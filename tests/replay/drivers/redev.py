@@ -1,10 +1,9 @@
 """/redev, played compliantly: /dev's flow under the /redev command text (commands/redev.md of the
 tree under test; P1b D22: /redev is /dev when saving context, minted a fresh task id exactly as /dev).
 
-commands/redev.md runs "the /dev workflow with the full command specification already loaded in
-this conversation" and makes that its precondition ("If you cannot recall the /dev step semantics
-from earlier turns, abort and ask the user to run /dev instead"). So the replay's one session holds
-two typed commands, as a conversation that saves context does:
+commands/redev.md runs commands/dev.md without re-emitting it ("it does not re-emit /dev's text,
+which this conversation already holds"). So the replay's one session holds two typed commands, as a
+conversation that saves context does:
 
 1. `/dev <requirement>`: a whole /dev cycle (drivers/dev.py DevCycle, variant plain), whose typed
    command puts commands/dev.md into the conversation;
@@ -18,8 +17,9 @@ two typed commands, as a conversation that saves context does:
 
 Driver arguments (cli.py --arg K=V):
   prior=dev      the /dev cycle that puts its text into the conversation first (default)
-  prior=none     /redev typed in a fresh session (redev.md's precondition then does not hold: a
-                 quick check of the /redev cycle alone, not a compliant replay)
+  prior=none     /redev typed in a fresh session (the conversation then holds no /dev text, which
+                 redev.md says to read from the harness first: a quick check of the /redev cycle
+                 alone, not a compliant replay)
   tier=STANDARD  BA's complexity_tier, as for drivers/dev.py
   kept=<JSON>    as for drivers/dev.py: on a tree other than the base, a declared deviation passes
                  only a block the base kit's same replay recorded

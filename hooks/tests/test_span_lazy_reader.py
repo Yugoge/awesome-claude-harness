@@ -3,10 +3,9 @@ what decides (P1b FX4: FX1's CS-1..3 and OB-2).
 
 - command_span.Span keeps the bytes active_span read; Span.iter_calls decodes a
   record only when its reader reaches it, newest first on request.
-- todo_canonical.checklist decodes the lists up to the first accepted one; the
-  newest ok TodoWrite (with ``before``, the newest ahead of that call) and its
-  writes are read only when asked. Every state below reads as the full read of
-  every call reads it.
+- todo_canonical.checklist decodes no list until asked; its list, the newest
+  ok TodoWrite, is then read from the end. Every state below reads as the full
+  read of every call reads it.
 - A reader from the end finds its lines from the end (P1b latency lane): it
   never runs the forward line reader over the span, and with ``before`` it
   decodes the lines holding that id, not every call ahead of it.
@@ -91,6 +90,12 @@ STATES = {
                              _result(2)],
     "earlier-command": [_opener(), _use(1, _frontier(0)), _result(1), _opener(args="y"), _use(2, _frontier(2)),
                         _result(2)],
+    # Gate 4's fact: the BA dispatch after its step went in_progress, and one before it did.
+    "ba-after-start": [_opener(), _use(1, _frontier(0)), _result(1), _use(2, _frontier(3)), _result(2),
+                       _uses((5, "Agent", {"subagent_type": "ba", "prompt": "p"})), _result(5)],
+    "ba-before-start": [_opener(), _use(1, _frontier(0)), _result(1),
+                        _uses((5, "Agent", {"subagent_type": "ba", "prompt": "p"})), _result(5),
+                        _use(2, _frontier(3)), _result(2)],
     # The first call that has an id is where ``before`` cuts, wherever another one has it too.
     "id-used-twice": [_opener(), _use(1, _frontier(0)), _result(1), _use(2, _frontier(1)), _result(2),
                       _use(3, _frontier(2)), _result(3), _use(2, _frontier(3)), _result(2), _use(4, _frontier(4)),
@@ -110,22 +115,15 @@ def _write(path, records):
     return path
 
 
-def _full_read(path, before=None):
-    """The checklist as a read of every call of the span gives it."""
+def _full_read(path):
+    """The checklist as a read of every call of the span gives it: the newest ok list of steps."""
     span = command_span.active_span(path)
-    todos, writes = None, []
+    todos = None
     for call in span.calls("TodoWrite"):
-        if before and call.id == before:
-            break
         new = call.input.get("todos")
-        if not call.ok or not isinstance(new, list) or not all(isinstance(t, dict) for t in new):
-            continue
-        todos = new
-        if writes or not todo_canonical.initial_status_violations(new):
-            writes.append(call)
-    accepted = writes[-1].input["todos"] if writes else None
-    lock = "not_started" if todos is None else "sequence_violation" if not writes else ""
-    return todos, accepted, lock, tuple(writes)
+        if call.ok and isinstance(new, list) and all(isinstance(t, dict) for t in new):
+            todos = new
+    return todos, "not_started" if todos is None else ""
 
 
 @pytest.fixture(autouse=True)
@@ -140,9 +138,8 @@ IDS = [None] + [f"toolu_{i}" for i in range(1, 5)] + ["toolu_9", "toolu_odd/1", 
 @pytest.mark.parametrize("state", sorted(STATES))
 def test_checklist_reads_as_the_full_read(tmp_path, state):
     path = _write(tmp_path / "t.jsonl", STATES[state])
-    for before in IDS:
-        got = todo_canonical.checklist(path, before)
-        assert (got.todos, got.accepted, got.lock, got.writes) == _full_read(path, before), (state, before)
+    got = todo_canonical.checklist(path)
+    assert (got.todos, got.lock) == _full_read(path), state
 
 
 def _ahead_of(calls, before):
@@ -194,29 +191,7 @@ def test_a_reader_from_the_end_never_runs_the_forward_reader_over_the_span(tmp_p
     assert next(span.iter_calls("TodoWrite", newest_first=True, before="toolu_40")).id == "toolu_39"
 
 
-def test_a_checklist_ahead_of_a_call_decodes_the_lines_holding_its_id(tmp_path, monkeypatch):
-    records = [_opener()]
-    for i in range(1, 41):
-        records += [_use(i, _frontier(min(i - 1, len(DEV) - 1))), _result(i)]
-    path = _write(tmp_path / "t.jsonl", records)
-    decoded = []
-    real = command_span._decode
-    monkeypatch.setattr(command_span, "_decode", lambda raw: decoded.append(raw) or real(raw))
-    state = todo_canonical.checklist(path, "toolu_40")  # the PostToolUse of the newest TodoWrite
-    assert state.todos == records[-4]["message"]["content"][0]["input"]["todos"] and state.lock == ""
-    uses = [raw for raw in decoded if b'"tool_use"' in raw]
-    assert len(uses) == 3, "the call with the id, the first accepted list and the newest one ahead of it"
-
-
-@pytest.mark.parametrize("before", [None, "toolu_9"])
-def test_the_step_rules_still_raise_inside_checklist(tmp_path, before):
-    broken = [{"status": "completed", "activeForm": "x"}] + _frontier(0)[1:]  # a completed step with no content
-    path = _write(tmp_path / "t.jsonl", [_opener(), _use(1, broken), _result(1), _use(9, _frontier(0)), _result(9)])
-    with pytest.raises(KeyError):
-        todo_canonical.checklist(path, before)
-
-
-def test_checklist_decodes_only_the_deciding_lists(tmp_path, monkeypatch):
+def test_checklist_decodes_only_the_newest_list(tmp_path, monkeypatch):
     records = [_opener()]
     for i in range(1, 41):
         records += [_use(i, _frontier(min(i - 1, len(DEV) - 1))), _result(i)]
@@ -225,12 +200,9 @@ def test_checklist_decodes_only_the_deciding_lists(tmp_path, monkeypatch):
     real = command_span._decode
     monkeypatch.setattr(command_span, "_decode", lambda raw: decoded.append(raw) or real(raw))
     state = todo_canonical.checklist(path)
-    assert len([raw for raw in decoded if b'"tool_use"' in raw]) == 1, "the first accepted list"
+    assert not [raw for raw in decoded if b'"tool_use"' in raw], "no list before one is asked for"
     assert state.todos == records[-2]["message"]["content"][0]["input"]["todos"] and state.lock == ""
-    assert len([raw for raw in decoded if b'"tool_use"' in raw]) == 2, "and, once asked, the newest ok list"
-    decoded.clear()
-    assert len(state.writes) == 40
-    assert len([raw for raw in decoded if b'"tool_use"' in raw]) == 40
+    assert len([raw for raw in decoded if b'"tool_use"' in raw]) == 1, "once asked, the newest ok list"
 
 
 def test_span_reads_the_transcript_once(tmp_path):
@@ -276,7 +248,7 @@ def _forward_span(path):
         number += 1
         if any(n in raw for n in command_span._USER_RECORD) and command_span._RESULT_BLOCK not in raw:
             record = command_span._decode(raw)
-            opener = command_span.stop_contract.span_opener(record, command_span.stop_contract.harness_commands()) \
+            opener = command_span.span_opener(record, command_span.harness_commands()) \
                 if record else None
             if opener:
                 found = (opener[0], opener[1], number)
@@ -331,7 +303,7 @@ def test_a_span_read_from_the_end_reads_no_line_before_it(tmp_path, monkeypatch,
     monkeypatch.setattr(command_span, "open", real_open, raising=False)
     assert (span.command, span.args, span.start_line) == _forward_span(path)
     state = todo_canonical.checklist(path)
-    assert (state.todos, state.accepted, state.lock, state.writes) == _full_read(path)
+    assert (state.todos, state.lock) == _full_read(path)
     assert [c.id for c in state.span.calls()] == ["toolu_900", "toolu_901", "toolu_902"]
 
 
@@ -365,18 +337,16 @@ def test_uses_are_the_calls_without_line_numbers(tmp_path, state):
 def test_the_checklist_readers_never_number_a_line(tmp_path, monkeypatch, state):
     # Line numbers count the lines before the span; no checklist decision needs one.
     path = _write(tmp_path / "t.jsonl", STATES[state])
-    expected = {before: _full_read(path, before) for before in IDS}
+    expected = _full_read(path)
     guard = _load_hook("pretool-todo-validate.py")
-    reference = {}
-    for before in IDS:
-        st = todo_canonical.checklist(path, before)
-        reference[before] = _dispatched_by_lines(st, DEV) if st else None
+    ba = DEV[3]  # Step 4, the BA dispatch step
+    st = todo_canonical.checklist(path)
+    reference = _dispatched_by_lines(st, ba)
     monkeypatch.setattr(command_span.Span, "start_line", property(lambda self: pytest.fail("a line was numbered")))
-    for before in IDS:
-        got = todo_canonical.checklist(path, before)
-        assert (got.todos, got.accepted, got.lock) == expected[before][:3]
-        assert [w.id for w in got.write_uses] == [w.id for w in expected[before][3]]
-        assert guard._dispatched_steps(got, DEV) == reference[before]
+    got = todo_canonical.checklist(path)
+    assert (got.todos, got.lock) == expected
+    # the transcript is no session's: its returned calls hold no /restart resume
+    assert guard._dispatched(got, ba["content"], ba, guard._returned_calls(got, "")) == reference
 
 
 def _load_hook(name):
@@ -389,29 +359,22 @@ def _load_hook(name):
     return module
 
 
-def _dispatched_by_lines(state, canonical):
-    """todo-validate's dispatched steps as the reader that ordered results by line number read them."""
-    guard = _load_hook("pretool-todo-validate.py")
-    events = sorted([(w.result_line, 0, w) for w in state.writes]
-                    + [(c.result_line, 1, c) for c in state.span.calls("Agent", "Task") if c.ok],
-                    key=lambda e: (e[0], e[1]))
-    current, counted = [], set()
-    for _, is_dispatch, call in events:
-        if not is_dispatch:
-            current = call.input["todos"]
-            counted -= {i for i, t in enumerate(current) if t.get("status") == "pending"}
+def _dispatched_by_lines(state, step):
+    """Gate 4's fact for ``step`` as a reader that orders results by line number reads it: an ok
+    Agent call of its type whose result comes after the result of the ok TodoWrite that last set
+    the step in_progress."""
+    start, was = None, None
+    for call in state.span.calls("TodoWrite"):
+        todos = call.input.get("todos")
+        if not call.ok or not isinstance(todos, list):
             continue
-        ip = guard._in_progress(current)
-        if ip is None:
-            continue
-        kind = str(call.input.get("subagent_type") or "").strip().lower()
-        window = range(ip, min(len(canonical), ip + 3)) if kind else [ip]
-        for i in window:
-            types = guard._subagent_types(canonical[i]) if i < len(canonical) else set()
-            if types and i not in counted and (not kind or kind in types):
-                counted.add(i)
-                break
-    return counted
+        now = next((t.get("status") for t in todos if isinstance(t, dict) and t.get("content") == step["content"]), None)
+        if now == "in_progress" and was != "in_progress":
+            start = call.result_line
+        was = now
+    kind = step["subagent_call"]["subagent_type"]
+    return start is not None and any(c.result_line > start and c.input.get("subagent_type") == kind
+                                     for c in state.span.calls("Agent", "Task") if c.ok)
 
 
 OPENER_LINES = {

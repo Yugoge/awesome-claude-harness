@@ -17,8 +17,9 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
   render [--force]   write the machine form of <H>/settings.json; refuses (without --force) to
                      drop working-file entries that neither the clean form, the overlay nor the
                      record explains.
-  check [--staged]   doctor checks (hook paths, filter wiring and round trip, entries nothing
-                     explains, protected-runtime file); with --staged: refuse a staged settings.json
+  check [--staged]   doctor checks (hook paths: a missing file, or a `# STUB:` file the clean form
+                     does not register; filter wiring and round trip, entries nothing explains,
+                     protected-runtime file); with --staged: refuse a staged settings.json
                      that is in machine form, and an index that holds the overlay or the
                      private-literal list <H>/private-literals.txt: both are personal and never
                      tracked, so after a forced add or an earlier commit of either, every commit
@@ -26,7 +27,8 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
   migrate --from REV [--settings-file PATH] [--base REV]
                      seed a NEW overlay from previous personal settings: run by init
                      (scripts/bootstrap --migrate-from), or once by the landing on an upgraded
-                     home. A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in).
+                     home. A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in),
+                     as is a hook command HEAD retired or already runs (by event and count).
   seed --claude-home PATH [MODULE=on|off ...]
                      write a NEW overlay holding the modules and env.CLAUDE_HOME: init's
                      (scripts/bootstrap) overlay when it migrates nothing.
@@ -38,9 +40,10 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      migrate, seed private-literals.txt (also from the home's git history, the
                      scan cut 10 s after the landing started, N s before). --rev prints the
                      pre-pull revision; --repair only undoes a conflicted pull (exit 1 while git
-                     refuses it); --history only seeds the list (run before init step 5
-                     reinstalls the git hooks): every source while it is absent or empty, else
-                     the history values it lacks, appended.
+                     refuses it); both drop the overlay's hook commands HEAD retired or already
+                     runs (R2). --history only seeds the list (run before init step 5 reinstalls
+                     the git hooks): every source while it is absent or empty, else the history
+                     values it lacks, appended.
 
 The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
 render applied to the working file since the last render, so that an entry dropped from the overlay
@@ -842,16 +845,30 @@ def _ok(label, ok):
     return ok
 
 
+def is_stub(path):
+    """A line starting `# STUB:` marks a retired hook kept as an exit-0 file: it runs nothing."""
+    try:
+        with open(path, "rb") as fh:
+            return any(line.startswith(b"# STUB:") for line in fh)
+    except OSError:
+        return False
+
+
 def check_hook_paths(home, working, overlay):
     env = dict(os.environ)
     env.update({k: v for k, v in _d(working.get("env")).items() if isinstance(v, str)})
     # Only a command of the clean form or of a module is echoed; any other may be personal.
     docs = [parse(clean_source(home)) or {}] + list(MODULES.values())
-    public = _hook_keys([g for d in docs for gs in _d(d.get("hooks")).values() for g in _list(gs)])
-    public -= _hook_keys([g for gs in _d(_layer_of(overlay or {}).get("hooks")).values()
-                          for g in gs])
+    kit = {(event, key) for d in docs for event, gs in _d(d.get("hooks")).items()
+           for key in _hook_keys(gs)}
+    mine = {(event, key) for event, gs in _d(_layer_of(overlay or {}).get("hooks")).items()
+            for key in _hook_keys(gs)}
+    public = {key for _, key in kit} - {key for _, key in mine}
+    checkout = is_checkout(home)
+    if not checkout:  # the clean form read is the working file, which holds the overlay's too
+        kit -= mine
     root = os.path.realpath(home)
-    total, missing = 0, []
+    total, missing, stubs, kept = 0, [], 0, set()
     for event, groups in _d(working.get("hooks")).items():
         for g in groups if isinstance(groups, list) else []:
             for h in g.get("hooks", []) if isinstance(g, dict) else []:
@@ -864,19 +881,35 @@ def check_hook_paths(home, working, overlay):
                     words = []
                 real = os.path.realpath(expand(words[1], env)) if len(words) > 1 else ""
                 inside = bool(real) and real.startswith(root + os.sep)
-                if inside and os.path.isfile(real):
+                if inside and os.path.isfile(real) and not is_stub(real):
                     continue
+                rel = os.path.relpath(real, root) if inside else ""
+                if inside and os.path.isfile(real):
+                    if (event, hook_key(h)) in kit:  # the clean form's own stub (D15): passes
+                        kept.add(rel)
+                        continue
+                    stubs += 1
+                    # A path HEAD tracks is a public harness path; any other may be personal.
+                    if hook_key(h) in public or checkout and _git_out(
+                            home, "cat-file", "-t", "HEAD:" + rel) == "blob":
+                        missing.append("%s: %s is a stub the clean form does not register"
+                                       % (event, rel))
+                        continue
                 if hook_key(h) not in public:
                     missing.append("%s: a hook outside the clean form (see %s)" % (event, OVERLAY))
                 elif not real:
                     missing.append("%s: no script path in the command" % event)
                 elif inside:
-                    missing.append(os.path.relpath(real, root))
+                    missing.append(rel)
                 else:
                     missing.append("outside the harness home: %s" % words[1])
-    ok = _ok("hook paths: %d commands, missing=%d" % (total, len(missing)), not missing)
+    ok = _ok("hook paths: %d commands, missing=%d%s" % (
+        total, len(missing) - stubs, ", stubs=%d" % stubs if stubs else ""), not missing)
     for item in missing:
         print("       %s" % item)
+    if kept:
+        print("[info] hook paths: the clean form registers %s, which pass: %s"
+              % (_count(len(kept), "exit-0 stub", "exit-0 stubs"), ", ".join(sorted(kept))))
     return ok
 
 
@@ -1135,10 +1168,90 @@ def module_enabled(fragment, prev, base):
     return False
 
 
-def _tracked_hook(home, rev, hook):
+def _script(hook):
     m = re.search(r"@H/((?:hooks|scripts)/\S+)", norm_command(str(hook.get("command", ""))))
-    proc = _git(home, "cat-file", "-e", "%s:%s" % (rev, m.group(1))) if m else None
-    return proc is not None and proc.returncode == 0
+    return m.group(1) if m else None
+
+
+def _named(data, rel):
+    """The .py and .sh file names a script's code holds, off comment lines: a whole quoted
+    literal in a Python file (no docstring or message), any word in a shell script."""
+    text = "\n".join(ln for ln in data.decode("utf-8", "replace").splitlines()
+                     if ln.strip()[:1] != "#")
+    name = r"([\w.+-]+\.(?:py|sh))"
+    return set(re.findall(r"""["'](?:[^"'\s]*/)?%s["']""" % name if rel.endswith(".py")
+                          else name + r"(?![\w.-])", text))
+
+
+def superseded(home, hooks, ref, past=()):
+    """R2, the one rule of the migration and of the overlay repair: removes from hooks (event ->
+    groups) each command whose script is a harness hook (HEAD's history or `past` tracked it) that
+    HEAD lacks or marks `# STUB:`, or that a command ref registers at that event already runs: its
+    script, or a .py or .sh file a script so run names (the Stop coordinator's phases, P5's
+    launcher's coordinator). Others stay; empty groups and events go. Returns {event: count}."""
+    names, runs, out = {}, {}, {}
+    for rel in (_git_out(home, "ls-tree", "-r", "--name-only", "HEAD", "hooks", "scripts")
+                or "").split():
+        names.setdefault(os.path.basename(rel), []).append(rel)
+
+    def gone(event, rel):
+        data = blob(home, "HEAD:" + rel)
+        if data is None:
+            return bool(_git_out(home, "--literal-pathspecs", "log", "-1", "--format=%h", "HEAD",
+                                 *past, "--", rel))
+        if event not in runs:
+            todo, runs[event] = [_script(h) for g in _list(_d(ref.get("hooks")).get(event))
+                                 for h in _list(_d(g).get("hooks")) if isinstance(h, dict)], set()
+            while todo:
+                run = todo.pop()
+                if run and run not in runs[event]:
+                    runs[event].add(run)
+                    path = os.path.join(home, run)  # the code that runs: the checked-out file
+                    todo += [p for n in _named(_read(path) or b"" if os.path.isfile(path) else b"",
+                                               run) for p in names.get(n, [])]
+        return any(ln.startswith(b"# STUB:") for ln in data.splitlines()) or rel in runs[event]
+
+    for event, groups in list(hooks.items()):
+        for g in groups:
+            keep = [h for h in g["hooks"] if not (_script(h) and gone(event, _script(h)))]
+            out[event] = out.get(event, 0) + len(g["hooks"]) - len(keep)
+            g["hooks"] = keep
+        groups[:] = [g for g in groups if g["hooks"]]
+        if not groups:
+            del hooks[event]
+    return {event: n for event, n in out.items() if n}
+
+
+def repair_overlay(home):
+    """R2's overlay repair, run by the landing on every home: the migration's rule (superseded)
+    drops the overlay's hook commands HEAD retired or already runs. The overlay is replaced
+    atomically, owner-only, the rest unchanged, and the working file loses the same commands (its
+    other entries, a CLI write among them, stay). {event: count}; an unusable overlay is doctor's."""
+    try:
+        overlay = load_overlay(home) or {}
+    except OverlayError:
+        return {}
+    hooks, layers = copy.deepcopy(_d(overlay.get("hooks"))), layers_of(overlay)
+    below = merge_all(parse(blob(home, "HEAD:" + SETTINGS)) or {}, layers[:-1])
+    dropped = superseded(home, hooks, below) if hooks else {}
+    if hooks and not dropped:  # checked against this HEAD: land checks it again once HEAD moves
+        os.utime(os.path.join(home, OVERLAY))
+    if dropped:
+        old = overlay["hooks"]
+        if hooks:
+            overlay["hooks"] = hooks
+        else:
+            del overlay["hooks"]
+        _write_atomic(os.path.join(home, OVERLAY), canon(overlay), 0o600)
+        working = parse(_read(os.path.join(home, SETTINGS)))
+        if working is not None:
+            for event, groups in old.items():
+                if isinstance(_d(working.get("hooks")).get(event), list):
+                    _unmerge_event(working["hooks"][event], groups,
+                                   _list(_d(below.get("hooks")).get(event)))
+            _write_atomic(os.path.join(home, SETTINGS), canon(merge(working, {"hooks": hooks})))
+            refresh_index(home)
+    return dropped
 
 
 def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
@@ -1186,14 +1299,7 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
         _err("migrate refused: the clean settings.json has an unexpected structure at %s" % exc)
         return 1
     extra = diff(prev, reference)
-    # A hook running a harness script that rev tracks was public there: missing from the clean form
-    # now means upstream unregistered it (P1's retired Stop gate, an exit-0 stub until P10 deletes
-    # it), so it is not personal and is not migrated.
-    for groups in extra.get("hooks", {}).values():
-        for g in groups:
-            g["hooks"] = [h for h in g["hooks"] if not _tracked_hook(home, rev, h)]
-        groups[:] = [g for g in groups if g["hooks"]]
-    extra["hooks"] = {event: groups for event, groups in extra.get("hooks", {}).items() if groups}
+    skipped = superseded(home, extra.setdefault("hooks", {}), reference, [rev])
     if not extra["hooks"]:
         del extra["hooks"]
     env = extra.pop("env", {})
@@ -1224,6 +1330,9 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
     for name, val in overlay.get("permissions", {}).items():
         print("  permissions.%s: %s" % (name, len(val) if isinstance(val, list) else "set"))
     print("  hooks: %d groups" % sum(len(g) for g in overlay.get("hooks", {}).values()))
+    for event, n in skipped.items():
+        print("  not migrated: hooks.%s: %s HEAD retired or already runs"
+              % (event, _count(n, "hook command", "hook commands")))
     others = [k for k in overlay if k not in STRUCTURED and k != "modules"]
     print("  other top-level keys: %d" % len(others))
     print("next: run scripts/bootstrap (or render-settings render) to render settings.json")
@@ -1262,6 +1371,9 @@ def cmd_literals(home):
 # -------------------------------------------------------------------------------------- land
 
 DOC_SYNC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|> Last updated: .*)$")  # doc-sync's dates
+FOLDER_DOC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|\*Auto-generated by doc-sync hook\.\*)?$")
+AUTO_MARKER = re.compile(rb"^<!-- (/?)AUTO:[^ ]+ -->$")
+INDEX_TITLE = re.compile(rb"^# [^ \t]+$")  # regen_index's `# <directory>`, kept below when stale
 SEED_KEYS = tuple(name for name, _, _ in CODE_DEFAULTS) + ("GRAPHIFY_BIN",)
 _HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:hooks|scripts)/[^\s"';]+)""")
 # Fact 9's history sources: the engine's EMAIL (scripts/check-public-core.sh) from its "@", the
@@ -1343,22 +1455,40 @@ def previous_settings(home, rev, stash):
     return prev, "%s:%s plus the working file" % (rev[:12], SETTINGS)
 
 
+def hand(data, name):
+    """The lines of a doc-sync file that doc-sync does not write: CLAUDE.md's all but its date
+    lines; a folder's INDEX.md or README.md all but its AUTO regions (markers included), date line,
+    footer, blank lines and an INDEX.md's `# <directory>` titles, as doc-sync rewrites those whole.
+    scripts/install/land's hand() applies the same rule before it runs a repair."""
+    if name == "CLAUDE.md":
+        return [ln for ln in data.splitlines() if not DOC_SYNC_LINE.match(ln)]
+    out, inside = [], False
+    for ln in data.split(b"\n"):
+        mark = AUTO_MARKER.match(ln)
+        if mark:
+            inside = not mark.group(1)
+        elif not (inside or FOLDER_DOC_LINE.match(ln) or name == "INDEX.md" and INDEX_TITLE.match(ln)):
+            out.append(ln)
+    return out
+
+
 def repair_pop(home, stash, always=False):
     """R2: undo what a conflicted stash pop left. An unmerged settings.json, and an unmerged
-    INDEX.md or CLAUDE.md the stash changed only in doc-sync's date lines, take HEAD's side
-    (removed where HEAD deleted it); then (once one was, or always on an upgraded home) every path
-    the pop staged is unstaged, its working content unchanged: index blob equal to the stash's, or
-    a path the stash changed that the pop merged (index equal to the working file); other
-    unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left, the
-    paths of the first two kinds git refused to take: a lock)."""
-    undated = lambda data: [ln for ln in data.splitlines() if not DOC_SYNC_LINE.match(ln)]  # noqa
+    INDEX.md, README.md or CLAUDE.md the stash changed only in lines doc-sync writes (hand), take
+    HEAD's side (removed where HEAD deleted it; the stash keeps the local file); then (once one
+    was, or always on an upgraded home) every path the pop staged is unstaged, its working
+    content unchanged: index blob equal to the stash's, or a path the stash changed that the pop
+    merged (index equal to the working file); other unmerged paths stay as they are. Returns
+    (resolved, doc-sync, unstaged, unmerged left, the paths of the first two kinds git refused to
+    take: a lock)."""
     resolved, refused = [], []
     for path in _unmerged(home):
         if path != SETTINGS:
             old, new = [blob(home, "%s%s:%s" % (stash, side, path)) if stash else None
                         for side in ("^1", "")]
-            if os.path.basename(path) not in ("INDEX.md", "CLAUDE.md") or None in (old, new) \
-                    or old == new or undated(old) != undated(new):
+            name = os.path.basename(path)
+            if name not in ("INDEX.md", "README.md", "CLAUDE.md") or None in (old, new) \
+                    or old == new or hand(old, name) != hand(new, name):
                 continue
         head = blob(home, "HEAD:" + path) is not None
         proc = _git(home, "--literal-pathspecs", *(["checkout", "-q", "HEAD"] if head else
@@ -1565,6 +1695,13 @@ def seed_literals(home, rev, seconds):
     return fresh, len(seeded), read, cut
 
 
+def overlay_note(dropped):
+    if dropped:
+        _say("overlay repaired: %s" % " ".join("hooks.%s=%d" % kv for kv in dropped.items()))
+    return ["%d hook command(s) of settings.machine.json that HEAD retired or already runs dropped"
+            % sum(dropped.values())] if dropped else []
+
+
 def repaired(res):
     """The notice parts for repair_pop's result. A path git refused to take (a lock) stays unmerged
     and is tried again at the next Stop: named apart, a control or line-break character as "?"."""
@@ -1626,7 +1763,9 @@ def land(home, mode, seconds=HISTORY_SECONDS):
             if stash and SETTINGS in unmerged else [None]
         lost = describe(diff(diff(docs[0], docs[1]), docs[2])) if None not in docs else []
         res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0, [])
-        _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+        if unmerged:
+            _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+        notes += overlay_note(repair_overlay(home))
         if lost and SETTINGS not in res[4]:
             _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
             notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
@@ -1652,6 +1791,7 @@ def land(home, mode, seconds=HISTORY_SECONDS):
     if not os.path.isfile(OVERLAY):
         _say("%s is not a regular file" % OVERLAY)
         return "overlay", 1
+    notes += overlay_note(repair_overlay(home))
     res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else \
         (0, 0, 0, 0, [])
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])

@@ -52,6 +52,7 @@ else
   REMOTE="origin"
 fi
 AUTO_MODE=0
+TYPED_REMOTE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --auto) AUTO_MODE=1 ;;
@@ -65,7 +66,7 @@ while [ $# -gt 0 ]; do
       echo "Usage: bash ~/.claude/hooks/push.sh [<remote>] [--auto]" >&2
       exit 2
       ;;
-    *) REMOTE="$1" ;;
+    *) REMOTE="$1"; TYPED_REMOTE=1 ;;
   esac
   shift
 done
@@ -333,6 +334,11 @@ if [ "$STAGED_COUNT" = "0" ]; then
   # On failure this rev-parse echoes the literal `@{u}` to stdout, so the captured value
   # is non-empty even with no upstream; the exit status is the only reliable signal (R22).
   HAS_UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || HAS_UPSTREAM=""
+  UP_REF="@{u}"
+  if [ -n "$TYPED_REMOTE" ]; then  # a typed remote counts ahead of its own tracking ref (none: a first push to it)
+    UP_REF="refs/remotes/$REMOTE/$BRANCH"
+    HAS_UPSTREAM=$(git rev-parse --verify --quiet "$UP_REF") || HAS_UPSTREAM=""
+  fi
   if [ -z "$HAS_UPSTREAM" ]; then
     # Case (b): no upstream → first-push flow is the right path. Fall through to step 9.
     BRANCH_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
@@ -341,11 +347,11 @@ if [ "$STAGED_COUNT" = "0" ]; then
       echo ""
       exit 0
     fi
-    echo "Working tree clean. Branch '$BRANCH' has no upstream yet — first-push flow ($BRANCH_COMMIT_COUNT commit(s) total) will set upstream to $REMOTE/$BRANCH."
+    echo "Working tree clean. Branch '$BRANCH' is not on $REMOTE yet — first push ($BRANCH_COMMIT_COUNT commit(s) total) to $REMOTE/$BRANCH."
     echo ""
   else
     # Case (a): upstream exists, normal ahead-count check.
-    COMMITS_AHEAD=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+    COMMITS_AHEAD=$(git rev-list --count "$UP_REF"..HEAD 2>/dev/null || echo "0")
     if [ "$COMMITS_AHEAD" != "0" ] && [ -n "$COMMITS_AHEAD" ]; then
       echo "Working tree clean. $COMMITS_AHEAD commit(s) ahead of remote — proceeding with push."
       echo ""

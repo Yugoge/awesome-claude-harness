@@ -602,6 +602,135 @@ def test_a_chain_calls_change_is_the_chains_and_measures_no_other_reader():
     assert {d.who for d in ctx.m.artifacts[other].decisions} == {"scripts/plan.py"}
 
 
+def _gate_ctx(uses=("returned",), loaded=(7,), tree="/t"):
+    """A Stop gate (hooks/gate.py) that calls the chain function (scripts/chain.py) in its own
+    process, uses its output as `uses` says, and reads one report of its own; the chain's own Bash
+    call decides on a lane report; the gate's Stop units (events 7 and 9) change on both reports;
+    the trace shows the gate loading the chain's module in the events of `loaded`."""
+    key, own, summary = "<proj>/docs/dev/r-<ts>.json", "<proj>/docs/dev/p-<ts>.json", \
+        "<proj>/docs/dev/nightly-summary-<ts>.md"
+    recs = [{"kind": "chain_call", "component": "hooks/gate.py", "site": "hooks/gate.py:9", "how": "load",
+             "uses": list(uses), "fields": [], "function": "disposition", "via": ""},
+            {"kind": "relation", "component": "hooks/gate.py", "site": "hooks/gate.py:20", "op": "read",
+             "mode": "content", "path": "<*>/docs/dev/p-<task>.json", "resolution": "partial", "via": "open"},
+            {"kind": "relation", "component": "hooks/gate.py", "site": "hooks/gate.py:24", "op": "read",
+             "mode": "list", "path": "<*>/docs/dev/<*>", "resolution": "partial", "via": "os.listdir"},
+            {"kind": "relation", "component": "hooks/gate.py", "site": "hooks/gate.py:26", "op": "read",
+             "mode": "list", "path": "<*>/docs/dev/nightly-summary-<*>.md", "resolution": "partial", "via": "glob"}]
+    ctx = C._Ctx(C.Map(str(tree)), recs, [], [], [], set(), "scripts/chain.py", [], str(tree))
+    for k in (key, own, summary):
+        a = ctx.m.art(k)
+        a.runtime = True
+        a.writers.append(C.Rel("agent:dev", "write", "x#3", "runtime"))
+    stop = {"event": "Stop", "label": "Stop", "kind": "hook", "origin": "hooks/launch.py"}
+    run = _diff_run([
+        {"seq": 5, "event": "PreToolUse", "label": "Step 5", "kind": "bash", "tool": "Bash",
+         "origin": "scripts/chain.py", "runs": [
+             {"pattern": key, "raw": "/p/r", "how": "removed", "changed": True, "readers": ["scripts/chain.py"]}]},
+        *[dict(stop, seq=seq, runs=[
+            {"pattern": k, "raw": raw, "how": "removed", "changed": True, "readers": ["hooks/gate.py"]}
+            for k, raw in ((key, "/p/r"), (own, "/p/p"), (summary, "/p/s"))]) for seq in (7, 9)]])
+    run.events = [{"comp": "hooks/gate.py", "origin": "hooks/launch.py", "actor": "main", "op": "read",
+                   "pattern": "<harness>/scripts/chain.py", "event": seq, "bulk": False, "raw": "/h/scripts/chain.py"}
+                  for seq in loaded]
+    ctx.runs = [run]
+    ctx.deciding()
+    return ctx, key, own, summary
+
+
+def test_a_verbatim_in_process_call_of_the_chain_function_is_its_own_call():
+    """A Stop gate that calls the chain function in its own process and returns what it returns
+    reads what the chain reads as its own process does: a change of its decision on a report its
+    own code does not read, in an event in which it loaded the chain's module, is the chain
+    function's decision at its own call (the gate named as the process it ran in), one rule with
+    the chain's own Bash call and no rule to move. Its change on the report its own code reads,
+    and in an event in which it did not load the chain, stays its own (a completion read, a rule
+    of its own), as on a file its code finds by a scan of that file's named family; a scan of
+    every file of the directory names none of them."""
+    ctx, key, own, summary = _gate_ctx()
+    a = ctx.m.artifacts[key]
+    assert sorted((d.who, d.position, d.evidence) for d in a.decisions) == [
+        ("hooks/gate.py", "completion read", "x/shipped#9:Stop:Stop"),
+        ("scripts/chain.py", "chain call", "x/shipped#5:PreToolUse:Step 5"),
+        ("scripts/chain.py", "chain call", "x/shipped#7:Stop:Stop in hooks/gate.py")]
+    for k in (own, summary):
+        mine = ctx.m.artifacts[k]
+        assert {(d.who, d.position) for d in mine.decisions} == {("hooks/gate.py", "completion read")}, k
+        assert [v.rule for v in C._rechecks(mine, k, [])] == ["6-move"], k
+    a.decisions = [d for d in a.decisions if not d.evidence.endswith("#9:Stop:Stop")]
+    assert C._rule_groups(a.decisions) == ["scripts/chain.py"]
+    assert not C._rechecks(a, key, [])
+
+
+def test_a_chain_caller_that_tests_a_field_of_its_output_keeps_its_decisions():
+    """The same gate testing a field of the chain's output (rule (5)'s violation) decides by a rule
+    of its own: its change stays a completion read, a rule to move."""
+    ctx, key, _own, _summary = _gate_ctx(uses=("fields", "returned"))
+    a = ctx.m.artifacts[key]
+    assert {(d.who, d.position) for d in a.decisions if "Stop" in d.evidence} == {("hooks/gate.py", "completion read")}
+    assert "6-move" in [v.rule for v in C._rechecks(a, key, [])]
+
+
+def test_a_chain_caller_that_imports_a_module_by_a_computed_name_keeps_its_decisions(tmp_path):
+    """The static half cannot follow an import whose module name is computed, so what that code
+    reads is not known to be none of the report: the same gate importing its libraries through
+    `importlib.import_module(f"lib.{name}")` keeps its change; one importing them by a literal
+    name takes the chain's verdict."""
+    gate = tmp_path / "hooks" / "gate.py"
+    gate.parent.mkdir()
+    gate.write_text('import importlib\ndef _lib(name):\n    return importlib.import_module(f"lib.{name}")\n')
+    ctx, key, _own, _summary = _gate_ctx(tree=tmp_path)
+    assert {(d.who, d.position) for d in ctx.m.artifacts[key].decisions if "#7:" in d.evidence} == {
+        ("hooks/gate.py", "completion read")}
+    gate.write_text('import importlib\ndef rec():\n    return importlib.import_module("lib.rec")\n')
+    ctx, key, _own, _summary = _gate_ctx(tree=tmp_path)
+    assert {(d.who, d.position) for d in ctx.m.artifacts[key].decisions if "#7:" in d.evidence} == {
+        ("scripts/chain.py", "chain call")}
+
+
+def test_a_unit_the_final_state_does_not_reproduce_runs_on_its_events_transcripts(tmp_path, monkeypatch):
+    """E1 re-runs a unit on the replay's final state, where the transcripts have grown since its
+    event: a Stop gate that let a /do Stop pass blocks there on the later /commit span, and its
+    decision on the report it read would go unmeasured. Run again with the transcripts cut back to
+    the event (one written after it removed), it gives the recorded decision, and the report's
+    mutations change it."""
+    from tests.replay import differential as D
+    home, store = tmp_path / "home", tmp_path / "home" / "projects" / "p"
+    store.mkdir(parents=True)
+    tx, later = store / "s.jsonl", store / "s" / "subagents" / "agent-a.jsonl"
+    tx.write_text('{"span": "do"}\n')
+    at_event = tx.stat().st_size
+    tx.write_text('{"span": "do"}\n{"span": "commit"}\n')
+    later.parent.mkdir(parents=True)
+    later.write_text("{}\n")
+    report = home / "r.json"
+    report.write_text("{}")
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = {"session_id": "s", "transcript_path": str(tx), "hook_event_name": "Stop"}
+    (work / "invocations.jsonl").write_text(json.dumps(
+        {"seq": 4, "event": "Stop", "label": "/do Stop", "payload": payload,
+         "transcripts": {str(tx): at_event}, "hooks": []}) + "\n")
+    for name in ("env.json", "bash-env.json"):
+        (work / name).write_text("{}")
+    unit = {"kind": "hook", "command": "gate", "timeout": 5, "original": [0, "ok", ""], "seq": 4,
+            "origin": "hooks/g.py", "event": "Stop", "label": "/do Stop",
+            "reads": [{"comp": "hooks/g.py", "pattern": "<home>/r.json", "raw": str(report)}]}
+    (work / "units.json").write_text(json.dumps({"units": [unit], "schemas": {}, "workers": 1, "layout": {
+        "home": str(home), "state": str(tmp_path / "state"), "temp_dirs": [], "project": str(tmp_path)}}))
+
+    def gate(cfg, n, unit, mutation, payload, env, cut=()):
+        at = dict(zip(cut[1::2], cut[0::2]))
+        do_span = at == {str(tx): str(at_event), str(later): "-"}
+        return {"decision": [0, "ok", ""] if do_span and mutation is None else [2, "block", "exit2"],
+                "ms": 1, "stderr": ""}
+    monkeypatch.setattr(D, "_one", gate)
+    assert D._inner(str(work / "units.json")) == 0
+    [rec] = json.loads((work / "results.json").read_text())["units"]
+    assert rec["reproduced"] and rec["cut"], rec
+    assert {(r["how"], r["changed"]) for r in rec["runs"]} == {("removed", True), ("invalid", True)}
+
+
 def test_a_decision_elsewhere_that_takes_an_allowed_deciders_verdict_is_its_use():
     """Row 13's use: a reader outside the allowed positions that decides from the return of the
     one function a decider at an allowed position decides by uses that verdict; with a rule of

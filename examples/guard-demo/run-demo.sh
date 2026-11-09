@@ -154,7 +154,7 @@ say "Shared resolver resolved the demo home by structural sentinel (basename 'do
 ask_guard() {  # <out_stderr_var> <target_path>
   local __outvar="$1" target="$2" payload err rc pydir
   pydir="$(dirname "$PYTHON_BIN")"
-  payload="$(printf '{"subagent_type":"dev","agent_id":"guard-demo","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$target")"
+  payload="$(printf '{"agent_id":"guard-demo","agent_type":"dev","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$target")"
   # env -i clears PATH; we re-add the resolved interpreter's own dir and invoke
   # it by ABSOLUTE path so the probe works wherever python3 lives.
   err="$(printf '%s' "$payload" \

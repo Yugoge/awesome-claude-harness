@@ -1,6 +1,7 @@
 #!/bin/bash
 # git-fswatch.sh - Comprehensive Git file watcher using fswatch
-# Pushes the branch to origin only when GIT_AUTO_PUSH=1 (off by default)
+# Pushes the branch to origin only when lib/auto_push.sh says so: the repository's
+# harness.autoPush, else GIT_AUTO_PUSH=1 (off by default)
 # Location: ~/.claude/hooks/git-fswatch.sh
 # Usage: bash ~/.claude/hooks/git-fswatch.sh [path]
 
@@ -28,6 +29,8 @@ LOG_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/git-fswatch-${REPO_NAME}.lo
 HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
   || harness_state_dir() { printf '%s\n' /tmp; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/auto_push.sh" 2>/dev/null \
+  || harness_auto_push() { return 1; }  # no reader, no push
 LOCK_FILE="$(harness_state_dir)/git-fswatch-${USER}-${REPO_NAME}.lock"
 
 # Runtime state
@@ -343,7 +346,7 @@ safe_commit() {
 
 # Perform git push with retry logic
 safe_push() {
-    [ "${GIT_AUTO_PUSH:-}" = "1" ] || { log_info "Push skipped: auto-push is off (enable with GIT_AUTO_PUSH=1)"; return 0; }
+    harness_auto_push "$WATCH_PATH" || { log_info "Push skipped: auto-push is off for this repository (enable with git config harness.autoPush true, or GIT_AUTO_PUSH=1)"; return 0; }
     cd "$WATCH_PATH" || return 1
 
     local branch=$(git branch --show-current)

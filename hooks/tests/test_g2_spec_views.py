@@ -87,7 +87,7 @@ def _obligation_prompt(project: Path) -> str:
 
 
 def _store(home: Path, project: Path, prompt: str, subagent_type: str | None) -> None:
-    slug = str(project.resolve()).replace("/", "-")
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(project.resolve()))  # Claude Code's folder name
     session_dir = home / ".claude" / "projects" / slug / SESSION
     (session_dir / "subagents").mkdir(parents=True, exist_ok=True)
     agent = session_dir / "subagents" / f"agent-{AGENT}.jsonl"
@@ -247,7 +247,7 @@ def _aged_stop(tmp_path: Path, prompt_of, aged: dict, earlier_seconds: float | N
         when = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - earlier_seconds, tz=timezone.utc)
         first = re.sub(r'"dispatched_at": "[^"]*"', f'"dispatched_at": "{when.strftime("%Y-%m-%dT%H:%M:%SZ")}"',
                        prompt)
-        slug = str(project.resolve()).replace("/", "-")
+        slug = re.sub(r"[^A-Za-z0-9]", "-", str(project.resolve()))  # Claude Code's folder name (P6)
         parent = home / ".claude" / "projects" / slug / f"{SESSION}.jsonl"
         call = {"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": "toolu_spec_dispatch_0", "name": "Agent",

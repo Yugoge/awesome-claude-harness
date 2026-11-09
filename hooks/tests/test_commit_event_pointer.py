@@ -118,14 +118,18 @@ def dispatch(prompt, sid=SID, subagent_type="changelog-analyst"):
              "input": {"subagent_type": subagent_type, "prompt": prompt}}]}}) + "\n")
     transcript = root / sid / "subagents" / f"agent-{agent_id}.jsonl"
     transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
-    (root / sid / "subagents" / f"agent-{agent_id}.meta.json").write_text(json.dumps({"toolUseId": tool_use_id}))
+    (root / sid / "subagents" / f"agent-{agent_id}.meta.json").write_text(
+        json.dumps({"agentType": subagent_type, "toolUseId": tool_use_id}))
     return agent_id
 
 
-def commit_payload(repo, agent_id, tool_use_id):
-    msg = Path(repo).parent / "msg.txt"
-    msg.write_text("feat: change\n")
-    return {"tool_name": "Bash", "session_id": SID, "agent_id": agent_id, "cwd": repo,
+def commit_payload(repo, agent_id, tool_use_id, message="feat: change\n\nTask-id: 20261028-100000\n",
+                   agent_type="changelog-analyst"):
+    """The commit's PreToolUse payload: agent_id and agent_type, as the CLI sends them."""
+    msg = Path(repo).parent / ("msg.txt" if message is not None else "missing-msg.txt")
+    if message is not None:
+        msg.write_text(message)
+    return {"tool_name": "Bash", "session_id": SID, "agent_id": agent_id, "agent_type": agent_type, "cwd": repo,
             "tool_use_id": tool_use_id, "transcript_path": str(session_dir() / f"{SID}.jsonl"),
             "tool_input": {"command": f'git -C {repo} commit -F "{msg}"'}}
 
@@ -187,7 +191,7 @@ def test_one_dispatch_commits_every_planned_repository_and_no_other_subagent_doe
     assert not os.path.exists(CJ.pointer_path(CJ.event_key(p1)))
 
     other = dispatch("a dev dispatch prompt", subagent_type="dev")
-    intruder = commit_payload(second, other, "toolu_intruder")
+    intruder = commit_payload(second, other, "toolu_intruder", agent_type="dev")
     assert evaluate(intruder) == 2
     assert os.path.exists(g2), "a refused caller must not spend the grant"
 
@@ -198,6 +202,32 @@ def test_one_dispatch_commits_every_planned_repository_and_no_other_subagent_doe
     assert no_lock_or_use_files(state)
 
 
+@pytest.mark.parametrize("intruder", ["dev", "qa", "demo-plugin:reviewer"])
+def test_an_attestation_is_selected_only_by_the_role_it_dispatched(world, capsys, intruder):
+    """P6 R8 (A8): a subagent of another CLI role holding the grant is refused naming its
+    role and changelog-analyst, even one dispatched with the very prompt the live attestation
+    records (the digest matches, the role does not); the main agent is refused as before; the
+    changelog-analyst the attestation records commits and spends the grant."""
+    state = os.environ["CLAUDE_STATE_DIR"]
+    repo = make_repo(world / "toy")
+    grant, _ = mint(state, repo)
+    prompt = "TASK_ID=20261028-100000\nDRYRUN=false"
+    analyst = dispatch(prompt)
+    other = dispatch(prompt, subagent_type=intruder)
+    assert evaluate(commit_payload(repo, other, "toolu_other", agent_type=intruder)) == 2
+    err = capsys.readouterr().err
+    assert f"role: {intruder}" in err and f"the caller's role is {intruder!r}" in err
+    assert "role its dispatch started, 'changelog-analyst'" in err
+    assert os.path.exists(grant), "a refused caller must not spend the grant"
+    main_agent = commit_payload(repo, analyst, "toolu_main")
+    main_agent.pop("agent_id")
+    main_agent.pop("agent_type")
+    assert evaluate(main_agent) == 2
+    assert "caller: main agent (no agent_id in the PreToolUse payload)" in capsys.readouterr().err
+    assert evaluate(commit_payload(repo, analyst, "toolu_analyst")) == 0
+    assert not os.path.exists(grant)
+
+
 def test_main_agent_and_a_spent_grant_are_refused(world):
     state = os.environ["CLAUDE_STATE_DIR"]
     repo = make_repo(world / "toy")
@@ -205,11 +235,34 @@ def test_main_agent_and_a_spent_grant_are_refused(world):
     analyst = dispatch("TASK_ID=20261028-100000")
     main_agent = commit_payload(repo, analyst, "toolu_main")
     main_agent.pop("agent_id")
+    main_agent.pop("agent_type")
     assert evaluate(main_agent) == 2
     assert os.path.exists(grant)
     assert evaluate(commit_payload(repo, analyst, "toolu_a")) == 0
     # The commit failed: the grant does not come back, so the same commit again is refused.
     assert evaluate(commit_payload(repo, analyst, "toolu_b")) == 2
+
+
+def test_a_grant_commits_only_a_message_carrying_its_task_id_line(world):
+    """A16: the analyst's `git commit -F <file>` under a grant naming a task needs the line
+    `Task-id: <task>` in the whole file; another task's line, the id elsewhere in a line, an
+    unreadable or unresolved file are refused, and a refusal spends nothing. The bulk route
+    (`auto-bulk:` subject, no Task-id line) is test_bulk_commit_sentinel's
+    test_f_flag_blessed_bridge_allowed_with_sentinel."""
+    state = os.environ["CLAUDE_STATE_DIR"]
+    repo = make_repo(world / "toy")
+    grant, _ = mint(state, repo)
+    analyst = dispatch("TASK_ID=20261028-100000")
+    for message in ("feat: change\n", "feat: change\n\nTask-id: 20261028-100001\n",
+                    "feat: Task-id: 20261028-100000\n", None):
+        assert evaluate(commit_payload(repo, analyst, "toolu_refused", message)) == 2, message
+        assert os.path.exists(grant)
+    unresolved = commit_payload(repo, analyst, "toolu_unresolved")
+    unresolved["tool_input"]["command"] = f'git -C {repo} commit -F "${{MSGFILE}}"'
+    assert evaluate(unresolved) == 2 and os.path.exists(grant)
+    body = "feat: change\n\nTask-id: 20261028-100000\n f.txt | 1 +\n"
+    assert evaluate(commit_payload(repo, analyst, "toolu_ok", body)) == 0
+    assert not os.path.exists(grant)
 
 
 def test_spending_is_an_unlink_only_one_event_wins(world):

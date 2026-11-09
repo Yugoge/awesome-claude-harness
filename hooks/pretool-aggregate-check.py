@@ -7,8 +7,8 @@ Fan-out collection check (QA dispatches only). A lane report declares a
 fan-out by its own `lane_set` naming two or more lanes. For each fan-out in the
 dispatch's scope it BLOCKS (exit 2), in every mode as on master, while every
 lane has reported and the canonical aggregate dev-report-<task-id>.json is
-missing. Two more rules block only when CLAUDE_OBLIGATION_BARRIER=block, since
-G3 stays advisory until P2 arms it:
+missing. Two more rules block only when CLAUDE_OBLIGATION_BARRIER=block, which
+the shipped settings.json sets (P2's arming; the code default stays advisory):
   (a) a lane its lane_set declares has no lane report (the roster check that
       hooks/posttool-lane-completeness-watch.py used to make, which never
       blocked);
@@ -46,7 +46,8 @@ reports and its canonical; worker labels in NON_WORKER_LABELS (bare "iter",
 lanes (iter2 FINDING-3).
 
 The obligation barrier and the gitignore rule below block only when
-CLAUDE_OBLIGATION_BARRIER=block.
+CLAUDE_OBLIGATION_BARRIER=block; while it is advisory the barrier prints each
+would-block finding on stderr (OBLIGATION BARRIER ADVISORY) and writes nothing.
 
 Fail-open contract: parsing failures, missing stdin, missing project dir,
 unexpected exceptions -> exit 0. Never crash the orchestrator on a self-bug.
@@ -597,6 +598,8 @@ def _run_obligation_barrier(data):
                 if ok:
                     continue
                 if mode == "block":
+                    # The block's text is built in its own statement, so the dead-end check
+                    # maps the block to this site from its literals (tests/replay/sites.py).
                     sys.stderr.write(
                         "\n"
                         + _format_barrier_violation(
@@ -608,6 +611,13 @@ def _run_obligation_barrier(data):
                         + "\n"
                     )
                     sys.exit(2)
+                # Advisory: the would-block reason, never a block; nothing is written.
+                line = _format_barrier_violation(
+                    violation["code"], violation["path"], violation["problem"], role, lane,
+                    "regenerate or repair the named artifact before dispatching "
+                    "this later pipeline stage",
+                )
+                sys.stderr.write(f"OBLIGATION BARRIER ADVISORY (pretool-aggregate-check): would block {line}\n")
     except Exception:
         pass  # fail open: an internal error never blocks a dispatch
 
@@ -620,7 +630,8 @@ def _run_obligation_barrier(data):
 # commit-landing, commit-qa, do-close or final_verification, P3 row 13). The
 # rule, admission included, is hooks/pretool-gitignore-preflight.py's
 # gitignored_deliverables(), called here, so the two never disagree; that hook
-# keeps blocking on it while this switch is advisory in the tracked settings.
+# keeps its own block on it too (P2's arming retired no copy: the artifact check
+# lists that block as an allowed position, H-023).
 #  ---------------------------------------------------------------------------
 
 GITIGNORE_RULE_PATH = Path(__file__).parent / "pretool-gitignore-preflight.py"
@@ -678,7 +689,8 @@ def main():
         violations = _find_violations(lane_reports, canonicals, dev_dir, scope_task_id)
         armed = os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() == "block"
         if not armed:
-            # Advisory G3 keeps master's one always-on block; (a) and (b) wait for P2's arming.
+            # Unarmed G3 (the code default; the shipped settings arm it) keeps master's one
+            # always-on block; (a) and (b) need the switch.
             violations = [v for v in violations if v[0] == "canonical_missing"]
         if violations:
             _emit_block(violations, dev_dir)

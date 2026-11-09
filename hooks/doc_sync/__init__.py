@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Doc-sync module for auto-generating INDEX.md and patching CLAUDE.md."""
+"""Doc-sync module: updates the marked sections of existing INDEX.md, README.md and CLAUDE.md files."""
 
 from .main import main
 

@@ -21,6 +21,11 @@ execute() runs, inside the sandbox's namespace, each unit once intact and once
 per (artifact, mutation), every run on a fresh overlay of the same final state
 (a mount and pid namespace of its own over HOME, the state dir and the temp
 dirs), so no run sees another's writes and nothing a run writes survives it.
+The replay changes one input after an event only by appending to it: the CLI's
+transcripts, whose sizes invocations.jsonl records per event. A unit whose
+intact run on the final state does not give its recorded decision runs again,
+every run with those transcripts cut back to its event (one the replay wrote
+after it removed), and that measures it when it gives the recorded decision.
 A run's decision is (exit code, verdict, how) as hookrun.interpret reads a
 hook's output; for a Bash call, its exit code. Results go to
 <run>/differential.json, sorted by event and artifact.
@@ -52,6 +57,12 @@ for i in "${!roots[@]}"; do
   r="${roots[$i]}"
   [ ! -d "$r" ] || mount -t overlay overlay -o "lowerdir=$r,upperdir=/mnt/ovl/$i/u,workdir=/mnt/ovl/$i/w" "$r"
 done
+# the transcripts as the unit's event saw them: SIZE PATH pairs up to "--" ("-": written after it)
+while [ "$1" != "--" ]; do
+  if [ "$1" = - ]; then rm -f -- "$2"; else truncate -s "$1" -- "$2"; fi
+  shift 2
+done
+shift
 # the mutation, over the overlays: HOW PATH CONTENT (PATH resolved, its root checked, by _one)
 how="$1"; path="$2"; content="$3"; shift 3
 case "$how" in
@@ -206,7 +217,7 @@ def execute(sb: str, run_dir: str, units: list[dict], schemas: dict | None = Non
     with open(os.path.join(work, "units.json"), "w") as fh:
         json.dump({"units": units, "schemas": schemas or {}, "workers": workers,
                    "layout": lay.to_json()}, fh)
-    env_inner = {"PATH": f"{lay.harness}/venv/bin:{os.environ.get('PATH', '/usr/bin:/bin')}", "HOME": lay.home,
+    env_inner = {"PATH": lay.path, "HOME": lay.home,
                  "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": lay.sb}
     t0 = time.monotonic()
     rc = sandbox.launch(sb, lay, [lay.python, "-m", "replay.differential", lay.sb + "/differential/units.json"],
@@ -259,7 +270,21 @@ def _roots(lay: dict) -> list[str]:
     return [lay["home"], lay["state"]] + [d for d in lay["temp_dirs"] if os.path.isdir(d)]
 
 
-def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env: dict) -> dict:
+def _cut(inv: dict, roots: list) -> list:
+    """SIZE PATH pairs cutting the replay's transcripts back to the event `inv` (its "transcripts":
+    each file's size then), "-" for one written after it; none without a record, or for a file
+    that is no longer a continuation of what the event saw."""
+    sizes, store = inv.get("transcripts"), os.path.dirname((inv.get("payload") or {}).get("transcript_path") or "")
+    out = []
+    for d, _dirs, files in sorted(os.walk(store)) if sizes and store else ():
+        for p in sorted(os.path.join(d, f) for f in files if f.endswith(".jsonl")):
+            if p in sizes and sizes[p] > os.path.getsize(p) or not any(p.startswith(r.rstrip("/") + "/") for r in roots):
+                return []
+            out += [str(sizes[p]) if p in sizes else "-", p]
+    return out
+
+
+def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env: dict, cut=()) -> dict:
     lay = cfg["layout"]
     roots = _roots(lay)
     how, path, content = "none", "", ""
@@ -269,7 +294,7 @@ def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env
         inside = any(path.startswith(r.rstrip("/") + "/") for r in roots)
         how, content = (mutation["how"] if inside else "outside"), mutation.get("content_file", "")
     argv = (["unshare", "--mount", "--propagation", "private", "--pid", "--fork", "--mount-proc",
-             "bash", "-c", OVERLAY, "overlay", *roots, "--", how, path, content,
+             "bash", "-c", OVERLAY, "overlay", *roots, "--", *cut, "--", how, path, content,
              "env", "-i", *[f"{k}={v}" for k, v in sorted(env.items())], "bash", "-c", unit["command"]])
     t0 = time.monotonic()
     try:
@@ -289,6 +314,7 @@ def _inner(units_path: str) -> int:
     work = os.path.dirname(units_path)
     cfg["work"] = work
     lay = cfg["layout"]
+    roots = _roots(lay)
     with open(os.path.join(work, "env.json")) as fh:
         hook_env = json.load(fh)
     with open(os.path.join(work, "bash-env.json")) as fh:
@@ -328,23 +354,35 @@ def _inner(units_path: str) -> int:
                 jobs.append((ui, m, pattern, payload, env))
     results: dict[int, dict] = {}
     t0 = time.monotonic()
+    cuts: dict[int, list] = {}
 
     def run(n_job):
         n, job = n_job
         ui, m, pattern, payload, env = job
-        return job, _one(cfg, n, cfg["units"][ui], m, payload, env)
+        return job, _one(cfg, n, cfg["units"][ui], m, payload, env, cuts.get(ui, ()))
 
     workers = max(1, int(cfg.get("workers") or 1))
-    if workers > 1:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            done = list(ex.map(run, enumerate(jobs)))
-    else:
-        done = [run(j) for j in enumerate(jobs)]
+
+    def execute(todo):
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                return list(ex.map(run, todo))
+        return [run(j) for j in todo]
+
+    done = execute(list(enumerate(jobs)))
+    intact = {ui: r["decision"] for (ui, m, _pt, _p, _e), r in done if m is None}
+    for ui, u in enumerate(cfg["units"]):
+        if u.get("original") is not None and intact.get(ui) != u["original"]:
+            cuts[ui] = _cut(invs.get(u["seq"]) or {}, roots)
+    again = execute([(n, j) for n, j in enumerate(jobs) if cuts.get(j[0])])
+    kept = {ui for (ui, m, _pt, _p, _e), r in again if m is None and r["decision"] == cfg["units"][ui]["original"]}
+    done = [(j, r) for j, r in done if j[0] not in kept] + [(j, r) for j, r in again if j[0] in kept]
     for (ui, m, pattern, _p, _e), r in done:
         u = cfg["units"][ui]
         rec = results.setdefault(ui, {k: u.get(k) for k in ("seq", "origin", "kind", "event", "label", "tool",
                                                           "agent_type", "agent_id", "original")})
+        rec["cut"] = ui in kept
         rec.setdefault("runs", [])
         if m is None:
             rec["intact"] = r["decision"]
@@ -364,7 +402,7 @@ def _inner(units_path: str) -> int:
             r["changed"] = r["decision"] != intact
         rec["runs"].sort(key=lambda r: (r["pattern"], r["raw"], r["how"]))
         out.append(rec)
-    res = {"units": out, "runs": len(jobs), "inner_wall_s": round(time.monotonic() - t0, 2)}
+    res = {"units": out, "runs": len(jobs) + len(again), "inner_wall_s": round(time.monotonic() - t0, 2)}
     with open(os.path.join(work, "results.json"), "w") as fh:
         json.dump(res, fh)
     return 0

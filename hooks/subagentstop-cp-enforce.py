@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
 # Description: SubagentStop hook for spec checkpoint enforcement (W6).
 #
-# MODE: ADVISORY by default. This hook ALWAYS exits 0 (never blocks a
-# subagent exit) unless CP_ENFORCE_MODE=block is EXPLICITLY set in the hook env.
+# MODE: blocking as shipped: settings.json's env sets CP_ENFORCE_MODE=block. Any
+# other value, or none, is advisory: the hook exits 0 and never blocks.
 #
-# WHY ADVISORY-FIRST: a buggy *blocking* SubagentStop hook breaks EVERY subagent
-# exit in every session (catastrophic blast radius), including the subagents you
-# would need to fix it. So the default never blocks; flipping to blocking
-# (CP_ENFORCE_MODE=block) is a deliberate, separately-reviewed decision.
+# WHY SCOPED: a blocking SubagentStop hook that judged every running slot would
+# block bystanders (a parallel agent, the /spec subagent whose Phase 2 sets
+# checklists for agents not yet dispatched). It judges only the stopping
+# subagent's own slots, so the only stop it blocks is an agent leaving its own
+# checkpoints pending; marking or waiving them (spec-check.py) always clears it.
 #
 # FAIL-SAFE: ANY error -> exit 0 (allow). Bounded filesystem scan, no network,
 # no subprocess. The outer try/except guarantees a hook bug can never trap a
 # subagent.
 #
 # Detection: scans $CLAUDE_PROJECT_DIR/.claude/specs/*/cp-state-*.json for the
-# stopping agent's own slots (agent_id, as spec-check.py register records it)
-# that are running (hooks/lib/agent_resolver.py cp_state_running, the one rule
-# role resolution also takes) AND have >=1 checkpoint still in state "pending".
-# Another agent's pending checkpoints are not this agent's to mark (P1c X6: a
-# /spec split's dev and qa slots refused the spec subagent's stop, a dead end).
+# stopping subagent's own running slots (agent_id = the payload's CLI agent_id,
+# which pretool-cp-checkin.py binds to the slot file that agent Read, through
+# spec-check.py register; running per hooks/lib/agent_resolver.py
+# cp_state_running, the one rule role resolution also takes) with >=1
+# checkpoint "pending". Another agent's pending checkpoints are not this
+# agent's to mark (P1c X6: a /spec split's dev and qa slots refused the spec
+# subagent's stop, a dead end). Replayed with CLI ids (P9 F-E4): an agent
+# leaving one pending is blocked until it marks it; /spec's own stop never is,
+# whatever id its Phase 2 passed (the slots it sets wait idle; another role's
+# Read binds nothing); a compliant /spec + /dev run, fan-out lanes included,
+# meets no block.
 from __future__ import annotations
 
 import glob
@@ -34,9 +41,11 @@ def main() -> int:
 
     mode = (os.environ.get("CP_ENFORCE_MODE", "advisory") or "advisory").strip().lower()
     try:
-        agent_id = json.load(sys.stdin).get("agent_id")
+        agent_id = (json.load(sys.stdin) or {}).get("agent_id")
     except Exception:
         agent_id = None
+    if not agent_id:
+        return 0  # the main agent's stop, or no id: no slot of its own
 
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     specs_glob = os.path.join(project, ".claude", "specs", "*", "cp-state-*.json")
@@ -49,7 +58,7 @@ def main() -> int:
                     st = json.load(fh)
             except Exception:
                 continue
-            if not agent_id or st.get("agent_id") != agent_id or not cp_state_running(st):
+            if st.get("agent_id") != agent_id or not cp_state_running(st):
                 continue
             cps = st.get("checkpoints") or []
             pend = [c.get("id") for c in cps if (c.get("state") or "pending") == "pending"]

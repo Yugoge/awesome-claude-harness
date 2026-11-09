@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""PreToolUse:Write|Edit|NotebookEdit advisory shim (warn-only as of 2026-05-14).
+"""PreToolUse:Write|Edit|NotebookEdit|MultiEdit advisory shim: exit 0 always.
 
-Canonical enforcement: pretool-tool-policy.py + lib/policy_registry — this
-hook is now registered in settings.json and authoritative. This shim was
-originally a backstop for unregistered sessions; with tool-policy
-authoritative, the shim is downgraded to advisory (exit 0 + stderr warning)
-on every hit. Path-based denial of non-dev code writes is enforced by
-pretool-tool-policy.py; this shim only emits a warning marker.
+A subagent (payload agent_id) writing a code file (CODE_PATTERN) whose role
+does not resolve to dev gets a stderr warning. Path-based denial of a role's
+writes is pretool-tool-policy.py's (lib/policy_registry rows); this shim only
+emits a warning marker.
 """
 from __future__ import annotations
 import json
@@ -32,17 +30,16 @@ def _target(tool_input: dict) -> str | None:
 
 
 def _warn_unregistered() -> None:
-    """LOW-10 soft-policy: role unresolved -> warn + allow (was hard-block).
+    """LOW-10 soft-policy: role unresolved -> warn + allow.
 
-    Hard-block on unresolved role caused false positives when Claude Code
-    dispatched subagents before any sentinel-creating tool fired (e.g. a
-    second back-to-back `dev` worker in the same session). The strong
-    invariant — wrong-role MUST NOT write code — is preserved by
-    `_block_wrong_role`. Unresolved role degrades to advisory warning.
+    A role can be unresolved for a legitimate subagent (e.g. a second
+    back-to-back `dev` worker in the same session), so it only warns. A
+    resolved role's write is decided by pretool-tool-policy.py, not here:
+    `_block_wrong_role` warns too.
     """
     sys.stderr.write(
         "WARN (shim): unregistered subagent role; allowing write. "
-        "(LOW-10 soft-policy; hard-block remains for resolved wrong-role)\n"
+        "(advisory: this shim never blocks)\n"
     )
     sys.exit(0)
 
@@ -57,12 +54,12 @@ def _block_wrong_role(role: str, target: str) -> None:
 
 
 def _decide(data: dict, target: str) -> None:
-    """Resolve role from stdin payload and apply the block matrix.
+    """Resolve role from stdin payload and apply the warn matrix (exit 0).
 
     - main agent (no agent_id) -> allow.
     - role 'dev' -> allow.
-    - role None (subagent skipped sentinel) -> warn + allow (LOW-10 soft).
-    - role any other -> block with role-specific message.
+    - role None (unresolved) -> warn + allow (LOW-10 soft).
+    - role any other -> warn with role-specific message, allow.
     """
     if not data.get("agent_id"):
         sys.exit(0)

@@ -33,7 +33,9 @@
 #      --migrate-from. Without --yes/--with/--without it asks once per module on
 #      standard input (y/yes/n/no, default No; end of input means No).
 #   3. git checkout: register the claude-settings filter in the repository's local
-#      git config; render the machine form of settings.json (render-settings render).
+#      git config, and set harness.autoPush false there when the key is absent (the
+#      home's automatic pushes off, D1); render the machine form of settings.json
+#      (render-settings render).
 #   4. create only when absent: <home>/logs/, the TMPDIR named by the rendered
 #      settings (mode 1777), <home>/private-literals.txt (empty, mode 0600), the
 #      protected-runtime file of hooks/lib/runtime_guard/config.py (empty lists).
@@ -302,6 +304,14 @@ if [ "$IS_GIT" -eq 1 ]; then
     && _set_cfg filter.claude-settings.required true \
     || { echo "bootstrap: could not register the claude-settings filter in the local git config." >&2; exit 1; }
   echo "bootstrap: settings filter claude-settings registered (local git config)"
+  # D1 as amended: this home's origin is the public repository, so its automatic pushes are off
+  # until the owner sets harness.autoPush; a value already set (any value) is never changed.
+  git -C "$HOME_DIR" config --local --get harness.autoPush >/dev/null 2>&1
+  if [ $? -eq 1 ]; then
+    git -C "$HOME_DIR" config --local harness.autoPush false \
+      || { echo "bootstrap: could not set harness.autoPush in the local git config." >&2; exit 1; }
+    echo "bootstrap: harness.autoPush set to false (local git config): this home does not push by itself"
+  fi
 else
   echo "bootstrap: not a git checkout — no settings filter to register; rendering from the working settings.json"
 fi

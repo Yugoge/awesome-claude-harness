@@ -62,7 +62,6 @@ COMMIT_GRANT_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-grant
 # awk on most Linux), `node(js)?`. NEVER remove a token to narrow a layer: an
 # interpreter writes with no redirection at all, so dropping one opens a hole
 # the redirection branch cannot see.
-# Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
 ARTIFACT_WRITE_VERB_RE='(\btee([^A-Za-z_]|$)|\bcp(io)?([^A-Za-z_]|$)|\bmv([^A-Za-z_]|$)|\bln([^A-Za-z_]|$)|\btouch([^A-Za-z_]|$)|\bsed\s+-i|\bi?python([^A-Za-z_]|$)|\binstall([^A-Za-z_]|$)|\bdd\s|\btruncate([^A-Za-z_]|$)|\bshred([^A-Za-z_]|$)|\brsync([^A-Za-z_]|$)|\b[gmn]?awk([^A-Za-z_]|$)|\bperl([^A-Za-z_]|$)|\bnode(js)?([^A-Za-z_]|$)|\bruby([^A-Za-z_]|$))'
 # A shell NAME=VALUE capture, used as a PREFIX to a namespace regex: it matches
 # the point where a command binds the protected namespace into a variable.
@@ -196,9 +195,17 @@ _runtime_guard_fail_closed() {
   # guaranteed. Over-denial is the intended direction: this path runs ONLY when the
   # engine already failed to decide. This helper is DEFENSE-IN-DEPTH over specific
   # tested forms, NOT a guarantee for any family. The families it covers are listed
-  # per-line below; what is NOT covered is named in the residual-gap note in
-  # docs/reference/core-context-refactor-plan.md (the authoritative, detailed record;
-  # lib/runtime_guard/context.py carries a short summary of it plus a pointer here).
+  # per-line below. Residual gaps (measured 2026-07-17; stated, not fixed):
+  #   1. no filesystem-mutation family: with the engine crashed, cp/tee/truncate/
+  #      `sed -i`/`>` onto a protected statefile, hotfile or global bin is ALLOWed,
+  #      so STEP0 (config self-protection), P3, P4 and P7 stay fail-OPEN on a crash;
+  #   2. the path-qualified/quoted tolerance is P5/P6-only: the service-control,
+  #      package-manager, build and runtime lines stay bare-token (a path-qualified
+  #      `systemctl` is not matched);
+  #   3. no family is fail-CLOSED family-wide, P5/P6 included: the quote-split and
+  #      backslash forms above stay engine=BLOCK, fallback=ALLOW; do not chase them;
+  #   4. `_core.main()` catches only around evaluate(): parseable non-object JSON
+  #      (`"hello"`, `[1,2]`, `42`, `null`) exits with empty stdout and a traceback.
   #
   # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
   # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token
@@ -310,14 +317,18 @@ def words(t):  # shell words; separators, comments and newlines kept as the shel
         x = shlex.shlex(t.replace('\n', '\n;') + tail, posix=True, punctuation_chars=';&|()`'); x.whitespace_split = True
         with contextlib.suppress(ValueError): return list(x)
     return t.split()
-UQ, DQ = (re.compile(p) for p in (r"""(?P<e>\\[\s\S])|(?P<s>'[^']*')|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$?\()|(?P<c>\))|(?P<d>")|(?P<x>\$[{']|<<|(?<![^\s;&|()<>])#|\bcase\b|['`])|[^\\$'`"()<#c]+|[\s\S]""", r"""(?P<e>\\[\s\S])|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$\()|(?P<d>")|(?P<x>\$\{|`)|[^\\`$"]+|[\s\S]"""))  # bash tokens outside / inside ".."
-def defuse(t, i=0, st='', o=''):  # t with each $( and ` the shell leaves unrun ('..', \-escaped) made inert ($ to _, ` to a ")" that shlex splits alike); t if unsure
-    while i < len(t) and st[-1:] != '!':  # st: open $(/( and " contexts as bash nests them; '!' = unsure: a stray ) or x token ($'..', <<, #, case, unclosed '/`, ${ not at top)
+UQ, DQ = (re.compile(p) for p in (r"""(?P<e>\\[\s\S])|(?P<s>'[^']*'|\$'(?:\\[\s\S]|[^\\'])*')|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$?\()|(?P<c>\))|(?P<d>")|(?P<m>(?<![^\s;&|()`])#[^\n]*)|(?P<x>\$\{|<<|\bcase\b|['`])|[^\\$'`"()<#c]+|[\s\S]""", r"""(?P<e>\\[\s\S])|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$\()|(?P<d>")|(?P<x>\$\{|`)|[^\\`$"]+|[\s\S]"""))  # bash tokens outside / inside ".."
+def gitish(s): s = re.sub(r'[\'"\\]', '', s); return re.search(r'(^|\W)git', s) and re.search('commit|config', s)  # the bash gate's test
+def unread(what): why.append(what); commits.append(('-C', cur[0]))  # text the guard cannot split like the shell: fail closed
+def defuse(t, i=0, st='', o=''):  # t with each $( and ` the shell leaves unrun ('..', $'..', \-escaped, # comment) made inert ($ to _, ` to a ")" that shlex splits alike); t if unsure
+    while i < len(t) and st[-1:] != '!':  # st: open $(/( and " contexts as bash nests them; '!' = unsure: a stray ) or x token (<<, case, unclosed '/`, ${ not at top)
         m = (DQ if st[-1:] == '"' else UQ).match(t, i); k, s, i = m.lastgroup, m.group(), m.end(); o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
+        if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]): unread('a double-quoted bash -c/eval string inside a double-quoted $(...)')
         st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
     return t if st else o
 def scan(text, depth=0, lg=False, gc=()):  # lg: quotes gone, so every $( and ` counts; gc: -c globals a `!`-shell alias's child git inherits
-    for sep, grp in itertools.groupby(zip(w := words(t := _process_heredocs(text)), w if lg else words(defuse(t))) if depth < 5 else [], lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
+    if depth >= 5: return unread('nesting past the expansion limit') if gitish(text) else None  # unexamined: fails closed
+    for sep, grp in itertools.groupby(zip(w := words(t := _process_heredocs(text)), w if lg else words(defuse(t))), lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
         if not sep: one(*map(list, zip(*grp)), depth, lg, gc)
 def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; recurse only into a word whose $( or ` the shell runs
     for w, v in zip(t, u):
@@ -337,10 +348,12 @@ def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; re
     if sub == 'config':  # keystone WRITE: denied if nested, wrapper-flagged, --global/--system, -f/--file, GIT_CONFIG or GIT_COMMON_DIR (any abbreviation); else (local) after the scan if its repo or a dir seen before it (cwd/cd/-C) has the harness home's git common dir or none
         ix = [j for j, a in enumerate(rest) if a[:1] != '-' and not (j and re.fullmatch(r'-[^-f]*f|--file?', rest[j - 1]))]; vb, wf = rest[ix[0]] if ix else '', any(o in WRF for o in rest); n = (ix[(vb in CFGW and not wf):] or [len(rest)])[0]  # ix: words that can be the verb or key (no -, not a separate -f/--file value); n: the key
         rn = any(len(o) > 4 and '--rename-section'.startswith(o) for o in rest[:n]) or vb == 'rename-section' and not wf; wr = wf or not (any(o in RDF for o in rest[:n]) or vb in CFGR) and (vb in CFGW or len(rest) > n + 1); tgt = next((a for j, a in enumerate(rest[n:n + 1 + rn]) for e in ('', '.path')[:1 + j] if prot(a + e)), '')  # git's options end at the key: each later word is an operand (a value may start with -); a rename (option abbreviated too) checks its new name as a section too (includeIf.<condition> holds .path)
-        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and tgt else None
+        gl = g[:len(g) - len(rest) - 1]; pin = not {'GIT_DIR', 'GIT_WORK_TREE'} & {*ex} and any(p[:1] == '/' and not re.search('[$`]', p) for p in [*(gl[j + 1] for j, w in enumerate(gl[:-1]) if w in ('-C', '--git-dir')), *(w[10:] for w in gl if w.startswith('--git-dir=')), *(a[8:] for a in t[:i] if a.startswith('GIT_DIR='))])  # a literal absolute -C/--git-dir/GIT_DIR prefix names the repository whatever the cwd (an export may not reach it)
+        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [] if pin else [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and tgt else None
     gr = [*gc, *(g[:len(g) - len(rest) - 1] if sub else [])]  # `-c alias.X=` overrides: inherited (a `!`-alias's outer -c) then this invocation's own
-    al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}
-    if sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
+    al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') if w[:2] == '-c' else None for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}  # None: --config-env takes the value from the environment
+    if sub and sub.lower() in al and al[sub.lower()] is None: why.append('an alias whose value --config-env reads from the environment'); commits.append(('-C', base))  # unseen value: fails closed
+    elif sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
     if sub != 'commit': return
     commits.append(('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))); skip = False
     for a in rest:
@@ -996,7 +1009,7 @@ fi
 #      listed verb through its environment.
 # The verb alternation itself is ARTIFACT_WRITE_VERB_RE, defined ONCE near the
 # top of this file and shared with Layer 1.E4 -- add verbs there, anchored, not
-# here. Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
+# here.
 # Stable label: commit-dispatch-attestation-write.
 if echo "$COMMAND" | grep -qE "${COMMIT_DISPATCH_ATTEST_RE}" \
    && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_DISPATCH_ATTEST_RE}" \
@@ -1076,7 +1089,7 @@ fi
 # textually IDENTICAL to Layer 1.E3's modulo the namespace variable, and
 # hooks/tests/test_commit_artifact_rw_boundary.py fails if the two diverge.
 # See Layer 1.E3's comment for the four branches, the relaxation they bind, and
-# the residual; and docs/reference/bash-safety-verb-anchoring-20261008.md.
+# the residual.
 # Stable label: commit-grant-raw-write.
 if echo "$COMMAND" | grep -qE "${COMMIT_GRANT_RE}" \
    && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_GRANT_RE}" \
@@ -1148,19 +1161,24 @@ fi
 # Run ONCE here; reused by all danger-git blocks below.
 # Uses COMMAND_CONTEXT_STRIPPED (normalized) NOT raw $COMMAND to avoid
 # false positives from quoted git references in echo/printf/heredoc bodies.
-# Prefilter: skip subprocess if no 'git' token in normalized command.
+# A git inside a shell -c string (`bash -c "git push --force"`) is just as
+# invisible to the bare regexes: the classifier resolves those strings from the
+# raw command (after a NUL, CMD_RAW=stdin), marks their invocations "nested", and every rule's
+# classifier branch below reads a nested invocation as it reads a path-qualified
+# one. Prefilter: skip the subprocess if neither view holds a 'git' token (the
+# stripped view blanks some -c strings, e.g. `bash -c -- "..."`).
 CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
 CLASSIFIER_STATUS='unavailable'
 CLASSIFIER_JSON=''
 CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
-if ! printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git'; then
-  # The normalized execution view contains no candidate token.  This is a
+if ! printf '%s\n%s\n' "$COMMAND_CONTEXT_STRIPPED" "$COMMAND" | grep -q 'git'; then
+  # Neither view contains a candidate token.  This is a
   # conclusive empty classification, not classifier unavailability.
   CLASSIFIER_STATUS='ok'
   CLASSIFIER_JSON='[]'
 elif [ -r "$CLASSIFIER_PY" ]; then
-  CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
-    "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
+  CLASSIFIER_JSON=$(printf '%s\n\0%s' "$COMMAND_CONTEXT_STRIPPED" "$COMMAND" | \
+    CMD_RAW=stdin "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
   _classifier_status=$?
   if [ "$_classifier_status" -eq 0 ] && \
      printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
@@ -1171,13 +1189,13 @@ if not isinstance(value, list):
 for item in value:
     if not isinstance(item, dict):
         raise SystemExit(1)
-    if set(item) != {"subcommand", "args", "path_qualified"}:
+    if set(item) != {"subcommand", "args", "path_qualified", "nested"}:
         raise SystemExit(1)
     if item["subcommand"] is not None and not isinstance(item["subcommand"], str):
         raise SystemExit(1)
     if not isinstance(item["args"], list) or not all(isinstance(arg, str) for arg in item["args"]):
         raise SystemExit(1)
-    if not isinstance(item["path_qualified"], bool):
+    if not isinstance(item["path_qualified"], bool) or not isinstance(item["nested"], bool):
         raise SystemExit(1)
 ' 2>/dev/null; then
     CLASSIFIER_STATUS='ok'
@@ -1187,14 +1205,14 @@ for item in value:
   unset _classifier_status
 fi
 if [ "$CLASSIFIER_STATUS" = "ok" ] && \
-   printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+   printf '%s\n' "$CLASSIFIER_JSON" | grep -qE '"(path_qualified|nested)": true'; then
   CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
 fi
-# Helper: check whether the classifier found a path-qualified invocation with
-# the given subcommand token.  Usage: _pq_git_has_subcmd reset
+# Helper: check whether the classifier found a path-qualified or nested invocation
+# with the given subcommand token.  Usage: _pq_git_has_subcmd reset
 _pq_git_has_subcmd() {
   local sub="$1"
-  printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true' && \
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -qE '"(path_qualified|nested)": true' && \
   printf '%s\n' "$CLASSIFIER_JSON" | grep -q "\"subcommand\": \"$sub\""
 }
 # Helper: check whether ANY classifier invocation (bare or path-qualified)
@@ -1604,11 +1622,38 @@ fi
 # Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs, each
 # matched anywhere (empty entries skipped: they would match every command). Unset or empty, the generic default names
 # match only a run: NAME or NAME.sh as the command word (after a path, options, '<', or a wrapper or shell, any pathed).
+# A ; & | ( ! { inside quoted data ('..', $'..', ".." outside its $( and `) is text, not a command start, unless a word
+# outside quotes may run text (a shell, eval, ssh, watch, trap, xargs, an interpreter, a -c/-e option): _HB_DATA masks it.
 _HB_CMD='(^|[;&|(`{!]|\$\()[[:space:]]*(([^[:space:];&|]*/)?(sudo|env|nohup|exec|command|time|nice|timeout|setsid|xargs|source|\.|(ba|z|da|k)?sh|if|then|do|else|while|until|[-<][^[:space:]]*|[0-9][^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*["'"'"']?([^[:space:];&|]*/)?'
+_HB_MASK='import re,sys
+t=sys.stdin.read();n=len(t);i=0;o=[];u=[]
+def code(j):  # end of the $( or ` code at j inside "..", or -1 when a quote inside makes it unsure
+    k=j+1 if t[j]=="`" else j+2;d=1
+    while k<n and d:
+        if t[k] in "\x27\"\\": return -1
+        d+=(t[k]=="(")-(t[k]==")") if t[j]=="$" else -(t[k]=="`");k+=1
+    return k if not d else -1
+while i<n and o is not None:
+    c=t[i];q="\"" if c=="\"" else "\x27"
+    if c=="\\": u.append(t[i:i+2]);o.append(t[i:i+2]);i+=2;continue
+    if c not in "\x27\"" and not t.startswith("$\x27",i): u.append(c);o.append(c);i+=1;continue
+    j=i+1+(c=="$");b=[t[i:j]]
+    while j<n and t[j]!=q:
+        if t[j]=="\\" and c!="\x27": b.append(t[j:j+2]);j+=2;continue
+        k=code(j) if c=="\"" and (t.startswith("$(",j) or t[j]=="`") else j
+        if k<0: o=None;break
+        if k>j: b.append(t[j:k]);j=k;continue
+        b.append("_" if t[j] in ";&|(!{" else t[j]);j+=1
+    if o is None or j>=n: o=None;break
+    o.append("".join(b)+q);u.append(" ");i=j+1
+r=r"(^|[\s;&|()`])((\S*/)?((ba|z|da|k|c|tc|fi|r)?sh|eval|ssh|watch|trap|su|parallel|tmux|screen|alias|flock|script|xargs|source|exec|[gmn]?awk|perl|ruby|python[\d.]*|node|php|lua|tclsh|expect|sed|n?vim?|make)|-\w*[ce]\w*|--(command|eval)\S*)(?=$|[\s;&|()`])|(^|[;&|()`])\s*\.\s"
+print(t if o is None or re.search(r,"".join(u)) else "".join(o),end="")'
 IFS='|' read -r -a _HARD_BANNED <<< "${CLAUDE_HARD_BANNED_SCRIPTS:-session-recovery|restart-all-sessions}"
 for _ban in "${_HARD_BANNED[@]}"; do
   _re="$_ban"; [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || _re="$_HB_CMD$_ban(\\.sh)?([\"'[:space:];&|)<>\`]|\$)"
-  if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_re"; then
+  [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || [ -n "${_HB_DATA:-}" ] || ! printf '%s\n' "$COMMAND" | grep -qE -- "$_re" \
+    || { _HB_DATA=$(printf '%s' "$COMMAND" | "$PYTHON_BIN" -c "$_HB_MASK" 2>/dev/null) && [ -n "$_HB_DATA" ]; } || _HB_DATA="$COMMAND"
+  if [ -n "$_ban" ] && printf '%s\n' "${_HB_DATA:-$COMMAND}" | grep -qE -- "$_re"; then
     printf "BLOCKED: hard-banned script '%s' is PERMANENTLY FORBIDDEN\nCommand: %s\nREASON: It manages session state or restarts daemons and can kill all sessions. Only the user may run it manually.\n" "$_ban" "$COMMAND" >&2; exit 2
   fi
 done
@@ -1765,7 +1810,7 @@ _EB_DECISION=''
 if [ -r "$_EB_PY" ]; then
   _EB_OUT=$(
     ulimit -v "${CLAUDE_HOOK_BOUNDARY_MEM_KB:-524288}" 2>/dev/null || true
-    CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
+    printf '%s' "$INPUT" | CMD_INPUT="$COMMAND" CMD_PAYLOAD=stdin timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
       "$PYTHON_BIN" "$_EB_PY" 2>/dev/null
   )
   if [ $? -eq 0 ]; then
@@ -1794,7 +1839,7 @@ case "$_EB_DECISION" in
   "DENY "*)
     echo "BLOCKED: removal-policy — ${_EB_DECISION#DENY }" >&2
     echo "Command: $COMMAND" >&2
-    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm); this command has a boundary that is neither." >&2
+    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no submodule); this command has a boundary that is none of these." >&2
     exit 2 ;;
   *)
     # DEGRADED MODE. The analyzer is missing, crashed, timed out, or hit the
@@ -1890,7 +1935,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; t
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='stash':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='stash':
     args=inv.get('args',[])
     bad={'push','save','create','store','-u','--include-untracked','-a','--all'}
     if not args or (args and (args[0] in bad or (args[0].startswith('-') and not args[0].startswith('--') and any(c in args[0][1:] for c in 'ua')))):
@@ -1918,7 +1963,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; t
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='stash' and not inv.get('args'):
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='stash' and not inv.get('args'):
     print('bare'); break
 " 2>/dev/null)
   [ "$_stash_bare" = "bare" ] && _PQ_STASH_BARE=1
@@ -1941,7 +1986,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd checkout
 import json,sys,re
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='checkout':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='checkout':
     args=inv.get('args',[])
     try:
       dd=args.index('--')
@@ -1977,7 +2022,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd restore;
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='restore':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='restore':
     args=inv.get('args',[])
     has_source=any(a in ('--source','-s') or a.startswith('--source=') or a.startswith('-s=') for a in args)
     if has_source:
@@ -2063,7 +2108,7 @@ import json,sys
 invs=json.load(sys.stdin)
 bad={'--force','-f','--force-with-lease','--delete','-d','--mirror'}
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='push':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='push':
     for tok in inv.get('args',[]):
       if tok in bad or tok.startswith('--force-with-lease=') or tok.startswith('+') or tok.startswith(':'):
         print('match'); sys.exit(0)
@@ -2085,7 +2130,7 @@ import json,sys,re
 invs=json.load(sys.stdin)
 bad_branch_flags={'--delete','--force','--move'}
 for inv in invs:
-  if not inv.get('path_qualified'):
+  if not (inv.get('path_qualified') or inv.get('nested')):
     continue
   sub=inv.get('subcommand','')
   args=inv.get('args',[])
@@ -2566,7 +2611,7 @@ import json,sys
 invs=json.load(sys.stdin)
 blocked={'revert','cherry-pick','rebase'}
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand') in blocked:
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand') in blocked:
     print('match'); break
 " 2>/dev/null | grep -q match && _PQ_SUBAGENT_HISTORY=1
   fi
@@ -2598,7 +2643,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd revert; 
 import json,sys,re
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='revert':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='revert':
     args=inv.get('args',[])
     # Find the ref arg (first non-flag arg)
     for a in args:

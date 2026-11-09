@@ -66,15 +66,16 @@ DEFAULT_REPORT_PREFIX = "dev-report-"
 DEFAULT_BASELINE_FIELD = "baseline_head_sha"
 DEFAULT_DECLARATION_CONTAINER = "dev"
 # THREE categories, not two, and the third is not a synonym for the first.
-# `files_created` and `files_modified` are GIT-DERIVED: a report fills them from
-# `git ls-files --others` and `git diff --name-only` against its own baseline.
-# That derivation is authorship-shaped, so by construction it cannot express a
+# `files_created` and `files_modified` are PRODUCER-DECLARED: dev lists the files
+# it wrote, and G2 (hooks/subagentstop-artifact-contract-enforce.py) checks the
+# lists at dev's stop against the files Claude Code recorded that dev writing.
+# Those lists are authorship-shaped, so by construction they cannot express a
 # path the cycle did NOT author but now hard-requires in the tree it ships -- a
 # file that already existed untracked, which a change made load-bearing. Such a
 # path lands in a purely observational field instead, the candidate tree is built
 # without it, and the criterion then fails for a requirement the records never
-# stated. `files_required_to_ship` is that missing category: DECLARED rather than
-# derived, and carrying no claim of authorship. Membership still comes only from
+# stated. `files_required_to_ship` is that missing category: declared without a
+# write behind it, and carrying no claim of authorship. Membership still comes only from
 # a report -- nothing enters a tree by existing on the machine.
 DEFAULT_DECLARATION_FIELDS = (
     "files_created",
@@ -307,7 +308,8 @@ def derive_declaration(reports_dir, task_id, *, baseline=None,
                        fields=DEFAULT_DECLARATION_FIELDS) -> Declaration:
     """Union of every declared path across the reports agreeing on one baseline.
 
-    "Declared" is `fields`: the git-derived created/modified sets plus the paths
+    "Declared" is `fields`: the producer-declared created/modified sets (G2 checks
+    them against the CLI's record of the dev's writes) plus the paths
     a report states it requires in the shipped tree without claiming to have
     authored them.
 

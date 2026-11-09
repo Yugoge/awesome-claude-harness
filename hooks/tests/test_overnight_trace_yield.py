@@ -67,13 +67,18 @@ def test_a_dispatch_declaring_a_specialist_report_records_its_yield(tmp_path, su
     assert (cycle / "trace.jsonl").is_file()
 
 
-@pytest.mark.parametrize("subagent_type,prompt", [
-    ("architect", "Provide your observations; no obligation"),
-    ("pm", _obligation("pm", "triage-report.v1")),
-    ("qa", _obligation("qa", "qa-report.v2")),
+# The obligation is built inside the test, not in the parameter list: its dispatched_at is the
+# clock, and a parameter value that holds the clock gives each xdist worker its own test id, so
+# the workers would collect different lists.
+@pytest.mark.parametrize("subagent_type,schema", [
+    ("architect", None),
+    ("pm", "triage-report.v1"),
+    ("qa", "qa-report.v2"),
 ])
-def test_any_other_dispatch_is_only_traced(tmp_path, subagent_type, prompt):
+def test_any_other_dispatch_is_only_traced(tmp_path, subagent_type, schema):
     cycle = _project(tmp_path)
+    prompt = (_obligation(subagent_type, schema) if schema
+              else "Provide your observations; no obligation")
     log = _dispatch(tmp_path, subagent_type, prompt)
     assert not log.exists()
     assert [json.loads(line)["agent_type"] for line in (cycle / "trace.jsonl").read_text().splitlines()] \

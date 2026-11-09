@@ -24,7 +24,7 @@
 #   orchestrator issued close_success_qa_fail_fixed scoring BEFORE QA finalized
 #   verdict. M3 adds a script-side precondition: close_success_* events require
 #   --note matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$ (no / \ . traversal). The
-#   events themselves are the ones scripts/close-scoring-decide.py returns from
+#   events themselves were the ones /close's old Step 3 helper returned from
 #   the close report's verdict (/close Step 3); the report and its verdict line
 #   are checked at close QA's own stop (G2), so this script reads neither (P1b E4).
 #
@@ -67,7 +67,6 @@ Reversal modes (M1/M2 — task 20260529-210616):
 
 close_success_* precondition (M3 — both qa_pass and qa_fail_fixed):
   --note REQUIRED matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}\$ (no /, \\, ., ..).
-  The event is one scripts/close-scoring-decide.py returned (/close Step 3).
 
 Score has no lower bound (negative scores accumulate), upper bound 100.
 Rank is recomputed from final score:
@@ -156,11 +155,6 @@ fi
 LIFECYCLE_DIR="$(dirname "${LIFECYCLE_FILE}")"
 mkdir -p "${LIFECYCLE_DIR}"
 
-# Touch the lifecycle file if it does not yet exist
-if [[ ! -f "${LIFECYCLE_FILE}" ]]; then
-  touch "${LIFECYCLE_FILE}"
-fi
-
 # -------- M3: close_success_* precondition gate (event mode only) --------
 # Runs BEFORE lock acquisition — failed precondition exits without touching file.
 if [[ "${EVENT}" == "close_success_qa_pass" || "${EVENT}" == "close_success_qa_fail_fixed" ]]; then
@@ -207,6 +201,7 @@ import datetime
 sys.path.insert(0, sys.argv[9])
 from score_log import ScoreLogError, read_lines
 sys.path.insert(0, sys.argv[10])
+from close_rating import append_row  # the log's one writer
 
 # Each role's score delta per event (spec 5.1; Path A rebalance, task
 # 20260524-205206 M1: cycle-total <= +5 across the scored roles, negatives
@@ -273,7 +268,7 @@ if mode == "event":
 
 # Read lifecycle.jsonl entries (under existing exclusive flock).
 try:
-    parsed_entries = read_lines(lifecycle_file)  # list of (line_number, entry_dict)
+    parsed_entries = read_lines(lifecycle_file) if os.path.exists(lifecycle_file) else []  # (line_number, entry_dict)
 except ScoreLogError as e:
     sys.stderr.write(f"score-update.sh: {e}\n")
     sys.exit(2)
@@ -366,14 +361,10 @@ entry_obj = {
     "actor": "orchestrator",
     "reason": final_reason,
 }
-line = json.dumps(entry_obj, ensure_ascii=False) + "\n"
 
 # Append to lifecycle.jsonl and fsync
 try:
-    with open(lifecycle_file, "a", encoding="utf-8") as f:
-        f.write(line)
-        f.flush()
-        os.fsync(f.fileno())
+    append_row(lifecycle_file, entry_obj)
 except OSError as e:
     sys.stderr.write(f"score-update.sh: failed to append to {lifecycle_file}: {e}\n")
     sys.exit(2)

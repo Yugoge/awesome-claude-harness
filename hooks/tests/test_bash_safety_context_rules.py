@@ -25,18 +25,27 @@ import subprocess
 import pytest
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "pretool-bash-safety.sh")
+# The harness home the hook guards. Every call below runs there, where every non-forced
+# git rm stays denied; TestRecoverableGitRm runs it in a product repository instead.
+HOME_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
-def run_hook(command: str, hook: str = HOOK) -> int:
-    """Invoke the real hook with a Bash tool_input and return its exit code."""
-    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    proc = subprocess.run(
+def run_hook_proc(command: str, hook: str = HOOK, cwd: str = HOME_DIR, env=None):
+    """Invoke the real hook with a Bash tool_input; `env` replaces the environment."""
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd})
+    return subprocess.run(
         ["bash", hook],
         input=payload,
         text=True,
         capture_output=True,
+        cwd=cwd,
+        env=env,
     )
-    return proc.returncode
+
+
+def run_hook(command: str, hook: str = HOOK, cwd: str = HOME_DIR) -> int:
+    """Invoke the real hook with a Bash tool_input and return its exit code."""
+    return run_hook_proc(command, hook, cwd).returncode
 
 
 BLOCK = 2
@@ -337,6 +346,155 @@ class TestCachedGitRmClassification:
     def test_quoted_reset_rule_data_and_sed_range_are_allowed(self):
         assert run_hook("echo 'permission: git reset --hard' >/dev/null") == ALLOW
         assert run_hook("sed -n '1,3p' README.md >/dev/null") == ALLOW
+
+
+# ── Recoverable git rm (P10 R13) ──────────────────────────────────────────────
+# git refuses to remove a file that differs from HEAD or the index, and a removed
+# clean file comes back with `git checkout <sha>^ -- <path>`, so a non-forced
+# git rm is allowed where the hook proves, in the repository it runs in, that no
+# pathspec matches a gitlink and that the repository is not the harness home.
+
+def _git(cwd, *args):
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                           "-c", "protocol.file.allow=always", *args], cwd=cwd, env=env,
+                          capture_output=True, text=True)
+
+
+@pytest.fixture
+def product_repo(tmp_path):
+    """A product repository with clean files, a directory and a clean submodule."""
+    return _make_product_repo(tmp_path)
+
+
+def _make_product_repo(root):
+    sub, repo = root / "sub-src", root / "repo"
+    sub.mkdir()
+    (sub / ".gitignore").write_text("data.log\n")
+    (repo / "dir").mkdir(parents=True)
+    for rel in ("clean.txt", "m.txt", "README.md", "dir/a.txt"):
+        (repo / rel).write_text(rel + "\n")
+    for cwd, steps in ((sub, ()), (repo, (("submodule", "add", "-q", str(sub), "vendor/sub"),
+                                           ("commit", "-qm", "sub")))):
+        for step in (("init", "-q"), ("add", "-A"), ("commit", "-qm", "init")) + steps:
+            assert _git(cwd, *step).returncode == 0, step
+    return str(repo)
+
+
+class TestRecoverableGitRm:
+    @pytest.mark.parametrize("command", (
+        "git rm clean.txt", "git rm -r dir", "git rm -n clean.txt", "git rm -- clean.txt",
+        "git rm -q clean.txt README.md", "git rm --cached -f clean.txt",
+        "git rm clean.txt; docker rm dev-container", "set -e; git rm clean.txt && echo done",
+        "cd /tmp && cd {repo} && git rm clean.txt", "git -C {repo} rm 'dir/*.txt'",
+    ))
+    def test_non_forced_git_rm_in_a_product_repo_is_allowed(self, product_repo, command):
+        assert run_hook(command.format(repo=product_repo), cwd=product_repo) == ALLOW, command
+
+    @pytest.mark.parametrize("command", (
+        # forced, in any spelling
+        "git rm -f clean.txt", "git rm -rf dir", "git rm -fr dir", "git rm --force clean.txt",
+        "git rm -r --force dir", "git rm -r dir --force", "git rm -qf clean.txt",
+        "git rm --forc clean.txt",
+        # wrapped, nested or handed its arguments by another program
+        "bash -c 'git rm -f clean.txt'", "bash -c 'git rm clean.txt'", "eval 'git rm clean.txt'",
+        "command git rm clean.txt", "env git rm clean.txt", "xargs git rm < list",
+        "find . -name clean.txt -exec git rm {} +", "echo $(git rm clean.txt)",
+        "git -c alias.x=rm x clean.txt",
+        # a location or pathspec the hook cannot resolve
+        'git rm "$X"', "git rm ~/clean.txt", 'cd "$D" && git rm clean.txt', "cd dir && git rm a.txt",
+        "export GIT_WORK_TREE=/tmp; git rm clean.txt", "GIT_DIR=/tmp git rm clean.txt",
+        "git -c core.worktree=/tmp rm clean.txt", "git rm --pathspec-from-file=list",
+        "set -a; git rm clean.txt", "trap 'cd /' DEBUG; git rm clean.txt",
+        # not git rm: unchanged
+        "rm clean.txt", "unlink clean.txt",
+    ))
+    def test_forced_wrapped_and_unresolvable_forms_are_blocked(self, product_repo, command):
+        assert run_hook(command, cwd=product_repo) == BLOCK, command
+
+    @pytest.mark.parametrize("command", ("git rm vendor/sub", "git rm -r vendor", "git rm -r .",
+                                         "git rm -n vendor/sub", "cd {repo} && git rm vendor/sub"))
+    def test_a_pathspec_matching_a_gitlink_is_blocked(self, product_repo, tmp_path, command):
+        cwd = str(tmp_path) if command.startswith("cd ") else product_repo
+        assert run_hook(command.format(repo=product_repo), cwd=cwd) == BLOCK, command
+
+    @pytest.mark.parametrize("command", (
+        "git rm README.md", "git -C {home} rm hooks/pretool-bash-safety.sh",
+        "cd {home} && git rm hooks/lib/policy_registry.py", "git -C {home} rm scripts/check-public-core.sh",
+        "git -C {home}/hooks rm --ignore-unmatch no-such-file",
+    ))
+    def test_every_non_forced_git_rm_in_the_harness_home_is_blocked(self, product_repo, command):
+        cwd = HOME_DIR if command == "git rm README.md" else product_repo
+        assert run_hook(command.format(home=HOME_DIR), cwd=cwd) == BLOCK, command
+
+    def test_git_refuses_a_modified_file_the_hook_allows(self, product_repo):
+        with open(os.path.join(product_repo, "m.txt"), "a") as fh:
+            fh.write("changed\n")
+        assert run_hook("git rm m.txt", cwd=product_repo) == ALLOW
+        assert _git(product_repo, "rm", "m.txt").returncode != 0
+        assert os.path.exists(os.path.join(product_repo, "m.txt"))
+
+    @pytest.mark.parametrize("command", ("git rm clean.txt", "git rm -f clean.txt",
+                                         "rm clean.txt", "unlink clean.txt"))
+    def test_degraded_mode_denies_every_git_rm(self, product_repo, tmp_path, command):
+        hook = TestGitResetExecutionClassification._fallback_hook(tmp_path)
+        assert run_hook(command, hook, cwd=product_repo) == BLOCK, command
+
+
+# ── Recoverable git rm from a session scratchpad (train 2) ────────────────────
+# A session scratchpad holds both $HOME and $TMPDIR below the /tmp stop root, so
+# the guard's data file ($HOME/.config/claude/protected-runtime.json) has an
+# ancestor (the scratchpad) that also holds the product repository. The guard
+# protects that ancestor as an entry; a glob operand under it is not a mutation
+# of the data file.
+
+DATA_FILE_REL = os.path.join(".config", "claude", "protected-runtime.json")
+
+
+@pytest.fixture
+def scratch_session(tmp_path):
+    """$HOME and $TMPDIR as two directories of one scratchpad, a product repository
+    under $TMPDIR, and the guard's data file tracked in a git repository of its own."""
+    pad = tmp_path / "scratchpad"
+    home, tmpdir = pad / "home", pad / "tmp"
+    home.mkdir(parents=True)
+    tmpdir.mkdir()
+    cfgdir = home / os.path.dirname(DATA_FILE_REL)
+    cfgdir.mkdir(parents=True)
+    (cfgdir / "protected-runtime.json").write_text('{"schema_version": 1}\n')
+    for step in (("init", "-q"), ("add", "-A"), ("commit", "-qm", "init")):
+        assert _git(str(cfgdir), *step).returncode == 0, step
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROTECTED_RUNTIME_FILE"}
+    env.update(HOME=str(home), TMPDIR=str(tmpdir))
+    return {"repo": _make_product_repo(tmpdir), "home": str(home), "cfgdir": str(cfgdir), "env": env}
+
+
+class TestRecoverableGitRmFromAScratchpad:
+    @pytest.mark.parametrize("command", ("git -C {repo} rm 'dir/*.txt'", "git rm 'dir/*.txt'",
+                                         "git rm -r dir", "git rm clean.txt"))
+    def test_a_glob_under_the_shared_scratchpad_is_allowed(self, scratch_session, command):
+        s = scratch_session
+        proc = run_hook_proc(command.format(**s), cwd=s["repo"], env=s["env"])
+        assert proc.returncode == ALLOW, (command, proc.stderr)
+
+    @pytest.mark.parametrize("command,where", (
+        ("git rm {cfgdir}/protected-runtime.json", "repo"),
+        ("git rm protected-runtime.json", "cfgdir"),
+        ("git rm '*.json'", "cfgdir"),
+        ("git rm '{cfgdir}/*'", "repo"),
+        ("git -C {cfgdir} rm protected-runtime.json", "repo"),
+        ("git -C {cfgdir} rm '*.json'", "repo"),
+        ("git -C {home} -C .config/claude rm protected-runtime.json", "repo"),
+        ("git -C {home} rm -r '.config/*'", "repo"),
+        ("rm {cfgdir}/protected-runtime.json", "repo"),
+        ("rm -rf {cfgdir}", "repo"),
+    ))
+    def test_a_git_rm_of_the_data_file_is_still_refused(self, scratch_session, command, where):
+        s = scratch_session
+        proc = run_hook_proc(command.format(**s), cwd=s[where], env=s["env"])
+        assert proc.returncode == BLOCK, command
+        assert "config self-protection" in proc.stderr, (command, proc.stderr)
+        assert os.path.exists(os.path.join(s["home"], DATA_FILE_REL))
 
 
 # ── Layer 1.F false-positive regression: protected name in quoted arg ─────────

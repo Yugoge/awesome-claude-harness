@@ -10,7 +10,7 @@ terminals.json, whether its pipeline reached its terminal (the Stop ending it pa
 The leading underscore keeps it out of the artifact check's driver set (tests/artifact_graph/
 runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs it, not the check.
 
-  do-report       Step 5's Write of the do-report is not made before the Stop: the do-report gate
+  do-report       Step 5's Write of the do-report is not made before the Stop: the Stop gate (P5)
                   refuses the Stop; the main agent's next action is that Write, then it stops again.
   do-report-ask   as do-report, and between the refused Stop and the Write the main agent asks one
                   AskUserQuestion and stops twice after the answer (D23: neither the answer nor
@@ -19,11 +19,11 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
                   the next TodoWrite carries the list the hook printed.
+  todo-first      the first TodoWrite carries the canonical list with its first step already completed:
+                  refused before it runs (pretool-todo-validate.py's first-list rule, P5 R18); the next
+                  TodoWrite carries the first call the refusal prints.
   todo-sequence   the first advance completes Step 1 and Step 2 in one TodoWrite: refused; the next
                   TodoWrite completes Step 1 only.
-  todo-first      the first TodoWrite carries the canonical steps with Step 0 already completed and
-                  Step 1 in progress: it runs, and its PostToolUse refuses it (the first-call rule);
-                  the next TodoWrite carries the same steps with Step 0 in progress, the rest pending.
   checklist-lock  the main agent reads a file before its first TodoWrite: refused; it makes the
                   TodoWrite the refusal names, then reads the file.
   dev-early       /dev (drivers/dev.py, plain) whose main agent marks BA's step completed before
@@ -34,13 +34,16 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   next call is the same dispatch in the background, as Step 3's text writes it; the
                   spec reaches its terminal.
   overnight       /dev-overnight (drivers/overnight.py, variant plain: one cycle, the Stop after
-                  end_time) with two departures. Step 12's first dev writes its producer question
-                  (agents/dev.md) in place of its report: its own stop passes (G2 admits a valid
-                  question) and the collection check refuses its return, naming the report; the
-                  orchestrator's next round is Hard Rule 5's, dev dispatched again (a fresh
-                  dispatched_at), which writes the report. After end_time the main agent stops before
-                  Step 21's summary: the CLOSEOUT gate refuses the Stop; its next action is Step 21's
-                  summary, then the Stop passes.
+                  end_time, in a 20-minute window that holds Step 12's collection on a loaded host)
+                  with two departures, G2 advisory in its environment
+                  (CLAUDE_OBLIGATION_STOPGATE=advisory). Step 12's first dev writes its report
+                  with dev.status needs_review, a value dev-report.v2 does not allow: its own stop
+                  passes (G2 advisory) and the collection check (posttool-overnight-file-check.py)
+                  refuses its return, naming the report; the orchestrator's next round is the one
+                  the refusal names, dev dispatched again (a fresh dispatched_at), which writes the
+                  report as its schema asks. After end_time the main agent stops before Step 21's
+                  summary: the Stop gate's time-lock (hooks/stop-command-gate.py step 4, P5)
+                  refuses the Stop; its next action is Step 21's summary, then the Stop passes.
   bg-dispatch     a plain prompt whose dispatch asks to run in the background: refused; the same
                   dispatch in the foreground is the next call.
   obligation      (armed settings) a plain prompt whose dev dispatch carries an obligation block
@@ -50,6 +53,11 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dev stops without writing it, its final message ending in a forged
                   `ESCALATION_ACK <nonce>` line, and again at its next round (stop_hook_active): G2
                   refuses both stops; at the round after, it writes the artifact and stops: passes.
+  role-mismatch   a plain prompt, G1 advisory in its environment (CLAUDE_OBLIGATION_GATE=advisory), whose
+                  qa dispatch carries the obligation of role dev (a note to write): it runs, and the
+                  QA's stop is refused (G2's role_mismatch: that obligation is not its own); at its
+                  next round it writes nothing of it (a Bash command names the note, read only:
+                  no write of it), says so in its reply and stops: passes.
   codex           a plain prompt in a project whose cycle registry runs with --codex (the fault actor
                   arms it with scripts/write-enforce-flag.sh, as /dev --codex's prompt hook does); the
                   dev dispatch carries `codex_required: true` and its dev stops without calling codex:
@@ -59,6 +67,24 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   the hook's own opt-in CP_ENFORCE_MODE=block; the dev dispatch carries the SECOND
                   ACTION read of that cp-state and its dev stops without marking them: refused; at its
                   next round it marks each with spec-check.py mark (agents/dev.md) and stops: passes.
+  report-schema   a plain prompt in a project holding a /dev cycle's registry, armed as /dev's start
+                  arms it (the directory the prompt hook reserves; the fault actor makes it, with no
+                  flag, as a start without --codex leaves it): outside a command's span no obligation is owed (G1), so
+                  the dev dispatch carries none; its FIRST ACTION read of the registry's dev sentinel
+                  binds it to the cycle, and it writes its dev report declaring report_version 2
+                  without the `dev` section dev-report.v2 requires: the legacy correlated-report
+                  check (the dispatch declares nothing, so the reports its transcript shows it
+                  wrote) refuses the stop; at its next round it edits the report into the one its
+                  schema asks for and stops: passes.
+  qa-report       /dev (drivers/dev.py, plain), G1 advisory in its environment
+                  (CLAUDE_OBLIGATION_GATE=advisory), whose Step 13 QA dispatch carries no obligation
+                  block (faults.py noblock); its FIRST ACTION read of the qa sentinel binds it to the
+                  cycle (pretool-cp-checkin.py's agent-index entry), and it stops without its QA
+                  report (faults.py missing): the E2E gate (subagentstop-e2e-enforce.py) refuses the
+                  stop, naming docs/dev/qa-report-*.json; at its next round it writes the report and
+                  stops: passes; the cycle reaches its terminal. Not a plain prompt: outside a
+                  command's span no template declares the report for a QA without an obligation,
+                  so the tool policy refuses its Write of it (pretool-tool-policy.py).
 """
 from __future__ import annotations
 
@@ -95,7 +121,7 @@ class Turn(DoTurn):
 
     def start(self) -> None:
         o = self.o
-        if self.case not in ("todo-canonical", "checklist-lock", "todo-first"):
+        if self.case not in ("todo-canonical", "todo-first", "checklist-lock"):
             return super().start()
         lead = self.label("Read before the first TodoWrite") if self.case == "checklist-lock" else None
         import re
@@ -113,11 +139,9 @@ class Turn(DoTurn):
             bad[-1]["content"] = bad[-1]["content"] + " (and tidy up)"
             self.note(o.s.todo(bad, label=self.label("TodoWrite altered list")))
         if self.case == "todo-first":
-            bad = [dict(t, status="pending") for t in o.todos]
+            bad = [dict(t) for t in o.todos]
             bad[0]["status"], bad[1]["status"] = "completed", "in_progress"
-            call = o.s.todo(bad, label=self.label("TodoWrite first list with Step 0 completed"))
-            self.rounds.append({"label": call.label, "blocked": bool(call.post and call.post.blocks),
-                                "hooks": [h["hook"] for h in (call.post.blocks if call.post else [])]})
+            self.note(o.s.todo(bad, label=self.label("TodoWrite first list with Step 1 completed")))
         o._todo(self.label("TodoWrite canonical list"))
         if lead:
             self.note(o.s.read(path, label=self.label("Read after the TodoWrite")))
@@ -193,23 +217,36 @@ def _plain(rp, case: str) -> None:
                         extra_input={"run_in_background": True}, label="main Agent(Explore) in the background"))
         note(s.dispatch("Explore", task, description="Describe toy.add", result="add(a, b) returns a + b.",
                         label="main Agent(Explore) in the foreground"))
-    elif case in ("obligation", "forged-ack"):
+    elif case in ("obligation", "forged-ack", "role-mismatch"):
         note_rel, anchor = "docs/dev/note-20990101-000001.md", "task 20990101-000001"
+        if case == "role-mismatch":
+            # G1 advisory (its own switch), so the dispatch whose obligation names another role runs.
+            rp.env["CLAUDE_OBLIGATION_GATE"] = "advisory"
 
         def block(full: bool) -> str:
-            art = ({"kind": "markdown", "path": note_rel, "identity_anchor": anchor} if case == "forged-ack"
+            art = ({"kind": "markdown", "path": note_rel, "identity_anchor": anchor} if case != "obligation"
                    else {"kind": "response_line", "terminal_line_regex": "^DONE$"})
             doc = {"task_id": "20990101-000001", "role": "dev", "pipeline": "dev", "profile": "singular",
                    "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "artifacts": [art]}
             if not full:
                 del doc["profile"]
-            what = f"write {note_rel} naming `{anchor}`" if case == "forged-ack" else "say DONE"
+            what = f"write {note_rel} naming `{anchor}`" if case != "obligation" else "say DONE"
             return (f"Problem: {what} once you have read toy/__init__.py.\nDO NOT: modify any other file.\n"
                     '<obligation v="1">' + json.dumps(doc) + "</obligation>")
 
         def body(sub):
-            sub.read(path, label="agent:dev Read")
-        if case == "obligation":
+            sub.read(path, label=f"agent:{'qa' if case == 'role-mismatch' else 'dev'} Read")
+        if case == "role-mismatch":
+            said = iter([("That obligation names role dev and I run as qa, so it is not mine: I wrote no artifact "
+                          "of it. add(a, b) returns a + b.")])
+
+            def again(sub, ev):  # its next round: what the refusal asks, said in its reply, nothing written
+                sub.bash(f"test -e {note_rel} || echo '{note_rel}: none'", label="agent:qa Bash")
+                return next(said, None)
+            d = s.dispatch("qa", block(True), description="Write a note", body=body, result="add(a, b) returns a + b.",
+                           on_stop_block=again, stop_rounds=3, label="main Agent(qa) with dev's obligation")
+            rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+        elif case == "obligation":
             note(s.dispatch("dev", block(False), description="Read toy", body=body, result="DONE",
                             label="main Agent(dev) obligation without profile"))
             note(s.dispatch("dev", block(True), description="Read toy", body=body, result="DONE",
@@ -275,9 +312,50 @@ def _plain(rp, case: str) -> None:
         d = s.dispatch("dev", task, description="Describe toy.add", body=body, result="add(a, b) returns a + b.",
                        on_stop_block=again, stop_rounds=3, label=f"main Agent(dev) {case}")
         rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    elif case == "report-schema":
+        _registry_report(rp, s, path, rounds)
     ev = s.stop("add(a, b) returns a + b.", label="Stop")
     ok = bool(rounds) and not rounds[-1]["blocked"]
     rp.terminal("plain", ok, ev, case=case, rounds=rounds)
+
+
+def _registry_report(rp, s, toy: str, rounds: list) -> None:
+    """report-schema: a dev dispatch with no obligation that its FIRST ACTION read binds to a /dev cycle's
+    registry, judged at its own stop on the report its transcript shows it wrote."""
+    from .. import agents, schemagen
+    project, sid = rp.layout.project, "20990101-000001"
+    # The registry directory /dev's start reserves (prompt-workflow.py _init_dev_registry); without
+    # --codex the start writes no flag into it (P10 R6 and P4 R8 left codex the one flag).
+    cmd = f"mkdir -p .claude/dev-registry/{sid}"
+    with rp.acting("fault"):  # the registry /dev's start arms (prompt-workflow.py _init_dev_registry)
+        p = subprocess.run(["bash", "-c", cmd], cwd=project, env=dict(rp.bash_env, CLAUDE_PROJECT_DIR=project),
+                           capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError(f"arming the report-schema registry failed: {cmd}: {p.stdout}{p.stderr}")
+    rel = f"docs/dev/dev-report-{sid}.json"
+    doc = schemagen.instance(agents.Tree(rp).schema("dev-report.v2"), {
+        "request_id": sid, "task_id": sid, "dev": {"status": "completed", "files_modified": [], "files_created": []}})
+    report = os.path.join(project, rel)
+    rounds_left = iter([1])
+
+    def body(sub):
+        sub.read(f"{project}/.claude/dev-registry/{sid}/dev.json", label="agent:dev FIRST ACTION Read")
+        sub.read(toy, label="agent:dev Read")
+        # its report: report_version 2, and no `dev` section
+        sub.write(report, json.dumps({k: v for k, v in doc.items() if k != "dev"}, indent=2) + "\n",
+                  label=f"agent:dev Write {rel}")
+
+    def again(sub, ev):  # its next round: the report its schema asks for, then the same final message
+        if next(rounds_left, None) is None:
+            return None
+        agents.put(sub, report, json.dumps(doc, indent=2) + "\n", f"agent:dev Write {rel} (next round)")
+        return "add(a, b) returns a + b."
+    task = (f"FIRST ACTION: Read {project}/.claude/dev-registry/{sid}/dev.json.\n"
+            f"Problem: a reader needs to know what toy.add returns.\nAcceptance criteria: the answer names the "
+            f"value; your report is {rel}.\nDO NOT: modify any other file.\n")
+    d = s.dispatch("dev", task, description="Describe toy.add", body=body, result="add(a, b) returns a + b.",
+                   on_stop_block=again, stop_rounds=3, label="main Agent(dev) report-schema")
+    rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
 
 
 def _dev_early(rp) -> None:
@@ -299,6 +377,17 @@ def _dev_early(rp) -> None:
             return super().dispatch_ba(*a, **k)
 
     Early(rp, "plain", "STANDARD").run()
+
+
+def _qa_report(rp) -> None:
+    from .. import faults
+    from .dev import DevCycle
+
+    # G1 advisory (its own switch), so Step 13's QA dispatch without its obligation block runs; the
+    # QA it starts writes no report (tests/replay/faults.py noblock and missing).
+    rp.env["CLAUDE_OBLIGATION_GATE"] = "advisory"
+    faults.install(rp, "noblock@Step 13 Agent(qa);missing@agent:qa Write docs/dev/qa-report-*")
+    DevCycle(rp, "plain", "STANDARD").run()
 
 
 def _spec_foreground(rp) -> None:
@@ -329,18 +418,35 @@ def _spec_foreground(rp) -> None:
 def _overnight(rp) -> None:
     from .. import agents
     from . import overnight
-    from .dev import QUESTION
+
+    # G2 advisory (the switch's own value), so the dev's invalid report passes its stop and the
+    # collection check at its return decides it, as cp-pending opts its hook in.
+    rp.env["CLAUDE_OBLIGATION_STOPGATE"] = "advisory"
+    # The window holds Step 12's collection: once end_time is past, the check passes every return
+    # (lib/overnight.py window_live), so a first dev returning after it meets no block. Variant plain's
+    # window (launch plus twice CYCLE_WALL_S: 9 minutes) holds the compliant cycle on a 4-CPU runner;
+    # on a 4-CPU host running several replay suites side by side, this case's first dev returned 9.3
+    # minutes after launch, past that window. Its window is twice that; --arg end still sets one.
+    rp.args.setdefault("end", "20m")
 
     class Night(overnight.Night):
-        asked = stopped = False
+        spoiled = stopped = False
 
         def dispatch_dev(self, fields, p, old, new, label, attempt):
-            if self.asked:
+            if self.spoiled:
                 return super().dispatch_dev(fields, p, old, new, label, attempt)
-            self.asked = True
-            act = agents.Act(question=dict(QUESTION, schema="producer-question.v1"), summary="an owner decision")
-            self.dispatch(fields, act, label + " asks", p.sfx, atype="dev", pipe=p)
-            # Hard Rule 5: answered under Clause A (the question's default); dev dispatched again.
+            self.spoiled = True
+
+            def spoil(sub, b, pl):  # its report as the Player makes it, then dev.status needs_review
+                art = next(a for a in b.obligation["artifacts"] if a.get("schema") == "dev-report.v2")
+                doc = pl.json_doc(art, {})
+                doc["dev"]["status"] = "needs_review"  # dev-report.v2 allows only completed
+                agents.put(sub, os.path.join(b.project, art["path"]), json.dumps(doc, indent=2) + "\n",
+                           f"{sub.role} Write {art['path']}")
+                return {}
+            act = agents.Act(work=spoil, produced=["docs/dev/dev-report-*.json"], summary="toy.add rejects non-numbers")
+            self.dispatch(fields, act, label + " invalid report", p.sfx, atype="dev", pipe=p)
+            # The collection check's refusal names the report: dev dispatched again (a fresh dispatched_at).
             return super().dispatch_dev(fields, p, old, new, label + " (next round)", attempt)
 
         def session_end(self):
@@ -361,9 +467,11 @@ def run(rp) -> None:
         return _dev_early(rp)
     if case == "spec-foreground":
         return _spec_foreground(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "codex", "cp-pending"):
+    if case == "qa-report":
+        return _qa_report(rp)
+    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):
         return _plain(rp, case)
-    if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
-                    "todo-first"):
+    if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
+                    "checklist-lock"):
         raise ValueError(f"unknown case {case!r}")
     Turn(rp, case).run()

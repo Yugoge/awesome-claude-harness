@@ -1110,13 +1110,6 @@ AC17_ACCEPTED_OVER_BLOCKS = [
     # lane has been pulled up for twice.)
     "git rebase -x 'git clean -n' HEAD~2",
     "git submodule foreach 'git clean -n'",
-    # shape F — ROUND 4: a dry-run whose global option takes a SEPARATE value
-    # the shared classifier does not recognise (`--attr-source HEAD`) resolves
-    # to no invocation at all, so dry-run cannot be proven and the rule fails
-    # closed. The direct price of denying the same option's destructive
-    # spelling, which is proven to delete. `git --attr-source=HEAD clean -n`
-    # (inline) IS resolved and stays ALLOWED — see AC17t.
-    "git --attr-source HEAD clean -n", 'git --attr-source "HEAD" clean -n',
 ]
 
 
@@ -1140,6 +1133,7 @@ def test_AC17m_dry_run_chained_with_a_nested_payload_blocks(form):
     "git --namespace ns clean -n", "git --git-dir .git clean -n",
     "git --work-tree . clean -n", 'git -c "a=b" clean -n',
     "git --namespace='ns' clean -n", "git --attr-source=HEAD clean -n",
+    "git --attr-source HEAD clean -n", 'git --attr-source "HEAD" clean -n',
     "git --no-lazy-fetch clean -n", "git -p clean -n", "git --bare clean -n",
     "git --no-pager grep clean src/", "git -C /tmp grep clean",
     "git --git-dir=/tmp/x grep clean src/", "git --attr-source HEAD grep clean",

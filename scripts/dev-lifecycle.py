@@ -9,8 +9,14 @@ Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md)
                (hooks/lib/obligation.terminal_status)
   dev chain -- a dev-report and no close-report: ONE call of the chain function
                (resolve-dev-artifact-chain.py resolve_chain), its result used
-               verbatim; the --auto close discovery hands that same result to
-               the walked task's own step, so the task's chain is called once
+               verbatim: close_pending whether it passes or not, as the
+               disposition takes an incomplete chain (D7); its instrument
+               failure, which the disposition raises, blocked. A gap of that
+               disposition the reader (obligation.declaring_dispatch) names no
+               owner for (the chain's own unowed_gap, used verbatim) can never
+               be produced unattended: list-actionable --next-action close
+               passes the task over, its reason on stderr (`auto_skip`);
+               /close <task> still takes it
   close     -- a close-report exists: the one classifier's class of its last
                line (hooks/lib/close-verdict.py), then commit detection; the
                chain is not called
@@ -26,9 +32,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
@@ -135,7 +143,8 @@ def ba_qa_verdict(doc: dict) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
-# do-report lite preflight (mirrors commands/close.md:157-162,224-233)
+# do-report shape check (a /do task's row; the disposition's own do-report
+# check is resolve-dev-artifact-chain.py's _check_do_report)
 # --------------------------------------------------------------------------
 
 
@@ -160,12 +169,14 @@ def do_report_lite_preflight(doc: dict) -> Optional[str]:
 
 
 def chain_state(task_id: str, result: dict) -> dict:
-    """The row a dev-chain task takes from its one chain call.
-
-    The chain's own verdict decides (its `exit_status`); its result is carried
-    whole (`artifact_chain`), and a fan-out's lanes are the ones it lists.
+    """The row a dev-chain task takes from its one chain call: close_pending
+    whether the chain passes or not, as the disposition takes an incomplete
+    chain (/close completes the cycle, D7); its result is carried whole
+    (`artifact_chain`), and a fan-out's lanes are the ones it lists.
     """
     row: dict[str, Any] = {
+        "state": "close_pending",
+        "next_action": "close",
         "invoke_resolver": True,
         "artifact_chain": result,
         "lanes": [
@@ -173,10 +184,6 @@ def chain_state(task_id: str, result: dict) -> dict:
             for lane in result["lanes"]
         ],
     }
-    if _load_resolver_module().exit_status(result) == 0:
-        row.update(state="close_pending", next_action="close")
-    else:
-        row.update(state="blocked", next_action="inspect", blocker="RESOLVER_FAIL")
     return row
 
 
@@ -201,20 +208,21 @@ def _head_reachable_trailer(repo_root: Path, trailer_line: str) -> bool:
 
 
 def _porcelain_dirty(repo_root: Path, owned_paths: list[str]) -> bool:
+    """Whether an owned path in the worktree differs from HEAD, read through a
+    throwaway index read from HEAD: a commit through /commit's session-private
+    index (scripts/lib/session_index.py) can leave the shared index behind."""
     if not owned_paths:
         return False
+    git = ["git", "-C", str(repo_root)]
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "status", "--porcelain", "--", *owned_paths],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, "index")}
+            subprocess.run([*git, "read-tree", "HEAD"], env=env, capture_output=True, timeout=10, check=True)
+            status = subprocess.run([*git, "status", "--porcelain", "--", *owned_paths], env=env,
+                                    capture_output=True, text=True, timeout=10, check=True)
     except (OSError, subprocess.SubprocessError):
         return True  # fail closed: unknown state is treated as dirty
-    if proc.returncode != 0:
-        return True
-    return bool(proc.stdout.strip())
+    return bool(status.stdout.strip())
 
 
 def _combine_commit_repo_statuses(per_repo: list[str]) -> dict:
@@ -222,7 +230,8 @@ def _combine_commit_repo_statuses(per_repo: list[str]) -> dict:
     without requiring a multi-repository git fixture per call site.
 
     case (a) every repo "committed" -> committed
-    case (b) every repo "no_evidence" -> commit_pending, commit_evidence=unknown
+    case (b) every repo "no_evidence" (no Task-id commit yet, its owned changes
+             dirty or not) -> commit_pending, commit_evidence=unknown
     case (c) anything else (mixed, or any "mismatch") -> blocked/PARTIAL_COMMIT
              -- a trailer match with dirty owned content NEVER counts as
              committed (objection 5's negative fixture).
@@ -269,18 +278,12 @@ def commit_detection(
     per_repo: list[str] = []
     for repo in plan["repositories"]:
         root = Path(repo["repo_root"])
-        owned = repo["owned_paths"]
-        has_trailer = _head_reachable_trailer(root, trailer_line)
-        dirty = _porcelain_dirty(root, owned)
-        if has_trailer and not dirty:
-            per_repo.append("committed")
-        elif not has_trailer:
-            # nothing of the task committed: its owned content still waits
-            # for /commit, dirty (the usual state after /close) or not.
+        if not _head_reachable_trailer(root, trailer_line):
             per_repo.append("no_evidence")
+        elif _porcelain_dirty(root, repo["owned_paths"]):
+            per_repo.append("mismatch")  # a Task-id commit, owned changes still outside HEAD
         else:
-            # trailer present but dirty owned content: NEVER a false `committed`.
-            per_repo.append("mismatch")
+            per_repo.append("committed")
 
     return _combine_commit_repo_statuses(per_repo)
 
@@ -308,20 +311,10 @@ def close_and_commit(
 
 
 def derive_state(project_root: Path, task_id: str) -> dict:
-    """Derive one task-id's lifecycle row.
-
-    Precedence resolution (dev implementation decision, documented in the dev
-    report): the ba-qa-report check and the do-report branch are both
-    reached only when no canonical dev-report exists; between them, a
-    ba-qa-report's PRESENCE takes precedence over a do-report's presence,
-    because a ba-qa-report is direct evidence of an in-progress /dev-track
-    attempt for this id. A do-report is a deliberate /do-track substitute for
-    the ENTIRE dev-chain (BA-QA included by design -- commands/close.md's
-    do-report lite preflight applies no ticket/context/QA checks), so it is
-    consulted only when no ba-qa-report exists either. This keeps AC-L1/L2/L3
-    (ba-qa-report-driven) and AC-L9/L10 (do-report-driven, real corpus has no
-    ba-qa-report for that id) both satisfied without contradiction.
-    """
+    """Derive one task-id's lifecycle row, by precedence: a dev-report (its close-report's verdict, else
+    the /dev chain's, unless it is dev's report concluding a /do task whose do-report is not completed:
+    Q7); else a ba-qa-report, direct evidence of a /dev-track attempt; else a do-report, the /do track's
+    substitute for the whole chain, BA-QA included (AC-L1-L3 and AC-L9/L10 hold together)."""
     project_root = Path(project_root)
     dev_dir = project_root / "docs" / "dev"
     row: dict[str, Any] = {
@@ -347,7 +340,17 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                     _load_close_verdict_module(), _load_commit_repos_module(),
                 ))
                 return row
-            row.update(chain_state(task_id, _load_resolver_module().resolve_chain(project_root, task_id)))
+            if do_report_lite_preflight(_read_json(do_report_path) or {}) == "do.status":
+                row.update(state="close_pending", next_action="close", invoke_resolver=False, chain_origin="do_report")
+                return row
+            resolver = _load_resolver_module()
+            result = resolver.resolve_chain(project_root, task_id)
+            row.update(chain_state(task_id, result))
+            # The chain's verdict on the disposition /close's Step 0 takes: a gap nobody owes (its
+            # instrument failure raises: a blocked row, below).
+            ownerless = resolver.unowed_gap(project_root, task_id, "dev")
+            if ownerless:  # /close <task> still takes it; --auto passes it over, saying why
+                row["auto_skip"] = f"no dispatch record or todo step owes {ownerless}"
             return row
 
         if ba_qa_path.is_file():
@@ -370,7 +373,7 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                 row.update(state="blocked", next_action="inspect", invoke_resolver=False, blocker="MALFORMED_DO_REPORT")
                 return row
             malformed_field = do_report_lite_preflight(do_doc)
-            if malformed_field is not None:
+            if malformed_field not in (None, "do.status"):  # not completed: /close routes it to dev (Q7)
                 row.update(
                     state="blocked", next_action="inspect", invoke_resolver=False,
                     blocker=f"MALFORMED_DO_REPORT_FIELD:{malformed_field}",
@@ -488,6 +491,40 @@ def actionable_parents(rows: list[dict], next_action: str) -> list[str]:
     )
 
 
+def auto_targets(project_root: Path, next_action: str, cutoff: Optional[float] = None,
+                 rows: Optional[list[dict]] = None, skipped: Optional[list[str]] = None) -> list[str]:
+    """The parents an --auto run walks: actionable_parents of ``rows``, else of
+    a fresh scan (no cached listing), less a task registered after ``cutoff`` (seconds
+    since the epoch; the run's opener), read from the time its id was minted
+    at (hooks/lib/obligation.task_stamp, the minting clock's local time), and,
+    for close, less a task the scan passes over (``auto_skip``: a gap nobody
+    owes), whose `<task-id>: skipped: <reason>` line goes to ``skipped`` when
+    given. A task whose id holds no stamp is kept."""
+    from datetime import datetime
+    from hooks.lib.obligation import task_stamp
+
+    def registered(task_id: str) -> Optional[float]:
+        stamp = task_stamp(task_id)
+        try:
+            return datetime.strptime(stamp, "%Y%m%d-%H%M%S").timestamp() if stamp else None
+        except ValueError:
+            return None
+
+    rows = scan(Path(project_root)) if rows is None else rows
+    by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
+    targets = []
+    for task_id in actionable_parents(rows, next_action):
+        if cutoff is not None and (registered(task_id) or float("-inf")) > cutoff:
+            continue
+        reason = by_id.get(task_id, {}).get("auto_skip") if next_action == "close" else None
+        if reason:
+            if skipped is not None:
+                skipped.append(f"{task_id}: skipped: {reason}")
+            continue
+        targets.append(task_id)
+    return targets
+
+
 def validate_auto_flag_combination(
     auto: bool, explicit_task_id: Optional[str], force: bool, bulk: bool
 ) -> Optional[str]:
@@ -580,6 +617,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     list_parser = sub.add_parser("list-actionable", help="List parent task-ids with a given next_action.")
     list_parser.add_argument("--next-action", required=True, choices=["close", "commit"])
     list_parser.add_argument("--project-dir", default=_default_project_dir())
+    list_parser.add_argument("--cutoff", type=float, default=None,
+                             help="Leave out tasks registered after this time (seconds since the epoch).")
 
     args = parser.parse_args(argv)
     project_root = Path(args.project_dir).resolve()
@@ -598,12 +637,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         # step takes it from here instead of calling the chain again.
         rows = scan(project_root)
         by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
-        for task_id in actionable_parents(rows, args.next_action):
+        skipped: list[str] = []
+        for task_id in auto_targets(project_root, args.next_action, args.cutoff, rows, skipped):
             chain = by_id[task_id].get("artifact_chain")
             if chain is None:
                 print(task_id)
             else:
                 print(task_id, json.dumps(chain, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+        for line in skipped:
+            print(line, file=sys.stderr)
         return 0
 
     return 2

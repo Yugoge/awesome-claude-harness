@@ -21,9 +21,6 @@ if [ -n "$TOOL_INPUT" ]; then
       WORKTREE_ROOT=$(echo "$FILE_PATH" | sed 's|\(.*/.claude/worktrees/[^/]*/\).*|\1|')
       if [ -d "$WORKTREE_ROOT" ]; then
         GIT_DIR="$WORKTREE_ROOT"
-        if [ "$SILENT_MODE" != "1" ]; then
-          echo "📂 Worktree detected: $GIT_DIR"
-        fi
       fi
     fi
   fi
@@ -52,16 +49,20 @@ fi
 
 # Threshold gate
 if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
-  if [ "$SILENT_MODE" != "1" ]; then
-    echo "💾 Auto-checkpoint triggered: $TOTAL files pending"
-  fi
-
   # Source lib and delegate. Lib writes to refs/checkpoints/<branch>, never HEAD.
   # shellcheck source=lib/checkpoint-core.sh
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
 
-  if write_checkpoint "$GIT_DIR" "posttool threshold (${TOTAL} files, threshold=${CHECKPOINT_THRESHOLD})"; then
-    if [ "$SILENT_MODE" != "1" ]; then
+  write_checkpoint "$GIT_DIR" "posttool threshold (${TOTAL} files, threshold=${CHECKPOINT_THRESHOLD})" >&2
+  RC=$?
+  if [ "$RC" -eq 3 ]; then
+    # Refused, nothing written: auto-commit.sh's notice as one JSON systemMessage, the whole stdout
+    # (code.claude.com/docs/en/hooks, read 2026-11-01: "Print nothing but the JSON object to stdout").
+    printf '{"systemMessage": "%s"}\n' \
+      "Checkpoint snapshot refused by $checkpoint_refused_by: nothing written, see logs/checkpoint.log"
+  elif [ "$SILENT_MODE" != "1" ]; then
+    echo "💾 Auto-checkpoint triggered: $TOTAL files pending"
+    if [ "$RC" -eq 0 ]; then
       BRANCH=$($GIT_CMD branch --show-current 2>/dev/null)
       if [ -n "$BRANCH" ]; then
         SANITIZED=$(printf '%s' "$BRANCH" | tr '/' '-')
@@ -71,10 +72,8 @@ if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
       fi
       REF="refs/checkpoints/${SANITIZED}"
       TIP=$($GIT_CMD rev-parse --short "$REF" 2>/dev/null)
-      echo "✅ Checkpoint saved: ${TIP:-?} on ${REF} (${TOTAL} files)"
-    fi
-  else
-    if [ "$SILENT_MODE" != "1" ]; then
+      echo "✅ Checkpoint saved: ${TIP:-?} on ${REF} (${TOTAL} files)${GIT_DIR:+ in $GIT_DIR}"
+    else
       echo "⚠️  Checkpoint failed; see ~/.claude/logs/checkpoint.log"
     fi
   fi

@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """
-PreToolUse Hook: Quality gate for Write/Edit operations.
+PreToolUse Hook: Quality gate for Write/Edit operations (advisory).
 
-Blocks file writes that would violate quantified quality thresholds:
+Warns on stderr when a Write's content, or an Edit's result, violates a
+quantified quality threshold:
 - File length: max 800 lines
 - Function length: max 30 lines
 - Nesting depth: max 3 levels
 
 Option alpha (no-net-worsening): if post-edit content has violations, the hook
-ALSO computes pre-edit metrics. Edits that do not worsen any metric (file
-lines, per-function-name length, max nesting) are ALLOWED with a [grandfathered]
-stderr note. New files (no pre-state) and previously-compliant files are still
-measured against the hard thresholds.
+ALSO computes pre-edit metrics. Edits that do not worsen per-function-name
+length or max nesting (file lines are not compared) get a [grandfathered]
+stderr note instead of the warning. New files (no pre-state) and
+previously-compliant files are still measured against the thresholds.
 
 Comparators are symmetric (post <= pre). Per-function comparison is name-keyed
-so an edit that shrinks A by 10 while growing B by 10 is BLOCKED (B grew).
+so an edit that shrinks A by 10 while growing B by 10 still warns (B grew).
 
-Hook type: PreToolUse (Write|Edit matcher). Exit codes: 0 allow, 2 block.
+Hook type: PreToolUse (Write|Edit|MultiEdit matcher; a MultiEdit is not
+checked). Exit code: always 0.
 """
 
 import json
@@ -361,7 +363,7 @@ def _grandfather_or_block(data, file_path, ext, post_content, violations):
 
 
 def main():
-    """Entry point: read stdin JSON, run quality checks, block or allow."""
+    """Entry point: read stdin JSON, run quality checks, warn; exit 0."""
     try:
         data = json.load(sys.stdin)
         tool_name = data.get("tool_name", "")

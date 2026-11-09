@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-# STUB: its one rule (a TodoWrite shorter than the canonical checklist) is pretool-todo-validate.py's, which refuses such a call before it runs.
-"""PostToolUse Hook (TodoWrite), retired to a no-op (P1c X6, class U).
+# STUB: settings.json no longer registers it; pretool-todo-validate.py refuses a short list at a span's first list or a length change before the call runs.
+"""PostToolUse hook (TodoWrite step count), retired to a no-op.
 
-It blocked a TodoWrite whose list held fewer steps than the active command's
-canonical checklist. No such call reaches PostToolUse: pretool-todo-validate.py
-(PreToolUse, matcher TodoWrite) checks every list with no accepted list before
-it, or with a length other than the accepted list's, against the canonical
-checklist (lib.todo_canonical.validate_against_canonical, whose first check is
-the count) and refuses it; every list it lets run therefore has the canonical
-length, the accepted list included (by induction from the first). Both hooks
-read the same checklist (lib.todo_canonical.checklist: the same span, the same
-todo script and arguments), so the block here was unreachable and is deleted.
-settings.json still registers this file and a running session runs the current
-hook files (D15), so it stays as an exit-0 stub that reads nothing."""
+It refused, after a TodoWrite had run, a list shorter than the command's
+canonical list at a first list or a change of its length. pretool-todo-
+validate.py compares those lists with the canonical one, count included,
+before the call runs (P5 R19). A running session keeps the hook list it
+loaded, so the file stays as an exit-0 stub that reads nothing and decides
+nothing."""
 import sys
 
 sys.exit(0)

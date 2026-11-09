@@ -78,69 +78,6 @@
       "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
-      "path": "commands/dev.md",
-      "fingerprint": "0f1494ee69e11a18",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Example: WHAT-only (correct) — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "7d6340d619802e4d",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "How the rule is enforced — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "ad431a4e6955f846",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Example: HOW-prescription (forbidden) — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "f653a2d8adf5a2f1",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Scope of this rule — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "docs/reference/core-context-refactor-plan.md",
-      "fingerprint": "040351515157df67",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| INV-5 | No project identifiers | new module `grep -Ei 'happy\\|<author-path>\\|slopus'` → clean |\""
-    },
-    {
-      "path": "docs/reference/monolith-split-plan.md",
-      "fingerprint": "367e182696ac526b",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| Result | INV-1 ✓ (755→755; full `hooks/tests` 1132 passed / 9 xpassed, no new fail/skip)\""
-    },
-    {
-      "path": "docs/reference/monolith-split-plan.md",
-      "fingerprint": "ad5fb79b27dda6e4",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| INV-5 | No project identifiers | New module `grep -Ei 'happy\\|<author-path>\\|<projname>'` → clea\""
-    },
-    {
-      "path": "docs/reference/monolith-split-plan.md",
-      "fingerprint": "d059de199e59510b",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Phase 3 — DONE (2026-07-15): path/glob matching seam — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "docs/reference/monolith-split-plan.md",
-      "fingerprint": "eb64f8bafeaf0354",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| Result | INV-1 ✓ (755→755; full `hooks/tests` 1136 passed / 9 xpassed, no new fail/skip)\""
-    },
-    {
       "path": "docs/reference/roadmap-decomposition-productization.md",
       "fingerprint": "10b0f05e3268340d",
       "ordinal": 1,
@@ -1198,41 +1135,6 @@
       "rationale": "usage() — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
-      "path": "scripts/close-scoring-decide.py",
-      "fingerprint": "924a6cf6f5aeb156",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# narrower 2-candidate resolution missed <author-path>). The resolver prints a path on\""
-    },
-    {
-      "path": "scripts/close-scoring-decide.py",
-      "fingerprint": "95ebf3714a61f66c",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "def main() — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "scripts/close-scoring-decide.py",
-      "fingerprint": "b21259cfb76925ea",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "def main() — whole-line comment describing the resolver's ${CONTROL_ROOT:-...} fallback; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
-    },
-    {
-      "path": "scripts/close-scoring-decide.py",
-      "fingerprint": "b9a6765cfdc74e03",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "def main() — whole-line comment describing the nested-repo mis-resolution against ${CONTROL_ROOT:-...}; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
-    },
-    {
-      "path": "scripts/close-scoring-decide.py",
-      "fingerprint": "d08e58a0dd6887e2",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "def main() — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "scripts/create-overnight-state.sh",
       "fingerprint": "500e9c4a69ea6ecb",
       "ordinal": 1,
@@ -1245,13 +1147,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# resolver is at ../hooks/lib), NEVER the author literal <author-path>.\""
-    },
-    {
-      "path": "scripts/spec-verify/spec_verify_parsers.py",
-      "fingerprint": "d08b965ca6991816",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
       "path": "scripts/step7-spec-update.py",
@@ -1455,6 +1350,41 @@
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "924a6cf6f5aeb156",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# narrower 2-candidate resolution missed <author-path>). The resolver prints a path on\""
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "95ebf3714a61f66c",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def main() — prose/comment text; never read as a path at runtime."
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "b21259cfb76925ea",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def main() — whole-line comment describing the resolver's ${CONTROL_ROOT:-...} fallback; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "b9a6765cfdc74e03",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def main() — whole-line comment describing the nested-repo mis-resolution against ${CONTROL_ROOT:-...}; never read as a path at runtime. Re-surfaced when the left boundary was narrowed to (?<![A-Za-z0-9])."
+    },
+    {
+      "path": "scripts/close-scoring-decide.py",
+      "fingerprint": "d08e58a0dd6887e2",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "def main() — prose/comment text; never read as a path at runtime."
     }
   ]
 }

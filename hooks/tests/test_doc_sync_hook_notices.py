@@ -197,7 +197,7 @@ def test_hook_notice_regenerated_or_reserved_paths_stay_silent(tmp_path, scenari
 
 
 def test_hook_notice_single_notice_when_dirs_coincide(tmp_path):
-    """The parent and the global directory reach the same README: it is reported once."""
+    """A README the global directory links to is reported once, and the global copies stay as they are."""
     world = World(tmp_path, folder_parts=('.claude', 'commands', 'sub'))
     world.readme.write_text(README_TEXTS['S3'])
     global_commands = world.home / '.claude' / 'commands'
@@ -208,8 +208,8 @@ def test_hook_notice_single_notice_when_dirs_coincide(tmp_path):
 
     text = parse_single_notice(run_hook(world))
 
-    # The global branch really ran (it updated its marked INDEX.md), yet both READMEs are one file.
-    assert '**Total entries**' in global_index.read_text()
+    # A product write regenerates only its own directory: the global INDEX.md keeps its bytes.
+    assert global_index.read_text() == '# commands\n\n<!-- AUTO:index-stats -->\n<!-- /AUTO:index-stats -->\n'
     assert text.count('SKIPPED_NO_CLOSING_MARKER') == 1
     assert text.count(os.path.realpath(world.readme)) == 1
 
@@ -564,7 +564,6 @@ def raise_runtime_error(*args, **kwargs):
 
 @pytest.mark.parametrize('failing_step', [
     pytest.param('patch_claude_md', id='patch_claude_md_raises'),
-    pytest.param('_maybe_regen_global', id='global_regen_raises'),
 ])
 def test_emission_robust_notices_survive_later_exception(tmp_path, monkeypatch, capsys, failing_step):
     """A skip collected before a later step raises is still printed, and the exit code stays 0."""

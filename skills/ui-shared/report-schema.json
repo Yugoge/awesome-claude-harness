@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://claude.ai/.claude/skills/ui-shared/report-schema.json",
   "title": "ui-specialist 6-channel structured review report",
-  "description": "Schema for the ui-specialist subagent's final JSON report. Implements spec-20260426-080555 section 5.5 (6 channels) + 5.11 (hard_defect vs taste_heuristic) + 5.15 (skill outputs) + double-defense severity hard-cap on aesthetic_findings.",
+  "description": "Schema for the ui-specialist subagent's final JSON report: 6 channels, hard_defect vs taste_heuristic findings, skill outputs, and a double-defense severity hard-cap on aesthetic_findings.",
   "type": "object",
   "required": [
     "agent",

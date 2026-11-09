@@ -202,9 +202,7 @@ def assert_joint_invariant(observation: dict, agg_mod: ModuleType) -> None:
     half breaks clause C1.  Because they are one function, no single-half
     revert can leave this green.
 
-    Attribution-journal consumer cutover (docs/reference/attribution-journal-
-    cutover-flip-plan-20261003.md, superseded by the zero-blocking constraint
-    of the follow-up consumer-cutover task) changed what C2 used to assert.
+    The attribution-journal consumer cutover changed what C2 used to assert.
     The SAME-CYCLE-ONLY gate (`_apply_completeness_check(..., same_cycle_only=
     True)`, OWNERSHIP_COMPLETENESS_BLOCKING_KEY / the resolver's GAP_CODE) no
     longer derives from the self-reported-ledger replay this fixture's git-only

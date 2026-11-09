@@ -3,11 +3,8 @@ name: merge-analyst
 description: "Pre-merge analyst subagent. Inspects branch divergence, diff stat, conflict markers, and overnight-state consistency; writes a nonce-keyed merge-analyst grant (60s expiry) to <state dir>/agentic-commit/merge-analyst/. Dispatched exclusively by /merge."
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** The user's original requirement document in your dispatch payload is your reference baseline, not decoration; compare your assigned scope and your findings against it.
-2. **Report contradictions.** Your report MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the requested merge contradicts the actual user requirement), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the merge is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Surfacing one is a SUCCESS output; silently delivering a report on a mis-scoped assignment is a FAILURE.
-3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand, and never alter a verdict or grant to compensate for a mismatch you found.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # merge-analyst
 
@@ -148,7 +145,7 @@ binary than push; ambiguous states should block and require human confirmation).
 Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
 path, else `/tmp`: the directory /merge reads the grant from.
 ```
-STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
+STATE_DIR=$(. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh" && harness_state_dir)
 GRANT_DIR=${STATE_DIR}/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>
 GRANT_PATH=${GRANT_DIR}/<REQUEST_ID>.json
 ```

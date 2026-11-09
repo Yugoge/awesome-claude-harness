@@ -294,9 +294,7 @@ def test_ac1_rejects_files_modified_path_missing_from_owned_edits_ledger(tmp_pat
         owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
     )
 
-    # Attribution-journal consumer cutover (docs/reference/attribution-
-    # journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
-    # constraint of the follow-up consumer-cutover task): absence from the
+    # Attribution-journal consumer cutover: absence from the
     # self-reported owned_edits ledger alone no longer raises -- the gate now
     # asks the write-time journal (scripts/resolve-commit-repos.py
     # _ledger_entangled()), and this fixture's edit is a plain-filesystem
@@ -1551,3 +1549,136 @@ def test_strict_ledger_helper_non_string_key_carries_upstream_defect_code(tmp_pa
             {1: "x"}, control, field_name="owned_edits"
         )
     assert excinfo.value.code == "upstream_defect"
+
+
+# --------------------------------------------------------------------------
+# Explicit per-path declared exclusion of an unsupported-owner owned path
+# (--exclude-unsupported-owned-path / plan.unsupported_owner_exclusions).
+# A cycle whose owned set legitimately spans an unsupported repository must
+# still be committable for its in-repo portion, with the scope difference
+# disclosed in the plan -- without widening repository admission.
+# --------------------------------------------------------------------------
+
+
+def _foreign_owned_fixture(tmp_path: Path, task: str) -> tuple[Path, Path, str, Path]:
+    """control repo + an unadmitted foreign repo, one owned path in each.
+
+    The foreign path is dual-listed in files_modified AND files_created,
+    matching the real shape of task 20261023-170759 (whose foreign
+    test_config_key_vocabulary.sh appears in both lists) -- so every caller
+    also pins the one-record-per-path dedup.
+    """
+    control = _repo(tmp_path / "control")
+    foreign = _repo(tmp_path / "foreign")
+    (control / "owned.txt").write_text("owned\n", encoding="utf-8")
+    (foreign / "manual.txt").write_text("manual\n", encoding="utf-8")
+    foreign_raw = str(foreign / "manual.txt")
+    report = _report(control, task, ["owned.txt", foreign_raw], created=[foreign_raw])
+    return control, foreign, foreign_raw, report
+
+
+def test_excl_rule2_declared_unsupported_owner_path_is_excluded_and_recorded(
+    tmp_path: Path,
+) -> None:
+    """Rule 2: a path that is BOTH unsupported-owner AND explicitly declared is
+    dropped from every repository entry's owned_paths and recorded once in
+    plan["unsupported_owner_exclusions"] with its declared spelling, resolved
+    owner repository, and the reason it was left out."""
+    task = "task-excl-rule2-declared-foreign-path"
+    control, foreign, foreign_raw, report = _foreign_owned_fixture(tmp_path, task)
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[str(control)],
+        report_arg=str(report),
+        excluded_unsupported_paths=[foreign_raw],
+    )
+
+    # No repository entry is created for the unsupported owner, and no entry
+    # carries the excluded path: admission is not widened, it is narrowed.
+    assert [item["repo_root"] for item in plan["repositories"]] == [str(control.resolve())]
+    assert plan["repository_count"] == 1
+    assert plan["repositories"][0]["owned_paths"] == ["owned.txt"]
+
+    records = plan["unsupported_owner_exclusions"]
+    assert len(records) == 1, "a dual-listed excluded path must record exactly once"
+    assert records[0]["path"] == foreign_raw
+    assert records[0]["owner_repo_root"] == str(foreign.resolve())
+    assert "supported repository" in records[0]["reason"]
+
+
+def test_excl_rule3_undeclared_unsupported_owner_path_still_raises(tmp_path: Path) -> None:
+    """Rule 3 regression pin: the SAME report with no declaration must still
+    fail closed, naming the foreign path. A newly-appearing foreign path is
+    never silently dropped just because the exclusion channel now exists."""
+    task = "task-excl-rule3-undeclared-foreign-path"
+    control, _foreign, foreign_raw, report = _foreign_owned_fixture(tmp_path, task)
+
+    with pytest.raises(MODULE.PlanError, match="outside the supported repository set") as excinfo:
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[str(control)],
+            report_arg=str(report),
+        )
+    assert foreign_raw in str(excinfo.value)
+
+
+def test_excl_rule4_declared_path_whose_owner_is_supported_raises(tmp_path: Path) -> None:
+    """Rule 4: declaring an owned path whose owner IS supported is an error
+    naming that path -- such a declaration is stale or mistaken, and honoring
+    it would silently drop committable work."""
+    task = "task-excl-rule4-declared-supported-owner"
+    control, _foreign, foreign_raw, report = _foreign_owned_fixture(tmp_path, task)
+
+    with pytest.raises(MODULE.PlanError, match="IS supported") as excinfo:
+        MODULE.build_plan(
+            task_id=task,
+            control_root_arg=str(control),
+            supported_repo_args=[str(control)],
+            report_arg=str(report),
+            excluded_unsupported_paths=[foreign_raw, "owned.txt"],
+        )
+    assert "owned.txt" in str(excinfo.value)
+
+
+def test_excl_rule5_declared_path_absent_from_owned_set_raises(tmp_path: Path) -> None:
+    """Rule 5: declaring a path the report does not own at all is an error
+    naming that path (same reasoning as rule 4). Covers both a real but
+    unowned file and a glob-shaped declaration -- matching is exact-path
+    only, so a glob admits no prefix, it simply matches nothing and raises."""
+    task = "task-excl-rule5-declared-unowned"
+    control, foreign, foreign_raw, report = _foreign_owned_fixture(tmp_path, task)
+    (foreign / "never-owned.txt").write_text("never\n", encoding="utf-8")
+
+    for declaration in (str(foreign / "never-owned.txt"), str(foreign / "*")):
+        with pytest.raises(
+            MODULE.PlanError, match="not in the report's owned path set"
+        ) as excinfo:
+            MODULE.build_plan(
+                task_id=task,
+                control_root_arg=str(control),
+                supported_repo_args=[str(control)],
+                report_arg=str(report),
+                excluded_unsupported_paths=[foreign_raw, declaration],
+            )
+        assert declaration in str(excinfo.value)
+
+
+def test_excl_rule6_plan_omits_exclusion_key_when_nothing_is_excluded(tmp_path: Path) -> None:
+    """Rule 6: an invocation that declares no exclusion keeps the pre-existing
+    plan shape -- the new key is absent, not present-and-empty, so serialized
+    output stays byte-identical."""
+    control = _repo(tmp_path / "control")
+    task = "task-excl-rule6-empty-shape"
+    report = _report(control, task, ["seed.txt"])
+
+    plan = MODULE.build_plan(
+        task_id=task,
+        control_root_arg=str(control),
+        supported_repo_args=[],
+        report_arg=str(report),
+    )
+
+    assert "unsupported_owner_exclusions" not in plan

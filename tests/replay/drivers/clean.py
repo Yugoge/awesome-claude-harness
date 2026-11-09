@@ -3,14 +3,15 @@ test, read at run time, up to the cleaner's commit and the completion report.
 
 Scenario: the toy as the owner left it before typing /clean (SETUP, committed by `prepare`, which
 cli.py runs on the reset sandbox before the replay starts, so its files are tracked at replay start): a
-root-level `*-guide.md` the text's documentation rules move under docs/, and one script under scripts/
+root-level `*-guide.md` the text's documentation rules move under docs/, one script under scripts/
 with a bare `python3` call, so the style planner has a file to give an inspector and the style
 standards a violation (without one, Step 7's planner finds no file and the text skips to Step 11, whose
-merge then has no style or prompt report: see "Text points"). The owner types `/clean` (no `--codex`:
-every `codex_required` line is left out), passes the checklist the hook hands it (scripts/todo/clean.py)
-to its first TodoWrite and completes one checklist step per TodoWrite call; at Step 13 the owner picks
-the first cleanup option (execute all) in one AskUserQuestion, so the approvals are generated
-mechanically from every finding.
+merge then has no style or prompt report: see "Text points"), and a tracked backup copy of that script
+(`.bak`), a byproduct the cleanliness-inspector's duplicate-scripts rule deletes. The owner types
+`/clean` (no `--codex`: every `codex_required` line is left out), passes the checklist the hook hands it
+(scripts/todo/clean.py) to its first TodoWrite and completes one checklist step per TodoWrite call; at
+Step 13 the owner picks the first cleanup option (execute all) in one AskUserQuestion, so the approvals
+are generated mechanically from every finding.
 
 What each step does is taken from the tree's commands/clean.md:
 
@@ -34,17 +35,21 @@ What each step does is taken from the tree's commands/clean.md:
   current UTC time) and the report path the step says it writes. The inspector reads its context,
   runs the Inspection Checklist calls its text makes over the whole project (`Run`/`MUST execute`
   lines of a section that is not `--changed-files`-only), reads each folder README it finds and Writes
-  its Output Format with the scenario's finding.
+  its Output Format with the scenario's findings (the root guide; the backup copy, under the findings key
+  of the section whose suffix list names its suffix, safe to delete).
 * Steps 6-10: Step 6 has no call of its own (its text is the heading of Steps 7-10); Step 7's planner,
   saved where the step says, then Read; Step 8 one style-inspector dispatch per plan group from the
-  step's prompt block, `run_in_background: true` as the text says; Step 9 each partial Read and the
+  step's prompt block (its obligation block, where the text has one, instantiated as Step 5's), with
+  the `run_in_background` value the step names; each inspector Writes its partial report in the
+  schema its prompt gives, the one file the prompt lets it write; Step 9 each partial Read and the
   merged report Written; Step 10 the plan Read again and the coverage compared.
 * Step 10A (no checklist item: done while Step 10 is in progress): the prompt-inspector dispatch with
   the context path, the `command_files:` and `agent_files:` lines (Glob of commands/*.md and
   agents/*.md), the obligation block the step names, where it names one (instantiated as Step 5's),
   and the report path; its report Read for the coverage gate.
-* A stop that returns an inspector's declared report (G2 naming that report): the inspector writes the
-  report its work drafted again, as the block asks, and stops again (its next round).
+* A stop that returns a subagent's declared report (G2 naming that report; an inspector's, a style
+  partial, the cleaner's execution report): the subagent writes the report its work drafted again, as
+  the block asks, and stops again (its next round).
 * Step 11: the merge call as the text spells it. On a text whose call names a context no step wrote
   and whose helper returns a combined report outside docs/clean/ (the base, A116/A124), see "Gaps".
 * Step 12: the combined report Read and presented with the text's options.
@@ -54,15 +59,30 @@ What each step does is taken from the tree's commands/clean.md:
 * Step 14: the two counts Read from their files and compared.
 * Step 15: the checkpoint hook, the checkpoint ref read, the step's `record-checkpoint` call.
 * Step 16: the step's jq block (the checkpoint commit bound where the text has the placeholder), then
-  the cleaner dispatch from the step's `Agent tool invocation:` prompt. The cleaner is played from its
+  the cleaner dispatch from the step's `Agent tool invocation:` prompt (its obligation block, where the
+  text has one, instantiated as Step 5's). The cleaner is played from its
   agent file: the report files the prompt names Read, the checkpoint check (Safety First), each
   approved action by the operation its Action Types table gives (move with `mkdir -p` and `mv`, the
-  `fix_style` replacement with the Edit tool; an action the table has no row for is skipped with its
-  reason), `git add` of the affected files, one commit with the text's message, the push-gate token as
-  the tree's text writes it (the writer's block, or, on the base, the Python script its prose
-  describes), and its execution report Written where the prompt says.
-* Step 17: the two git calls the step names; Step 18: the completion report from the step's template,
-  Written at its `Save to:` path; the last TodoWrite; Stop.
+  `fix_style` replacement with the Edit tool; a discard, where the row, or the delete row it points to,
+  names a `git rm`: a path inside the harness home skipped, `git ls-files` telling a tracked path from an
+  untracked one (skipped), then the row's `git rev-parse HEAD`, its `git rm` and its DISCARDED line, kept
+  in the action's `discarded` field and printed in the cleaner's final message; a row with no command but
+  a `Bash (<tool>)` cell, the base's delete, runs `<tool> -- <path>`; an action the table has no row for
+  is skipped with its reason), `git add` of the affected files, one commit with the text's message, the
+  push-gate token as the tree's text writes it (the writer's block, or, on the base, the Python script
+  its prose describes), and its execution report Written where the prompt says. A call a hook refuses
+  (no deviation passes it) is listed in `actions_refused` with the operation as run and the hook's first
+  line, its files not staged, and never run again. Where the text's Step 16 names `actions_refused` (the
+  hook-rejection rule; the base records a refusal as a failure), the orchestrator then Reads the
+  execution report and, when it lists refusals, asks one AskUserQuestion whose question names each
+  refused action and its exact operation: one the tool policy refused stated as the Workflow Overview's
+  rule says (withdrawn), with that rule's two options for it (the owner takes the recommended one), in a
+  question of its own beside the decision on the others, whose options are the owner decisions that rule
+  names for a hook that reads grants (the owner picks the first, leaving them undone); the outcomes go
+  into Steps 17 and 18.
+* Step 17: the git calls the step names (one it names after "when the execution report names a
+  `cleanup_commit`" only with one); Step 18: the completion report from the step's template, Written at
+  its `Save to:` path; the last TodoWrite; Stop.
 
 Text points the driver resolves (each also reported as a text defect):
 * Step 4's checklist item has no subagent call, but the step says "Run rule-inspector" and
@@ -72,7 +92,8 @@ Text points the driver resolves (each also reported as a text defect):
   driver completes Step 6 when the text's Step 6 has nothing left to do (a block, if a hook refuses
   it, is recorded).
 * Step 10A has no checklist item: its dispatch is made while Step 10 is in progress.
-* Step 8's `run_in_background: true` is dispatched as written (a hook that refuses it is recorded).
+* Step 8's `run_in_background` value is dispatched as written (the base's `true`: a hook that refuses
+  it is recorded).
 * Step 5's prompt names the report only in its obligation, where it has one (the base's names only the
   context); the report path is the one the step says the inspector writes, added as a `Write your
   report to:` line (likewise for Step 10A's report). Step 5's Bash block
@@ -106,9 +127,11 @@ quoting the hook's text; nothing else passes a block. `--arg kept=<JSON>` makes 
 base block (drivers/dev.py KeptOnly).
 
 Faults (`--arg fault=<role>:<missing|invalid|notjson>`, none by default): the first Write of that
-inspector's report is changed through the framework's fault hook (Replay.step): `missing` skips it,
-`invalid` drops the first field the declared schema requires, `notjson` keeps the first half of the
-text. Each is meant to be stopped at the inspector's own stop and pass on its next round (above).
+subagent's report (an inspector's report, a style partial, the cleaner's execution report) is changed
+through the framework's fault hook (Replay.step): `missing` skips it, `invalid` drops the first field
+the declared schema requires (a markdown-kind report, which has none: its first field), `notjson` keeps
+the first half of the text. Each is meant to be stopped at the subagent's own stop and pass on its next
+round (above).
 
 `--arg then=push`: after /clean's Stop the owner types `/push` in the same session, played by
 drivers/push.py's PushRun from the tree's commands/push.md: on a branch no earlier token covers (no
@@ -127,7 +150,7 @@ import re
 import shlex
 import time
 
-from .. import agents, cmdtext
+from .. import agents, cmdtext, hookrun
 from ..pipeline import Deviations, Orchestrator, utc_now
 from ..replay import Deviation
 from ..sandbox import FIXED_DATE
@@ -178,12 +201,14 @@ DEVIATIONS = Deviations([
         "the cleaner's commit as its agent text makes it")),
 ])
 
-# The owner's toy before /clean: a root-level guide the documentation rules move under docs/, and a
-# script with a bare python3 call (style standard 3) the planner hands an inspector.
+# The owner's toy before /clean: a root-level guide the documentation rules move under docs/, a script
+# with a bare python3 call (style standard 3) the planner hands an inspector, and a tracked backup copy of
+# that script's older version (a byproduct the duplicate-scripts rule deletes).
 SETUP = {
     "usage-guide.md": "# Usage guide\n\nCall `toy.add(a, b)` to add two numbers.\n",
     "scripts/run-tests.sh": "#!/usr/bin/env bash\n# Run the toy's test suite.\nset -euo pipefail\n"
                             "python3 -m pytest -q tests\n",
+    "scripts/run-tests.sh.bak": "#!/usr/bin/env bash\npython3 -m pytest tests\n",
 }
 
 
@@ -458,7 +483,7 @@ class CleanRun:
             s4 = cmdtext.section(text, "Step 4: Generate INDEX.md")
             if "ORCHESTRATOR_KEY_FOLDERS" in s4:
                 # the folders clean-inspect checks: the script the step names, read for its default list
-                orch = os.path.join(o.harness, re.search(r"`~/\.claude/(scripts/[\w.-]+\.sh) clean-inspect`", s4).group(1))
+                orch = os.path.join(o.harness, re.search(r"`(?:~/\.claude|<HARNESS_ROOT>)/(scripts/[\w.-]+\.sh) clean-inspect`", s4).group(1))
                 sub.read(orch, label=f"{sub.role} Read orchestrator.sh")
                 dflt = re.search(r"ORCHESTRATOR_KEY_FOLDERS:-([\w,/.-]+)\}", agents.peek(self.rp, sub.role, orch)).group(1)
                 index_dirs = [f for f in dflt.split(",") if os.path.isdir(self.abs(f))]
@@ -585,7 +610,7 @@ class CleanRun:
             else:
                 text = text[: len(text) // 2]
             step["input"] = dict(step["input"], content=text)
-        self.rp.faults.append((f"agent:{role} Write report", fn))
+        self.rp.faults.append((f"agent:{role} Write*report", fn))
 
     def cleanliness_work(self, role: str, report: str):
         o = self.o
@@ -604,8 +629,9 @@ class CleanRun:
                 key = _finding_key(title, findings)
                 exc = re.search(r"\*\*Exception list\*\*[^\n]*\n((?:\s*-\s+`[^`]+`[^\n]*\n?)+)", part)
                 skip = set(re.findall(r"`([^`]+)`", exc.group(1))) if exc else set()
-                for cmd in re.findall(r"(?:\bRun|\bexecute)\s+`(~/\.claude/scripts/[^`]+\"\$PROJECT_ROOT\")`", part):
-                    name = os.path.basename(cmd.split()[0])
+                for cmd in re.findall(r"(?:\bRun|\bexecute)\s+`((?:~/\.claude/|bash \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/)"
+                                      r"scripts/[^`]+\"\$PROJECT_ROOT\")`", part):
+                    name = re.search(r"scripts/([\w.-]+)", cmd).group(1)
                     c = sub.bash(cmd.replace('"$PROJECT_ROOT"', shlex.quote(self.project)), name,
                                  label=f"{sub.role} Bash {name}")
                     out = _json_out(c.response.get("stdout", "") if c.ok else "")
@@ -625,6 +651,17 @@ class CleanRun:
                     findings["misplaced_docs"].append({
                         "file": rel, "reason": "markdown file in the project root outside the allowed set",
                         "severity": "major", "recommendation": "move", "destination": dest})
+            # a copy of another SETUP file under a suffix a section's "suffixes alongside their originals"
+            # list names (Duplicate Scripts): not identical, so "keep newest, delete backup versions"
+            for part in re.split(r"\n(?=### )", sec):
+                key = _finding_key(part.split("\n", 1)[0], findings)
+                sufs = re.findall(r"`([-.][\w-]+)`", part) if "suffixes alongside their originals" in part else []
+                for rel in SETUP if key and sufs else ():
+                    orig = next((o for o in SETUP if o != rel and any(
+                        rel in (o + x, os.path.splitext(o)[0] + x + os.path.splitext(o)[1]) for x in sufs)), None)
+                    if orig:
+                        findings[key].append({"file": rel, "reason": f"backup copy of {orig}", "severity": "minor",
+                                              "recommendation": "delete", "safe_to_delete": True})
             items = [f for v in findings.values() if isinstance(v, list) for f in v]
             doc = {"request_id": self.rid, "timestamp": utc_now(), "inspector": role, "baseline_check": "not_provided",
                    "findings": findings, "codex_consult": {"invoked": False, "status": "not_requested", "findings": [],
@@ -664,21 +701,26 @@ class CleanRun:
             n = g["group_id"]
             lines = []
             for line in self.prompt_block("Step 8", "You are a style-inspector"):
-                line = line.replace("{N}", str(n))
+                line = line.replace("{GROUP_ID}", str(n)).replace("{N}", str(n))   # the base text spells it {N}
                 if re.match(r"\s*\d+\.\s+\{file_path_\d+\}", line):
                     if line.lstrip().startswith("1."):
                         lines += [f"{k}. {os.path.relpath(p, self.project) if os.path.isabs(p) else p}"
                                   for k, p in enumerate(g["files"], 1)]
                     continue
                 lines.append(line)
-            prompt = "\n".join(lines)
+            prompt = o.instantiate("\n".join(lines), None)
             partial = re.search(r"Write your partial report to:\s*(\S+)", prompt).group(1)
             self.partials.append(partial)
-            self.dispatch(role, prompt, self.style_work(role, n, g["files"], partial), f"Step 8 Agent({role}) group {n}",
-                          extra_input=extra, description=f"Style inspection group {n}")
+            self.dispatch(role, prompt, self.style_work(role, n, g["files"], partial, prompt),
+                          f"Step 8 Agent({role}) group {n}", extra_input=extra,
+                          description=f"Style inspection group {n}", report=partial)
         self.say(f"Launched {len(self.partials)} style-inspector agents in parallel")
 
-    def style_work(self, role: str, n: int, files: list, partial: str):
+    def style_work(self, role: str, n: int, files: list, partial: str, prompt: str):
+        # the partial's fields: the JSON object the prompt gives after "MUST use this schema:"
+        at = prompt.find("{", prompt.index("MUST use this schema:"))
+        fields = list(json.JSONDecoder().raw_decode(prompt[at:])[0])
+
         def work(sub, brief, player):
             violations = []
             for p in files:
@@ -695,10 +737,18 @@ class CleanRun:
                                            "finding": "bare python3 invocation",
                                            "recommendation": "run it with the project venv's python",
                                            "old_line": line, "new_line": line.replace("python3", "python", 1)})
-            doc = {"request_id": self.rid, "group_id": n,
-                   "files_audited": [os.path.relpath(self.abs(p), self.project) for p in files],
-                   "violations": violations, "status": "complete"}
-            agents.put(sub, self.abs(partial), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write partial report")
+            audited = [os.path.relpath(self.abs(p), self.project) for p in files]
+            values = {"request_id": self.rid, "timestamp": utc_now(), "inspector": role, "group_id": n,
+                      "files_audited": audited, "violations": violations,
+                      "summary": {"standards_checked": 11, "violations_found": len(violations),
+                                  "critical": sum(1 for v in violations if v.get("severity") == "critical"),
+                                  "files_audited": len(audited), "files_total": len(files)},
+                      "codex_consult": {"invoked": False, "status": "not_requested", "findings": [],
+                                        "feedback_summary": None, "feedback_incorporated": None},
+                      "status": "complete"}
+            doc = {k: values[k] for k in fields if k in values}
+            self.reports[partial] = json.dumps(doc, indent=2) + "\n"
+            agents.put(sub, self.abs(partial), self.reports[partial], f"{sub.role} Write partial report")
             return {"_final": f"Audited {len(files)} files; {len(violations)} violations.\n\nSTATUS: complete"}
         return work
 
@@ -904,10 +954,69 @@ class CleanRun:
         self.bash(text, "Step 16 Bash context-with-approvals", "Merge the approvals into the cleaner's context")
         inv = cmdtext.block(o.text, "Step 16", anchor="Agent tool invocation:")
         m = re.search(r'prompt:\s*"(.*)"\s*$', inv.rstrip("\n"), re.S)
-        prompt = self.fill(m.group(1))
+        prompt = o.instantiate(self.fill(m.group(1)), None)
         role = self.checklist_role(16) or self.role_in("Step 16")
+        out_rel = re.search(r"Write results to\s+(\S+?\.json)", prompt).group(1)
         self.dispatch(role, prompt, self.cleaner_work(role, prompt), f"Step 16 Agent({role})",
-                      description="Execute approved cleanup actions")
+                      description="Execute approved cleanup actions", report=out_rel)
+        self.refused_answers = []
+        if "actions_refused" not in o.section("Step 16"):
+            return   # the base text: a refused action is a failure the report records
+        # the hook-rejection rule (Workflow Overview): the execution report read, then one AskUserQuestion naming
+        # each refused action and its exact operation; one the tool policy refused is stated withdrawn, the owner's
+        # answer decides each other one, nothing is run again
+        self.read(out_rel, "Step 16 Read execution report")
+        refused = (getattr(self, "cleaner_result", {}) or {}).get("actions_refused") or []
+        if not refused:
+            return
+        rule = cmdtext.section(o.text, "Workflow Overview")
+        withdrawn = re.search(r"`hooks/pretool-tool-policy\.py` refused is not run again in this session \([^)]*\): "
+                              r"the question states its outcome, the action (withdrawn) and recorded with the hook's "
+                              r"output", rule)
+        grant = re.search(r"runs again only after (the owner's `/allow` grant for it) \(.*?\), (when the orchestrator "
+                          r"re-dispatches the same role)[^;]*; or the owner (leaves it undone)", rule)
+        choice = re.search(r'offers "([^"]+\(Recommended\))" or "([^"]+)"', rule[withdrawn.end():]) if withdrawn else None
+        named, policy, decide = [], [], []
+        for r in refused:
+            line = f"{r['action_id']} ({r.get('action')}): {r['operation']} was refused by {r.get('hook')}: " \
+                   f"{r.get('hook_output')}"
+            if r.get("hook", "").endswith("pretool-tool-policy.py"):
+                if not (withdrawn and choice):
+                    raise cmdtext.TextNotFound("Workflow Overview: no outcome for an operation the tool policy refused")
+                named.append(f"{line}; {withdrawn.group(1)} and recorded with the hook's output")
+                policy.append(r)
+            else:
+                if not grant:
+                    raise cmdtext.TextNotFound("Workflow Overview: no owner decision for a refused operation")
+                named.append(f"{line}; the owner decides it")
+                decide.append(r)
+
+        def ask(text, header, opts):
+            return {"question": text, "header": header, "multiSelect": False,
+                    "options": [{"label": t[:60], "description": t} for t in opts]}
+
+        questions = []
+        if decide:
+            # The owner leaves a refusal a grant could let through undone (the first option): the replay plays no
+            # /allow prompt and no re-dispatch.
+            questions.append(ask("Refused by a hook: " + " | ".join(named) + ". How do you decide the ones you decide?",
+                                 "Refused", [grant.group(3), f"{grant.group(1)}, {grant.group(2)}"]))
+        if policy:
+            # the tool policy's refusals: a question of their own beside a grant decision; the owner takes the
+            # recommended option
+            text = ("Refused by a hook: " + " | ".join(named) if not decide else
+                    "Withdrawn: " + ", ".join(r["action_id"] for r in policy)) + ". How do you record them?"
+            questions.append(ask(text, "Withdrawn", [choice.group(1), choice.group(2)]))
+        call = o.s.tool("AskUserQuestion", {"questions": questions},
+                        label="Step 16 AskUserQuestion refused operations",
+                        deviation=self.devs.at("Step 16 AskUserQuestion refused operations"))
+        answers = call.response.get("answers") or {}
+        answer = answers.get(questions[0]["question"], "") if decide else ""
+        record = answers.get(questions[-1]["question"], "") if policy else ""
+        outcome = withdrawn.group(1) if not policy or record == choice.group(1)[:60] else \
+            f"{withdrawn.group(1)}, recorded as {choice.group(2).split(' as ', 1)[-1]}"
+        held = {id(r) for r in policy}
+        self.refused_answers = [(r, outcome if id(r) in held else answer) for r in refused]
 
     def cleaner_work(self, role: str, prompt: str):
         o = self.o
@@ -935,19 +1044,66 @@ class CleanRun:
                     "generate_index": 6}
             if len(order) != len(rank):
                 raise agents.PlayError(f"agents/{role}.md's execution order has {len(order)} items")
-            done, skipped, failed, staged = [], [], [], []
+            def discard_codes(kind):
+                """A discard row's `git rev-parse`, `git rm` and DISCARDED codes (an "as **delete** does" row
+                takes the delete row's), or None where the row names no git rm."""
+                op = table[kind][0]
+                if "git rm" not in op and "**delete**" in op and "delete" in table:
+                    op = table["delete"][0]
+                codes = re.findall(r"`([^`]+)`", op)
+                rm = next((c for c in codes if c.startswith("git rm")), None)
+                return rm and (next((c for c in codes if c.startswith("git rev-parse")), "git rev-parse HEAD"), rm,
+                               next((c for c in codes if c.startswith("DISCARDED")), ""))
+
+            harness = os.path.realpath(o.harness)
+            done, skipped, failed, staged, discarded, refused = [], [], [], [], [], []
+
+            def refusal(c, a, operation):
+                """A hook's refusal: listed with the operation as run and the hook's output, never retried."""
+                b = c.pre.blocks[0] if c.pre and c.pre.blocks else {}
+                return dict(a, result="refused", operation=operation, hook=b.get("hook", ""),
+                            hook_output=hookrun.refusal_first(b) if b else (c.error or "")[:200])
+
             for a in sorted(actions, key=lambda a: rank.get(a.get("action"), 99)):
                 kind = a.get("action")
                 if kind not in table:
                     skipped.append(dict(a, result="skipped", reason=f"no operation for action {kind!r}"))
+                    continue
+                disc = discard_codes(kind)
+                if disc:
+                    path = a.get("file") or a.get("location") or ""
+                    full = os.path.realpath(self.abs(path))
+                    if full == harness or full.startswith(harness + "/"):
+                        skipped.append(dict(a, result="skipped", reason="harness home"))
+                        continue
+                    c = sub.bash(f"git ls-files -- {q(path)}", f"Is {path} tracked",
+                                 label=f"{sub.role} Bash ls-files {a['action_id']}")
+                    if not (c.ok and c.response.get("stdout", "").strip()):
+                        skipped.append(dict(a, result="skipped", reason="untracked"))
+                        continue
+                    r = sub.bash(disc[0], "HEAD at the removal", label=f"{sub.role} Bash sha {a['action_id']}")
+                    sha = r.response.get("stdout", "").strip() if r.ok else ""
+                    cmd = disc[1].replace("<path>", q(path))
+                    if os.path.isdir(self.abs(path)):
+                        cmd = cmd.replace("git rm", "git rm -r", 1)
+                    c = sub.bash(cmd, f"Discard {path}", label=f"{sub.role} Bash {kind} {a['action_id']}")
+                    if c.ok:
+                        line = disc[2].replace("<path>", path).replace("<sha>", sha)
+                        discarded.append(line)
+                        done.append(dict(a, result="success", git_staged=True, discarded=line))
+                        staged.append(path)
+                    elif c.blocked:
+                        refused.append(refusal(c, a, cmd))
+                    else:
+                        failed.append(dict(a, result="failed", error=(c.error or "failed")[:200]))
                     continue
                 if kind in ("move", "archive", "rename"):
                     src, dst = a.get("file") or a.get("location"), a.get("destination")
                     if not dst or not os.path.exists(self.abs(src)):
                         skipped.append(dict(a, result="skipped", reason="source or destination missing"))
                         continue
-                    c = sub.bash(f"mkdir -p {q(os.path.dirname(dst) or '.')} && mv {q(src)} {q(dst)}",
-                                 f"{kind} {src}", label=f"{sub.role} Bash {kind} {a['action_id']}")
+                    operation = f"mkdir -p {q(os.path.dirname(dst) or '.')} && mv {q(src)} {q(dst)}"
+                    c = sub.bash(operation, f"{kind} {src}", label=f"{sub.role} Bash {kind} {a['action_id']}")
                     affected = [src, dst]
                 elif kind == "fix_style":
                     rel = (a.get("location") or "").rsplit(":", 1)[0]
@@ -955,21 +1111,33 @@ class CleanRun:
                         skipped.append(dict(a, result="skipped", reason="no replacement line"))
                         continue
                     sub.read(self.abs(rel), label=f"{sub.role} Read {a['action_id']}")
+                    operation = f"Edit {rel}: {a['old_line']!r} -> {a['new_line']!r}"
                     c = sub.edit(self.abs(rel), a["old_line"], a["new_line"], label=f"{sub.role} Edit {a['action_id']}")
                     affected = [rel]
                 else:
                     cmd = re.search(r"`([^`]+)`", table[kind][0])
-                    if not cmd:
+                    tool = re.fullmatch(r"Bash \((\w+)\)", table[kind][1])
+                    path = a.get("file") or a.get("location") or ""
+                    if not cmd and kind == "delete" and tool and path:
+                        # the base's delete row: no command in its Operation, the tool in its Tools cell
+                        operation = f"{tool.group(1)} -- {q(path)}"
+                        c = sub.bash(operation, f"{kind} {path}", label=f"{sub.role} Bash {kind} {a['action_id']}")
+                        affected = [path]
+                    elif not cmd:
                         skipped.append(dict(a, result="skipped", reason="no command"))
                         continue
-                    c = sub.bash(cmd.group(1).replace('"$PROJECT_ROOT', '"' + self.project), kind,
-                                 label=f"{sub.role} Bash {a['action_id']}")
-                    affected = []
+                    else:
+                        operation = cmd.group(1).replace('"$PROJECT_ROOT', '"' + self.project)
+                        c = sub.bash(operation, kind, label=f"{sub.role} Bash {a['action_id']}")
+                        affected = []
                 if c.ok:
                     done.append(dict(a, result="success", git_staged=bool(affected)))
                     staged += [p for p in affected if p not in staged]
+                elif c.blocked:
+                    refused.append(refusal(c, a, operation))
+                    continue
                 else:
-                    failed.append(dict(a, result="failed", error=(c.error or "refused")[:200]))
+                    failed.append(dict(a, result="failed", error=(c.error or "failed")[:200]))
                 if affected:
                     sub.bash("git add -A -- " + " ".join(q(p) for p in affected), "Stage the affected files",
                              label=f"{sub.role} Bash git add {a['action_id']}")
@@ -977,11 +1145,15 @@ class CleanRun:
             if staged:
                 tpl = next(b.text for b in cmdtext.blocks(text, "5. Git Operations") if "cleanup:" in b.text)
                 subject, _, body = tpl.strip("\n").partition("\n")
-                moved = sum(1 for a in done if a.get("action") == "move")
-                body = body.strip().replace("X files", f"{moved} files").replace("Y files", "0 files").replace(
-                    "Z files", "0 files").replace("W violations", f"{sum(1 for a in done if a.get('action') == 'fix_style')} violations")
-                c = sub.bash(f"git commit -q -m {q(subject)} -m {q(body)}", "Commit the cleanup",
-                             label=f"{sub.role} Bash commit")
+                n = {k: sum(1 for a in done if a.get("action") == k)
+                     for k in ("move", "archive", "delete", "fix_style")}
+                for word, k in (("X files", "move"), ("Y files", "archive"), ("Z files", "delete"),
+                                ("W violations", "fix_style")):
+                    body = body.strip().replace(word, f"{n[k]} {word.split()[1]}")
+                commit = f"git commit -q -m {q(subject)} -m {q(body)}"
+                c = sub.bash(commit, "Commit the cleanup", label=f"{sub.role} Bash commit")
+                if c.blocked:
+                    refused.append(refusal(c, {"action_id": "commit", "action": "commit"}, commit))
                 if c.ok:
                     r = sub.bash("git rev-parse --show-toplevel\ngit branch --show-current\ngit rev-parse HEAD",
                                  "The commit's repository, branch and sha", label=f"{sub.role} Bash commit descriptor")
@@ -989,20 +1161,26 @@ class CleanRun:
                     if len(vals) >= 3 and vals[2].strip():
                         commit_sha = vals[2].strip()
                         self.token(sub, text, vals[0].strip(), vals[1].strip(), commit_sha)
-            status = "completed" if not failed else "partial"
+            # agents/cleaner.md: completed when every approved action ran, else partial
+            status = "completed" if len(done) == len(actions) and not refused else "partial"
             doc = {"request_id": self.rid, "timestamp": utc_now(), "cleaner": {
                 "status": status, "actions_completed": done, "actions_failed": failed, "actions_skipped": skipped,
+                "actions_refused": refused,
                 "summary": {"total_actions": len(actions), "successful": len(done), "failed": len(failed),
-                            "skipped": len(skipped), "files_moved": sum(1 for a in done if a.get("action") == "move"),
-                            "files_archived": 0, "files_deleted": 0, "files_renamed": 0,
+                            "skipped": len(skipped), "refused": len([r for r in refused if r["action_id"] != "commit"]),
+                            "files_moved": sum(1 for a in done if a.get("action") == "move"),
+                            "files_archived": sum(1 for a in done if a.get("action") == "archive"),
+                            "files_deleted": sum(1 for a in done if a.get("action") == "delete"), "files_renamed": 0,
                             "style_fixes": sum(1 for a in done if a.get("action") == "fix_style"), "index_generated": False},
                 "git_status": {"checkpoint_commit": (ctx.get("orchestrator") or {}).get("analysis", {}).get(
                     "checkpoint_commit", self.checkpoint), "cleanup_commit": commit_sha,
                     "files_staged": len(staged), "ready_for_review": bool(commit_sha)}}}
-            agents.put(sub, self.abs(out_rel), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write execution report")
+            self.reports[out_rel] = json.dumps(doc, indent=2) + "\n"
+            agents.put(sub, self.abs(out_rel), self.reports[out_rel], f"{sub.role} Write execution report")
             self.execution_rel = out_rel
             self.cleaner_result = doc["cleaner"]
-            return doc
+            # the final message: each DISCARDED line, then the report
+            return dict(doc, _final="\n".join(discarded + [json.dumps(doc, indent=2)]))
         return work
 
     def token(self, sub, text: str, root: str, branch: str, sha: str) -> None:
@@ -1037,14 +1215,22 @@ class CleanRun:
 
     # ------------------------------------------------------------ Steps 17-18
     def step17(self) -> None:
-        for k, c in enumerate([cmd for cmd in self.codes("Step 17", "Review git changes") if cmd.startswith("git ")], 1):
-            self.bash(c, f"Step 17 Bash git {k}", "Review the cleanup's git changes")
         r = getattr(self, "cleaner_result", {}) or {}
+        commit = (r.get("git_status") or {}).get("cleanup_commit", "")
+        # "when the execution report names a `cleanup_commit`, also ...": those calls only with one
+        item = next(it for it in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)|\n\s*\n", self.o.section("Step 17"))
+                    if "Review git changes" in it)
+        always, _, if_commit = item.partition("when the execution report names a `cleanup_commit`")
+        calls = re.findall(r"`(git [^`]+)`", always) + (re.findall(r"`(git [^`]+)`", if_commit) if commit else [])
+        for k, c in enumerate(calls, 1):
+            self.bash(c, f"Step 17 Bash git {k}", "Review the cleanup's git changes")
         s = r.get("summary") or {}
-        self.say(f"# Cleanup Execution Results\n\n**Status**: {r.get('status', 'blocked')}\n**Actions**: "
-                 f"{s.get('successful', 0)} successful, {s.get('failed', 0)} failed, {s.get('skipped', 0)} skipped\n\n"
-                 f"- Checkpoint commit: {self.checkpoint}\n- Cleanup commit: "
-                 f"{(r.get('git_status') or {}).get('cleanup_commit', '')}")
+        decided = "".join(f"\n- {a['action_id']}: {a['operation']} (refused by {a.get('hook')}): {ans}"
+                          for a, ans in getattr(self, "refused_answers", []))
+        self.say(f"# Cleanup Execution Results\n\n**Status**: {r.get('status', 'partial')}\n**Actions**: "
+                 f"{s.get('successful', 0)} successful, {s.get('failed', 0)} failed, {s.get('skipped', 0)} skipped, "
+                 f"{s.get('refused', 0)} refused by a hook{decided}\n\n"
+                 f"- Checkpoint commit: {self.checkpoint}\n- Cleanup commit: {commit or 'none'}")
 
     def step18(self) -> None:
         tpl = cmdtext.block(self.o.text, "Step 18", lang="markdown")
@@ -1052,11 +1238,18 @@ class CleanRun:
         g = r.get("git_status") or {}
         text = self.fill(tpl).replace("clean-YYYYMMDD-HHMMSS", self.rid)
         for k, v in (("<project_path>", self.project), ("<project_type>", (self.facts.get("scan") or {}).get(
-                "project_type", "Generic")), ("<timestamp>", utc_now()), ("<completed|partial|blocked>", r.get("status", "blocked")),
+                "project_type", "Generic")), ("<timestamp>", utc_now()), ("<completed|partial|blocked>", r.get("status", "partial")),
+                ("<completed|partial>", r.get("status", "partial")),
                 ("<checkpoint_commit>", self.checkpoint), ("<branch>", self.facts.get("branch", ""))):
             text = text.replace(k, v)
         text = text.replace("Checkpoint commit: <hash>", f"Checkpoint commit: {self.checkpoint}").replace(
             "Cleanup commit: <hash>", f"Cleanup commit: {g.get('cleanup_commit', '')}")
+        decided = "\n".join(f"- {a['action_id']}: {a['operation']} ({a.get('hook')}: {a.get('hook_output')}); "
+                            + (ans if ans.startswith("withdrawn") else f"the owner: {ans}")
+                            for a, ans in getattr(self, "refused_answers", []))
+        text = re.sub(r"<list of refused actions[^>]*>", lambda _m: decided or "none", text)
+        text = re.sub(r"<the checkpoint, plus [^>]+>", "the checkpoint" + (" and the cleanup commit" if g.get(
+            "cleanup_commit") else ""), text)
         text = re.sub(r"<list of [^>]+>", "(see the execution report)", text)
         self.write(self.save_path("Step 18"), text, "Step 18 Write completion report")
 
@@ -1066,9 +1259,11 @@ class CleanRun:
         if self.ended:
             text = f"/clean {self.rid}: stopped. {self.ended}."
         else:
+            commit = (r.get("git_status") or {}).get("cleanup_commit", "")
             text = (f"/clean {self.rid} complete: {r.get('summary', {}).get('successful', 0)} actions executed, "
-                    f"cleanup commit {(r.get('git_status') or {}).get('cleanup_commit', '')}. "
-                    "To publish to the remote: /push")
+                    f"{r.get('summary', {}).get('refused', 0)} refused by a hook and decided by the owner; "
+                    + (f"cleanup commit {commit}. To publish to the remote: /push" if commit
+                       else "no cleanup commit: nothing was committed"))
         self.o.s.stop(text, label="Stop", deviation=self.devs.at("Stop"))
 
     def run(self) -> None:

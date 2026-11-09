@@ -2,8 +2,9 @@
 # sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 # Layer B, task 20260907-015935).
 #
-# Removes ONLY this session's own scratch directory (<root>/<own-sid>/) after
-# confirming its .owner record names this exact session id — the common-case
+# Removes ONLY this session's own files: its runtime files in the project, and
+# its scratch directory (<root>/<own-sid>/) after confirming its .owner record
+# names this exact session id — the common-case
 # cleanup: session-owned scratch dies with its session. Runs in the hook
 # channel, outside the agent tool-call gate — the same legitimate deletion
 # channel already used by hooks/stop-cleanup-allowlist.sh; the agent-side rm
@@ -14,21 +15,19 @@
 # support) are NOT this hook's job: scripts/install/tmpfiles-claude-scratch.conf
 # bounds them declaratively with an age floor (host channel), never here.
 #
-# Never touches a sibling session's directory — only ever resolves and acts
-# on <root>/<own-sid>/. Non-blocking: best-effort, exits 0 unconditionally.
+# Never touches a sibling session's files — only ever resolves and acts on
+# paths named by its own sid. Non-blocking: best-effort, exits 0 unconditionally.
 
 set -u
 exec >&2   # SessionEnd hooks must not pollute stdout (harness JSON channel)
 
 ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
-SID="${CLAUDE_CODE_SESSION_ID:-}"
-
 INPUT=$(cat 2>/dev/null || true)
-if [ -z "$SID" ]; then
-  SID=$(printf '%s' "$INPUT" | python3 -c \
-    "import json,sys; d=json.load(sys.stdin); print(d.get('session_id','') or '')" \
-    2>/dev/null || true)
-fi
+# The payload's id keys the project files, as their producer (prompt-workflow.py) keys them.
+PSID=$(printf '%s' "$INPUT" | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print(d.get('session_id','') or '')" \
+  2>/dev/null || true)
+SID="${CLAUDE_CODE_SESSION_ID:-$PSID}"
 if [ -z "$SID" ]; then
   echo "sessionend-scratch-sweep: no session id available — skipping"
   exit 0
@@ -37,12 +36,18 @@ fi
 # Charset guard: SID becomes a literal path component below and must never
 # carry a path separator or traversal sequence — this is the ONLY thing that
 # stands between "remove our own dir" and "remove something else."
-case "$SID" in
+case "$SID $PSID" in
   */*|*..*)
-    echo "sessionend-scratch-sweep: unsafe session id '$SID' — skipping"
+    echo "sessionend-scratch-sweep: unsafe session id '$SID $PSID' — skipping"
     exit 0
     ;;
 esac
+
+# This session's own runtime files in the project (prompt-workflow.py's, keyed by
+# session id) go with it: the workflow bookmark, its start lock, its start replays.
+OWN="${CLAUDE_PROJECT_DIR:-$PWD}/.claude"
+[ -n "$PSID" ] && rm -rf -- "$OWN/workflow-$PSID.json" "$OWN/workflow-locks/$PSID.lock" \
+  "$OWN/dev-start-replays/$PSID" 2>/dev/null
 
 if [ ! -d "$ROOT" ]; then
   echo "sessionend-scratch-sweep: root $ROOT absent — nothing to sweep"

@@ -3,4 +3,4 @@ description: Single-use break-glass for a declared grant-aware safety hook; it n
 disable-model-invocation: true
 ---
 
-(hook-only command; body is not injected because of `disable-model-invocation: true`. This line exists so the body is never empty — see commands/dev-command.md for the empty-body API-400 lesson.)
+(Human-only: `disable-model-invocation: true` keeps the model from invoking /allow itself. When the owner types it, hooks/userprompt-consent-allowlist.sh writes or refuses the grant from the typed arguments and prints its notice; this body then reaches the model with those arguments and asks nothing of it. The line keeps the body non-empty: a command whose body is empty fails the API call with a 400.)

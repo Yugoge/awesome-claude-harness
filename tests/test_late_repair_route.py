@@ -29,7 +29,6 @@ import _late_repair_fixtures as fx  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTROLLER_PATH = REPO_ROOT / "scripts" / "late-repair-controller.py"
 CHECKER_PATH = REPO_ROOT / "scripts" / "check-late-repair-provenance.py"
-ROUTE_SELECT_PATH = REPO_ROOT / "scripts" / "close-route-select.py"
 
 
 def _load(path: Path, name: str):
@@ -40,7 +39,6 @@ def _load(path: Path, name: str):
 
 
 CONTROLLER = _load(CONTROLLER_PATH, "_late_repair_controller_under_test")
-ROUTE_SELECT = _load(ROUTE_SELECT_PATH, "_close_route_select_under_test")
 
 
 def _run_controller(*args: str) -> subprocess.CompletedProcess[str]:
@@ -105,12 +103,6 @@ def test_ac7_force_combined_with_late_repair_is_a_usage_error_before_eligibility
     assert payload["outcome"] == "refuse"
     assert "--force" in payload["reason"]
     assert not _run_record_path(root, task_id).is_file()
-    # A bare /close --force fixture's pre-cycle behavior is unaffected: close-route-select's
-    # own --late-repair + --force usage-error check does not touch the resolver at all
-    # for a bare bash-level --force invocation, and --force alone (no --late-repair)
-    # never reaches late-repair code at all.
-    rc, payload2 = ROUTE_SELECT.run(task_id, str(root), False, True)
-    assert payload2["outcome"] == "not_selected"
 
 
 # ---------------------------------------------------------------------------
@@ -673,94 +665,18 @@ def test_ac10_disclosure_negative_controls_and_positive_control(tmp_path: Path) 
 # AC-11: bare /close never invokes the controller; --late-repair does.
 # ---------------------------------------------------------------------------
 
-def test_ac11_bare_close_route_select_never_calls_controller(tmp_path: Path) -> None:
-    task_id = "20260101-000500"
-    root = tmp_path
-    fx.build_qa_only(root, task_id)  # AC-4's shape: missing QA (and here, singular qa_only).
-    before = {p: p.read_bytes() for p in (root / "docs" / "dev").rglob("*") if p.is_file()}
-
-    calls = {"count": 0}
-    original = ROUTE_SELECT._controller_module
-
-    def _counting_controller():
-        calls["count"] += 1
-        return original()
-
-    ROUTE_SELECT._controller_module = _counting_controller
-    try:
-        rc, payload = ROUTE_SELECT.run(task_id, str(root), False, False)
-    finally:
-        ROUTE_SELECT._controller_module = original
-
-    assert payload["outcome"] == "not_selected"
-    assert calls["count"] == 0
-    assert not _run_record_path(root, task_id).is_file()
-    after = {p: p.read_bytes() for p in (root / "docs" / "dev").rglob("*") if p.is_file()}
-    assert before == after
-
-
-def test_ac11_late_repair_flag_is_the_only_behavior_switch(tmp_path: Path) -> None:
-    task_id = "20260101-000510"
-    root = tmp_path
-    fx.build_beyond_qa_clean(root, task_id)
-
-    calls = {"count": 0}
-    original = ROUTE_SELECT._controller_module
-
-    def _counting_controller():
-        calls["count"] += 1
-        return original()
-
-    ROUTE_SELECT._controller_module = _counting_controller
-    try:
-        rc0, payload0 = ROUTE_SELECT.run(task_id, str(root), False, False)
-        assert calls["count"] == 0
-        rc1, payload1 = ROUTE_SELECT.run(task_id, str(root), True, False)
-        assert calls["count"] == 1
-    finally:
-        ROUTE_SELECT._controller_module = original
-
-    assert payload0["outcome"] == "not_selected"
-    assert payload1["outcome"] == "initialized"
-    assert rc1 == 0
-
-
-def test_route_select_cli_passes_only_a_pass_chain_and_loads_a_legacy_needs_review_report(tmp_path: Path) -> None:
-    # /close Step 0's arguments; a dev-report older code left as needs_review
-    # with a status_rationale is a failing chain: exit 2 with the JSON.
-    for task_id, legacy, expected_rc, expected_status in (
-        ("20260101-000520", False, 0, "pass"),
-        ("20260101-000521", True, 2, "fail"),
-    ):
-        root = tmp_path / task_id
-        paths = fx.build_complete(root, task_id)
-        if legacy:
-            report = json.loads(paths["dev_report"].read_text(encoding="utf-8"))
-            report["dev"]["status"] = "needs_review"
-            report["dev"]["status_rationale"] = {
-                "classification": "other_disclosed_handoff",
-                "blocked_by": "a lane could not finish",
-                "forbidden_action": "see the lane dev-report",
-            }
-            paths["dev_report"].write_text(json.dumps(report), encoding="utf-8")
-        proc = subprocess.run(
-            [sys.executable, str(ROUTE_SELECT_PATH), "--task-id", task_id, "--project-dir", str(root)],
-            capture_output=True, text=True, check=False,
-        )
-        assert proc.returncode == expected_rc, proc.stderr
-        assert "Traceback" not in proc.stderr
-        payload = json.loads(proc.stdout)
-        assert payload["outcome"] == "not_selected"
-        assert payload["artifact_chain"]["status"] == expected_status
-
-
-def test_ac11_static_grep_confirms_close_md_uses_close_route_select(tmp_path: Path) -> None:
-    # Routing invariant: /close reaches the late-repair controller only through
-    # the route selector, so the controller is not named before the R4 section.
+def test_ac11_static_grep_confirms_close_md_reaches_init_only_in_the_r4_section(tmp_path: Path) -> None:
+    # Routing invariant (P4): /close calls no route selector; its late-repair
+    # section alone names the controller, whose init it calls once, and only
+    # when --late-repair is passed.
     close_md = (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8")
-    assert "### Late-repair route" in close_md
-    assert "scripts/close-route-select.py" in close_md
-    assert "late-repair-controller.py" not in close_md.split("### Late-repair route")[0]
+    head, rest = close_md.split("### Late-repair route")
+    r4 = rest.split("\n### ")[0]
+    assert "close-route-select" not in close_md
+    assert "late-repair-controller.py" not in head
+    assert close_md.count("late-repair-controller.py") == r4.count("late-repair-controller.py")
+    assert 'late-repair-controller.py" init --task-id "$TASK_ID"' in r4
+    assert "without `--late-repair`, nothing in this section runs" in r4
 
 
 # ---------------------------------------------------------------------------
@@ -1075,6 +991,36 @@ def test_ac9_companion_resolve_commit_repos_selects_effective_report_when_verifi
     assert Path(plan["report_path"]).resolve() == effective_path.resolve()
 
 
+def _commit_step5_block() -> str:
+    """commands/commit.md Step 5's repository-plan block, as the command spells it."""
+    text = (REPO_ROOT / "commands" / "commit.md").read_text(encoding="utf-8")
+    step5 = text[text.index("### Step 5:") : text.index("### Step 6:")]
+    import re
+    body = next(b for b in re.findall(r"```bash\n(.*?)```", step5, re.S) if "LATE_REPAIR_JSON" in b)
+    assert "resolve-commit-repos.py" in body, body
+    return "\n".join(line[2:] if line.startswith("  ") else line for line in body.splitlines())
+
+
+def test_commit_step5_plans_from_the_verified_effective_report(tmp_path: Path) -> None:
+    """P4 R5/R6 (late-repair entry as /commit uses it): with the controller's state verified,
+    commit.md Step 5's own block plans from the effective report, which the changelog-analyst
+    then admits into its whitelist because the plan names it (agents/changelog-analyst.md item 4)."""
+    task_id = "20260101-000805"
+    root = tmp_path / "project"
+    effective_path = _produce_verified_effective_report(root, task_id)
+    script = (_commit_step5_block() + '\nprintf "TASK_REPORT=%s\\n" "$TASK_REPORT"'
+              + '\nprintf "PLAN=%s\\n" "$(jq -c . <<<"$REPOSITORY_PLAN")"\n')
+    env = {**__import__("os").environ, "CLAUDE_HOME": str(REPO_ROOT), "TASK_ID": task_id,
+           "CLOSE_REPORT": str(root / "docs" / "dev" / f"close-report-{task_id}.md")}
+    proc = subprocess.run(["bash", "-c", script], cwd=root, env=env, capture_output=True, text=True)
+    out = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+    assert json.loads(out["LATE_REPAIR"])["state"] == "verified", proc.stdout + proc.stderr
+    assert Path(out["TASK_REPORT"]).resolve() == effective_path.resolve()
+    assert Path(json.loads(out["PLAN"])["report_path"]).resolve() == effective_path.resolve()
+    analyst = (REPO_ROOT / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
+    assert "when `REPOSITORY_PLAN.report_path` is\n   `dev-report-<TASK_ID>.effective.json`" in analyst
+
+
 def test_ac9_companion_resolve_commit_repos_regression_no_run_record(tmp_path: Path) -> None:
     task_id = "20260101-000810"
     root = tmp_path
@@ -1280,7 +1226,10 @@ def _dispatch_again(root: Path, task_id: str, role: str) -> None:
     """The stage's dispatch run again: its record in the task's transcript, a fresh
     dispatched_at and its own tool_use id (toolu_<role>_again_<task>)."""
     import os
-    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(root.resolve()).replace("/", "-")
+    import re
+    # Claude Code's folder name, as fx.declare_stage_dispatches writes the transcript (P6): every
+    # non-alphanumeric character becomes "-", the "_" of pytest's tmp_path too.
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root.resolve()))
     transcript = store / f"late-repair-{task_id}.jsonl"
     records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
     first = next(r for r in records if r["type"] == "assistant"
@@ -1460,54 +1409,6 @@ def test_finalize_refuses_naming_the_path_when_the_file_it_wrote_is_wrong(tmp_pa
     assert record["effective_report"] is None
 
 
-def test_rule5_a_declined_init_hands_its_chain_call_to_the_ordinary_route(tmp_path: Path, monkeypatch) -> None:
-    """Row 19 rule 5: a /close --late-repair whose init declines goes on with
-    that call's chain result, used verbatim; the chain is resolved once."""
-    calls: list[tuple] = []
-
-    def counting(module):
-        real = module.resolve_chain
-
-        def resolve_chain(*args, **kwargs):
-            calls.append(args)
-            return real(*args, **kwargs)
-
-        module.resolve_chain = resolve_chain
-        return module
-
-    original_controller = ROUTE_SELECT._controller_module
-    original_resolver = ROUTE_SELECT._resolver_module
-
-    def controller():
-        module = original_controller()
-        loader = module.load_sibling_module
-        module.load_sibling_module = lambda name, caller: (
-            counting(loader(name, caller)) if name == "resolve-dev-artifact-chain.py" else loader(name, caller)
-        )
-        return module
-
-    monkeypatch.setattr(ROUTE_SELECT, "_controller_module", controller)
-    monkeypatch.setattr(ROUTE_SELECT, "_resolver_module", lambda: counting(original_resolver()))
-
-    for index, builder in enumerate((fx.build_complete, fx.build_qa_only, fx.build_mixed_integrity)):
-        task_id = f"20260101-00095{index}"
-        root = tmp_path / builder.__name__
-        builder(root, task_id)
-        calls.clear()
-        rc, payload = ROUTE_SELECT.run(task_id, str(root), True, False)
-        assert len(calls) == 1, builder.__name__
-        assert payload["outcome"] == "not_selected"
-        assert payload["late_repair"] == {"outcome": "refuse", "reason": "not a beyond-QA gap; use R1's route"}
-        assert not _run_record_path(root, task_id).is_file()
-
-        calls.clear()
-        rc_ordinary, ordinary = ROUTE_SELECT.run(task_id, str(root), False, False)
-        assert len(calls) == 1
-        assert rc == rc_ordinary
-        assert json.dumps(payload["artifact_chain"], sort_keys=True) == json.dumps(ordinary["artifact_chain"], sort_keys=True)
-        assert {k: v for k, v in payload.items() if k != "late_repair"}.keys() == ordinary.keys()
-
-
 def test_close_todo_declares_finalize_as_a_main_agent_step_under_late_repair(tmp_path: Path) -> None:
     def todos(prompt: str) -> list[dict]:
         proc = subprocess.run(
@@ -1519,11 +1420,15 @@ def test_close_todo_declares_finalize_as_a_main_agent_step_under_late_repair(tmp
 
     plain = todos("/close")
     late = todos("/close --late-repair 20260101-000960")
-    assert todos("/close --force") != plain
-    assert late[1:] == plain
+    # P4 R11: the same five steps under every prompt; under --late-repair,
+    # Step 0 (the main agent's own) also declares finalize's effective report.
+    assert todos("/close --force") == plain
+    assert todos("/close --auto") == plain
+    assert late[1:] == plain[1:]
     finalize = late[0]
-    assert finalize["content"] == "Step 0: Finalize the late repair"
+    assert finalize["content"] == plain[0]["content"] == "Step 0: Resolve the disposition; complete the cycle when incomplete"
     assert "subagent_call" not in finalize
+    assert "artifacts" not in plain[0]
     [declared] = finalize["artifacts"]
 
     # The declared path is the one finalize writes and records.

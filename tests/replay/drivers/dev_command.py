@@ -11,8 +11,8 @@ Each step does what the tree's text says, read at run time:
 * Step 1: the spec as the tree decides it (the hook's `Spec:` line where the text says the hook
   decided it; else the text's own auto-detect, a Glob of the pattern it names, newest first; a
   `--spec` is never passed), the Read of the command-development patterns document the text
-  says to read before authoring a slash command, and every Bash block of the step but the
-  fallback the text keeps for a missing hook output;
+  says to read before authoring a slash command (where the text still names one), and every Bash
+  block of the step but the fallback the text keeps for a missing hook output;
 * Step 2: the graphify hydrator block of commands/dev.md the step points to;
 * Step 3: the four specialists assessed (all SKIP, each with a reason), no dispatch;
 * Step 4: the pre-BA retry signals (the text's `git log --grep` and the ticket Glob), then BA
@@ -157,7 +157,7 @@ class DevCommandCycle:
     def _rules(self):
         return [
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
-            (r"^(?:timestamp|task_id|task-id)$", lambda m: self.tid),
+            (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
             (r"^(?:requirement from Step 1|original requirement|requirement)$", REQUIREMENT),
             (r"^spec_path or null$", lambda m: self.spec_path or "null"),
@@ -278,9 +278,16 @@ class DevCommandCycle:
         if self.patterns_read:
             return
         o = self.o
-        doc = next(c for c in re.findall(r"`([^`\s]+\.md)`", o.section("Command Development Best Practices"))
-                   if c.startswith("~/"))
-        path = os.path.join(self.rp.layout.home, doc[2:])
+        try:
+            practices = o.section("Command Development Best Practices")
+        except cmdtext.TextNotFound:  # the text names no patterns document (a dangling one was removed)
+            practices = ""
+        doc = next((c for c in re.findall(r"`([^`\s]+\.md)`", practices) if c.startswith(("~/", "<HARNESS_ROOT>/"))),
+                   None)
+        if doc is None:
+            self.patterns_read = True
+            return
+        path = os.path.join(self.rp.layout.home, doc[2:]) if doc.startswith("~/") else o.bind(doc)
         self.gated(lambda label: o.s.read(path, label=label, deviation=o.devs.at(label)),
                    "Read command-development patterns")
         self.patterns_read = True
@@ -299,7 +306,9 @@ class DevCommandCycle:
                         fh.write(before)
         o.hook_out = ""  # no longer in the main agent's context
         sec = o.section("Step 1")
-        found = [(b, para) for _n, b, para in o.step_blocks("Step 1") if "prompt-workflow.py start" in b.text]
+        # The start function's call, by its path or through the CLAUDE_HOME channel (`prompt-workflow.py" start`).
+        found = [(b, para) for _n, b, para in o.step_blocks("Step 1")
+                 if re.search(r'prompt-workflow\.py"? start\b', b.text)]
         if not found:
             raise cmdtext.TextNotFound("Step 1 has no start-function fallback")
         blk = found[0][0]
@@ -337,7 +346,8 @@ class DevCommandCycle:
         if self.spec_path:
             o.s.say(f"Spec: {self.spec_path}")
         o.values["spec_path"] = self.spec_path
-        # "Read that document before authoring or editing slash commands" (Command Development Best Practices).
+        # "Read that document before authoring or editing slash commands" (Command Development Best
+        # Practices), where the text still names one (read_patterns skips when it names none).
         self.read_patterns()
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output (?:is )?absent|not in your context")
         o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
@@ -422,10 +432,9 @@ class DevCommandCycle:
         o = self.o
         fields = with_lines(o.template("Step 10"), list(add_lines) + self.graph_lines, context_rel)
         if iteration:  # QA's finding: the command runs the whole tree; dev narrows it to -q tests/
-            work = roles.dev([(CMD_REL, "python3 -m pytest\n", "python3 -m pytest -q tests/\n")], baseline_fallback=True)
+            work = roles.dev([(CMD_REL, "python3 -m pytest\n", "python3 -m pytest -q tests/\n")])
         else:
-            work = roles.dev([], creates=[(CMD_REL, CMD_PARTIAL if self.variant == "qa-fail" else CMD_FINAL)],
-                             baseline_fallback=True)
+            work = roles.dev([], creates=[(CMD_REL, CMD_PARTIAL if self.variant == "qa-fail" else CMD_FINAL)])
         content = {"*": {"baseline_head_sha": "", "baseline_dirty_snapshot": "",  # none in the dispatch payload
                          "dev": {"fix_layer": LAYER}}}
         act = agents.Act(work=work, content=content, summary="the test command runs the toy package tests")

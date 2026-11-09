@@ -13,10 +13,14 @@
 # $HOME; the home's own daemon in its git work makes the landing wait), render-settings land
 # (repair the index a conflicted pull left, migrate, seed the private-literal list), then init
 # steps 3-5; each step is idempotent, and the whole stays under 15 s. A landed home whose later
-# pull conflicted on settings.json or on doc-sync's date lines gets render-settings land --repair,
+# pull conflicted on settings.json or on lines doc-sync writes, or whose overlay names a harness
+# script in a hook command (R2: HEAD may have retired it), gets render-settings land --repair,
 # and one with a stale daemon (left running before, or older than a later pull) restarts it; a
 # settings.json that a CLI write left stat-dirty gets its index stat re-recorded (review N1), which
 # `--settings-stat` runs alone (hooks/pull.sh and git-fswatch.sh, before their stash decision).
+# In each of these states the home gets harness.autoPush false when the key is absent (D1 as amended),
+# and, whenever the post-commit hook template's mtime differs from the last scan's mark, the installed
+# copies of an earlier version of it (byte for byte, here and under $HOME) get the current one.
 set -u
 trap 'exit 0' EXIT  # R9: exit 0 whatever fails below
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
@@ -56,8 +60,20 @@ finish() {  # <log result> <notice>: the one notice line (no quote or backslash)
   exit 0
 }
 
+SHIPPED=""  # the blob ids hooks/git-hooks/post-commit-auto-push has had in this home's history
+refresh_copy() {  # <hook file>: a byte-for-byte copy of an earlier version gets the current one
+  local f="$1" t=hooks/git-hooks/post-commit-auto-push b
+  [ -f "$t" ] && ! cmp -s "$t" "$f" && b="$(git hash-object --no-filters -- "$f" 2>/dev/null)" || return 1
+  [ -n "$SHIPPED" ] || SHIPPED="$(git log --format= --raw --no-abbrev --no-renames -- "$t" 2>/dev/null \
+    | awk '{print $3; print $4}')"
+  grep -qxF -- "$b" <<< "$SHIPPED" || return 1
+  cp -f "$t" "$f.landing.$$" 2>/dev/null && chmod 755 "$f.landing.$$" && mv -f "$f.landing.$$" "$f" 2>/dev/null \
+    || { rm -f "$f.landing.$$"; return 1; }
+}
 legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the hook carried them
-  local g repo dir f to t n=0 lfs=0 kept="" found="" rc=0 i=0
+  # D1 as amended: a post-commit copy of an earlier hooks/git-hooks/post-commit-auto-push, byte for
+  # byte, does not read harness.autoPush; the current one takes its place (a copy with edits stays).
+  local g repo dir f to t n=0 lfs=0 r=0 kept="" found="" rc=0 i=0
   # The repositories under $HOME (owner input "also"): a scan cut at 5 s for R1's bound, and said so;
   # past 8 s the loop leaves the ones after the home's own (the first) as well (review RQ-4).
   [ -z "${HOME:-}" ] || { found="$(timeout 5 find "$HOME" -maxdepth 5 -type d -name .git -prune 2>/dev/null)"; rc=$?; }
@@ -66,10 +82,12 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
     repo="${g%/*}"
     dir="$(git -C "$repo" config --get core.hooksPath 2>/dev/null)" && dir="$(cd "$repo" && realpath -m "${dir/#\~/${HOME:-~}}")"
     for f in "$g/hooks/post-commit" "$g/keystone-hooks/preserved/post-commit" ${dir:+"$dir/post-commit"}; do
-      [ -f "$f" ] && grep -q 'GIT_AUTO_PUSH:-1' "$f" 2>/dev/null || continue
+      [ -f "$f" ] || continue
       # One the repository tracks (a shared .githooks/) stays: renamed, its next commit -a deletes it.
       git -C "$repo" --literal-pathspecs ls-files --error-unmatch -- "$f" >/dev/null 2>&1 \
-        && { kept=$((kept + 1)); continue; }
+        && { ! grep -q 'GIT_AUTO_PUSH:-1' "$f" 2>/dev/null || kept=$((kept + 1)); continue; }
+      refresh_copy "$f" && { r=$((r + 1)); continue; }
+      grep -q 'GIT_AUTO_PUSH:-1' "$f" 2>/dev/null || continue
       to="$f.auto-push-disabled"; [ ! -e "$to" ] || to="$to.$(date +%s)"
       mv -f "$f" "$to" 2>/dev/null || continue
       n=$((n + 1))
@@ -82,7 +100,9 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
     done
   done < <(printf '%s\n' "$COMMON" "$found" | while IFS= read -r g; do [ -z "$g" ] || realpath -e "$g" 2>/dev/null; done | awk '!seen[$0]++')
   [ "$rc" -eq 124 ] && rc=" scan=timed-out" || rc=""
-  log "legacy-hooks disabled=$n lfs-restored=$lfs${kept:+ tracked-left=$kept}$rc"
+  [ "$r" -eq 0 ] && r="" || r=" post-commit-refreshed=$r"
+  log "legacy-hooks disabled=$n lfs-restored=$lfs$r${kept:+ tracked-left=$kept}$rc"
+  [ -z "$r" ] || NOTE="$NOTE; ${r#*=} post-commit hook copy(ies) updated to the one that reads harness.autoPush"
   [ "$n" -eq 0 ] || NOTE="$NOTE; $n legacy auto-push hook(s) renamed aside"
   [ "$lfs" -eq 0 ] || NOTE="$NOTE (LFS hooks restored in $lfs)"
   [ -z "$kept" ] || NOTE="$NOTE; $kept tracked legacy auto-push hook(s) left as they are"
@@ -105,7 +125,7 @@ stale() {
   # mtime, and the boot time as the clock now minus /proc/uptime.
   while read -r k _ v _; do [[ $v == *.* ]] && v="${v#*.}00" || v=00
     v=$((k * 100 + 10#${v:0:2})); [ "$v" -le "$newest" ] || newest=$v
-  done < <(stat -c '%Y %y' hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null)
+  done < <(stat -c '%Y %y' hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh hooks/lib/auto_push.sh 2>/dev/null)
   read -r up _ < /proc/uptime; up="${up//[!0-9]/}"; now="${EPOCHREALTIME//[!0-9]/}"
   [ -n "$now" ] || now="$(date +%s%6N)"; tick="$(getconf CLK_TCK 2>/dev/null)"
   boot=$(( ${now:-0} / 10000 - 10#${up:-0} ))
@@ -115,6 +135,12 @@ stale() {
     [ "${#st[@]}" -ge 20 ] && [ $((boot + st[19] * 100 / tick)) -le "$newest" ] || unset 'STALE[k]'
   done
   [ "${#STALE[@]}" -gt 0 ]
+}
+hand() {  # <rev>:<path> of a folder's INDEX.md or README.md: its lines doc-sync does not write (render-settings' hand)
+  git cat-file -e "$1" 2>/dev/null && git show "$1" 2>/dev/null | awk -v ix="$([[ $1 == *INDEX.md ]] && echo 1)" '
+    /^<!-- AUTO:[^ ]+ -->$/ { g = 1; next } /^<!-- \/AUTO:[^ ]+ -->$/ { g = 0; next }
+    g || /^(\*Last updated: [^*]*\*|\*Auto-generated by doc-sync hook\.\*)?$/ || (ix && /^# [^ \t]+$/) { next }
+    { print }'
 }
 _tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do _tree "$c"; done; echo "$1"; }
 restart_daemons() {  # [landed] R8: the stale processes running this home's git-fswatch.sh
@@ -193,19 +219,36 @@ state
 [ "${1:-}" = "--state" ] && { echo "$STATE"; exit 0; }
 [ "${1:-}" = --settings-stat ] && { [ "$STATE" != landed ] || settings_stat; exit 0; }  # X9: /pull, fswatch
 case "$STATE" in landed|hooks|upgraded) ;; *) exit 0 ;; esac
+# D1 as amended: the home's origin is the public repository, so its automatic pushes stay off until
+# the owner sets harness.autoPush; a value already set (any value) is never changed. One git call.
+git config --local --get harness.autoPush >/dev/null 2>&1
+[ $? -ne 1 ] || { git config --local harness.autoPush false && log "auto-push harness.autoPush set (it was absent)"; } 2>/dev/null
+# After a pull that wrote the post-commit hook template, its copies here and in the repositories
+# under $HOME follow it (legacy_hooks). The lock file then takes the template's mtime (as review
+# N1's marker does), so a later turn end costs two stats. (An upgraded home scans under the lock.)
+tpl=hooks/git-hooks/post-commit-auto-push lk="$COMMON/claude-landing.lock"
+case "$STATE" in landed|hooks) { [ "$tpl" -nt "$lk" ] || [ "$lk" -nt "$tpl" ]; } \
+  && { legacy_hooks; touch -r "$tpl" "$lk" 2>/dev/null; } ;; esac
 if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry is kept), or a stale daemon
-  # settings.json unmerged, or an index or CLAUDE.md whose stash change is doc-sync's date lines
-  # only (review LH-5: the owner's own conflict there is not the repair's, so no run per Stop).
+  # settings.json unmerged, a CLAUDE.md whose stash change is doc-sync's date lines only, or an
+  # index or README whose stash change is in lines doc-sync writes only (review LH-5: the owner's
+  # own conflict there is not the repair's, so no run per Stop).
   REPAIR="" p0=""
   [ -s "$COMMON/logs/refs/stash" ] && while IFS=$'\t' read -r _ p; do
     [ "$p" != "$p0" ] && p0="$p" || continue
-    case "$p" in settings.json) REPAIR=1 ;; INDEX.md|*/INDEX.md|CLAUDE.md|*/CLAUDE.md)
+    case "$p" in settings.json) REPAIR=1 ;; CLAUDE.md|*/CLAUDE.md)
       d="$(git diff -U0 --output-indicator-old='<' --output-indicator-new='>' refs/stash^1 \
         refs/stash -- "$p" 2>/dev/null | grep '^[<>]')"
       [ -n "$d" ] && ! grep -qvE '^[<>](\*Last updated: [^*]*\*|> Last updated: .*)$' <<< "$d" \
-        && REPAIR=1 ;; esac
+        && REPAIR=1 ;;
+    INDEX.md|*/INDEX.md|README.md|*/README.md) ! git diff --quiet refs/stash^1 refs/stash -- "$p" 2>/dev/null \
+      && a="$(hand "refs/stash^1:$p")" && b="$(hand "refs/stash:$p")" && [ "$a" = "$b" ] && REPAIR=1 ;; esac
   done < <(git ls-files -u 2>/dev/null)
   settings_stat
+  # R2: an overlay hook command naming a harness script is checked against HEAD (land --repair)
+  # once HEAD moved since the overlay was written or last checked, which is when HEAD can retire it.
+  [ "$COMMON/logs/HEAD" -nt settings.machine.json ] && grep -qsE '"command": ".*/(hooks|scripts)/' \
+    settings.machine.json && REPAIR="${REPAIR:-overlay}"
   [ -n "$REPAIR" ] || stale || exit 0
 fi
 mkdir -p logs 2>/dev/null
@@ -222,7 +265,7 @@ GD="$(git rev-parse --absolute-git-dir 2>/dev/null)"
 for op in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert \
   "SQUASH_MSG:squash merge"; do  # (git merge --squash stops without a MERGE_HEAD)
   [ -e "$GD/${op%%:*}" ] || continue  # R2 S4: a stopped integration holds the owner's commits
-  [ "$STATE" != landed ] || [ -n "$REPAIR" ] || break
+  [ "$STATE" != landed ] || [ -n "${REPAIR#overlay}" ] || { REPAIR=""; break; }
   n="$(git ls-files -u | cut -f2 | sort -u | wc -l)"
   log "state=$STATE stopped=${op#*:} conflicted=$n"
   [ "$STATE" = upgraded ] || finish "waits-${op#*:}" "${NOTE:+Harness landing: ${NOTE#; }.}"
@@ -234,12 +277,13 @@ if [ "$STATE" = landed ]; then
   res=repaired  # render-settings exits 1 for a path git refused to repair (a lock) or a failed run
   [ -z "$REPAIR" ] || { settings --repair || { res=repair-refused; [ "${out:-settings}" != settings ] || res=repair-failed \
     out="the settings repair failed (see logs/landing.log); it runs again at the next turn end"; }; NOTE="${out:+; $out}$NOTE"; }
+  [ "$REPAIR${out:-}" != overlay ] || REPAIR=""  # the overlay held nothing to drop: no log line
   [ -n "$REPAIR$NOTE" ] || exit 0  # only daemons it could not restart yet: no log line, no notice
   finish "$res" "${NOTE:+Harness landing: ${NOTE#; }.}"
 fi
 if [ "$STATE" = upgraded ]; then
   log "landing state=$STATE"
-  legacy_hooks
+  legacy_hooks; touch -r "$tpl" "$lk" 2>/dev/null
   # Before the settings: a landing that waits for a busy daemon has not migrated anything yet.
   restart_daemons || finish waits-daemon "Harness landing waits: a stale git-fswatch daemon is in the middle of its git work; the settings are not touched yet${NOTE:+ (done so far: ${NOTE#; })}; the landing goes on at the next turn end."
   settings --spent "$SECONDS" || finish "failed-${out:-settings}" "Harness landing failed at the ${out:-settings} step (see logs/landing.log)${NOTE:+ (done so far: ${NOTE#; })}; it runs again at the next turn end."

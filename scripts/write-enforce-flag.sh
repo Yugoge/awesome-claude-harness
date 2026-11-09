@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Write one or more enforcement-flag sentinels into a dev-registry session dir.
 #
-# Merges the body of write-codex-enforce.sh, which remains as a thin wrapper
-# around this script (command text written before this change calls it by
-# name), so this is a consolidation, not a rename. The E2E gate has no flag
-# (hooks/subagentstop-e2e-enforce.py judges every cycle's QA): its wrapper,
-# write-e2e-enforce.sh, writes nothing.
+# The E2E gate has no flag (hooks/subagentstop-e2e-enforce.py judges every
+# cycle's QA): its old wrapper, write-e2e-enforce.sh, is an exit-0 stub that
+# writes nothing.
 #
 # --flag is repeatable, and that is the point: one invocation writes every flag
 # a cycle's registry needs (hooks/prompt-workflow.py _arm_registry). A flag
@@ -14,7 +12,7 @@
 #
 # Usage: write-enforce-flag.sh --source-command <dev|dev-command|redev|dev-overnight> \
 #                              --session-id <DEV_SESSION_ID> \
-#                              --flag <codex|artifact-contract> [--flag <...>]
+#                              --flag codex [--flag <...>]
 # Exits 1 on failure; callers must abort if this script fails.
 set -euo pipefail
 
@@ -46,7 +44,7 @@ CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 flag_filename() {
   case "$1" in
     codex)             echo "codex-enforce.json" ;;
-    artifact-contract) echo "artifact-contract-enforce.json" ;;
+
     *)                 return 1 ;;
   esac
 }
@@ -56,7 +54,7 @@ flag_filename() {
 # bad: the first sentinel already on disk, the caller told to abort.
 for flag in "${FLAGS[@]}"; do
   flag_filename "$flag" >/dev/null || {
-    echo "ERROR: unknown --flag '$flag' (expected: codex, artifact-contract)" >&2; exit 1; }
+    echo "ERROR: unknown --flag '$flag' (expected: codex)" >&2; exit 1; }
 done
 
 mkdir -p "$REGISTRY_DIR" \
@@ -85,6 +83,6 @@ for flag in "${FLAGS[@]}"; do
   # and transcripts grep for these strings.
   case "$flag" in
     codex)             echo "Codex enforcement active: $target" ;;
-    artifact-contract) echo "Artifact-contract enforcement active: $target" ;;
+
   esac
 done

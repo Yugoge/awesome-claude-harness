@@ -45,6 +45,7 @@ import fcntl
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +191,20 @@ def write_json_locked(path: Path, data: Any, indent: int = 2) -> None:
             path.write_text(json.dumps(data, indent=indent, ensure_ascii=False), encoding="utf-8")
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def write_validated(path: Path, record: dict, schema_name: str) -> dict:
+    """Write a result artifact once the harness's one validator (contract_runtime.validate,
+    over schemas/registry.json) has checked it against schema_name; a record it rejects
+    is written as status failed, never as given. Returns the record written."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from hooks.lib.contract_runtime import validate
+    verdict = validate(record, schema_name)
+    if not verdict["ok"]:
+        record = {**empty_graph_context(STATUS_FAILED, f"{schema_name}: {'; '.join(verdict['errors'])}"[:500]),
+                  **{k: record[k] for k in ("task_id", "generated_at") if isinstance(record.get(k), str)}}
+    write_json_locked(path, record)
+    return record
 
 
 def reset_semantic_mode_in_manifest(cache_dir: Path) -> bool:

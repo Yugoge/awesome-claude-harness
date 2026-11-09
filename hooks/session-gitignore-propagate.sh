@@ -1,38 +1,27 @@
 #!/usr/bin/env bash
-# SessionStart hook: append missing standard harness gitignore rules to project repo
-# Usage: Invoked automatically at session start by the Claude Code harness
-# Runs idempotently — only appends rules that are absent.
-# Exit codes: 0=success (always), 2=internal error (treated as 0 by design)
+# SessionStart hook: keep the harness's runtime directories out of a product repo's git status.
+# Appends each harness-owned .claude/ subdirectory below that the clone's own exclude file
+# (`git rev-parse --git-path info/exclude`; a worktree resolves its own) does not list yet.
+# Never writes a tracked file or the tracked .gitignore, never lists a docs/dev artifact
+# /commit stages; a project that is not a git repository is left alone. Exits 0.
 
-set -euo pipefail
+set -u
 
-HARNESS_RULES=(
-  "tests/generated/"
-  ".claude/dev-registry/dev-*/"
-  "docs/codex/"
-  ".playwright-mcp/"
+RUNTIME_DIRS=(
+  ".claude/dev-registry/"
+  ".claude/dev-start-replays/"
+  ".claude/specs/"
+  ".claude/workflow-locks/"
 )
 
-# Find git root of CWD (fall back to CLAUDE_PROJECT_DIR env var if set)
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-
-GIT_ROOT=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null) || exit 0
-
-# Only run for harness repos identified by the .awesome-claude-harness marker file
-[[ -f "$GIT_ROOT/.claude/.awesome-claude-harness" ]] || exit 0
-
-GITIGNORE="$GIT_ROOT/.gitignore"
-
-# If no .gitignore exists, exit without modifying anything
-[[ -f "$GITIGNORE" ]] || exit 0
-
-# The one writer of a project's .gitignore appends each rule it does not hold yet.
-HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RULE_ARGS=()
-for rule in "${HARNESS_RULES[@]}"; do
-  RULE_ARGS+=(--rule "$rule")
+ROOT=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -n "$ROOT" ] && cd "$ROOT" 2>/dev/null || exit 0
+EXCLUDE=$(git rev-parse --git-path info/exclude 2>/dev/null) || exit 0
+mkdir -p "$(dirname "$EXCLUDE")" 2>/dev/null || exit 0
+for dir in "${RUNTIME_DIRS[@]}"; do
+  grep -qxF "$dir" "$EXCLUDE" 2>/dev/null && continue
+  # A last line without its newline must not swallow the appended one.
+  [ -s "$EXCLUDE" ] && [ -n "$(tail -c1 "$EXCLUDE")" ] && printf '\n' >> "$EXCLUDE"
+  printf '%s\n' "$dir" >> "$EXCLUDE" 2>/dev/null || exit 0
 done
-bash "$HARNESS_DIR/scripts/update-gitignore.sh" "$GIT_ROOT" \
-  --comment "harness-propagated by session-gitignore-propagate.sh" "${RULE_ARGS[@]}" >/dev/null || true
-
 exit 0

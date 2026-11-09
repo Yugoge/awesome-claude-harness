@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Three-way staging adjudicator over write-time attribution journal chains.
 
-Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
-docs/reference/attribution-journal-consumer-cutover-20261004.md): the lane-agnostic
+Phase D cutover: the lane-agnostic
 `ledger_structural_verdict()` / `ledger_blocks()` at the bottom of this file are the
 real, executed-path callers for scripts/resolve-commit-repos.py's ownership gate,
 hooks/subagentstop-artifact-contract-enforce.py's artifact-contract section, and
 scripts/aggregate-dev-report.py's same-cycle-only completeness gate. The full
-per-task adjudicator below (adjudicate_file / adjudicate_task, requiring real lane
-metadata, which no dispatcher records yet) remains additive until a future cycle
-wires dispatch-time capture.
+per-task adjudicator below (adjudicate_file, requiring real lane metadata, which no
+dispatcher records yet) runs for them with a lane-agnostic task.
 
 It reads journal events (hooks/lib/attribution_journal.py) and the chain fold
 (scripts/verify-attribution-chain.py), and for each file under a task baseline
@@ -23,7 +21,7 @@ returns exactly one verdict:
                         baseline + foreign deltas reproduces the on-disk tail
                         byte for byte -> `stage_content` is the synthesized bytes.
   ENTANGLED             anything else with enough coverage to judge. NEVER
-                        auto-resolved, side-selected or merged: a durable
+                        auto-resolved, side-selected or merged: an
                         escalation record naming the exact conflicting edge
                         pair is emitted (schemas/owned-edits-ledger.v1.json
                         x-classification-contract.escalation_record_properties
@@ -47,26 +45,14 @@ Conservatism rules (deliberate, not tunable):
   * Textual 3-way merge is `git merge-file` on temp files: adjacency counts as
     overlap (fails closed). It creates no commit, ref, index entry or object.
 
-Limits stated up front: escalation persistence is two independent opt-in
-routes, neither implied by the other. --escalation-dir writes a plain JSON
-file ledger. --escalation-store additionally keeps the record AND every
-object it references (each claimant's version blob, the baseline blob)
-REACHABLE through the namespaced ref refs/pending-conflicts/<conflict_record_
-id> -- the E6 reachability half, via persist_escalation_ref() (mirrors
-scripts/stage-owned-hunks.py def persist_escalation_record(): same namespace,
-same create-only CAS; the --classify route there writes fresh blobs for
-inline text, this route's blobs already exist in the journal's object store).
-Dispatch-time baseline content for files already dirty when a task is
-dispatched (fill_clean_baselines() below only infers CLEAN paths from the
-committed HEAD blob; a dirty path's baseline must be captured from the
-worktree at the moment of dispatch) is capture_dispatch_baselines() /
---capture-dispatch-baselines-into: also opt-in, also unwired to any
-dispatcher. Gate-side consumption of the region scope (E7 / dependency D3) is
-still not here.
+Limits stated up front: the escalation record rides in the ENTANGLED verdict
+only; nothing here persists it. A file already dirty when a task is
+dispatched has no baseline (fill_clean_baselines() below only infers CLEAN
+paths from the committed HEAD blob). Gate-side consumption of the region scope
+(E7 / dependency D3) is still not here.
 """
 from __future__ import annotations
 
-import argparse
 import hashlib
 import importlib.util
 import json
@@ -101,10 +87,6 @@ UNUSABLE = {aj.OVERSIZE, aj.NOTFILE, "unreadable"}
 NO_SELECTION_LITERAL = ("NO SIDE HAS BEEN SELECTED AND NOTHING HAS BEEN DISCARDED: both versions "
                         "are preserved below; a human must decide.")
 PAIRWISE_CAP = 400
-# A namespaced ref is not a branch, a PR or a worktree; it costs one ref plus
-# objects that already exist (cf. refs/checkpoints/*; mirrors the identical
-# constant in scripts/stage-owned-hunks.py, the --classify route's E6).
-PENDING_CONFLICT_REF_NAMESPACE = "refs/pending-conflicts"
 
 
 def _load_verify():
@@ -285,7 +267,7 @@ def _verdict(kind, path, **kw):
     return d
 
 
-def adjudicate_file(path, events, task, *, gitdir=None, disk_sha=None, escalation_dir=None, escalation_store=None):
+def adjudicate_file(path, events, task, *, gitdir=None, disk_sha=None):
     """One file's verdict. `events` = every journal event for `path`."""
     gitdir = gitdir or aj.git_dir()
     if not events:
@@ -332,13 +314,11 @@ def adjudicate_file(path, events, task, *, gitdir=None, disk_sha=None, escalatio
             return _entangled(path, task, gitdir, baseline, pair, "ambiguous_writer_decisive",
                               f"edge {amb['pre_sha'][:12]}->{amb['post_sha'][:12]} ({amb['kind']}) was recorded by "
                               f"more than one writer identity including a task identity; ownership is unknowable",
-                              cov, escalation_dir, derivation="ambiguous_witnesses", ambiguous=amb,
-                              escalation_store=escalation_store)
+                              cov, derivation="ambiguous_witnesses", ambiguous=amb)
     if ordered is None:
         a, b = _first_two(trail)
         return _entangled(path, task, gitdir, baseline, (a, b), "order_not_determinable",
-                          f"edge order is not provable ({why})", cov, escalation_dir, derivation="unordered",
-                          escalation_store=escalation_store)
+                          f"edge order is not provable ({why})", cov, derivation="unordered")
     mine = [e for e in ordered if owned_ids(e)]
     foreign = [e for e in ordered if not owned_ids(e)]
     if not mine:
@@ -349,8 +329,7 @@ def adjudicate_file(path, events, task, *, gitdir=None, disk_sha=None, escalatio
         return _verdict(WHOLE, path, coverage=cov, stage_blob=disk,
                         owned_edges=[edge_id(e) for e in mine],
                         detail="every state-changing edge is the task's")
-    return _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov, escalation_dir,
-                     escalation_store=escalation_store)
+    return _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov)
 
 
 def _witness_as_event(w, path, amb):
@@ -373,7 +352,7 @@ def _delta(ev, gitdir):
     return pre, post
 
 
-def _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov, escalation_dir, escalation_store=None):
+def _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov):
     blobs = {}
     for e in ordered:
         pre, post = _delta(e, gitdir)
@@ -390,7 +369,7 @@ def _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov, esca
             nb = _nearest_other_owner(ordered, i, task)
             return _entangled(path, task, gitdir, baseline, (e, nb), "deletion_interleaved",
                               f"edge {edge_id(e)} deletes the file amid interleaved writers", cov,
-                              escalation_dir, derivation="deletion_edge", escalation_store=escalation_store)
+                              derivation="deletion_edge")
     s_cur, f_cur = base_bytes, base_bytes
     for i, e in enumerate(ordered):
         pre, post = blobs[id(e)]
@@ -400,13 +379,13 @@ def _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov, esca
             return _entangled(path, task, gitdir, baseline, (e, _nearest_other_owner(ordered, i, task)),
                               "binary_or_unmergeable_interleaved",
                               f"edge {edge_id(e)}: interleaved binary content cannot be 3-way merged", cov,
-                              escalation_dir, derivation="adjacent_other_owner", escalation_store=escalation_store)
+                              derivation="adjacent_other_owner")
         if st == "conflict":
             other, how = _counterpart(ordered, i, task, conflict, blobs, gitdir)
             return _entangled(path, task, gitdir, baseline, (e, other),
                               "task_delta_does_not_apply_on_baseline" if mine else "foreign_delta_does_not_apply_on_baseline",
                               f"edge {edge_id(e)} does not apply onto the baseline without the other party's edits",
-                              cov, escalation_dir, derivation=how, conflict=conflict, escalation_store=escalation_store)
+                              cov, derivation=how, conflict=conflict)
         if mine:
             s_cur = out
         else:
@@ -417,9 +396,9 @@ def _separate(path, task, gitdir, baseline, ordered, tail_bytes, disk, cov, esca
         b = [e for e in ordered if not task.owns(e)][-1]
         return _entangled(path, task, gitdir, baseline, (a, b), "recomposition_mismatch",
                           "baseline + task deltas combined with baseline + foreign deltas does not reproduce "
-                          "the on-disk bytes: the two parties' edits interact", cov, escalation_dir,
+                          "the on-disk bytes: the two parties' edits interact", cov,
                           derivation="last_edge_of_each_party", conflict=conflict,
-                          recomposed=recomposed, tail=tail_bytes, escalation_store=escalation_store)
+                          recomposed=recomposed, tail=tail_bytes)
     return _verdict(SYNTH, path, coverage=cov, stage_content=s_cur,
                     stage_content_sha=_sha_nowrite(s_cur),
                     owned_edges=[edge_id(e) for e in ordered if task.owns(e)],
@@ -484,28 +463,14 @@ def _excerpt(text, anchor, ctx=3, cap=4000):
     return "\n".join(lines[max(0, at - ctx): at + len(anchor.split("\n")) + ctx])[:cap]
 
 
-def _entangled(path, task, gitdir, baseline, pair, reason, detail, cov, escalation_dir, *,
-               derivation, conflict=None, ambiguous=None, recomposed=None, tail=None, escalation_store=None):
+def _entangled(path, task, gitdir, baseline, pair, reason, detail, cov, *,
+               derivation, conflict=None, ambiguous=None, recomposed=None, tail=None):
     a, b = pair
     out = _verdict(ENTANGLED, path, reason=reason, detail=detail, coverage=cov,
                    conflicting_pair={"derivation": derivation,
                                      "edges": [edge_id(x) if x else None for x in pair]})
     out["escalation"] = build_escalation_record(path, task, gitdir, baseline, a, b, reason, detail,
                                                 conflict, recomposed, tail, ambiguous, derivation)
-    if escalation_dir:
-        out["escalation_path"] = persist_escalation(out["escalation"], escalation_dir)
-    if escalation_store:
-        stored, error = persist_escalation_ref(out["escalation"], escalation_store)
-        p = out["escalation"]["persistence"]
-        p.pop("ref_note", None)
-        if stored:
-            p["ref_persisted"] = True
-            p["ref"] = stored["ref"]
-            p["ref_tree"] = stored["tree"]
-        else:
-            p["ref_persisted"] = False
-            p["ref_error"] = error
-            p["ref_note"] = "E6 reachability ref write was attempted (escalation_store given) and failed; see ref_error"
     return out
 
 
@@ -581,97 +546,13 @@ def build_escalation_record(path, task, gitdir, baseline, a, b, reason, detail, 
         "no_selection_and_no_discard": NO_SELECTION_LITERAL,
         "if_chosen": if_chosen,
         "rendered_message": msg,
-        "persistence": {"ledger": "json-file (opt-in)", "ref_namespace": "refs/pending-conflicts/",
-                        "ref_persisted": False,
-                        "ref_note": "E6 reachability ref not written: no escalation_store given "
-                                    "(opt-in; see persist_escalation_ref)"},
         "scope": {"kind": "region", "path": path, "region_digest": _sha("region", anchor),
                   "gate_consumption": "dependency D3 (IAC-2), not implemented here"},
         "ambiguous_edge": ({k: ambiguous[k] for k in ("pre_sha", "post_sha", "kind", "writers")} if ambiguous else None),
     }
 
 
-def persist_escalation(record, escalation_dir):
-    d = Path(escalation_dir)
-    d.mkdir(parents=True, exist_ok=True)
-    target = d / (record["conflict_record_id"] + ".json")
-    tmp = target.with_suffix(".tmp%d" % os.getpid())
-    tmp.write_text(json.dumps(record, indent=1, sort_keys=True))
-    os.replace(tmp, target)
-    return str(target)
-
-
-def persist_escalation_ref(record, git_root):
-    """E6 (schemas/owned-edits-ledger.v1.json x-classification-contract E6): keep the
-    escalation record and every object it references REACHABLE through the namespaced
-    ref refs/pending-conflicts/<conflict_record_id>. Mirrors
-    scripts/stage-owned-hunks.py def persist_escalation_record() -- same namespace,
-    same create-only CAS -- except every versions[].object_id and the baseline blob
-    here are ALREADY git blobs (hash_file/hash_files wrote them at edit time), so this
-    only adds a record.json blob and a tree that reaches both them and it. `git_root`
-    must be the SAME object store those blobs already live in (in production that is
-    the harness repo gitdir the caller is already adjudicating against; a disposable
-    fixture repo in tests -- E6's own text: "durability is exercised only in an
-    isolated disposable fixture repository").
-
-    Returns (stored_dict, None) on success or (None, error) on failure. The ref is
-    NEVER silently clobbered: a pre-existing DIFFERENT record at the same ref is
-    refused; a byte-identical re-persist is idempotent (already_present: True)."""
-    entries = []
-    for v in record.get("versions") or []:
-        oid = v.get("object_id")
-        if not oid or len(oid) != 40:
-            continue
-        name = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in str(v.get("claim_ref") or oid))[:120]
-        entries.append("100644 blob %s\tversion-%s.txt" % (oid, name))
-    base = (record.get("contested_region") or {}).get("bound_image_id")
-    if base and len(base) == 40:
-        entries.append("100644 blob %s\tbound-image.txt" % base)
-    body = json.dumps(record, indent=1, sort_keys=True).encode()
-    rb = subprocess.run(["git", "--git-dir", git_root, "hash-object", "-t", "blob", "-w", "--stdin"],
-                        input=body, capture_output=True, env=_clean_env())
-    if rb.returncode != 0:
-        return None, "could not store the record blob: %s" % rb.stderr.decode(errors="replace").strip()
-    entries.append("100644 blob %s\trecord.json" % rb.stdout.decode().strip())
-    mt = subprocess.run(["git", "--git-dir", git_root, "mktree"],
-                        input=("\n".join(entries) + "\n").encode(), capture_output=True, env=_clean_env())
-    if mt.returncode != 0:
-        return None, "could not build the pending tree: %s" % mt.stderr.decode(errors="replace").strip()
-    tree_oid = mt.stdout.decode().strip()
-    ref = "%s/%s" % (PENDING_CONFLICT_REF_NAMESPACE, record["conflict_record_id"])
-    rp = subprocess.run(["git", "--git-dir", git_root, "rev-parse", "--verify", "--quiet", ref],
-                        capture_output=True, env=_clean_env())
-    if rp.returncode == 0:
-        existing = rp.stdout.decode().strip()
-        if existing == tree_oid:
-            return {"ref": ref, "tree": tree_oid, "already_present": True}, None
-        return None, ("%s already names a DIFFERENT pending record (%s); refusing to overwrite "
-                      "an un-adjudicated escalation" % (ref, existing))
-    ur = subprocess.run(["git", "--git-dir", git_root, "update-ref", ref, tree_oid, ""],
-                        capture_output=True, env=_clean_env())
-    if ur.returncode != 0:
-        return None, "could not write %s: %s" % (ref, ur.stderr.decode(errors="replace").strip())
-    return {"ref": ref, "tree": tree_oid, "already_present": False}, None
-
-
 # ----------------------------------------------------------------- task level
-
-def adjudicate_task(events, task, paths=None, *, gitdir=None, disk_shas=None, escalation_dir=None,
-                    escalation_store=None):
-    by_path = {}
-    for ev in events:
-        by_path.setdefault(ev["path"], []).append(ev)
-    wanted = sorted(paths) if paths is not None else sorted(by_path)
-    verdicts = {}
-    for p in wanted:
-        verdicts[p] = adjudicate_file(p, by_path.get(p, []), task, gitdir=gitdir,
-                                      disk_sha=(disk_shas or {}).get(p), escalation_dir=escalation_dir,
-                                      escalation_store=escalation_store)
-    counts = {v: 0 for v in VERDICTS}
-    for r in verdicts.values():
-        counts[r["verdict"]] += 1
-    return {"task_id": task.task_id, "verdicts": verdicts, "counts": counts}
-
 
 def task_from_metadata(meta):
     agent_ids = {a for lane in meta.get("lanes", []) for a in lane.get("agent_ids", [])}
@@ -682,8 +563,7 @@ def task_from_metadata(meta):
 
 def _dirty_rel_paths(dirty_snapshot_text):
     """Repo-relative paths named by a `git status --porcelain` style snapshot
-    (a rename line keeps the NEW path, same reading fill_clean_baselines and
-    capture_dispatch_baselines both need)."""
+    (a rename line keeps the NEW path, the reading fill_clean_baselines needs)."""
     out = []
     for ln in (dirty_snapshot_text or "").split("\n"):
         if len(ln) > 3:
@@ -696,7 +576,7 @@ def fill_clean_baselines(meta, root, rel_paths):
     their dispatch-time bytes ARE the baseline_head_sha blob (read-only
     rev-parse; a path not in that tree and not dirty/untracked at baseline is
     'absent'). Dirty files keep ONLY an explicitly supplied blob -- never
-    guessed; capture_dispatch_baselines() is the supplier of that blob."""
+    guessed."""
     dirty = set(_dirty_rel_paths(meta.get("baseline_dirty_snapshot")))
     head = meta.get("baseline_head_sha")
     out = dict(meta.get("baselines") or {})
@@ -710,32 +590,6 @@ def fill_clean_baselines(meta, root, rel_paths):
     return out
 
 
-def capture_dispatch_baselines(root, dirty_snapshot_text):
-    """Dispatch-time baseline CONTENT snapshot for files already dirty when a
-    task is dispatched. agents/dev.md's baseline_dirty_snapshot: is a porcelain
-    PATH list only -- it names WHICH files were dirty, never their bytes --
-    which is exactly why fill_clean_baselines() above refuses to guess a
-    baseline for any of them: this function is the supplier of the "explicitly
-    supplied blob" it requires instead.
-
-    MUST be called by the dispatcher AT the moment of dispatch: the bytes
-    hashed are whatever is on disk RIGHT NOW. A call made later (e.g. from
-    this module's own adjudicate/view CLI, which by design runs long after
-    dispatch once a task's edits have already landed) would capture the
-    task's own edits instead of the pre-dispatch state and silently defeat
-    the whole point of a baseline. Unlike the rest of this module, this
-    WRITES a git blob per path (git hash-object -w, via
-    attribution_journal.hash_files) so adjudicate_file() can later resolve it
-    with cat-file exactly like any journal-written blob.
-
-    Returns {abs_path: blob_sha}; a path absent on disk maps to aj.ABSENT."""
-    rels = _dirty_rel_paths(dirty_snapshot_text)
-    if not rels:
-        return {}
-    paths = [abs_event_path(root, r) for r in rels]
-    return aj.hash_files(paths)
-
-
 def abs_event_path(root, rel):
     return rel if os.path.isabs(rel) else os.path.normpath(os.path.join(root, rel))
 
@@ -745,8 +599,7 @@ def abs_event_path(root, rel):
 def ledger_structural_verdict(path, *, root=None, journal_dir=None, gitdir=None, task_id=None):
     """Lane-agnostic ledger verdict for ONE path, for a consumer that is
     switching off the self-reported ("replay owned_edits hunks, compare to
-    disk") judgment per docs/reference/attribution-journal-cutover-flip-plan-
-    20261003.md, without per-task lane metadata (no dispatcher records any
+    disk") judgment, without per-task lane metadata (no dispatcher records any
     yet, so no `agent_id -> task_id` map or dispatch-time baseline exists for
     any real task today).
 
@@ -789,46 +642,3 @@ def ledger_blocks(path, **kw):
     ledger_structural_verdict()'s docstring for why that is deliberate, not a
     gap."""
     return ledger_structural_verdict(path, **kw)["verdict"] == ENTANGLED
-
-
-def main(argv=None):
-    ap = argparse.ArgumentParser(description="Journal-based three-way staging adjudicator (read-only "
-                                              "unless --capture-dispatch-baselines-into or --escalation-store is given).")
-    ap.add_argument("--lanes", required=True, help="lane metadata JSON (task_id, lanes[].agent_ids, baselines)")
-    ap.add_argument("--file", action="append", default=[])
-    ap.add_argument("--journal-dir")
-    ap.add_argument("--git-dir")
-    ap.add_argument("--repo-root", default=str(ROOT))
-    ap.add_argument("--escalation-dir", help="opt-in: persist escalation records here as JSON files")
-    ap.add_argument("--escalation-store", help="opt-in: additionally keep each escalation record and every "
-                    "object it references reachable via refs/pending-conflicts/<id> (E6; see persist_escalation_ref)")
-    ap.add_argument("--capture-dispatch-baselines-into", help="DISPATCH-TIME ONLY: capture a baseline content "
-                    "blob for every path --lanes' baseline_dirty_snapshot names as dirty (git hash-object -w, "
-                    "the one write this flag makes), merge it into baselines (an explicitly supplied blob always "
-                    "wins), write the complete lane metadata to this path, and exit -- does not adjudicate")
-    a = ap.parse_args(argv)
-    meta = json.loads(Path(a.lanes).read_text())
-    root = a.repo_root
-    meta["baselines"] = {abs_event_path(root, k): v for k, v in (meta.get("baselines") or {}).items()}
-    if a.capture_dispatch_baselines_into:
-        captured = capture_dispatch_baselines(root, meta.get("baseline_dirty_snapshot"))
-        for k, v in captured.items():
-            meta["baselines"].setdefault(k, v)
-        Path(a.capture_dispatch_baselines_into).write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
-        return 0
-    events, bad = aj.read_all_journals(Path(a.journal_dir) if a.journal_dir else None)
-    rels = sorted({os.path.relpath(e["path"], root) for e in events if e["path"].startswith(root.rstrip("/") + "/")})
-    meta["baselines"] = fill_clean_baselines(meta, root, rels)
-    task = task_from_metadata(meta)
-    paths = [abs_event_path(root, f) for f in a.file] or None
-    rep = adjudicate_task(events, task, paths, gitdir=a.git_dir, escalation_dir=a.escalation_dir,
-                          escalation_store=a.escalation_store)
-    for r in rep["verdicts"].values():                    # bytes are not JSON
-        r.pop("stage_content", None)
-    rep["discarded_journal_lines"] = len(bad)
-    print(json.dumps(rep, indent=1, sort_keys=True))
-    return 0 if all(v["verdict"] in (WHOLE, SYNTH, NOT_TASK) for v in rep["verdicts"].values()) else 10
-
-
-if __name__ == "__main__":
-    sys.exit(main())

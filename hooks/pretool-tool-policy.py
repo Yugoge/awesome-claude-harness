@@ -20,7 +20,7 @@ NotebookEdit target and every Bash write target:
     prefixes, tool lists and the scratch rule below still apply.
   - Any other caller's write of a declared path -> exit 2 naming the path and
     the declaring obligation's role, whatever an allow prefix (dev's '*',
-    general-purpose's '*/docs/dev/*') says. No prefix table names an artifact.
+    changelog-analyst's '*/docs/dev/') says. No prefix table names an artifact.
   - An undeclared path keeps the role policy rows below.
   - What a dispatch can declare has the shapes of the paths the current
     command files' templates write ("path" in their JSON, any bracketed text
@@ -63,13 +63,26 @@ NotebookEdit target and every Bash write target:
     lib/declared_paths, loaded only for a write; this file keeps the rule
     and the session transcript's reader (_Record).
 
+Grant binding (D8), beside it and for every caller alike: only <name> writes
+under <state dir>/agentic-commit/<name>/, <name> a listed role (the push- and
+merge-analyst grants); a removal is no write (_check_grant_writes).
+
+In-flight compatibility (train 2, A17; D15), kept until no session predates
+train 2's landing: the commit message file 2acc29b's changelog-analyst text
+writes, /tmp/commit-msg-<name>.txt, is that analyst's own by the Write tool
+(its role's denials only) and no other caller's (_check_inflight_msg_writes);
+the test-writer entry 2acc29b's /dev text has its test-writer create in its
+own cycle's registry is that test-writer's own by the Write tool, its dispatch
+prompt naming the create, and no other caller's (_check_inflight_entry_writes).
+
 Behavior:
-  - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
-    permission (the orchestrator gate handles the rest of the main agent).
-  - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
-    unresolved role is a NORMAL state (a subagent may write before any sentinel-
-    creating tool runs; agent_resolver LOW-10: callers MUST NOT hard-block on
-    None). Role-specific deny is enforced once the role resolves.
+  - Every caller, first: a protected file's write, delete or rename, and a
+    ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
+  - Main agent (no agent_id) -> exit 0 after the derived permission and the
+    grant binding (the orchestrator gate handles the rest of the main agent).
+  - Subagent role unresolvable (a NORMAL state, agent_resolver LOW-10), or one
+    the policy does not list (Explore, Plan, general-purpose, `<plugin>:<name>`)
+    -> exit 0: no role row applies, never is_allowed's "unknown role".
   - Resolved role + denied tool/path -> exit 2 with structured stderr
     JSON: {"role", "tool", "target", "deny_reason"}.
   - Deny-logic import/bootstrap failure -> exit 2 (FAIL CLOSED, WS1): the
@@ -118,6 +131,7 @@ WRITE_TOOLS: set
 resolve_agent_type = None  # type: ignore[assignment]
 extract_bash_write_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
+harness_state_dir = None  # type: ignore[assignment]
 
 
 def _bootstrap_security() -> None:
@@ -126,11 +140,12 @@ def _bootstrap_security() -> None:
     This MUST be called from main() BEFORE any authorization decision and MUST
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
-    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed
+    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed, harness_state_dir
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
         from lib.bash_write_targets import extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
+        from lib.harness_state_dir import harness_state_dir as _hsd
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
@@ -142,6 +157,7 @@ def _bootstrap_security() -> None:
     resolve_agent_type = _rat
     extract_bash_write_paths = _ebwp
     is_allowed = _ia
+    harness_state_dir = _hsd
 
 
 def _read_payload() -> dict:
@@ -200,11 +216,13 @@ def _role_temp_exceptions(role: str) -> list:
 
     An entry qualifies when it names tmp/var-tmp and is NOT one of the bare
     raw-temp grants.  These survive the raw-temp denial verbatim, for exactly
-    the role that holds each.
+    the role that holds each.  A CLAUDE_STATE_DIR below a temp root is no
+    arbitrary temp: the role's '*/' entries (an analyst's grants) hold in it.
     """
     from lib.policy_registry import get_role_policy
 
     allowed = get_role_policy(role).get("allowed_write_path_prefixes", []) or []
+    state = harness_state_dir()
     out = []
     for entry in allowed:
         if not isinstance(entry, str) or entry in _RAW_TEMP_GRANTS:
@@ -212,6 +230,8 @@ def _role_temp_exceptions(role: str) -> list:
         parts = entry.strip("*").split("/")
         if "tmp" in parts:
             out.append(entry)
+        elif state not in _SYSTEM_TEMP_ROOTS and entry.startswith("*/"):
+            out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
 
@@ -613,6 +633,186 @@ def _caller_label(role, data: dict) -> str:
     return data.get("agent_type") or "unresolved"
 
 
+def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None:
+    """Exit 2 when a caller other than <name> creates or overwrites a file under
+    <state dir>/agentic-commit/<name>/, <name> a listed role (any, the policy
+    unreadable); an unexpanded Bash word is judged by the directory it spells."""
+    from lib import policy_registry
+
+    base = f"{_resolved(harness_state_dir())}/agentic-commit/"
+    roles = (policy_registry.load_policy() or {}).get("roles")
+    for target in targets[1:] if tool_name == "Bash" else targets[:1] if tool_name in WRITE_TOOLS else []:
+        if not isinstance(target, str) or not target or "\x00" in target:
+            continue
+        if "$" in target or "`" in target:
+            match = re.search(r"/agentic-commit/([^/$`]+)/", target)
+            owner = match.group(1) if match else None
+        else:
+            path = f"{_resolved(target)}/"
+            owner = path[len(base):].split("/")[0] if path.startswith(base) else None
+        if owner and owner != role and (roles is None or owner in roles):
+            _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                        f"write target {target} is in the {owner} grant directory; only the {owner} "
+                        "creates or overwrites a file there")
+            sys.exit(2)
+
+
+# -- in-flight compatibility: the changelog-analyst's message file (train 2, A17) --
+# COMPATIBILITY CODE, kept only until no running session predates train 2's
+# landing (D15); then this block, its call in main() and its tests
+# (hooks/tests/test_grant_binding.py, "in-flight compatibility") go.
+# A session that loaded origin/master's text before train 1 landed (2acc29b)
+# keeps that changelog-analyst text: its Phase 8 has the Write tool write the
+# file of its `git commit -F` at /tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt
+# (2acc29b agents/changelog-analyst.md:1099; :71 and :557 name the same file),
+# where the text since names one under the role's scratch directory. That
+# analyst's role used to go unresolved, so no role row applied; resolved from
+# the CLI's agent_type (P6), its row refuses the write and the in-flight
+# /commit ends failed. So that one name, directly in /tmp and resolving to
+# itself, written by the Write tool, is the changelog-analyst's own: its role's
+# denials apply to it, not its allow prefixes or the raw-temp rule, as to a
+# path its dispatch declares. No other caller, the main agent included, writes
+# a file of that name, by any write tool or Bash write target (D8). A subagent
+# whose role does not resolve is left as before (agent_resolver LOW-10).
+_INFLIGHT_MSG_ROLE = "changelog-analyst"
+_INFLIGHT_MSG_NAME = re.compile(r"commit-msg-[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
+
+
+def _inflight_msg_named(path: str) -> bool:
+    return (_INFLIGHT_MSG_NAME.fullmatch(os.path.basename(path)) is not None
+            and os.path.dirname(path) in ("/tmp", os.path.realpath("/tmp")))
+
+
+def _inflight_msg_file(target: str, own: bool) -> bool:
+    """Whether ``target`` names the in-flight analyst's message file: as
+    written or as it resolves, or (``own``, the analyst's Write) written
+    /tmp/commit-msg-<name>.txt and resolving to that same file."""
+    written = os.path.normpath(target)
+    try:
+        real = str(_resolved(target))
+    except Exception:
+        real = None
+    if own:
+        return (target.startswith("/tmp/") and _inflight_msg_named(written)
+                and real == os.path.join(os.path.realpath("/tmp"), os.path.basename(written)))
+    return _inflight_msg_named(written) or (real is not None and _inflight_msg_named(real))
+
+
+def _check_inflight_msg_writes(role, tool_name: str, targets: list, data: dict) -> set:
+    """Exit 2 when a caller other than the changelog-analyst writes the
+    in-flight message file; returns the analyst's own Write of it."""
+    writes = [t for t in _write_targets(tool_name, targets) if _inflight_msg_file(t, own=False)]
+    if not writes or (role is None and data.get("agent_id")):
+        return set()
+    if role == _INFLIGHT_MSG_ROLE:
+        return {t for t in writes if tool_name == "Write" and _inflight_msg_file(t, own=True)}
+    target = writes[0]
+    _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                f"write target {target} is the message file of an in-flight changelog-analyst's "
+                f"git commit -F; only the {_INFLIGHT_MSG_ROLE} writes it (D8)")
+    sys.exit(2)
+
+
+# -- in-flight compatibility: the test-writer's registry entry (train 2, A17) --
+# COMPATIBILITY CODE, kept only until no running session predates train 2's
+# landing (D15); then this block, its call in main() and its tests
+# (hooks/tests/test_grant_binding.py, "in-flight compatibility") go.
+# 2acc29b's prompt-workflow.py wrote every role's sentinel into the registry
+# at the cycle's start, and its commands/dev.md:799 dispatches the test-writer
+# with "FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/
+# <DEV_SESSION_ID>/test-writer.json (or create if absent with {...})". Since
+# train 1 the registry is armed with no sentinel in it: hooks/pretool-cp-
+# checkin.py creates a role's sentinel right before its dispatch's FIRST
+# ACTION Read, its one producer (D24), and the text since names that Read
+# only. A session that took up master's /dev text before the landing still
+# dispatches that test-writer, which finds its entry absent and creates it.
+# Its role used to go unresolved at that first call, so no role row applied;
+# resolved from the CLI's agent_type (P6), its row refuses the Write. So the
+# test-writer's Write that creates <registry>/test-writer.json is its own when
+# the registry is that of the cycle its own dispatch belongs to (its
+# obligation's task id, obligation.registry_dir_for; armed: an existing
+# directory, not a link) and its dispatch prompt, as the session's dispatch
+# record holds it, tells it to create that very file:
+# its role's denials apply to it, not its allow prefixes or the scratch rule,
+# as to the message file above. No other caller, the main agent included,
+# writes a registry's test-writer.json, by any write tool or Bash write target
+# (D8). A subagent whose role does not resolve is left as before (LOW-10).
+_INFLIGHT_ENTRY_ROLE = "test-writer"
+_INFLIGHT_ENTRY_RE = re.compile(r"(?:^|/)\.claude/dev-registry/[^/]+/test-writer\.json\Z")
+_INFLIGHT_CREATE_RE = re.compile(r"^\s*FIRST ACTION:\s*Read\s+(\S+?)\s+\(or create if absent\b", re.M)
+_PROJECT_WORD_RE = re.compile(r"\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR\b|<PROJECT_ROOT>")
+
+
+def _inflight_entry(target: str) -> bool:
+    """Whether ``target`` names a registry's test-writer entry, as written or as it resolves."""
+    try:
+        real = str(_resolved(target))
+    except Exception:
+        real = ""
+    return any(p and _INFLIGHT_ENTRY_RE.search(p) for p in (os.path.normpath(target), real))
+
+
+def _own_inflight_entry(target: str, data: dict) -> bool:
+    """Whether the test-writer's Write of ``target`` creates the entry of its own
+    cycle's registry that its in-flight dispatch prompt tells it to create: its
+    dispatch is found as _grant_producer finds it (its first record and meta,
+    and the session's record of that call with that prompt), its cycle is its
+    obligation's task (obligation.registry_dir_for), whose registry exists."""
+    try:
+        from lib import command_span, declared_paths, obligation
+
+        if not os.path.isabs(target) or os.path.lexists(target):
+            return False
+        transcript = _session_transcript(data)
+        agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id"))
+        if agent_transcript is None:
+            return False
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+        if prompt is None or not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
+            return False
+        record = _Record(transcript)
+        try:
+            call = record.find_call(named, prompt)
+        finally:
+            record.close()
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+        if (call is None or own.get("role") != _INFLIGHT_ENTRY_ROLE
+                or call.input.get("subagent_type") != _INFLIGHT_ENTRY_ROLE):
+            return False
+        project = str(_project_root())
+        registry = obligation.registry_dir_for(project, own.get("task_id"))
+        if registry is None or registry.is_symlink() or not registry.is_dir():
+            return False
+        entry = (registry / "test-writer.json").resolve(strict=False)
+        if _resolved(target) != entry:
+            return False
+        named_paths = (_PROJECT_WORD_RE.sub(lambda _m: project, m.group(1).strip("`'\""))
+                       for m in _INFLIGHT_CREATE_RE.finditer(prompt))
+        return any(_resolved(os.path.normpath(n)) == entry for n in named_paths)
+    except Exception:  # an unreadable dispatch record names no in-flight create: the role row decides
+        return False
+
+
+def _check_inflight_entry_writes(role, tool_name: str, targets: list, data: dict) -> set:
+    """Exit 2 when a caller other than the test-writer writes a registry's
+    test-writer entry; returns the in-flight test-writer's own create of it."""
+    writes = [t for t in _write_targets(tool_name, targets)
+              if isinstance(t, str) and t and "\x00" not in t and _inflight_entry(t)]
+    if not writes or (role is None and data.get("agent_id")):
+        return set()
+    if role == _INFLIGHT_ENTRY_ROLE:
+        return {t for t in writes if tool_name == "Write" and _own_inflight_entry(t, data)}
+    target = writes[0]
+    _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                f"write target {target} is a cycle's {_INFLIGHT_ENTRY_ROLE} registry entry, which "
+                "hooks/pretool-cp-checkin.py creates at its dispatch's FIRST ACTION Read; only that "
+                f"{_INFLIGHT_ENTRY_ROLE} writes it (D8, D24)")
+    sys.exit(2)
+
+
 def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
     """Apply the derived write permission; exit 2 on another caller's write of
     a declared path. Returns the targets the caller itself declared."""
@@ -749,7 +949,7 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
         tasks = sorted({str(d[2]) for d in covering if d[2]})
         reason = (f"write target {target} is declared by the obligation of the "
                   f"{', '.join(roles)} dispatch" + (f" for task {', '.join(tasks)}" if tasks else "")
-                  + "; only that dispatch writes it")
+                  + f"; only {' or '.join(roles)} writes this artifact (D8)")
         check_tool = "Write" if tool_name == "Bash" else tool_name
         _emit_block(_caller_label(role, data), check_tool, target, reason)
         sys.exit(2)
@@ -774,7 +974,8 @@ def _declared_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
-def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset()) -> None:
+def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset(),
+                   message_file: set = frozenset()) -> None:
     """Iterate targets, exit 2 on first deny. For Bash, treat each
     extracted write target (idx > 0) as a Write authorization request.
 
@@ -782,13 +983,16 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     actor-exact scratch gate, because a JSON prefix cannot distinguish an
     owner's scratch directory from a sibling's and cannot deny a role holding
     a bare '*' grant. A target in ``own`` is a path the caller's own dispatch
-    declared: the prefix layer applies only its denials to it.
+    declared: the prefix layer applies only its denials to it. A target in
+    ``message_file`` is the in-flight analyst's message file or the in-flight
+    test-writer's own registry entry (compatibility, _check_inflight_msg_writes,
+    _check_inflight_entry_writes): only its role's denials apply to it.
     """
     for idx, target in enumerate(targets):
         check_tool = tool_name
         if tool_name == "Bash" and idx > 0:
             check_tool = "Write"
-        if check_tool in WRITE_TOOLS and target in own:
+        if check_tool in WRITE_TOOLS and (target in own or target in message_file):
             allowed, reason = _declared_write_allowed(role, check_tool, target)
         else:
             allowed, reason = is_allowed(role, check_tool, target)
@@ -796,14 +1000,206 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash" and idx > 0:
                 _note_bash_write_target(data, target)
+            _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
-        if check_tool in WRITE_TOOLS:
+        if check_tool in WRITE_TOOLS and target not in message_file:
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
                 if tool_name == "Bash" and idx > 0:
                     _note_bash_write_target(data, target)
                 sys.exit(2)
+
+
+# -- protected paths (P5 R2, R3; D11/D12) -------------------------------------
+# No caller, /do or not, writes, deletes or renames a file the settings filter,
+# the commit checks or a Stop decision reads. The harness home's are its own
+# (a product repository's of the same names stay writable); a transcript's
+# agent meta counts with it, since the derived permission above reads it; the
+# /push Stop's push-gate token and push-analyst grant count too (review H2),
+# the grant's own producer's Write of it aside. What a script or interpreter
+# writes is not seen.
+_HOME_PROTECTED = ("settings.machine.json", "private-literals.txt", "scripts/check-public-core.sh",
+                   "scripts/install/render-settings", "hooks/git-hooks/pre-commit", ".git/config",
+                   ".git/hooks", ".gitattributes")
+
+
+def _below(path: str, root) -> str | None:
+    """``path`` relative to ``root``, either taken as written or real; None outside it."""
+    for p in {os.path.normpath(path), os.path.realpath(path)}:
+        for r in {os.path.normpath(root), os.path.realpath(root)}:
+            rel = os.path.relpath(p, r)
+            if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+                return rel
+    return None
+
+
+_GRANT = "a push-analyst grant, which only the push-analyst dispatched for its request writes"
+
+
+def _push_input(path: str, state: str) -> str | None:
+    """What the /push Stop reads at ``path``, else None: a file of the push-gate
+    token tree (the token's one writer, scripts/write-push-gate-token.py, writes
+    it from no tool call this hook sees), or a push-analyst grant
+    (<grant tree>/<repo hash>/<session>/<request>.json, merge_grant's path rule)."""
+    rel = _below(path, os.path.join(state, "agentic-commit"))
+    parts = rel.split(os.sep) if rel else []
+    if parts[:1] == ["push"] and len(parts) > 1:
+        return "a push-gate token, whose one writer is scripts/write-push-gate-token.py"
+    if parts[:1] == ["push-analyst"] and len(parts) == 4 and parts[3].endswith(".json"):
+        return _GRANT
+    return None
+
+
+def _protected(path: str, removed: bool, home, config: str, state: str) -> str | None:
+    """What protected file absolute ``path`` is, else None; deleting or
+    renaming (``removed``) a directory takes the protected files beneath it:
+    the harness home's by name, the projects tree's and the /push inputs' as
+    the directory holds them."""
+    from fnmatch import fnmatchcase
+
+    def kept(name: str) -> bool:  # a transcript or agent meta, below ``config``
+        return name.endswith(".jsonl") or fnmatchcase(name, "agent-*.meta.json")
+
+    rel, name = (_below(path, home) if home else None), os.path.basename(path)
+    if rel and any(rel == p or rel.startswith(p + "/") for p in _HOME_PROTECTED):
+        return f"the harness home's {rel}"
+    if _below(path, config) and kept(name):
+        return "a session transcript or its subagent meta"
+    if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
+        return "a /do task sidecar"
+    push = _push_input(path, state)
+    if push:
+        return push
+    held = [os.path.join(home, p) for p in _HOME_PROTECTED] if home else []
+    if removed and (any(_below(p, path) for p in held + [config])
+                    or (_below(path, config) and any(kept(n) for _, _, names in os.walk(path) for n in names))):
+        return "a directory holding the harness home's protected files or the session transcripts"
+    inputs = os.path.join(state, "agentic-commit")  # walked from the deeper of it and the removed directory
+    walked = path if _below(path, inputs) else inputs if removed and _below(inputs, path) else None
+    if removed and walked and any(_push_input(os.path.join(d, n), state) for d, _, names in os.walk(walked)
+                                  for n in names):
+        return "a directory holding a push-gate token or a push-analyst grant"
+    return None
+
+
+def _grant_producer(target: str, state: str, data: dict) -> bool:
+    """Whether the caller is the push-analyst grant's producer: a subagent
+    whose own dispatch (the declaring-dispatch reader's: its record found back
+    from the end of the session transcript by the call its meta names, as
+    _own_from_tail finds it) is a dispatch of the role the grant's folder names
+    (merge_grant's path rule), by a subagent of that type, whose command
+    template binds the grant's repository hash, session and request id."""
+    try:
+        from lib import command_span, declared_paths, dispatch_template, obligation
+
+        transcript = _session_transcript(data)
+        agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id"))
+        if agent_transcript is None:
+            return False
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+        if prompt is None or not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
+            return False
+        record = _Record(transcript)
+        try:
+            call = record.find_call(named, prompt)
+        finally:
+            record.close()
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+        folder, *values = _below(target, os.path.join(state, "agentic-commit")).split(os.sep)
+        if call is None or not folder == own.get("role") == call.input.get("subagent_type"):
+            return False
+        found = dispatch_template._template(own.get("pipeline"), folder, prompt, None)
+        bound = set(dispatch_template._bindings(found[2]).values()) if found else set()
+        return {values[0], values[1], values[2][:-len(".json")]} <= bound
+    except Exception:  # an unreadable record names no producer: the write stays refused
+        return False
+
+
+def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
+    from lib import claude_home
+    from lib.bash_write_targets import extract_bash_touched_paths
+    from lib.harness_state_dir import harness_state_dir
+
+    found = [(t, False) for t in _write_targets(tool_name, targets)]
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        try:  # on a failure the frozen extractor's targets still count, and the rules below still run
+            found += extract_bash_touched_paths(tool_input.get("command") or "")
+        except Exception:
+            pass
+    if not found:
+        return
+    base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    roots = (claude_home.resolve(), os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+                                                 "projects"), harness_state_dir())
+    for target, removed in dict.fromkeys(found):  # a variable the hook's environment holds is the shell's
+        word = os.path.expandvars(re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: os.environ.get(m[1]) or m[2], target))
+        path = os.path.join(base, os.path.expanduser(word))
+        what = not any(c in word for c in "$`\x00") and _protected(path, removed, *roots)
+        if what == _GRANT and not removed and data.get("agent_id") and _grant_producer(path, roots[2], data):
+            continue  # the push-analyst's own Write of its grant (agents/push-analyst.md Phase 7)
+        if what:
+            _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                        f"{target} is {what}: no agent writes, deletes or renames it (D11/D12)")
+            _note_inflight_token_route(role, tool_name, target)
+            sys.exit(2)
+
+
+# -- in-flight compatibility: the token Write's refusal names its route (train 2, A17)
+# COMPATIBILITY CODE, kept only until no running session predates train 2's
+# landing (D15); it goes with scripts/execute-push.py's Step 9b and
+# hooks/tests/test_inflight_push_route.py. 2acc29b's changelog-analyst text
+# (Phase 10) writes the push-gate token with the Write tool, at /tmp/agentic-
+# commit/push/<repo hash>/<session digest>/<branch>.json. That Write stays
+# refused (D18): by the protected stage above where the state dir is /tmp, by
+# the analyst's role row elsewhere. Its stderr names the route that still
+# reaches the push of the commit it names (D25): /push, whose Step 5 has the
+# token's one writer write the token for that commit (execute-push.py Step 9b,
+# on the CLI's record of this refusal).
+_INFLIGHT_TOKEN_RE = re.compile(r"/agentic-commit/push/[0-9a-f]{16}/[0-9a-f]{16}/[^/]+\.json\Z")
+_INFLIGHT_TOKEN_ROUTE = (
+    "tool-policy.v1 note (train 2, A17): this Write stays refused; no agent writes a push-gate token. The "
+    "commit it names reaches its push through /push (the harness home's commands/push.md, Steps 0-5): Step 3 "
+    "dispatches the push-analyst, whose own dispatch binds its grant, and Step 5's scripts/execute-push.py, "
+    "once that grant passes, has the token's one writer (scripts/write-push-gate-token.py) write the token for "
+    "that commit while it is HEAD and no token names an ancestor of HEAD. Report this refusal; do not write "
+    "the token any other way.")
+
+
+def _note_inflight_token_route(role, tool_name: str, target) -> None:
+    """The route of a changelog-analyst's refused Write of a push-gate token path."""
+    if role == "changelog-analyst" and tool_name == "Write" and _INFLIGHT_TOKEN_RE.search(
+            os.path.normpath(str(target))):
+        sys.stderr.write(_INFLIGHT_TOKEN_ROUTE + "\n")
+
+
+# -- scheduled prompts (P5 R5) ------------------------------------------------
+# P1's capture (COV-7, CLI 2.1.303) measured a fired CronCreate prompt's record
+# (isMeta, turnOrigin "scheduled"): stop_contract.is_human_prompt excludes it.
+# A ScheduleWakeup prompt's record is unmeasured, so one typing a harness
+# command outside CONTROL is refused, the overnight wake's own text aside.
+def _check_scheduled_prompt(role, tool_name: str, tool_input: dict, data: dict) -> None:
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if tool_name != "ScheduleWakeup" or not isinstance(prompt, str):
+        return
+    from lib import stop_contract
+
+    found = stop_contract.slash_command(prompt)
+    if not found or found[0] not in stop_contract.harness_commands() or found[0] in stop_contract.CONTROL_COMMANDS:
+        return
+    try:
+        from lib import overnight
+
+        wake = overnight.WAKE_PROMPT
+    except Exception:  # no wake text on this tree: nothing to exempt
+        wake = None
+    if prompt.strip() != wake:
+        _emit_block(_caller_label(role, data), tool_name, f"/{found[0]}",
+                    f"a {tool_name} prompt that types /{found[0]}: only the human types a harness command")
+        sys.exit(2)
 
 
 def main() -> None:
@@ -818,18 +1214,20 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     role = resolve_agent_type(data)
     targets = _extract_targets(tool_name, tool_input)
+    _check_protected(role, tool_name, tool_input, targets, data)
+    _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
-    if not role:
-        # An unresolved role is a NORMAL state, not an error: Claude Code may
-        # dispatch a subagent before any sentinel-creating tool runs, so the
-        # agent-index entry can legitimately be missing during a first write.
-        # Per the agent_resolver LOW-10 contract, callers MUST NOT hard-block on
-        # None — defer to the backstop shim (exit 0). (Reverted: the prior
-        # unresolved-role fail-closed broke every subagent lacking a registry.)
-        # The main agent has no role rows either; the derived permission above
-        # is all that applies to it.
+    _check_grant_writes(role, tool_name, targets, data)
+    message_file = _check_inflight_msg_writes(role, tool_name, targets, data)  # compatibility (A17)
+    message_file |= _check_inflight_entry_writes(role, tool_name, targets, data)  # compatibility (A17)
+    from lib import policy_registry
+
+    if not role or policy_registry.get_role_policy(role).get("_unknown_role"):
+        # Unresolved is NORMAL (agent_resolver LOW-10: never hard-block on None);
+        # the main agent and an unlisted (built-in or plugin) role have no role
+        # rows: the checks above are all that applies to them.
         sys.exit(0)
-    _check_targets(role, tool_name, targets, data, own)
+    _check_targets(role, tool_name, targets, data, own, message_file)
     sys.exit(0)
 
 

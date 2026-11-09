@@ -1,13 +1,15 @@
 # Quick Start — the hooks layer
 
-> **Important — this harness does NOT auto-commit or auto-push.** An earlier
-> version of this guide described a "commit + push after every response" model.
-> That model is **wrong for this repo**: git mutations here are *never* automatic —
-> they pass through a single-use, human-authorized **grant kernel** (`/commit` and
-> `/push` write the grant; `hooks/pretool-git-privilege-guard.py` validates and
-> consumes it). The sections below about auto-commit/auto-push are retained only as
-> historical context and do **not** reflect current behavior. For the real model
-> see the root [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6.
+> **Important — this harness does NOT commit after each response, and pushes nothing unless
+> `GIT_AUTO_PUSH` is exactly `1`.** An earlier version of this guide described a "commit + push
+> after every response" model. That model is **wrong for this repo**. Automated snapshots go to
+> `refs/checkpoints/<branch>` and never move HEAD. An agent's commit and push pass through
+> single-use grants: `/commit` writes the commit grant that `hooks/pretool-git-privilege-guard.py`
+> checks, and `/push`'s push-analyst writes the push grant that `scripts/execute-push.py` validates
+> and spends before `hooks/push.sh` pushes. Only with `GIT_AUTO_PUSH=1` (the shipped
+> `settings.json` sets `0`) do the automatic pushes run: the checkpoint ref, the installed
+> post-commit hooks, the fswatch watcher's branch and a new repository's initial commit. For the
+> real model see the root [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6.
 
 ---
 
@@ -63,7 +65,9 @@ nano ~/.zshrc
 Add the following:
 
 ```bash
-# Claude Code auto-create GitHub repository
+# Claude Code auto-create GitHub repository (hooks/session-git-init.sh runs only
+# when CLAUDE_SESSION_GIT_INIT is set; the repository is pushed only with GIT_AUTO_PUSH=1)
+export CLAUDE_SESSION_GIT_INIT=1
 export CLAUDE_AUTO_CREATE_REPO=true
 ```
 
@@ -92,7 +96,8 @@ Should see `-rwxr-xr-x` (x indicates executable)
 python3 -m json.tool ~/.claude/settings.json >/dev/null && echo "settings.json OK"
 
 # Repository initialization is handled by the wired SessionStart hook
-# (~/.claude/hooks/session-git-init.sh); it runs at session start, not by hand.
+# (~/.claude/hooks/session-git-init.sh); it runs at session start when
+# CLAUDE_SESSION_GIT_INIT is set, not by hand.
 ```
 
 ### Test 3: Verify GitHub CLI
@@ -120,8 +125,8 @@ claude-code  # or your launch command
 # 3. Work proceeds through the grant-gated pipeline:
 #    - SessionStart hooks announce the environment
 #    - Edits go to a dev subagent; the git kernel gates every mutation
-#    - There is NO auto-commit and NO auto-push — you run /commit and /push,
-#      each under its own single-use grant
+#    - Nothing is committed on HEAD and nothing is pushed automatically (unless
+#      GIT_AUTO_PUSH=1) — you run /commit and /push, each under its own single-use grant
 ```
 
 ### Scenario 2: Existing Project
@@ -133,17 +138,17 @@ cd existing-project
 # 2. Start Claude Code
 claude-code
 
-# 3. Same grant-gated model — nothing is committed or pushed automatically;
-#    /commit and /push each require a human-authorized grant token
+# 3. Same grant-gated model — nothing is committed on HEAD or pushed automatically
+#    (unless GIT_AUTO_PUSH=1); /commit and /push each require a single-use grant
 ```
 
 ---
 
 ## Custom Options
 
-There is no "disable auto-push" toggle to set, because nothing here auto-pushes.
-Git mutations are grant-gated: you run `/commit` and `/push` explicitly, each
-under its own single-use grant. There is no auto-commit script to edit — to
+Automatic push is off unless `GIT_AUTO_PUSH` is exactly `1` (any other value, unset included,
+keeps every automatic push off; the shipped `settings.json` sets `0`). Commits and pushes by an
+agent are grant-gated: you run `/commit` and `/push` explicitly, each under its own single-use grant. There is no auto-commit script to edit — to
 customize commit behavior, configure the release commands in `commands/` and the
 grant kernel in `settings.json` instead.
 
@@ -183,15 +188,17 @@ grep -o 'pretool-git-privilege-guard.py' ~/.claude/settings.json | head -1
 
 **Q: Why didn't my work get committed automatically?**
 
-A: By design — nothing commits or pushes on its own. Run `/commit` then `/push`
-(each is grant-gated), or commit/push from your own shell as a human.
+A: By design — nothing commits on HEAD on its own, and nothing pushes unless `GIT_AUTO_PUSH=1`.
+Run `/close` then `/commit`, then `/push` (each is grant-gated), or commit/push from your own
+shell as a human.
 
 **Q: A commit or push is being blocked.**
 
-A: That is the git kernel working as designed. An agent needs a grant from
-`/commit` or `/push`; as a human you can run the git command from your own shell,
-or use `/do` / `/allow`. Confirm `gh auth status` and `git remote -v` if a manual
-push fails.
+A: That is the git kernel working as designed. An agent's commit lands through `/close` then
+`/commit`, a push through `/push`. `/do` consent does not cover `git commit`, `git push`, a git
+operation the guard refuses without `/do` that can move the protected branch (a merge, hard reset
+or ref write onto it) or whose landing branch it cannot tell, or a git command the guard cannot
+classify; a merge into it lands through `/merge`. `/allow <command>` grants one matching call.
 
 **Q: How do I temporarily disable the harness?**
 
@@ -207,9 +214,10 @@ mv ~/.claude/settings.json.disabled ~/.claude/settings.json   # restore
 ## Complete!
 
 You can now start using Claude Code. To be explicit about the git model:
-1. The harness checks/initializes a Git repository at session start.
+1. With `CLAUDE_SESSION_GIT_INIT` set, the harness initializes a Git repository (and its
+   initial commit) at session start in a directory that has none.
 2. It does **NOT** commit after each response — you run `/commit` (grant-gated).
-3. It does **NOT** auto-push — you run `/push` (grant-gated). As a human you can
-   also commit/push from your own shell, or use `/do` / `/allow`.
+3. It pushes nothing unless `GIT_AUTO_PUSH` is exactly `1` — you run `/push` (grant-gated).
+   As a human you can also commit/push from your own shell, or grant one call with `/allow`.
 
 See [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6 for the full grant kernel.

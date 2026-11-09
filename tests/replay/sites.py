@@ -966,7 +966,7 @@ FAIL_CLOSED = re.compile(r"FAIL-CLOSED|bootstrap FAILED|\bis unavailable\b|inval
 # ... unless what it cannot read is the refused call itself (a different call is the next round):
 INPUT_UNREADABLE = re.compile(r"tokeniz|could not be resolved|unresolv", re.I)
 # The overnight window a time-lock compares the clock with:
-WINDOW = re.compile(r"\bwindow_live\b|\bend_time\b")
+WINDOW = re.compile(r"\bwindow_(?:live|open)\b|\bend_time\b")
 TOOL_TEST = re.compile(r"(?:tool_name|TOOL_NAME)\W{0,4}(?:==|=|in)\s*[({\[]?\s*([^)}\]]*)")
 TOOLS = re.compile(r"[\"']([A-Z][A-Za-z]+)[\"']")
 # The calls by which an actor discharges its own obligations: TodoWrite (the canonical step record a

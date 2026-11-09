@@ -635,27 +635,6 @@
       ],
       "rationale": "spec: may write the spec folders and scratch only; the views directory its dispatch's obligation declares is its alone (pretool-tool-policy.py); no source/protected/test edits."
     },
-    "general-purpose": {
-      "allowed_tools": {
-        "Bash": {},
-        "Read": {},
-        "Glob": {},
-        "Grep": {},
-        "Edit": {},
-        "Write": {},
-        "MultiEdit": {},
-        "TodoWrite": {},
-        "Skill": {},
-        "Agent": {},
-        "WebFetch": {},
-        "WebSearch": {}
-      },
-      "allowed_write_path_prefixes": [
-        "*/docs/dev/*",
-        "*/tmp/claude-scratch/general-purpose/",
-        "*/.claude/scratch/"
-      ]
-    },
     "changelog-analyst": {
       "allowed_tools": [
         "Read",
@@ -669,6 +648,8 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/tmp/claude-scratch/changelog-analyst/",
+        "/tmp/agentic-commit/locks/*",
+        "*/docs/dev/",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -680,7 +661,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "changelog-analyst: git commit operations; reads dev-artifacts, stages and commits source changes via Bash (git add/commit). Its Write tool writes only the message file of its own `git commit -F`, a scratch input, under its scratch directory; the push-gate token is written by scripts/write-push-gate-token.py, never by Write; no write access to protected infra"
+      "rationale": "changelog-analyst: git commit operations; reads dev-artifacts, stages and commits source changes via Bash (git add/commit). Its Write tool writes the message file of its own `git commit -F`, a scratch input, under its scratch directory, and in bulk mode the docs/dev close annotation; its fd-9 lock is a redirect under /tmp/agentic-commit/locks/; the push-gate token is written by scripts/write-push-gate-token.py, never by Write; no write access to protected infra"
     },
     "push-analyst": {
       "allowed_tools": [

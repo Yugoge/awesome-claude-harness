@@ -2,28 +2,29 @@
 """git destructive-subcommand argument parsing for the guard.
 
 Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
-stdlib; references nothing from _core. See docs/reference/monolith-split-plan.md
-for the decomposition rationale (incl. why `_git_inspection_head` and the
-forward-referencing orchestrator `_git_destructive_pathspec_hits` stay in _core)
-and the INV-3 dual-context import contract.
+the git global-option table of hooks/lib/git_command_classifier.py + stdlib;
+references nothing from _core. `_git_inspection_head` and the
+forward-referencing orchestrator `_git_destructive_pathspec_hits` stay in _core.
 
 Scope: the pure argv PARSERS for a git invocation -- global-option-aware
 subcommand location and `-C` chdir folding (`_git_subcommand_index`,
-`_git_effective_cwd`), pathspec-magic stripping (`_strip_git_pathspec_magic`),
-destructive-pathspec collection (`_git_destructive_pathspecs`), and the
-destructive-mode predicate (`_git_is_destructive_invocation`) -- plus the generic
-git verb/option lookup tables they key on.
+`_git_effective_cwd`, `_git_location`), pathspec-magic stripping
+(`_strip_git_pathspec_magic`), destructive-pathspec collection
+(`_git_destructive_pathspecs`), and the destructive-mode predicate
+(`_git_is_destructive_invocation`) -- plus the generic git verb/option lookup
+tables they key on.
 ZERO project identifiers.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 # git argv parsers key on the phase-1 quote stripper and the phase-3 leading-home
-# expander (for `git -C ~/dir`). Dual-context import (INV-3) --
-# see docs/reference/monolith-split-plan.md.
+# expander (for `git -C ~/dir`). Dual-context import (INV-3; the contract
+# is stated at _core's first re-import block).
 try:
     from .shell_lex import _strip_quotes
     from .pathmatch import _expand_leading_home
@@ -32,17 +33,20 @@ except ImportError:  # executed under the top-level-script shim (no package)
     from pathmatch import _expand_leading_home  # type: ignore[no-redef]
 
 
+try:
+    from ..git_command_classifier import GIT_GLOBAL_VALUE_OPTS
+except ImportError:  # executed under the top-level-script shim: hooks/lib is the parent
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # type: ignore[no-redef]
+
 # git GLOBAL options (before the subcommand) that consume the FOLLOWING token as
-# their argument (`git -C <dir> status`, `git -c k=v log`). Their operand must be
-# skipped when locating the subcommand, else the operand (`<dir>`) is mistaken for
-# the subcommand and a read-only `git -C <dir> status` is wrongly treated as a
-# non-inspection command (which then mis-fires the anchor scan on the dir operand
-# when the dir basename equals a protected command). Generic git CLI grammar, NOT
-# project names.
-_GIT_GLOBAL_OPTS_WITH_ARG = frozenset({
-    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
-    "--super-prefix",
-})
+# their argument (`git -C <dir> status`, `git -c k=v log`): the classifier's git
+# global-option table. Their operand must be skipped when locating the
+# subcommand, else the operand (`<dir>`) is mistaken for the subcommand and a
+# read-only `git -C <dir> status` is wrongly treated as a non-inspection command
+# (which then mis-fires the anchor scan on the dir operand when the dir basename
+# equals a protected command).
+_GIT_GLOBAL_OPTS_WITH_ARG = GIT_GLOBAL_VALUE_OPTS
 
 
 # Destructive git subcommands that DELETE / OVERWRITE / REVERT working-tree files
@@ -113,6 +117,45 @@ def _git_effective_cwd(tokens: list, git_idx: int, cwd: Optional[str], cwd_det: 
             continue
         break
     return (cwd, cwd_det)
+
+
+def _git_location(tokens: list, git_idx: int, sub_idx: int, cwd: Optional[str], cwd_det: bool):
+    """Where the git invocation at `git_idx` runs its subcommand at `sub_idx`, as
+    (cwd, determinate, proven). Unlike `_git_effective_cwd`, which stops at the
+    first `-C`, every `-C <dir>` / `-C<dir>` is folded in order, as git reads each
+    relative one against the one before (an empty one changes nothing). `proven`
+    is False when any other global option comes first (`--work-tree`, `--git-dir`
+    and `-c core.worktree=` move the work tree; the rest are not told apart) or a
+    `-C` value has a `..` segment, which chdir resolves physically after a symlink
+    and `os.path.normpath` logically. A dynamic `-C` value is not determinate."""
+    proven = True
+    i = git_idx + 1
+    while i < sub_idx:
+        st = _strip_quotes(tokens[i])
+        if st == "-C" or st.startswith("-C"):
+            if st == "-C":
+                if i + 1 >= sub_idx:
+                    return (cwd, False, False)
+                d, i = _strip_quotes(tokens[i + 1]), i + 2
+            else:
+                d, i = st[2:], i + 1
+            d = _expand_leading_home(d)
+            if not d:
+                continue
+            if any(ch in d for ch in ("$", "`", "*", "?", "[", "{")):
+                return (cwd, False, False)
+            if ".." in d.split("/"):
+                proven = False
+            if os.path.isabs(d):
+                cwd, cwd_det = os.path.normpath(d), True
+            elif cwd:
+                cwd = os.path.normpath(os.path.join(cwd, d))
+            else:
+                cwd, cwd_det = os.path.normpath(d), False
+            continue
+        proven = False
+        i += 2 if st in _GIT_GLOBAL_OPTS_WITH_ARG else 1
+    return (cwd, cwd_det, proven)
 
 
 def _strip_git_pathspec_magic(spec: str):

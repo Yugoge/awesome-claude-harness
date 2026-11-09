@@ -9,8 +9,8 @@
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["ok", "degraded", "unavailable", "skipped"],
-      "description": "ok=cache hit with full data; degraded=partial parse; unavailable=binary/cache absent; skipped=explicitly disabled"
+      "enum": ["ok", "degraded", "failed", "unavailable", "skipped"],
+      "description": "ok=cache hit with full data; degraded=partial parse; failed=the producer's result did not validate against this schema; unavailable=binary/cache absent; skipped=explicitly disabled"
     },
     "task_id": {
       "type": "string",
@@ -74,7 +74,7 @@
     },
     "extraction_layers_used": {
       "type": "array",
-      "items": {"type": "string", "enum": ["deterministic_rules", "repo_alias_index", "graph_fuzzy_query"]},
+      "items": {"type": "string", "enum": ["deterministic_rules", "graph_json_node_link", "real_graphify_query"]},
       "description": "Which of the 3 extraction layers successfully contributed data"
     },
     "cache_metadata": {

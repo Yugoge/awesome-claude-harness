@@ -6,7 +6,8 @@ artifact-completeness detection from /close and /commit time -- where the
 producing agent's context is already gone -- to the dispatch moment. It runs
 on every Agent dispatch whose prompt contains "<obligation" (any
 subagent_type) or whose tool_input.subagent_type is a role the active
-command's dispatch templates declare an obligation for (read from
+command's dispatch templates declare an obligation for (read from the
+command's text the CLI recorded when it was typed, else from
 commands/<command>.md, P1b row 18), and evaluates the
 dispatch prompt's <obligation v="1"> block with hooks/lib/obligation.py's
 parse_obligation() (never re-implemented here) against the harness's own
@@ -63,12 +64,14 @@ SUBAGENT_ENV_KEYS = (
 )
 
 BLOCK_BANNER = "OBLIGATION GATE BLOCK"
+# P4 R9: the advisory switch's one stderr line, the would-block reason.
+ADVISORY_BANNER = "OBLIGATION GATE ADVISORY"
 TASK_ID = "20261019-103000"
 DISPATCH_ID = "toolu_g1_dispatch"
 # (command, a role its dispatch templates declare an obligation for) (TC-41, D7).
 DECLARING_SPANS = (
     ("dev", "ba"), ("redev", "ba"), ("dev-command", "ba"), ("dev-overnight", "pm"),
-    ("close", "qa"), ("commit", "changelog-analyst"), ("spec", "spec"),
+    ("close", "qa"), ("close", "dev"), ("commit", "changelog-analyst"), ("commit", "dev"), ("spec", "spec"),
     ("merge", "merge-analyst"), ("push", "push-analyst"),
 )
 
@@ -304,7 +307,8 @@ def test_AC_L1_01_valid_block_always_passes(tmp_path):
 
 def test_AC_L1_02_missing_block_active_session_advisory_passes(tmp_path):
     """AC-L1-02: no block, advisory, active /dev span (no dev-registry dir
-    anywhere) -> exit 0, no block message, nothing written."""
+    anywhere) -> exit 0, no block message, the would-block reason on one
+    stderr line, nothing written."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac02")
     payload = _dispatch_payload(project, sid, _span_records("dev"), prompt="do work, no block")
@@ -312,6 +316,8 @@ def test_AC_L1_02_missing_block_active_session_advisory_passes(tmp_path):
     result = _run_hook(home, project, payload)
     assert result.returncode == 0
     assert BLOCK_BANNER not in result.stderr
+    assert result.stderr.startswith(ADVISORY_BANNER) and result.stderr.count("\n") == 1, result.stderr
+    assert "reason=missing_block" in result.stderr
     assert _written_logs(home) == []
 
 
@@ -346,8 +352,8 @@ def test_AC_L1_04_missing_block_active_session_block_mode_rejects(tmp_path):
 
 def test_AC_L1_05_malformed_block_advisory_passes(tmp_path):
     """AC-L1-05: malformed block, advisory, active /dev span -> exit 0, no
-    block message, nothing written (AC-L1-06 pins the validator's reason in
-    block mode)."""
+    block message, the validator's reason on the advisory stderr line,
+    nothing written (AC-L1-06 pins the reason in block mode)."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac05")
     payload = _dispatch_payload(project, sid, _span_records("dev"),
@@ -355,6 +361,7 @@ def test_AC_L1_05_malformed_block_advisory_passes(tmp_path):
     result = _run_hook(home, project, payload)
     assert result.returncode == 0
     assert BLOCK_BANNER not in result.stderr
+    assert ADVISORY_BANNER in result.stderr and "reason=missing_field" in result.stderr, result.stderr
     assert _written_logs(home) == []
 
 
@@ -594,15 +601,19 @@ def test_G1_block_mode_rejects_violation(tmp_path, case_id):
 
 @pytest.mark.parametrize("case_id", sorted(VIOLATION_CASES))
 def test_G1_switch_unset_advisory_passes_violation(tmp_path, case_id):
-    """Acceptance 3 (k): the same cases with CLAUDE_OBLIGATION_GATE unset ->
-    exit 0, no block message, nothing written."""
+    """Acceptance 3 (k): the same cases with CLAUDE_OBLIGATION_GATE unset or
+    advisory -> exit 0, no block message, the reason the block would name on
+    one stderr line (P4 R9), nothing written."""
     home, project = _dirs(tmp_path)
-    sid = _unique_sid("g1adv")
-    payload, _, _ = _violation_payload(project, sid, case_id)
-    result = _run_hook(home, project, payload)
-    assert result.returncode == 0, f"{case_id}: {result.stderr}"
-    assert BLOCK_BANNER not in result.stderr
-    assert _written_logs(home) == []
+    for switch in (None, "advisory"):
+        sid = _unique_sid("g1adv")
+        payload, subagent_type, reason = _violation_payload(project, sid, case_id)
+        result = _run_hook(home, project, payload, switch=switch)
+        assert result.returncode == 0, f"{case_id}: {result.stderr}"
+        assert BLOCK_BANNER not in result.stderr
+        assert result.stderr.startswith(ADVISORY_BANNER), result.stderr
+        assert f"reason={reason}" in result.stderr and f"subagent_type={subagent_type}" in result.stderr
+        assert _written_logs(home) == []
 
 
 @pytest.mark.parametrize("command,role", DECLARING_SPANS)
@@ -620,12 +631,13 @@ def test_G1_gated_span_producer_without_block_rejects(tmp_path, command, role):
 
 
 @pytest.mark.parametrize("command,subagent_type", [
-    ("do", "dev"), ("close", "dev"), ("close", "ba"), ("commit", "dev"), ("merge", "dev"), ("push", "qa"),
+    ("do", "dev"), ("close", "ba"), ("commit", "ba"), ("merge", "dev"), ("push", "qa"),
 ])
 def test_G1_role_the_active_command_declares_no_template_for_passes(tmp_path, command, subagent_type):
     """No list of commands requires a block: /do's text declares no template,
-    /close's and /commit's none for dev or ba (another command's template for
-    that role does not count), /merge's and /push's none but their analyst's.
+    /close's and /commit's none for ba (another command's template for that
+    role does not count; their own dev template, the dev that completes a /do
+    task's work, does), /merge's and /push's none but their analyst's.
     Each such dispatch without a block passes in block mode."""
     home, project = _dirs(tmp_path)
     payload = _dispatch_payload(project, _unique_sid("g1nodecl"), _span_records(command),
@@ -765,10 +777,96 @@ def test_G1_declared_roles_follow_the_command_files(tmp_path, monkeypatch):
     (commands / "reship.md").write_text("---\n---\nRun the /ship workflow.\n")
     (todo / "reship.py").write_text("from ship import get_todos\n")
     monkeypatch.setattr(gate.stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(sys.modules[gate.stop_contract.harness_commands.__module__], "COMMANDS_DIR", commands)
     monkeypatch.setattr(gate, "TODO_DIR", todo)
     assert gate._declared_roles("ship") == {"qa"}
     assert gate._declared_roles("reship") == {"qa"}
     assert gate._declared_roles("absent") == frozenset()
+    # The text the session loaded, when given, is read in place of the file;
+    # a command whose todo is another's still has that one's file.
+    assert gate._declared_roles("ship", 'embed it with role="ba"') == {"ba"}
+    assert gate._declared_roles("absent", 'embed it with role="ba"') == {"ba"}
+    assert gate._declared_roles("reship", 'embed it with role="ba"') == {"qa"}
+
+
+# --------------------------------------------------------------------------
+# P2 acceptance 15 (live landing): a session follows the prose it loaded. The
+# CLI records a typed command's text once, in the isMeta record whose
+# parentUuid is the command record's uuid (measured on CLI 2.1.319: the file
+# minus its frontmatter, $ARGUMENTS filled); a later edit of the file leaves
+# that record as it was. G1 reads the declared roles from it.
+# --------------------------------------------------------------------------
+
+# A /dev-overnight text from before the update: its BA template declares an
+# obligation, its PM templates none (origin/master's commands/dev-overnight.md).
+LOADED_BEFORE_UPDATE = (
+    "# /dev-overnight\n\n### Step 2: PM PLAN\n\nAgent(subagent_type: pm, prompt: \"PM_MODE: PLAN ...\")\n\n"
+    "### Step 8: BA\n\nAgent(subagent_type: ba, prompt: \"... "
+    '<obligation v="1">{"role":"ba","pipeline":"dev-overnight"}</obligation>")\n'
+)
+
+
+def _recorded_command(name, text, args="8h harden the toy package"):
+    """A typed /<name> as the CLI records it: the command record, then the
+    isMeta record of the text it loaded, linked by uuid and parentUuid."""
+    typed = {"type": "user", "isSidechain": False, "origin": {"kind": "human"},
+             "uuid": f"uuid-{name}-typed", "parentUuid": None,
+             "message": {"role": "user", "content": _command_tag_text(name, args)}}
+    loaded = {"type": "user", "isSidechain": False, "isMeta": True, "turnCompanion": True,
+              "uuid": f"uuid-{name}-text", "parentUuid": typed["uuid"],
+              "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+    return [typed, loaded]
+
+
+def _shipped_text(name):
+    """commands/<name>.md as the CLI records it when typed: frontmatter dropped."""
+    text = Path(REPO_ROOT, "commands", f"{name}.md").read_text(encoding="utf-8")
+    return text.split("\n---\n", 1)[1] if text.startswith("---\n") else text
+
+
+@pytest.mark.parametrize("role,expected", [("pm", 0), ("ba", 2)])
+def test_G1_session_started_before_an_update_is_held_to_the_prose_it_loaded(tmp_path, role, expected):
+    """An overnight session typed before the update loaded a text whose PM
+    templates declare no obligation, while commands/dev-overnight.md on disk
+    now declares one for pm: its PM dispatch without a block passes in block
+    mode, and its BA dispatch without one, which its own text declares, is
+    still missing_block."""
+    assert "pm" in _gate_module()._declared_roles("dev-overnight")  # the file on disk declares pm
+    home, project = _dirs(tmp_path)
+    records = _queue_operations() + _recorded_command("dev-overnight", LOADED_BEFORE_UPDATE) + [_assistant_text()]
+    payload = _dispatch_payload(project, _unique_sid("g1loaded"), records,
+                                subagent_type=role, prompt="PM_MODE: PLAN, no block")
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == expected, result.stderr
+    assert ("reason=missing_block" in result.stderr) == (expected == 2), result.stderr
+
+
+def test_G1_session_on_the_new_prose_still_needs_its_pm_block(tmp_path):
+    """A session typed after the update loaded the shipped text: its PM
+    dispatch without a block is missing_block in block mode."""
+    home, project = _dirs(tmp_path)
+    records = (_queue_operations() + _recorded_command("dev-overnight", _shipped_text("dev-overnight"))
+               + [_assistant_text()])
+    payload = _dispatch_payload(project, _unique_sid("g1newprose"), records,
+                                subagent_type="pm", prompt="PM_MODE: PLAN, no block")
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2, result.stderr
+    assert "reason=missing_block" in result.stderr
+
+
+def test_G1_reads_the_file_when_no_record_holds_the_loaded_text(tmp_path):
+    """No isMeta record links to the command record: the roles come from
+    commands/dev-overnight.md, so a PM dispatch without a block is
+    missing_block in block mode."""
+    home, project = _dirs(tmp_path)
+    typed, loaded = _recorded_command("dev-overnight", LOADED_BEFORE_UPDATE)
+    loaded["parentUuid"] = "uuid-of-another-record"
+    payload = _dispatch_payload(project, _unique_sid("g1unlinked"),
+                                _queue_operations() + [typed, loaded, _assistant_text()],
+                                subagent_type="pm", prompt="PM_MODE: PLAN, no block")
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2, result.stderr
+    assert "reason=missing_block" in result.stderr
 
 
 # --------------------------------------------------------------------------

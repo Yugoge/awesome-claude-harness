@@ -1,4 +1,5 @@
-"""graphify-enrich.py writes only its own outputs (P1b E10, scope row 4).
+"""graphify-enrich.py writes only its own outputs (P1b E10, scope row 4); it and
+graphify-query.py check their results against their schemas before writing (P10 A17).
 
 The script reads the context file it is given and never writes it; it writes the run
 record (with the fingerprint /dev-overnight Step 11g compares) on every path and the
@@ -10,6 +11,7 @@ stub graphify binary and a cache root under the test's own tmp_path.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import stat
@@ -17,8 +19,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from hooks.lib.contract_runtime import validate
+
 ROOT = Path(__file__).resolve().parent.parent
 ENRICH = ROOT / "scripts" / "graphify-enrich.py"
+QUERY = ROOT / "scripts" / "graphify-query.py"
 REFINE = ROOT / "scripts" / "refine-context.sh"
 
 GRAPH = {
@@ -118,6 +123,7 @@ def test_enrichment_writes_its_own_two_files_and_never_the_context(tmp_path):
                 "graphify_affected_results", "summary"):
         assert key in focused, key
     assert focused["status"] == "ok" and focused["nodes"]
+    assert validate(focused, "graphify-focused-subgraph.v1")["ok"]
 
 
 def test_run_record_carries_the_step_11g_fingerprint(tmp_path):
@@ -163,6 +169,78 @@ def test_the_cache_refresh_runs_through_graphify_maintain(tmp_path):
     # enrich itself only queries the graph
     own = [c for c in calls if "graphify-enrich.py" in c["caller"]]
     assert own and all(c["args"][0] in ("affected", "--version") for c in own), own
+
+
+def _load(script: Path, env: dict, monkeypatch):
+    """The producer loaded in this process with the test project's environment, so a test
+    can replace one of its builders."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("CLAUDE_GRAPHIFY_ENABLED", raising=False)
+    monkeypatch.chdir(env["CLAUDE_PROJECT_DIR"])
+    spec = importlib.util.spec_from_file_location(script.stem.replace("-", "_"), script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _graphify_out(proj: Path, name: str) -> dict:
+    return json.loads((proj / ".claude" / "dev-registry" / "dev-T1" / "graphify" / name).read_text(encoding="utf-8"))
+
+
+def test_a_malformed_focused_subgraph_is_written_as_failed_and_so_is_the_run(tmp_path, monkeypatch):
+    proj, _context, env = _project(tmp_path)
+    _seed_cache(tmp_path, env)
+    enrich = _load(ENRICH, env, monkeypatch)
+    build = enrich._build_focused_subgraph
+    monkeypatch.setattr(enrich, "_build_focused_subgraph", lambda *a: {**build(*a), "edges": "not a list"})
+    monkeypatch.setattr(sys, "argv", ["graphify-enrich.py", "--task-id", "dev-T1",
+                                      "--context-file", "docs/dev/context-T1.json"])
+    assert enrich.main() == 0
+    focused = _graphify_out(proj, "focused-subgraph.json")
+    assert focused["status"] == "failed" and focused["task_id"] == "dev-T1"
+    assert focused["error_detail"].startswith("graphify-focused-subgraph.v1: edges:")
+    assert validate(focused, "graphify-focused-subgraph.v1")["ok"]
+    run = _run_record(proj)
+    assert run["status"] == "failed" and run["error_detail"] == focused["error_detail"]
+
+
+def _query_project(tmp_path: Path) -> tuple[Path, Path, dict]:
+    proj, _context, env = _project(tmp_path)
+    _seed_cache(tmp_path, env)
+    req = proj / "docs" / "dev" / "requirement-T1.md"
+    req.write_text("Fix add in toy/__init__.py\n", encoding="utf-8")
+    return proj, req, env
+
+
+def test_well_formed_pre_queries_validate_and_are_written_as_produced(tmp_path):
+    proj, req, env = _query_project(tmp_path)
+    for extra, status in (([], "ok"), (["--no-graphify"], "skipped")):
+        proc = subprocess.run([sys.executable, str(QUERY), "--task-id", "dev-T1",
+                               "--requirement-file", str(req), *extra],
+                              env=env, cwd=proj, capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        pre = _graphify_out(proj, "pre_query.json")
+        assert pre["status"] == status, pre
+        assert validate(pre, "graphify-prequery.v1")["ok"]
+    env["GRAPHIFY_BIN"] = str(tmp_path / "no-such-binary")
+    assert subprocess.run([sys.executable, str(QUERY), "--task-id", "dev-T1", "--requirement-file", str(req)],
+                          env=env, cwd=proj, capture_output=True).returncode == 0
+    pre = _graphify_out(proj, "pre_query.json")
+    assert pre["status"] == "unavailable" and validate(pre, "graphify-prequery.v1")["ok"]
+
+
+def test_a_malformed_pre_query_is_written_as_failed(tmp_path, monkeypatch):
+    proj, req, env = _query_project(tmp_path)
+    query = _load(QUERY, env, monkeypatch)
+    monkeypatch.setattr(query, "_build_import_excerpt", lambda graph, anchors: [{"not": "a string"}])
+    monkeypatch.setattr(sys, "argv", ["graphify-query.py", "--task-id", "dev-T1", "--requirement-file", str(req)])
+    assert query.main() == 0
+    pre = _graphify_out(proj, "pre_query.json")
+    assert pre["status"] == "failed" and pre["task_id"] == "dev-T1"
+    assert pre["structural_context"] == {} and pre["ambiguity_hypotheses"] == []
+    assert pre["error_detail"].startswith("graphify-prequery.v1: structural_context.import_graph_excerpt.0:")
+    assert validate(pre, "graphify-prequery.v1")["ok"]
 
 
 def test_refine_context_stub_passes_the_context_through(tmp_path):

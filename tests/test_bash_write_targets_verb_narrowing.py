@@ -10,7 +10,6 @@ reported, including one whose verb is a quoted expansion (`"$CP"`) inside a `cas
 Every test goes through the ENTRY POINT of one consumer, never through the library alone:
   * tool_policy - hooks/pretool-tool-policy.py, run as the real hook process
   * overnight   - hooks/pretool-overnight-hook-guard.py, the six decision functions that consume it
-  * overwrite   - hooks/pretool-overwrite-guard.py, `offending_targets` and `--explain`
   * noncaller   - hooks/pretool-cp-state-write-guard.py and hooks/pretool-wrapper-userintent.py, which
                   import the library but never call the extractor and must stay unaffected
 Kinds: `no_phantom` (a command that writes nothing yields no target: red on the unmodified library),
@@ -42,7 +41,6 @@ HOOKS = ROOT / "hooks"
 
 TOOL_POLICY_HOOK = "pretool-tool-policy.py"
 OVERNIGHT_HOOK = "pretool-overnight-hook-guard.py"
-OVERWRITE_HOOK = "pretool-overwrite-guard.py"
 CP_STATE_GUARD_HOOK = "pretool-cp-state-write-guard.py"
 USERINTENT_HOOK = "pretool-wrapper-userintent.py"
 
@@ -99,7 +97,7 @@ REAL_EXPANSION_SPELLED = [
     "c$X -a cp-01 " + DEST, "sudo /usr/bin/$CMD -a cp-01 " + DEST, 'c"$X" cp-01 ' + DEST,
 ]
 # a real copy or move inside a `case` arm, verb spelled with a quoted expansion (`"$CP"`, `c"$X"`), an
-# unquoted expansion or plainly; `@@` is the destination and the second field the overwrite-guard mechanism
+# unquoted expansion or plainly; `@@` is the destination and the second field the copy or move mechanism
 CASE_ARM_ROWS = [
     ('case x in x) "${CP}" -r mv-tool @@ ;; esac', "mv-dest"), ('case x in x) "$C$P" -- cp-01 @@ ;; esac', "cp-dest"),
     ('case x in x) c"$X" -- mv-tool @@ ;; esac', "mv-dest"), ('case x in x) "$CP" -r cp-01 @@ ;; esac', "cp-dest"),
@@ -116,8 +114,8 @@ CASE_ARM_ROWS = [
     # backlog #100 (fixed dev-20260926-072017): a case arm's pattern-leading `(` used to be blanked as
     # a grouping subshell, destroying the `)` that _quoted_expansion_verb's endswith(")") tolerance
     # needs once a `|`/newline inside the pattern has cut the segment short. See the KNOWN-LOSS-turned-
-    # FIXED tests below for the full history; these three rows give the fix the same triple-consumer
-    # coverage (tool_policy/overnight/overwrite) every other row in this table already gets.
+    # FIXED tests below for the full history; these three rows give the fix the same two-consumer
+    # coverage (tool_policy/overnight) every other row in this table already gets.
     ('case x in (y|x) "$CP" cp-01 @@ ;; esac', "cp-dest"),
     ('case x in\n(x) "$CP" cp-01 @@\n;; esac', "cp-dest"),
     ('case b in (a|b|c) "$CP" cp-01 @@ ;; esac', "cp-dest"),
@@ -135,7 +133,7 @@ CASE_MARKING = [
 
 # ---- consumer 1: the real tool-policy hook process ----------------------------------------------
 def _run_policy(role: str, command: str):
-    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "subagent_type": role,
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "agent_type": role,
                "agent_id": "a" + role + "verbnarrow", "session_id": "verbnarrow-sess"}
     proc = subprocess.run([sys.executable, str(HOOKS / TOOL_POLICY_HOOK)], input=json.dumps(payload),
                           capture_output=True, text=True, cwd=str(PROJECT), timeout=90)
@@ -333,7 +331,7 @@ def test_tool_policy_case_lead_heuristic_ignores_escaped_terminator_before_real_
 # task 20260928-021841). A `#`-comment merely MENTIONING `case`/`esac`/`;;`/`;&`/`;;&` (e.g.
 # explaining case-statement-like logic in prose) previously fooled `_inside_open_case_block` /
 # `_CASE_HEADER_IN_TAIL_RE` into treating a following REAL, unrelated subshell's own paren as a
-# case-arm pattern lead -- silently dropping tool_policy's/overwrite_guard's detection of a real
+# case-arm pattern lead -- silently dropping tool_policy's detection of a real
 # write inside it. Comment text is dead to bash; it can never be genuine case-arm syntax. All four
 # commands below execute a real `cp` under real bash and must stay refused.
 CASE_LEAD_COMMENT_ROWS = [
@@ -383,9 +381,7 @@ def test_tool_policy_case_lead_heuristic_ignores_case_in_as_plain_arguments(role
 # extract_bash_write_targets_with_modes. Comment text is dead to bash; a quote character inside one
 # is never a real quote-opener. Fixed by making `_strip_quoted_regions` itself comment-aware in the
 # same single left-to-right pass (see hooks/lib/bash_write_targets.py). All rows below execute a real
-# write under real bash and must stay refused. (The install idiom is covered separately, through the
-# overwrite-guard consumer, below: its legacy extract_bash_write_paths reader is unaffected by this
-# bug, so a tool_policy-based assertion for it would not exercise the fix.)
+# write under real bash and must stay refused.
 UNMATCHED_QUOTE_COMMENT_ROWS = [
     "# don't do that\necho x > " + DEST,
     '# he said "watch out\necho x | tee ' + DEST,
@@ -498,101 +494,6 @@ def test_overnight_still_detected_main_checkout_and_git_metadata(overnight, comm
     assert _call(overnight._raw_git_metadata_write_into_main, command + " " + GIT + "/HEAD", MAIN, WORKTREE, GIT)[1] is True
 
 
-# ---- consumer 3: the overwrite guard ---------------------------------------------------------------
-@pytest.fixture(scope="module")
-def overwrite():
-    sys.path.insert(0, str(HOOKS))
-    spec = importlib.util.spec_from_file_location("overwrite_guard_under_test", HOOKS / OVERWRITE_HOOK)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert not module._BOOTSTRAP_ERROR, module._BOOTSTRAP_ERROR
-    return module
-
-
-@pytest.fixture()
-def populated(tmp_path):
-    for name in ("2", "b", "c", "cp-09", "ID", "dest", "real_dst", "src", "cp-01"):
-        (tmp_path / name).write_text("existing")
-    return str(tmp_path)
-
-
-def _explain(command: str, cwd: str) -> str:
-    proc = subprocess.run([sys.executable, str(HOOKS / OVERWRITE_HOOK), "--explain", command, cwd],
-                          capture_output=True, text=True, timeout=60, cwd=str(PROJECT))
-    return proc.stdout
-
-
-OVERWRITE_NOWRITE = REDIRECT_MARKING[:2] + [
-    DOCUMENTED_MARKING, LOOP_MARKING[0], LOOP_MARKING[4], "mv-tool a b", CASE_MARKING[0], CASE_MARKING[2],
-    'case "$CP" in x) echo cp-01 real_dst ;; esac',
-]
-OVERWRITE_BESIDE_REAL = [
-    ("for cp in a b c; do cp src real_dst; done", "cp-dest"),
-    (M + " --cp-id cp-01 2>&1 | tail -5 && mv src real_dst", "mv-dest"),
-]
-OVERWRITE_REAL = [
-    ("cp src real_dst", "cp-dest"), ("mv src real_dst", "mv-dest"), ("sudo -u for cp src real_dst", "cp-dest"),
-    ("cp cp-01 real_dst", "cp-dest"), ("cp -r cp-01 real_dst", "cp-dest"), ("cp -a mv-tool real_dst", "mv-dest"),
-    ("sudo /bin/cp cp-01 real_dst", "cp-dest"), ("time /bin/cp cp-01 real_dst", "cp-dest"),
-    ("env A=1 /bin/cp cp-01 real_dst", "cp-dest"), ('sudo "cp" cp-01 real_dst', "cp-dest"),
-    ("$CP cp-01 real_dst", "cp-dest"), ("sudo $CP cp-01 real_dst", "cp-dest"), ('"$CP" cp-01 real_dst', "cp-dest"),
-    ('sudo "$MV" mv-tool real_dst', "mv-dest"), ("c$X -a cp-01 real_dst", "cp-dest"),
-    ("sudo /usr/bin/$CMD -a cp-01 real_dst", "cp-dest"), ('time -p "$CP" cp-01 real_dst', "cp-dest"),
-] + [(row.replace("@@", "real_dst"), mechanism) for row, mechanism in CASE_ARM_ROWS]
-
-
-@pytest.mark.parametrize("command", OVERWRITE_NOWRITE)
-def test_overwrite_no_phantom_marking_offends_nothing(overwrite, populated, command):
-    _assert_hook(overwrite, OVERWRITE_HOOK)
-    names = sorted(o["as_written"] for o in overwrite.offending_targets(command, populated))
-    assert names == [], "the overwrite guard would refuse a command that writes nothing: %r -> %r" % (command, names)
-
-
-@pytest.mark.parametrize("command", [REDIRECT_MARKING[0], LOOP_MARKING[0], "for cp in a b c; do echo $cp; done"])
-def test_overwrite_no_phantom_explain_shows_no_deny(populated, command):
-    out = _explain(command, populated)
-    assert "DENY" not in out, "--explain shows a DENY for a command that writes nothing: %r" % out[-160:]
-
-
-@pytest.mark.parametrize("command,mechanism", OVERWRITE_BESIDE_REAL)
-def test_overwrite_no_phantom_beside_real_replacement(overwrite, populated, command, mechanism):
-    _assert_hook(overwrite, OVERWRITE_HOOK)
-    offenders = overwrite.offending_targets(command, populated)
-    assert [(o["as_written"], o["mechanism"]) for o in offenders] == [("real_dst", mechanism)], command
-
-
-@pytest.mark.parametrize("command", ["for cp in a b; do cp x real_dst; done"])
-def test_overwrite_no_phantom_explain_names_only_the_destination(populated, command):
-    deny = [line for line in _explain(command, populated).splitlines() if "DENY" in line]
-    assert len(deny) == 1 and "real_dst" in deny[0], "--explain should name real_dst once for %r: %r" % (command, deny)
-
-
-@pytest.mark.parametrize("command,mechanism", OVERWRITE_REAL)
-def test_overwrite_still_detected_real_replacement(overwrite, populated, command, mechanism):
-    _assert_hook(overwrite, OVERWRITE_HOOK)
-    offenders = overwrite.offending_targets(command, populated)
-    assert [(o["as_written"], o["mechanism"]) for o in offenders] == [("real_dst", mechanism)], command
-
-
-@pytest.mark.parametrize("command", ["cp src real_dst", "sudo -u for cp src real_dst", '"$CP" cp-01 real_dst'])
-def test_overwrite_still_detected_explain_deny_line(populated, command):
-    deny = [line for line in _explain(command, populated).splitlines() if "DENY" in line]
-    assert len(deny) == 1 and "real_dst" in deny[0], "--explain should name real_dst once for %r: %r" % (command, deny)
-
-
-# ---- SECURITY REGRESSION GUARD, install idiom (same fix as UNMATCHED_QUOTE_COMMENT_ROWS above).
-# install's MODE-AWARE extractor (_extract_install_mode_targets, the only one the overwrite guard
-# consumes) masks its command text through the same `_strip_quoted_regions` and was equally affected;
-# its LEGACY extractor (_extract_install_targets, the one tool_policy/overnight consume) reads the
-# unmasked original text directly and was never affected -- so this idiom's regression is observable
-# only through the overwrite-guard consumer, not through tool_policy.
-def test_overwrite_unmatched_quote_in_install_comment_still_detected(overwrite, populated):
-    _assert_hook(overwrite, OVERWRITE_HOOK)
-    command = '# he said "watch out\ninstall -m 755 src real_dst'
-    offenders = overwrite.offending_targets(command, populated)
-    assert [(o["as_written"], o["mechanism"]) for o in offenders] == [("real_dst", "install-dest")], command
-
-
 # ---- the two importers that never call the extractor: unaffected by any state of the library ------
 def _extractor_calls(tree):
     return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and (
@@ -607,13 +508,13 @@ def test_noncaller_unchanged_cp_state_write_guard_imports_but_never_calls():
                and any(a.name == "extract_bash_write_paths" for a in n.names)]
     assert len(imports) == 1 and _extractor_calls(tree) == [], "the guard must stay import-only"
     for command in REDIRECT_MARKING + [DOCUMENTED_MARKING, "cp src dest", "mv src " + DEST]:
-        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "subagent_type": "ba",
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "agent_type": "ba",
                    "agent_id": "abaverbnarrow", "session_id": "verbnarrow-sess"}
         proc = subprocess.run([sys.executable, str(HOOKS / CP_STATE_GUARD_HOOK)], input=json.dumps(payload),
                               capture_output=True, text=True, cwd=str(PROJECT), timeout=90)
         assert proc.returncode == 0, "the cp-state guard changed its Bash behaviour for %r" % command
     write = {"tool_name": "Write", "tool_input": {"file_path": str(PROJECT / ".claude" / "specs" / "S-vn" / "cp-state-ba.json"),
-                                                    "content": "{}"}, "subagent_type": "ba", "agent_id": "abaverbnarrow",
+                                                    "content": "{}"}, "agent_type": "ba", "agent_id": "abaverbnarrow",
              "session_id": "verbnarrow-sess"}
     proc = subprocess.run([sys.executable, str(HOOKS / CP_STATE_GUARD_HOOK)], input=json.dumps(write),
                           capture_output=True, text=True, cwd=str(PROJECT), timeout=90)

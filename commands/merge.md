@@ -18,10 +18,10 @@ Merge a source commit-ish into the repository default branch using a proper merg
 
 | Source shape | Example | Lifecycle cleanup |
 |---|---|---|
-| Local branch | `worktree-overnight-20260809-685c203b` | worktree removal + branch deletion + overnight-state removal, subject to the in_place rules below |
+| Local branch | `worktree-overnight-<date>-<id>` | worktree removal + branch deletion + overnight-state removal, subject to the in_place rules below |
 | Remote-tracking ref | `origin/master`, `refs/remotes/origin/master` | none applicable -- skipped and announced |
 | Tag (annotated or lightweight) | `v1.2.3` | none applicable -- skipped and announced |
-| Bare commit hash | `fa0aea69ccedee7a9fdc71f3b0bfece0fc86c983` | none applicable -- skipped and announced |
+| Bare commit hash | `<40-hex commit id>` | none applicable -- skipped and announced |
 
 Validation is "does `<ref>` resolve to a commit object", never a `refs/heads/` prefix match.
 Accepting every ref shape relaxes NO check: the clean-tree precondition, the untracked-overlap
@@ -33,9 +33,14 @@ non-branch source that absence is the EXPECTED state -- announced and skipped, n
 because there is provably no worktree, branch or overnight-state file for it to act on. This
 paragraph is the normative home for both halves of that rule.
 
-When invoked bare, the orchestrator resolves the source per Step 0's three tiers. No filesystem fallback to "newest branch", no guessing - if no tier resolves a source, exit with error asking the user to pass an explicit ref.
+When invoked bare, the orchestrator resolves the source per Step 0's three tiers. No filesystem fallback to "newest branch", no guessing - if no tier resolves a source, refuse as Step 0 says.
 
 ## Implementation
+
+**Refusals.** Where a step below refuses, ask ONE AskUserQuestion in this turn instead of exiting: the
+question is the refusal's message with its facts; the options are the action the refusal names, marked
+(Recommended), and "I give another instruction". Act on the answer. A refusal met again after the
+answer is reported in the reply, not asked again.
 
 ### Step 0: Determine worktree shape, then resolve branch name
 
@@ -61,15 +66,13 @@ Worktree-shape condition table -- each condition is read-only; none creates a br
 | Safe to `git checkout $DEFAULT_BRANCH` in place with no precondition | Yes -- exclusivity (row 3) makes this safe for free | No -- merge.sh now requires a clean tree (`git status --porcelain` empty) before checkout, as the equivalent of that exclusivity guarantee |
 | Safe to auto-delete the branch after a clean merge | Yes -- the branch is single-purpose and disposable | No -- the branch may be a long-lived shared branch; merge.sh skips deletion and leaves it on disk |
 
-Only the last two rows require new handling in_place (the clean-tree precondition and the
-skipped branch deletion, both in `hooks/merge.sh`); every other row already holds, or already
-degrades safely, with zero code change.
+Only the last two rows need handling in_place (merge.sh's clean-tree precondition and skipped branch deletion).
 
 The orchestrator then resolves the merge source in this order: (1) the explicit argument, if
 supplied; (2) conversation context's most recent overnight-state-*.json with a
 `worktree_branch` field; (3) when `IS_IN_PLACE` is true, `git branch --show-current`. Do NOT
-guess from filesystem listing beyond tier 3. If no tier resolves a source, exit with an error
-asking the user to pass an explicit ref.
+guess from filesystem listing beyond tier 3. If no tier resolves a source, refuse: "no tier resolved a
+merge source" (action "name the ref to merge").
 
 Tier 3 degenerates when the current branch already IS the default branch: source and target
 resolve to the same commit, which Step 1 refuses as a self-merge before any dispatch.
@@ -79,7 +82,7 @@ resolve to the same commit, which Step 1 refuses as a self-merge before any disp
 ```bash
 RESOLVED_REF=<the-resolved-merge-source>
 SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}" || echo "MISSING")
-DEFAULT_BRANCH=$(bash ~/.claude/scripts/derive-default-branch.sh)
+DEFAULT_BRANCH=$(bash "<HARNESS_ROOT>/scripts/derive-default-branch.sh")
 DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}" || echo "MISSING")
 REPO_ROOT=$(realpath "$(git rev-parse --show-toplevel)")
 REPO_HASH=$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-16)
@@ -87,29 +90,24 @@ REQUEST_ID=$(openssl rand -hex 16)
 SESSION_ID="${CLAUDE_CODE_SESSION_ID}"
 ```
 
-`SOURCE_TIP` is resolved through `${RESOLVED_REF}^{commit}` rather than
-`refs/heads/${RESOLVED_REF}`, so a remote-tracking ref, a tag (peeled to its commit) and a bare
-commit hash all resolve. `--verify` makes an ambiguous or unknown name a hard MISSING instead of
-a silent empty string.
+`SOURCE_TIP` is resolved through `${RESOLVED_REF}^{commit}`, so a remote-tracking ref, a tag (peeled) and a
+bare hash resolve; `--verify` makes an ambiguous or unknown name a hard MISSING, not an empty string.
 
-If `SESSION_ID` is empty or unset, abort immediately with:
-"Cannot dispatch merge-analyst: CLAUDE_CODE_SESSION_ID not set. Invoke /merge from within a Claude Code session."
+If `SESSION_ID` is empty or unset, refuse: "Cannot dispatch merge-analyst: CLAUDE_CODE_SESSION_ID not
+set" (action "re-run the snapshot now"). If either tip is "MISSING", refuse: "`<ref>` does not resolve
+to a commit" (action "name the ref to merge").
 
-If either tip is "MISSING", abort with an error describing which ref was not found.
-
-If `SOURCE_TIP` equals `DEFAULT_TIP`, abort with "refusing self-merge: `<RESOLVED_REF>` and
-`<DEFAULT_BRANCH>` are the same commit `<SOURCE_TIP>` — nothing to merge". Do NOT dispatch
+If `SOURCE_TIP` equals `DEFAULT_TIP`, refuse: "refusing self-merge: `<RESOLVED_REF>` and
+`<DEFAULT_BRANCH>` are the same commit `<SOURCE_TIP>` — nothing to merge" (action "name the ref to merge"). Do NOT dispatch
 merge-analyst for a no-op. Note this rejects only an EXACT same-commit pair; a source that is a
 strict ancestor of the target still proceeds to git's genuine "Already up to date" path, which is
 what makes re-invoking /merge after a completed merge idempotent (merge no-ops, cleanup runs).
-This step is the normative home for the self-merge rule: a source and target resolving to the
-SAME commit are an error, not a success, and `hooks/merge.sh` refuses the identical condition
-independently with a non-zero exit (defense in depth -- the wrapper never trusts having been
-reached through this document).
+This step is the normative home for the self-merge rule (the SAME commit is an error, not a success);
+`hooks/merge.sh` refuses it independently with a non-zero exit (defense in depth).
 
 ### Step 2: Dispatch merge-analyst subagent
 
-Dispatch the `merge-analyst` subagent with the following context:
+Dispatch the `merge-analyst` subagent (Agent tool, `run_in_background: false`) with the following context:
 
 ```
 RESOLVED_REF=<RESOLVED_REF>
@@ -143,9 +141,9 @@ merge-analyst's own Write of it (`hooks/lib/merge_grant.py`, run by the PostTool
 `hooks/posttool-allowlist-consume.py`, which removes a faulty grant and returns the fault to the
 merge-analyst before it stops); this step re-checks none of it.
 
-- No grant at that path: the merge-analyst wrote none; abort with "merge-analyst did not write
-  a grant — aborting merge".
-- `verdict` = `blocked`: display `risks[]` to the user and abort. Do NOT call merge.sh.
+- No grant at that path: refuse: "merge-analyst did not write a grant" (action "re-run the analysis now").
+- `verdict` = `blocked`: refuse: "merge-analyst blocked the merge" with `risks[]` (action "resolve the
+  listed risks first"; never "merge anyway"). Do NOT call merge.sh.
 - `verdict` = `approved`: continue to Step 4.
 
 ### Step 4: Revalidate branch tips
@@ -157,15 +155,15 @@ CURRENT_SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}")
 CURRENT_DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}")
 ```
 
-If either tip differs from the value stored in the grant (`source_tip`, `default_tip`):
-abort with "Tips changed since merge-analyst ran — re-run /merge to get a fresh analysis".
+If either tip differs from the value stored in the grant (`source_tip`, `default_tip`), refuse: "Tips
+changed since merge-analyst ran" (action "re-run the analysis now": Step 1's REQUEST_ID line, then Step 2).
 
 ### Step 5: Call merge.sh
 
 The orchestrator calls the wrapper exactly once with the resolved ref:
 
 ```bash
-bash ~/.claude/hooks/merge.sh "<resolved-ref>"
+bash "<HARNESS_ROOT>/hooks/merge.sh" "<resolved-ref>"
 ```
 
 Add `--no-commit` when the merge must be inspected before it becomes history: the wrapper applies
@@ -179,7 +177,7 @@ weakens no check -- every preflight runs first, it simply stops earlier. Re-run 
 The wrapper handles every step internally so that the privilege-guard literal-string match on the merge command does not fire on main-agent PreToolUse (the wrapper runs git operations in its OWN subprocess, which is not seen by main-agent hooks):
 
 1. Argument parsing -- one merge source plus optional `--no-commit`; an unknown option, a second source or no source exits 2 (no user-intent sentinel is checked: /merge writes none)
-2. Default-branch resolution (via ~/.claude/scripts/derive-default-branch.sh)
+2. Default-branch resolution (via <HARNESS_ROOT>/scripts/derive-default-branch.sh)
 3. Source resolution -- `git rev-parse --verify --quiet "<ref>^{commit}"`; a ref resolving to no commit object is rejected
 4. Self-merge refusal -- resolved source sha equals resolved default-branch sha: abort non-zero (rule stated at Step 1)
 5. Worktree-shape detection (`IS_IN_PLACE`, same read-only check as Step 0, re-run inside the wrapper's own subprocess)
@@ -193,7 +191,8 @@ The wrapper handles every step internally so that the privilege-guard literal-st
    - Linked worktree, local-branch source: git worktree remove --force for the worktree directory, git branch -d for the merged branch, rm any overnight-state-*.json whose worktree_branch field matches. A local branch with no registered worktree skips only the worktree step
    - In_place, local-branch source: skip worktree removal and branch deletion -- the main worktree cannot be removed and the source branch is not disposable, so it stays on disk; overnight-state cleanup still runs (removes only files whose worktree_branch matches, which is correct stale-bookkeeping cleanup either way)
 
-If the merge has conflicts, the wrapper exits non-zero and the user resolves manually. The wrapper does NOT auto-resolve.
+If the merge has conflicts, the wrapper exits non-zero and does NOT auto-resolve: refuse with its output (action "I
+resolve the conflicts myself, then you continue"; on that answer, go on from Step 1 with the same ref).
 
 ## Critical rules
 

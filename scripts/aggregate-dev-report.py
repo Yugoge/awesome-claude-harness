@@ -1555,8 +1555,8 @@ _MAX_COMPLETENESS_HUNK_CHAIN_NODES = 1000
 
 def _load_stage_owned_hunks_replay():
     """Import scripts/stage-owned-hunks.py and return its ENTRY-side replay
-    primitives, following scripts/check-owned-edits-ledger.py:127-165's exact
-    file-location import pattern -- never invoking main()/the --dry-run CLI,
+    primitives, loaded by file location (importlib.util.spec_from_file_location
+    beside this script) -- never invoking main()/the --dry-run CLI,
     so the irrelevant BASELINE-side ownership-conflict probe (the false-
     positive source, task 20261001-close-multilane-stall) is never reached.
 
@@ -2481,10 +2481,8 @@ def _completeness_check_file(
     if not require_full_coverage:
         # Same-cycle-only mode (OWNERSHIP_COMPLETENESS_BLOCKING_KEY) is the
         # ONE blocking call of this function (require_full_coverage=True's
-        # global diagnostic below is advisory-only and untouched). Attribution-
-        # journal consumer cutover (docs/reference/attribution-journal-
-        # cutover-flip-plan-20261003.md, superseded by the zero-blocking
-        # constraint of the follow-up consumer-cutover task): the self-
+        # global diagnostic below is advisory-only and untouched). Since the
+        # attribution-journal consumer cutover, the self-
         # reported-ledger replay combinatorics below this branch (still used
         # by the advisory call) are no longer this gate's authority. A file
         # with no write-time journal evidence, or evidence that does not
