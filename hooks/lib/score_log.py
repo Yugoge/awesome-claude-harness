@@ -1,5 +1,5 @@
 """The score log (logs/lifecycle.jsonl) has one module: its reader, its one writer, the point values and the rules.
-Scores, ranks, trends and the two text views are computed on read, never stored. Rows: event {kind, ts, project, task_id,
+Scores, ranks, trends and the text views are computed on read, never stored. Rows: event {kind, ts, project, task_id,
 role, event, points, key, why, ref}; rating {kind, ts, project, task_id, rating, roles, tool_use_id}. A row without
 ``kind`` (score-update.sh's nine keys, P4's four) is read and never scored. ts and as_of are UTC ``%Y-%m-%dT%H:%M:%SZ``."""
 
@@ -195,3 +195,33 @@ def render_owner_summary(rows, project, as_of, task_id) -> str:
         f"This cycle {task_id}: " + (", ".join(items) or "no scored events"),
         f"Worst: {worst} ({tier(stats[worst][0])}, {stats[worst][0]}); " + (f'last miss: "{miss}"' if miss else "no negative event"),
     ))
+
+
+def glyphs(values) -> str:
+    """The numbers as one line of ▁▂▃▅▇, each scaled between the lowest and the highest of them (rounded half up); all equal gives ▃ throughout."""
+    low, high = min(values, default=0), max(values, default=0)
+    return "".join("▁▂▃▅▇"[int((v - low) * 4 / (high - low) + .5) if high > low else 2] for v in values)
+
+
+def _after_cycles(pairs):
+    """The identity's score after each of its cycles (task families, in order of first appearance): the fold up to the next cycle's first row, the whole fold for the last."""
+    family, first = _ob("task_family"), {}
+    for i, (r, _) in enumerate(pairs):
+        first.setdefault(family(r.get("task_id")), i)
+    starts = list(first.values())
+    return [_fold(pairs[:i]) for i in starts[1:] + [len(pairs)] if starts]
+
+
+def render_rating_view(rows, project, as_of) -> str:
+    """Plain text for the owner's /rating: each identity of the project, lowest score first (score and rank, the score's glyphs over its last 10 cycles, its last 5 events newest first), then the last 5 ratings."""
+    live = _live(rows, project, as_of)
+    names = {n for r in live for n in ([r.get("role")] if r["kind"] == "event" else ["main", *(r.get("roles") or ())]) if n and isinstance(n, str)}
+    if not names:
+        return "Scores (this project): no records yet."
+    mine, lines = {n: _mine(live, n, project, as_of) for n in names}, ["Scores (this project), lowest first"]
+    for n in sorted(mine, key=lambda n: (_fold(mine[n]), n)):
+        rank, span, _ = _rank(value := _fold(mine[n]))
+        lines += [f"{n}: {value} [Rank: {rank}, {span}]", "  trend " + (glyphs(_after_cycles(mine[n])[-10:]) or "-")]
+        lines += [f"  {r.get('task_id')}  {r.get('event')}  {pts:+d}  {' '.join(str(r.get('why') or '').split())[:80]}".rstrip() for r, pts in reversed(mine[n]) if r["kind"] == "event"][:5] or ["  no events"]
+    rated = [f"  {r.get('task_id')}  {r.get('rating')}" for r in reversed(live) if r["kind"] == "rating"][:5]
+    return "\n".join(lines + (["Your latest ratings, newest first"] + rated if rated else ["Your ratings: none yet"]))
