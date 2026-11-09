@@ -14,7 +14,7 @@ Files are stored at the root level of this folder.
 
 ## Allowed File Types
 
-- `.md` files: 6 found
+- `.md` files: 25 found
 ## Naming Convention
 
 kebab-case (lowercase with hyphens, e.g., `my-file.md`)

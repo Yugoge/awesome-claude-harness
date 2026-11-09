@@ -217,7 +217,15 @@ def test_another_session_in_the_same_repository_asks_freely(project, store):
 
 def test_shipped_settings_route_ask_user_question_to_the_guard():
     """The CLI's matcher rule (hookrun.select, as runhook.py) sends a PreToolUse
-    AskUserQuestion payload to the guard."""
+    AskUserQuestion payload to the guard: since P12 the write gate, which runs the guard as its
+    overnight-boundary rule for that tool."""
     settings = json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8"))
     hooks = [h["hook"] for h in hookrun.select(settings, "PreToolUse", {"tool_name": "AskUserQuestion"})]
-    assert "hooks/pretool-overnight-hook-guard.py" in hooks
+    assert "hooks/pretool-write-gate.py" in hooks
+    sys.path.insert(0, str(REPO_ROOT / "hooks"))
+    try:
+        from lib import write_gate
+    finally:
+        sys.path.pop(0)
+    rules = [r.path for r in write_gate.RULES if r.applies("AskUserQuestion")]
+    assert "pretool-overnight-hook-guard.py" in rules, rules

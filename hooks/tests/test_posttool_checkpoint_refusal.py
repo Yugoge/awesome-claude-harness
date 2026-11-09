@@ -1,12 +1,14 @@
-"""A snapshot the threshold path refuses is reported as one JSON systemMessage (P5 R16, A19).
+"""A snapshot the threshold path refuses is reported as one JSON object (P5 R16, A19; P12-L4).
 
 Drives hooks/posttool-git-checkpoint.sh as settings.json registers it (PostToolUse on
 Write|Edit|NotebookEdit|MultiEdit, the payload on stdin) in a throwaway copy of the harness
 home (hooks/ plus the two engines a refusal runs). When write_checkpoint refuses the snapshot
 (rc 3: the private-literal rule, or in the harness home the settings check), nothing is
-written, the hook exits 0 and its whole stdout is one JSON object whose systemMessage is
-auto-commit.sh's refusal notice, never "Checkpoint failed" and never the stand-in value.
-An ordinary snapshot and a refusal-free failure keep their plain lines.
+written, the hook exits 0 and its whole stdout is one JSON object whose systemMessage (for the
+user) and additionalContext (for the model) are auto-commit.sh's refusal notice, never
+"Checkpoint failed" and never the stand-in value. A refusal-free failure is reported the same way
+as "Checkpoint failed"; a written snapshot says nothing (plain PostToolUse stdout reaches no one).
+The file the payload names (stdin; the CLI sets no TOOL_INPUT) picks the worktree it belongs to.
 """
 
 from __future__ import annotations
@@ -115,8 +117,10 @@ def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
     proc = _post_tool_use(home, env, written)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    notice = f"Checkpoint snapshot refused by {rule}: nothing written, see logs/checkpoint.log"
     assert json.loads(proc.stdout) == {
-        "systemMessage": f"Checkpoint snapshot refused by {rule}: nothing written, see logs/checkpoint.log"
+        "systemMessage": notice,
+        "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": notice},
     }
     assert proc.stdout.count("\n") == 1, "the JSON object must be the hook's whole stdout"
     assert "Checkpoint failed" not in proc.stdout + proc.stderr
@@ -126,17 +130,14 @@ def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
     assert f"snapshot refused by {rule}: nothing written" in log and STANDIN not in log
 
 
-def test_ordinary_threshold_snapshot_keeps_its_plain_lines(harness) -> None:
+def test_ordinary_threshold_snapshot_says_nothing(harness) -> None:
     home, env = harness
     (home / "private-literals.txt").write_text(f"{STANDIN}\n")  # the rule runs and passes
     written = home / "notes.txt"
     written.write_text("ordinary note\n")
     proc = _post_tool_use(home, env, written)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "systemMessage" not in proc.stdout
-    assert "Auto-checkpoint triggered: 1 files pending" in proc.stdout
-    tip = _git(env, home, "rev-parse", "--short", "refs/checkpoints/main")
-    assert f"Checkpoint saved: {tip} on refs/checkpoints/main" in proc.stdout
+    assert proc.stdout == ""
     assert _git(env, home, "show", "refs/checkpoints/main:notes.txt") == "ordinary note"
 
 
@@ -148,5 +149,32 @@ def test_refusal_free_failure_still_says_checkpoint_failed(harness) -> None:
     log.mkdir()  # every `2>>checkpoint.log` redirect fails: rc 1, not a refusal
     proc = _post_tool_use(home, env, written)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "Checkpoint failed" in proc.stdout and "systemMessage" not in proc.stdout
+    out = json.loads(proc.stdout)
+    assert out["systemMessage"].startswith("Checkpoint failed (1 files pending)")
+    assert out["hookSpecificOutput"]["additionalContext"] == out["systemMessage"]
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
+
+
+def test_refusal_free_failure_is_silent_in_silent_mode(harness) -> None:
+    home, env = harness
+    written = home / "notes.txt"
+    written.write_text("ordinary note\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "checkpoint.log").mkdir()
+    proc = _post_tool_use(home, {**env, "GIT_CHECKPOINT_SILENT": "1"}, written)
+    assert (proc.returncode, proc.stdout) == (0, "")
+
+
+def test_a_file_in_an_agent_worktree_is_checkpointed_in_that_worktree(harness) -> None:
+    """The payload's file_path selects the worktree (audit 5.3-2: the branch read TOOL_INPUT,
+    which the CLI never sets, so it always checkpointed the main repository)."""
+    home, env = harness
+    (home / ".gitignore").write_text("/settings.machine.json\n/private-literals.txt\n/.claude/\n")
+    _git(env, home, "commit", "-q", "-am", "ignore worktrees")
+    wt = home / ".claude" / "worktrees" / "agent-a1"
+    _git(env, home, "worktree", "add", "-q", "-b", "agent-a1", str(wt))
+    written = wt / "inside.txt"
+    written.write_text("worktree note\n")
+    proc = _post_tool_use(home, env, written)
+    assert (proc.returncode, proc.stdout) == (0, ""), proc.stderr
+    assert _git(env, home, "show", "refs/checkpoints/agent-a1:inside.txt") == "worktree note"
+    assert _git(env, home, "for-each-ref", "refs/checkpoints/main") == ""

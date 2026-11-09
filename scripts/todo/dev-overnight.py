@@ -16,7 +16,7 @@ _STEPS = [
     # The wake (P1c X8): one recurring CronCreate of the session's wake prompt
     # (hooks/lib/overnight.py WAKE_PROMPT); its completion is gated on that call.
     ("0", "Schedule the wake", "Scheduling the wake", {"wake_call": True}),
-    ("1", "Create worktree (first run only)", "Creating worktree", None),
+    ("1", "Read state file and establish the working root", "Reading state file and establishing the working root", None),
     (
         "2",
         "PM Plan",

@@ -132,6 +132,7 @@ over every tracked file whatever its class. Path = first back-ticked token; clas
 | `ARCHITECTURE.md` | `public-core` | Architecture reference. |
 | `CHANGELOG.md` | `public-core` | Release history. |
 | `CLAUDE.md` | `public-core` | Harness operating manual — candidate public-core per roadmap §4.1. |
+| `AGENTS.md` | `public-core` | Instructions for Codex in this repository: its review guidelines. |
 | `LICENSE` | `public-core` | MIT licence (harness's own code). |
 | `NOTICE` | `public-core` | Attribution / licence notice. |
 | `settings.json` | `public-core` | The one hand-maintained settings source, tracked in its clean public form: hooks reached through `${CLAUDE_HOME:-$HOME/.claude}`, no install path, CLI-owned key or personal entry. Machine values live in the untracked overlay `settings.machine.json`; the `claude-settings` filter keeps them out of git (§2). |

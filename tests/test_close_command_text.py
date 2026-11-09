@@ -90,3 +90,97 @@ def test_commit_routes_a_do_task_with_the_close_template_and_rule() -> None:
     flat = " ".join(item.split())
     assert "concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it)" in flat
     assert "the `/commit` orchestrator writes no report" in flat
+
+
+# --- P12: the slimmed text keeps its rules; D31's Codex review loop in Step 2 ---------------------------------
+
+def _qa_prompt() -> str:
+    step2 = _section("### Step 2:")
+    return re.search(r"```\n(FIRST ACTION:.*?)\n```", step2, re.S).group(1)
+
+
+def test_no_stamps_dead_references_or_history_are_left() -> None:
+    for stamp in ("spec-2026", "task 2026", "ba-spec-2026", "AC-2.6", "AC-12.1", "Section 5.", "Trap 11", "BUG-CLOSE",
+                  "FINDING-4", "R4 —", "R1's route", "Must-Have", "venv/bin/activate", "close-overrides.log",
+                  "deprecated", "Cross-reference"):
+        assert stamp not in TEXT, stamp
+    assert len(re.findall(r"CRITICAL|MANDATORY|NON-NEGOTIABLE|HARD RULE|PARAMOUNT", TEXT)) <= 3
+
+
+def test_force_effect_is_stated_once() -> None:
+    assert TEXT.count("is accepted and ignored") == 2  # the frontmatter description and the Invocation line
+    assert "it changes nothing and nothing is logged" in TEXT
+
+
+def test_which_task_offers_the_skipped_tasks_of_stderr() -> None:
+    para = next(p for p in TEXT.split("\n\n") if p.startswith("**Which task?**"))
+    assert "`<task-id>: skipped: <reason>` stderr line" in para and "`/close <task-id>` takes it" in para
+
+
+def test_a_do_task_without_a_do_report_is_still_a_do_task() -> None:
+    resolution = _section("### Task-id resolution")
+    assert "or when a GAP line of Step 0 names it" in resolution
+    assert "`DO_REPORT` to `docs/dev/do-report-<TASK_ID>.json`" in resolution
+
+
+def test_a_do_task_has_no_registry_so_its_dispatches_leave_first_action_out() -> None:
+    step1 = _section("### Step 1:")
+    assert "A `/do` task (`DO_REPORT` set) has no registry directory" in step1
+    assert "leave the FIRST ACTION line out of every dispatch of Steps 1 and 2" in step1
+
+
+def test_every_dev_dispatch_without_a_record_names_its_template() -> None:
+    routes = _section("### Routes")
+    assert "from the cycle command's dev template" in routes
+    cycle = next(p for p in routes.split("\n\n") if p.startswith("**Cycle templates.**"))
+    for part in ("`commands/dev.md`", "`commands/dev-command.md`", "Step 4 for BA", "Step 10 for dev", "Step 13"):
+        assert part in cycle, part
+    late = _section("### Late-repair route")
+    assert 'each from the cycle command\'s own template (Routes, "Cycle templates")' in late
+
+
+def test_the_inspector_dispatches_and_qa_prompt_have_one_disposition_line() -> None:
+    assert "- Disposition: chain_pass (Step 0's last run)\n" in _qa_prompt()
+    assert "verify-disclosure" not in _qa_prompt()
+
+
+def test_codex_review_follows_the_shared_include_and_the_d31_loop() -> None:
+    prompt = _qa_prompt()
+    assert "templates/prompt-includes/codex-consultation.md" in prompt
+    for rule in (
+        "QA decides the verdict; Codex has no veto.",
+        "Round 1 is one complete pass",
+        "Flip items are the blocker, high and medium findings with a realistic trigger that you classify in_scope_real_bug.",
+        "Rounds 2 and 3 are re-reviews",
+        "only new blocker or high defects the fix itself introduced",
+        "Never ask for a new complete pass.",
+        "After round 3 nothing below blocker reopens the cycle",
+        "goes to the follow-up list and the close lands",
+        "A blocker still open is a finding (branch 3)",
+        "ask Codex once more for that line; if that fails too, your own verdict stands with a note",
+        "USER REQUIREMENT", "SCOPE", "OUT OF SCOPE",
+    ):
+        assert rule in prompt, rule
+    for word in ("in_scope_real_bug", "in_scope_minor", "out_of_scope", "nitpick", "blocker", "high", "medium", "edge",
+                 "style"):
+        assert word in prompt, word
+
+
+def test_the_old_codex_loop_is_gone() -> None:
+    prompt = _qa_prompt()
+    for old in ("2–5", "2-5", "flip your verdict", "manual scan", "manual parse", "Skill tool", "Skill(codex)",
+                "UNANIMOUS", "cleanliness/style violations", "Round 3 (skip", "Round 2 (skip"):
+        assert old not in prompt, old
+
+
+def test_failed_parse_is_a_degraded_consultation_like_quota_and_timeout() -> None:
+    branch6 = next(line for line in _qa_prompt().splitlines() if line.startswith("6. Codex unavailable"))
+    for status in ("failed_quota", "failed_timeout", "failed_parse"):
+        assert status in branch6
+    assert "CLOSE: YES - degraded codex consultation: codex_status=<value>" in branch6
+
+
+def test_the_verdict_branch_that_agents_qa_cites_keeps_its_number_and_clauses() -> None:
+    branch2 = next(line for line in _qa_prompt().splitlines() if line.startswith("2. AC-deviation PASS"))
+    for clause in ("(a)", "(b)", "(c)", "(d)", "ac_deviation_with_user_need_satisfied: true"):
+        assert clause in branch2, clause

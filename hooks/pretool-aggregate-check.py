@@ -45,15 +45,15 @@ reports and its canonical; worker labels in NON_WORKER_LABELS (bare "iter",
 "iter2", "draft", "retry", "fix", ...) are within-shard iteration markers, not
 lanes (iter2 FINDING-3).
 
-The obligation barrier and the gitignore rule below block only when
-CLAUDE_OBLIGATION_BARRIER=block; while it is advisory the barrier prints each
-would-block finding on stderr (OBLIGATION BARRIER ADVISORY) and writes nothing.
+The obligation barrier below blocks only when CLAUDE_OBLIGATION_BARRIER=block;
+while it is advisory it prints each would-block finding on stderr (OBLIGATION
+BARRIER ADVISORY) and writes nothing. A gitignored deliverable in a dev report a
+dispatch names is decided by hooks/pretool-gitignore-preflight.py alone.
 
 Fail-open contract: parsing failures, missing stdin, missing project dir,
 unexpected exceptions -> exit 0. Never crash the orchestrator on a self-bug.
 """
 
-import importlib.util
 import json
 import os
 import sys
@@ -622,48 +622,6 @@ def _run_obligation_barrier(data):
         pass  # fail open: an internal error never blocks a dispatch
 
 
-#  ---------------------------------------------------------------------------
-# G3's rule on a dev report a dispatch names (P1b row 6): a path in its
-# dev.files_modified or dev.files_created that `git check-ignore` matches, with
-# no gitignore_waiver, blocks the dispatch; a close or commit producer reading
-# the report of its own task is admitted from its obligation (profile
-# commit-landing, commit-qa, do-close or final_verification, P3 row 13). The
-# rule, admission included, is hooks/pretool-gitignore-preflight.py's
-# gitignored_deliverables(), called here, so the two never disagree; that hook
-# keeps its own block on it too (P2's arming retired no copy: the artifact check
-# lists that block as an allowed position, H-023).
-#  ---------------------------------------------------------------------------
-
-GITIGNORE_RULE_PATH = Path(__file__).parent / "pretool-gitignore-preflight.py"
-
-
-def _gitignored_deliverables(prompt):
-    spec = importlib.util.spec_from_file_location("pretool_gitignore_preflight", GITIGNORE_RULE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.gitignored_deliverables(prompt)
-
-
-def _run_gitignore_rule(data):
-    """Apply the gitignore rule to an Agent/Task dispatch; blocks only when
-    CLAUDE_OBLIGATION_BARRIER=block (it does nothing while advisory)."""
-    try:
-        if os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() != "block":
-            return
-        if not isinstance(data, dict) or data.get("tool_name") not in ("Agent", "Task"):
-            return
-        findings = _gitignored_deliverables(_dispatch_prompt_body(data))
-    except Exception:
-        return  # fail open: an internal error never blocks a dispatch
-    if findings:
-        sys.stderr.write("".join(
-            f"\n[gitignored_deliverable] {report}: {', '.join(paths)} declared in its "
-            "dev.files_modified/files_created match .gitignore and it carries no gitignore_waiver"
-            for report, paths in findings
-        ) + "\n")
-        sys.exit(2)
-
-
 def main():
     data = _load_stdin()
     if data is None:
@@ -703,7 +661,6 @@ def main():
             _emit_canonical_findings(findings, armed, dev_dir)
 
     _run_obligation_barrier(data)
-    _run_gitignore_rule(data)
     sys.exit(0)
 
 

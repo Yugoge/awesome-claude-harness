@@ -218,8 +218,8 @@ def _diagnose_block(contract, valid_ids: str, has_step_ids: bool, entry, step: s
         return (
             "Case C (incomplete contract): the contract is present but has no "
             "usable contracted steps.",
-            "do not retry by re-marking the step; re-publish the contract / request "
-            "orchestrator escalation.",
+            "mark the PM TRIAGE step in progress and re-dispatch PM TRIAGE: when the "
+            "contract lists no call, its return writes it again.",
         )
     if entry is None:
         return (

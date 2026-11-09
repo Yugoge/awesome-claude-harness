@@ -62,14 +62,41 @@ class ToolError(Exception):
 
 @dataclass
 class Deviation:
-    """Pass one block: `hook` is the registered hook file (or its basename), `quote` an excerpt of its text."""
+    """Pass one block: `hook` is the hook file that refuses (or its basename): registered, or a rule of
+    the merged gate that reports the block (tests/replay/sites.py gate_rules); `quote` an excerpt of
+    its text."""
     hook: str
     quote: str
     why: str = ""
 
     def covers(self, block_hook: str, raw: str, text: str) -> bool:
-        same = block_hook == self.hook or block_hook.endswith("/" + self.hook)
+        names = [block_hook] + rule_files(block_hook)
+        same = any(n == self.hook or n.endswith("/" + self.hook) for n in names)
         return same and (self.quote in raw or self.quote in text)
+
+
+_RULES: dict = {}
+# The Replay of this process (inner.py makes one): its harness is the tree under test. Inside a sandbox this
+# package is <sb>/replay, beside the tree's copy (<sb>/home/.claude), not inside a repository, so the tree
+# is never found from this file's own path there.
+_CURRENT: list = []
+
+
+def rule_files(hook: str) -> list:
+    """The refusing rule files of the merged gate `hook` of the tree under test (none: []): the running
+    replay's harness, read as the driver; without a replay (a unit test), this repository."""
+    rp = _CURRENT[-1] if _CURRENT else None
+    tree = rp.layout.harness if rp else os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    key = (tree, hook)
+    if key not in _RULES:
+        from . import sites
+        if rp:
+            with rp.acting("driver"):
+                rules = sites.gate_rules(tree, hook)
+        else:
+            rules = sites.gate_rules(tree, hook)
+        _RULES[key] = [r.file for r in rules if r.relays]
+    return _RULES[key]
 
 
 class Event:
@@ -191,6 +218,7 @@ class Replay:
         self.event_names: set[str] = set()
         self.step_label = ""
         self._actors: list[str] = []
+        _CURRENT[:] = [self]  # rule_files reads the merged gates of this replay's tree
 
     # ------------------------------------------------------------ environment
     def _env(self, extra: dict) -> dict:

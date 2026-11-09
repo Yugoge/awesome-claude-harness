@@ -22,13 +22,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"**Optional-capability degradation.** Every **OPTIONAL** row above is *graceful*: an automa\""
     },
     {
-      "path": "INDEX.md",
-      "fingerprint": "ef823c2748678c35",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
-    },
-    {
       "path": "PUBLIC-CORE.md",
       "fingerprint": "a9bf15c785afac85",
       "ordinal": 1,
@@ -48,34 +41,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"\"public-core\": several `public-core` files still carry deferred `<author-path>` leaks (roadmap\""
-    },
-    {
-      "path": "agents/qa.md",
-      "fingerprint": "3ba600a2ea5583cb",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Hardcoded absolute paths — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "agents/qa.md",
-      "fingerprint": "bf18eb2f5c09b477",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Severity Levels — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "agents/qa.md",
-      "fingerprint": "f59fa5eaba52ab00",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Potential hardcoded secrets/credentials — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "agents/style-inspector.md",
-      "fingerprint": "79ce3ac9cb5a901f",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
       "path": "docs/reference/roadmap-decomposition-productization.md",
@@ -1105,13 +1070,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
-    },
-    {
-      "path": "scripts/INDEX.md",
-      "fingerprint": "41ba4204049bec4f",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Tree — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "scripts/apply-permissions.sh",

@@ -61,7 +61,9 @@ Derivation rules, in the order row 19 states them:
     runs only for the shipped readers outside the allowed positions (E1's
     fallback).
 (5) Position of a deciding read: from the hook's event and matcher
-    (settings.json) and the event's payload: the producer side (the artifact's
+    (settings.json; a rule file a registered gate's RULES table runs takes the
+    gate's, narrowed to the rule's tools, and decides only as a `refuse` rule)
+    and the event's payload: the producer side (the artifact's
     producer's own stop or tool call), G1 (PreToolUse on Agent), G3
     (PostToolUse on Agent), the main agent's own stop (Stop, deciding on what
     the main agent's side wrote), a completion read (Stop, deciding on a
@@ -314,7 +316,8 @@ def derive(tree: str, static, runs: list[Run], *, chain_script: str | None = Non
     recs = static.records
     decl = [r for r in recs if r["kind"] == "declaration"]
     obligations = [d for d in decl if d["type"] == "obligation"]
-    registrations = [d for d in decl if d["type"] == "hook_registration"]
+    # settings.json's registrations, and the rules a registered gate runs on its own (static_half)
+    registrations = [d for d in decl if d["type"] in ("hook_registration", "gate_rule")]
     switches = [d for d in decl if d["type"] == "gate_switch"]
     tree_files = _tree_files(tree)
     ctx = _Ctx(m, recs, obligations, registrations, switches, tree_files, chain_script, runs, tree)
@@ -582,6 +585,7 @@ class _Ctx:
         # adds no reader to that path. A component the trace never ran keeps its static read.
         ran = {x for art in m.artifacts.values() for r in art.writers + art.readers if r.source == "runtime"
                for x in (r.who, r.via, r.proc) if x}
+        ran |= {f for g in list(ran) for f in self.rule_files(g)}     # a gate runs its rules in its process
         for a in m.artifacts.values():
             rt_readers = {r.who for r in a.readers if r.source == "runtime"}
             if not rt_readers or not any(w.source == "runtime" for w in a.writers):
@@ -615,6 +619,27 @@ class _Ctx:
 
         return {t: rels_ for t, rels_ in own.items() if not scratch(t, rels_)}
 
+    def _deciding_on(self, component: str, key: str) -> list:
+        """The static half's deciding reads of `key` in a component's code."""
+        if ("dec_by",) not in self.texts:
+            by: dict = {}
+            for d in self.recs:
+                if d["kind"] == "deciding":
+                    by.setdefault(comp_identity(d["component"]), []).append(d)
+            self.texts[("dec_by",)] = by
+        return [d for d in self.texts[("dec_by",)].get(component, ()) if d["path"] == key or matches(d["path"], key)]
+
+    def rule_files(self, gate: str, deciding: bool = False) -> list[str]:
+        """The hook files a registered gate's RULES table runs in the gate's own process (the static
+        half's gate_rule registrations); with `deciding`, its `refuse` rules only."""
+        return sorted({r["component"] for r in self.regs if r.get("type") == "gate_rule" and r.get("gate") == gate
+                       and (not deciding or _decides(r))})
+
+    def _gate_deciders(self, gate: str, key: str) -> list[str]:
+        """The refusing rule files of a gate whose own code decides on `key` (static deciding reads):
+        the deciders a change of the gate's decision on it stands for."""
+        return [f for f in self.rule_files(gate, deciding=True) if self._deciding_on(f, key)]
+
     def _loads(self, component: str, lib: str, depth: int = 3) -> bool:
         """The component's code runs `lib`'s in its own process: its text sources or imports `lib`
         (a shell `source`/`.` of the file, or of a variable assigned its path; a Python import), or
@@ -632,6 +657,8 @@ class _Ctx:
         return cache[key]
 
     def _loads_directly(self, component: str, lib: str) -> bool:
+        if lib in self.rule_files(component):
+            return True     # a merged gate runs its rule files in its own process (runpy)
         text = self._text(component)
         base = lib.rsplit("/", 1)[-1]
         stem = base.rsplit(".", 1)[0] if "." in base else base
@@ -658,7 +685,8 @@ class _Ctx:
         """The tree's library files a component imports or sources by name."""
         cache = self.__dict__.setdefault("_libs_of", {})
         if component not in cache:
-            cache[component] = [f for f in self._libs() if f != component and self._loads_directly(component, f)]
+            cache[component] = [f for f in self._libs() if f != component and self._loads_directly(component, f)] \
+                + [f for f in self.rule_files(component) if f != component and f not in self._libs()]
         return cache[component]
 
     def _libs(self) -> list[str]:
@@ -976,11 +1004,14 @@ class _Ctx:
                     if a is None:
                         continue
                     for reader in r["readers"]:
-                        rk = (os.path.normpath(reader), key)
-                        rec = self.measured.setdefault(rk, {"changed": set(), "settings": set(), "reproduced": False})
-                        rec["settings"].add(run.settings)
-                        if u.get("reproduced"):
-                            rec["reproduced"] = True
+                        # a gate's process runs its rule files' code: what the trace measures of the
+                        # gate on an artifact its refusing rules decide on, it measures of them
+                        rules = self._gate_deciders(os.path.normpath(reader), key)
+                        for rk in [(os.path.normpath(reader), key)] + [(f, key) for f in rules]:
+                            rec = self.measured.setdefault(rk, {"changed": set(), "settings": set(), "reproduced": False})
+                            rec["settings"].add(run.settings)
+                            if u.get("reproduced"):
+                                rec["reproduced"] = True
                         if not r["changed"]:
                             continue
                         if exact_targets and r["how"] != "invalid":
@@ -988,18 +1019,26 @@ class _Ctx:
                         if (run.name, u["seq"]) in chain_calls and os.path.normpath(reader) != self.chain_script \
                                 and (key, r["how"]) in chain_decides:
                             continue    # the call's change is the chain function's (above)
-                        rec["changed"].add((run.settings, r["how"]))
+                        for rk in [(os.path.normpath(reader), key)] + [(f, key) for f in rules]:
+                            self.measured[rk]["changed"].add((run.settings, r["how"]))
                         who = os.path.normpath(reader)
                         where = f"{run.name}#{u['seq']}:{u['event']}:{u['label']}"
                         if who in callers and self._ran_chain(run, who, u["seq"]) and not self._own_read(who, key):
                             # rule (5): the chain function's own call, run in this process: its decision
-                            who, pos, where = self.chain_script, "chain call", f"{where} in {who}"
+                            deciders = [(self.chain_script, "chain call", f"{where} in {who}")]
+                        elif rules:
+                            # a merged gate's decision is its refusing rules': each rule file that
+                            # decides on the artifact, with its own deciding reads (rule (4)), at the
+                            # gate's position as that file (its own artifact only if it wrote it)
+                            deciders = [(f, self._position(a, u["event"], u.get("tool"), u.get("agent_type"), f,
+                                                           u["kind"]), f"{where} in {who}") for f in rules]
                         else:
-                            pos = self._position(a, u["event"], u.get("tool"), u.get("agent_type"), u["origin"],
-                                                 u["kind"])
-                        a.decisions.append(Decision(
-                            who, pos, where, "differential", r["how"], run.settings, u["event"],
-                            u.get("tool") or u.get("agent_type") or "", rule=self._rule_id(who, key)))
+                            deciders = [(who, self._position(a, u["event"], u.get("tool"), u.get("agent_type"),
+                                                             u["origin"], u["kind"]), where)]
+                        for dw, pos, at in deciders:
+                            a.decisions.append(Decision(
+                                dw, pos, at, "differential", r["how"], run.settings, u["event"],
+                                u.get("tool") or u.get("agent_type") or "", rule=self._rule_id(dw, key)))
         self._target_reads()
         # E1's fallback: a static branch to an exit or a block on a read, for readers not measured
         rt = sorted(self.rt_keys)
@@ -1087,7 +1126,7 @@ class _Ctx:
         if meas and meas["reproduced"]:
             return      # the differential measured this reader on this artifact
         settings = "static-armed" if d["component"] in self.switched() else "static"
-        for event, matcher in self._registrations(d["component"]):
+        for event, matcher in self._registrations(d["component"], deciding=True):
             pos = self._position(a, event, None, None, who, "static", matcher=matcher)
             a.decisions.append(Decision(who, pos, d["decision_site"], "static", how, settings, event,
                                         matcher or "", rule=self._static_rule(d)))
@@ -1168,9 +1207,18 @@ class _Ctx:
             self.texts[key] = out
         return self.texts[key]
 
-    def _registrations(self, component: str) -> list[tuple]:
-        out = [(r["event"], r["matcher"]) for r in self.regs if r.get("component") == component]
-        return out or [("", "")]
+    def _registrations(self, component: str, deciding: bool = False) -> list[tuple]:
+        """The (event, matcher) pairs a component runs at: its settings.json registrations, and,
+        for a rule file of a registered gate's table, the gate's (narrowed to the rule's tools);
+        [("", "")] for code nothing registers. With `deciding`, the positions its refusals reach
+        the call from: a gate's consult, observe, witness or advise rule refuses nothing through
+        the gate, so a component registered only as such a rule decides nowhere ([])."""
+        mine = [r for r in self.regs if r.get("component") == component]
+        if not mine:
+            return [("", "")]
+        if deciding:
+            mine = [r for r in mine if _decides(r)]
+        return [(r["event"], r["matcher"]) for r in mine]
 
     def _static_rule(self, d: dict) -> str:
         """The code identity of a static deciding read: the read's own site in the function of
@@ -1198,13 +1246,7 @@ class _Ctx:
         several, each a rule it shares with every reader that takes that function's verdict)."""
         ck = ("rule", reader, key)
         if ck not in self.texts:
-            if ("dec_by",) not in self.texts:
-                by: dict = {}
-                for d in self.recs:
-                    if d["kind"] == "deciding":
-                        by.setdefault(comp_identity(d["component"]), []).append(d)
-                self.texts[("dec_by",)] = by
-            mine = [d for d in self.texts[("dec_by",)].get(reader, ()) if d["path"] == key or matches(d["path"], key)]
+            mine = self._deciding_on(reader, key)
             libs = {self._static_rule(d) for d in mine if d.get("whole") and _library_read(d)}
             # else the functions of its own code its reads of it run in: a library its callers load
             # in-process decides by the same function when it runs as a process of its own
@@ -1269,7 +1311,7 @@ class _Ctx:
         """E4's G2: hooks registered at SubagentStop whose gate switch the armed copy sets
         otherwise than the tree's settings.json (advisory as the tree ships, blocking armed)."""
         return sorted({r["component"] for r in self.regs if r.get("event") == "SubagentStop"
-                       and r.get("component") in self.switched()})
+                       and _decides(r) and r.get("component") in self.switched()})
 
     def stop_gate(self, a: Artifact) -> dict:
         """E4's G2 on a declared artifact, from what the tree declares: a hook registered at
@@ -1406,7 +1448,7 @@ class _Ctx:
                     if not any(x.who == who and x.evidence == lit["site"] for x in a.readers):
                         a.readers.append(Rel(who, "read", lit["site"], "static"))
                     if comp.startswith(("hooks/", "scripts/")):
-                        for event, matcher in self._registrations(comp):
+                        for event, matcher in self._registrations(comp, deciding=True):
                             pos = self._position(a, event, None, None, who, "static", matcher=matcher)
                             d = Decision(who, pos, lit["site"], "static", "any", "static", event, matcher or "",
                                          rule=who)
@@ -1446,13 +1488,27 @@ class _Ctx:
             tasks = [v for v, k in (run.ids.get("ids") or {}).items() if k == "task"]
             if not tasks:
                 continue
+            # where the run held each id before a hook event: the event before which it was first
+            # there (1: at the run's start, in a file of its starting tree or state), from a file a
+            # step of an earlier event wrote, or an earlier event's payload (hook event n's
+            # processes carry n; a driver or tool step carries the last event fired before it)
+            held: dict = {}
+            seen = [(1, p) for p in run.manifest]
+            seen += [(e["event"] + 1, e["raw"]) for e in run.events if e["op"] in ("write", "create", "rename")]
+            seen += [(s + 1, json.dumps(inv.get("payload") or {})) for s, inv in run.invocations.items()]
+            for k, text in seen:
+                for t in tasks:
+                    if t in text:
+                        held[t] = min(held.get(t, k), k)
             first = None
-            # a hook mints an id its output carries and its event's payload did not hand it (a
-            # PreToolUse rewrite of the call's input passes on the ids the call held)
+            # a hook mints an id its output carries that its event's payload did not hand it and
+            # the run did not already hold (a PreToolUse rewrite of the call's input passes on the
+            # ids the call held; a hook that lists a cycle's files names ids the run started with)
             for n, h in sorted(enumerate(run.hooks, 1), key=lambda p: p[1].get("t", 0)):
                 given = json.dumps((run.invocations.get(n) or {}).get("payload") or {})
                 for x in h.get("hooks", []):
-                    if any(t in (x.get("stdout") or "") and t not in given for t in tasks):
+                    if any(t in (x.get("stdout") or "") and t not in given and held.get(t, n + 1) > n
+                           for t in tasks):
                         first = os.path.normpath(x["hook"])
                         break
                 if first:
@@ -1491,6 +1547,11 @@ _DIR_TEST = re.compile(r"(^|\.)(is_?dir)$|^test -d$")
 # opened), as against one of its content or of its times: E1's 'invalid' mutation rewrites the
 # file in place and leaves every such answer as it was, so only its removal can change them
 _PRESENCE_TEST = re.compile(r"(^|\.)(exists|lexists|is_?file|is_?symlink|islink|access)$|^test -[aefsrwxLhGO]$")
+
+
+def _decides(reg: dict) -> bool:
+    """A registration whose refusals reach the call: a hook's own, or a gate's `refuse` rule."""
+    return reg.get("type") != "gate_rule" or reg.get("rule_kind") == "refuse"
 
 
 def _presence_only(vias) -> bool:
