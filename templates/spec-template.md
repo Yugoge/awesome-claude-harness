@@ -79,8 +79,7 @@ _Not yet populated._
 ## Section 7: What Must Be Done
 
 <!-- WHO WRITES: scripts/spec-write.py only (/spec-update and /commit Step 8, from qa.spec_section_updates.section_7 on a fail verdict, or a /dev-overnight retro report's unresolved_issues) -->
-<!-- WHAT: Prescriptive actions that finish this cycle for this specific issue. Not generic advice -- a concrete action. -->
-<!-- RULE: Everything the user requested is done in this cycle. This section lists the concrete actions that finish it; it never holds phases, a "phase 2", an MVP first, deferred parts or work for a later cycle. Parallel lanes inside the cycle are fine. -->
+<!-- WHAT: Prescriptive actions that finish this cycle for this specific issue; everything the user requested is done in this cycle. Never phases, a "phase 2", an MVP first, deferred parts or work for a later cycle (parallel lanes inside the cycle are fine). Not generic advice -- a concrete action. -->
 <!-- Example: "Increase padding from 8px to 16px in Chat.tsx:42" not "fix the padding" -->
 
 ### Cycle 1
