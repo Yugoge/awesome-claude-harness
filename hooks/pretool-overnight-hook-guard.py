@@ -10,7 +10,8 @@ Enforcement layers:
   1. Global: Block modifications to .claude/hooks/ and overnight-state files.
   2. Session: Block file writes where path lacks "worktree" string.
   3. Session: Block file writes outside the worktree realpath boundary.
-  4. Actor: Block Write/Edit of its checkout's git config (the keystone).
+  4. Actor: Block Write/Edit of its checkout's git config (the keystone), and any write onto a
+     worktree's per-worktree config.worktree (P2-8) or a `git config` write of the keystone key.
   AskUserQuestion: denied to the /dev-overnight session's main agent and
   subagents until a human-typed prompt follows its /dev-overnight (D20).
 
@@ -19,6 +20,7 @@ Exit codes:
   2: Block tool use
 """
 
+import fnmatch
 import json
 import os
 import re
@@ -1210,14 +1212,58 @@ def _git_subcommand_index(subtoks: list[str]) -> int:
     return j
 
 
+_CONFIG_VALUE_OPTS = {'-f', '--file', '--blob', '--type', '--default', '--comment', '--url'}
+_EXPANSION_RE = re.compile(r'\$(?:[A-Za-z_0-9]+|[@*#?$!-])|`')
+
+
+def _unquote_word(token: str) -> str:
+    """The word the shell hands git: quotes and backslashes dropped, lowercased (git compares
+    section and key names without case). P2-8: `core.hooks"Path"` is the key `core.hookspath`."""
+    return re.sub(r'[\\\'"]', '', token).lower()
+
+
+def _key_may_be_keystone(word: str) -> bool:
+    """True iff the (unquoted, lowercased) config key operand is, or can expand at run time to, a
+    key that redirects the keystone. An expansion (`$K`, `$SUBST...`) matches any text, so `$K` and
+    `core.$K` can be `core.hookspath` while `alias.$name` cannot."""
+    if not _EXPANSION_RE.search(word):
+        return _config_key_redirects_keystone(word)
+    pat = '.*'.join(re.escape(part) for part in _EXPANSION_RE.split(word))
+    if any(re.fullmatch(pat, key) for key in _HOOKS_REDIRECT_CONFIG_KEYS):
+        return True
+    return word.startswith('includeif.') or bool(re.fullmatch(pat, 'includeif.x.path'))
+
+
+def _config_key_operand(args: list[str]) -> str:
+    """The key operand of a `git config` write: the first word that is not an option, an
+    option's value, or the leading verb (`set`, `unset`, ...); '' when there is none."""
+    words: list[str] = []
+    skip = False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+        elif a == '--':
+            words += args[i + 1:]
+            break
+        elif a in _CONFIG_VALUE_OPTS:
+            skip = True
+        elif not a.startswith('-'):
+            words.append(a)
+    if words and words[0] in ('set', 'unset', 'get', 'add', 'replace-all', 'unset-all', 'edit', 'list',
+                              'remove-section', 'rename-section'):
+        words = words[1:]
+    return words[0] if words else ''
+
+
 def _config_writes_keystone(subtoks: list[str]) -> bool:
     """True iff this git invocation is a `git config` that is not a pure read and names the
-    keystone key (core.hooksPath, include.path, includeIf.*.path), removes or renames the
-    `core` section, or opens the config in an editor."""
+    keystone key (core.hooksPath, include.path, includeIf.*.path) or builds the key operand from
+    an expansion that could be one, removes or renames the `core` section, or opens the config in
+    an editor."""
     k = _git_subcommand_index(subtoks)
     if k >= len(subtoks) or subtoks[k].strip('\'"') != 'config':
         return False
-    args = [t.strip('\'"').lower() for t in subtoks[k + 1:]]
+    args = [_unquote_word(t) for t in subtoks[k + 1:]]
     opts = args[:args.index('--')] if '--' in args else args  # after `--` every word is a value
     words = [a for a in opts if not a.startswith('-')]
     verb = words[0] if words else ''  # `git config get|set|unset|edit|remove-section ...`
@@ -1226,9 +1272,118 @@ def _config_writes_keystone(subtoks: list[str]) -> bool:
     if (verb in _CONFIG_SECTION_OPS or any(a in _CONFIG_SECTION_OPS for a in opts if a.startswith('-'))) \
             and 'core' in args:
         return True
-    if not any(_config_key_redirects_keystone(a.split('=', 1)[0]) for a in args):
+    reads = any(a in _CONFIG_READ_FLAGS for a in opts) or verb in ('get', 'list')
+    if reads:
         return False
-    return not (any(a in _CONFIG_READ_FLAGS for a in opts) or verb in ('get', 'list'))
+    key = _config_key_operand(args)
+    # (the key operand first; any operand that is a keystone key stays enough, as before P2-8)
+    return (bool(key) and _key_may_be_keystone(key)) or any(
+        _config_key_redirects_keystone(a.split('=', 1)[0]) for a in args)
+
+
+def _neutralize_substitutions(command: str) -> str:
+    """`command` with every `$(...)`, `${...}`, `$((...))` and backtick span replaced by one word
+    `$SUBST_<its text, every character that is not a letter or digit turned into _>`. The git-invocation tokenizer cuts a
+    command at each `(`, `)`, `{` and `}`, so `git config -f "$(git rev-parse --git-dir)/c" KEY v`
+    reached it as `config -f "$`, with the key cut off (P2-8, measured: the write passed). A span
+    that does not close leaves the command unchanged."""
+    out: list[str] = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == '\\' and i + 1 < n:
+            out.append(command[i:i + 2]); i += 2; continue
+        if c == '`':
+            j = command.find('`', i + 1)
+            if j < 0:
+                return command
+            out.append('$SUBST_' + re.sub(r'[^A-Za-z0-9]', '_', command[i + 1:j])); i = j + 1; continue
+        if c == '$' and i + 1 < n and command[i + 1] in '({':
+            opener = command[i + 1]
+            closer = ')' if opener == '(' else '}'
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += (command[j] == opener) - (command[j] == closer)
+                j += 1
+            if depth:
+                return command
+            out.append('$SUBST_' + re.sub(r'[^A-Za-z0-9]', '_', command[i + 2:j - 1])); i = j; continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def _command_writes_keystone_config(command: str) -> bool:
+    """True iff some `git config` in `command` is a keystone write, read both as written (the
+    invocations inside a substitution) and with its substitutions neutralized (the invocation that
+    holds one)."""
+    for text in (command, _neutralize_substitutions(command)):
+        if any(_config_writes_keystone(subtoks) for subtoks, _cwd, _amb in _iter_git_invocations(text)):
+            return True
+    return False
+
+
+# P2-8: the per-worktree config file. With extensions.worktreeConfig on, git reads
+# `<gitdir>/config.worktree` after the shared config, so a core.hooksPath or include.path in it
+# redirects the keystone for that worktree. bubblewrap's read-only rebind (P2 R13) covers
+# `<common>/config` and `<common>/hooks` only; the file sits in the per-worktree git dir, which
+# stays writable for commits.
+_WORKTREE_CONFIG_LEAF = 'config.worktree'
+_WRITE_VERBS = {'tee', 'cp', 'mv', 'sed', 'perl', 'ln', 'dd', 'install', 'truncate', 'rm', 'unlink',
+                'shred', 'touch', 'chmod', 'chown', 'rsync', 'ed', 'ex', 'vi', 'vim', 'nano', 'emacs',
+                'awk', 'gawk', 'python', 'python3', 'ruby', 'node', 'nodejs', 'php', 'xargs'}
+_COMMAND_PREFIXES = {'sudo', 'command', 'exec', 'env', 'time', 'nice', 'nohup'}
+# a path built from a query for git's own directories (the plain `--show-toplevel` is not one)
+_GIT_DIR_QUERY_RE = re.compile(r'git[_-]?(?:common[_-]?)?dir|git[_-]?path', re.I)
+
+
+def _names_worktree_config(word: str) -> bool:
+    """True iff this shell word is, or as a glob can match, the leaf `config.worktree`."""
+    w = re.sub(r'[\\\'"]', '', word).lower()
+    leaf = w.rsplit('/', 1)[-1]
+    return _WORKTREE_CONFIG_LEAF in w or (bool(re.search(r'[*?\[]', leaf)) and fnmatch.fnmatchcase(
+        _WORKTREE_CONFIG_LEAF, leaf))
+
+
+def _builds_git_dir_path(word: str) -> bool:
+    return bool(_EXPANSION_RE.search(word) and _GIT_DIR_QUERY_RE.search(word))
+
+
+def _command_writes_worktree_config(command: str) -> bool:
+    """True iff a segment of `command` writes the per-worktree git config file, in any mode:
+    a redirect target, or an operand of a write verb or of `git config` (not a read form), that
+    names `config.worktree` (also as a glob); or a redirect target or write-verb operand built from
+    a query for git's directory (`$(git rev-parse --git-dir)/...`), which names it at run time."""
+    for seg in re.split(r'[;&|\n]+', _neutralize_substitutions(command).replace('>|', '>')):
+        words = [w.lstrip('({') for w in seg.split()]
+        words = [w for w in words if w and w not in (')', '}', '!')]
+        if not words:
+            continue
+        redirects = [t for t in re.findall(r'(?:^|[\s\d])>>?\|?\s*([^\s<>]+)', seg)
+                     if t != '/dev/null' and not t.startswith('&')]
+        head = next((os.path.basename(_unquote_word(w)) for w in words
+                     if not _ENV_ASSIGN_RE.match(w) and w not in _COMMAND_PREFIXES), '')
+        operands = words if head in _WRITE_VERBS else []
+        if head == 'git' and not _is_pure_config_read(words):
+            if any(_names_worktree_config(w) for w in words):
+                return True
+        for t in redirects + operands:
+            if _names_worktree_config(t) or _builds_git_dir_path(t):
+                return True
+    return False
+
+
+def _is_pure_config_read(words: list[str]) -> bool:
+    """True iff this git command line is not a `git config` write: another subcommand (the word
+    `config` inside a commit message is not one), or one of the read forms."""
+    args = [_unquote_word(w) for w in words]
+    gi = next((i for i, w in enumerate(args) if os.path.basename(w) == 'git'), -1)
+    sub = args[gi + 1:]
+    k = _git_subcommand_index(sub) if gi >= 0 else len(sub)
+    if k >= len(sub) or sub[k] != 'config':
+        return True
+    rest = sub[k + 1:]
+    return any(a in _CONFIG_READ_FLAGS for a in rest) or (bool(rest) and rest[0] in ('get', 'list'))
 
 
 def _strip_shell_comments(command: str) -> str:
@@ -1563,6 +1718,13 @@ def _mentions_worktree_path(command: str) -> bool:
     return False
 
 
+_KEYSTONE_CONFIG_BLOCK = (
+    '\nOVERNIGHT KEYSTONE CONFIG BLOCK: a git config write that names the keystone '
+    '(core.hooksPath, include.path, includeIf.*.path), builds that key from an expansion, removes or '
+    'renames the core section, or edits the config is forbidden for overnight actors; the keystone '
+    'stays as the launcher set it. Reading it (--get, --list) is allowed.\n')
+
+
 def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: str,
                                    main_git_dir: str = '') -> None:
     """M13/M14a/M15 + fix-2/fix-3 (Cycle-2): for an overnight actor, block
@@ -1589,6 +1751,17 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             '(incl. GIT_CONFIG_PARAMETERS), --config-env) is forbidden for '
             'overnight actors — it would redirect/disable the reference-transaction '
             'keystone for the invocation (config-include bypass).\n'
+        )
+    # P2-5/P2-8: a `git config` write of the keystone key, also when a substitution cut the command
+    # for the invocation scanner; and any write onto the per-worktree config file (config.worktree).
+    if _command_writes_keystone_config(command):
+        _block(_KEYSTONE_CONFIG_BLOCK)
+    if _command_writes_worktree_config(command):
+        _block(
+            '\nOVERNIGHT WORKTREE CONFIG BLOCK: a write onto a worktree\'s config.worktree (a redirect, '
+            'tee, cp, mv, sed -i, ln, git config --file ...) or onto a path built from `git rev-parse '
+            '--git-dir` is forbidden for overnight actors; with extensions.worktreeConfig on, '
+            'that file can redirect core.hooksPath for the worktree. Reading it is allowed.\n'
         )
     # fix-3/codex#6: --git-dir / GIT_DIR / GIT_COMMON_DIR into the main repo.
     if _gitdir_into_main(command, main_real, main_git_dir):
@@ -1679,12 +1852,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
 
         # P2-5: the keystone key stays in every mode, bubblewrap or not, from any directory.
         if _config_writes_keystone(subtoks):
-            _block(
-                '\nOVERNIGHT KEYSTONE CONFIG BLOCK: a git config write that names the keystone '
-                '(core.hooksPath, include.path, includeIf.*.path), removes or renames the core '
-                'section, or edits the config is forbidden for overnight actors; the keystone '
-                'stays as the launcher set it. Reading it (--get, --list) is allowed.\n'
-            )
+            _block(_KEYSTONE_CONFIG_BLOCK)
 
         # M13: any git op whose effective dir is main-targeting -> block. P2-5: `rev-parse` only
         # reads (it runs no hook and writes no file), and Step 1 runs it in the main root.
@@ -2103,6 +2271,11 @@ def _targets_git_config(file_path: str) -> bool:
     """R13: file_path is the config or config.worktree of the git dir or common dir of the
     checkout it lies in, which the bwrap rebind keeps Bash off; an Edit runs outside bwrap."""
     real = os.path.realpath(os.path.abspath(file_path))
+    parts = real.lower().split(os.sep)
+    # P2-8: whatever the git dir is (also one that does not exist yet), a file of this name inside a
+    # `.git` directory or a `worktrees/<name>` one is a per-worktree git config
+    if parts[-1] == _WORKTREE_CONFIG_LEAF and ('.git' in parts[:-1] or 'worktrees' in parts[:-2]):
+        return True
     probe = os.path.dirname(real)
     while not os.path.isdir(probe):
         probe = os.path.dirname(probe)
