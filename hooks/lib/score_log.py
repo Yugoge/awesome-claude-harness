@@ -203,6 +203,11 @@ def glyphs(values) -> str:
     return "".join("▁▂▃▅▇"[int((v - low) * 4 / (high - low) + .5) if high > low else 2] for v in values)
 
 
+def _plain(value) -> str:
+    """The value on one line of printable text: each control character and run of white space becomes one space."""
+    return " ".join("".join(c if c.isprintable() else " " for c in str(value)).split())
+
+
 def _after_cycles(pairs):
     """The identity's score after each of its cycles (task families, in order of first appearance): the fold up to the next cycle's first row, the whole fold for the last."""
     family, first = _ob("task_family"), {}
@@ -221,7 +226,7 @@ def render_rating_view(rows, project, as_of) -> str:
     mine, lines = {n: _mine(live, n, project, as_of) for n in names}, ["Scores (this project), lowest first"]
     for n in sorted(mine, key=lambda n: (_fold(mine[n]), n)):
         rank, span, _ = _rank(value := _fold(mine[n]))
-        lines += [f"{n}: {value} [Rank: {rank}, {span}]", "  trend " + (glyphs(_after_cycles(mine[n])[-10:]) or "-")]
-        lines += [f"  {r.get('task_id')}  {r.get('event')}  {pts:+d}  {' '.join(str(r.get('why') or '').split())[:80]}".rstrip() for r, pts in reversed(mine[n]) if r["kind"] == "event"][:5] or ["  no events"]
-    rated = [f"  {r.get('task_id')}  {r.get('rating')}" for r in reversed(live) if r["kind"] == "rating"][:5]
+        lines += [f"{_plain(n)}: {value} [Rank: {rank}, {span}]", "  trend " + (glyphs(_after_cycles(mine[n])[-10:]) or "-")]
+        lines += [f"  {_plain(r.get('task_id'))}  {_plain(r.get('event'))}  {pts:+d}  {_plain(r.get('why') or '')[:80]}".rstrip() for r, pts in reversed(mine[n]) if r["kind"] == "event"][:5] or ["  no events"]
+    rated = [f"  {_plain(r.get('task_id'))}  {_plain(r.get('rating'))}" for r in reversed(live) if r["kind"] == "rating"][:5]
     return "\n".join(lines + (["Your latest ratings, newest first"] + rated if rated else ["Your ratings: none yet"]))

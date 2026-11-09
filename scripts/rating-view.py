@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 import score_log  # noqa: E402
 
+sys.stdout.reconfigure(errors="replace")  # a terminal that cannot show the glyphs gets "?" and no traceback
 log = score_log.log_path()
 try:  # a log never written means no records yet
     rows = [row for _, row in score_log.read_lines(str(log))] if log.exists() else []

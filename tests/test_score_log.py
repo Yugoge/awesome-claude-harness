@@ -593,3 +593,187 @@ def test_the_owner_summary_edges() -> None:
     lines = score_log.render_owner_summary(many, PROJECT, END, task).split("\n")
     assert len(lines) <= 5 and lines[1].count(" -1 (") == 7
     assert lines[2].startswith("Worst: ba (")  # equal scores and trends: the first name
+
+
+# --------------------------------------------------------------------------
+# /rating: the glyph line and the owner's terminal view
+# --------------------------------------------------------------------------
+
+NO_RECORDS = "Scores (this project): no records yet."
+RATINGS_HEAD = "Your latest ratings, newest first"
+
+
+def _view(rows, project=PROJECT, as_of=END) -> list[str]:
+    return score_log.render_rating_view(rows, project, as_of).split("\n")
+
+
+def _heads(lines: list[str]) -> list[tuple]:
+    """(identity, score, rank text) of each agent's first line."""
+    return [m.groups() for m in map(re.compile(r"(\S+): (-?\d+) \[Rank: (.+)\]").fullmatch, lines) if m]
+
+
+def _run(deltas, role="dev") -> list:
+    """One event of the role per task, a task a minute from 2026-11-01, with the reason "why <n>"."""
+    return [_event(p, role, f"202611{n:02d}-100000", _ts(n), event="qa_fail" if p < 0 else "qa_first_pass", key=f"{role}{n}", why=f"why {n}")
+            for n, p in enumerate(deltas, start=1)]
+
+
+@pytest.mark.parametrize(
+    ("values", "line"),
+    [([1, 2, 3, 4, 5], "▁▂▃▅▇"), ([5, 4, 3, 2, 1], "▇▅▃▂▁"), (list(range(9)), "▁▂▂▃▃▅▅▇▇"), ([7, 7, 7], "▃▃▃"), ([42], "▃"),
+     ([], ""), ([0, 100], "▁▇"), ([-10, 0, 10], "▁▃▇"), ([0.0, 0.5, 1.0], "▁▃▇"), ([50, 52, 50, 54], "▁▃▁▇")],
+)
+def test_the_glyph_line_scales_the_numbers_between_their_lowest_and_highest(values: list, line: str) -> None:
+    assert score_log.glyphs(values) == line
+
+
+def test_the_glyph_line_has_one_of_five_glyphs_per_number_and_never_falls_where_the_numbers_rise() -> None:
+    for values in ([3, -1, 4, 1, -5, 9, 2, 6], list(range(-20, 21)), [1, 1, 2], [10**6, 0], [-3, -3]):
+        line = score_log.glyphs(values)
+        index = ["▁▂▃▅▇".index(glyph) for glyph in line]  # raises for any other glyph
+        assert len(line) == len(values)
+        assert [index[i] for i in sorted(range(len(values)), key=values.__getitem__)] == sorted(index)
+        if len(set(values)) > 1:
+            assert line[values.index(min(values))] == "▁" and line[values.index(max(values))] == "▇"
+
+
+def test_agents_are_listed_from_the_lowest_score_to_the_highest_with_score_and_rank() -> None:
+    rows = [_event(-6, "dev", key="1"), _event(1, "qa", event="qa_catch", key="2"),
+            _event(3, "ba", event="ba_option_chosen", key="3"), _event(-40, "scribe", event="escaped", key="4"),
+            _rating(5, roles=("qa",))]  # qa +3 and main +3 from the rating
+    out = _view(rows)
+    assert out[0] == "Scores (this project), lowest first"
+    assert _heads(out) == [("scribe", "10", "Apprentice, 0-20"), ("dev", "44", "Skilled Craftsman, 41-60"),
+                           ("ba", "53", "Skilled Craftsman, 41-60"), ("main", "53", "Skilled Craftsman, 41-60"),  # equal scores: by name
+                           ("qa", "54", "Skilled Craftsman, 41-60")]
+    assert _view([_event(2, "ba", key="1"), _event(-2, "dev", key="2")]) == _view([_event(-2, "dev", key="2"), _event(2, "ba", key="1")])  # not file order
+
+
+@pytest.mark.parametrize(
+    ("value", "rank"),
+    [(-1, "Disgraced, <0"), (0, "Apprentice, 0-20"), (20, "Apprentice, 0-20"), (21, "Journeyman, 21-40"), (40, "Journeyman, 21-40"),
+     (41, "Skilled Craftsman, 41-60"), (61, "Senior Craftsman, 61-80"), (81, "Master, 81-100"), (100, "Master, 81-100")],
+)
+def test_the_view_names_the_rank_and_its_range_as_the_dispatch_line_does(value: int, rank: str) -> None:
+    assert _view([_event(value - 50)])[1] == f"dev: {value} [Rank: {rank}]"
+    assert f"{value} [Rank: {rank}]" in score_log.render_dispatch_line([_event(value - 50)], "dev", PROJECT, END)
+
+
+@pytest.mark.parametrize(
+    ("deltas", "line"),
+    [([2] * 5, "▁▂▃▅▇"), ([-6] * 5, "▇▅▃▂▁"), ([0] * 4, "▃▃▃▃"), ([2], "▃"), ([2, -6], "▇▁"),
+     ([2] * 10, "▁▁▂▂▃▃▅▅▇▇"), ([40, 40] + [-6] * 10, "▇▇▅▅▃▃▂▂▁▁")],  # twelve cycles: only the last ten are drawn
+)
+def test_the_trend_line_draws_the_score_after_each_of_the_last_ten_cycles(deltas: list, line: str) -> None:
+    out = _view(_run(deltas))
+    assert out[2] == "  trend " + line
+    assert len(line) == min(len(deltas), 10)
+
+
+def test_a_cycle_is_one_step_whatever_its_lanes_and_late_rating_rows() -> None:
+    rows = [_event(2, task="20261101-100000-l1", ts=_ts(1), key="1"), _event(2, task="20261101-100000-l2", ts=_ts(2), key="2"),
+            _event(2, task="20261102-100000", ts=_ts(3), key="3"), _rating(5, roles=("dev",), task="dev-20261101-100000", ts=_ts(4))]
+    # after the first cycle 54 (its rating comes later and counts from the second cycle on), at the end 54 + 2 + 3
+    out = _view(rows)
+    assert out[out.index("dev: 59 [Rank: Skilled Craftsman, 41-60]") + 1] == "  trend ▁▇"
+
+
+def test_each_agent_shows_its_last_five_events_newest_first_with_task_id_event_points_and_reason() -> None:
+    out = _view(_run([-6, 2, -6, 2, 2, -6, 2]))
+    assert out == [
+        "Scores (this project), lowest first",
+        "dev: 40 [Rank: Journeyman, 21-40]",
+        "  trend ▅▇▂▃▅▁▂",
+        "  20261107-100000  qa_first_pass  +2  why 7",
+        "  20261106-100000  qa_fail  -6  why 6",
+        "  20261105-100000  qa_first_pass  +2  why 5",
+        "  20261104-100000  qa_first_pass  +2  why 4",
+        "  20261103-100000  qa_fail  -6  why 3",
+        "Your ratings: none yet",
+    ]
+    # fewer than five: all of them; events at one instant: the later row first
+    assert _view(_run([2, -6])[:1])[3:5] == ["  20261101-100000  qa_first_pass  +2  why 1", "Your ratings: none yet"]
+    tie = [_event(2, ts=_ts(1), key="a", why="first written"), _event(2, ts=_ts(1), key="b", why="second written")]
+    assert [line.split("  ")[-1] for line in _view(tie)[3:5]] == ["second written", "first written"]
+
+
+def test_only_event_rows_are_listed_as_events_and_a_rating_changes_the_score_not_the_list() -> None:
+    assert _view([_event(2, key="a", why="good"), _rating(5, roles=("dev",), ts=_ts(2))]) == [
+        "Scores (this project), lowest first",
+        "main: 53 [Rank: Skilled Craftsman, 41-60]", "  trend ▃", "  no events",
+        "dev: 55 [Rank: Skilled Craftsman, 41-60]", "  trend ▃", "  20261101-100000  qa_fail  +2  good",
+        RATINGS_HEAD, "  20261101-100000  5"]
+
+
+def test_the_reason_is_the_rows_why_on_one_printable_line_cut_at_80_characters() -> None:
+    why = "QA failed 20261101-100000:\n\tedge \x1b[31mcase\x1b[0m not tested " + "x" * 100
+    out = _view([_event(-6, why=why)])
+    assert len(out) == 5 and "\x1b" not in "".join(out)
+    assert out[3].startswith("  20261101-100000  qa_fail  -6  QA failed 20261101-100000: edge [31mcase [0m not tested xxx")
+    assert len(out[3].split("  -6  ")[1]) == 80
+    assert _view([_event(-6, why="", key="a")])[3] == "  20261101-100000  qa_fail  -6"  # no reason: no trailing space
+
+
+def test_the_owners_last_five_ratings_newest_first_with_task_id_and_rating() -> None:
+    rows = [_rating(r, roles=("dev",), task=f"2026110{n}-100000", ts=_ts(n)) for n, r in enumerate([5, 4, 3, 1, 5, 4, 3], start=1)]
+    out = _view(rows)
+    assert _heads(out) == [("dev", "46", "Skilled Craftsman, 41-60"), ("main", "46", "Skilled Craftsman, 41-60")]
+    assert out[out.index(RATINGS_HEAD):] == [RATINGS_HEAD, "  20261107-100000  3", "  20261106-100000  4", "  20261105-100000  5",
+                                             "  20261104-100000  1", "  20261103-100000  3"]
+    assert len(_view(rows[:2])) == len(_view(rows[:1])) + 1  # fewer than five: all of them
+    assert _view(rows + [_rating(1, ("dev",), "20261108-100000", _ts(8), project=ELSEWHERE)]) == out  # another project's rating
+
+
+def test_rows_of_other_projects_rows_without_kind_and_rows_from_as_of_on_are_never_shown() -> None:
+    rows = _cycle()
+    noise = [_event(-90, "intruder", "20269999-100000", _ts(5), project=ELSEWHERE, key="x"),
+             _rating(1, ("intruder",), "20269999-100000", _ts(6), project=ELSEWHERE),
+             {"ts": _ts(1), "agent": "ghost", "event": "old", "delta": -50, "new_score": 0},  # score-update.sh's nine keys, no kind
+             {"ts": _ts(1), "project": PROJECT, "role": "ghost", "event": "qa_fail", "points": -50, "task_id": "20269998-100000"},
+             _event(-90, "tardy", "20261101-100000", _ts(9), key="y")]
+    text = "\n".join(_view(rows + noise, as_of=_ts(9)))
+    assert text.split("\n") == _view(rows)
+    assert not any(word in text for word in ("intruder", "ghost", "tardy", "20269999", "20269998"))
+
+
+def test_main_appears_when_the_owner_rated_and_every_role_of_a_rating_is_an_agent() -> None:
+    assert [h[0] for h in _heads(_view([_event(2, key="1")]))] == ["dev"]
+    out = _view([_event(2, key="1"), _rating(4, roles=("scribe",))])
+    assert [h[0] for h in _heads(out)] == ["main", "scribe", "dev"]  # 51, 51 (by name), 52
+    assert out[out.index("scribe: 51 [Rank: Skilled Craftsman, 41-60]"):][1:3] == ["  trend ▃", "  no events"]
+
+
+def test_an_empty_or_unknown_project_gets_one_line() -> None:
+    assert score_log.render_rating_view([], PROJECT, END) == NO_RECORDS
+    assert score_log.render_rating_view(_cycle(), ELSEWHERE, END) == NO_RECORDS
+    assert score_log.render_rating_view(_cycle(), PROJECT, _ts(0)) == NO_RECORDS  # nothing is dated before as_of
+    assert score_log.render_rating_view([{"agent": "dev"}, {"kind": "note", "project": PROJECT}, {"kind": "event"}], PROJECT, END) == NO_RECORDS
+
+
+def test_a_role_that_is_not_a_name_is_not_an_agent() -> None:
+    odd = [_event(2, role=["dev"], key="a"), _event(2, role=7, key="b"), _event(2, role=None, key="c"), _event(2, role="", key="d")]
+    assert score_log.render_rating_view(odd, PROJECT, END) == NO_RECORDS
+    assert [h[0] for h in _heads(_view(odd + [_rating(5, roles=(None, 7, "dev"))]))] == ["dev", "main"]
+
+
+def test_an_identity_with_no_scored_row_shows_a_dash_for_its_trend_and_no_events() -> None:
+    assert _view([_rating(2, roles=())]) == [
+        "Scores (this project), lowest first", "main: 50 [Rank: Skilled Craftsman, 41-60]", "  trend -", "  no events",
+        RATINGS_HEAD, "  20261101-100000  2"]
+
+
+def test_ten_agents_stay_a_handful_of_lines_each() -> None:
+    rows = [_event(-1, f"agent{i}", f"2026110{n}-100000", _ts(n), event="rerun_gap", key=f"{i}-{n}") for i in range(10) for n in range(1, 9)]
+    out = _view(rows)
+    assert len(out) == 1 + 10 * 7 + 1  # a head, the trend and five events for each, the ratings line
+    assert [h[0] for h in _heads(out)] == [f"agent{i}" for i in range(10)] and max(map(len, out)) < 80
+
+
+def test_the_view_is_plain_text_and_only_reads_the_rows() -> None:
+    rows = _cycle() + [_rating(1, ("ba",), "20261102-100000", _ts(6)), _event(-60, "dev", ts=_ts(7), key="z", why="needs a fix")]
+    before = json.dumps(rows, sort_keys=True)
+    text = score_log.render_rating_view(rows, PROJECT, END)
+    assert "[Rank: Disgraced, <0]" in text  # a rank range may hold "<"; a tag never opens
+    assert not re.search(r"</?[A-Za-z!][^>]*>", text) and "\x1b" not in text
+    assert not re.search(r"[\x00-\x09\x0b-\x1f\x7f]", text) and {c for c in text if ord(c) > 127} <= set("▁▂▃▅▇")
+    assert json.dumps(rows, sort_keys=True) == before and score_log.render_rating_view(rows, PROJECT, END) == text
