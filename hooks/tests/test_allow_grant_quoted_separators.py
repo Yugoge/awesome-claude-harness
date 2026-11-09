@@ -24,6 +24,7 @@ import importlib.util
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -148,25 +149,60 @@ def test_text_with_no_quote_splits_exactly_as_before():
         assert AL._bash_subcommands(command) == expect, repr(command)
 
 
+def _bash_keywords_and_builtins(bash):
+    out = subprocess.run([bash, "-c", "compgen -b; compgen -k"], capture_output=True, text=True, timeout=10,
+                         stdin=subprocess.DEVNULL, env={"PATH": ""}).stdout
+    return set(out.split())
+
+
+def run_oracle(bash, command, empty_dir, work_dir, timeout=10):
+    """How many simple commands bash runs for ``command``, counted with ``command_not_found_handle``.
+
+    Nothing real runs: the child's PATH is an empty directory, so every word that is not a builtin or
+    keyword reaches the handler, and its environment holds nothing else; it runs in a scratch directory
+    with no stdin. Returns None when the run times out (the draw is then skipped, never passed)."""
+    harness = "command_not_found_handle(){ echo C; return 0; }\n"
+    try:
+        done = subprocess.run([bash, "-c", harness + command], capture_output=True, text=True, timeout=timeout,
+                              stdin=subprocess.DEVNULL, cwd=work_dir,
+                              env={"PATH": str(empty_dir), "LC_ALL": "C", "HOME": str(work_dir)})
+    except subprocess.TimeoutExpired:
+        return None
+    return done.stdout.count("C\n")
+
+
+# Fragments are words (or word pieces) that no builtin or keyword can be spelled from: x y q a b fix: git
+# commit -m EOF body. A draw whose words, with quotes and backslashes removed, still spell one is skipped.
+FRAGMENTS = ["git commit -m ", "x ", "y", " ", "a;b", ";", "&&", "||", "|", "\n", '"', "'", "$'", "\\", "\\'",
+             '\\"', "#", " #", "q", "fix: ", "; ", " && ", " | ", "<<", "<<EOF\nbody\nEOF\n", "\\;", "\\\n"]
+
+
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash as the oracle")
-def test_the_scan_never_finds_fewer_commands_than_bash_runs():
+def test_the_scan_never_finds_fewer_commands_than_bash_runs(tmp_path):
     """Differential: bash runs each fragment-built command with every unknown word counted once; the
     splitter must find at least that many sub-commands (a lone `&` is no separator, as before, so the
-    fragments hold none)."""
+    fragments hold none). No real program runs (run_oracle)."""
+    bash = shutil.which("bash")
+    empty, work = tmp_path / "no-programs", tmp_path / "work"
+    empty.mkdir()
+    work.mkdir()
+    reserved = _bash_keywords_and_builtins(bash)
     rnd = random.Random(20261109)
-    frags = ["git commit -m ", "x ", "y", " ", "a;b", ";", "&&", "||", "|", "\n", '"', "'", "$'", "\\", "\\'",
-             '\\"', "#", " #", "q", "fix: ", "; ", " && ", " | ", "<<", "<<EOF\nbody\nEOF\n", "\\;", "\\\n"]
-    harness = "command_not_found_handle(){ echo C; return 0; }\n"
-    checked = 0
+    checked = skipped = 0
     for _ in range(1500):
-        command = "".join(rnd.choice(frags) for _ in range(rnd.randint(1, 9)))
-        if subprocess.run(["bash", "-n", "-c", command], capture_output=True).returncode != 0:
+        command = "".join(rnd.choice(FRAGMENTS) for _ in range(rnd.randint(1, 9)))
+        words = set(re.split(r"[\s;&|<>#]+", re.sub(r"[\"'\\$]", "", command)))
+        if words & reserved or subprocess.run([bash, "-n", "-c", command], capture_output=True, cwd=work,
+                                              env={"PATH": str(empty)}).returncode != 0:
+            skipped += 1
             continue
-        ran = subprocess.run(["bash", "-c", harness + command], capture_output=True, text=True, timeout=10,
-                             stdin=subprocess.DEVNULL).stdout.count("C\n")
+        ran = run_oracle(bash, command, empty, work)
+        if ran is None:
+            skipped += 1
+            continue
         checked += 1
         assert len(AL._bash_subcommands(command)) >= ran, repr(command)
-    assert checked > 100
+    assert checked > 100, f"only {checked} draws checked, {skipped} skipped"
 
 
 # --------------------------------------------------------------------------------------------
