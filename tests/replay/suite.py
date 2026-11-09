@@ -228,6 +228,9 @@ def preconditions() -> list[str]:
 
 
 REGISTRY: dict[str, tuple] = {}
+# A settings name a test module defines -> fn(runner) returning the settings file the replay runs
+# with, built from the tree under test when a replay first names it (Runner._replay).
+BUILT_SETTINGS: dict = {}
 
 
 def replay_key(scn: Scenario, settings: str, faults: tuple = (), tag: str = "") -> str:
@@ -313,8 +316,10 @@ class Runner:
             shutil.rmtree(out)
         os.makedirs(out)
         sandbox.clone(self.template(), sb)
+        choice = self.settings_files.get(settings) or \
+            (BUILT_SETTINGS[settings](self) if settings in BUILT_SETTINGS else settings)
         argv = [sys.executable, "-m", "tests.replay", "run", "--tree", self.tree, "--out", out, "--sandbox", sb,
-                "--driver", scn.driver, "--settings", self.settings_files.get(settings, settings), "--runs", "plain"]
+                "--driver", scn.driver, "--settings", choice, "--runs", "plain"]
         for k, v in tuple(scn.args) + tuple(faults):
             argv += ["--arg", f"{k}={v}"]
         for k, v in {**self.guard.env(), **self.env}.items():
