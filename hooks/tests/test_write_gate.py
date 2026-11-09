@@ -428,3 +428,28 @@ def test_l4s_whole_registration_change():
     for _, _, command in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
         assert (ROOT / path).is_file(), command
+
+
+def test_a_runner_fault_falls_back_and_is_never_an_allow(lab):
+    """If the runner around a rule raises, the gate answers through separate processes instead of
+    ending with exit 1 (which the CLI would let through, skipping tool-policy's closed check)."""
+    gate = HOOKS / "pretool-write-gate.py"
+    probe = textwrap.dedent(f"""
+        import importlib.util, io, sys
+        sys.path.insert(0, {str(HOOKS)!r})
+        import lib.rule_runner
+        def broken(*a, **k):
+            raise OSError("no file descriptors")
+        lib.rule_runner.run_rule = broken
+        spec = importlib.util.spec_from_file_location('gate', {str(gate)!r})
+        gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+        sys.exit(gate.main())
+        """)
+    refused = _payload("Write", {"file_path": f"{OUTSIDE}/src/app.py", "content": "x"}, "qa")
+    for raw in (refused, _payload("Write", {"file_path": str(lab.proj / "existing.txt"), "content": "x"}),
+                _payload("Read", {"file_path": "/etc/hosts"})):
+        expected = lab.run(write_gate_settings.GATE_COMMAND, raw)
+        got = subprocess.run([sys.executable, "-c", probe], input=raw, capture_output=True, text=True,
+                             env=lab.env(), cwd=lab.proj, timeout=120)
+        assert (got.returncode, got.stdout, got.stderr) == expected, raw
+    assert expected[0] == 0 and lab.run(write_gate_settings.GATE_COMMAND, refused)[0] == 2

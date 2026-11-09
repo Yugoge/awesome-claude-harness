@@ -9,9 +9,9 @@ pretool-bash-views-guard.py, pretool-overnight-hook-guard.py, pretool-tool-polic
 pretool-cp-state-write-guard.py, lib/write_gate/overwrite.py (pretool-write-guard.sh's
 checks) and pretool-claude-config-guard.py.
 
-If the gate itself fails before a rule has run, it runs each rule the call matches as a
-separate process, as the CLI ran them, so a fault here neither refuses every tool nor
-skips tool-policy's fail-closed check.
+If the gate's own code fails (loading the rule table, or the runner around a rule), it runs
+each rule the call matches as a separate process, as the CLI ran them, so a fault here
+neither refuses every tool nor skips tool-policy's fail-closed check.
 """
 from __future__ import annotations
 
@@ -71,9 +71,11 @@ def main() -> int:
         from lib.write_gate import RULES, combine
         tool = _tool(raw)
         rules = [rule for rule in RULES if rule.applies(tool)]
+        # A rule's own failure is in its RuleRun; an exception here is the runner's, and
+        # would otherwise end the gate with exit 1, which the CLI lets through.
+        results = [(rule, run_rule(rule.file, raw, rule.budget)) for rule in rules]
     except Exception:
         return _fallback(raw)
-    results = [(rule, run_rule(rule.file, raw, rule.budget)) for rule in rules]
     return _emit(combine(results))
 
 
