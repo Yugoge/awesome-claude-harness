@@ -484,6 +484,18 @@ def test_project_key_is_the_hash_of_the_resolved_git_common_directory(tmp_path: 
     assert str(tmp_path) not in key
 
 
+def test_log_path_follows_the_config_directory_variable_and_creates_nothing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    assert score_log.log_path() == tmp_path / "config" / "logs" / "lifecycle.jsonl"
+    home_log = tmp_path / "home" / ".claude" / "logs" / "lifecycle.jsonl"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")  # empty and unset both fall back to ~/.claude
+    assert score_log.log_path() == home_log
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert score_log.log_path() == home_log
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_the_dispatch_line_is_one_line_with_no_record_and_two_with_a_miss() -> None:
     assert score_log.render_dispatch_line([], "dev", PROJECT, END) == \
         "Your record (dev, this project): no record yet [Rank: Skilled Craftsman, 41-60]."

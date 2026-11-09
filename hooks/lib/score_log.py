@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 from contextlib import contextmanager
+from pathlib import Path
 
 START, CAP = 50, 100
 POINTS = {  # event -> points by role ("*": any other role); per-event caps (qa_catch +2 a task) are the writer's
@@ -63,6 +64,11 @@ def project_key(cwd) -> str:
 def points_for(event: str, role: str) -> int | None:
     """The table's points for the event and role; None when it gives that role nothing."""
     return POINTS[event].get(role, POINTS[event].get("*"))
+
+
+def log_path() -> Path:
+    """The score log: <CLAUDE_CONFIG_DIR when set and non-empty, else ~/.claude>/logs/lifecycle.jsonl. Creates nothing."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "lifecycle.jsonl"
 
 
 @contextmanager
