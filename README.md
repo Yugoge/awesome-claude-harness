@@ -38,8 +38,8 @@ Counted from the repository by `scripts/readme_facts.py` and re-derived by `scri
 | Pipelines replayed | 10 pipelines, 15 compliant scenarios, 2 settings modes (shipped, armed), 30 compliant replays | a compliant replay that meets a gate block or a hook error, or does not reach its terminal, fails CI (`tests/replay/test_pipelines.py`) |
 | Faults injected | 9 fault classes in 25 variants; 4 regression replays (R-E1, R-N1, R-P1, R-V1) | a fault that no gate returns to its producer, or that its producer does not repair without human action, fails CI for 8 of the 25 variants (`tests/replay/test_faults.py`); the regression replays are in `tests/replay/test_regressions.py` |
 | Blocking sites of the registered hooks | 181 sites: 31 own-obligation gates, 126 denials of a forbidden operation, 4 time-lock; 20 with no clearing class | a replay that reaches a blocking site with no clearing class fails CI (`tests/replay/test_no_dead_end.py`) |
-| file artifacts declared by the producers' obligation templates in commands/*.md, read statically; not the artifact total the CI job "artifact check (traced replays)" reports | 23 (distinct path patterns, from 51 declarations in 38 obligation templates) | an artifact without one producer or without a deciding reader fails the check, which keeps no exception list (`tests/test_artifact_graph.py`) |
-| Tests, counted statically (parametrization not expanded) | 4,754 test functions in 252 files: `hooks/tests` 2,763 in 145 files, `tests` 1,991 in 107 files | the unit suite fails on any of 3.10, 3.11, 3.12 (it leaves out `tests/artifact_graph/test_mutations.py`, `tests/generated`, `tests/replay`, `tests/test_artifact_graph.py`) |
+| file artifacts declared by the producers' obligation templates in commands/*.md, read statically; not the artifact total the CI job "artifact check (traced replays)" reports | 23 (distinct path patterns, from 47 declarations in 36 obligation templates) | an artifact without one producer or without a deciding reader fails the check, which keeps no exception list (`tests/test_artifact_graph.py`) |
+| Tests, counted statically (parametrization not expanded) | 4,794 test functions in 254 files: `hooks/tests` 2,763 in 145 files, `tests` 2,031 in 109 files | the unit suite fails on any of 3.10, 3.11, 3.12 (it leaves out `tests/artifact_graph/test_mutations.py`, `tests/generated`, `tests/replay`, `tests/test_artifact_graph.py`) |
 | Hook registrations in the tracked `settings.json` | 78 entries in 9 events (PreToolUse 35, PostToolUse 17, SessionStart 8, SubagentStop 8, UserPromptSubmit 6, Notification 1, PostToolUseFailure 1, SessionEnd 1, Stop 1) | ledger rows that differ from the registered hooks fail `scripts/check-enforcement-evidence.py` |
 <!-- END canonical-region id=proof -->
 
@@ -109,14 +109,14 @@ Generated from the frontmatter of `commands/*.md`. A command marked owner-only c
 | `/codex [prompt or --review or --model <model> <prompt>]` | owner or agent | Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel… |
 | `/commit` | owner only | Commit session changes via changelog-analyst subagent |
 | `/dev [--codex] [--spec <path>] <requirement>` | owner only | Orchestrated development workflow with BA subagent delegation, parallel agent execution, and… |
-| `/dev-command` | owner only | Enhanced development workflow with BA subagent delegation, command development best practices… |
+| `/dev-command` | owner only | /dev for developing a slash command, a subagent or another .claude file; the /dev workflow with the… |
 | `/dev-overnight` | owner only | Autonomous overnight development loop - continuously explores codebase, finds issues, fixes them… |
 | `/do` | owner only | Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations… |
 | `/merge` | owner only | Merge any resolvable commit-ish into the default branch, on either a linked (registered_worktree)… |
 | `/paseo-daemon [bootstrap\|tick\|drain]` | owner only | paseo multi-session monitoring and three-account dynamic scheduling control plane — bootstrap of a… |
 | `/pull` | owner only | Execute safe git pull with automatic stash management and conflict detection |
 | `/push` | owner only | `/push` is the validated wrapper for normal branch publication |
-| `/redev [--codex] [--spec <path>] [<requirement>]` | owner only | /redev is /dev when saving context — the /dev workflow (same arguments, steps, gates and artifacts)… |
+| `/redev [--codex] [--spec <path>] [<requirement>]` | owner only | /redev is /dev when saving context — it re-enters the harness in the same conversation without… |
 | `/restart` | owner only | Resume every quota-interrupted subagent in the current Claude Code parent session from its original… |
 | `/spec [--codex] [<requirement>]` | owner only | Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference) |
 | `/spec-update [--update --spec <path> \| --continue \| --temp] [--spec <path>] [what the next session should focus on]` | owner only | Update an existing spec, continue unfinished development, or write a temp session note |
