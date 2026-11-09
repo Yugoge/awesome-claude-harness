@@ -368,14 +368,16 @@ def _handle_with(monkeypatch, config: Path, payload: dict, **attributes) -> dict
 
 
 def _sweeper(config: Path):
-    """A stand-in sweep that records its calls and scores the close QA: a fact row in the log, as the real one writes."""
-    calls = []
+    """A stand-in sweep that records its calls (and how many rating rows the log held then) and scores the close QA:
+    a fact row in the log, as the real one writes."""
+    calls, rated = [], []
 
     def sweep(transcript_path, cwd):
         calls.append((transcript_path, cwd))
+        rated.append(sum(r.get("kind") == "rating" for r in _rows(config)))
         score_log.append(_log(config), _event("qa", "qa_catch", 1, "close QA swept in", key="swept"))
 
-    sweep.calls = calls
+    sweep.calls, sweep.rated = calls, rated
     return sweep
 
 
@@ -383,10 +385,10 @@ def test_an_answered_close_rating_sweeps_once_per_call_before_the_summary_new_ro
     _seed(config, *SEEDED)
     sweep, payload = _sweeper(config), _payload("4 - Minor gaps")
     out = _handle_with(monkeypatch, config, payload, sweep=sweep)
-    assert sweep.calls == [(payload["transcript_path"], payload["cwd"])]  # the rating row is written, then the sweep
+    assert sweep.calls == [(payload["transcript_path"], payload["cwd"])] and sweep.rated == [1]  # the row first, then the sweep
     assert "qa +1 (close QA swept in)" in out["systemMessage"] and "rating 4: +1 each" in out["systemMessage"]
     again = _handle_with(monkeypatch, config, _payload("5 - Fully met", tool_use_id="toolu_again"), sweep=sweep)
-    assert len(sweep.calls) == 2  # a second rating of the task writes no row, still sweeps, still shows the summary
+    assert len(sweep.calls) == 2 and sweep.rated == [1, 1]  # a second rating of the task writes no row, still sweeps, still shows the summary
     assert [r["rating"] for r in _rows(config) if r.get("kind") == "rating"] == [4]
     assert again == out and sum(r.get("key") == "swept" for r in _rows(config)) == 1
 

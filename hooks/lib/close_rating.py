@@ -83,6 +83,8 @@ def handle(payload) -> dict | None:
             with score_log.locked(log):
                 score_log.append(log, {"kind": "rating", "ts": _utc(time.time()), "project": project, "task_id": task_id,
                                        "rating": rating, "roles": roles, "tool_use_id": payload.get("tool_use_id")})
+            with contextlib.suppress(Exception):
+                _lib("score_events").sweep(payload["transcript_path"], payload["cwd"])
         rows =[row for _, row in score_log.read_lines(str(log))]
         return {"systemMessage": score_log.render_owner_summary(rows, project, _utc(time.time() + 1), task_id)}
     except Exception:
