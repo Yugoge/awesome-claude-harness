@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -455,20 +456,30 @@ def test_twenty_parallel_appends_of_one_key_write_it_once(tmp_path: Path) -> Non
     assert len(_log_rows(log)) == 1
 
 
-def test_project_key_is_the_hash_of_the_resolved_git_top_level(tmp_path: Path) -> None:
+def _git(repo: Path, *args: str) -> None:
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "PATH": os.environ["PATH"], "HOME": str(repo.parent)}
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", *args],
+                   check=True, capture_output=True, env=env)
+
+
+def test_project_key_is_the_hash_of_the_resolved_git_common_directory(tmp_path: Path) -> None:
     if shutil.which("git") is None:
         pytest.skip("needs git")
     one, two, plain = tmp_path / "one", tmp_path / "two", tmp_path / "plain"
     for repo in (one, two):
         subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    _git(one, "commit", "-q", "--allow-empty", "-m", "first")
+    _git(one, "worktree", "add", "-q", "--detach", str(tmp_path / "linked"))  # a linked working copy of one, no branch
     (one / "src" / "deep").mkdir(parents=True)
     plain.mkdir()
     (tmp_path / "link").symlink_to(one)
     key = score_log.project_key(one)
     assert re.fullmatch(r"[0-9a-f]{12}", key)
-    assert key == hashlib.sha256(str(one.resolve()).encode()).hexdigest()[:12]
-    assert key == score_log.project_key(one / "src" / "deep") == score_log.project_key(tmp_path / "link")
+    assert key == hashlib.sha256(str((one / ".git").resolve()).encode()).hexdigest()[:12]
+    # the main checkout, a subdirectory of it, a symlink to it and its linked working copy are one project
+    assert {score_log.project_key(path) for path in (one / "src" / "deep", tmp_path / "link", tmp_path / "linked")} == {key}
     assert score_log.project_key(two) != key and score_log.project_key(plain) != key
+    # outside a repository the directory itself is the identity
     assert score_log.project_key(plain) == hashlib.sha256(str(plain.resolve()).encode()).hexdigest()[:12]
     assert str(tmp_path) not in key
 

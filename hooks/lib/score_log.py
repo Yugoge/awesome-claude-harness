@@ -55,9 +55,9 @@ def read_lines(path: str) -> list[tuple[int, dict]]:
 
 
 def project_key(cwd) -> str:
-    """First 12 hex digits of the sha256 of the resolved git top-level of cwd (cwd itself outside a repository)."""
-    top = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    return hashlib.sha256(os.path.realpath(top.stdout.strip() or cwd).encode()).hexdigest()[:12]
+    """First 12 hex digits of the sha256 of the resolved git common directory of cwd, which a repository's linked working copies share (cwd itself outside one)."""
+    common = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--git-common-dir"], capture_output=True, text=True).stdout.strip()
+    return hashlib.sha256(os.path.realpath(os.path.join(cwd, common)).encode()).hexdigest()[:12]
 
 
 def points_for(event: str, role: str) -> int | None:
