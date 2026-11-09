@@ -45,12 +45,23 @@ EXCLUDES=(
   ".cache"
   ".DS_Store"
   "Thumbs.db"
+  ".claude"
+)
+# The harness's own directories in a project: .claude (above; Claude Code's and the harness's runtime
+# files) and the JSON-only workflow directories commands/clean.md's documentation rules name. A README or
+# INDEX the rule-inspector writes there is read by no one and stays behind untracked.
+EXCLUDE_PATHS=(
+  "./docs/dev"
+  "./docs/clean"
 )
 
 # Build find exclude arguments
 EXCLUDE_ARGS=()
 for exclude in "${EXCLUDES[@]}"; do
   EXCLUDE_ARGS+=(-name "$exclude" -prune -o)
+done
+for exclude in "${EXCLUDE_PATHS[@]}"; do
+  EXCLUDE_ARGS+=(-path "$exclude" -prune -o)
 done
 
 # Find all directories (excluding system dirs)

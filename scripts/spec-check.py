@@ -43,7 +43,8 @@ runs when a subagent Reads its cp-state file) until the first of: the mark or wa
 terminal (auto-close: is_running false, checked_out_at set, agent_id KEPT),
 check-out (agent_id cleared) or unlock (agent_id cleared). A slot registered while
 every checkpoint is already terminal has no such write ahead of it: it closes on
-its next mark or waive (a repeat done mark included) or on check-out.
+its next mark or waive (a repeat done mark included) or on check-out. checkpoints
+leaves its slot idle until the agent it is for Reads the file (register).
 
 A closed slot accepts exactly two mutations, both only from its recorded owner (the
 caller whose non-empty --agent-id equals the slot's agent_id): mark of a done
@@ -60,11 +61,11 @@ of the role), keeps every checkpoint state and re-binds ownership.
 --bump-generation is not a re-open: it resets every checkpoint to pending. A
 check-in by an id that owns no slot takes over the first idle slot of the role and
 its previous owner then fails with "no cp-state slot ... is owned by agent_id"; a
-register by such an id re-binds a finished slot the same way.
+register by such an id takes the slot file it Read (a running holder moves aside).
 
 Usage:
   spec-check.py check-in   --spec-id SID --agent AGENT --agent-id AID [--artifact PATH]
-  spec-check.py register   --spec-id SID --agent AGENT --agent-id AID
+  spec-check.py register   --spec-id SID --agent AGENT [--instance-id N] --agent-id AID
   spec-check.py checkpoints --spec-id SID --agent AGENT [--instance-id N] --agent-id AID --action TEXT [--action TEXT ...]
   spec-check.py mark       --spec-id SID --agent AGENT [--instance-id N] [--agent-id AID] --cp-id CP_ID
   spec-check.py waive      --spec-id SID --agent AGENT [--instance-id N] [--agent-id AID] --cp-id CP_ID
@@ -437,28 +438,28 @@ def _cmd_check_in(args):
 
 def _cmd_register(args):
     """The read-trigger registration (hooks/pretool-cp-checkin.py runs it when a
-    subagent Reads its cp-state file, with the agent_id of its payload): the slot
-    this id already holds, else the first idle slot of the role, else a new
-    numbered slot carrying the primary's checklist (parallel same-role agents).
+    subagent Reads its cp-state file, with its payload's agent_id and --instance-id
+    of that file): the slot this id already holds, else the slot it Read, so that
+    file names it (checkpoint-marking.md); a holder still running there (a parallel
+    same-role agent) moves, id and checkpoint states kept, to a new numbered slot.
     It restamps ownership only and keeps every checkpoint state; a repeat by the
     slot's running owner keeps its checked_in_at, so a bystander re-reading the
     file never keeps a registration fresh (STALE-1, hooks/lib/agent_resolver.py).
-    A role with no slot under the spec is left alone."""
+    A slot file that does not exist is left alone."""
     if not _validate_agent(args.agent):
         return 1
     loaded = [(iid, _read_payload(args.spec_id, args.agent, iid))
               for iid, _path in _all_instance_files(args.spec_id, args.agent)]
-    if not loaded:
-        return 0
     pick = next(((iid, p) for iid, p in loaded if p.get("agent_id") == args.agent_id), None)
-    pick = pick or next(((iid, p) for iid, p in loaded if not p.get("is_running")), None)
     if pick is None:
-        iid = 2
-        while _cp_file(args.spec_id, args.agent, iid).exists():
-            iid += 1
-        payload = json.loads(json.dumps(loaded[0][1]))
-        payload.update(instance_id=iid, is_running=False, checked_out_at=None)
-        pick = (iid, payload)
+        pick = next(((iid, p) for iid, p in loaded if iid == args.instance_id), None)
+        if pick is None:
+            return 0
+        if pick[1].get("is_running"):
+            moved = 2
+            while _cp_file(args.spec_id, args.agent, moved).exists():
+                moved += 1
+            _write_payload(args.spec_id, args.agent, dict(pick[1], instance_id=moved), moved)
     iid, payload = pick
     same_owner = bool(payload.get("is_running")) and payload.get("agent_id") == args.agent_id
     payload["is_running"] = True
@@ -474,7 +475,8 @@ def _cmd_register(args):
 def _cmd_checkpoints(args):
     """Set a slot's checklist whole (the spec subagent's Phase 2, agents/spec.md):
     one pending checkpoint cp-NN per --action, in the order given, on the slot
-    --agent-id holds (or --instance-id names)."""
+    --agent-id holds (or --instance-id names), left idle (the id kept as a label)
+    for the agent not yet dispatched whose Read of the file registers it."""
     if not _validate_agent(args.agent):
         return 1
     iid, payload = _resolve_payload_for_actor(
@@ -486,6 +488,7 @@ def _cmd_checkpoints(args):
         {"id": f"cp-{n:02d}", "action": action, "state": "pending", "waived_reason": None, "updated_at": now}
         for n, action in enumerate(args.action, 1)
     ]
+    payload["is_running"] = False
     _write_payload(args.spec_id, args.agent, payload, iid)
     print(f"checkpoints set: {len(payload['checkpoints'])} on {_cp_file(args.spec_id, args.agent, iid)}")
     return 0
@@ -1115,6 +1118,7 @@ def _add_register_cmd(sub):
     sp = sub.add_parser("register", help="Register a subagent on its cp-state Read (the read-trigger hook)")
     sp.add_argument("--spec-id", required=True)
     sp.add_argument("--agent", required=True)
+    sp.add_argument("--instance-id", type=int, default=None)
     sp.add_argument("--agent-id", required=True)
 
 

@@ -1,7 +1,10 @@
 """/allow grant and /do consent reader for Claude Code hooks.
 
-Single source of truth for the one /allow grant file and the one /do consent
-decision used by PreToolUse, PostToolUse and Stop hooks.
+The /allow grant file's one writer (write_sentinel_grant) and its readers,
+and the one /do consent decision (has_do_consent), for the PreToolUse,
+PostToolUse and Stop hooks that honour them. hooks/userprompt-consent-
+allowlist.sh also removes a stale grant itself before /allow writes or
+refuses one.
 
 Contract:
   - PreToolUse hooks ONLY read the grant; they never delete it.
@@ -9,33 +12,36 @@ Contract:
   - Whether a grant reaches subagents is each caller's choice; the /do
     consent decision carries its own subagent check (has_do_consent).
 
-Sentinel-file grant lifecycle (task 20260519-211515 R2 / AC2):
+Sentinel-file grant lifecycle:
   - /allow (hooks/userprompt-consent-allowlist.sh) and the README demo's
     capture (scripts/capture-hero-run.py) write the grant through
-    write_sentinel_grant() at <state dir>/claude-grants/<task_id>.json,
-    containing {task_id, session_id, allowed_operations[], created_at,
-    expires_at}. allowed_operations[] is a structured list of {op, target,
-    args_contain?, ...} dicts, NOT a free-text regex. It is the only /allow
-    grant file.
+    write_sentinel_grant() at <state dir>/claude-grants/<task_id>.json
+    (<state dir>: hooks/lib/harness_state_dir.py, CLAUDE_STATE_DIR when it
+    is absolute, else /tmp), containing {task_id, session_id,
+    allowed_operations[], created_at, expires_at}. allowed_operations[] is a
+    structured list of {op, target, args_contain?, ...} dicts; a regex
+    /allow (`/allow re:<regex>`) writes one {op: "*", regex} entry. It is
+    the only /allow grant file.
   - load_sentinel_grant_for_task() reads and validates the sentinel.
-  - match_sentinel_grant_for_bash_command() returns True iff the bash
-    command structurally satisfies at least one entry in allowed_operations[].
-    The predicate NEVER substring-matches against the raw command line;
-    the only allowed predicate is structured-equality on op/target/args.
+  - match_sentinel_grant_for_bash_command() returns the entry a single bash
+    sub-command satisfies: a structural entry by equality on op/target and
+    a positional prefix of the arguments, never a substring of the raw
+    command line; a regex entry by re.search over that sub-command.
     match_sentinel_grant_for_write() and match_sentinel_grant_for_tool()
-    match a Write target and a tool name the same way.
-  - consume_sentinel_grant_on_terminal_result() unlinks the sentinel on
-    ANY terminal result (success, non-zero exit, malformed grant, or
-    comment-only attack). This is the consume-on-any-terminal-result
-    semantic (item 2 of qa-output-retrospective-classification-20260519-175339).
-  - reap_expired_sentinel_grants() is called by stop-cleanup hook to remove
-    every grant the reader rejects at session end.
+    match a Write target and a tool name.
+  - consume_sentinel_grant_on_terminal_result() unlinks the task's grant
+    files; posttool-allowlist-consume.py calls it once the call a grant
+    matched has ended, whatever its result, and for a grant file the reader
+    rejects.
+  - reap_expired_sentinel_grants() is called by hooks/stop-cleanup-allowlist.sh,
+    the cleanup phase hooks/stop-workflow-coordinator.py runs at each Stop
+    its earlier phases do not block, to remove every grant the reader rejects.
 
 Shell hooks reach has_do_consent() through this file's one entry point:
 `python3 <hooks>/lib/allowlist.py consent` with the hook payload on stdin
 exits 0 when it holds /do consent and 1 when it does not.
 
-Stdlib-only; Python 3.12+ required.
+Stdlib-only; Python 3.10+.
 """
 
 import json
@@ -54,7 +60,7 @@ except ImportError:  # hooks/lib itself is on sys.path
     from subagent import is_subagent_context
 
 
-# Sentinel-grant filesystem layout (task 20260519-211515 R2 / AC2)
+# The grant directory, <state dir>/claude-grants, resolved once at import.
 SENTINEL_GRANT_DIR = harness_state_dir() + "/claude-grants"
 
 
@@ -117,20 +123,17 @@ def write_tool_streak(session_id: str, state: dict | None) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Sentinel-grant lifecycle (task 20260519-211515 R2 / AC2)
+# Sentinel-grant lifecycle
 #
-# The sentinel grant is the one /allow grant file, STRUCTURED rather than a
-# pattern string. The hook reads <state dir>/claude-grants/<task_id>.json
-# at PreToolUse time instead of grepping the command text. The predicate
-# never substring-matches against the command line; allowed_operations[]
-# is a structured list of {op, target?, args_contain?} dicts that must
-# match by exact op-and-target equality.
+# The sentinel grant is the one /allow grant file. PreToolUse hooks read
+# <state dir>/claude-grants/<task_id>.json instead of grepping the command
+# text. A structural entry {op, target?, args_contain?} matches by op and
+# target equality and a positional argument prefix, never by substring.
 #
-# Contract (consume-on-any-terminal-result):
-#   - success: grant unlinked on exit 0
-#   - failure: grant unlinked on non-zero exit (1..255)
-#   - malformed: grant unlinked when JSON parse fails during posttool
-#   - comment_only: pretool denies; posttool MUST NOT leave leftover state
+# Consumption (posttool-allowlist-consume.py): a matched grant is unlinked
+# once its call has ended (success, non-zero exit, interrupted); a grant
+# file the reader rejects (malformed, expired) is unlinked at the task's
+# next Bash or Write call.
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -282,12 +285,13 @@ def _bash_subcommands(command: str) -> list[str]:
 
 
 # git global options that may be skipped when locating the subcommand for grant
-# matching. DELIBERATELY NARROWER than git_command_classifier._GIT_GLOBAL_VALUE:
-# that set is for *classification* (identify the verb no matter what), while this
-# one gates *authorization*. Only options that retarget the repository or toggle
-# a no-op are listed; every option carrying a code-execution vector is omitted on
-# purpose, so a command bearing one never inherits a shorter grant and instead
-# fails closed:
+# matching: a subset of git_command_classifier's git global-option table (a test
+# pins it; the core install profile ships this module without the classifier),
+# DELIBERATELY NARROWER: the table is for *classification* (identify the verb no
+# matter what), while this subset gates *authorization*. Only options that
+# retarget the repository or toggle a no-op are listed; every option carrying a
+# code-execution vector is omitted on purpose, so a command bearing one never
+# inherits a shorter grant and instead fails closed:
 #   -c <k=v> / --config-env=  -> core.pager, alias.*, core.sshCommand,
 #                                uploadpack.packObjectsHook => arbitrary exec
 #   --exec-path[=<p>]         -> redirects the git subcommand binaries
@@ -301,7 +305,8 @@ def _bash_subcommands(command: str) -> list[str]:
 # which DO have a real `=`-joined attached form. So `-C` is deliberately
 # excluded from _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES — including it would
 # model a syntax that does not exist (harmless, since git itself fails closed
-# on that token before running anything, but incorrect domain modeling).
+# on that token before running anything, but incorrect domain modeling). The
+# table says the same: only its long value options take `=<value>`.
 _GRANT_SKIPPABLE_GIT_VALUE_OPTS = frozenset({
     '-C', '--git-dir', '--work-tree', '--namespace',
 })
@@ -472,8 +477,8 @@ def match_sentinel_grant_for_write(task_id: str, session_id: str, target_path: s
       - Neither key present (bare {"op":"Write"}): intentional wildcard — matches
         any target_path. This preserves /allow Write (no path) wildcard behavior.
 
-    The 'target' field name mirrors the existing schema (allowlist.py:22);
-    do NOT use 'target_path'.
+    The 'target' field name is the one /allow writes for `/allow Write <path>`
+    (hooks/userprompt-consent-allowlist.sh); do NOT use 'target_path'.
 
     Args:
         task_id: task whose sentinel grant to load.
@@ -518,16 +523,15 @@ def match_sentinel_grant_for_write(task_id: str, session_id: str, target_path: s
 def consume_sentinel_grant_on_terminal_result(task_id: str, terminal_result: str) -> bool:
     """Unlink the sentinel grant file on ANY terminal result.
 
-    This implements the consume-on-any-terminal-result semantic mandated by
-    AC2: grants must be unlinked on the four mandatory terminal-consumption
-    cases (success, non_zero exit, malformed grant, comment_only attack).
+    Its caller, posttool-allowlist-consume.py, decides when: once the call a
+    grant matched has ended, whatever its result, and for a grant file the
+    reader rejects.
 
     Args:
         task_id: the task whose sentinel grant should be reaped.
         terminal_result: one of "success", "failure", "non_zero", "malformed",
                          "comment_only", or any other terminal sentinel string.
-                         The value is logged but does not change behavior —
-                         all four cases unlink unconditionally.
+                         The value is only logged: every call unlinks.
 
     Returns:
         True iff at least one matching grant file was unlinked, False otherwise.

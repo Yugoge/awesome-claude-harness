@@ -22,7 +22,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 PROMPT = SOURCE_ROOT / "hooks" / "prompt-workflow.py"
 PRETOOL = SOURCE_ROOT / "hooks" / "pretool-workflow-gate.py"
 POSTTODO = SOURCE_ROOT / "hooks" / "posttool-todo-tracker.py"
-CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-overnight-timelock.py"
+CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-launch.py"  # the registered Stop hook (P5 R12)
 ACTIVE_CONFIGS = {
     "claude": SOURCE_ROOT / "settings.json",
 }
@@ -136,7 +136,7 @@ def _owner_command(runtime: str, event: str) -> str:
         "UserPromptSubmit": "prompt-workflow.py",
         "PreToolUse": "pretool-workflow-gate.py",
         "PostToolUse": "posttool-todo-tracker.py",
-        "Stop": "stop-workflow-coordinator.py",
+        "Stop": "stop-launch.py",
     }[event]
 
 
@@ -457,6 +457,14 @@ def test_r03_configured_full_chain_resolution_execution_and_aggregation(
     evidence = []
     evidence.append(_full_start(fixture, f"/dev r03 full chain {runtime}"))
     evidence.extend(_full_progress(fixture, 0))
+    # P5: a Stop inside an unfinished /dev span is the Stop gate's block (its own tests,
+    # test_stop_command_gate.py, decide it); this test checks the configured chain's resolution,
+    # execution and aggregation, so its Stop runs with the gate's process-env off switch, and the
+    # same Stop armed is checked to block naming the gate.
+    armed = execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop"))
+    assert armed["aggregate"]["decision"] == "block"
+    assert "COMMAND_GATE /dev: not complete" in armed["aggregate"]["combined_user_visible_output"]
+    fixture["env"]["CLAUDE_COMMAND_GATE"] = "off"
     evidence.append(execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop")))
     assert [item["event"] for item in evidence] == [
         "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"
@@ -548,6 +556,9 @@ def test_r03_whole_stop_then_next_generation_progress(tmp_path: Path, runtime: s
     prior_bytes = _task_families(fixture)[prior_task]
     family_count = len(_task_families(fixture))
 
+    # P5: the unfinished /dev span's Stop is the Stop gate's block; this test checks what a whole
+    # Stop leaves for the next generation, so it stops with the gate's process-env off switch.
+    fixture["env"]["CLAUDE_COMMAND_GATE"] = "off"
     stopped = execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop"))
     combined = stopped["aggregate"]["combined_user_visible_output"].lower()
     assert stopped["aggregate"]["decision"] == "allow", combined

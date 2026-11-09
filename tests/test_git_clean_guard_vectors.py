@@ -59,6 +59,10 @@ SNAPSHOT_CASES = [
     "sudo git clean -fd",
     # -c is CONFIG, not the -C chdir redirect.
     "git -c clean.requireForce=false clean -d",
+    # git global options that take a value, from the classifier's option table.
+    "git --attr-source HEAD clean -fd",
+    "git --shallow-file f clean -fd",
+    "git --exec-path clean -fd",
     # `-e` swallows the next token: these all still delete.
     "git clean -fd -e -n",
     "git clean -fd --exclude -n",

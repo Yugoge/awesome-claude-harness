@@ -44,7 +44,7 @@ RELAY_HOOK = REPO_ROOT / 'hooks' / 'userprompt-doc-sync-check.py'
 DOC_SYNC_PACKAGE = REPO_ROOT / 'hooks' / 'doc_sync'
 sys.path.insert(0, str(REPO_ROOT))
 
-SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT')
+SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT', 'CLAUDE_CONFIG_DIR')
 STATE_ROOT_SEAM = 'CLAUDE_DOC_SYNC_STATE_ROOT'
 NOTICE_CAP = 2000
 
@@ -251,14 +251,14 @@ def test_hook_chain_hc_readme_and_index_one_object(tmp_path):
 def test_hook_chain_hc_claude_section_notice(tmp_path):
     """A CLAUDE.md section the classifier refuses is reported (the fallback shape: a near miss)."""
     world = World(tmp_path)
-    text = CLAUDE_HEAD + CLAUDE_GUARD + '<!--AUTO:last-updated-->\nold\n<!-- /AUTO:last-updated -->\n'
+    text = CLAUDE_HEAD + CLAUDE_GUARD + '<!--AUTO:claude-inventory-->\nold\n<!-- /AUTO:claude-inventory -->\n'
     world.claude_md.write_text(text)
 
     notice = parse_single_notice(run_hook(world))
 
     assert notice.startswith('doc-sync: CLAUDE.md section not regenerated (SKIPPED_MALFORMED_MARKERS)')
     assert 'NEAR_MISS_MARKER' in notice and 'Action:' in notice
-    assert f'CLAUDE.md: {os.path.realpath(world.claude_md)} section: last-updated' in notice
+    assert f'CLAUDE.md: {os.path.realpath(world.claude_md)} section: claude-inventory' in notice
     assert world.claude_md.read_text() == text
 
 
@@ -375,7 +375,7 @@ def long_world(tmp_path):
     world.readme.write_text(f'# sub\n\n{RO}\nstale\n')
     world.index.write_text('# sub\n\nhand written\n')
     sections = ''.join(f'<!-- AUTO:{name} -->\nx\n<!-- AUTO:{name} -->\n<!-- /AUTO:{name} -->\n\n'
-                       for name in ('claude-inventory', 'agent-list', 'skill-list', 'last-updated'))
+                       for name in ('claude-inventory', 'agent-list', 'skill-list', 'docker-services'))
     world.claude_md.write_text(CLAUDE_HEAD + CLAUDE_GUARD + sections)
     world.register_session('sess-a')
     return world
@@ -402,7 +402,7 @@ def state_entry_ids(world):
 
 
 ALL_ENTRIES = {'README', 'INDEX', 'section:claude-inventory', 'section:agent-list', 'section:skill-list',
-               'section:last-updated'}
+               'section:docker-services'}
 
 
 def test_hook_chain_hc_cap_printed_equals_recorded(tmp_path):
@@ -470,7 +470,7 @@ def test_notice_unit_nu_exhaustive_kind_status_shape():
     notice = load('notice')
     count = 0
     for kind in ('README', 'INDEX', 'CLAUDE_MD_SECTION'):
-        marker_id = 'last-updated' if kind == 'CLAUDE_MD_SECTION' else None
+        marker_id = 'claude-inventory' if kind == 'CLAUDE_MD_SECTION' else None
         for status in NOTIFYING:
             shapes = MALFORMED_SHAPES if status == 'SKIPPED_MALFORMED_MARKERS' else [None, 'REVERSED', 'ONLY_OPENING']
             for shape in shapes:
@@ -482,7 +482,7 @@ def test_notice_unit_nu_exhaustive_kind_status_shape():
                 if shape in MALFORMED_SHAPES:
                     assert shape in text
                 if kind == 'CLAUDE_MD_SECTION':
-                    assert text.endswith('section: last-updated')
+                    assert text.endswith('section: claude-inventory')
                 assert regions.ArtifactKind[kind].name  # kind stays a member
     assert count == 3 * (3 + 9 + 3)
 
@@ -788,7 +788,8 @@ def run_relay(home, tmp_root):
     environment.update(HOME=str(home), TMPDIR=str(tmp_root),
                        PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', ''),
                        PYTHONDONTWRITEBYTECODE='1')
-    return subprocess.run([sys.executable, str(RELAY_HOOK)], capture_output=True, text=True, env=environment,
+    installed = shutil.copy(RELAY_HOOK, home / '.claude' / 'hooks' / RELAY_HOOK.name)  # runs its siblings
+    return subprocess.run([sys.executable, str(installed)], capture_output=True, text=True, env=environment,
                           cwd=str(home), timeout=120)
 
 

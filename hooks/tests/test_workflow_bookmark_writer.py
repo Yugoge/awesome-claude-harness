@@ -234,7 +234,7 @@ def dev_start(tmp_path, monkeypatch):
     monkeypatch.setattr(PROMPT, "_check_workflow_conflict", lambda cmd: None)
     monkeypatch.setattr(PROMPT, "_init_dev_registry", lambda cmd, prompt, sid, project: "dev-20261030-000000-x")
     monkeypatch.setattr(PROMPT, "_start_identity", lambda task_id: f"Task id: {task_id}\n")
-    monkeypatch.setattr(PROMPT, "decide_spec_path", lambda explicit, sid: "")
+    monkeypatch.setattr(PROMPT, "decide_spec_path", lambda explicit, sid: ("", "Spec: none"))
 
     def start(prompt: str, digest: str):
         PROMPT._ordinary_dev_start("dev", prompt, "s1", digest)

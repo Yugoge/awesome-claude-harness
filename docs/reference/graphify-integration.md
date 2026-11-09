@@ -10,8 +10,8 @@
 
 Graphify is a code-to-knowledge-graph tool that provides structural codebase context (import chains, module topology, function call graphs). The integration adds two phases to the /dev workflow:
 
-- **Pre-BA hydrator (between Step 1 and Step 2)** — Deterministic pre-BA Bash hydrator (`graphify-query.py`): reads the real node-link `graph.json` and runs real `graphify query` to inject structural context BEFORE BA analysis.
-- **Graphify enrichment (between Step 7 and Step 8)** — Graphify subagent enrichment (`graphify-enrich.py`): resolves the blast-radius-map paths to real graph node IDs, builds a focused subgraph deterministically from `graph.json` as a **reverse-blast-radius (R1) impact view** (see "Focused subgraph: R1 reverse-blast-radius" below), and runs real `graphify affected`, AFTER BA-QA validation and BEFORE DEV dispatch.
+- **Pre-BA hydrator (/dev Step 2)** — Deterministic pre-BA Bash hydrator (`graphify-query.py`): reads the real node-link `graph.json` and runs real `graphify query` to inject structural context BEFORE BA analysis.
+- **Graphify enrichment (/dev Step 9)** — Graphify subagent enrichment (`graphify-enrich.py`): resolves the blast-radius-map paths to real graph node IDs, builds a focused subgraph deterministically from `graph.json` as a **reverse-blast-radius (R1) impact view** (see "Focused subgraph: R1 reverse-blast-radius" below), and runs real `graphify affected`, AFTER BA-QA validation and BEFORE DEV dispatch.
 
 Both phases are **advisory** (fail-open): Graphify tool failure never blocks DEV. Only requirement ambiguity (unresolved implicit references) is clarification-blocking.
 
@@ -68,8 +68,8 @@ Depth-2 traversal, hub-pruning, per-intermediate caps, and scoring weights are e
 └── run-manifest.json                     # wrapper-written: semantic_mode, head_sha, timestamps
 
 .claude/dev-registry/{task_id}/graphify/  # Per-task immutable artifacts
-├── pre_query.json                        # pre-BA hydrator output (between Step 1 and Step 2): structural_context
-├── graphify-run.json                     # graphify enrichment run manifest (between Step 7 and Step 8)
+├── pre_query.json                        # pre-BA hydrator output (/dev Step 2): structural_context
+├── graphify-run.json                     # graphify enrichment run manifest (/dev Step 9)
 ├── focused-subgraph.json                 # Task-scoped subgraph (translated node-link)
 ├── graph-summary.json                    # Compact summary
 └── graph-report.md                       # Human-readable report
@@ -125,7 +125,7 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintai
 
 ### Source-of-truth reconciliation
 
-Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-state record; the on-disk `graph.json` is the authoritative graph — they must not diverge. Any AST overwrite of `graph.json` (maintain's `update` AND `graphify-enrich.py`'s Step-1 update during graphify enrichment, between Step 7 and Step 8) resets `semantic_mode` back to `ast_only` via the shared `graphify_lib.reset_semantic_mode_in_manifest(cache_dir)` helper whenever the graph was actually mutated, so `status` can never report a stale `semantic:<backend>` for a graph that is now AST-only.
+Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-state record; the on-disk `graph.json` is the authoritative graph — they must not diverge. Any AST overwrite of `graph.json` (maintain's `update` AND `graphify-enrich.py`'s Step-1 update during graphify enrichment, /dev Step 9) resets `semantic_mode` back to `ast_only` via the shared `graphify_lib.reset_semantic_mode_in_manifest(cache_dir)` helper whenever the graph was actually mutated, so `status` can never report a stale `semantic:<backend>` for a graph that is now AST-only.
 
 **AST-only quality caveat**: on prompt/config-heavy repos, AST-only blast-radius signal can be weak (high builtin/noise ratio). Semantic mode materially improves it but is environment-gated and user-triggered.
 
@@ -140,7 +140,7 @@ Maintain's `run-manifest.json` `semantic_mode` is the authoritative semantic-sta
 # One-time initial build (user-triggered only — NEVER auto-triggered inside /dev)
 source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py init               # real `graphify update <repo>` AST-only (≤300s)
 
-# Incremental refresh (runs automatically during graphify enrichment, between Step 7 and Step 8, and post-/pull)
+# Incremental refresh (runs automatically during graphify enrichment, /dev Step 9, and post-/pull)
 source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py update             # real `graphify update <repo>` AST-only (≤60s)
 
 # User-triggered semantic extraction (edge-signature proof-gated; promotes only on NEW edges)
@@ -158,9 +158,9 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintai
 
 | Command        | Graphify integration                                     |
 |----------------|----------------------------------------------------------|
-| /dev           | pre-BA hydrator (between Step 1 and Step 2) + graphify enrichment subagent (between Step 7 and Step 8) |
+| /dev           | pre-BA hydrator (Step 2) + graphify enrichment subagent (Step 9, after the BA-QA loop, before the dev dispatch) |
 | /dev-command   | Same as /dev (mirrors commands/dev.md)                   |
-| /dev-overnight | Full dual-touchpoint (mirrors /dev): per-pipeline pre-BA hydrator (between Step 1 and Step 2 conceptually; runs before each overnight BA dispatch) + graphify enrichment subagent via the shared Step 11g Dev-dispatch precondition (between Step 7 and Step 8 conceptually; runs before EVERY Dev dispatch on every path). Pipeline-scoped task-ids keep fanout artifacts disjoint; shares the global cache via graphify-maintain.py |
+| /dev-overnight | Full dual-touchpoint (mirrors /dev): per-pipeline pre-BA hydrator (/dev's Step 2 role; runs before each overnight BA dispatch) + graphify enrichment subagent via the shared Step 11g Dev-dispatch precondition (/dev's Step 9 role; runs before EVERY Dev dispatch on every path). Pipeline-scoped task-ids keep fanout artifacts disjoint; shares the global cache via graphify-maintain.py |
 | /redev         | Inherits /dev behavior                                   |
 | /pull          | Post-pull incremental update (non-blocking advisory)     |
 | /refactor      | Optional (not implemented in v1)                         |

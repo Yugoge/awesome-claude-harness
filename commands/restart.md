@@ -72,7 +72,7 @@ directive to this session's own main agent — see
    `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when neither exists:
 
    ```text
-   ~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py prepare
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" prepare
    ```
 
    The output is the transcript-derived candidate set for THIS parent session
@@ -119,7 +119,7 @@ directive to this session's own main agent — see
    helper with a tool timeout of at least 600000 ms:
 
    ```text
-   ~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py status --wait-seconds 540
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" status --wait-seconds 540
    ```
 
    If `complete` is false, report `RESTART_INCOMPLETE` with every
@@ -132,7 +132,7 @@ directive to this session's own main agent — see
 5. **Finalize only after all responses.** When `complete` is true, invoke:
 
    ```text
-   ~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py finalize
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" finalize
    ```
 
    Report the recovered agent IDs and point to their existing transcript paths.
@@ -191,9 +191,10 @@ complete, valid prepare result, never an error to retry.
    - **No stand-in agent.** Continuation is the main agent resuming its own
      work. It never becomes an `Agent`/`Task` dispatch carrying the session's
      transcript as a prompt.
-   - **Report honestly.** If the interrupted work cannot be resumed from the
-     surviving state, say so and name what is missing. Never claim a phase
-     complete when no evidence of it exists.
+   - **Rebuild what is missing.** When the surviving state lacks what the next
+     phase needs, name what is missing and produce it again by the step that
+     makes it, then continue. Never claim a phase complete when no evidence of it
+     exists.
 
 ## Non-negotiable prohibitions
 

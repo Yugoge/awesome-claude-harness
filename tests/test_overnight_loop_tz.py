@@ -72,6 +72,14 @@ def _run_hook(tmpdir: Path, payload: dict) -> subprocess.CompletedProcess:
     )
 
 
+def _said(result: subprocess.CompletedProcess) -> str:
+    """The text the hook hands the agent: its PostToolUse JSON's additionalContext (the hooks
+    reference; a PostToolUse hook's plain stdout reaches the debug log only)."""
+    hso = json.loads(result.stdout)['hookSpecificOutput']
+    assert hso['hookEventName'] == 'PostToolUse'
+    return hso['additionalContext']
+
+
 def _exec_case(end_time_iso: str, sid: str, cycle_count: int = 0):
     tmp = tempfile.TemporaryDirectory()
     tmpdir = Path(tmp.name)
@@ -91,8 +99,8 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         result, tmp = _exec_case(future, 'test-future-aware')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
-            self.assertIn('Starting cycle 1.', result.stdout)
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', _said(result))
+            self.assertIn('Starting cycle 1.', _said(result))
         finally:
             tmp.cleanup()
 
@@ -101,7 +109,7 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         result, tmp = _exec_case(past, 'test-past-aware', cycle_count=2)
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertIn('OVERNIGHT SESSION COMPLETE', result.stdout)
+            self.assertIn('OVERNIGHT SESSION COMPLETE', _said(result))
         finally:
             tmp.cleanup()
 
@@ -111,21 +119,34 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         result, tmp = _exec_case(future_z, 'test-z-suffix')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', _said(result))
         finally:
             tmp.cleanup()
 
-    def test_naive_future_end_time_is_local_time(self) -> None:
-        """A zone-less end_time is local time (lib/overnight.py's window rule)."""
-        future_naive = (datetime.now() + timedelta(hours=1)).isoformat()
-        self.assertNotIn('+', future_naive)
-        self.assertFalse(future_naive.endswith('Z'))
-        result, tmp = _exec_case(future_naive, 'test-naive-future')
-        try:
-            self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
-        finally:
-            tmp.cleanup()
+    def test_naive_end_time_is_utc_in_any_timezone(self) -> None:
+        """A zone-less end_time is UTC (lib/overnight.py parse_end_time), so
+        UTC now+1h is ahead and UTC now-1h has passed under TZ=Asia/Shanghai
+        (UTC+8) and TZ=America/Los_Angeles (UTC-7/-8) alike."""
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for tz in ('Asia/Shanghai', 'America/Los_Angeles'):
+            for delta, complete in ((1, False), (-1, True)):
+                naive = (utc_now + timedelta(hours=delta)).isoformat()
+                self.assertNotIn('+', naive)
+                with self.subTest(tz=tz, delta=delta):
+                    tmp = tempfile.TemporaryDirectory()
+                    try:
+                        tmpdir = Path(tmp.name)
+                        _write_state(tmpdir, 'test-naive', naive)
+                        env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(tmpdir), 'TZ': tz}
+                        result = subprocess.run(
+                            [sys.executable, str(HOOK_PATH)], input=json.dumps(_build_payload('test-naive')),
+                            capture_output=True, text=True, env=env, timeout=10)
+                        self.assertEqual(result.returncode, 0, msg=result.stderr)
+                        self.assertEqual('OVERNIGHT SESSION COMPLETE' in _said(result), complete, result.stdout)
+                        if not complete:
+                            self.assertIn('Time remaining: 0h 59m', _said(result))
+                    finally:
+                        tmp.cleanup()
 
     def test_cycle_number_is_read_from_the_retrospectives(self) -> None:
         """The loop writes no state: the cycle that ended is the last one
@@ -157,8 +178,26 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertIn('OVERNIGHT LOOP: Cycle 2 complete (PM retro filed). '
-                          'Starting cycle 3.', result.stdout)
+                          'Starting cycle 3.', _said(result))
             self.assertEqual(state_path.read_bytes(), before)
+        finally:
+            tmp.cleanup()
+
+    def test_a_replay_sees_the_continuation_and_never_plain_stdout(self) -> None:
+        """tests/replay/hookrun.context, the text a replay's driver acts on, is
+        the hook's additionalContext; the same text printed plain, as the hook
+        did before, hands the agent nothing on PostToolUse."""
+        from tests.replay import hookrun
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        result, tmp = _exec_case(future, 'test-replay-view')
+        try:
+            run = {'verdict': hookrun.interpret(result.returncode, result.stdout)[0], 'stdout': result.stdout}
+            self.assertEqual(run['verdict'], 'ok')
+            seen = hookrun.context('PostToolUse', run)
+            self.assertEqual(seen, _said(result))
+            self.assertIn('Reset your todo list', seen)
+            self.assertEqual(hookrun.context('PostToolUse', {'verdict': 'ok', 'stdout': seen + '\n'}), '')
+            self.assertEqual(hookrun.context('Stop', run), '')
         finally:
             tmp.cleanup()
 

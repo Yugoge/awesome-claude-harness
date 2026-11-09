@@ -1,11 +1,10 @@
-"""Focused contract tests for deterministic Dev/QA v1 report projections."""
+"""Focused contract tests for the deterministic QA v1 report projection and the report gate."""
 
 from __future__ import annotations
 
 import copy
 import hashlib
 import importlib.util
-import io
 import json
 import subprocess
 import sys
@@ -52,13 +51,8 @@ def _load_module(name: str, relative: str):
     return module
 
 
-aggregate = _load_module("projection_aggregate", "scripts/aggregate-dev-report.py")
-resolver = _load_module("projection_resolver", "scripts/resolve-dev-artifact-chain.py")
 file_check = _load_module(
     "projection_file_check", "hooks/posttool-overnight-file-check.py"
-)
-gitignore_reader = _load_module(
-    "projection_gitignore_reader", "hooks/pretool-gitignore-preflight.py"
 )
 e2e_reader = _load_module(
     "projection_e2e_reader", "hooks/subagentstop-e2e-enforce.py"
@@ -69,43 +63,26 @@ e2e_reader = _load_module(
 def _use_checkout_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
     schemas = {
         name: json.loads((ROOT / "schemas" / f"{name}.json").read_text(encoding="utf-8"))
-        for name in ("dev-report.v1", "qa-report.v1")
+        for name in ("dev-report.v2", "qa-report.v1", "qa-report.v2")
     }
     monkeypatch.setattr(runtime.schema_registry, "get_schema", schemas.get)
 
 
-def _dev_report(status: str = "completed") -> dict:
-    top_status = {
-        "completed": "completed",
-        "blocked": "blocked",
-        "needs_review": "partial",
-    }[status]
-    files_modified = ["hooks/lib/example.py"]
-    files_created = ["hooks/tests/test_example.py"]
-    ac_status = {"AC-01": "met", "AC-02": "n/a"}
-    root_text = "The shared boundary now enforces the canonical producer contract."
+def _dev_report() -> dict:
+    """A dev-report.v2, the dev report's one schema (P10 R7 deleted its v1)."""
     return {
-        "report_version": 1,
+        "report_version": 2,
         "request_id": "20260101-120000-projection",
         "task_id": "20260101-120000-projection",
-        "status": top_status,
-        "files_modified": copy.deepcopy(files_modified),
-        "files_created": copy.deepcopy(files_created),
-        "root_cause_addressed": root_text,
-        "ac_status": copy.deepcopy(ac_status),
+        "timestamp": "2026-01-01T12:00:00Z",
         "baseline_head_sha": "abc123",
         "baseline_dirty_snapshot": "",
-        "blocking_issues": [],
+        "owned_edits": {},
+        "pre_edit_snapshots": {},
         "dev": {
-            "status": status,
-            "files_modified": files_modified,
-            "files_created": files_created,
-            "ac_status": ac_status,
-            "tasks_completed": [],
-            "scripts_created": [],
-            "permissions_to_add": [],
-            "observed_preexisting": [],
-            "git_rationale": {"how_fix_addresses_root": root_text},
+            "status": "completed",
+            "files_modified": ["hooks/lib/example.py"],
+            "files_created": ["hooks/tests/test_example.py"],
         },
     }
 
@@ -169,7 +146,7 @@ def _qa_report(status: str = "pass", *, ui: bool = False) -> dict:
     }
 
 
-# Canonical singular-projection producer examples, OWNED BY THIS SUITE.
+# The canonical singular-projection producer example, OWNED BY THIS SUITE.
 #
 # An earlier revision scraped these out of agents/dev.md and agents/qa.md by
 # substring search.  That coupled a runtime contract test to two prompt
@@ -178,30 +155,6 @@ def _qa_report(status: str = "pass", *, ui: bool = False) -> dict:
 # break again on any future edit to that prose.  The projection contract is the
 # subject under test, not a document, so the examples live here and are
 # exercised through the real gate below.
-_DEV_PRODUCER_EXAMPLE = {
-    "report_version": 1,
-    "request_id": "20260101-120000-example",
-    "task_id": "20260101-120000-example",
-    "status": "completed",
-    "files_modified": ["hooks/lib/example.py"],
-    "files_created": [],
-    "root_cause_addressed": (
-        "The shared contract boundary now enforces the producer invariant."
-    ),
-    "ac_status": {"AC-01": "met"},
-    "dev": {
-        "status": "completed",
-        "files_modified": ["hooks/lib/example.py"],
-        "files_created": [],
-        "ac_status": {"AC-01": "met"},
-        "git_rationale": {
-            "how_fix_addresses_root": (
-                "The shared contract boundary now enforces the producer invariant."
-            )
-        },
-    },
-}
-
 _QA_PRODUCER_EXAMPLE = {
     "report_version": 1,
     "request_id": "20260101-120000-example",
@@ -219,7 +172,6 @@ _QA_PRODUCER_EXAMPLE = {
 }
 
 _PRODUCER_EXAMPLES = {
-    "dev-report.v1": _DEV_PRODUCER_EXAMPLE,
     "qa-report.v1": _QA_PRODUCER_EXAMPLE,
 }
 
@@ -256,33 +208,6 @@ def _assert_both_entry_points_fail(
     assert report == before
 
 
-DEV_NEGATIVE_CASES = [
-    pytest.param((("delete", ("report_version",), None),), ("report_version",), id="version-missing"),
-    pytest.param((("set", ("report_version",), 2),), ("report_version",), id="version-wrong-value"),
-    pytest.param((("set", ("report_version",), True),), ("report_version",), id="version-bool"),
-    pytest.param((("delete", ("task_id",), None),), ("task_id",), id="task-id-missing"),
-    pytest.param((("set", ("task_id",), ""),), ("task_id",), id="task-id-empty"),
-    pytest.param((("set", ("task_id",), 1),), ("task_id",), id="task-id-wrong-type"),
-    pytest.param((("delete", ("status",), None),), ("status", "dev.status"), id="status-flat-missing"),
-    pytest.param((("delete", ("dev", "status"), None),), ("status", "dev.status"), id="status-source-missing"),
-    pytest.param((("set", ("status",), "blocked"),), ("status", "dev.status"), id="status-contradiction"),
-    pytest.param((("set", ("dev", "status"), "success"),), ("status", "dev.status"), id="status-unsupported"),
-    pytest.param((("delete", ("files_modified",), None),), ("files_modified", "dev.files_modified"), id="modified-flat-missing"),
-    pytest.param((("delete", ("dev", "files_modified"), None),), ("files_modified", "dev.files_modified"), id="modified-source-missing"),
-    pytest.param((("set", ("files_modified",), []),), ("files_modified", "dev.files_modified"), id="modified-contradiction"),
-    pytest.param((("delete", ("files_created",), None),), ("files_created", "dev.files_created"), id="created-flat-missing"),
-    pytest.param((("delete", ("dev", "files_created"), None),), ("files_created", "dev.files_created"), id="created-source-missing"),
-    pytest.param((("set", ("files_created",), []),), ("files_created", "dev.files_created"), id="created-contradiction"),
-    pytest.param((("delete", ("root_cause_addressed",), None),), ("root_cause_addressed", "dev.git_rationale.how_fix_addresses_root"), id="root-flat-missing"),
-    pytest.param((("delete", ("dev", "git_rationale", "how_fix_addresses_root"), None),), ("root_cause_addressed", "dev.git_rationale.how_fix_addresses_root"), id="root-source-missing"),
-    pytest.param((("set", ("root_cause_addressed",), "contradiction"),), ("root_cause_addressed", "dev.git_rationale.how_fix_addresses_root"), id="root-contradiction"),
-    pytest.param((("set", ("dev", "git_rationale", "how_fix_addresses_root"), ""),), ("root_cause_addressed", "dev.git_rationale.how_fix_addresses_root"), id="root-source-empty"),
-    pytest.param((("delete", ("ac_status",), None),), ("ac_status", "dev.ac_status"), id="ac-flat-missing"),
-    pytest.param((("delete", ("dev", "ac_status"), None),), ("ac_status", "dev.ac_status"), id="ac-source-missing"),
-    pytest.param((("set", ("ac_status",), {"AC-01": "not_met"}),), ("ac_status", "dev.ac_status"), id="ac-contradiction"),
-]
-
-
 QA_NEGATIVE_CASES = [
     pytest.param((("delete", ("report_version",), None),), ("report_version",), id="version-missing"),
     pytest.param((("set", ("report_version",), 2),), ("report_version",), id="version-wrong-value"),
@@ -310,41 +235,26 @@ QA_NEGATIVE_CASES = [
 
 
 def test_producer_examples_are_valid_singular_projections() -> None:
-    dev = _producer_example("dev-report.v1")
     qa = _producer_example("qa-report.v1")
-    before_dev = copy.deepcopy(dev)
     before_qa = copy.deepcopy(qa)
 
-    assert runtime.validate(dev, "dev-report.v1") == {
-        "ok": True,
-        "errors": [],
-        "severity": "pass",
-    }
     assert runtime.validate(qa, "qa-report.v1") == {
         "ok": True,
         "errors": [],
         "severity": "pass",
     }
-    assert runtime.validate(dev, "dev-report.v1")["ok"]
     assert runtime.validate(qa, "qa-report.v1")["ok"]
 
     # Singularity: a flat alias is never duplicated inside the nested block it
     # projects from, and it agrees with that canonical source exactly.
-    assert "root_cause_addressed" not in dev["dev"]
-    assert (
-        dev["root_cause_addressed"]
-        == dev["dev"]["git_rationale"]["how_fix_addresses_root"]
-    )
     assert "status" not in qa
     assert qa["verdict"] == qa["qa"]["status"]
 
-    assert dev == before_dev
     assert qa == before_qa
 
 
 def test_producer_examples_pass_the_report_artifact_gate(tmp_path: Path) -> None:
     for schema_name, basename in (
-        ("dev-report.v1", "dev-report-producer-example.json"),
         ("qa-report.v1", "qa-report-producer-example.json"),
     ):
         path = tmp_path / basename
@@ -369,32 +279,6 @@ def test_type_strict_json_equal_is_recursive_and_non_mutating() -> None:
         {"nested": {"count": 1}}, {"nested": {"count": 1.0}}
     )
     assert left == before
-
-
-@pytest.mark.parametrize("status", ["completed"])
-def test_dev_status_projection_positive_and_non_mutating(status: str) -> None:
-    report = _dev_report(status)
-    before = copy.deepcopy(report)
-    assert runtime.validate(report, "dev-report.v1")["ok"]
-    assert runtime.validate(report, "dev-report.v1")["ok"]
-    assert report == before
-
-
-@pytest.mark.parametrize("status", ["blocked", "needs_review"])
-def test_dev_status_other_than_completed_is_rejected(status: str) -> None:
-    """D2: dev-report v1 and v2 each have one legal status, completed."""
-    report = _dev_report(status)
-    assert not runtime.validate(report, "dev-report.v1")["ok"]
-    assert not runtime.validate(report, "dev-report.v1")["ok"]
-
-
-@pytest.mark.parametrize(("mutations", "fragments"), DEV_NEGATIVE_CASES)
-def test_dev_projection_negative_matrix(
-    mutations: tuple[tuple, ...], fragments: tuple[str, ...]
-) -> None:
-    report = _dev_report()
-    _apply_mutations(report, mutations)
-    _assert_both_entry_points_fail(report, "dev-report.v1", *fragments)
 
 
 @pytest.mark.parametrize("status", ["pass", "warning", "fail"])
@@ -439,7 +323,6 @@ def test_qa_optional_ac_status_alias_may_be_omitted() -> None:
 
 def test_projection_errors_are_schema_qualified_and_prefixed() -> None:
     for schema_name, report, flat_field in (
-        ("dev-report.v1", _dev_report(), "status"),
         ("qa-report.v1", _qa_report(), "verdict"),
     ):
         del report[flat_field]
@@ -451,28 +334,6 @@ def test_projection_errors_are_schema_qualified_and_prefixed() -> None:
 
 
 def test_missing_canonical_source_is_diagnosed_as_missing_not_mistyped() -> None:
-    shallow = _dev_report()
-    del shallow["dev"]["files_modified"]
-    assert runtime.validate(shallow, "dev-report.v1")["errors"] == [
-        "projection dev-report.v1: canonical source 'dev.files_modified' "
-        "missing for flat field 'files_modified'"
-    ]
-
-    mapped = _dev_report()
-    del mapped["dev"]["status"]
-    assert runtime.validate(mapped, "dev-report.v1")["errors"] == [
-        "projection dev-report.v1: canonical source 'dev.status' missing for "
-        "flat field 'status'"
-    ]
-
-    deep = _dev_report()
-    del deep["dev"]["git_rationale"]["how_fix_addresses_root"]
-    assert runtime.validate(deep, "dev-report.v1")["errors"] == [
-        "projection dev-report.v1: canonical source "
-        "'dev.git_rationale.how_fix_addresses_root' missing for flat field "
-        "'root_cause_addressed'"
-    ]
-
     qa = _qa_report()
     del qa["qa"]["evidence_summary"]
     assert runtime.validate(qa, "qa-report.v1")["errors"] == [
@@ -483,23 +344,10 @@ def test_missing_canonical_source_is_diagnosed_as_missing_not_mistyped() -> None
 
 JSON_TYPE_NAME_CASES = [
     pytest.param(
-        "dev-report.v1", ("dev", "files_modified"), "not-a-list",
-        "projection dev-report.v1: canonical source 'dev.files_modified' must "
-        "be an exact JSON array for flat field 'files_modified'",
-        id="array",
-    ),
-    pytest.param(
-        "dev-report.v1", ("dev", "ac_status"), ["AC-01"],
-        "projection dev-report.v1: canonical source 'dev.ac_status' must be an "
-        "exact JSON object for flat field 'ac_status'",
+        "qa-report.v1", ("qa", "evidence_summary"), ["checks"],
+        "projection qa-report.v1: canonical source 'qa.evidence_summary' must be "
+        "an exact JSON object for flat field 'evidence_summary'",
         id="object",
-    ),
-    pytest.param(
-        "dev-report.v1", ("dev", "git_rationale", "how_fix_addresses_root"), 7,
-        "projection dev-report.v1: canonical source "
-        "'dev.git_rationale.how_fix_addresses_root' must be an exact non-empty "
-        "JSON string for flat field 'root_cause_addressed'",
-        id="string",
     ),
     pytest.param(
         "qa-report.v1", ("qa", "ui_pipeline"), 1,
@@ -516,9 +364,7 @@ JSON_TYPE_NAME_CASES = [
 def test_canonical_source_type_names_are_exact(
     schema_name: str, source_path: tuple[str, ...], bad_value, expected: str
 ) -> None:
-    report = (
-        _dev_report() if schema_name == "dev-report.v1" else _qa_report()
-    )
+    report = _qa_report()
     _apply_mutations(report, (("set", source_path, bad_value),))
     assert expected in runtime.validate(report, schema_name)["errors"]
 
@@ -534,7 +380,7 @@ def test_canonical_source_type_names_are_exact(
 # ---------------------------------------------------------------------------
 
 _VERSION_ERROR = (
-    "projection dev-report.v1: flat field 'report_version' must be literal integer 1"
+    "projection qa-report.v1: flat field 'report_version' must be literal integer 1"
 )
 _TASK_ID_ERROR = (
     "projection qa-report.v1: flat field 'task_id' must be a non-empty string"
@@ -548,14 +394,14 @@ def _assert_draft7_unbound() -> None:
     in which Draft7 was still bound and doing the rejecting.
     """
     assert runtime.Draft7Validator is None
-    assert runtime.validate(_dev_report(), "dev-report.v1")["severity"] == "warn"
+    assert runtime.validate(_qa_report(), "qa-report.v1")["severity"] == "warn"
 
 
 def test_projection_header_rejects_json_float_version_with_draft7_present() -> None:
     assert runtime.Draft7Validator is not None
-    report = _dev_report()
+    report = _qa_report()
     report["report_version"] = 1.0
-    _assert_fail(runtime.validate(report, "dev-report.v1"), _VERSION_ERROR)
+    _assert_fail(runtime.validate(report, "qa-report.v1"), _VERSION_ERROR)
 
 
 @pytest.mark.parametrize("bad_version", [2, "1", True, 1.0, None])
@@ -564,9 +410,9 @@ def test_projection_header_version_guard_holds_without_draft7(
 ) -> None:
     monkeypatch.setattr(runtime, "Draft7Validator", None)
     _assert_draft7_unbound()
-    report = _dev_report()
+    report = _qa_report()
     report["report_version"] = bad_version
-    _assert_fail(runtime.validate(report, "dev-report.v1"), _VERSION_ERROR)
+    _assert_fail(runtime.validate(report, "qa-report.v1"), _VERSION_ERROR)
 
 
 @pytest.mark.parametrize("bad_task_id", ["", 7, None, True])
@@ -594,37 +440,42 @@ def test_qa_ui_evidence_prepass_remains_enforced_after_projection() -> None:
     )
 
 
-def test_interactive_gate_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The module fixture serves only the v1 schemas; the report_version = 2 case
-    # below must reach the checkout's dev-report.v2 so it fails on its content
-    # rather than skipping for want of a schema.
-    served = runtime.schema_registry.get_schema
-    v2 = json.loads((ROOT / "schemas" / "dev-report.v2.json").read_text(encoding="utf-8"))
-    monkeypatch.setattr(
-        runtime.schema_registry, "get_schema",
-        lambda name: v2 if name == "dev-report.v2" else served(name),
-    )
-    matching = tmp_path / "dev-report-match.json"
-    matching.write_text(json.dumps(_dev_report()), encoding="utf-8")
+def test_interactive_gate_matrix(tmp_path: Path) -> None:
+    matching = tmp_path / "qa-report-match.json"
+    matching.write_text(json.dumps(_qa_report()), encoding="utf-8")
     assert runtime.validate_report_artifact(matching)["status"] == "pass"
 
-    mismatch = _dev_report()
-    mismatch["root_cause_addressed"] = "contradiction"
-    mismatch_path = tmp_path / "dev-report-mismatch.json"
+    mismatch = _qa_report()
+    mismatch["verdict"] = "fail"
+    mismatch_path = tmp_path / "qa-report-mismatch.json"
     mismatch_path.write_text(json.dumps(mismatch), encoding="utf-8")
     assert runtime.validate_report_artifact(mismatch_path)["status"] == "fail"
 
-    wrong_version = _dev_report()
+    # A v1 record declaring version 2 reaches the checkout's qa-report.v2 and
+    # fails on its content rather than skipping for want of a schema.
+    wrong_version = _qa_report()
     wrong_version["report_version"] = 2
-    wrong_path = tmp_path / "dev-report-wrong-version.json"
+    wrong_path = tmp_path / "qa-report-wrong-version.json"
     wrong_path.write_text(json.dumps(wrong_version), encoding="utf-8")
     assert runtime.validate_report_artifact(wrong_path)["status"] == "fail"
 
-    legacy = _dev_report()
+    legacy = _qa_report()
     del legacy["report_version"]
-    legacy_path = tmp_path / "dev-report-legacy.json"
+    legacy_path = tmp_path / "qa-report-legacy.json"
     legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
     assert runtime.validate_report_artifact(legacy_path)["status"] == "skip"
+
+    # A dev report has one schema, dev-report.v2: declaring version 1 is
+    # refused naming it, and the v2 report passes.
+    dev_v1 = tmp_path / "dev-report-v1.json"
+    dev_v1.write_text(json.dumps(dict(_dev_report(), report_version=1)), encoding="utf-8")
+    assert runtime.validate_report_artifact(dev_v1) == {
+        "status": "fail", "schema": "dev-report.v2",
+        "errors": ["report_version: 2 was expected"], "reason": "schema-invalid versioned artifact",
+    }
+    dev_v2 = tmp_path / "dev-report-v2.json"
+    dev_v2.write_text(json.dumps(_dev_report()), encoding="utf-8")
+    assert runtime.validate_report_artifact(dev_v2)["status"] == "pass"
 
     invalid = tmp_path / "qa-report-invalid.json"
     invalid.write_text("{", encoding="utf-8")
@@ -654,9 +505,7 @@ def test_infrastructure_words_in_user_failures_never_cause_skip(
     assert runtime.validate_report_artifact(path)["status"] == "fail"
 
     schema_invalid = _dev_report()
-    value = [{"note": tell}]
-    schema_invalid["dev"]["files_modified"] = copy.deepcopy(value)
-    schema_invalid["files_modified"] = copy.deepcopy(value)
+    schema_invalid["dev"]["files_modified"] = [{"note": tell}]
     invalid_path = tmp_path / f"dev-report-schema-tell-{kind}.json"
     invalid_path.write_text(json.dumps(schema_invalid), encoding="utf-8")
     assert runtime.validate_report_artifact(invalid_path)["status"] == "fail"
@@ -677,7 +526,7 @@ def test_exact_schema_infrastructure_failures_still_skip(
     monkeypatch.setattr(runtime.schema_registry, "get_schema", _raise_registry)
     assert runtime.validate_report_artifact(path)["status"] == "skip"
 
-    schema = json.loads((ROOT / "schemas/dev-report.v1.json").read_text(encoding="utf-8"))
+    schema = json.loads((ROOT / "schemas/dev-report.v2.json").read_text(encoding="utf-8"))
     monkeypatch.setattr(runtime.schema_registry, "get_schema", lambda name: schema)
 
     class BrokenValidator:
@@ -715,79 +564,24 @@ def test_direct_caller_keeps_invalid_json_and_projection_fail_closed(tmp_path: P
     # The overnight file check validates the artifact its dispatch's
     # obligation declares, against the obligation's schema.
     def errors_for(name: str) -> list[str]:
-        artifact = {"kind": "json", "path": name, "schema": "dev-report.v1"}
+        artifact = {"kind": "json", "path": name, "schema": "qa-report.v1"}
         return file_check._artifact_errors(artifact, tmp_path)
 
-    (tmp_path / "dev-report-valid.json").write_text(json.dumps(_dev_report()), encoding="utf-8")
-    assert errors_for("dev-report-valid.json") == []
+    (tmp_path / "qa-report-valid.json").write_text(json.dumps(_qa_report()), encoding="utf-8")
+    assert errors_for("qa-report-valid.json") == []
 
-    missing_version = _dev_report()
+    missing_version = _qa_report()
     del missing_version["report_version"]
-    _assert_fail(runtime.validate(missing_version, "dev-report.v1"), "report_version")
+    _assert_fail(runtime.validate(missing_version, "qa-report.v1"), "report_version")
 
-    mismatch = _dev_report()
-    mismatch["files_created"] = []
-    (tmp_path / "dev-report-mismatch.json").write_text(json.dumps(mismatch), encoding="utf-8")
-    assert any("dev.files_created" in error for error in errors_for("dev-report-mismatch.json"))
+    mismatch = _qa_report()
+    mismatch["evidence_summary"] = {"verification": "different"}
+    (tmp_path / "qa-report-mismatch.json").write_text(json.dumps(mismatch), encoding="utf-8")
+    assert any("qa.evidence_summary" in error for error in errors_for("qa-report-mismatch.json"))
 
-    (tmp_path / "dev-report-invalid.json").write_text("not-json", encoding="utf-8")
-    assert any("unparseable JSON" in error for error in errors_for("dev-report-invalid.json"))
+    (tmp_path / "qa-report-invalid.json").write_text("not-json", encoding="utf-8")
+    assert any("unparseable JSON" in error for error in errors_for("qa-report-invalid.json"))
     assert any("missing" in error for error in errors_for("missing.json"))
-
-
-def test_projected_dev_preserves_aggregate_and_resolver_nested_semantics(
-    tmp_path: Path,
-) -> None:
-    first = _dev_report()
-    second = _dev_report()
-    second["dev"]["files_modified"] = ["hooks/lib/second.py"]
-    second["files_modified"] = ["hooks/lib/second.py"]
-    shards = [("a", first), ("b", second)]
-
-    assert runtime.validate(first, "dev-report.v1")["ok"]
-    assert runtime.validate(second, "dev-report.v1")["ok"]
-    assert aggregate._validate_shards(shards, first["task_id"]) == []
-    combined = aggregate._build_aggregate(shards, first["task_id"])
-    assert combined["dev"]["status"] == "completed"
-    assert combined["dev"]["files_modified"] == [
-        "hooks/lib/example.py",
-        "hooks/lib/second.py",
-    ]
-
-    checker = resolver.ChainValidator(tmp_path, first["task_id"])
-    checker.validate_dev(first, first["task_id"], tmp_path / "dev-report.json")
-    assert checker.errors == []
-
-
-def test_projected_dev_is_accepted_by_nested_file_claim_reader(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    report = _dev_report()
-    assert runtime.validate(report, "dev-report.v1")["ok"]
-    report_path = tmp_path / "docs" / "dev" / "dev-report-projection.json"
-    report_path.parent.mkdir(parents=True)
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    hook_input = {
-        "tool_name": "Agent",
-        "tool_input": {"prompt": "Read docs/dev/dev-report-projection.json"},
-    }
-    observed_claims: list[str] = []
-
-    def _record_claim(path: str, root: str) -> bool:
-        assert root == str(tmp_path)
-        observed_claims.append(path)
-        return False
-
-    monkeypatch.setattr(gitignore_reader, "get_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(gitignore_reader, "is_gitignored", _record_claim)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input)))
-
-    with pytest.raises(SystemExit) as exc:
-        gitignore_reader.main()
-    assert exc.value.code == 0
-    assert observed_claims == (
-        report["dev"]["files_modified"] + report["dev"]["files_created"]
-    )
 
 
 def test_projected_qa_is_accepted_by_permission_and_e2e_readers(
@@ -813,15 +607,13 @@ def test_projected_qa_is_accepted_by_permission_and_e2e_readers(
     enforce = tmp_path / ".claude" / "dev-registry" / session_id / "e2e-enforce.json"
     enforce.parent.mkdir(parents=True)
     enforce.write_text('{"enabled": true}', encoding="utf-8")
+    (tmp_path / ".claude" / "dev-registry" / "agent-index.json").write_text(
+        json.dumps({"qa-agent": {"agent_type": "qa", "dev_session_id": session_id}}),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(e2e_reader, "_load_stdin", lambda: {"agent_id": "qa-agent"})
     monkeypatch.setattr(
-        e2e_reader,
-        "resolve_dev_registry_entry",
-        lambda agent_id, project_dir: {
-            "dev_session_id": session_id,
-            "agent_type": "qa",
-        },
+        e2e_reader, "_load_stdin", lambda: {"agent_id": "qa-agent", "agent_type": "qa"}
     )
     # The QA is judged on the report its own dispatch declares (R10).
     declared = {"role": "qa", "task_id": "20260101-120000-projection", "artifacts": [

@@ -16,7 +16,7 @@ You manage spec files. `$ARGUMENTS` may be empty or hold the user's first requir
 
 ### Step 1: Parse $ARGUMENTS
 
-**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the requirement text and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every spec-subagent / QA dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block (`agents/<role>.md` § Codex adversarial consultation) activates. When `codex_required = false`, do NOT include that line — subagents skip codex consultation and emit `codex_consult: { invoked: false, status: "not_requested" }` in their output.
+**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the requirement text and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every spec-subagent / QA dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block (`templates/prompt-includes/codex-consultation.md`, which `agents/<role>.md` points to) activates. When `codex_required = false`, do NOT include that line — subagents skip codex consultation and emit `codex_consult: { invoked: false, status: "not_requested" }` in their output.
 
 After stripping `--codex`, branch on the remaining requirement text:
 
@@ -34,17 +34,17 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 **If not triggered**: skip to Step 3.
 
 **If triggered**:
-1. Ask ONE targeted question at a time. Wait for user response.
+1. Ask ONE targeted question at a time, with AskUserQuestion inside the turn: a real, specific question about what Section 5 should say.
 2. Re-evaluate: can Section 5 now be sketched? If yes, proceed to Step 3.
 3. Repeat max 3 rounds. After the 3rd answer, proceed regardless — write the spec with whatever Section 5 content you can extract plus an `_Assumption_` note.
 
 ### Step 3: Write first spec + dispatch background Explore
 
-1. Read the template at `~/.claude/templates/overnight-spec.md`. If missing, report error and stop.
+1. Read the template at `<HARNESS_ROOT>/templates/overnight-spec.md`. If missing, report error and stop.
 
 2. Generate the output path:
    ```
-   ${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
+   ${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
    ```
    Specs always land in the parent project directory, never inside an overnight worktree. Store the resulting absolute path as `spec_path` for reuse in Step 4. A fresh `/spec` invocation in a new session creates a new timestamped file; within-session follow-ups append to the same file.
 
@@ -56,10 +56,10 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
      keep their `<!-- consumers: [all] -->` line + `_Not yet populated._` placeholder
      until their own first entry — see the Design & Evidence Capture Routine below)
 
-4. Write the spec through its one writer, `~/.claude/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
+4. Write the spec through its one writer, `<HARNESS_ROOT>/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
 
    ```bash
-   python3 ~/.claude/scripts/spec-write.py create --spec <spec_path> <<'SPEC_TEXT'
+   python3 "<HARNESS_ROOT>/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
    <the populated template>
    SPEC_TEXT
    ```
@@ -92,7 +92,7 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 
 ### Step 4: Multi-turn accumulation loop
 
-Copied from `ask.md` Step 6 (multi-turn dialogue loop architecture). One `/spec` invocation spans multiple user messages; each message lands in the SAME `spec_path`.
+One `/spec` invocation spans multiple user messages; each message lands in the SAME `spec_path`.
 
 After Step 3, wait for the next user message. For EVERY user turn, FIRST run the
 capture precondition, THEN branch:
@@ -126,7 +126,7 @@ After the capture precondition has run, branch on the turn's requirement/closure
   Section 5 at all — the design/evidence is already persisted to Section 9 + companion files,
   so there is nothing left to record. Simply loop back to wait. This turn shape is now fully
   captured — it can never fall through uncaptured.
-- **Exploration findings arrive** → integrate into Section 1 (Before) silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, surface one targeted question — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
+- **Exploration findings arrive** → integrate into Section 1 (Before) silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, ask one targeted question with AskUserQuestion inside the turn — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
 - **Mid-loop vague input** → apply Step 2 logic (max 3 rounds) to that single message before appending, then loop back. (The capture precondition already handled any design/evidence in the triggering turn.) Each clarification RESPONSE collected by Step 2 is itself a fresh Step 4 user turn: run the capture precondition (the Design & Evidence Capture Routine) on it FIRST, before re-evaluating Step 2 / appending — do NOT process a clarification answer in a bypass path that skips capture, or design/evidence supplied in a clarification reply would be dropped.
 
 Maintain `turn_count` internally (not user-visible), increment after each user response. No hard turn cap — termination is signal-driven.
@@ -167,10 +167,10 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
    path — the centralization lint (Step 6 sub-step 6) flags inline derivation:
 
    ```bash
-   RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR")
+   RESOLVED_JSON=$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" \
+       --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")
    SPEC_DIR_ID=$(jq -r '.candidates[0]' <<<"$RESOLVED_JSON")   # de-prefixed id
-   BOUND_ROOT="$CLAUDE_PROJECT_DIR/docs/dev/specs/$SPEC_DIR_ID"
+   BOUND_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/$SPEC_DIR_ID"
    ```
 
    On the FIRST arriving design/evidence material, create the bound artifact root and its
@@ -264,8 +264,6 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
 
 ### Step 5: Natural-conclusion detection
 
-Copied verbatim from `ask.md` Step 8 (lines 495-510).
-
 **Strong signals** (trigger finalize):
 - Gratitude: "thanks", "thank you", "appreciate it"
 - Satisfaction: "perfect", "got it", "i understand now", "that's helpful"
@@ -305,14 +303,15 @@ Only proceed to Step 6 when a STRONG signal fires.
    ```
    Use Agent tool with:
    - subagent_type: "spec"
+   - run_in_background: false
    - description: "Spec agent: split + checkpoints for <spec-id>"
    - prompt: "
-     You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
+     You are the spec subagent. Read and follow the instructions in <HARNESS_ROOT>/agents/spec.md EXACTLY.
      Spec id: <spec-id>
      Monolith: <spec_path>
      Monolith lines: <MONOLITH_LINES>
      Output folder: docs/dev/specs/<spec-id>/
-     Project dir: <$CLAUDE_PROJECT_DIR>
+     Project dir: <PROJECT_ROOT>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
      Obligation block (instantiate per dispatch: <spec-id> is this split's de-prefixed id, dispatched_at the UTC time captured immediately before this Agent call; never hand-invented):
@@ -329,6 +328,7 @@ Only proceed to Step 6 when a STRONG signal fires.
    ```
    Use Agent tool with:
    - subagent_type: "qa"
+   - run_in_background: false
    - description: "Validate spec split quality for <spec-id>"
    - prompt: "
      Validate the spec split at docs/dev/specs/<spec-id>/views/.
@@ -374,31 +374,30 @@ Only proceed to Step 6 when a STRONG signal fires.
      "
    ```
 
-   **Split-QA auto-iteration loop** (mirrors `/dev` Step 7; max 3 rounds, no user prompt between rounds):
-
-   **Iteration guard**: Maximum 3 split-QA rounds to prevent infinite loops.
+   **Split-QA loop** (no user prompt between rounds): a `fail` verdict is a step of the loop, not an end of it.
 
    **Current split-QA round**: Track internally as `SPLIT_QA_ROUND` (starts at 1).
 
    **If QA verdict == `pass`** (at any round): exit loop, proceed to sub-step 4 (mark split complete).
 
-   **If QA verdict == `fail` and `SPLIT_QA_ROUND` < 3**:
+   **If QA verdict == `fail`**:
 
-   Announce: `Split-QA round <N>/3: QA found <count> issue(s). Re-invoking spec subagent with feedback.`
+   Announce: `Split-QA round <N>: QA found <count> issue(s). Re-invoking spec subagent with feedback.`
 
    Re-invoke the spec subagent with the same Agent pattern as sub-step 2, appending the QA `issues` array verbatim under the label `qa_feedback_from_previous_round` in the prompt:
 
    ```
    Use Agent tool with:
    - subagent_type: "spec"
+   - run_in_background: false
    - description: "Spec agent re-split (round <N>) addressing QA feedback for <spec-id>"
    - prompt: "
-     You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
+     You are the spec subagent. Read and follow the instructions in <HARNESS_ROOT>/agents/spec.md EXACTLY.
      Spec id: <spec-id>
      Monolith: <spec_path>
      Monolith lines: <MONOLITH_LINES>
      Output folder: docs/dev/specs/<spec-id>/
-     Project dir: <$CLAUDE_PROJECT_DIR>
+     Project dir: <PROJECT_ROOT>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
      Obligation block (instantiate per dispatch: <spec-id> is this split's de-prefixed id, dispatched_at the UTC time captured immediately before this Agent call; never hand-invented):
@@ -425,18 +424,9 @@ Only proceed to Step 6 when a STRONG signal fires.
 
    Increment `SPLIT_QA_ROUND` and re-run the QA validation (sub-step 3) against the refreshed split.
 
-   **If QA verdict == `fail` and `SPLIT_QA_ROUND` == 3** (all rounds exhausted — auto-proceed, do NOT prompt the user):
-
-   1. Print to stdout (non-blocking): `Spec split QA: 3 rounds exhausted. Proceeding with best-effort split. Unresolved issues: <list of QA issues>.`
-   2. Write the round-3 `issues` array verbatim to `docs/dev/specs/<spec-id>/split-qa-unresolved.json`.
-   3. Continue to sub-step 4 (mark split complete); the caveat line is appended there.
-   4. Include the caveat in the Step 7 displayed output so reviewers are notified.
-
-   **Rule**: Every spec subagent invocation MUST be followed by QA validation. The loop exits only on `pass` or on round-3 exhaustion.
+   **Rule**: Every spec subagent invocation MUST be followed by QA validation. The loop exits only on `pass`.
 
 4. **Mark split as complete**: Write `"split-complete: $(date -Iseconds)"` to `docs/dev/specs/<spec-id>/.split-complete`.
-
-   If the loop exited via round-3 exhaustion (sub-step 3), also append `"warning: unresolved split-QA issues (<N>); see split-qa-unresolved.json"` so reviewers see the warning inline with the marker.
 
 5. The split's own predicates (its manifest of this monolith, the monolith hash it records and the
    views the manifest references) were checked at the spec subagent's own stop (G2, with
@@ -446,10 +436,10 @@ Only proceed to Step 6 when a STRONG signal fires.
 6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
 
    ```bash
-   ~/.claude/scripts/lint-spec-id-centralization.py --paths \
-       ~/.claude/commands/dev.md ~/.claude/commands/dev-command.md \
-       ~/.claude/commands/dev-overnight.md ~/.claude/commands/close.md \
-       ~/.claude/commands/spec.md \
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/lint-spec-id-centralization.py" --paths \
+       "${CLAUDE_HOME:-$HOME/.claude}/commands/dev.md" "${CLAUDE_HOME:-$HOME/.claude}/commands/dev-command.md" \
+       "${CLAUDE_HOME:-$HOME/.claude}/commands/dev-overnight.md" "${CLAUDE_HOME:-$HOME/.claude}/commands/close.md" \
+       "${CLAUDE_HOME:-$HOME/.claude}/commands/spec.md" \
      || echo "WARNING: centralization lint flagged inline spec-id derivation in a consumer command file — a /dev*/spec command re-derives the spec-id in prose instead of calling resolve-spec-artifacts.py. Fix before the next commit that touches those files." >&2
    ```
 
@@ -459,7 +449,7 @@ Before the final stdout response, create a compact temp update using
 `/spec-update --temp` (its `update.md` in a `mktemp -d` directory); do not write this
 update into the repo unless the user explicitly asks. The update focuses on
 the next `/dev` session and references the spec path, split marker, views
-folder, checkpoints, and unresolved split-QA file by path instead of duplicating
+folder and checkpoints by path instead of duplicating
 their contents. Do NOT use continuation-spec mode here because `/spec` already
 produced the spec.
 
@@ -474,9 +464,6 @@ Sections populated:
 - Section 5 (User's Acceptance Criterion): populated (N requirements accumulated)
 - Section 1 (Before): <populated from Explore findings, or empty>
 
-<If split-QA exhausted 3 rounds, include:>
-⚠ Split-QA: 3 rounds exhausted with unresolved issues — see docs/dev/specs/<spec-id>/split-qa-unresolved.json
-
 Usage:
   /dev                                        ← in this session: uses this spec (the session's last spec write)
   /dev --spec <absolute path>                 ← in any session
@@ -490,16 +477,16 @@ Usage:
 
 ## Important Rules
 
-- **Read the template at runtime** from `~/.claude/templates/overnight-spec.md`. Never hardcode template content.
+- **Read the template at runtime** from `<HARNESS_ROOT>/templates/overnight-spec.md`. Never hardcode template content.
 - **Preserve template structure exactly** — only replace designated placeholders and `_Not yet populated._` markers.
 - **Do not modify any existing files** except the spec file being created, and that
-  one only through `~/.claude/scripts/spec-write.py` — with ONE scoped carve-out for
+  one only through `<HARNESS_ROOT>/scripts/spec-write.py` — with ONE scoped carve-out for
   design/evidence capture (M9): at design/evidence capture time (the Design & Evidence
   Capture Routine) `/spec` MAY create/write ONLY
   `docs/dev/specs/<de-prefixed-id>/design/*` and
   `docs/dev/specs/<de-prefixed-id>/evidence/*`. It MUST NOT write `views/` or
   `manifest.json` (the spec subagent's, created at finalize); its own `.split-complete`
-  and `split-qa-unresolved.json` are written only in Step 6. No other existing file may be modified.
+  is written only in Step 6. No other existing file may be modified.
 - **Use absolute paths** in all output messages.
 - **Spec Creation Mode is the only mode.** It acts immediately on whatever the user provides, accumulates multiple requirements into one file per session, and finalizes only on a natural-conclusion strong signal.
 - **Section 5 verbatim — DO NOT invent nested sub-section structure.** Section 5 holds the user's requirement text verbatim. The only structure the /spec orchestrator may ADD beneath Section 5 is the `### 5.N: <title>` accumulation header defined in Step 4 (one per follow-up turn); any other bullets, headings, or sub-headings must come verbatim from the user, not be invented. DO NOT decompose the user's natural-language paragraph into invented `#### A.`, `#### B.`, `#### C.` (or any `5.X.A`, `5.X.B`-style) sub-headings, machine-voice checklist bullets, or parallel "should/should-not" AC ladders below a `§5.N` block. This prohibition governs both Step 3 (first-write of Section 5) and Step 4 (multi-turn append of `### 5.N`). If the user's paragraph contains multiple ideas, leave them as one paragraph; downstream agents (BA, dev, QA) will decompose during their own phases — not the /spec orchestrator.
@@ -510,7 +497,7 @@ Usage:
   artifacts are created by `/spec` itself at design/evidence capture time (the Design &
   Evidence Capture Routine, M9), and `.split-complete` by `/spec` in Step 6 sub-step 4.
   Legacy specs lacking an output folder remain valid — `/dev*` falls back gracefully.
-- **Todo script**: `~/.claude/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
+- **Todo script**: `<HARNESS_ROOT>/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
 - **Workflow update**: Step 7 emits a temp update for the next phase using
   `/spec-update --temp`. It must be compact, reference existing artifacts by path,
   and suggest the exact next command (`/dev` in this session, or `/dev --spec

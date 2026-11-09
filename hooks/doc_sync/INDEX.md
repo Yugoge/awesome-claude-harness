@@ -8,7 +8,6 @@
 ## Tree
 ```
 doc_sync/
-├── `claude.py` - CLAUDE.md auto-creation and patching.
 ├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 ├── `extract.py` - Extract description from various file types.

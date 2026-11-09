@@ -468,9 +468,17 @@ SILENT_CASES = ['M03', 'M14']
 PATCHED_CASES = ['M01', 'M02', 'M15', 'M16']
 
 
-def build_claude_case(tmp_path, monkeypatch, case, text=None):
+# The section these cases patch: its body comes from the project's .claude/ tree, which every
+# case gives one agent file, so a regenerated body is known in advance.
+SECTION = 'claude-inventory'
+SECTION_BODY = '- **agents**: 1 files'
+
+
+def build_claude_case(tmp_path, case, text=None):
     project = tmp_path / 'project'
-    project.mkdir(parents=True)
+    agents = project / '.claude' / 'agents'
+    agents.mkdir(parents=True)
+    (agents / 'a.md').write_text('# a\n')
     claude_md = project / 'CLAUDE.md'
     if text is None:
         if case == 'M17':
@@ -481,37 +489,37 @@ def build_claude_case(tmp_path, monkeypatch, case, text=None):
             skill.mkdir(parents=True)
             text = CLAUDE_HEAD + CLAUDE_GUARD + shape_body('M01', 'skill-list')
         else:
-            text = CLAUDE_HEAD + CLAUDE_GUARD + shape_body(case, 'last-updated')
+            text = CLAUDE_HEAD + CLAUDE_GUARD + shape_body(case, SECTION)
     claude_md.write_bytes(text.encode())
-    monkeypatch.setattr(load('patch'), 'datetime', FixedClock)
     return project, claude_md, text
 
 
 @pytest.mark.parametrize('case', [pytest.param(case, id=f'cmd_{case}') for case in
                                   ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11',
                                    'M12', 'M13', 'M14', 'M15', 'M17']])
-def test_claudemd_shapes_section_records_and_bytes(tmp_path, monkeypatch, case):
+def test_claudemd_shapes_section_records_and_bytes(tmp_path, case):
     """A shape the classifier refuses never corrupts CLAUDE.md and yields exactly one record."""
     regions = load('regions')
-    project, claude_md, text = build_claude_case(tmp_path, monkeypatch, case)
+    project, claude_md, text = build_claude_case(tmp_path, case)
 
     records = load('patch').patch_claude_md(project)
 
     assert isinstance(records, list)
     if case in PATCHED_CASES:
         assert records == []
-        assert claude_md.read_text() != text and '> Last updated: 2026-01-02' in claude_md.read_text()
-        assert claude_md.read_text().count('<!-- AUTO:last-updated -->') == (2 if case == 'M15' else 1)
-        assert claude_md.read_text().startswith(CLAUDE_HEAD + CLAUDE_GUARD)
+        updated = claude_md.read_text()
+        assert updated != text and f'\n{SECTION_BODY}\n' in updated
+        assert updated.count(f'<!-- AUTO:{SECTION} -->') == (2 if case == 'M15' else 1)
+        assert updated.startswith(CLAUDE_HEAD + CLAUDE_GUARD)
         if case == 'M15':
-            assert '```\n<!-- AUTO:last-updated -->\nexample body\n<!-- /AUTO:last-updated -->\n```' in claude_md.read_text()
+            assert f'```\n<!-- AUTO:{SECTION} -->\nexample body\n<!-- /AUTO:{SECTION} -->\n```' in updated
         return
     assert claude_md.read_bytes() == text.encode()
     if case in SILENT_CASES:
         assert records == []
         return
     status, shape = CLAUDE_STATUS[case]
-    marker_id = 'skill-list' if case == 'M17' else 'last-updated'
+    marker_id = 'skill-list' if case == 'M17' else SECTION
     assert len(records) == 1
     record = records[0]
     assert record.kind is regions.ArtifactKind.CLAUDE_MD_SECTION
@@ -520,14 +528,13 @@ def test_claudemd_shapes_section_records_and_bytes(tmp_path, monkeypatch, case):
     assert record.marker_id == marker_id
 
 
-def test_claudemd_shapes_cmd_single_last_updated_bytes_identical(tmp_path, monkeypatch):
-    """A single well-formed last-updated pair is patched to the same bytes the old code produced."""
+def test_claudemd_shapes_cmd_single_section_bytes_identical(tmp_path):
+    """A single well-formed section is patched to the same bytes the old code produced."""
+    start, end = f'<!-- AUTO:{SECTION} -->', f'<!-- /AUTO:{SECTION} -->'
     project, claude_md, text = build_claude_case(
-        tmp_path, monkeypatch, 'M01',
-        text=CLAUDE_HEAD + '<!-- AUTO:last-updated -->\n> Last updated: 2001-01-01\n<!-- /AUTO:last-updated -->\n\nhand notes\n')
-    start, end = '<!-- AUTO:last-updated -->', '<!-- /AUTO:last-updated -->'
+        tmp_path, 'M01', text=CLAUDE_HEAD + f'{start}\n- **agents**: 0 files\n{end}\n\nhand notes\n')
     s, e = text.find(start), text.find(end)
-    legacy = text[:s + len(start)] + '\n' + '> Last updated: 2026-01-02' + '\n' + text[e:]
+    legacy = text[:s + len(start)] + '\n' + SECTION_BODY + '\n' + text[e:]
 
     records = load('patch').patch_claude_md(project)
 
@@ -535,69 +542,71 @@ def test_claudemd_shapes_cmd_single_last_updated_bytes_identical(tmp_path, monke
     assert claude_md.read_bytes() == legacy.encode()
 
 
-def test_claudemd_shapes_cmd_records_per_section(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_records_per_section(tmp_path):
     """One record per opted-in section that was refused, in patch order; healthy sections get none."""
+    date_block = '<!-- AUTO:last-updated -->\nold\n<!-- /AUTO:last-updated -->\n'
     text = (CLAUDE_HEAD
             + '<!-- AUTO:claude-inventory -->\n<!-- AUTO:claude-inventory -->\nx\n<!-- /AUTO:claude-inventory -->\n\n'
             + CLAUDE_GUARD
             + '<!-- /AUTO:agent-list -->\n\n'
             + '<!--AUTO:skill-list-->\n\n'
-            + '<!-- AUTO:last-updated -->\nold\n<!-- /AUTO:last-updated -->\n')
-    project, claude_md, _ = build_claude_case(tmp_path, monkeypatch, 'M01', text=text)
+            + date_block)
+    project, claude_md, _ = build_claude_case(tmp_path, 'M01', text=text)
 
     records = load('patch').patch_claude_md(project)
 
     assert [(record.marker_id, record.shape.name) for record in records] == [
         ('claude-inventory', 'DUPLICATE_OPENING'), ('agent-list', 'ONLY_CLOSING'), ('skill-list', 'NEAR_MISS_MARKER')]
     updated = claude_md.read_text()
-    assert '> Last updated: 2026-01-02' in updated
+    # A last-updated block is no section of doc-sync's: no date is written into it.
+    assert updated.endswith(date_block)
     assert '<!--AUTO:skill-list-->' in updated and '<!-- /AUTO:agent-list -->' in updated
 
 
-def test_claudemd_shapes_cmd_unopted_section_silent(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_unopted_section_silent(tmp_path):
     """A section without any marker is not opted in: no record, no change, whatever else is present."""
     text = CLAUDE_HEAD + CLAUDE_GUARD + 'plain notes\n'
-    project, claude_md, _ = build_claude_case(tmp_path, monkeypatch, 'M01', text=text)
+    project, claude_md, _ = build_claude_case(tmp_path, 'M01', text=text)
 
     assert load('patch').patch_claude_md(project) == []
     assert claude_md.read_text() == text
     # A prose mention of a marker is not an opt-in either.
-    prose = CLAUDE_HEAD + CLAUDE_GUARD + 'see `<!-- AUTO:last-updated -->` for the date\n'
+    prose = CLAUDE_HEAD + CLAUDE_GUARD + f'see `<!-- AUTO:{SECTION} -->` for the counts\n'
     claude_md.write_text(prose)
     assert load('patch').patch_claude_md(project) == []
     assert claude_md.read_text() == prose
 
 
-def test_claudemd_shapes_cmd_returns_list_of_records(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_returns_list_of_records(tmp_path):
     """patch_claude_md returns a list, empty or of six-field RegenRecords, on every path."""
     regions = load('regions')
-    project, _, _ = build_claude_case(tmp_path / 'a', monkeypatch, 'M07')
+    project, _, _ = build_claude_case(tmp_path / 'a', 'M07')
     records = load('patch').patch_claude_md(project)
     assert isinstance(records, list) and all(isinstance(record, regions.RegenRecord) for record in records)
     assert records[0]._fields == ('kind', 'path', 'status', 'marker_id', 'shape', 'detail')
-    # A project without any CLAUDE.md gets the template and an empty list.
+    # A project without any CLAUDE.md gets an empty list and no CLAUDE.md: none is created.
     empty = tmp_path / 'empty'
     empty.mkdir()
     assert load('patch').patch_claude_md(empty) == []
+    assert os.listdir(empty) == []
     # A detail is carried for an unclosed fence: the line the fence starts on.
-    fenced_text = CLAUDE_HEAD + CLAUDE_GUARD + '```\n<!-- AUTO:last-updated -->\nx\n<!-- /AUTO:last-updated -->\n'
-    project, _, _ = build_claude_case(tmp_path / 'b', monkeypatch, 'M01', text=fenced_text)
+    fenced_text = CLAUDE_HEAD + CLAUDE_GUARD + f'```\n<!-- AUTO:{SECTION} -->\nx\n<!-- /AUTO:{SECTION} -->\n'
+    project, _, _ = build_claude_case(tmp_path / 'b', 'M01', text=fenced_text)
     fenced = load('patch').patch_claude_md(project)
     assert [(record.shape.name, record.detail) for record in fenced] == [
         ('UNCLOSED_FENCE', str(fenced_text.split('\n').index('```') + 1))]
 
 
-def test_claudemd_shapes_cmd_toplevel_candidate_guard_unchanged(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_toplevel_candidate_guard_unchanged(tmp_path):
     """Pinned boundary: a file is a candidate only when it contains the substring `<!-- AUTO:`."""
     # Only a near miss: the substring is absent, the file is not a candidate, nothing is reported.
-    near_only = CLAUDE_HEAD + '<!--AUTO:last-updated-->\nold\n<!-- /AUTO:last-updated -->\n'
-    project, claude_md, _ = build_claude_case(tmp_path / 'near', monkeypatch, 'M01', text=near_only)
+    near_only = CLAUDE_HEAD + f'<!--AUTO:{SECTION}-->\nold\n<!-- /AUTO:{SECTION} -->\n'
+    project, claude_md, _ = build_claude_case(tmp_path / 'near', 'M01', text=near_only)
     assert load('patch').patch_claude_md(project) == []
     assert claude_md.read_text() == near_only
     # The project file has no marker text: the second candidate .claude/CLAUDE.md is used instead.
-    project, claude_md, _ = build_claude_case(tmp_path / 'second', monkeypatch, 'M01', text=CLAUDE_HEAD + 'notes\n')
+    project, claude_md, _ = build_claude_case(tmp_path / 'second', 'M01', text=CLAUDE_HEAD + 'notes\n')
     inner = project / '.claude' / 'CLAUDE.md'
-    inner.parent.mkdir()
-    inner.write_text(CLAUDE_HEAD + '<!-- AUTO:last-updated -->\nold\n<!-- /AUTO:last-updated -->\n')
+    inner.write_text(CLAUDE_HEAD + f'<!-- AUTO:{SECTION} -->\nold\n<!-- /AUTO:{SECTION} -->\n')
     assert load('patch').patch_claude_md(project) == []
-    assert '> Last updated: 2026-01-02' in inner.read_text() and claude_md.read_text() == CLAUDE_HEAD + 'notes\n'
+    assert f'\n{SECTION_BODY}\n' in inner.read_text() and claude_md.read_text() == CLAUDE_HEAD + 'notes\n'

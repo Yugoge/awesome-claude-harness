@@ -1,82 +1,48 @@
 #!/usr/bin/env python3
-"""SubagentStop Hook: producer-side artifact schema gate for dev/qa reports.
+"""SubagentStop Hook (G2): a producer's declared artifacts, checked at its own stop.
 
-Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
-contract_runtime.validate_report_artifact() Draft7 check that rejects a
-versioned-but-schema-invalid dev/qa report at close time) to the PRODUCER's
-stop boundary: the qa/dev subagent that just wrote the report is blocked
-from stopping while it still has full context to repair it, instead of the
-identical violation surfacing later as a /close schema-gate rejection after the
-producer's context is gone.
+The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
+declares what it owes; each declared artifact is checked while that producer
+still has the context to repair it: json (existence, schema, identity),
+markdown (identity anchor, terminal line), response_line and response_block
+(its own final reply), spec_views (spec-verify.py --strict), a dev report's
+downstream wires (attribution journal, /commit's trial plan, a fan-out lane's
+canonical aggregate, and P6 A3.a: its file lists against the files Claude Code
+recorded the dev writing) and P3 R14's dispatch echo (written for this
+dispatch; lane and lane_set echoed). Any stopping producer's own Write or Edit
+that leaves a live harness hook or script that does not compile is a finding
+(P6 F3.a). The role the obligation must name is the one Claude Code runs the
+agent as (lib.agent_resolver.resolve_agent_type, P6 R3); an obligation
+naming another role (role_mismatch) refuses the agent's stop with that
+notice, and its next round's stop (stop_hook_active) passes when its own
+transcript shows it wrote none of the files that obligation declares: it
+ran no Write or Edit of one, and none that another of its calls names (a
+Bash heredoc, tee or cp) changed since its dispatch. A fresh, valid
+producer-question file stands in for every declared artifact (TC-33).
+Switch CLAUDE_OBLIGATION_STOPGATE (the process env, else the harness home's
+settings.json env at run time, P1b E4):
+  "block"    -- a failure exits 2 (OBLIGATION_STOPGATE_BLOCKED, each failing
+                path and check named to the producer);
+  "advisory" -- the default: the same reason on stderr
+                (OBLIGATION_STOPGATE_ADVISORY), exit 0;
+  "off"      -- no obligation is read, so nothing is judged.
 
-Scope discipline (deliberately the SAME blocking surface as /close):
-  - BLOCKS only validate_report_artifact() status == "fail": the report
-    DECLARES report_version but VIOLATES its versioned schema. Same engine,
-    same semantics ("this is the only blocking outcome" — close.md).
-  - Unversioned legacy reports, unparseable JSON, unregistered kinds, and
-    validator-infra problems all return 'skip' from the shared engine and
-    pass through. Measured baseline 2026-09-26: 674 real reports in
-    docs/dev/ -> 9 pass / 0 fail / 665 skip, so this gate rejects zero
-    existing compliant reports.
-  - A MISSING report is NOT blocked here: qa-report existence is already
-    enforced (exit 2) by subagentstop-e2e-enforce.py, and dev-report
-    existence by /close's Step-0 artifact-chain resolver. Duplicating
-    existence enforcement would create a drift-prone mirrored pair, so a
-    missing report passes here.
+A dispatch whose obligation does not resolve (its block fails the grammar or
+names another role, as an earlier template's does) is judged by the
+declared-report check: each json report its block declares, read as
+declared, that states report_version yet fails its schema
+(contract_runtime.validate_report_artifact: dev, qa and do reports; every
+other kind skips) exits 2 (ARTIFACT_CONTRACT_BLOCKED) under
+ARTIFACT_CONTRACT_ENFORCE_MODE "block" (the default), or prints the same
+reason (ARTIFACT_CONTRACT_ADVISORY) and exits 0 under "advisory". It judges
+a registered agent only (LOW-10: one the dev registry does not resolve is
+never blocked) and never a missing report.
 
-Activation chain (every step fails open to exit 0):
-  1. stdin carries agent_id (subagent stop, not a main-session stop).
-  2. resolve_dev_registry_entry() resolves the agent. LOW-10 contract
-     (hooks/lib/agent_resolver.py): callers MUST NOT hard-block on None —
-     a skipped FIRST ACTION registration fails open here, as in every
-     sibling SubagentStop hook.
-  3. The entry carries dev_session_id (legacy flat entries skip).
-  4. .claude/dev-registry/<sid>/artifact-contract-enforce.json exists with
-     enabled == true (written by scripts/write-enforce-flag.sh
-     --flag artifact-contract from /dev-family init and /close Step 2).
-  5. The producer's own dispatch declares the reports it owes (its json
-     artifacts, read as declared also when the block fails the grammar, as a
-     pre-P1 template's does; P1b E3): no name decides whose a report is.
+M4: an exception inside the obligation branch names itself on stderr
+(OBLIGATION_STOPGATE_FAULT) and the declared-report check decides the stop,
+so a fault the producer cannot repair never holds it.
 
-Every declared report on disk is validated, each one, rather than a single
-pick: picking one file would let an invalid report be shadowed by a valid
-sibling (codex audit finding, HIGH). Each producer is judged on its own
-reports at its own stop, never on a sibling lane's; a BA-validation QA
-declares the BA-QA report, which no report schema of the engine covers.
-
-Mode: ARTIFACT_CONTRACT_ENFORCE_MODE environment variable.
-  "block" (default) — schema-fail exits 2 with an
-                      ARTIFACT_CONTRACT_BLOCKED message.
-  "advisory"        — schema-fail allows the stop.
-  Default is block — unlike cp-enforce's advisory-first default — because
-  the validator is not new judgment: the identical engine already blocks
-  these exact reports at /close today; this hook only moves WHERE the
-  rejection lands (user ruling 2026-09-26). The env var is the kill-switch.
-
-Exit codes:
-  0: Allow stop (pass-through).
-  2: Block stop (ARTIFACT_CONTRACT_BLOCKED — repair the report first).
-
-Spec alignment (2026-09-26, do-20260926-073930): this hook is a PROPER SUBSET
-of docs/dev/specs/spec-20260914-052140.md §5.1 (contract-driven SubagentStop
-source-blocking of MISSING artifacts, still pending, never checked out) — it
-implements only the schema-wellformedness half of that spec's
-_artifact_valid_for_entry() end state, for the two roles whose reports already
-carry versioned schemas, via the existing enforce-flag channel instead of
-cycle-contract required_calls[]. It does NOT implement and does NOT supersede
-§5.1: missing-artifact blocking, contract-driven role coverage, the role-enum
-extension, prerequisite (f) (hooks reading the contract), and the advisory-log
-cleanup precondition (c) all remain that spec's scope. When §5.1 lands, its
-mechanism subsumes this hook's check (existence + schema in one entry lookup):
-retire this hook or fold it into the contract-driven gate at that point rather
-than running both. Rollout style follows spec-20260916-031427 §8.1
-(no over-engineering: reuse existing plumbing, no new mechanism); the
-default-block-instead-of-advisory-first deviation from that spec's §5.2 is
-deliberate and evidence-backed — the blocking predicate is not new judgment
-(the identical engine already blocks the identical reports at /close's
-Artifact schema gate;
-measured 674-report corpus: 0 fail) and the user ordered immediate blocking
-on 2026-09-26; ARTIFACT_CONTRACT_ENFORCE_MODE=advisory is the rollback lever.
+The hook writes nothing. Exit codes: 0 allow, 2 block.
 """
 
 import importlib.util
@@ -84,6 +50,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -91,9 +58,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.agent_resolver import resolve_dev_registry_entry
+from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
+from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
-from lib import command_span
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -142,8 +109,8 @@ def _classify_verdict_line(line: str) -> str:
 def _dispatch_obligation(prompt) -> dict:
     """This producer's own dispatch obligation as declared, read even when the
     block fails the grammar (a pre-P1 template still carries required_values),
-    so the legacy check knows which reports are its own and which it owes; {}
-    when the prompt carries none."""
+    so the declared-report check knows which reports are its own; {} when the
+    prompt carries none."""
     block = obligation.extract_obligation_block(prompt) if isinstance(prompt, str) else None
     if not isinstance(block, obligation.ExtractedBlock):
         return {}
@@ -248,9 +215,7 @@ def _load_lib_module(name: str):
 
 
 def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline: float) -> list:
-    """Attribution-journal consumer cutover (docs/reference/attribution-
-    journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
-    constraint of the follow-up consumer-cutover task): replaces this hook's
+    """Attribution-journal consumer cutover: replaces this hook's
     two self-reported-ledger replay checks -- check-owned-edits-ledger.py's
     structural+replay validation and stage-owned-hunks.py --dry-run's hunk-
     replay exclusion. check-owned-edits-ledger.py has since been deleted;
@@ -297,11 +262,174 @@ def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline
     return findings
 
 
-def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> list:
-    """The dev report's wires (ledger judgment and /commit's trial plan).
-    Returns findings. Another producer's artifact is never judged at this
-    stop: G3 decides on it at the next dispatch."""
-    findings = []
+AGGREGATE_CHECK = Path(__file__).resolve().parent / "pretool-aggregate-check.py"
+
+
+def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
+    """C5 for G3's canonical_missing: the canonical aggregate's one producer,
+    the lane-completeness watch, runs on a lane report's Write or Edit. While
+    G3's own rule (pretool-aggregate-check.py _find_violations) finds the
+    canonical missing, the lane whose report is its fan-out's newest is
+    returned at its own stop: that report reached disk another way (a shell
+    redirection), and its Edit runs the producer. A sibling's later report is
+    the sibling's own (its watch may still be running)."""
+    try:
+        spec = importlib.util.spec_from_file_location("pretool_aggregate_check", AGGREGATE_CHECK)
+        g3 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(g3)
+        dev_dir = Path(project_dir) / "docs" / "dev"
+        lane_reports, canonicals = g3._scan_dev_dir(dev_dir)
+        own = (Path(project_dir) / report_rel).resolve()
+        findings = []
+        for family, reports in lane_reports.items():
+            stamps = {path.resolve(): path.stat().st_mtime_ns for path in reports.values()}
+            if stamps.get(own) != max(stamps.values()):
+                continue
+            for code, path, problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
+                if code == "canonical_missing":
+                    findings.append({"path": report_rel, "reason": code, "errors": [
+                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, "
+                        "hooks/posttool-lane-completeness-watch.py, runs on a lane report's Write or Edit, "
+                        "and this report, the fan-out's newest, reached disk another way: Read it, save it "
+                        "again with Edit (its timestamp), then stop again."]})
+        return findings
+    except Exception:
+        return []  # a wire that cannot run judges nothing
+
+
+# P6 A3.a (a dev's declared lists against the files Claude Code recorded it
+# writing) and F3.a (a live harness file its dev or test-writer broke) block as
+# G2 findings; each only warned, exit unchanged, in the commit introducing it.
+FILE_LISTS_BLOCK = True
+SYNTAX_BLOCK = True
+
+
+def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it); (None, "") outside every tree
+    tree = next((p for p in path.parents if (p / ".git").exists()), None)
+    return tree, path.relative_to(tree).as_posix() if tree else ""
+
+
+def _recorded(transcript):
+    """(written, named) resolved paths of a transcript over every account root's copy (each a partial view,
+    subagent_restart._child_transcript_copies), None if none is readable. Read on "/" to keep other
+    repositories' paths, so the excluded trees are dropped here, in each path's own repository."""
+    copies = subagent_restart._child_transcript_copies(transcript) if transcript else []
+    found = [s for s in (command_span.write_set(c, "/") for c in copies) if s is not None]
+    keep = lambda rels: {p for p in (Path("/", r).resolve() for r in rels)
+                         if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)}
+    return tuple(keep(set().union(*(s[i] for s in found))) for i in (0, 1)) if found else None
+
+
+def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
+    """A3.a: each declared path written or named by this dev or an earlier dev dispatch of its task id and lane (QA
+    loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a formatter, a
+    generator); each written path git has a change for declared."""
+    if (own := _recorded(getattr(resolution, "transcript_path", None))) is None:
+        return []
+    (written, named), unreadable, ran, tool, uses, spans = own, [], [resolution.transcript_path], set(), {}, []
+    ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
+    # A stamp without a zone reads as UTC (parse_iso8601's "Z"), so an aware and a naive one compare.
+    stamp = lambda v: (d := obligation.parse_iso8601(v)) and (d if d.tzinfo else d.replace(tzinfo=timezone.utc))
+    mine = stamp(ob.get("dispatched_at"))
+    dev, root = report.get("dev") or {}, Path(project_dir).resolve()
+    # resolve-commit-repos.py _canonical_owned_path's form; an absolute path stays itself.
+    declared = {key: {(root / os.path.expanduser(p)).resolve(): p for p in dev.get(key) or []}
+                for key in ("files_modified", "files_created")}
+    raw = {**declared["files_created"], **declared["files_modified"]}
+    change = lambda p: (t := _tree_rel(p))[0] and subprocess.run(  # git's status line for p; "" or None: none
+        ["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(t[0]), "status", "--porcelain", "-uall", "--",
+         t[1]], capture_output=True, text=True, timeout=10).stdout
+
+    def inherit():  # _task_records reads the sessions modified since a day before the id's stamp
+        for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
+            other = rec["obligation"]
+            at = stamp(other.get("dispatched_at"))
+            if (rec["prompt"] == resolution.prompt or (mine and at and at > mine) or ours != (
+                    other.get("role"), other.get("lane"), obligation.canonical_task_id(other.get("task_id")))):
+                continue
+            meta = next((m for c in subagent_restart._child_transcript_copies(rec["transcript"])  # any root's
+                         if (m := subagent_restart._metadata_by_tool_use(c).get(rec["tool_use_id"]))), {})
+            sets = _recorded(meta.get("agent_transcript_path"))
+            if sets is None:
+                unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {rec['transcript'].stem}")
+            else:
+                written.update(sets[0]), named.update(sets[1]), ran.append(meta["agent_transcript_path"])
+        # A tool's change: git has one, its mtime lies in such a Bash call run in its tree (its tool_use record to
+        # its tool_result, a background call's to now) and no live subagent's record wrote it.
+        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if set(raw) - written - named
+                           for c in subagent_restart._child_transcript_copies(t) if c.is_file()  # a root may hold none
+                           for _, r in command_span._records(c)
+                           for b in (r.get("message") or {}).get("content") or () if isinstance(b, dict)):
+            if at and b.get("name") == "Bash":
+                uses[b.get("id")] = (Path(cwd or "/").resolve(), at.timestamp(), b.get("input") or {})
+            elif at and (use := uses.pop(b.get("tool_use_id"), None)):
+                spans.append((*use[:2], time.time() if use[2].get("run_in_background") else at.timestamp()))
+        live = (a for t in obligation._session_transcripts(project_dir, None) if spans for a in t.with_suffix(
+            "").glob("subagents/agent-*.jsonl") if a.stat().st_mtime >= min(s[1] for s in spans))
+        tool.update(p for p in set(raw) - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
+                    if p.is_file() and change(p) and not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)
+                    and any(s <= p.stat().st_mtime <= e and c.is_relative_to(_tree_rel(p)[0]) for c, s, e in spans))
+    try:
+        _with_alarm(deadline - time.monotonic(), inherit)
+    except _WireTimeout:
+        unreadable.append("the search for earlier dev dispatches (wire budget spent)")
+    missing, extra = set(raw) - written - named - tool, {}
+    for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree): nothing to declare
+        if out := change(p):
+            extra[p] = "files_created" if out[:2] == "??" or out[0] == "A" else "files_modified"
+    if not missing and not extra:
+        return []
+    show = lambda p: p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p)
+    expected = {key: [r for p, r in paths.items() if unreadable or p not in missing]
+                + [show(p) for p, k in extra.items() if k == key] for key, paths in declared.items()}
+    listed = lambda paths: ", ".join(sorted(paths)) or "(none)"
+    lines = [f"declared but not written by this dev: {listed(raw[p] for p in missing)}",
+             f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
+             "to exactly: " + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
+    lines += ["a file your own Bash produced counts once one of your Bash commands names it (for example "
+              "`ls -l <path>`): name it and keep it listed"] if missing else []
+    if unreadable:
+        lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
+    return lines
+
+
+def _harness_syntax(resolution) -> list:
+    """F3.a: each file of the agent's own written set (no inheritance) under the live harness home's
+    hooks/ or scripts/ (realpath) that Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
+    shebang) rejects as it stands now. Nothing is written: no py_compile, no __pycache__."""
+    home, findings = claude_home.resolve(), []
+    roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
+    try:
+        written = sorted(_recorded(getattr(resolution, "transcript_path", None))[0])
+    except Exception:  # an unreadable transcript judges nothing
+        return []
+    for p in (p for p in written if any(p.is_relative_to(r) for r in roots)):
+        try:
+            text = p.read_bytes()
+            shebang = text.split(b"\n", 1)[0] if text[:2] == b"#!" and not p.suffix else b""
+            if p.suffix == ".py" or b"python" in shebang:
+                compile(text, str(p), "exec")
+            elif (p.suffix == ".sh" or b"bash" in shebang) and (run := subprocess.run(
+                    ["bash", "-n", "--", p.name], cwd=p.parent, capture_output=True, text=True, timeout=2)).returncode:
+                raise SyntaxError("; ".join(run.stderr.strip().splitlines()))
+        except (SyntaxError, ValueError) as exc:
+            if SYNTAX_BLOCK:
+                findings.append({"path": str(p), "reason": "harness_syntax_error", "errors": [str(exc)]})
+            else:
+                sys.stderr.write(f"F3.a would block: {p}: {exc}\n")
+        except Exception:  # gone at the stop, unreadable, or bash timed out: judges nothing
+            pass
+    return findings
+
+
+def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
+    """F3.a for any stopping producer (only a role the tool policy lets write the
+    harness can trip it: a dev, a test-writer under tests/generated/), then the dev
+    report's wires (ledger judgment, /commit's trial plan or, for a fan-out lane,
+    the canonical aggregate its report completes, and A3.a's file lists).
+    Returns findings. Another producer's artifact is otherwise never judged at
+    this stop: G3 decides on it at the next dispatch."""
+    findings = _harness_syntax(resolution)
     if ob.get("role") != "dev":
         return findings
     deadline = time.monotonic() + WIRE_TOTAL_BUDGET_S
@@ -311,17 +439,27 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
     shard = isinstance(lane_set, list) and len(lane_set) > 1
     for art in json_artifacts:
         # Only the v2 report carries the nested dev section, owned_edits
-        # ledger and pre_edit_snapshots the downstream consumers read; the
-        # flat v1 shape is unplannable by /commit itself and is shape-gated
-        # only (schema + identity + terminal state).
+        # ledger and pre_edit_snapshots the downstream consumers read; any
+        # other json artifact is shape-gated only (schema + identity).
         if not str(art.get("schema", "")).startswith("dev-report.v2"):
             continue
         report_rel = art["path"]
         report_full = Path(project_dir) / report_rel
         task_id = str(ob.get("task_id"))
-        findings += _wire_ledger_judgment(_read_json(report_full), project_dir, task_id, deadline)
+        report = _read_json(report_full)
+        findings += _wire_ledger_judgment(report, project_dir, task_id, deadline)
         if not shard:
             findings += _wire_trial_plan(report_full, report_rel, project_dir, task_id)
+        else:
+            findings += _wire_canonical(project_dir, report_rel, task_id)
+        try:
+            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline)
+        except Exception:  # a check that cannot run judges nothing
+            lines = []
+        if lines and FILE_LISTS_BLOCK:
+            findings.append({"path": report_rel, "reason": "file_lists_differ", "errors": lines})
+        elif lines:
+            sys.stderr.write(f"A3.a would block: {report_rel}: file_lists_differ\n" + "".join(f"    {x}\n" for x in lines))
     return findings
 
 
@@ -390,36 +528,6 @@ def _declared_files(project_dir: str, art: dict) -> list:
     except OSError:
         return []
     return [f"{art['path']}/{p.name}" for p in entries if p.is_file()]
-
-
-def _producer_question(project_dir: str, ob: dict):
-    """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
-    obligation's own task_id and role. Which producers may ask is the
-    producer-question.v1 schema's role enum (ba and dev, D23), so a question
-    from any other role is schema-invalid. Returns None when absent or not
-    fresh against the obligation's dispatched_at (a file from an earlier
-    round; None freshness counts as stale), "valid" when it stands in for the
-    declared artifacts, else a failure naming why it is invalid."""
-    rel = f"docs/dev/producer-question-{ob.get('task_id')}-{ob.get('role')}.json"
-    full = Path(project_dir) / rel
-    try:
-        mtime = full.stat().st_mtime
-    except OSError:
-        return None
-    if obligation.artifact_freshness_satisfied("json", mtime, ob.get("dispatched_at")) is not True:
-        return None
-    result = contract_runtime.validate_artifact_for_obligation(str(full), "producer-question.v1")
-    errors = list(result.get("errors", []))[:10] or [str(result.get("reason"))]
-    if result.get("status") == "pass":
-        record = _read_json(full)
-        labels = [o.get("label") for o in record.get("options", []) if isinstance(o, dict)]
-        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
-                  for key in ("task_id", "role") if record.get(key) != ob.get(key)]
-        if record.get("default") not in labels:
-            errors.append(f"default {record.get('default')!r} is not one of the option labels {labels}")
-        if not errors:
-            return "valid"
-    return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
 # P3 R14: a stop's artifacts stand for it only by the one freshness rule
@@ -503,6 +611,111 @@ def _lane_echo_findings(ob: dict, art: dict, record) -> list:
     return [{"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors}] if errors else []
 
 
+def _call_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _call_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _call_strings(item)
+
+
+def _tool_call_texts(transcript_path) -> list | None:
+    """The input text of each tool call the transcript records (every string in it); None when it
+    cannot be read."""
+    texts = []
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        message = record.get("message") if isinstance(record, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                texts.append("\n".join(_call_strings(block.get("input"))))
+    return texts
+
+
+# A file a call names stands alone in its text: no path character other than "/" runs on either side.
+_NAME_BEFORE, _NAME_AFTER = r"(?<![A-Za-z0-9_.@%+~-])", r"(?![A-Za-z0-9_.@%+~-])"
+
+
+def _change_stamps(path: Path) -> list | None:
+    """The file's mtime and ctime (a copy that keeps an older mtime, cp -p, touch -d or mv, still
+    sets the ctime), a symlink's target's with its own; None when it is not there. A stat that fails
+    otherwise raises."""
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    stamps = [st.st_mtime, st.st_ctime]
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            target = os.stat(path)
+            stamps += [target.st_mtime, target.st_ctime]
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+    return stamps
+
+
+def _role_mismatch_writes(data: dict, project_dir: str):
+    """The files an obligation of another role (role_mismatch) declares that this agent wrote, read
+    over its own transcript (every account root's copy); [] when it wrote none, None when that
+    cannot be told, so the notice stands.
+
+    A file a Write or Edit of it ran on is written. So is a file one of its tool calls names (the
+    file's name, or a spec_views directory's path, in the call's input: a Bash heredoc, tee, cp or
+    python3 -c, an MCP tool; what such a call writes cannot be parsed) when it is there and was
+    changed at or after dispatched_at (_change_stamps). A named file that is not there, or that is
+    unchanged since the dispatch, is no write: a QA that only reads the dev report passes. A named
+    file that is there with a dispatched_at that cannot be read (unparseable, or ahead of the stop's
+    clock, which every write would precede), or whose stat fails, leaves the notice standing (None).
+    The names are read here: command_span's named set leaves docs/dev/, the dev report's tree, out."""
+    try:
+        mine = obligation.resolve_own_obligation(
+            session_id=data.get("session_id") or data.get("sessionId"), agent_id=data.get("agent_id"),
+            project_dir=project_dir, payload_agent_transcript_path=data.get("agent_transcript_path"))
+        if not isinstance(mine, obligation.Resolved):
+            return None
+        copies = subagent_restart._child_transcript_copies(mine.transcript_path)
+        sets = [s for s in (command_span.write_set(c, project_dir, excluded=()) for c in copies) if s is not None]
+        if not sets:
+            return None
+        written = set().union(*(s.written for s in sets))
+        texts = [t for c in copies for t in _tool_call_texts(c) or ()]
+        since, wrote = None, set()
+        for art in mine.obligation.get("artifacts") or []:
+            if not (isinstance(art, dict) and isinstance(art.get("path"), str) and art["path"]):
+                continue
+            for rel in _declared_files(project_dir, art):
+                if rel in written:
+                    wrote.add(rel)
+                    continue
+                names = [os.path.basename(rel)] + ([art["path"].rstrip("/")] if art.get("kind") == "spec_views" else [])
+                named = re.compile("|".join(_NAME_BEFORE + re.escape(n) + _NAME_AFTER for n in names if n))
+                stamps = _change_stamps(Path(project_dir) / rel) if any(named.search(t) for t in texts) else None
+                if stamps is None:  # not named, or not there
+                    continue
+                if since is None:
+                    dispatched = obligation.parse_iso8601(mine.obligation.get("dispatched_at"))
+                    if dispatched is None or dispatched.timestamp() > time.time():
+                        return None
+                    since = dispatched.timestamp()
+                if max(stamps) >= since:
+                    wrote.add(rel)
+    except Exception:  # what it wrote cannot be read: the notice stands
+        return None
+    return sorted(wrote)
+
+
 def _finding_lines(findings: list) -> str:
     return "".join(f"  - {f['path']}: {f['reason']}\n" + "".join(f"    {e}\n" for e in f.get("errors", [])[:10])
                    for f in findings[:10])
@@ -519,25 +732,20 @@ def main() -> None:
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 
-    # Resolved unconditionally (no early-exit here): the obligation-mode
-    # block below does not depend on agent-index.json / resolve_dev_registry_entry
-    # at all (hooks/lib/obligation.py has zero references to either). The
-    # LOW-10 "never hard-block on an unresolved agent" early-exits are
-    # deferred to immediately before the LEGACY correlation path's first
-    # actual use of dev_session_id, below -- relocated so a skipped FIRST
-    # ACTION registry Read no longer silently discards obligation-mode
-    # enforcement of the agent's own dev-report/context.json obligation too.
+    # The registry entry gives the agent's type (the role its obligation must
+    # name) and, for the declared-report check only, the LOW-10 guard: a
+    # skipped FIRST ACTION read never discards the obligation branch.
     entry = resolve_dev_registry_entry(agent_id, project_dir)
     agent_type = entry.get("agent_type", "") if entry else ""
+    role = resolve_agent_type(data)  # P6 R3: the CLI's role whenever one is known
 
-    # Obligation mode (rollout S4): verify the artifacts THIS agent's own
-    # dispatch obligation names, ahead of the session-wide correlation guess
-    # below. CLAUDE_OBLIGATION_STOPGATE is a DIFFERENT switch from
-    # ARTIFACT_CONTRACT_ENFORCE_MODE, which continues to govern only the
-    # untouched legacy path. A process whose env lacks the key takes it from
-    # the harness home's settings.json env at run time (P1b E4): a session
-    # keeps the env it started with, so a session started before the switch
-    # was set, with or without CLAUDE_HOME, meets its current value.
+    # The obligation branch: the artifacts THIS agent's own dispatch
+    # obligation names. CLAUDE_OBLIGATION_STOPGATE governs it alone;
+    # ARTIFACT_CONTRACT_ENFORCE_MODE governs the declared-report check below.
+    # A process whose env lacks the key takes it from the harness home's
+    # settings.json env at run time (P1b E4): a session keeps the env it
+    # started with, so a session started before the switch was set, with or
+    # without CLAUDE_HOME, meets its current value.
     env_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE")
     stopgate_mode = (env_mode.strip().lower() if env_mode is not None
                      else settings_switch("CLAUDE_OBLIGATION_STOPGATE", "advisory"))
@@ -555,12 +763,27 @@ def main() -> None:
                 project_dir=project_dir,
                 payload_agent_transcript_path=transcript_hint,
                 # Every template and canonical todo step declares a dispatch's
-                # role as its subagent_type (G1 refuses any other), the type
-                # this agent registered as; no role list says which.
-                expected_role=agent_type or None,
+                # role as its subagent_type (G1 refuses any other), the role
+                # Claude Code runs this agent as; no role list says which.
+                expected_role=role or None,
             )
             if isinstance(resolution, obligation.NoObligationInPrompt):
                 resolution = _template_declared(resolution) or resolution
+            if getattr(resolution, "reason", None) == "role_mismatch" and stopgate_mode == "block":
+                # The first stop is refused with the notice; the next round's stop (stop_hook_active)
+                # passes once the agent's own transcript shows it wrote none of the files that
+                # obligation declares, by a Write or Edit or by a call naming one that is changed since
+                # its dispatch (P1c D25: the agent's next stop clears it). No report of the other role
+                # is judged as its own, so the declared-report check does not run.
+                wrote = _role_mismatch_writes(data, project_dir)
+                if data.get("stop_hook_active") is True and wrote == []:
+                    sys.exit(0)
+                sys.stderr.write(f"OBLIGATION_STOPGATE_BLOCKED: agent {agent_id} runs as {role!r}; its dispatch's "
+                                 f"obligation names role {resolution.detail}:\n  - <obligation>: role_mismatch\n"
+                                 "That obligation is not yours: write no artifact of another role; say so in your "
+                                 "reply, then stop again.\n"
+                                 + (f"  you wrote its file(s): {', '.join(wrote)}\n" if wrote else ""))
+                sys.exit(2)
             if isinstance(resolution, obligation.Resolved):
                 artifacts = resolution.obligation.get("artifacts", [])
                 json_artifacts = [a for a in artifacts if a.get("kind") == "json"]
@@ -576,7 +799,7 @@ def main() -> None:
                 )
                 failures = []
                 echo = []
-                question = _producer_question(project_dir, resolution.obligation)
+                question = contract_runtime.producer_question(project_dir, resolution.obligation)
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
                     # that reads those artifacts runs for this stop.
@@ -749,9 +972,8 @@ def main() -> None:
                 # shape- and terminal-valid, so the checkers see a usable report.
                 if not failures:
                     try:
-                        failures.extend(
-                            _run_downstream_wires(project_dir, resolution.obligation, json_artifacts)
-                        )
+                        failures.extend(_run_downstream_wires(
+                            project_dir, resolution.obligation, json_artifacts, resolution))
                     except Exception:
                         pass  # a crashed wire judges nothing (see its section comment)
                 who = (f"agent {agent_id} (role={resolution.obligation.get('role')}, "
@@ -762,43 +984,31 @@ def main() -> None:
                         f"failed that do not block yet:\n{_finding_lines(echo)}"
                     )
                 if not failures:
-                    # M3: all pass -- bypass the legacy correlation path
-                    # entirely for this stop.
+                    # M3: all pass; the declared-report check does not run.
                     sys.exit(0)
+                reason = (f"{who} declared {len(verified_artifacts)} obligated artifact(s); "
+                          f"{len(failures)} finding(s) to repair before you stop:\n{_finding_lines(failures)}")
                 if stopgate_mode == "block":
                     sys.stderr.write(
-                        f"OBLIGATION_STOPGATE_BLOCKED: {who} declared "
-                        f"{len(verified_artifacts)} obligated artifact(s); "
-                        f"{len(failures)} failed verification:\n"
-                        f"{_finding_lines(failures)}"
+                        f"OBLIGATION_STOPGATE_BLOCKED: {reason}"
                         f"Fix your OWN artifact(s) listed above, then stop "
                         f"again. Do NOT edit any other agent's artifact.\n"
                     )
                     sys.exit(2)
-                # advisory mode: never blocks (AC4/AC5).
+                # advisory mode: the would-block reason, never a block (AC4/AC5).
+                sys.stderr.write(f"OBLIGATION_STOPGATE_ADVISORY: {reason}")
                 sys.exit(0)
-            # Unresolvable or NoObligationInPrompt: the legacy path below
-            # decides.
-        except Exception:
-            # M4: an obligation-mode-only failure must degrade to "run
-            # legacy path", never "allow" and never escape from inside
-            # this except block.
-            pass
+            # Unresolvable or NoObligationInPrompt: the declared-report check
+            # below decides.
+        except Exception as exc:
+            # M4: the fault names itself and the declared-report check below
+            # decides: a fault the producer cannot repair never holds its stop.
+            sys.stderr.write(f"OBLIGATION_STOPGATE_FAULT: agent {agent_id}: {exc!r}\n")
 
-    # LOW-10: never hard-block the legacy correlation path on an
-    # unresolved agent. Deferred here (was previously gating the
-    # obligation-mode block above too) because only this legacy path
-    # actually needs dev_session_id.
-    if entry is None:
-        sys.exit(0)
-    dev_session_id = entry.get("dev_session_id")
+    # The declared-report check. LOW-10: an agent the dev registry does not
+    # resolve is never blocked here.
+    dev_session_id = entry.get("dev_session_id") if entry else None
     if not dev_session_id:
-        sys.exit(0)
-
-    registry_dir = Path(project_dir) / ".claude" / "dev-registry" / dev_session_id
-
-    flag = _read_json(registry_dir / "artifact-contract-enforce.json")
-    if not flag.get("enabled"):
         sys.exit(0)
 
     # The reports this producer owes are the json artifacts its own dispatch
@@ -816,8 +1026,8 @@ def main() -> None:
     report_paths = [Path(project_dir) / r for r in rels if obligation._legal_repo_relative_path(r)]
     report_paths = [p for p in report_paths if p.is_file()]
     if not report_paths:
-        # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)
-        # and /close's chain resolver (dev). Never block here.
+        # A missing report is not this check's finding (the obligation
+        # branch and the chain resolver own existence). Never block here.
         sys.exit(0)
 
     failures = []
@@ -828,24 +1038,17 @@ def main() -> None:
     if not failures:
         sys.exit(0)
 
-    mode = os.environ.get("ARTIFACT_CONTRACT_ENFORCE_MODE", "block").strip().lower()
-    if mode == "advisory":
-        sys.exit(0)
-
-    detail_lines = ""
+    reason = (f"agent {agent_id} (type={agent_type}) in session {dev_session_id}: "
+              f"{len(failures)} declared report(s) declare report_version but violate their schema.\n")
     for p, r in failures[:5]:
-        detail_lines += f"  report {p} violates schema {r.get('schema')!r}:\n"
-        detail_lines += "".join(f"    - {e}\n" for e in r.get("errors", [])[:10])
+        reason += f"  report {p} violates schema {r.get('schema')!r}:\n"
+        reason += "".join(f"    - {e}\n" for e in r.get("errors", [])[:10])
+    if os.environ.get("ARTIFACT_CONTRACT_ENFORCE_MODE", "block").strip().lower() == "advisory":
+        sys.stderr.write(f"ARTIFACT_CONTRACT_ADVISORY: {reason}")
+        sys.exit(0)
     sys.stderr.write(
-        f"ARTIFACT_CONTRACT_BLOCKED: agent {agent_id} (type={agent_type}) in "
-        f"session {dev_session_id}: {len(failures)} correlated report(s) "
-        f"declare report_version but violate their schema.\n"
-        f"{detail_lines}"
-        f"This is the same check /close's Artifact schema gate applies — /close would "
-        f"reject these reports identically. Repair the named report(s) so they "
-        f"satisfy their declared schema before stopping. If a named report was "
-        f"written by a sibling lane agent, report the blockage instead of "
-        f"editing a peer's artifact.\n"
+        f"ARTIFACT_CONTRACT_BLOCKED: {reason}"
+        f"Repair the named report(s) so they satisfy their declared schema before stopping.\n"
     )
     sys.exit(2)
 

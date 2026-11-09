@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 # Add repo root to path so we can import hooks.lib.agent_resolver as a module,
 # matching hooks/tests/test_bash_safety_context.py's convention.
@@ -164,14 +165,92 @@ def test_same_role_active_collision_still_resolves(tmp_path, monkeypatch):
     assert role == "qa", f"F14 M9 regression: same-role collision resolved to {role!r}"
 
 
-def test_subagent_type_direct_short_circuit_unaffected(tmp_path, monkeypatch):
-    """Step 1 (payload.subagent_type direct hit) must remain untouched by
-    the cp-state staleness fix -- it never reaches _scan_cp_state_files."""
+def test_agent_type_direct_short_circuit_unaffected(tmp_path, monkeypatch):
+    """Step 1 (payload.agent_type with agent_id, the CLI's role) must remain
+    untouched by the cp-state staleness fix -- it never reaches
+    _scan_cp_state_files."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    role = resolve_agent_type({"subagent_type": "qa", "agent_id": "whatever"})
+    role = resolve_agent_type({"agent_type": "qa", "agent_id": "whatever"})
     assert role == "qa"
 
 
 def test_no_cp_state_files_falls_through_to_none(tmp_path, monkeypatch):
     role = _resolve(tmp_path, "nobody-agent", monkeypatch)
     assert role is None
+
+
+# -------------------- P6 R1: the role comes from what Claude Code records ---------------------
+
+SID = "p6-role-session"
+
+
+def _isolated(tmp_path, monkeypatch):
+    """Project and CLI configuration under tmp_path: no real account root is read."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    return project
+
+
+def _write_meta(transcript_dir, agent_id, agent_type):
+    """The meta file the CLI writes beside a subagent's transcript."""
+    sub = transcript_dir / SID / "subagents"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / f"agent-{agent_id}.meta.json").write_text(
+        json.dumps({"agentType": agent_type, "description": "d", "toolUseId": "toolu_p6"}), encoding="utf-8")
+
+
+def _account_root_dir(tmp_path, project):
+    """<CLAUDE_CONFIG_DIR>/projects/<slug>, the CLI's own account root for this project."""
+    from hooks.lib.subagent_restart import project_slug
+    return tmp_path / "config" / "projects" / project_slug(project)
+
+
+def test_a2_payload_agent_type_with_agent_id_is_the_role(tmp_path, monkeypatch):
+    _isolated(tmp_path, monkeypatch)
+    assert resolve_agent_type({"agent_id": "a-p6", "agent_type": "qa"}) == "qa"
+
+
+def test_a2_meta_agent_type_when_the_payload_names_none(tmp_path, monkeypatch):
+    """An older CLI: no agent_type in the payload, the meta file names it, found
+    beside the payload's transcript and in an account root alike."""
+    project = _isolated(tmp_path, monkeypatch)
+    beside = tmp_path / "transcripts"
+    _write_meta(beside, "a-p6", "qa")
+    assert resolve_agent_type({"agent_id": "a-p6", "session_id": SID,
+                               "transcript_path": str(beside / f"{SID}.jsonl")}) == "qa"
+    _write_meta(_account_root_dir(tmp_path, project), "a-root", "qa")
+    assert resolve_agent_type({"agent_id": "a-root", "session_id": SID}) == "qa"
+
+
+def test_a2_index_entry_without_payload_role_or_meta(tmp_path, monkeypatch):
+    project = _isolated(tmp_path, monkeypatch)
+    _write_agent_index(project, {"a-p6": {"agent_type": "dev", "dev_session_id": "dev-x"}})
+    assert resolve_agent_type({"agent_id": "a-p6", "session_id": SID}) == "dev"
+
+
+def test_a2_cli_role_beats_an_index_entry(tmp_path, monkeypatch):
+    """Old index files never beat a CLI role: neither the payload's nor the meta file's."""
+    project = _isolated(tmp_path, monkeypatch)
+    _write_agent_index(project, {"a-p6": "dev", "a-meta": "dev"})
+    assert resolve_agent_type({"agent_id": "a-p6", "agent_type": "qa"}) == "qa"
+    _write_meta(_account_root_dir(tmp_path, project), "a-meta", "qa")
+    assert resolve_agent_type({"agent_id": "a-meta", "session_id": SID}) == "qa"
+
+
+def test_a2_no_agent_id_is_the_main_agent(tmp_path, monkeypatch):
+    project = _isolated(tmp_path, monkeypatch)
+    _write_agent_index(project, {"": "dev"})
+    assert resolve_agent_type({"agent_type": "dev"}) is None
+    assert resolve_agent_type({"agent_type": "dev", "agent_id": ""}) is None
+
+
+def test_a2_top_level_subagent_type_is_no_role(tmp_path, monkeypatch):
+    _isolated(tmp_path, monkeypatch)
+    assert resolve_agent_type({"agent_id": "a-p6", "subagent_type": "qa"}) is None
+
+
+def test_a2_resolver_reads_no_top_level_subagent_type():
+    src = (Path(__file__).resolve().parents[1] / "lib" / "agent_resolver.py").read_text(encoding="utf-8")
+    assert 'get("subagent_type")' not in src

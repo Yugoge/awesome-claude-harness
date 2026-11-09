@@ -25,7 +25,7 @@ def run(rp) -> None:
              label="prompt")
     s.tool("Grep", {"pattern": "end_time", "path": f"{lay.project}/hooks", "output_mode": "files_with_matches"},
            label="main Grep")
-    s.read(f"{lay.project}/hooks/stop-overnight-timelock.py", label="main Read", limit=40)
+    s.read(f"{lay.project}/hooks/stop-command-gate.py", label="main Read", limit=40)
     s.bash("git status --short", "Show working tree status", label="main Bash git-status")
-    ev = s.stop("hooks/stop-overnight-timelock.py refuses it (the time-lock); nothing was changed.")
+    ev = s.stop("hooks/stop-command-gate.py refuses it (the time-lock, its step 4); nothing was changed.")
     rp.terminal("home", True, ev)

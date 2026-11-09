@@ -178,6 +178,12 @@ def parse_gap(line: str) -> dict:
     }
 
 
+def chain_line(stdout: str):
+    """The chain's data the CLI prints on its last line (CHAIN=<json>), else None."""
+    last = stdout.splitlines()[-1]
+    return json.loads(last[len("CHAIN="):]) if last.startswith("CHAIN=") else None
+
+
 def outcome(root: Path, stage: str = "dev", **kwargs):
     """(disposition, gaps) as the CLI prints them; every line must parse."""
     proc = run_cli(root, stage, **kwargs)
@@ -185,6 +191,8 @@ def outcome(root: Path, stage: str = "dev", **kwargs):
     lines = proc.stdout.splitlines()
     header = HEADER_RE.fullmatch(lines[0])
     assert header and header.group(2) == stage and header.group(3) == TASK, proc.stdout
+    if chain_line(proc.stdout) is not None:
+        lines = lines[:-1]
     gaps = [parse_gap(line) for line in lines[1:]]
     assert (header.group(1) == "chain_pass") == (gaps == [])
     return header.group(1), gaps
@@ -258,7 +266,20 @@ def ob(tid, role, pipeline, profile, artifacts, lane=None, lane_set=None):
 def test_a_full_singular_chain_is_chain_pass(tmp_path):
     tree = singular(tmp_path)
     proc = run_cli(tree.root, "dev")
-    assert (proc.returncode, proc.stdout) == (0, f"DISPOSITION=chain_pass STAGE=dev TASK={TASK}\n")
+    assert proc.returncode == 0
+    assert proc.stdout.splitlines()[0] == f"DISPOSITION=chain_pass STAGE=dev TASK={TASK}"
+    assert len(proc.stdout.splitlines()) == 2 and set(chain_line(proc.stdout)) == set(RESOLVER.CHAIN_FIELDS)
+
+
+def test_the_chain_line_carries_the_resolved_chain_data(tmp_path):
+    """Steps 1-3 of /close and /commit read mode, lanes, report paths, the canonical
+    report, artifact paths, the commit whitelist and QA inputs from this one run."""
+    tree = fanout(tmp_path)
+    proc = run_cli(tree.root, "dev")
+    chain = chain_line(proc.stdout)
+    resolved = RESOLVER.resolve_chain(tree.root, TASK)
+    assert chain == json.loads(json.dumps({key: resolved[key] for key in RESOLVER.CHAIN_FIELDS}))
+    assert chain["lanes"], chain
 
 
 def test_a_full_two_lane_fanout_chain_is_chain_pass(tmp_path):
@@ -395,6 +416,54 @@ def test_a_do_report_short_of_completed_is_a_do_status_gap(tmp_path, status, pro
     assert pairs(outcome(tree.root)[1]) == [(tree.rel(f"do-report-{TASK}.json"), problem)]
 
 
+# Q7: dev, dispatched along the do-report's route (close.md Routes), concludes a /do task whose do-report is
+# not completed in its own dev-report; no ticket, context or QA report is asked of a /do task.
+@pytest.mark.parametrize("stage", ["dev", "close"])
+def test_dev_s_report_concludes_a_do_task_whose_do_report_is_not_completed(tmp_path, stage):
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report("blocked"))
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK))
+    if stage == "close":
+        tree.write(f"close-report-{TASK}.md", "# Close\n\nCLOSE: YES — codex disabled by user\n")
+    assert outcome(tree.root, stage) == ("chain_pass", [])
+
+
+def test_dev_s_report_short_of_completed_leaves_the_do_task_open_on_it(tmp_path):
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report("blocked"))
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK, status="blocked"))
+    assert pairs(outcome(tree.root)[1]) == [(tree.rel(f"dev-report-{TASK}.json"), "INVALID_DEV_STATUS")]
+
+
+def test_a_completed_do_report_concludes_beside_dev_s_report(tmp_path):
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report())
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK, status="blocked"))
+    assert outcome(tree.root) == ("chain_pass", [])
+
+
+@pytest.mark.parametrize("stage", ["dev", "close"])
+def test_q7_the_do_report_lists_exactly_the_files_of_dev_s_report(tmp_path, stage):
+    """P5 R8's step at P3's merge (A3.c on the route without a transcript, a /close or /commit
+    span): where dev's report concludes the /do task, the do-report's files_modified and
+    files_created equal that report's (do_report_gaps); a difference is one gap naming dev's
+    files. No schema is asked of the do-report there: it is not completed by the route's own
+    condition."""
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report("blocked"))
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK, files=("scripts/one.py", "scripts/two.py")))
+    if stage == "close":
+        tree.write(f"close-report-{TASK}.md", "# Close\n\nCLOSE: YES — codex disabled by user\n")
+    disposition, gaps = outcome(tree.root, stage)
+    assert disposition == "incomplete"
+    assert pairs(gaps) == [(tree.rel(f"do-report-{TASK}.json"), "FILES_NOT_DEV_REPORT")]
+    assert json.dumps(["scripts/one.py", "scripts/two.py"]) in gaps[0]["message"]
+    tree.write(f"do-report-{TASK}.json", do_report("blocked", do={
+        "status": "blocked", "summary": "s", "files_modified": ["scripts/two.py"],
+        "files_created": ["scripts/one.py"]}))
+    assert outcome(tree.root, stage) == ("chain_pass", [])
+
+
 # --------------------------------------------------------------------------
 # A2: instrument failures are never a disposition
 # --------------------------------------------------------------------------
@@ -446,6 +515,7 @@ def test_the_importable_function_returns_the_disposition_the_cli_prints(tmp_path
     tree = singular(tmp_path)
     tree.write(f"qa-report-{TASK}.json", qa_report(TASK, "fail"))
     result = RESOLVER.disposition(tree.root, TASK, "dev")
+    assert set(result.pop("chain")) == set(RESOLVER.CHAIN_FIELDS)
     assert result == {
         "disposition": "incomplete",
         "stage": "dev",
@@ -754,4 +824,6 @@ def test_without_the_flag_the_project_root_is_the_working_directory_s_git_top_le
     tree = singular(tmp_path)
     repository(tree, tmp_path)
     proc = run_cli(tree.root, "dev", cwd=tree.root / "scripts", project_dir=False)
-    assert (proc.returncode, proc.stdout) == (0, f"DISPOSITION=chain_pass STAGE=dev TASK={TASK}\n")
+    assert proc.returncode == 0
+    assert proc.stdout.splitlines()[0] == f"DISPOSITION=chain_pass STAGE=dev TASK={TASK}"
+    assert set(chain_line(proc.stdout)) == set(RESOLVER.CHAIN_FIELDS)

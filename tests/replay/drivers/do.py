@@ -20,13 +20,26 @@ Driver arguments (cli.py --arg K=V):
   then=close          /close only
   then=none           the /do turn only
   session=same|later  the session /close and /commit are typed in (default same)
-
-Acceptance 7's /do case, run by name (`--arg variant=blocked`; the artifact check's job list,
-tests/artifact_graph/runtime.py drivers(), keeps this driver's one default replay):
-  blocked             the /do work is not finished: the user abandons the task before the change is
-                      made, and Step 5 writes the do-report with the honest terminal status `blocked`
-                      the text names; /close's do-report lite preflight finds it not `completed` and
-                      dev is dispatched again under the same task id to complete the /do work
+  mistype=1           P5 review M: the owner types /close with a ticket path of another id, which does not
+                      exist; Task-id resolution asks in the turn and the owner picks the /do task's id
+                      (drivers/close.py resolve_typed)
+  variant=blocked     the /do turn ends with the do-report's other terminal, do.status "blocked"
+                      (default then=close): /close's Step 0 names the do-report, Routes' /do bullet
+                      dispatches dev under the same task id with the obligation the bullet spells,
+                      and /close lands (acceptance 4 (g), Q7)
+  variant=main-file   close QA's first round names the file the /do main agent wrote (default
+                      then=close): dev along the do-report's route, Step 0 again, a fresh round
+                      (acceptance 4 (h), its /do half)
+  dev_stop=unwritten|uncompleted   the first routed dev stops leaving the artifact its obligation
+                      declares as it is, or written with its terminal field short of completed; on
+                      G2's block it writes it completed and stops again (whether G2 stops a missing
+                      completion at dev's stop)
+  variant=abandoned   P1b's acceptance 7 /do case (P1b ran it as variant=blocked): the user abandons
+                      the task before the change is made, and Step 5 writes the do-report with the
+                      honest terminal status `blocked` the text names (default then=close): /close's
+                      Step 0 names the do-report and Routes' /do bullet dispatches dev under the same
+                      task id, which makes the change
+The artifact check replays the plain /do (VARIANTS); the variants run on demand.
 
 Respellings: no harness-script call of the /do text needs one (row 7). One path is recorded in
 blocks.json "respellings" as "do sidecar dir": the base text reads the sidecar at the literal
@@ -59,14 +72,18 @@ TOY_NEW = ("def add(a, b):\n    for name, x in ((\"a\", a), (\"b\", b)):\n"
            "            raise TypeError(f\"add(): argument {name} must be a number\")\n    return a + b\n")
 
 DEVIATIONS = Deviations([])
+# The do-report's summary per terminal status (Step 5: "blocked" says what blocked it).
+SUMMARY = {"completed": "toy.add now raises TypeError naming the argument that is not a number.",
+           "blocked": "toy.add is changed, but the toy tests were not run: the operation stayed unauthorized.",
+           "abandoned": "Not finished: the user abandoned the task before toy.add was changed."}
 
 
 class DoTurn:
     """One /do turn: the main agent works directly and writes the do-report."""
 
     def __init__(self, rp, session=None, deviations: Deviations | None = None, task: str = TASK,
-                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), variant: str = "plain"):
-        self.rp, self.task, self.edits, self.variant = rp, task, list(edits), variant
+                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), status: str = "completed", variant: str = "plain"):
+        self.rp, self.task, self.edits, self.status, self.variant = rp, task, list(edits), status, variant
         from .close import kept_only
         self.o = Orchestrator(rp, "do", session=session, deviations=kept_only(rp, deviations or DEVIATIONS))
         self.tid = ""
@@ -102,7 +119,7 @@ class DoTurn:
         for rel, old, new in self.edits:
             path = os.path.join(o.project, rel)
             self.call(s.read, path, label=self.label(f"Step 2 Read {rel}"))
-            if self.variant == "blocked":
+            if self.variant == "abandoned":
                 # The user abandons the task before the change is made.
                 s.say("Stopping here at your request: toy.add is unchanged.")
                 return
@@ -116,7 +133,7 @@ class DoTurn:
         self.o.s.say("Step 3 skipped: --codex was not passed.")
 
     def step4(self) -> None:
-        if self.variant == "blocked":
+        if self.variant == "abandoned":
             self.o.s.say("Nothing changed: the task was abandoned before the change was made. Codex audit not run.")
             return
         self.o.s.say(f"Changed toy.add: a non-number argument now raises TypeError naming it. "
@@ -164,14 +181,8 @@ class DoTurn:
             if v == "<TASK_ID>":
                 doc[k] = self.tid
         doc["request"] = self.task
-        doc["do"].update(status="completed", files_modified=list(self.files_modified),
-                         files_created=list(self.files_created),
-                         summary="toy.add now raises TypeError naming the argument that is not a number.")
-        if self.variant == "blocked":
-            # "`blocked` — honest terminal state when the task could not be finished (user abandoned it ...).
-            # Fill `do.summary` with what blocked it."
-            doc["do"].update(status="blocked", summary="Not finished: the user abandoned the task before toy.add "
-                                                       "was changed.")
+        doc["do"].update(status=self.status, files_modified=list(self.files_modified),
+                         files_created=list(self.files_created), summary=self.summary())
         text = json.dumps(doc, indent=2) + "\n"
         path = os.path.join(o.project, self.report_rel)
         # A text that has the hook pre-write a skeleton tells the agent to rewrite it; else the agent
@@ -179,6 +190,10 @@ class DoTurn:
         if "skeleton" in sec and os.path.exists(path):
             self.call(s.read, path, label=self.label("Step 5 Read do-report skeleton"))
         self.call(s.write, path, text, label=self.label("Step 5 Write do-report"))
+
+    def summary(self) -> str:
+        """do.summary: what blocked a `blocked` report (Step 5)."""
+        return SUMMARY["abandoned" if self.variant == "abandoned" else self.status]
 
     def run(self) -> str:
         o = self.o
@@ -188,9 +203,7 @@ class DoTurn:
             o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
             fn()
         o.advance(label=self.label("TodoWrite Step 5 done"))
-        done = ("blocked: the task was abandoned before the change" if self.variant == "blocked"
-                else "done: toy.add rejects non-numbers")
-        ev = o.s.stop(f"/do {self.tid} {done}; do-report {self.report_rel}. "
+        ev = o.s.stop(f"/do {self.tid} {self.status}: {self.summary()} do-report {self.report_rel}. "
                       f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
         try:
             with open(os.path.join(o.project, self.report_rel)) as fh:
@@ -201,20 +214,30 @@ class DoTurn:
         return self.tid
 
 
+# The variant the artifact check replays ("": the plain /do, then /close and /commit); the acceptance
+# variants run on demand only (`--arg variant=...`).
+VARIANTS = ("",)
+ACCEPTANCE_VARIANTS = ("blocked", "main-file", "abandoned")
+
+
 def run(rp) -> None:
-    then = rp.args.get("then", "close-commit")
-    variant = rp.args.get("variant", "plain")
-    if variant not in ("plain", "blocked"):
+    variant = rp.args.get("variant", "")
+    if variant not in VARIANTS + ACCEPTANCE_VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
-    rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant != "plain" else "") + (
-        "/later" if rp.args.get("session") == "later" else "")
-    turn = DoTurn(rp, variant=variant)
+    then = rp.args.get("then", "close" if variant else "close-commit")
+    rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant else "") + (
+        "/later" if rp.args.get("session") == "later" else "") + ("/mistyped" if rp.args.get("mistype") else "")
+    turn = DoTurn(rp, status="blocked" if variant in ("blocked", "abandoned") else "completed",
+                  variant=variant or "plain")
     tid = turn.run()
     if then == "none":
         return
     from . import close as close_drv
     session = rp.later_session(turn.o.s) if rp.args.get("session") == "later" else turn.o.s
-    cr = close_drv.CloseRun(rp, session, tid, do_report=turn.report_rel, producer=close_drv.DoProducer(turn))
+    typo = tid[:-2] + ("58" if tid.endswith("59") else "59")  # another second: no task of this replay
+    cr = close_drv.CloseRun(rp, session, tid, do_report=turn.report_rel, producer=close_drv.DoProducer(turn),
+                            variant="append" if variant == "main-file" else "plain",
+                            typed=f"docs/dev/ticket-{typo}.md" if rp.args.get("mistype") else "")
     cr.run()
     if then == "close":
         return

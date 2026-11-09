@@ -5,7 +5,7 @@ landed harness home is a clone of a local bare origin built from the tree under 
 files and made landed by init (scripts/bootstrap); the CLI's writes are plain file writes; /pull is
 hooks/pull.sh and fswatch's periodic pull is git-fswatch.sh's safe_pull, each in the session's
 environment (the rendered settings' env); a Stop is the registered Stop hook
-(hooks/stop-workflow-coordinator.py), whose auto_commit phase runs the landing
+(hooks/stop-launch.py, running the coordinator), whose auto_commit phase runs the landing
 (scripts/install/land) and relays its notice. HOME, CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and
 TMPDIR lie in the test's temporary directory (tests/test_landing.py's env); no network.
 
@@ -83,7 +83,7 @@ def _landed_harness_home(tmp_path, env):
     assert git(env, home, "status", "--porcelain").stdout == ""
     settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     stop = [h["command"] for group in settings["hooks"]["Stop"] for h in group["hooks"]
-            if "stop-workflow-coordinator.py" in h.get("command", "")]
+            if "stop-launch.py" in h.get("command", "")]
     assert len(stop) == 1, stop
     session = dict(env, **{k: v for k, v in settings["env"].items() if isinstance(v, str)})
     session.update(CLAUDE_PROJECT_DIR=str(home))
@@ -372,14 +372,26 @@ def _template_following(art: dict, role: str, task_id: str) -> dict:
     return schemagen.instance(schema, dict(work, task_id=task_id) | (art.get("identity") or {}), seed=art["path"])
 
 
+# The v1 report schemas P10 (R7) deleted with the dev-report.v1 projection: no reader judges a report
+# by them any more (a report declaring version 1 is refused naming dev-report.v2), so no dual shape
+# can pass, and the retired id stays out of the tree.
+DELETED_V1 = {"dev-report.v1"}
+
+
 def _assert_template_shape(doc: dict, art: dict) -> None:
     """Valid against the schema the obligation declares and not against the retired v1: the report a
-    dev or QA following its template writes, not the dual shape that was the only one to pass."""
+    dev or QA following its template writes, not the dual shape that was the only one to pass. Where
+    P10 deleted the v1 schema (DELETED_V1), the tree must hold no schema under that id."""
     assert schemagen.jsonschema is not None, "jsonschema is needed to tell the two shapes apart"
     v2 = _report_schema(art)
     errors = schemagen.errors(schemagen.load(str(TREE_UNDER_TEST), v2), doc)
     assert not errors, f"{art['path']} does not follow its template ({v2}): {errors}"
-    v1 = schemagen.load(str(TREE_UNDER_TEST), v2[:-1] + "1")
+    v1_id = v2[:-1] + "1"
+    if v1_id in DELETED_V1:
+        with pytest.raises(FileNotFoundError):
+            schemagen.load(str(TREE_UNDER_TEST), v1_id)
+        return
+    v1 = schemagen.load(str(TREE_UNDER_TEST), v1_id)
     assert schemagen.errors(v1, doc), f"{art['path']} also carries the v1 shape (the dual shape)"
 
 

@@ -294,9 +294,7 @@ def test_ac1_rejects_files_modified_path_missing_from_owned_edits_ledger(tmp_pat
         owned_edits={"owned.txt": [{"old": "a", "new": "b"}]},
     )
 
-    # Attribution-journal consumer cutover (docs/reference/attribution-
-    # journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
-    # constraint of the follow-up consumer-cutover task): absence from the
+    # Attribution-journal consumer cutover: absence from the
     # self-reported owned_edits ledger alone no longer raises -- the gate now
     # asks the write-time journal (scripts/resolve-commit-repos.py
     # _ledger_entangled()), and this fixture's edit is a plain-filesystem

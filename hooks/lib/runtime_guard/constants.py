@@ -3,9 +3,8 @@
 
 Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
 references nothing from _core. The decision anchors `_block`, the `Verdict` type
-alias, and `ALLOW` stay in _core by design; only pure data lives here. See
-docs/reference/monolith-split-plan.md for the decomposition rationale and the
-INV-3 dual-context import contract. ZERO project identifiers.
+alias, and `ALLOW` stay in _core by design; only pure data lives here.
+ZERO project identifiers.
 """
 
 # ── Generic verb / keyword vocabularies (no project names) ───────────────────

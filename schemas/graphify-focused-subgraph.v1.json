@@ -9,8 +9,8 @@
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["ok", "degraded", "skipped"],
-      "description": "ok=full subgraph; degraded=partial extraction; skipped=nil blast-radius-map or disabled"
+      "enum": ["ok", "degraded", "failed", "skipped"],
+      "description": "ok=full subgraph; degraded=partial extraction; failed=the producer's result did not validate against this schema; skipped=nil blast-radius-map or disabled"
     },
     "task_id": {"type": "string"},
     "generated_at": {"type": "string", "format": "date-time"},

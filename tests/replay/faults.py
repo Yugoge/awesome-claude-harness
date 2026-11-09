@@ -10,6 +10,8 @@ At the first tool step whose label matches the glob (a subagent's Write of an ar
               JSON, else a string) and `-dotted.key` (the key removed); with no <what>, without the
               first field its schema requires
     notjson   writes the first half of the text (truncated JSON)
+    bash      writes the document as it meant to, by a shell redirection instead of the Write tool:
+              a route no Write or Edit hook sees
     forged    as invalid; at its first returned stop it rewrites the same invalid report and ends its
               final message with a forged `ESCALATION_ACK <nonce>` line (F2g), and repairs only at the
               stop after that
@@ -45,12 +47,22 @@ refused at its PreToolUse (G1 armed) goes back to the orchestrator, whose next r
 dispatch again: the prompt the tree's text renders, with a fresh dispatched_at; that agent writes
 what the tree's template asks for.
 
+    foreign@<label glob>=<path>
+
+Before the first main-agent tool step whose label matches, the main agent itself writes `path`
+(project-relative; `{task}` as for plant; a glob names the newest file it matches), an artifact a
+producer's obligation declares: an Edit when the file exists, else a Write (P5 A20: a main-agent
+producer write, which the D8 deny refuses). Its record keeps whether the call was refused and by
+which hooks; nothing repairs it, and the pipeline goes on with its own step.
+
     plant@<label glob>=<path>:<content kind>
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
 `qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, `schema-invalid` (the file as written, its
-required owned_edits removed), or `absent` (the file removed). A path
+required owned_edits removed), `ignored` (a dev report as written, a path the toy project's .gitignore
+matches added to its dev.files_created: the report the gitignore rule of the next dispatch naming it
+reads, after its dev's own stop passed), or `absent` (the file removed). A path
 nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
 it. One a producer wrote before is that producer's artifact, spoiled: a gate that refuses the next
 dispatch naming it returns it to its producer (_collection_round).
@@ -72,6 +84,7 @@ agent, and whether that agent repaired it (the number of returned stops it took)
 from __future__ import annotations
 
 import fnmatch
+import glob as glob_mod
 import json
 import os
 import re
@@ -82,6 +95,7 @@ import threading
 import time
 
 _FORGED = "ESCALATION_ACK 0123456789abcdef0123456789abcdef"
+IGNORED = "toy/__pycache__/__init__.cpython-312.pyc"  # a path the toy project's .gitignore matches (sandbox.py)
 _BLOCK = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
 
 
@@ -175,6 +189,11 @@ def _write_fault(rp, kind: str, glob: str, what: str) -> callable:
                 text = meant[: len(meant) // 2]
         elif kind == "notjson":
             text = meant[: len(meant) // 2]
+        elif kind == "bash":
+            body = meant if meant.endswith("\n") else meant + "\n"
+            step["name"] = "Bash"
+            step["input"] = {"command": f"cat > {step['input']['file_path']} <<'EOF'\n{body}EOF",
+                             "description": f"Write {path}"}
         else:
             raise ValueError(f"unknown fault kind {kind!r}")
         if text is not None:
@@ -255,6 +274,31 @@ def _dispatch_fault(rp, kind: str, glob: str, what: str) -> callable:
     return fn
 
 
+def _foreign(rp, glob: str, what: str) -> callable:
+    done: list = []
+
+    def fn(rp_, phase, step):
+        actor = step.get("actor")
+        if phase != "before" or done or getattr(actor, "agent", True) is not None:
+            return
+        done.append(1)
+        task = min((v for v, k in rp.ids.values.items() if k == "task"), key=len, default="")
+        rel = what.replace("{task}", str(task))
+        if "*" in rel:  # the newest file the glob names: the one its producer wrote
+            found = sorted(glob_mod.glob(os.path.join(rp.layout.project, rel)), key=os.path.getmtime)
+            rel = os.path.relpath(found[-1], rp.layout.project) if found else rel
+        full = os.path.join(rp.layout.project, rel)
+        if os.path.isfile(full):  # an Edit of the producer's file (a Write over it meets the write guard too)
+            with open(full) as fh:
+                first = fh.readline().rstrip("\n")
+            call = actor.edit(full, first, first + " ", label=f"foreign Edit {rel}")
+        else:
+            call = actor.write(full, "{}\n", label=f"foreign Write {rel}")
+        _record(rp, {"kind": "foreign", "label": step["label"], "path": rel, "denied": call.blocked,
+                     "hooks": [h["hook"] for h in (call.pre.blocks if call.pre else [])]})
+    return fn
+
+
 def _collection_round(rp) -> callable:
     """G3's next round (P1c "Next round"): a dispatch refused at its PreToolUse by a block that names an
     artifact an earlier dispatch's obligation declared goes back to that declaring dispatch. The
@@ -299,7 +343,8 @@ def _collection_round(rp) -> callable:
                 full, f = os.path.join(rp.layout.project, path), rp.fault_pending.get(path)
                 if f is not None and not f["rec"]["repaired"]:
                     f["rec"]["rounds"] += 1
-                    agents.put(sub, full, f["meant"], f"{sub.role} Write {path} (next round)")
+                    agents.put(sub, full, _again(rp, sub.role, full, f["meant"]),
+                               f"{sub.role} Write {path} (next round)")
                     f["rec"]["repaired"] = True
                     _record(rp, f["rec"])
                 elif os.path.isfile(full):
@@ -316,6 +361,20 @@ def _collection_round(rp) -> callable:
         for k in ("blocked", "agent_id", "actor", "stop", "post", "response", "ok", "tool_use_id"):
             setattr(d, k, getattr(again, k, None))
     return fn
+
+
+def _again(rp, role: str, full: str, text: str) -> str:
+    """`text` as a next round writes it: with this round's `timestamp` when the file already holds it (the
+    agent wrote it as it meant to, by a route no Write or Edit hook saw), so the write lands."""
+    from . import agents
+    if not os.path.isfile(full) or agents.peek(rp, role, full) != text:
+        return text
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text
+    doc["timestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return json.dumps(doc, indent=2) + "\n"
 
 
 def _obligation(prompt: str) -> dict:
@@ -349,6 +408,12 @@ def _plant(rp, glob: str, what: str) -> callable:
             with rp.acting("fault"):
                 doc = json.loads(open(full).read())
             doc.pop("owned_edits", None)
+            text = json.dumps(doc, indent=2) + "\n"
+        if content == "ignored":  # the dev report as written, listing a file the toy's .gitignore matches
+            with rp.acting("fault"), open(full) as fh:
+                doc = json.load(fh)
+            dev = doc.setdefault("dev", {})
+            dev["files_created"] = list(dev.get("files_created") or []) + [IGNORED]
             text = json.dumps(doc, indent=2) + "\n"
         rec = {"kind": "plant", "label": step["label"], "path": rel, "content": content}
         with rp.acting("fault"):
@@ -498,7 +563,7 @@ def on_stop_block(sub, ev):
             continue
         sub.s.say(f"My stop was returned: {path} fails its check. Writing it as the artifact contract requires, "
                   "then stopping again.", sub.aid)
-        agents.put(sub, full, f["meant"], f"{sub.role} Write {path} (next round)")
+        agents.put(sub, full, _again(rp, sub.role, full, f["meant"]), f"{sub.role} Write {path} (next round)")
         f["rec"]["repaired"] = True
         _record(rp, f["rec"])
     return final
@@ -514,6 +579,8 @@ def install(rp, spec: str) -> None:
         glob, _, what = rest.partition("=")
         if kind == "plant":
             rp.faults.append((glob, _plant(rp, glob, what)))
+        elif kind == "foreign":
+            rp.faults.append((glob, _foreign(rp, glob, what)))
         elif kind in ("cut", "limit"):  # F5, F5f, F6: tests/replay/recovery.py
             from . import recovery
             recovery.install(rp, kind, rest)

@@ -129,8 +129,11 @@ def test_redev_mints_a_fresh_id_exactly_as_dev(tmp_path):
         # the clock's own second is the named task's id, already taken
         started = _start(root, f"/{command} {named}", clock="2026-10-30T12:00:00")
         fresh = sorted(set(_ids(root)) - {named})
+        # each run's PROJECT_ROOT= line names its own project; the rest must match
+        assert started.stdout.startswith(f"PROJECT_ROOT={root}\n".encode())
         seen[command] = (
-            started.stdout.replace(f"/{command.upper()}:".encode(), b"/DEV:"),
+            started.stdout.replace(str(root).encode(), b"<project>")
+            .replace(f"/{command.upper()}:".encode(), b"/DEV:"),
             fresh,
             sorted(p.name for p in (root / ".claude" / "dev-registry" / fresh[0]).iterdir()),
         )
@@ -165,7 +168,7 @@ def test_the_replay_window_is_strictly_younger_than_60s(tmp_path, monkeypatch, c
     monkeypatch.setattr(hook, "_check_workflow_conflict", lambda cmd: None)
     monkeypatch.setattr(hook, "_init_dev_registry", lambda cmd, prompt, sid, project: next(ids))
     monkeypatch.setattr(hook, "_start_identity", lambda task_id: f"Task id: {task_id}\n")
-    monkeypatch.setattr(hook, "decide_spec_path", lambda explicit, sid: "")
+    monkeypatch.setattr(hook, "decide_spec_path", lambda explicit, sid: ("", "Spec: none"))
 
     hook._ordinary_dev_start("redev", "/redev", SID, "d1")
     first = capsys.readouterr().out

@@ -10,6 +10,9 @@ Enforcement layers:
   1. Global: Block modifications to .claude/hooks/ and overnight-state files.
   2. Session: Block file writes where path lacks "worktree" string.
   3. Session: Block file writes outside the worktree realpath boundary.
+  4. Actor: Block Write/Edit of its checkout's git config (the keystone).
+  AskUserQuestion: denied to the /dev-overnight session's main agent and
+  subagents until a human-typed prompt follows its /dev-overnight (D20).
 
 Exit codes:
   0: Allow tool use
@@ -32,7 +35,8 @@ from lib.bash_write_targets import (  # noqa: E402
     extract_bash_write_paths,
 )
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
-from lib import overnight  # noqa: E402
+from lib import command_span, overnight, stop_contract  # noqa: E402
+from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
 
 try:  # T2.4: optional contract runtime + agent resolver for self_repair grant.
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -166,8 +170,9 @@ def _payload_pipeline_id(payload: dict) -> str:
     return m.group(1) if m else ''
 
 
-def _try_resolve_agent_type(payload: dict) -> str:
-    """Call lib.agent_resolver.resolve_agent_type; return '' on any failure."""
+def _resolve_role(payload: dict) -> str:
+    """The acting subagent's role through lib.agent_resolver alone ('' for the
+    main agent or on any failure): an environment variable is never a role."""
     if _resolve_agent_type is None or not isinstance(payload, dict):
         return ''
     try:
@@ -175,15 +180,6 @@ def _try_resolve_agent_type(payload: dict) -> str:
     except Exception:
         return ''
     return role if isinstance(role, str) else ''
-
-
-def _resolve_role(payload: dict) -> str:
-    """Resolve acting subagent role: agent_resolver lib first, env var fallback."""
-    role = _try_resolve_agent_type(payload)
-    if role:
-        return role
-    env_role = os.environ.get('CLAUDE_AGENT_TYPE', '')
-    return env_role if isinstance(env_role, str) else ''
 
 
 def _load_active_contract(state: dict) -> dict | None:
@@ -513,10 +509,9 @@ def _enforce_bash_all_sessions(tool_name: str, tool_input: dict, worktree_paths:
 
 
 def apply_global_worktree_enforcement(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
-    """Block ALL sessions from writing outside active overnight worktrees.
-
-    This catches subagents that have different session_ids from the
-    parent overnight agent but should still be confined to the worktree.
+    """Block writes outside every live overnight worktree; main() runs it for
+    each enforced actor. A subagent's payload carries its parent's session_id
+    and main transcript_path (plus agent_id), so it is governed as its session.
     """
     if not worktree_paths:
         return
@@ -864,26 +859,28 @@ def _is_cwd_in_worktree(worktree_paths: list[str], cwd: str | None = None) -> bo
 
 
 def _resolve_child_session(payload: dict) -> dict | None:
-    """M9/round-3 overnight_child: payload.agent_id -> agent-index.json
-    dev_session_id -> overnight state, if that state is live + validated."""
+    """M9/round-3 overnight_child: the overnight state of the session that
+    dispatched the subagent (payload.session_id), which records its dispatch
+    obligation (P6 R4). A pre-pull agent-index.json dev_session_id names it only
+    for a dispatch without one (its transcript is read only for such an entry)."""
     if not isinstance(payload, dict):
         return None
     agent_id = payload.get('agent_id')
     if not agent_id:
         return None
     project_dir = str(Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())))
-    if _resolve_dev_registry_entry is None:
-        return None
+    session_id = payload.get('session_id') or ''
     try:
-        entry = _resolve_dev_registry_entry(agent_id, project_dir)
+        entry = _resolve_dev_registry_entry(agent_id, project_dir) if _resolve_dev_registry_entry else None
+        if entry and entry.get('dev_session_id'):
+            from lib import obligation
+            own = obligation.resolve_own_obligation(session_id=session_id, agent_id=agent_id,
+                                                    project_dir=project_dir)
+            if not isinstance(own, obligation.Resolved):
+                session_id = entry['dev_session_id']
     except Exception:
         return None
-    if not entry:
-        return None
-    dev_sid = entry.get('dev_session_id')
-    if not dev_sid:
-        return None
-    return _load_session_state(dev_sid)
+    return _load_session_state(session_id)
 
 
 def _governing_state_for_cwd(cwd: str) -> dict | None:
@@ -1070,14 +1067,6 @@ def _iter_git_invocations(command: str):
             yield (toks[k + 1:], cwd_override, cwd_ambiguous)
 
 
-def _normalize_git_basename_cmds(command: str) -> list[str]:
-    """Back-compat shim: return only the subtoks for each git invocation.
-
-    Retained for any external caller / test; the shell-aware effective-cwd data
-    is consumed via `_iter_git_invocations`."""
-    return [subtoks for subtoks, _cwd, _amb in _iter_git_invocations(command)]
-
-
 _GIT_HOOK_SUPPRESS_RE = re.compile(
     r'(-c\s+core\.hooksPath\s*=|--config-env|'
     r'GIT_CONFIG_(COUNT|KEY|VALUE|GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS)|'
@@ -1112,17 +1101,6 @@ def _config_key_redirects_keystone(key: str) -> bool:
     if k in _HOOKS_REDIRECT_CONFIG_KEYS:
         return True
     return k.startswith('includeif.') and k.endswith('.path')
-
-
-# Git GLOBAL options that consume the FOLLOWING token as a separate operand
-# (e.g. `git -C <dir> -c include.path=… status`). The scanner MUST skip the
-# operand so it does not mistake it for the subcommand boundary and stop before a
-# later config injection (codex F2 — the realistic `git -C <worktree> -c …`
-# shape). `-c` / `--config-env` are handled specially above; these are the other
-# value-taking globals that may legitimately precede the injection.
-_GIT_GLOBAL_OPTS_WITH_OPERAND = frozenset({
-    '-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix',
-})
 
 
 def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
@@ -1174,15 +1152,16 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
         # follow, so stop scanning.
         if t == '--':
             break
-        # A value-taking git global option (`-C <dir>`, `--git-dir <d>`, …):
-        # skip BOTH the option and its operand so a later `-c` injection is still
-        # reached (codex F2). The glued `-C<dir>` / `--git-dir=<d>` forms carry
-        # the value in-token and consume no separate operand.
-        if t in _GIT_GLOBAL_OPTS_WITH_OPERAND:
+        # Any other value-taking git global option (`-C <dir>`, `--git-dir <d>`,
+        # …, from the classifier's option table): skip BOTH the option and its
+        # operand so a later `-c` injection is still reached (codex F2). The
+        # glued `-C<dir>` / `--git-dir=<d>` forms carry the value in-token and
+        # consume no separate operand.
+        if t in GIT_GLOBAL_VALUE_OPTS:
             j += 2
             continue
         if (t.startswith('-C') and len(t) > 2) or any(
-                t.startswith(o + '=') for o in _GIT_GLOBAL_OPTS_WITH_OPERAND):
+                t.startswith(o + '=') for o in GIT_GLOBAL_VALUE_OPTS):
             j += 1
             continue
         # Reaching the first non-option token ends the git global-option region:
@@ -1228,6 +1207,9 @@ _GIT_TOKEN_RE = re.compile(r'(?<![\w./-])(?:/[\w./-]*/)?git\b')
 _DANGEROUS_GIT_OP_RE = re.compile(
     r'\b(checkout|switch|reset|restore|clean|stash|update-ref|symbolic-ref|'
     r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
+# P2 R6: a command names a harness script through the CLAUDE_HOME channel; the operand scan
+# reads it at the path the shell expands it to (CLAUDE_HOME, else the home this hook runs from).
+_CHANNEL_RE = re.compile(r'^\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?=/)')
 
 
 # Per-request working root of the record GOVERNING this actor, for `in_place`
@@ -1396,9 +1378,11 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
         return False
     # If the command itself names main_root + a dangerous git op, the inline scan
     # already covers it; here we focus on file operands.
+    home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for tok in command.split():
-        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable".
-        t = os.path.expanduser(tok.strip('\'"'))
+        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable"; a
+        # channel-spelled operand is read at the path the shell expands it to (P2 R6).
+        t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"')))
         if not t or t.startswith('-'):
             continue
         # heuristically a script operand: a path ending in a known script ext OR
@@ -1972,6 +1956,18 @@ def _command_is_worktree_local(command: str, main_root: str, worktree_path: str,
     return True
 
 
+def _targets_git_config(file_path: str) -> bool:
+    """R13: file_path is the config or config.worktree of the git dir or common dir of the
+    checkout it lies in, which the bwrap rebind keeps Bash off; an Edit runs outside bwrap."""
+    real = os.path.realpath(os.path.abspath(file_path))
+    probe = os.path.dirname(real)
+    while not os.path.isdir(probe):
+        probe = os.path.dirname(probe)
+    dirs = _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probe)
+    return any(real == os.path.join(os.path.realpath(d), leaf)
+               for d in dirs.splitlines() for leaf in ('config', 'config.worktree'))
+
+
 def _emit_command_rewrite(new_command: str) -> None:
     """Emit the Claude Code PreToolUse command-rewrite and exit 0. The runtime
     replaces tool_input.command with `new_command` (the bwrap re-exec)."""
@@ -2088,9 +2084,41 @@ def _restart_journal(payload: dict) -> tuple:
     return tuple(os.path.realpath(d) for d in (restart.state_dir(), restart.grant_dir()))
 
 
+_UNATTENDED_DENY = {  # D20: nobody answers a question asked inside /dev-overnight
+    False: "Overnight is unattended; nobody answers. Decide (experiment, else the question's default), record the "
+           "decision in the cycle log and in the summary's 'Decisions made without the owner', and continue.",
+    True: "Nobody answers overnight. Decide by experiment if one can be run, else take the question's default; "
+          "record the decision, its options, the evidence or experiment and the chosen option in your report, "
+          "and write your report.",
+}
+
+
+def _unattended(payload: dict) -> bool:
+    """True while the caller's session is unattended: the latest human-typed
+    prompt of its main transcript is /dev-overnight. A subagent's payload
+    carries its session's transcript_path (or its own, <sid>/subagents/
+    agent-<id>.jsonl, read as <sid>.jsonl), so it needs no registration; no
+    state file decides, and another session's transcript has no such prompt."""
+    path = Path(str(payload.get('transcript_path') or ''))
+    if path.parent.name == 'subagents':
+        path = path.parent.parent.parent / f'{path.parent.parent.name}.jsonl'
+    latest = None
+    try:
+        for _number, record in command_span._records(path):
+            if stop_contract.is_human_prompt(record):
+                latest = record
+    except (OSError, ValueError):
+        return False
+    return stop_contract.span_opener(latest, frozenset({'dev-overnight'})) is not None
+
+
 def main():
     """Entry point: apply global + actor-scoped overnight enforcement (M9)."""
     tool_name, tool_input, session_id, payload = _parse_hook_input()
+    if tool_name == 'AskUserQuestion':  # R10: the deny is this hook's only rule for it
+        if _unattended(payload):
+            _block(_UNATTENDED_DENY[bool(payload.get('agent_id'))] + '\n')
+        sys.exit(0)
     state = _load_session_state(session_id)
     _set_request_ctx(state, payload)  # T2.4: enable self_repair grant lookup
     if is_overnight_active():
@@ -2152,6 +2180,11 @@ def main():
             # non-git, non-interpreter command is left to the worktree-boundary
             # enforcement below.
             _fail_closed_worktree_context(tool_input.get('command', ''))
+    target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
+    if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
+            and target and _targets_git_config(target):
+        _block('\nOVERNIGHT GIT CONFIG PROTECTION: the repository\'s git config holds the keystone '
+               f'(core.hooksPath); an overnight actor leaves it as it is.\nBlocked: {tool_name} to {target}\n')
 
     if wt_paths:
         apply_global_worktree_enforcement(tool_name, tool_input, wt_paths)

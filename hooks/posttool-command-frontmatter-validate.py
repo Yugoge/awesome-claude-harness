@@ -7,8 +7,9 @@ Checks format only:
 2. Must have closing "---"
 3. Must have "description" field
 
-Hook type: PostToolUse (Write|Edit matcher)
-Exit codes: 0 = pass, 1 = block with error message
+Hook type: PostToolUse (Write|Edit|NotebookEdit|MultiEdit matcher): it runs
+after the write, so an invalid file stays written.
+Exit codes: 0 = valid or not a command file, 1 = invalid (errors on stderr)
 """
 
 import json
@@ -73,7 +74,7 @@ def main():
         sys.exit(0)
 
     basename = path.rsplit('/', 1)[-1]
-    print(f'BLOCKED: {basename} has invalid command frontmatter:', file=sys.stderr)
+    print(f'INVALID: {basename} was written with invalid command frontmatter; fix the file:', file=sys.stderr)
     for e in errors:
         print(f'  - {e}', file=sys.stderr)
     print(f'\nCommand files must start with "---", have a closing "---", and include a "description" field.', file=sys.stderr)

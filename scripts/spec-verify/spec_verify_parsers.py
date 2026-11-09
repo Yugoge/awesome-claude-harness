@@ -1,6 +1,7 @@
 """Front-matter + annotation parsers for spec-verify.py (R1.6).
 
-Authoritative grammar: /root/docs/dev/specs/MONOLITH-WRITING-GUIDE.md R6.6.
+Grammar: the regexes below, for the `## Role: <agent>` headings and `consumers:`
+annotations agents/spec.md describes (R6.6).
 
 Extracted into a sidecar module because spec-verify.py would exceed
 the 800-line quality-gate limit if these parsers were inlined. The

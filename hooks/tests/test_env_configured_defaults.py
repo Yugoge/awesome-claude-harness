@@ -151,6 +151,12 @@ def test_process_family_rules(sandbox):
     'git commit -m "remove session-recovery.sh"',
     "grep -n trap scripts/session-recovery.sh | head -5",
     "timeout 5 cat scripts/restart-all-sessions.sh",
+    # P5 R6: a name merely after ( ; | ! or & inside quoted text is data, not a command start
+    'git commit -m "fix(session-recovery): quote the restore path"',
+    "git commit -m 'docs; restart-all-sessions stays human-only'",
+    'grep -n "restore|session-recovery" notes.md',
+    "echo 'never !session-recovery'",
+    'git add . && git commit -m "chore: tidy & restart-all-sessions notes"',
 ))
 def test_default_hard_bans_allow_reading_and_mentioning_the_names(sandbox, command):
     _, env = sandbox
@@ -181,6 +187,13 @@ def test_default_hard_bans_allow_reading_and_mentioning_the_names(sandbox, comma
     ("./scripts/restart-all-sessions.sh>/dev/null 2>&1", "restart-all-sessions"),
     ("find . -name '*.log' | xargs scripts/session-recovery.sh", "session-recovery"),
     ("echo `restart-all-sessions.sh`", "restart-all-sessions"),
+    # P5 R6: quoted text a shell, eval or ssh runs, and a $( inside "..", stay code
+    ("bash -c 'cd /opt/x; session-recovery'", "session-recovery"),
+    ("echo 'cd /opt/x; restart-all-sessions' | sh", "restart-all-sessions"),
+    ('echo "$(cd /opt/x; session-recovery)"', "session-recovery"),
+    ("eval 'true; restart-all-sessions'", "restart-all-sessions"),
+    ("ssh demo-host 'cd /opt/x; session-recovery'", "session-recovery"),
+    ("awk 'BEGIN { system(\"cd /opt/x; restart-all-sessions\") }'", "restart-all-sessions"),
 ))
 def test_default_hard_bans_block_running_the_scripts(sandbox, command, name):
     _, env = sandbox

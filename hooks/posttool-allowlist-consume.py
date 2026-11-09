@@ -2,15 +2,15 @@
 """
 PostToolUse Hook: /allow grant consumption.
 
-Atomically deletes the /allow grant file after a tool executes successfully.
-PreToolUse hooks are now read-only grant checkers; this hook is the sole
+Deletes an /allow grant file once a call the grant matches has ended,
+whatever the result. PreToolUse hooks only read grants; this hook is the
 consume point. Applies to any matching PostToolUse event (subagent or
 main-agent). Subagent write-grant firewall remains in
 `hooks/userprompt-consent-allowlist.sh` Step 0.
 
 PostToolUse fires only when all PreToolUse hooks exit 0 (tool was allowed).
-If any PreToolUse hook exits 2, PostToolUse never fires — grant persists
-for retry. This is correct UX: user can retry with the same grant.
+If any PreToolUse hook exits 2, PostToolUse never fires — the grant persists
+for a retry until it expires.
 
 PostToolUse additionally fires only for tool calls that RETURNED. A Bash
 command whose non-benign exit code makes the tool throw fires the separate
@@ -19,15 +19,15 @@ is_interrupt — no tool_response), so this hook is registered under BOTH
 events in settings.json (audit R2-1): the failure event is what removes a
 failed commit's event pointer and consumes sentinels on failed commands.
 
-Sentinel-grant consume-on-any-terminal-result semantic (task 20260519-211515
-R2 / AC2): this hook unlinks the sentinel grant at
-<state dir>/claude-grants/<task_id>.json, the one /allow grant file, when ANY
-terminal result is observed for the wrapped tool. The four mandated
-terminal-consumption cases are: success (exit 0), failure / non_zero exit
-(1..255), malformed grant JSON, and comment_only attack (the magic phrase
-appears in the command but no sentinel JSON exists). All four unlink the
-sentinel grant unconditionally — this is the consume-on-any-terminal-result
-contract documented verbatim below.
+What it unlinks at <state dir>/claude-grants/<task_id>.json, the one /allow
+grant file:
+  - Bash: a grant whose entry matches the command, once the call has ended
+    (success, PostToolUseFailure, an interrupted or error response, a non-zero
+    exit code); a background launch receipt has not ended and consumes nothing.
+  - Write: a grant whose entry matches the target.
+  - Any other tool, and Bash: a grant naming the tool itself (`/allow Agent`).
+  - Bash and Write: a grant file the reader rejects (malformed, expired),
+    whatever the call.
 
 Exit 0 (fail-open), silently when no grant matches. One exception: a Write of
 a merge-analyst grant that hooks/lib/merge_grant.py rejects is removed and exits
@@ -117,9 +117,8 @@ from lib.allowlist import (  # noqa: E402
 def _classify_terminal_result(data: dict) -> str:
     """Classify the posttool terminal-result for sentinel consumption.
 
-    Implements consume-on-any-terminal-result: every TERMINAL outcome
-    (success, failure, non_zero exit, malformed grant, comment_only attack)
-    unlinks the sentinel. "unknown_terminal" is the one NONTERMINAL label
+    Every TERMINAL outcome (success, failure, non_zero exit) lets main()
+    unlink a matched grant. "unknown_terminal" is the one NONTERMINAL label
     (audit F2): a background-launch receipt means the command is still
     running, so nothing is consumed, restored, or deleted for it — the state
     survives for the terminal event or the age-bounded sweeps.
@@ -143,8 +142,8 @@ def _classify_terminal_result(data: dict) -> str:
     and the failure event is recognized by its hook_event_name. The
     is_error / exit_code branches are kept for SDK-style payloads.
 
-    Returns one of: "success", "failure", "non_zero", "malformed",
-                    "comment_only", "unknown_terminal".
+    Returns one of: "success", "failure", "non_zero", "unknown_terminal";
+    main() itself labels a grant file the reader rejects "malformed".
     """
     if data.get("hook_event_name") == "PostToolUseFailure":
         # The tool threw (Bash: non-benign non-zero exit or pre-spawn
@@ -213,17 +212,17 @@ def main() -> None:
             consume_sentinel_grant_on_terminal_result(
                 os.environ.get("CLAUDE_TASK_ID") or session_id, named_result)
 
-    # Sentinel-grant consume-on-any-terminal-result (task 20260519-211515 R2 / AC2).
+    # Sentinel-grant consumption for a Bash call.
     #
-    # CF-2 scoping (codex iter-1 BLOCKER): the sentinel grants bash-command
+    # Scoping: the sentinel grants bash-command
     # authorization. PostToolUse fires for EVERY tool (matcher "*"), so an
     # unrelated Read/Grep/Glob call after `/allow` could otherwise unlink the
     # sentinel before the intended Bash call. We restrict sentinel consumption
     # to Bash terminal results AND only when the sentinel actually matched
     # this command structurally (`match_sentinel_grant_for_bash_command`).
-    # The four mandated terminal cases (success/failure/non_zero/malformed)
-    # are all hit only when Bash itself fires; non-Bash tool events skip the
-    # sentinel-consume path entirely.
+    # The terminal cases (success/failure/non_zero/malformed) are all hit
+    # only when Bash itself fires; non-Bash tool events skip this path (the
+    # named-tool grant above and the Write branch below are theirs).
     env_task_id = os.environ.get("CLAUDE_TASK_ID", "")
     task_id = env_task_id if env_task_id else session_id
     if task_id and tool_name == "Bash":

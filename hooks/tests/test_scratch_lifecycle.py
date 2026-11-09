@@ -43,12 +43,12 @@ VAR_TMP_OVERRIDE_CONF = INSTALL_DIR / "tmpfiles-var-tmp-override.conf"
 SYSTEMD_TMPFILES = shutil.which("systemd-tmpfiles")
 
 
-def _run_hook(hook_path, env_overrides):
+def _run_hook(hook_path, env_overrides, payload="{}"):
     env = dict(os.environ)
     env.update(env_overrides)
     return subprocess.run(
         ["bash", str(hook_path)],
-        input="{}",
+        input=payload,
         capture_output=True,
         text=True,
         env=env,
@@ -126,6 +126,33 @@ class SessionEndScratchSweepTests(unittest.TestCase):
     def setUp(self):
         self.sandbox = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-sweep-"))
         self.addCleanup(shutil.rmtree, self.sandbox, ignore_errors=True)
+        # The project the hook acts in (the CLI exports CLAUDE_PROJECT_DIR to hooks).
+        self.project = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-project-"))
+        self.addCleanup(shutil.rmtree, self.project, ignore_errors=True)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.project)
+        self.addCleanup(os.environ.pop, "CLAUDE_PROJECT_DIR", None)
+
+    def test_removes_own_runtime_files_in_the_project_siblings_survive(self):
+        # Keyed by the payload's session id, as prompt-workflow.py writes them; an inherited
+        # CLAUDE_CODE_SESSION_ID (a session started from another session's Bash) names another.
+        claude = self.project / ".claude"
+        own = [claude / "workflow-own-sid.json", claude / "workflow-locks" / "own-sid.lock",
+               claude / "dev-start-replays" / "own-sid" / "d.json"]
+        kept = [claude / "workflow-parent-sid.json", claude / "workflow-locks" / "parent-sid.lock",
+                claude / "dev-start-replays" / "parent-sid" / "d.json",
+                claude / "dev-registry" / "agent-index.json"]
+        for path in own + kept:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n")
+        result = _run_hook(
+            SESSION_SWEEP_HOOK,
+            {"TMPDIR": str(self.sandbox), "CLAUDE_CODE_SESSION_ID": "parent-sid"},
+            payload=json.dumps({"session_id": "own-sid"}),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([p for p in own if p.exists()], [])
+        self.assertFalse((claude / "dev-start-replays" / "own-sid").exists())
+        self.assertEqual([p for p in kept if not p.exists()], [])
 
     def test_removes_own_dir_sibling_survives_byte_untouched(self):
         own = self.sandbox / "own-sid"

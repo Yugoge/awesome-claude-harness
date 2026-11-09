@@ -65,6 +65,15 @@
       "positional_justification": "The removal-naming word is the git subcommand `rm` in subcommand_resource_operand position: its consuming position is git's index, not the filesystem, and `--cached` was proven present BEFORE the `--` operand separator. Post-`--` (`git rm -- --cached f`) is a pathspec and denies."
     },
     {
+      "reason_code": "git_rm_recoverable",
+      "positional_shape": "subcommand_resource_operand",
+      "admissible_proof_kind": "proven-recoverable non-forced git removal",
+      "representative_command": "git rm tracked.txt",
+      "members": 4,
+      "referenced_by": 4,
+      "positional_justification": "The removal-naming word is the git subcommand `rm` in subcommand_resource_operand position, with no force option in any spelling: git refuses a path that differs from HEAD or the index, and a removed clean path comes back from history. The walk allows it only as its command's own head at the top level, with literal pathspecs and only location options before `rm`; at run time the hook (prove_git_rm) still denies it in the harness home, on a gitlink, or where git cannot resolve the repository."
+    },
+    {
       "reason_code": "docker_resource_removal",
       "positional_shape": "subcommand_resource_operand",
       "admissible_proof_kind": "proven-safe container/image resource removal",

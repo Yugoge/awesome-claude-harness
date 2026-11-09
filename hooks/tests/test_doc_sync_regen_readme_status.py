@@ -19,7 +19,6 @@ import importlib
 import importlib.util
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -267,8 +266,8 @@ CLAUDE_MD_HEAD = '# CLAUDE.md\n\n> Project-specific settings for demo\n\n'
 
 
 @pytest.mark.parametrize('case', ['single_pair', 'reversed_pair'])
-def test_patch_claude_md_touches_only_a_wellformed_last_updated_pair(tmp_path, case):
-    """patch_claude_md refreshes a single last-updated pair and leaves a reversed pair alone."""
+def test_patch_claude_md_leaves_a_last_updated_pair_alone(tmp_path, case):
+    """patch_claude_md writes no date: a last-updated pair, well-formed or reversed, keeps its bytes."""
     project = tmp_path / 'project'
     project.mkdir()
     open_marker = '<!-- AUTO:last-updated -->'
@@ -279,19 +278,10 @@ def test_patch_claude_md_touches_only_a_wellformed_last_updated_pair(tmp_path, c
         text = f'{CLAUDE_MD_HEAD}{close_marker}\nmiddle\n{open_marker}\n> Last updated: 2001-01-01\n\nhand notes\n'
     claude_md = project / 'CLAUDE.md'
     claude_md.write_text(text)
-    date_before = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-    patch_module.patch_claude_md(project)
+    assert patch_module.patch_claude_md(project) == []
 
-    date_after = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-    if case == 'single_pair':
-        expected = {
-            f'{CLAUDE_MD_HEAD}{open_marker}\n> Last updated: {date}\n{close_marker}\n\nhand notes\n'
-            for date in (date_before, date_after)
-        }
-        assert claude_md.read_text() in expected
-    else:
-        assert claude_md.read_text() == text
+    assert claude_md.read_bytes() == text.encode()
 
 
 def load_regen_readme(mode):

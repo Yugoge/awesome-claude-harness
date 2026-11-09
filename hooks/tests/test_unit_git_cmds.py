@@ -3,8 +3,8 @@
 
 Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 unit-tests its pure git argv PARSERS in isolation: _git_subcommand_index,
-_git_effective_cwd, _strip_git_pathspec_magic, _git_destructive_pathspecs,
-_git_is_destructive_invocation. Crafted argv token lists in, parsed structure /
+_git_effective_cwd, _git_location, _strip_git_pathspec_magic,
+_git_destructive_pathspecs, _git_is_destructive_invocation. Crafted argv token lists in, parsed structure /
 predicate out — NOT full evaluate() e2e.
 """
 
@@ -35,6 +35,13 @@ def test_git_subcommand_index_skips_global_opts_with_arg():
     assert git_cmds._git_subcommand_index(["git", "-c", "k=v", "log"], 0) == ("log", 3)
 
 
+def test_git_subcommand_index_uses_the_classifier_option_table():
+    # --config-env and --attr-source take a value; bare --exec-path takes none.
+    assert git_cmds._git_subcommand_index(["git", "--config-env", "k=E", "clean"], 0) == ("clean", 3)
+    assert git_cmds._git_subcommand_index(["git", "--attr-source", "HEAD", "clean"], 0) == ("clean", 3)
+    assert git_cmds._git_subcommand_index(["git", "--exec-path", "clean"], 0) == ("clean", 2)
+
+
 def test_git_subcommand_index_none_when_no_subcommand():
     assert git_cmds._git_subcommand_index(["git"], 0) == (None, None)
 
@@ -47,6 +54,22 @@ def test_git_effective_cwd_absolute_dashC():
 
 def test_git_effective_cwd_dynamic_operand_marks_indeterminate():
     assert git_cmds._git_effective_cwd(["git", "-C", "$X", "clean"], 0, "/base", True) == ("/base", False)
+
+
+def test_git_location_folds_every_dashC_in_order():
+    t = ["git", "-C", "/a", "-C", "b", "-C", "", "-Cc", "rm", "x"]
+    assert git_cmds._git_location(t, 0, 8, "/w", True) == ("/a/b/c", True, True)
+    assert git_cmds._git_location(["git", "rm", "x"], 0, 1, "/w", True) == ("/w", True, True)
+
+
+def test_git_location_is_not_proven_past_another_global_option_or_a_dotdot():
+    for opts in (["--work-tree=/t"], ["-c", "core.worktree=/t"], ["--git-dir", "/g"], ["-P"]):
+        t = ["git", *opts, "rm", "x"]
+        assert git_cmds._git_location(t, 0, len(opts) + 1, "/w", True)[2] is False, opts
+    assert git_cmds._git_location(["git", "-C", "/a/l/..", "rm", "x"], 0, 3, "/w", True) == (
+        "/a", True, False)
+    assert git_cmds._git_location(["git", "-C", "$D", "rm", "x"], 0, 3, "/w", True) == (
+        "/w", False, False)
 
 
 def test_git_effective_cwd_no_dashC_passthrough():

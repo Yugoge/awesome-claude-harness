@@ -4,11 +4,13 @@
 Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 unit-tests its path-normalization + segment-boundary glob-matching primitives in
 isolation: _normalize_path, _glob_to_segment_regex, _has_shell_glob,
-_dir_equal_or_under, _path_matches_any, _path_under_any.
+_dir_equal_or_under, _path_matches_any, _path_matches_entries, _path_under_any.
 
-All path inputs are non-existent synthetic paths, so no ambient /tmp / realpath
+Path inputs are non-existent synthetic paths, so no ambient /tmp / realpath
 state can perturb assertions (the exists()/realpath() branch only ever ADDS a
-candidate, never for these inputs). HOME-dependent cases save/restore os.environ.
+candidate, never for these inputs), except in the _path_matches_entries cases,
+which build their files and symlinks under pytest's tmp_path because that rule
+reads the filesystem. HOME-dependent cases save/restore os.environ.
 """
 
 from __future__ import annotations
@@ -138,6 +140,64 @@ def test_path_matches_any_command_side_glob_selects_protected():
     assert pathmatch._path_matches_any("/a/dir/*", ["/a/dir/secret"]) is True
     # a glob whose parent selects nothing protected does not match.
     assert pathmatch._path_matches_any("/tmp/scratch/*", ["/a/dir/secret"]) is False
+
+
+# ── _path_matches_entries ────────────────────────────────────────────────────
+# Real paths under tmp_path: the entry-only rule reads the filesystem (symlinks,
+# the glob walk). `pad` stands for a session scratchpad that holds $HOME and $TMPDIR.
+
+def _scratchpad(tmp_path):
+    pad = tmp_path / "pad"
+    cfg = pad / "home" / ".config" / "app"
+    cfg.mkdir(parents=True)
+    data = cfg / "data.json"
+    data.write_text("{}")
+    work = pad / "tmp" / "repo" / "dir"
+    work.mkdir(parents=True)
+    (work / "a.txt").write_text("a")
+    files = [str(data)]
+    entries = [str(cfg), str(cfg.parent), str(cfg.parent.parent), str(pad), str(tmp_path)]
+    return pad, cfg, work, files, entries
+
+
+def test_path_matches_entries_a_glob_inside_an_ancestor_entry_is_no_hit(tmp_path):
+    _pad, cfg, work, files, entries = _scratchpad(tmp_path)
+    glob = f"{work}/*.txt"
+    assert pathmatch._path_matches_any(glob, files + entries) is True  # the container rule
+    assert pathmatch._path_matches_entries(glob, files, entries) is False
+    assert pathmatch._path_matches_entries(f"{cfg}/sub/*", files, entries) is False
+    # where the caller cannot prove the location, the container rule stands
+    assert pathmatch._path_matches_entries(glob, files, entries, located=False) is True
+    # with no entries it is _path_matches_any
+    assert pathmatch._path_matches_entries(glob, files, []) is False
+
+
+def test_path_matches_entries_still_hits_the_file_and_every_entry(tmp_path):
+    pad, cfg, _work, files, entries = _scratchpad(tmp_path)
+    for path in (f"{cfg}/*", f"{cfg}/*.json", f"{cfg.parent}/*", f"{pad}/*",
+                 f"{pad}/home/.conf*/app", f"{cfg}/sub/*/../../*", files[0], str(cfg)):
+        assert pathmatch._path_matches_entries(path, files, entries) is True, path
+    # a literal path below an entry is not the entry (unchanged)
+    assert pathmatch._path_matches_entries(f"{cfg}/sub", files, entries) is False
+
+
+def test_path_matches_entries_follows_symlinks(tmp_path):
+    _pad, cfg, work, files, entries = _scratchpad(tmp_path)
+    (work / "to-cfg").symlink_to(cfg)
+    (work / "to-data").symlink_to(files[0])
+    (work / "sub").mkdir()
+    for path in (f"{work}/*/data.json", f"{work}/to-*", f"{work}/to-cfg/*", f"{work}/to-cfg/../*"):
+        assert pathmatch._path_matches_entries(path, files, entries) is True, path
+    assert pathmatch._path_matches_entries(f"{work}/sub/*", files, entries) is False
+
+
+def test_glob_walk_reaches_proves_nothing_past_its_limit_or_for_a_relative_token(tmp_path):
+    _pad, _cfg, work, files, entries = _scratchpad(tmp_path)
+    targets = files + entries
+    assert pathmatch._glob_walk_reaches(f"{work}/*", targets) is False
+    assert pathmatch._glob_walk_reaches(f"{work}/*", targets, limit=0) is True
+    assert pathmatch._glob_walk_reaches("dir/*", targets) is True
+    assert pathmatch._glob_walk_reaches(f"{work}/**", targets) is True
 
 
 # ── _path_under_any ──────────────────────────────────────────────────────────

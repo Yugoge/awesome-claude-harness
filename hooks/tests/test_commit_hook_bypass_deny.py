@@ -32,6 +32,7 @@ repositories touched are created there.
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -129,6 +130,16 @@ BYPASS_CASES = [
     "echo \"\\\\$(git commit -n)\"",
     "bash -c 'echo $(git commit -n)'",
     "git -c 'alias.ci=!echo `git commit -n`' ci",
+    # P5 R6, fail closed where the guard cannot read the commit: an alias whose value
+    # --config-env takes from the environment, a double-quoted bash -c / eval string inside
+    # a double-quoted $(...), and nesting past the expansion limit (five bash -c levels).
+    "git --config-env=alias.ci=CI_VALUE ci -m x",
+    "git --config-env alias.ci=CI_VALUE ci -m x",
+    "echo \"$(bash -c \"git commit -n\")\"",
+    "echo \"$(eval \"git commit --no-verify\")\"",
+    "echo \"$(sh -c \"git commit -m x\")\"",
+    shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(
+        ["bash", "-c", shlex.join(["bash", "-c", "git commit -m x"])])])])]),
 ]
 
 # item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
@@ -422,6 +433,16 @@ ALLOWED_CASES = [
     "echo \"\\$(git commit -n)\" > notes.md",
     "cd \"$(git rev-parse --show-toplevel)\" && git commit -m 'forbid `git commit -n`'",
     "x=$(echo '$(git commit -n)'); git status",
+    # P5 R6: single-quoted text stays data beside a trailing # comment or a $'..' word; a
+    # --config-env alias that is not called, a double-quoted $( ) nested without bash -c or
+    # eval, and deep nesting that names no git commit or config pass.
+    "echo '$(git commit -n)' # a note",
+    "git commit -m 'never run `git commit -n`' # see the commit guard",
+    "echo '$(git commit -n)' $'tab\\there'",
+    "git --config-env=alias.ci=CI_VALUE status",
+    "git commit -m \"$(date +\"%Y\")\"",
+    shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(
+        ["bash", "-c", shlex.join(["bash", "-c", "echo commit"])])])])]) + " && git status",
 ]
 
 
@@ -568,6 +589,30 @@ def test_local_keystone_write_aimed_at_the_harness_home_is_blocked(sandbox, harn
     r = run_hook(sandbox, command, target_cwd(form, harness_home, user_project), caller)
     assert_blocked(r, "config-keystone-write", command)
     assert str(harness_home) in r.stderr.splitlines()[0], r.stderr
+
+
+# P5 R6: from the harness home, a write that names another repository by a literal absolute
+# -C, --git-dir or GIT_DIR prefix reaches that repository whatever the shell's cwd, so it passes;
+# a target an export or a cd sets may not hold where the write runs, so those stay denied.
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("write", LOCAL_WRITES)
+@pytest.mark.parametrize("form", ("dash-C", "git-dir", "GIT_DIR"))
+def test_local_keystone_write_to_another_repository_from_the_harness_home_is_allowed(
+        sandbox, harness_home, user_project, caller, form, write):
+    assert_allowed(run_hook(sandbox, target_command(form, user_project, write), harness_home, caller))
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("command", (
+    "cd {project} && git config core.hooksPath .githooks",
+    "export GIT_DIR={project}/.git && git config alias.st status",
+    "(export GIT_DIR={project}/.git); git -C {home} config core.hooksPath .githooks",
+    "git -C \"$HOME\"/.. config core.hooksPath .githooks",
+))
+def test_keystone_write_whose_target_rests_on_the_shell_state_stays_denied_in_the_harness_home(
+        sandbox, harness_home, user_project, caller, command):
+    command = command.format(project=user_project, home=harness_home)
+    assert_blocked(run_hook(sandbox, command, harness_home, caller), "config-keystone-write", command)
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))

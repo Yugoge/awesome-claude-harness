@@ -401,6 +401,13 @@ class Analyzer:
         self.chain_basename = chain_basename
         self.modules: dict[str, PyModule] = {}
         self.retired: list[PyModule] = []    # embedded modules add_embedded replaced
+        # Every module parsed in the run, kept to its end. The caches key by id() of AST nodes
+        # (memo, summaries, the reaching-definition caches) and an id names one object only
+        # while it lives: a module dropped mid-run (add_embedded registers a snippet again under
+        # a key it holds) frees its ids, and a node parsed later at one of them is answered
+        # from the dropped node's entries. Which node, if any, moves with the heap and with
+        # when the collector runs (CI's run-to-run disagreement on pretool-bash-safety.sh:365).
+        self.parsed: list[PyModule] = []
         self.failed: dict[str, str] = {}
         self.summaries: dict[int, Summary] = {}
         self.in_progress: set[int] = set()
@@ -440,6 +447,7 @@ class Analyzer:
         except (SyntaxError, ValueError, UnicodeDecodeError) as exc:
             self.failed[path] = type(exc).__name__
             return None
+        self.parsed.append(mod)
         self.modules[path] = mod
         return mod
 
@@ -450,6 +458,7 @@ class Analyzer:
             mod = PyModule(self, component, source, line_offset=line_offset, embedded=True, env=env, origin=origin)
         except (SyntaxError, ValueError):
             return None
+        self.parsed.append(mod)    # outlives the module it may displace in self.modules below
         if injected:
             mod.injected = dict(injected)
             pat = re.compile(r"__sh_\d+__")

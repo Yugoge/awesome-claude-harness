@@ -2106,7 +2106,7 @@ class TestObligationBarrierRepairProfileBypass:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l7",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )
@@ -2152,7 +2152,7 @@ class TestObligationBarrierBlockMissingPriorArtifact:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l7",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
             }],
         )
@@ -2182,7 +2182,8 @@ class TestObligationBarrierBlockMissingPriorArtifact:
 
 class TestObligationBarrierAdvisoryPasses:
     """AC4: advisory (unset default, or explicit "advisory") -> exit 0, no
-    block message and nothing written, though the prior artifact is missing."""
+    block message and nothing written, though the prior artifact is missing;
+    the finding the block would name is on stderr (P4 R9)."""
 
     @pytest.mark.parametrize("explicit_mode", [None, "advisory"])
     def test_obligation_barrier_advisory_passes(
@@ -2202,7 +2203,7 @@ class TestObligationBarrierAdvisoryPasses:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l9",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )
@@ -2212,7 +2213,9 @@ class TestObligationBarrierAdvisoryPasses:
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
         assert _run_barrier_hook(monkeypatch, data) == 0
-        assert missing_rel not in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert err.startswith("OBLIGATION BARRIER ADVISORY (pretool-aggregate-check): would block "), err
+        assert f"[artifact_missing] {missing_rel}" in err and "dev(l9)" in err, err
         assert not (fake_home / ".claude" / "logs").exists()
 
 
@@ -2235,7 +2238,7 @@ class TestObligationBarrierOffSwitchFullBypass:
             BARE_TID,
             artifacts=[{
                 "kind": "json", "path": "docs/dev/dev-report-missing-ac5.json",
-                "schema": "dev-report.v1", "identity": {"task_id": BARE_TID},
+                "schema": "dev-report.v2", "identity": {"task_id": BARE_TID},
             }],
         )
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
@@ -2361,7 +2364,7 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l2",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )
@@ -2529,7 +2532,7 @@ class TestObligationBarrierBlockIdentityMismatch:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l3",
             artifacts=[{
-                "kind": "json", "path": artifact_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": artifact_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
             }],
         )
@@ -2604,7 +2607,7 @@ class TestObligationBarrierBlockSchemaInvalidPriorArtifact:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l4",
             artifacts=[{
-                "kind": "json", "path": artifact_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": artifact_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )

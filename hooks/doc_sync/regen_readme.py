@@ -43,8 +43,7 @@ SKIP_NAMES = {
     # Runtime telemetry — gitignored per spec-20260518-225715 Cycle 2 P2.3;
     # excluding from the README listing prevents re-leakage on regen.
     'agent-scores.json', 'agent-scores.json.lock',
-    # Lifecycle JSONL score log and its lock file (arch-7 phase 2, task 20260525-050824).
-    # lifecycle.jsonl is tracked in git but must not appear in generated README listings.
+    # The rating log logs/lifecycle.jsonl (gitignored, untracked) and its lock file.
     'lifecycle.jsonl', 'lifecycle.jsonl.lock',
 }
 SKIP_DIRS = {'__pycache__', '.git', 'node_modules'}

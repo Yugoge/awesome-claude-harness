@@ -1,8 +1,7 @@
 # Root conftest — `generated` marker gate for tests/generated/.
 #
-# Phase 3 of docs/reference/test-suite-overhaul-plan.md (ratified decision in
-# docs/reference/generated-tests-policy.md): retire the blanket
-# `--ignore=tests/generated` and instead make the test-writer AC skeletons
+# Policy (docs/reference/generated-tests-policy.md): instead of the blanket
+# `--ignore=tests/generated`, the test-writer AC skeletons are made
 # OPT-IN-RUNNABLE behind a `generated` pytest marker, with the generated tree not
 # collected by the DEFAULT run.
 #

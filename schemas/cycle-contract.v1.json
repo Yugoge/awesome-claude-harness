@@ -34,7 +34,7 @@
     },
     "required_calls": {
       "type": "array",
-      "description": "One entry per dispatch of a canonical step after PM TRIAGE (scripts/todo/dev-overnight.py _STEPS): once per pipeline the triage report creates, except a step whose dispatch carries a mode, once per cycle.",
+      "description": "One entry per dispatch after PM TRIAGE, a canonical step's (scripts/todo/dev-overnight.py _STEPS) or a re-dispatch of one (lib/contract_runtime.py post_triage_steps): once per pipeline the triage report creates, except a step whose dispatch carries a mode, once per cycle.",
       "items": {
         "type": "object",
         "additionalProperties": false,

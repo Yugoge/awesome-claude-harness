@@ -5,8 +5,8 @@ Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
 observational: never blocks, always exits 0, fails soft.
 
 Also the sole production trigger for the periodic seal-to-persistent-storage
-step (autoseal_hook_trigger -- see hooks/lib/attribution_journal.py and
-docs/reference/attribution-journal-phase0-facility.md #1): it runs after
+step (autoseal_hook_trigger -- see hooks/lib/attribution_journal.py's module
+docstring): it runs after
 record_post, in its own fail-soft path, so a seal failure never affects
 capture and a capture failure never blocks the seal check.
 """

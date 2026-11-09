@@ -935,6 +935,106 @@ def test_doctor_fails_on_entries_nothing_explains(sb):
     assert STAND_IN.encode() not in git(sb, home, "show", ":settings.json").stdout
 
 
+# ------------------------------------------------------------------------ stubs (P10 R1, D15)
+
+RETIRED = "hooks/stop-retired.py"  # a tracked exit-0 stub the clean form does not register
+KEPT = "hooks/stop-kept.py"  # a tracked exit-0 stub the clean form still registers (D15)
+STUB_TEXT = "#!/usr/bin/env python3\n# STUB: retired; exits 0.\nimport sys\nsys.exit(0)\n"
+
+
+def stub_home(sb, overlay_hooks=None):
+    """A rendered checkout whose clean form also registers the stub KEPT at Stop, with RETIRED
+    tracked and unregistered; the overlay adds overlay_hooks(home), whose commands name the
+    home by its absolute (personal) path; protected-runtime file complete."""
+    home = make_home(sb)
+    for rel in (RETIRED, KEPT):
+        (home / rel).write_text(STUB_TEXT)
+    doc = clean_form()
+    doc["hooks"]["Stop"][0]["hooks"].append(hook("python3", KEPT))
+    init_repo(sb, home, canon(doc), register=True)
+    overlay = {"env": {"CLAUDE_HOME": str(home)}}
+    if overlay_hooks:
+        overlay["hooks"] = overlay_hooks(home)
+    write_overlay(home, overlay)
+    proc = run_tool(sb, home, "render")
+    assert proc.returncode == 0, proc.stderr
+    sb.runtime_file.write_text(json.dumps(dict({"schema_version": 1},
+                                               **{k: [] for k in required_keys()})))
+    return home
+
+
+def check_out(sb, home):
+    proc = run_tool(sb, home, "check")
+    return proc.returncode, proc.stdout.decode()
+
+
+KEPT_INFO = "[info] hook paths: the clean form registers 1 exit-0 stub, which pass: " + KEPT
+
+
+def test_check_passes_the_clean_forms_own_stub_with_an_info_line(sb):
+    rc, out = check_out(sb, stub_home(sb))
+    assert rc == 0, out
+    assert "[ ok ] hook paths: 7 commands, missing=0\n" in out
+    assert KEPT_INFO + "\n" in out and RETIRED not in out
+
+
+def test_check_fails_a_stub_the_clean_form_does_not_register(sb):
+    """The overlay registers the unregistered stub at Stop and the kept one at another event:
+    both fail, each named as a stub (HEAD tracks both); the personal command is not echoed."""
+    home = stub_home(sb, lambda h: {
+        "Stop": [{"hooks": [hook("python3", RETIRED, prefix=str(h))]}],
+        "SessionStart": [{"hooks": [hook("python3", KEPT, prefix=str(h))]}]})
+    rc, out = check_out(sb, home)
+    assert rc == 1, out
+    assert "[FAIL] hook paths: 9 commands, missing=0, stubs=2" in out
+    assert "       Stop: %s is a stub the clean form does not register" % RETIRED in out
+    assert "       SessionStart: %s is a stub the clean form does not register" % KEPT in out
+    assert KEPT_INFO in out and str(home) not in out
+
+
+def test_check_without_a_checkout_does_not_take_the_overlays_stub_for_the_clean_forms(sb):
+    """Not a checkout: the clean form read is the working file, which holds what the overlay
+    added; an overlay-registered stub still fails (no HEAD tracks it: not echoed)."""
+    home = make_home(sb)
+    (home / RETIRED).write_text(STUB_TEXT)
+    (home / "settings.json").write_bytes(canon(clean_form()))
+    write_overlay(home, {"env": {"CLAUDE_HOME": str(home)},
+                         "hooks": {"Stop": [{"hooks": [hook("python3", RETIRED)]}]}})
+    assert run_tool(sb, home, "render").returncode == 0
+    sb.runtime_file.write_text(json.dumps(dict({"schema_version": 1},
+                                               **{k: [] for k in required_keys()})))
+    rc, out = check_out(sb, home)
+    assert rc == 1, out
+    assert "[FAIL] hook paths: 7 commands, missing=0, stubs=1" in out
+    assert "       Stop: a hook outside the clean form (see settings.machine.json)" in out
+    assert "[info]" not in out and RETIRED not in out
+
+
+def test_check_fails_a_missing_hook_file(sb):
+    home = stub_home(sb)
+    (home / "hooks" / "stop-demo.py").unlink()
+    rc, out = check_out(sb, home)
+    assert rc == 1, out
+    assert "[FAIL] hook paths: 7 commands, missing=1\n       hooks/stop-demo.py\n" in out
+
+
+def test_check_does_not_echo_a_command_outside_the_clean_form(sb):
+    """An untracked stub and a missing file, both registered by the overlay: each fails with the
+    outside-the-clean-form line, neither its path nor its command echoed."""
+    personal = "hooks/personal-%s.py" % STAND_IN
+    gone = "hooks/gone-%s.py" % STAND_IN
+    home = stub_home(sb, lambda h: {
+        "Stop": [{"hooks": [hook("python3", personal, prefix=str(h))]}],
+        "Notification": [{"hooks": [hook("python3", gone, prefix=str(h))]}]})
+    (home / personal).write_text(STUB_TEXT)  # created after the commit: untracked
+    rc, out = check_out(sb, home)
+    assert rc == 1, out
+    assert "[FAIL] hook paths: 9 commands, missing=1, stubs=1" in out
+    for event in ("Stop", "Notification"):
+        assert "       %s: a hook outside the clean form (see settings.machine.json)" % event in out
+    assert STAND_IN not in out and str(home) not in out
+
+
 # ---------------------------------------------------------------------------------- migrate
 
 SAFETY_OLD = r"""#!/usr/bin/env bash
@@ -1274,3 +1374,10 @@ def test_round_trip_properties_randomised(sb):
         assert tool.clean_bytes(machine, layers + old, base) == (b_bytes, None), (base, over, old)
         checked += 1
     assert checked == 400
+
+
+def test_shipped_clean_form_stops_hooks_writing_bytecode():
+    """The tracked clean form sets PYTHONDONTWRITEBYTECODE, so the hooks of a session started from it
+    leave no __pycache__ in the harness home; the value is a public one, not a machine value."""
+    env = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["env"]
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"

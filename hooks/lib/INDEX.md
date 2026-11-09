@@ -2,14 +2,13 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 53
+**Total entries**: 54
 **Convention**: kebab
 
 ## Tree
 ```
 lib/
 ├── runtime_guard/
-│   ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 │   ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 │   ├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
 │   ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
@@ -22,6 +21,7 @@ lib/
 ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 ├── `allowlist.py` - Single source of truth for the one /allow grant file and the one /do consent
 ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
+├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
 ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_execution_boundary.py` - THE ALGEBRA (spec-20260808-035658 LANE-POL, Must-1).  Every execution-bearing
@@ -31,6 +31,7 @@ lib/
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
+├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required ask...
 ├── `closeout.py` - CLI:
 ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 ├── `commit_journal.py` - WHY THIS EXISTS
@@ -48,7 +49,7 @@ lib/
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 ├── `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
-├── `overnight.py` - The state record `<project>/.claude/overnight-state-<sid>.json` has one producer,
+├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` (main root: the parent of the git common dir) has one producer; the module holds the one end_time parser, the locator, window_open and closeout_gaps
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front

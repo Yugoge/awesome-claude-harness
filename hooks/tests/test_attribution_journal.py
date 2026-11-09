@@ -481,6 +481,32 @@ def test_autoseal_disabled_by_default_is_a_true_noop(tmp_path, monkeypatch):
     assert not (tmp_path / "would-be-dest").exists()
 
 
+def test_default_seal_store_is_beside_the_journal_state_dir_in_ignored_state(tmp_path, monkeypatch):
+    """No override: <harness>/state/attribution-seals when CLAUDE_CONFIG_DIR is unset or inside the
+    harness tree, and the harness's .gitignore ignores it (the old default was an unignored store at
+    the home's root); a config dir apart from the tree keeps the seals there (a tmpfs checkout)."""
+    for name in ("ATTRIBUTION_SEAL_DEST", "ATTRIBUTION_STATE_DIR", "ATTRIBUTION_HARNESS_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    assert seal.default_dest() == tmp_path / "config" / "attribution-seals"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ROOT))
+    assert seal.default_dest() == aj.state_dir().parent / "attribution-seals" == ROOT / "state" / "attribution-seals"
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert seal.default_dest() == ROOT / "state" / "attribution-seals"
+    repo = tmp_path / "home"
+    repo.mkdir()
+    (repo / ".gitignore").write_bytes((ROOT / ".gitignore").read_bytes())
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path),
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    for rel in ("state/attribution-seals/seal-log.jsonl", "state/attribution-seals/objects.git/HEAD"):
+        assert subprocess.run(["git", "check-ignore", "-q", "--no-index", rel], cwd=repo, env=env).returncode == 0
+    monkeypatch.setenv("ATTRIBUTION_STATE_DIR", str(tmp_path / "s" / "attribution-journal"))
+    assert seal.default_dest() == tmp_path / "s" / "attribution-seals"
+    monkeypatch.setenv("ATTRIBUTION_SEAL_DEST", str(tmp_path / "seals"))
+    assert seal.default_dest() == tmp_path / "seals"
+
+
 def test_posttool_hook_autoseals_end_to_end_via_real_subprocess(tmp_path, monkeypatch):
     """The production wiring: posttool-attribution-post.py -> record_post ->
     autoseal_hook_trigger -> seal-attribution-journal.py, as one subprocess
@@ -518,8 +544,8 @@ def test_posttool_hook_autoseals_end_to_end_via_real_subprocess(tmp_path, monkey
 # ----------------------------------- known boundary: hook-written side effects
 
 def test_doc_sync_regen_outside_capture_window_surfaces_as_break(tmp_path, monkeypatch):
-    """Known, ruled boundary (docs/reference/attribution-journal-phase0-facility.md
-    #3): a file written by a DIFFERENT PostToolUse hook as a side effect of
+    """Known, ruled boundary (hooks/lib/attribution_journal.py's module
+    docstring): a file written by a DIFFERENT PostToolUse hook as a side effect of
     editing a sibling file (doc-sync regenerating INDEX.md) is captured by
     NEITHER this call's single-target measurement NOR a Bash dirty-worktree
     scan -- it is simply never the declared target. This uses the REAL

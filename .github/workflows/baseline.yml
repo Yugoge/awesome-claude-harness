@@ -120,6 +120,24 @@ jobs:
           "$smoke_venv/bin/python" -c "import importlib.metadata as m, pytest, jsonschema, yaml; print('clean-install smoke OK — pytest', m.version('pytest'), '/ jsonschema', m.version('jsonschema'), '/ pyyaml', m.version('pyyaml'))"
           rm -rf "$smoke_root"
 
+      - name: Size ratchet (measure)
+        # scripts/size-ratchet.py's six metrics at the ref this event compares with (a pull
+        # request's base, a push's `before`; HEAD for any other event or an all-zeros `before`)
+        # and at HEAD, so the log shows the growth of the whole pull request or push. Measure
+        # only: experiment 12 (P10) found nothing in a /dev -> /commit -> /push that acts on a
+        # budget, so the tree carries no budget file and CI runs no --check.
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          ref="${PR_BASE:-${PUSH_BEFORE:-HEAD}}"
+          case "$ref" in *[!0]*) ;; *) ref=HEAD ;; esac
+          echo "size at $ref:"
+          python3 scripts/size-ratchet.py --measure --ref "$ref"
+          echo "size at HEAD:"
+          python3 scripts/size-ratchet.py --measure
+
       - name: Run tests
         # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
         # the artifact-graph jobs below run it: shards with strace and a mount

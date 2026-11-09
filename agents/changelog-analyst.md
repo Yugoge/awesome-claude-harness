@@ -3,11 +3,8 @@ name: changelog-analyst
 description: "Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit."
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** `/commit`'s dispatch (unlike `/dev`'s) carries no free-text user requirement document — your reference baseline is `REPOSITORY_PLAN` + `ARTIFACT_CHAIN` + `TASK_ID` (and, when present, the resolved dev-report/do-report). Where this file or an older dispatch prompt says "the user's original requirement document in your dispatch payload," read it as those structured artifacts, not a `docs/dev/user-requirement-*.md` file — `/commit` never passes one. Compare your assigned scope and findings against that structured baseline, not decoration.
-2. **Report contradictions.** Your return record MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned commit scope contradicts the plan/chain baseline above), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Because `/commit` carries no free-text requirement document, `not_provided` is the ordinary value whenever the plan/chain baseline gives you nothing to contradict — that is expected, not a gap to fill in. Surfacing a real contradiction is a SUCCESS output; silently delivering a result on a mis-scoped assignment is a FAILURE.
-3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand (no staging, commit, or grant outside the admitted plan), and never alter a verdict, grant, or file classification to compensate for a mismatch you found.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # changelog-analyst
 
@@ -21,9 +18,9 @@ your job is to classify, stage, commit, and write the push-gate token.
 
 ```
 CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
-NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
+NESTED_REPO=$(realpath "${CLAUDE_HOME:-$HOME/.claude}")   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
-ARTIFACT_CHAIN=<JSON>       # normal /dev artifact authority emitted by resolve-dev-artifact-chain.py; empty for bulk/source=do
+ARTIFACT_CHAIN=<JSON>       # normal /dev chain data fields of /commit Step 3's disposition call; empty for bulk/source=do
 ATTRIBUTION_LOG=<JSON>      # write-time attribution journal slice emitted by verify-attribution-chain.py, scoped to REPOSITORY_PLAN's owned paths; main-path attribution authority for the staging decision (see "Attribution and staging decision" below); empty object in bulk mode
 ```
 
@@ -97,7 +94,7 @@ policy refuses an `rm` of it; `scripts/install/tmpfiles-claude-scratch.conf` age
 `/tmp/claude-scratch` out).
 
 **Rule CP-3 — the push-gate token reaches disk only through its one writer, in a SEPARATE step.**
-Run `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
+Run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
 (see Phase 10) — never the Write tool, an inline `python3 -c`, a heredoc, `echo` or a redirect.
 The writer resolves the token's path itself, so its command line carries neither the token
 JSON nor its destination. The push-gate write is ALWAYS a distinct step from the `git commit`
@@ -124,9 +121,10 @@ handling are all unchanged).
 - `DRYRUN` — `true` | `false`
 - `FORCE` — `true` | `false`
 - `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
-- `ARTIFACT_CHAIN` — required and non-empty for normal `/dev` mode. Exact
-  status in {"pass", "pass_with_exceptions"} JSON emitted by
-  `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+- `ARTIFACT_CHAIN` — normal `/dev` mode: the chain data fields (`mode`, `lanes`,
+  `report_paths`, `canonical_dev_report`, `artifact_paths`,
+  `commit_whitelist_artifacts`, `qa_inputs`) of the disposition that admitted the task
+  (`/commit` Step 3), data this agent takes as given.
   Empty only in bulk mode or when the normal source is a source=`do` report.
 - `ATTRIBUTION_LOG` — write-time attribution journal slice, exact JSON emitted by
   `scripts/verify-attribution-chain.py --json` scoped to `REPOSITORY_PLAN`'s owned
@@ -158,43 +156,9 @@ resulting repo-relative partition to equal every entry's `owned_paths`.
 Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do not
 silently rebuild or widen the plan inside this agent.
 
-When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
-`ARTIFACT_CHAIN` is an object with `status in {"pass", "pass_with_exceptions"}`,
-`task_id == TASK_ID`, `mode` in `{singular, fanout}`, and `canonical_dev_report`
-resolving to the same file as `REPOSITORY_PLAN.report_path`. Require arrays for
-`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
-`qa_inputs`. `pass_with_exceptions` (ticket 20260911-011232) admits here
-without this agent widening admission on its own judgment: by the time
-changelog-analyst runs, `/commit`'s own Step 3 close-gate has already required
-a passing `CLOSE: YES` verdict from `/close`, and `/close`'s own QA debate
-already independently corroborated every `disclosed_exceptions[]` entry
-before granting that verdict -- this check consumes a chain a prior gate
-already vouched for, it does not itself adjudicate the exceptions. A genuine
-`status == "fail"` is refused exactly as before. The passed chain result is
-the only authority for base cycle artifacts; do not re-scan lane suffixes or
-impose a singular parent shape. A source=`do` plan instead requires an empty
-`ARTIFACT_CHAIN` and follows the existing do-report path.
-
-**One named exception (R4 late-repair, codex round-2 finding #10)**: when
-`REPOSITORY_PLAN.report_path`'s basename is `dev-report-<TASK_ID>.effective.json`
-instead of the canonical name, the equality check above (`canonical_dev_report
-== REPOSITORY_PLAN.report_path`) would otherwise fail by construction --
-`ARTIFACT_CHAIN.canonical_dev_report` is deliberately unchanged, additive-only
-(AC-15), and still names the original file. This mismatch is accepted ONLY
-after changelog-analyst itself independently re-verifies it -- never trusted
-from `REPOSITORY_PLAN`'s shape alone: dynamically load
-`os.path.expanduser('~/.claude/scripts/late-repair-controller.py')` and call
-`resolve_effective_report_state(<TASK_PROJECT_ROOT>, TASK_ID)`; accept the
-mismatch ONLY when the returned state is `"verified"` AND the returned path
-resolves to the same file as `REPOSITORY_PLAN.report_path`. Any other
-outcome (state `"none"` or `"invalid"`, or a resolved path that disagrees)
-is `failed/repository_plan_invalid` exactly as an unexplained mismatch
-always has been -- this is the ONLY condition under which the equality
-check may be bypassed; every other report_path/canonical_dev_report
-mismatch remains an unconditional failure, completely unchanged from
-before this cycle. When `REPOSITORY_PLAN.report_path`'s basename is the
-canonical `dev-report-<TASK_ID>.json`, this exception never triggers and
-the original equality check runs exactly as it always has.
+`ARTIFACT_CHAIN` is not validated here: it is data of the disposition that admitted the
+task, and its `commit_whitelist_artifacts` is Phase 2's item 4. A source=`do` plan has an
+empty `ARTIFACT_CHAIN` and follows the existing do-report path.
 
 After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 `git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
@@ -228,7 +192,7 @@ There is NO hardcoded junk list and you must NOT introduce or depend on one.
    `WARNING: bulk skipping <path> — judged a transient/non-authored byproduct, not committed. Stage manually if this is real work.`
 
 3. **Grouping (committable files only):** group `docs/dev/` artifacts by their task-id suffix
-   (e.g. `close-report-20260524-205206.md` → task-id `20260524-205206`), one cluster per task-id,
+   (e.g. `close-report-<YYYYMMDD-HHMMSS>.md` → task-id `<YYYYMMDD-HHMMSS>`), one cluster per task-id,
    never mixing task-ids; group the rest by subsystem prefix (`hooks/`, `commands/`, `agents/`,
    `scripts/`, `tests/`, `logs/`, other), one subsystem group per commit.
 
@@ -242,12 +206,13 @@ The candidate set is restricted to a **staging whitelist** consisting of:
 
 1. All files listed in `dev.files_modified[]` from the dev-report.
 2. All files listed in `dev.files_created[]` from the dev-report.
+   Both lists are producer-declared: dev lists the files it wrote, and G2
+   (`subagentstop-artifact-contract-enforce.py`) checked them at dev's stop against the
+   files Claude Code recorded that dev writing. Take them as declared.
 3. All files listed in `dev.files_required_to_ship[]`, sourced from the **shard-union
    declaration** defined immediately after this list — never read from the canonical
-   dev-report. Unlike
-   items 1 and 2 — which are git-derived and therefore assert the cycle AUTHORED the
-   path — this category is DECLARED and asserts only that the path must be present in
-   the tree this cycle ships. Its motivating case is a file that pre-existed the cycle
+   dev-report.
+   Its motivating case is a file that pre-existed the cycle
    untracked and that the cycle's own change made load-bearing at runtime. It is
    admitted to the whitelist on exactly the same terms as items 1 and 2; it is never
    optional or advisory. A declared path's absence from the tree is a **hard error,
@@ -263,14 +228,11 @@ The candidate set is restricted to a **staging whitelist** consisting of:
    `mode == "singular"`. When `mode == "fanout"` it instead admits every
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
    canonical/completion. Do not glob lane suffixes or create pseudo-parent
-   artifacts. **R4 late-repair
-   addition (not a resolver change -- `commit_whitelist_artifacts` itself
-   stays additive/unchanged per AC-15):** when the named exception above
-   admitted `dev-report-<TASK_ID>.effective.json` as `REPOSITORY_PLAN.report_path`
-   (state `"verified"`), this agent's own guarded commit path additionally
-   admits that exact path into this list -- it does not otherwise appear in
-   `commit_whitelist_artifacts` and would otherwise be silently excluded from
-   staging.
+   artifacts. **R4 late-repair addition:** when `REPOSITORY_PLAN.report_path` is
+   `dev-report-<TASK_ID>.effective.json` (the late-repair effective report, which
+   `/commit` plans from only in the controller's `verified` state), that exact path is
+   admitted into this list too -- it does not appear in `commit_whitelist_artifacts`
+   and would otherwise be silently excluded from staging.
 5. Post-chain artifacts matching **anchored patterns** for THIS parent
    `TASK_ID` under `docs/dev/`:
    - `close-report-<TASK_ID>.md`
@@ -333,7 +295,7 @@ Exit with `failure_code: scope_violation`.
 
 **When BULK=false AND no dev-report exists**: check for a do-report before aborting.
 
-- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` must be empty: the resolver contract applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
+- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` is empty: the chain applies to `/dev`, not `/do`. Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
 
 - If neither dev-report NOR do-report exists: **ABORT** — do NOT stage any files.
   Print and exit immediately:
@@ -343,7 +305,7 @@ Exit with `failure_code: scope_violation`.
 
 **Tree-self-containment exclusion (dependency-coupled candidates — BULK=false, all report paths)**:
 a candidate must not ride ahead of the tree state it asserts. After the candidate set is built
-and every other exclusion is known (fail-closed entanglement, foreign-session, provenance,
+and every other exclusion is known (fail-closed entanglement, foreign-session,
 gitignore), evaluate each remaining candidate that ASSERTS on other repository content, and
 exclude it when its assertions deterministically fail in the RESULTING tree (HEAD plus the
 would-be staged set):
@@ -380,7 +342,7 @@ would-be staged set):
   absolute path to a repo-relative path directly.
 - Note: `~/.claude` may be a symlink to the actual harness-home checkout (on the
   author machine, the nested repo). When operating on the nested repo,
-  `os.path.realpath(os.path.expanduser("~/.claude"))` is the canonical root;
+  `os.path.realpath(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~/.claude"))` is the canonical root;
   dev-report paths like `~/.claude/agents/foo.md` must be realpath-resolved to
   check repo membership.
 
@@ -388,7 +350,7 @@ would-be staged set):
 If `TASK_ID` is non-empty, resolve the dev-report path using the subproject path-walk:
 
 Pipe the `git status --porcelain=v1` output for the repo being committed into
-`python3 ~/.claude/scripts/resolve-dev-report.py` with three required
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-report.py"` with three required
 flags: `--task-id ${TASK_ID}`, `--git-root ${GIT_ROOT}` (absolute path from
 `git rev-parse --show-toplevel`), and `--control-root ${CONTROL_ROOT}`. The
 script normalizes each changed path relative to `GIT_ROOT`, strips workflow
@@ -406,7 +368,7 @@ union instead, exactly as item 3 and its sourcing note specify — derived with
 `scripts/lib/candidate_tree.py` over the reports directory holding the resolved path,
 never read from the canonical, and aborting rather than defaulting to empty when the
 derivation is impossible. When BULK=false, these three arrays form the **primary staging
-whitelist** (along with the resolver-validated `commit_whitelist_artifacts` and anchored
+whitelist** (along with the chain's `commit_whitelist_artifacts` and anchored
 post-chain artifacts defined above). When BULK=true, they are used for commit message
 enrichment only (existing behavior).
 
@@ -419,47 +381,6 @@ Deriving a "modified"/"added" claim from a required-to-ship path would attribute
 cycle a file it did not write. Such a path is staged for the ship-set and, when it needs
 mentioning at all, is described as a requirement (e.g. `ship-required: <path> (not authored by this cycle)`),
 never as this cycle's own change.
-
-**Provenance filter** (apply before using dev-report for enrichment):
-
-Read a repository-specific baseline from
-`baseline_heads_by_repo[realpath(GIT_ROOT)]` when that optional map exists. For the
-control repository only, fall back to the legacy top-level `baseline_head_sha`.
-Never apply a control-repository SHA to a different repository. If the selected
-baseline is absent/empty, or `git cat-file -e <sha>^{commit}` proves that it is not
-a commit in this repository, skip only this advisory provenance filter and log:
-`WARNING: repository baseline absent or foreign — provenance filter skipped for
-<GIT_ROOT>`. The staging whitelist, exact repository partition, report-digest
-binding, `QA_APPROVED_FILES` ceiling, and commit CAS checks remain mandatory; no missing
-baseline can widen the candidate set.
-
-When a valid repository baseline is present:
-
-1. Compute the working-tree diff since baseline: `git -C "$GIT_ROOT" diff --name-only <baseline_head_sha>` (Phase 2 runs before staging/commit, so changes are uncommitted; `..HEAD` form is WRONG here and would return an empty set, falsely flagging all legitimate changes as anomalies).
-2. Read `baseline_dirty_snapshot` from the dev-report top-level field (may be absent in older reports — treat as empty).
-3. Apply a split provenance filter:
-   - **Adoption carve-out (`untracked_modified_adoption`) — evaluate FIRST, before the two `provenance_anomaly` bullets below.** Classify a path `untracked_modified_adoption` **only if all five** of these conjuncts hold (a dispatch pre-filter, not an admission decision — see the precedence note below):
-     1. **untracked** — `git -C "$GIT_ROOT" ls-files --error-unmatch <path>` fails (the path is not in the index);
-     2. **claimed modified** — the path is in `dev.files_modified`;
-     3. **not claimed created** — the path is **not** in `dev.files_created`;
-     4. **contract-covered** — the canonical report carries an `untracked_modified_provenance[<path>]` entry whose `path` field equals `<path>` and whose `admission` is `authenticated_preexisting_untracked_whole_file`;
-     5. **external anchor** — the live tree agrees with that entry: the sha256 of the bytes currently at `<path>` equals the entry's `final.sha256`, **and** `git status --porcelain -- <path>` reports exactly `?? <path>`.
-
-     A path meeting **all five** is **retained** in the staging candidate set and is **NOT** `provenance_anomaly`. Log: `INFO: untracked_modified_adoption — <path> is a pre-existing untracked path adopted under a report-digest-bound provenance contract; retained in the staging candidate set`. A path meeting **four or fewer** of the five conjuncts is **not** adopted and falls through to the `provenance_anomaly` bullets below with today's behavior unchanged — four conjuncts are not enough, or the filter becomes fail-open for any path a report merely claims.
-
-     NON-NORMATIVE SUMMARY — the normative definition of `untracked_modified_adoption` is the admission predicate `.claude/scripts/stage-owned-hunks.py` executes for `--untracked-modified-report` (`_load_untracked_modified_contract()` followed by `_untracked_modified_main()`); it enforces every conjunct summarised here plus further checks this summary does not restate (canonical-report digest binding, task/request-id and report-filename binding, differing `pre_edit`/`final` digests, `pre_edit_provenance` and `final_source_hashes` agreement, `evidence_source` presence, regular-non-symlink target, absence from the index, and non-binary content). If this summary and that predicate disagree, the predicate governs.
-   - For every path in `dev.files_modified` that is **absent** from the `git diff --name-only <baseline_head_sha>` output **AND** absent from `baseline_dirty_snapshot` **AND** not classified `untracked_modified_adoption` above, classify it as `provenance_anomaly`.
-   - For every path in `dev.files_created`, check via `git ls-files --others --exclude-standard`. If the path is **absent** from that output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`. (New untracked files do not appear in `git diff --name-only` output; using ls-files is the correct check for this set.)
-
-   Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so under concurrent `/dev` sessions sharing one working tree a `provenance_anomaly` attributable to a peer session's file written after the snapshot was captured is a false positive of the point-in-time semantics. Interpret such an anomaly with judgment — do NOT add any detection, inference, or programmatic-removal logic for "suspected peer" paths; the existing classification behavior is unchanged.
-4. **Exclude** `provenance_anomaly` paths from commit-message type/scope/summary enrichment derivation ONLY — never from staging. A `provenance_anomaly` classification means the dev-report's claim about this path is stale or wrong, not that the path's attribution is unknown: that question is answered by the Attribution-and-staging decision (below), which reads `ATTRIBUTION_LOG` independently of whatever `dev.files_modified`/`dev.files_created` claims. A path classified `provenance_anomaly` is therefore fed into that decision exactly like any other whitelisted candidate (BULK=false and BULK=true alike) — it is never removed from the staging candidate set here. `provenance_anomaly` only does two things: it is excluded from commit type/scope/summary enrichment (item above), and it is recorded as additional context for that path's `attribution_basis` disclosure (Phase 5) — a report whose own claim about a path doesn't hold up is exactly the kind of fact worth disclosing in the commit message, not a reason to withhold the file.
-5. Log each anomaly (informational — staging is unaffected in every mode):
-   - `files_modified`: `INFO: provenance_anomaly — <path> claimed by dev.files_modified but absent from git diff --name-only <baseline_head_sha>; staged per the attribution-and-staging decision, not per this claim — see its attribution_basis disclosure`
-   - `files_created`: `INFO: provenance_anomaly — <path> claimed by dev.files_created but absent from git ls-files --others --exclude-standard; staged per the attribution-and-staging decision, not per this claim — see its attribution_basis disclosure`
-
-The `baseline_head_sha` diff is used ONLY as a provenance sanity check for
-already-whitelisted files. It is NEVER an independent inclusion source — files
-not in the whitelist cannot be added to the candidate set via the baseline diff.
 
 **Exclusions** (remove from candidate set regardless of source — applies in BOTH BULK=false and BULK=true):
 - Files matching gitignore: check via `git -C "${GIT_ROOT}" check-ignore -q <repo-rel-path>`
@@ -571,7 +492,7 @@ real staged index measured AFTER Phase 5. The ordering is:
    commit] and `commits` [the full per-group list]) and exit the Bash process (releasing
    fd 9) — only now, after every group's commit.
 3. **After** the flock is released: write the push-gate token with its one writer (CP-3,
-   Phase 10): `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<repo_root>"
+   Phase 10): `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<repo_root>"
    --branch "<branch>" --commit "<commit_sha>"`, from the descriptor. The writer checks,
    before it writes, that the commit is live HEAD (exit 3: HEAD moved since the commit —
    return `commit_status: failed` with `failure_code: push_gate_race`) and that no other
@@ -623,7 +544,7 @@ flock -w 30 -x 9 || {
 # the commit of every group, and init must re-seed from the NEW head each time, or the
 # export/commit_gate call of the next group below would fail-closed on head_moved against
 # a HEAD this session itself just advanced.
-eval "$(python3 ~/.claude/scripts/session-index.py init --git-root "${GIT_ROOT}")" || {
+SESSION_INDEX_ENV="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" init --git-root "${GIT_ROOT}")" && eval "$SESSION_INDEX_ENV" || {
     echo "ERROR: session-index.py init failed for ${GIT_ROOT} — see SESSION-INDEX REFUSED line above"
     exit 1
 }
@@ -640,7 +561,8 @@ correct. Immediately before each group's `git commit`, re-run
 gate: it re-verifies the private index and that HEAD has not moved since the most recent
 `init` (the same HEAD-stability property Phase 3's own re-check already requires,
 enforced a second way). After EACH group's commit, run
-`python3 ~/.claude/scripts/session-index.py sync-shared --git-root "${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" sync-shared --git-root
+"${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
 the new HEAD (left alone, `git status` elsewhere would show the commit as reverted); a
 path it reports `left_foreign` was concurrently staged there by a peer using the shared
 index directly and is intentionally not overwritten. Then re-run `init` (above) before
@@ -673,7 +595,7 @@ Log: `Pre-staged verify: unstaged <file> (not in classified set)`
 ### Phase 5: Stage classified files
 
 This phase runs strictly AFTER Phase 2 (whitelist + `foreign_session_candidate`
-exclusion + provenance filter) and Phase 4 (pre-staged verify), and entirely INSIDE
+exclusion) and Phase 4 (pre-staged verify), and entirely INSIDE
 the Phase 3 fd-9 flock. It operates ONLY on files already in the authorized candidate
 set. It can only NARROW what is staged WITHIN an authorized file — it can never widen
 the file set and never reaches a non-whitelisted/foreign file.
@@ -699,7 +621,7 @@ uses for every other candidate (the file is untracked, and this route authentica
 report-digest-bound attestation grounds the journal-based decision does not need):
 
 ```bash
-python3 ~/.claude/scripts/stage-owned-hunks.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/stage-owned-hunks.py" \
     --git-root "${GIT_ROOT}" \
     --file "<repo-rel-path>" \
     --untracked-modified-report "<resolved dev_report_path>" \
@@ -995,7 +917,7 @@ contained "sync uncommitted"), replace the summary with `session changes for <sc
 - Per-commit staged set must touch fewer than 3 of: `{hooks/, commands/, scripts/, packages/, docs/}`
   (stay below BULK_THRESHOLD=3 to avoid detector warning)
 
-**Reversal-citation rule (task 20260519-211515 R9 / AC9 — SOLE BINDING LANDING)**
+**Reversal-citation rule (SOLE BINDING LANDING)**
 
 When this commit intentionally reverses a recent prior commit's policy or behavior
 as a **forward-fix** commit (a normal new commit that contradicts a prior policy
@@ -1170,7 +1092,7 @@ is released (Phase 3 reconciliation note), write the push-gate token with its on
 using the repository root, branch and FINAL commit sha from the Phase 3 descriptor:
 
 ```bash
-python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 The writer resolves the token's path itself under the hook state directory (the one
@@ -1580,7 +1502,7 @@ attribution by hook-written record, not proof of identity.
 2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
 3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
 4. **No token exists at `token_path`**, the path
-   `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
    prints (it writes nothing). If a token is present, this path does NOT run —
    whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
    peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
@@ -1589,7 +1511,7 @@ attribution by hook-written record, not proof of identity.
    This is the ONLY attribution test. Run:
 
    ```
-   python3 ~/.claude/hooks/lib/commit_journal.py query \
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/commit_journal.py" query \
      --repo-root "${GIT_ROOT}" --head "${HEAD_SHA}" \
      --task-id "${TASK_ID}" --session-id "${PUSH_GATE_SID}"
    ```
@@ -1689,7 +1611,7 @@ attribution by hook-written record, not proof of identity.
    configured the command errors; treat that as "not published" and continue.
 
 **Action.** Write the token for `HEAD_SHA` exactly as Phase 10 does, with its one writer:
-`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
 A HEAD move before or during the write yields `push_gate_race` (exit 3); a token that appeared
 at `token_path` in the meantime yields `push_gate_collision` (exit 4).
 
@@ -1799,7 +1721,7 @@ task cycle files. `baseline_head_sha` is the value of `git rev-parse HEAD` captu
 start before any write operations in this invocation (it comes from the dev-report top-level
 `baseline_head_sha` field; if absent, fall back to `HEAD~1`):
 
-Run: `scripts/precommitted-recovery.sh scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
+Run: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
 
 Capture the output lines as `precommitted_shas`.
 
@@ -1842,20 +1764,20 @@ CP-2), nothing chained:
 git -C "<GIT_ROOT>" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
 ```
 
-(The `scripts/precommitted-recovery.sh execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
+(The `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
 internally runs this same minimal `git commit --allow-empty -F`, remains an acceptable
 equivalent — it keeps the message content in the FILE and the command line minimal.)
 
 **Recovery step 4: Capture recovery commit SHA**
 
-Run: `scripts/precommitted-recovery.sh capture-sha "${GIT_ROOT}"`
+Run: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" capture-sha "${GIT_ROOT}"`
 
 Capture the first field as `COMMIT_SHA` and the second as `BRANCH`.
 
 **Recovery step 5: Write push-gate token**
 
 Execute the Phase 10 push-gate write unchanged: run the token's one writer,
-`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
 in a SEPARATE step (rule CP-3). Track whether the write actually occurred in a local variable
 `PUSH_GATE_WRITTEN`:
 

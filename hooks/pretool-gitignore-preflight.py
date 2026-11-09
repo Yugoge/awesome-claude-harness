@@ -33,9 +33,9 @@
 #
 # One rule, two callers: gitignored_deliverables() is also G3's rule on a dev
 # report a dispatch names (hooks/pretool-aggregate-check.py applies it under
-# CLAUDE_OBLIGATION_BARRIER). While G3 is advisory in the tracked settings.json
-# this hook keeps blocking on it, the copy P1b's E4 keeps until P2's arming
-# commit retires it.
+# CLAUDE_OBLIGATION_BARRIER, which the shipped settings.json arms). This hook
+# keeps its own block as well: P2's arming retired no copy, since the artifact
+# check lists this block as an allowed position (H-023, G3's rule).
 #
 # gitignore_waiver bypass:
 #   Add "gitignore_waiver": "<reason>" at the top level of the dev-report JSON.

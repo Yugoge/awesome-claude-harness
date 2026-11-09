@@ -1,6 +1,6 @@
 # `tests/generated/` policy — tracked but ignored, on purpose
 
-> Last updated: 2026-07-16 (Phase 1 of `docs/reference/test-suite-overhaul-plan.md`)
+> Last updated: 2026-07-16
 
 `tests/generated/` is git-tracked yet excluded from the default test run. This
 looks contradictory at a glance, so this note records the intent **and the
@@ -15,7 +15,7 @@ from a cycle's `acceptance-criteria-<task_id>.json`. A fresh skeleton is a stub
 that hard-stops via `pytest.fail("TEST_INCOMPLETE: ...")` so it can never
 masquerade as a passing test — but **most skeletons no longer hard-stop.**
 
-**Measured reality (2026-07-16, per `test-suite-overhaul-plan.md` §1):** of the
+**Measured reality (2026-07-16):** of the
 **449** `test_*.py` skeletons, **≈393 have been realized** into real assertions
 (the hard-stop removed as a human/cycle filled them in) and only **≈56 still
 hard-stop** by design. So the tree is a *mix* of realized tests and stubs, not a

@@ -41,7 +41,6 @@ inline form, except three lines newly authored here to describe the new in-place
       "spec_path": "docs/dev/overnight/<session_id>/spec-pipeline-<index>.md"
     }
   ],
-  "failed_attempts": {"issue_desc": 2},
   "addressed_issues": ["issue_desc_1", "issue_desc_2"],
   "cycle_log": [
     {

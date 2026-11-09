@@ -166,7 +166,8 @@ class Replay:
         self.roots = norm.Roots([(layout.harness, "<harness>"), (layout.project, "<project>"),
                                  (layout.origin, "<origin>"), (layout.state, "<state>"),
                                  (layout.home, "<home>"), (layout.sb, "<sb>")])
-        self.env = self._env(env_extra or {})
+        self.env_extra = dict(env_extra or {})  # the replay's own --env: it overrides settings.json's env
+        self.env = self._env(self.env_extra)
         # E5: the CLI exports CLAUDE_PROJECT_DIR to hooks only; its Bash tool leaves it unset.
         self.bash_env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
         self.args: dict = {}  # the driver's arguments (cli.py --arg K=V)
@@ -291,9 +292,12 @@ class Replay:
         # The event's own marker: the trace attributes each hook process's file operations to this
         # event, and invocations.jsonl keeps what re-running it needs (E1's differential).
         self.mark("event", str(self.n_events + 1))
+        # the transcripts as this event's hooks see them (the replay only appends to them after it)
+        sizes = {os.path.join(d, f): os.path.getsize(os.path.join(d, f)) for d, _s, fs in os.walk(session.tdir)
+                 for f in fs if f.endswith(".jsonl")}
         rec = hookrun.run_event(self.settings, event, payload, self.env, self.layout.project, self.parallel)
         self._inv.write(json.dumps({"seq": self.n_events + 1, "event": event, "label": label,
-                                    "payload": dict(payload, hook_event_name=event),
+                                    "payload": dict(payload, hook_event_name=event), "transcripts": sizes,
                                     "hooks": [{k: h[k] for k in ("hook", "command", "matcher", "timeout", "rc",
                                                                  "verdict", "how")} for h in rec["hooks"]]})
                         + "\n")
@@ -459,15 +463,7 @@ class Session:
 
     def _context(self, ev: Event) -> None:
         for h in ev.hooks:
-            out = h["stdout"].strip()
-            if h["verdict"] != "ok" or not out:
-                continue
-            try:
-                j = json.loads(out)
-            except ValueError:
-                j = None
-            if isinstance(j, dict):
-                out = (j.get("hookSpecificOutput") or {}).get("additionalContext") or ""
+            out = hookrun.context(ev.event, h)
             if out:
                 self.append({"type": "attachment", "attachment": {"type": "hook_additional_context",
                                                                   "content": out, "hookName": ev.event}})

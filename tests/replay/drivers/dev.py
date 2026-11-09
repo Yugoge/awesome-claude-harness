@@ -47,9 +47,14 @@ Driver arguments (cli.py --arg K=V):
                        AskUserQuestion inside the turn and re-dispatches BA (Step 5) with the answer
   variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8), keeps its unchanged
                        acceptance criteria and must stop unblocked (else the replay raises); QA passes
+  variant=formatter    as plain, the dev then running a formatter (FORMATTER) that rewrites toy/util.py,
+                       a file it did not edit; it declares that file too and names none
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
   variant=fanout-qa-fail  a fan-out cycle whose first lane's first QA fails; Step 16 re-dispatches
                        that lane's dev only and its QA passes; the other lanes are untouched
+  stop_before=N        (singular cycle) the orchestrator ends its turn before Step N, claiming the
+                       cycle done (P5 A20: stop_before=13, QA never dispatched); each such Stop is
+                       recorded in the terminal's `early_stops`; the cycle then goes on with Step N
   lanes=N              fan-out lane count (2 or 3)
   lane_id=text|task    fan-out lane id base: `text` (default) the placeholder the adapter line
                        names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b, `<TASK_ID>-<lane-suffix>` on
@@ -106,7 +111,8 @@ from ..replay import Deviation
 PIPELINE = "dev"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
-COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508}
+COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508,
+        "formatter": 310}
 
 REQUIREMENT = ("add input validation to toy.add: raise TypeError naming the offending argument "
                "when an argument is not a number")
@@ -158,6 +164,9 @@ class KeptOnly(Deviations):
 
 # ---------------------------------------------------------------- the scenario
 
+# A formatter built from git and sed (no package to install): comma spacing over the tracked Python files, which
+# rewrites the toy's unformatted toy/util.py as black would; its command names no file it changes.
+FORMATTER = "git ls-files -z -- '*.py' | xargs -0 sed -i -E 's/,([^ ])/, \\1/g'"
 TOY_OLD = "def add(a, b):\n    return a + b\n"
 TOY_PARTIAL = ("def add(a, b):\n    if not all(isinstance(x, (int, float)) for x in (a, b)):\n"
                "        raise TypeError()\n    return a + b\n")
@@ -348,7 +357,7 @@ class DevCycle:
     def _rules(self):
         return [
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
-            (r"^(?:timestamp|task_id|task-id)$", lambda m: self.tid),
+            (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
             (r"^(?:requirement from Step 1|original requirement|requirement)$", lambda m: self.sc.requirement),
             (r"^spec_path or null$", "null"),
@@ -386,7 +395,13 @@ class DevCycle:
         return re.sub(r"^(Step \d+)", lambda m: m.group(1) + self.tag, label, count=1) if self.tag else label
 
     def to(self, n: int) -> None:
-        """Advance the checklist until Step n is in_progress (one completion per TodoWrite)."""
+        """Advance the checklist until Step n is in_progress (one completion per TodoWrite); with
+        stop_before=n (A20), first a Stop claiming the cycle done, recorded in early_stops."""
+        if not self.tag and str(n) == self.rp.args.get("stop_before"):
+            ev = self.o.s.stop(f"/{self.o.typed} {self.tid} complete.", label=f"Stop before Step {n}")
+            self.early_stops = getattr(self, "early_stops", []) + [
+                {"step": n, "blocked": [h["hook"] for h in ev.blocks],
+                 "text": [h.get("refusal_head") or h.get("stderr", "") for h in ev.blocks]}]
         while not self.o.at_step(n):
             self.o.advance()
 
@@ -654,7 +669,7 @@ class DevCycle:
         baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
         work = roles.dev([(sc.rel, old_code, new_code)], test_bodies={"*": sc.test_body} if self.tw_expected
-                         else None)
+                         else None, tools=[FORMATTER] if self.variant == "formatter" else None)
         if early_qa:  # variant=qa-early: Step 13's QA is sent while this dev still runs (G1's order, R17)
             def work(sub, brief, player, _work=work):
                 d = self._dispatch(with_lines(self.o.template("Step 13"), self.graph_lines),
@@ -799,7 +814,8 @@ class DevCycle:
         text = (f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}"
                 if getattr(self, "chain_ok", True) else self.not_complete())
         ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
-        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid)
+        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid,
+                         early_stops=getattr(self, "early_stops", []))
 
     # ------------------------------------------------------------ the whole cycle
     def run(self) -> None:
@@ -1058,7 +1074,7 @@ class FanoutCycle(DevCycle):
         self.stop()
 
 
-VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail")
+VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail", "formatter")
 
 
 def run(rp) -> None:

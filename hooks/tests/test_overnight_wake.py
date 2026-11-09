@@ -11,8 +11,9 @@ CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and CLAUDE_PROJECT_DIR are tmp_path's own.
   /dev-overnight span, never after the owner's /stop, and to every prompt starting with /restart as before
   (X8: the hook cannot tell a scheduled prompt from a typed one);
 * prompt-workflow.py hands over commands/restart.md's recovery for the wake inside that span only;
-* stop-overnight-timelock.py refuses a Stop after end_time, its closeout met, while the transcript's wake
-  has no later CronDelete, naming the id, whatever span is active; a transcript with no wake meets nothing;
+* the Stop gate's time-lock (stop-command-gate.py's step 4, P5) refuses a Stop after end_time, its closeout
+  met, while the transcript's wake has no later CronDelete, naming the id, whatever span is active; a
+  transcript with no wake meets nothing (P2's locator and window, faked from this base's own readers);
 * past a command's first list and with the length unchanged, the hooks pair todos by content, never by
   index: a session that started with the list before Step 0 (one step shorter) keeps running.
 """
@@ -205,49 +206,71 @@ def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
 # ---------------------------------------------------------------- the time-lock's wake check
 
 def _ended(night, summary=True):
+    """The session after end_time; with ``summary``, its closeout on disk (overnight.closeout_gaps):
+    Step 20's PM retrospective and Step 21's summary."""
     past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
     start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7200))
     (night.project / ".claude" / f"overnight-state-{night.sid}.json").write_text(json.dumps(
         {"session_id": night.sid, "start_time": start, "end_time": past, "current_phase": "exploring"}))
-    if summary:
-        (night.project / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+    if summary:  # the closeout P2's time-lock reads (lib/overnight closeout_gaps): retro and summary
+        retro = night.project / "docs" / "dev" / "overnight" / night.sid
+        retro.mkdir(parents=True, exist_ok=True)
+        (retro / "retro-report-cycle1.json").write_text("{}\n")
         (night.project / "docs" / "dev" / "overnight-summary-2099-01-01.md").write_text("# Summary\n")
 
 
-def _stop(night):
-    return night.hook("stop-overnight-timelock.py", "Stop", stop_hook_active=False)
+def _gate():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("stop_command_gate_wake", HOOKS / "stop-command-gate.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_stop_after_end_time_refused_while_the_wake_is_live(night):
+GATE = _gate()
+
+
+@pytest.fixture
+def lock(night, monkeypatch):
+    """The gate's time-lock on the night's payload, on the real lib/overnight (P2's window_open
+    and closeout_gaps, P1c's open_wakes): every case here is past end_time."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(night.project))
+    monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME", raising=False)
+    payload = {"session_id": night.sid, "transcript_path": str(night.path), "cwd": str(night.project)}
+    return lambda: GATE.time_lock(payload)
+
+
+def test_stop_after_end_time_refused_while_the_wake_is_live(night, lock):
     _ended(night)
     night.wake()
-    p = _stop(night)
-    assert p.returncode == 2 and JOB in p.stderr and "CronDelete" in p.stderr
+    code, text, _terminal = lock()
+    assert code == 2 and JOB in text and "CronDelete" in text
     night.use("CronDelete", {"id": JOB})
-    assert _stop(night).returncode == 0
+    assert lock() == (0, "", "completed_by_deadline")
 
 
-def test_closeout_comes_first(night):
+def test_closeout_comes_first(night, lock):
+    """The closeout incomplete, the time-lock names no wake: the closeout is the gate's
+    /dev-overnight predicate gap (test_stop_command_gate.py)."""
     _ended(night, summary=False)
     night.wake()
-    p = _stop(night)
-    assert p.returncode == 2 and "CLOSEOUT GATE" in p.stderr and JOB not in p.stderr
+    assert lock() == (0, "", None)
 
 
-def test_after_the_owners_stop_the_wake_check_still_holds(night):
+def test_after_the_owners_stop_the_wake_check_still_holds(night, lock):
     _ended(night)
     night.wake()
     night.typed("/stop")
-    assert _stop(night).returncode == 2
+    assert lock()[0] == 2
     night.use("CronDelete", {"id": JOB}, result="No scheduled job", error=True)  # deleted is deleted
-    assert _stop(night).returncode == 0
+    assert lock() == (0, "", "cancelled_by_user")
 
 
-def test_a_transcript_without_the_wake_meets_nothing_new(night):
+def test_a_transcript_without_the_wake_meets_nothing_new(night, lock):
     _ended(night)
     night.use("CronCreate", {"cron": "7 * * * *", "recurring": True, "prompt": "check the deploy"},
               tool_use_result={"id": "other"})
-    assert _stop(night).returncode == 0
+    assert lock()[0] == 0
 
 
 def test_a_cron_delete_before_the_wake_does_not_end_it(night):
@@ -275,9 +298,7 @@ def test_a_list_started_before_step_0_keeps_running(night):
     refused = s.todo(_frontier(old, 2))  # Step 2, PM Plan, a subagent step: Gate 4 by content
     assert refused.returncode == 2 and "pm" in refused.stderr
     s.use("Agent", {"subagent_type": "pm", "prompt": "PLAN", "description": "pm plan"})
-    assert s.todo(_frontier(old, 2)).returncode == 0
-    count = s.todo(_frontier(old, 3), hook="posttool-todo-count.py", event="PostToolUse")
-    assert count.returncode == 0, count.stderr
+    assert s.todo(_frontier(old, 2)).returncode == 0  # its length, shorter than the canonical list, holds
     assert todo_canonical.checklist(str(s.path)).lock == ""
 
 

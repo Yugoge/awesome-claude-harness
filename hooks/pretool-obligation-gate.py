@@ -21,7 +21,8 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
      contains "<obligation" (any subagent_type) OR the human-typed span it
      lies in (lib/command_span.active_span) is a command whose dispatch
      templates declare an obligation for its subagent_type (_declared_roles,
-     read from commands/<command>.md, TC-41); every other dispatch passes
+     read from the command's text as the CLI recorded it when it was typed,
+     else from commands/<command>.md, TC-41); every other dispatch passes
      through untouched.
   3. hooks.lib.obligation.parse_obligation(prompt), with the schema ids of
      the harness's own schemas/registry.json (resolved from the hook's
@@ -34,7 +35,8 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
        - Rejection (malformed block, unregistered schema id, OR
          tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
          bad_prompt case): UNCONDITIONAL.
-     On a violation advisory mode exits 0; block mode prints the
+     On a violation advisory mode prints the reason on one stderr line
+     (OBLIGATION GATE ADVISORY) and exits 0; block mode prints the
      three-element stderr message and exits 2.
      A valid block in block mode is then held to dispatch order (R17,
      _order_findings): ORDER_EXIT decides the exit of a finding.
@@ -53,7 +55,8 @@ parse_obligation() -- this hook never re-implements obligation-block
 grammar or field validation (ticket-20260930-132644-l1 constraint).
 
 Exit codes:
-  0 -- allow (pass-through, valid block, or a violation in advisory mode).
+  0 -- allow (pass-through, valid block, or a violation in advisory mode,
+       its reason on stderr; nothing is written).
   2 -- reject (block mode only: missing block where step 2 requires one, or any
        malformed/invalid block, role mismatch, out-of-bound clock, bad prompt).
 """
@@ -94,30 +97,34 @@ ORDER_EXIT = 2
 VERDICT_SCHEMA = "ba-qa-report.v1"
 
 
-def _declared_roles(command) -> frozenset:
+def _declared_roles(command, text=None) -> frozenset:
     """The roles the active command's dispatch templates declare an obligation
-    for (P1b row 18), read from commands/<command>.md whenever asked: a
-    dispatch of one of them inside that command's span must carry its block.
-    A command whose canonical todo is another's (/redev runs /dev, D22) has
-    that command's templates. No list of roles or of commands says which,
-    and the roster is not this set: /dev dispatches graphify and its
-    specialists without a block."""
+    for (P1b row 18): a dispatch of one of them inside that command's span
+    must carry its block. They are read from ``text``, the command as the
+    session loaded it (Span.body), else from commands/<command>.md: a session
+    that started before an update follows the prose it loaded, and the
+    templates it writes from are that prose's. A command whose canonical todo
+    is another's (/redev runs /dev, D22) has that command's templates, read
+    from its file. No list of roles or of commands says which, and the
+    roster is not this set: /dev dispatches graphify and its specialists
+    without a block."""
     try:
         delegate = _TODO_DELEGATE_RE.search((TODO_DIR / f"{command}.py").read_text(encoding="utf-8"))
     except OSError:
         delegate = None
     if delegate and delegate.group(1) in stop_contract.harness_commands():
-        command = delegate.group(1)
-    try:
-        text = (stop_contract.COMMANDS_DIR / f"{command}.md").read_text(encoding="utf-8")
-    except OSError:
-        return frozenset()
+        command, text = delegate.group(1), None
+    if text is None:
+        try:
+            text = (stop_contract.COMMANDS_DIR / f"{command}.md").read_text(encoding="utf-8")
+        except OSError:
+            return frozenset()
     return frozenset(sentence or example for sentence, example in _DECLARED_ROLE_RE.findall(text))
 
 
 def _block_required(transcript_path, subagent_type) -> bool:
     span = command_span.active_span(transcript_path) if transcript_path else None
-    return span is not None and subagent_type in _declared_roles(span.command)
+    return span is not None and subagent_type in _declared_roles(span.command, span.body())
 
 
 def _emit_block(session_id, subagent_type, reason) -> None:
@@ -253,6 +260,8 @@ def _evaluate(data: dict, mode: str) -> None:
     if mode == "block":
         _emit_block(session_id, subagent_type, reason)
         sys.exit(2)
+    sys.stderr.write(f"OBLIGATION GATE ADVISORY (pretool-obligation-gate): would block "
+                     f"session={session_id} subagent_type={subagent_type} reason={reason}\n")
 
 
 def main() -> None:
