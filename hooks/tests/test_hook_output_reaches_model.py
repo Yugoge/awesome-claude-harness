@@ -2,7 +2,7 @@
 
 The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 UserPromptSubmit only; on PreToolUse and PostToolUse a hookSpecificOutput.additionalContext JSON
-does (a PostToolUse exit 2 shows stderr to the model too); stderr on exit 0 reaches no one, nor does
+does (none of these hooks adds a blocking site); stderr on exit 0 reaches no one, nor does
 anything a SessionEnd hook prints; at SubagentStop any output that reaches a model keeps the subagent
 running. Each case drives the real hook as a process on an input that makes it speak.
 """
@@ -131,7 +131,8 @@ def test_a_broken_command_file_is_told_to_the_model(tmp_path, repo):
     cmd.write_text("no frontmatter\n")
     p = _run("posttool-command-frontmatter-validate.py", {"tool_name": "Write", "tool_input": {"file_path": str(cmd)}},
              _env(tmp_path), repo)
-    assert p.returncode == 2 and p.stderr.startswith("INVALID: x.md was written with invalid command frontmatter")
+    assert p.returncode == 0 and p.stderr == ""
+    assert _context(p.stdout, "PostToolUse").startswith("INVALID: x.md was written with invalid command frontmatter")
 
 
 def test_a_run_code_timeout_is_told_to_the_model(tmp_path, repo):

@@ -9,9 +9,9 @@ Checks format only:
 
 Hook type: PostToolUse (Write|Edit|NotebookEdit|MultiEdit matcher): it runs
 after the write, so an invalid file stays written.
-Exit codes: 0 = valid or not a command file, 2 = invalid: the errors on stderr go to
-the model, which wrote the file and can fix it (a PostToolUse exit 2 cannot undo the
-write; any other non-zero status would show them to the user alone).
+Exit code: 0. An invalid file's errors go to the model, which wrote it and can fix it, as
+PostToolUse additionalContext JSON on stdout (the write cannot be undone; a non-zero
+status other than 2 would show them to the user alone, and the check is advice, not a gate).
 """
 
 import json
@@ -76,11 +76,12 @@ def main():
         sys.exit(0)
 
     basename = path.rsplit('/', 1)[-1]
-    print(f'INVALID: {basename} was written with invalid command frontmatter; fix the file:', file=sys.stderr)
-    for e in errors:
-        print(f'  - {e}', file=sys.stderr)
-    print(f'\nCommand files must start with "---", have a closing "---", and include a "description" field.', file=sys.stderr)
-    sys.exit(2)
+    lines = [f'INVALID: {basename} was written with invalid command frontmatter; fix the file:']
+    lines += [f'  - {e}' for e in errors]
+    lines += ['', 'Command files must start with "---", have a closing "---", and include a "description" field.']
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                             "additionalContext": "\n".join(lines)}}))
+    sys.exit(0)
 
 
 if __name__ == '__main__':
