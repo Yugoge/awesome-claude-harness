@@ -427,6 +427,23 @@ def test_static_artifacts_follow_the_command_files(tmp_path):
     assert not list(root.rglob("__pycache__"))
 
 
+def test_static_artifacts_name_an_artifact_that_declares_no_kind(tmp_path):
+    """An artifact without a `kind` used to make the count by kind raise a bare TypeError (None sorted with str)."""
+    root = _artifact_repo(tmp_path)
+    nokind = NEW_OBLIGATION.replace('"kind": "json", ', "")
+    assert nokind != NEW_OBLIGATION
+    with open(root / "commands/merge.md", "a", encoding="utf-8") as fh:
+        fh.write(nokind)
+    git(root, "add", "-A")
+    with pytest.raises(rf.FactError, match=r"commands/merge\.md:\d+: an artifact of the qa obligation declares no `kind`"):
+        rf.static_artifacts(root)
+    edit(root, "commands/merge.md", '"path": "docs/dev/zzz-report-<timestamp>.json"', '"kind": 3, "path": "docs/dev/zzz-report-<timestamp>.json"')
+    with pytest.raises(rf.FactError, match="declares no `kind`"):
+        rf.static_artifacts(root)
+    edit(root, "commands/merge.md", '"kind": 3, ', '"kind": "json", ')
+    assert rf.static_artifacts(root)["declared_by_kind"]["json"] >= 1  # and with its kind it counts
+
+
 def test_static_artifacts_missing_inputs_are_named(tmp_path):
     with pytest.raises(rf.FactError, match="artifact_graph"):
         rf.static_artifacts(make_repo(tmp_path, {"commands": REPO / "commands"}))
@@ -952,6 +969,12 @@ def test_ci_enforces_fails_closed_on_a_missing_source(tmp_path, gone, predicate)
     got = rf.ci_enforces(make_repo(tmp_path, files))
     assert got[predicate]["holds"] is False
     assert Path(gone).name in " ".join(got[predicate]["missing"])
+    if gone == WORKFLOW:  # no workflow shows CI running any of them: every predicate is false and says so
+        for name, verdict in got.items():
+            assert verdict["holds"] is False and "baseline.yml" in " ".join(verdict["missing"]), name
+            assert verdict["workflow"]["holds"] is False if name != "unit_suite_on_every_version" else True
+        assert got["no_site_without_class"]["weaker"]["holds"] is False
+        return
     assert [n for n, v in got.items() if n != predicate and gone not in v["missing"] and not v["holds"]] in (
         [], ["no_site_without_class"])  # the other predicates still answer from their own sources
 
@@ -961,6 +984,372 @@ def test_ci_enforces_fails_closed_on_a_source_that_does_not_parse(tmp_path):
     (root / "tests/replay/test_pipelines.py").write_text("def broken(:\n", encoding="utf-8")
     verdict = rf.ci_enforces(root)["compliant_replays_clean"]
     assert verdict["holds"] is False and "test_pipelines.py" in " ".join(verdict["missing"])
+
+
+# ================================================================ 9a. the workflow really runs the test
+
+WORKFLOW = ".github/workflows/baseline.yml"
+REPLAY_THREE = {"compliant_replays_clean", "no_site_without_class", "faults_returned_and_repaired"}
+FOUR = REPLAY_THREE | {"artifact_check_clean"}
+
+
+def must_replace(text: str, old: str, new: str) -> str:
+    assert text.count(old) >= 1, f"the workflow has no {old!r}"
+    return text.replace(old, new, 1)
+
+
+def replace_last(text: str, old: str, new: str) -> str:
+    assert old in text, old
+    head, _, tail = text.rpartition(old)
+    return head + new + tail
+
+
+def drop_job(text: str, job: str) -> str:
+    """The workflow without the job `job` (the text from its key to the next job's key)."""
+    start = text.index(f"\n  {job}:\n")
+    nxt = re.search(r"\n  [\w-]+:\n", text[start + 1:])
+    return text[:start] + (text[start + 1 + nxt.start():] if nxt else "\n")
+
+
+def run_workflow_variant(tmp_path, name, mutate):
+    root = _ci_repo(tmp_path / name)
+    text = (root / WORKFLOW).read_text(encoding="utf-8")
+    changed = mutate(text)
+    assert changed != text, name
+    (root / WORKFLOW).write_text(changed, encoding="utf-8")
+    git(root, "add", "-A")
+    return rf.ci_enforces(root)
+
+
+def assert_ci_verdicts(got: dict, false_for, message: str):
+    """The predicates in `false_for` (a set, or {predicate: reason}) are false with the workflow's reason (and,
+    for the dead-end predicate, its weaker claim too); every other predicate still finds the workflow running
+    its test."""
+    reasons = false_for if isinstance(false_for, dict) else {name: message for name in false_for}
+    for name, verdict in got.items():
+        if name == "unit_suite_on_every_version":
+            continue
+        wf = verdict["workflow"]
+        if name in reasons:
+            message = reasons[name]
+            assert wf["holds"] is False and verdict["holds"] is False, (name, wf)
+            assert message in " ".join(wf["missing"]), (name, wf["missing"])
+            assert any(message in m for m in verdict["missing"]), (name, verdict["missing"])
+            if name == "no_site_without_class":
+                assert verdict["weaker"]["holds"] is False and verdict["weaker"]["workflow"] is wf
+        else:
+            assert wf["holds"] is True, (name, wf["missing"])
+
+
+def test_the_workflow_runs_each_test_on_this_repository(real):
+    """The real workflow passes every rule: each of the four tests is run by a step of a job that cannot be
+    skipped or ignored, and the evidence says which, where, and which step ignores it."""
+    got = real.facts["ci_enforces"]
+    lines = tracked_text(WORKFLOW).splitlines()
+    expect = {
+        "compliant_replays_clean": ("replay-suite", "pytest tests/replay "),
+        "no_site_without_class": ("replay-suite", "pytest tests/replay "),
+        "faults_returned_and_repaired": ("replay-suite", "pytest tests/replay "),
+        "artifact_check_clean": ("artifact-graph", "pytest tests/test_artifact_graph.py "),
+    }
+    for name, (job, command) in expect.items():
+        wf = got[name]["workflow"]
+        assert wf["holds"] is True and wf["missing"] == [] and wf["file"] == WORKFLOW, name
+        assert wf["job"] == job and command in lines[wf["line"] - 1] and command in wf["command"] + " ", (name, wf)
+        assert wf["runs"] and wf["rejected"] == [], (name, wf)
+        # the baseline job's own pytest step leaves the test out; it is listed, and is not the one that counts
+        ignoring = [r for r in wf["ignored_by"] if r["job"] == "baseline"]
+        assert ignoring and "pytest hooks/tests tests" in lines[ignoring[0]["line"] - 1], (name, wf["ignored_by"])
+        assert got[name]["holds"] == (name != "no_site_without_class")
+    assert got["no_site_without_class"]["weaker"]["holds"] is True
+    assert got["no_site_without_class"]["weaker"]["workflow"]["holds"] is True
+    unit = got["unit_suite_on_every_version"]["workflow"]
+    assert unit["holds"] and unit["job"] == "baseline" and unit["ignored_by"] == [] and unit["rejected"] == []
+    # an independent reading of the job and step names: the replay shards and the artifact check
+    text = tracked_text(WORKFLOW)
+    assert re.search(r"(?m)^  replay-suite:\n", text) and re.search(r"(?m)^  artifact-graph:\n", text)
+
+
+# (name, mutation of the workflow text, the predicates that turn false, the reason it names)
+MUTATIONS = [
+    # with the job gone, the only step that still reaches the test is the baseline job's, which leaves it out
+    ("replay job removed", lambda t: drop_job(t, "replay-suite"), REPLAY_THREE, "no step runs pytest over"),
+    ("artifact job removed", lambda t: drop_job(t, "artifact-graph"), {"artifact_check_clean"}, "ignores it"),
+    ("replay dir ignored", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                  "--ignore=tests/replay/test_run_to_run.py --ignore=tests/replay"),
+     REPLAY_THREE, "ignores it"),
+    ("replay dir ignored, spaced", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                          "--ignore tests/replay"), REPLAY_THREE, "ignores it"),
+    ("one file ignored", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                "--ignore=tests/replay/test_run_to_run.py --ignore=tests/replay/test_faults.py"),
+     {"faults_returned_and_repaired"}, "ignores it"),
+    ("one file ignored by a glob", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                          "--ignore-glob=*test_pipelines.py"),
+     {"compliant_replays_clean"}, "ignores it"),
+    ("artifact test ignored", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
+                                                     "pytest tests/test_artifact_graph.py --ignore=tests/test_artifact_graph.py -q"),
+     {"artifact_check_clean"}, "ignores it"),
+    ("artifact step runs another file", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
+                                                               "pytest tests/artifact_graph/test_mutations.py -q"),
+     {"artifact_check_clean"}, "ignores it"),  # the baseline step that reaches it leaves it out
+    ("replay step continue-on-error", lambda t: must_replace(
+        t, "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n",
+        "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n        continue-on-error: true\n"),
+     REPLAY_THREE, "continue-on-error"),
+    ("artifact step continue-on-error", lambda t: must_replace(
+        t, "      - name: Artifact check\n", "      - name: Artifact check\n        continue-on-error: true\n"),
+     {"artifact_check_clean"}, "continue-on-error"),
+    ("replay job continue-on-error", lambda t: must_replace(
+        t, "    name: replay suite ${{ matrix.shard }}/6\n", "    name: replay suite ${{ matrix.shard }}/6\n    continue-on-error: true\n"),
+     REPLAY_THREE, "job `replay-suite` has continue-on-error"),
+    ("replay job continue-on-error by expression", lambda t: must_replace(
+        t, "    name: replay suite ${{ matrix.shard }}/6\n",
+        "    name: replay suite ${{ matrix.shard }}/6\n    continue-on-error: ${{ matrix.shard == 6 }}\n"),
+     REPLAY_THREE, "continue-on-error"),
+    ("artifact job continue-on-error", lambda t: must_replace(
+        t, "    name: artifact check (traced replays)\n",
+        "    name: artifact check (traced replays)\n    continue-on-error: true\n"),
+     {"artifact_check_clean"}, "job `artifact-graph` has continue-on-error"),
+    ("job it needs continue-on-error", lambda t: must_replace(
+        t, "    name: artifact check plan\n", "    name: artifact check plan\n    continue-on-error: true\n"),
+     {"artifact_check_clean"}, "needed job: job `artifact-graph-plan` has continue-on-error"),
+    ("replay step conditional", lambda t: must_replace(
+        t, "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n",
+        "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n        if: github.event_name == 'push'\n"),
+     REPLAY_THREE, "the step has an `if`"),
+    ("replay job conditional", lambda t: replace_last(
+        t, "if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+        "if: ${{ github.event_name == 'push' }}"), REPLAY_THREE, "is conditional"),
+    ("artifact job conditional", lambda t: must_replace(
+        t, "if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}",
+        "if: ${{ github.ref == 'refs/heads/master' }}"), {"artifact_check_clean"}, "is conditional"),
+    ("artifact job gated on a job it does not need", lambda t: must_replace(
+        t, "needs.artifact-graph-plan.result == 'success'", "needs.baseline.result == 'success'"),
+     {"artifact_check_clean"}, "is conditional"),
+    ("replay selection -k", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -k smoke"),
+     REPLAY_THREE, "selects tests"),
+    ("replay selection -k attached", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -ksmoke"),
+     REPLAY_THREE, "selects tests"),
+    ("replay selection -m", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -m 'not slow'"),
+     REPLAY_THREE, "selects tests"),
+    ("replay last-failed", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --lf"),
+     REPLAY_THREE, "selects tests"),
+    ("artifact selection", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
+                                                  "pytest tests/test_artifact_graph.py -k test_no_violation -q"),
+     {"artifact_check_clean"}, "selects tests"),
+    ("replay deselect file", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --deselect=tests/replay/test_pipelines.py"),
+     {"compliant_replays_clean"}, "deselects"),
+    ("replay deselect test", lambda t: must_replace(
+        t, "-rfE --durations=0", "-rfE --durations=0 --deselect tests/replay/test_faults.py::test_fault_returns_to_its_producer"),
+     {"faults_returned_and_repaired"}, "deselects"),
+    ("replay collect only", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --collect-only"),
+     REPLAY_THREE, "only collects"),
+    ("replay collect only, short", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --co"),
+     REPLAY_THREE, "only collects"),
+    ("artifact setup plan", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
+                                                   "pytest tests/test_artifact_graph.py --setup-plan -q"),
+     {"artifact_check_clean"}, "only collects"),
+    ("replay config override", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -o addopts=-q"),
+     REPLAY_THREE, "overrides the pytest configuration"),
+    ("replay node id", lambda t: must_replace(t, "pytest tests/replay -q", "pytest tests/replay/test_faults.py::test_x -q"),
+     {"faults_returned_and_repaired": "node ids", "compliant_replays_clean": "ignores it",
+      "no_site_without_class": "ignores it"}, ""),
+    ("replay exit code swallowed", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                          "--ignore=tests/replay/test_run_to_run.py || true"),
+     REPLAY_THREE, "can fail without failing the job"),
+    ("replay exit code swallowed by echo", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                                  "--ignore=tests/replay/test_run_to_run.py || echo failed"),
+     REPLAY_THREE, "can fail without failing the job"),
+    ("replay piped", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                            "--ignore=tests/replay/test_run_to_run.py | tee replay.log"),
+     REPLAY_THREE, "hides its exit status"),
+    ("replay in the background", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                        "--ignore=tests/replay/test_run_to_run.py &"),
+     REPLAY_THREE, "background"),
+    ("artifact exit code swallowed", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s",
+                                                            "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s || true"),
+     {"artifact_check_clean"}, "can fail without failing the job"),
+    ("replay shards cut", lambda t: must_replace(t, "shard: [1, 2, 3, 4, 5, 6]", "shard: [1, 2, 3]"),
+     REPLAY_THREE, "splits the tests over 6 shards"),
+    ("replay shard count raised", lambda t: must_replace(t, "REPLAY_SHARD: ${{ matrix.shard }}/6", "REPLAY_SHARD: ${{ matrix.shard }}/8"),
+     REPLAY_THREE, "splits the tests over 8 shards"),
+    ("selection in the environment", lambda t: must_replace(t, "          REPLAY_WORK: ${{ runner.temp }}/replay\n",
+                                                            "          REPLAY_WORK: ${{ runner.temp }}/replay\n          PYTEST_ADDOPTS: \"-k smoke\"\n"),
+     REPLAY_THREE, "selects tests"),
+    ("another directory", lambda t: must_replace(
+        t, "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n",
+        "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n        working-directory: tests\n"),
+     REPLAY_THREE, "working-directory"),
+    ("another shell", lambda t: must_replace(
+        t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: sh {0}\n"),
+     {"artifact_check_clean"}, "shell"),
+]
+
+
+@pytest.mark.parametrize("name,mutate,false_for,message", MUTATIONS, ids=[m[0] for m in MUTATIONS])
+def test_the_workflow_rules_turn_the_predicates_false(tmp_path, name, mutate, false_for, message):
+    got = run_workflow_variant(tmp_path, "mutated", mutate)
+    assert_ci_verdicts(got, false_for, message)
+    assert got["unit_suite_on_every_version"]["holds"] is True  # none of these touches the baseline job's pytest step
+
+
+# changes that do not narrow the run, narrow nothing: the predicates stay true
+HARMLESS = [
+    ("more output", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -vv --tb=short -x")),
+    ("another ignored file", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                    "--ignore=tests/replay/test_run_to_run.py --ignore=tests/replay/test_trace_reduce.py")),
+    ("an exit code kept", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                 "--ignore=tests/replay/test_run_to_run.py || exit 1")),
+    ("a pipe with pipefail", lambda t: must_replace(
+        t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: bash\n").replace(
+        "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s", "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s | tee check.log")),
+    ("a job with no if", lambda t: must_replace(
+        t, "    if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}\n", "")),
+    ("an always() job", lambda t: must_replace(
+        t, "!cancelled() && needs.artifact-graph-plan.result == 'success'", "always()")),
+]
+
+
+@pytest.mark.parametrize("name,mutate", HARMLESS, ids=[h[0] for h in HARMLESS])
+def test_the_workflow_rules_leave_harmless_changes_alone(tmp_path, name, mutate):
+    got = run_workflow_variant(tmp_path, "harmless", mutate)
+    for predicate, verdict in got.items():
+        assert verdict["workflow"]["holds"] is True if predicate != "unit_suite_on_every_version" else verdict["holds"], \
+            (name, predicate, verdict["missing"])
+    assert got["compliant_replays_clean"]["holds"] and got["faults_returned_and_repaired"]["holds"]
+    assert got["artifact_check_clean"]["holds"]
+
+
+def test_a_baseline_job_skipped_on_another_condition_is_no_reference(tmp_path):
+    """Every job shares the draft-skip `if`, so a change that gives them all another condition keeps them equal to
+    one another; the baseline job's own `if` is the reference only while it is the draft skip."""
+    got = run_workflow_variant(tmp_path, "alike", lambda t: t.replace(
+        "if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+        "if: ${{ github.event_name == 'push' }}"))
+    for name, verdict in got.items():
+        assert verdict["holds"] is False and "is conditional" in " ".join(verdict["workflow"]["missing"]), name
+    always = run_workflow_variant(tmp_path, "never", lambda t: must_replace(
+        t, "    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}\n    runs-on: ubuntu-latest\n    strategy:",
+        "    if: ${{ false }}\n    runs-on: ubuntu-latest\n    strategy:"))
+    assert always["unit_suite_on_every_version"]["holds"] is False
+    assert "is conditional" in " ".join(always["unit_suite_on_every_version"]["missing"])
+
+
+UNIT_STEP = "python3 -m pytest hooks/tests tests -q -n auto --dist loadfile"
+
+
+@pytest.mark.parametrize("extra,message", [
+    ("-k smoke", "selects tests"), ("-ksmoke", "selects tests"), ("-m 'not slow'", "selects tests"),
+    ("--collect-only", "only collects"), ("--co", "only collects"), ("--setup-plan", "only collects"),
+    ("--deselect tests/test_x.py::test_y", "deselects"), ("--deselect=hooks/tests/test_z.py", "deselects"),
+    ("--lf", "selects tests"), ("--sw", "selects tests"), ("-o addopts=-q", "overrides the pytest configuration"),
+    ("|| true", "can fail without failing the job"), ("|| echo ok", "can fail without failing the job"),
+    ("| tee unit.log", "hides its exit status"), ("&", "background"),
+    ("--ignore=tests", "ignores it"), ("--ignore=hooks/tests", "ignores it"), ("--ignore-glob=*tests", "ignores it"),
+], ids=lambda v: v if isinstance(v, str) else None)
+def test_unit_suite_rejects_what_narrows_or_swallows_the_run(tmp_path, extra, message):
+    got = run_workflow_variant(tmp_path, "unit", lambda t: must_replace(t, UNIT_STEP, f"{UNIT_STEP} {extra}"))
+    unit = got["unit_suite_on_every_version"]
+    assert unit["holds"] is False and unit["workflow"]["holds"] is False, unit
+    assert message in " ".join(unit["missing"]), unit["missing"]
+    assert unit["ignored"] == []  # nothing is claimed about what it leaves out
+
+
+def test_unit_suite_keeps_its_cell_when_the_run_is_whole(tmp_path):
+    """Options that narrow nothing leave the predicate, its `ignored` list and its `versions` as they were."""
+    base = rf.ci_enforces(_ci_repo(tmp_path / "base"))["unit_suite_on_every_version"]
+    got = run_workflow_variant(tmp_path, "whole", lambda t: must_replace(t, UNIT_STEP, f"{UNIT_STEP} -x --tb=short -vv"))
+    unit = got["unit_suite_on_every_version"]
+    assert unit["holds"] and unit["ignored"] == base["ignored"] and unit["versions"] == base["versions"]
+    assert unit["line"] == base["line"] and unit["claim"] == base["claim"] and unit["file"] == base["file"]
+    assert unit["assertions"] == base["assertions"]
+
+
+def test_a_workflow_that_cannot_be_read_fails_every_predicate_closed(tmp_path):
+    root = _ci_repo(tmp_path)
+    (root / WORKFLOW).write_text("jobs: [unclosed\n", encoding="utf-8")
+    git(root, "add", "-A")
+    got = rf.ci_enforces(root)
+    assert set(got) == {"compliant_replays_clean", "no_site_without_class", "artifact_check_clean",
+                        "faults_returned_and_repaired", "unit_suite_on_every_version"}
+    for name, verdict in got.items():
+        assert verdict["holds"] is False and "baseline.yml" in " ".join(verdict["missing"]), name
+
+
+@pytest.mark.parametrize("run,swallowed", [
+    ("python3 -m pytest tests -q", False),
+    ("pytest tests -q", False),
+    ("FOO=1 python3 -m pytest tests", False),
+    ("python3 -m pip install pytest", None),               # `pytest` as an argument is no pytest run
+    ("pip install pytest && echo done", None),
+    ("python3 -m pytest tests || exit 1", False),
+    ("python3 -m pytest tests || exit 0", True),
+    ("python3 -m pytest tests || true", True),
+    ("python3 -m pytest tests && echo ok", False),
+    ("python3 -m pytest tests && echo ok\necho done", True),
+    ("python3 -m pytest tests | tee x.log", True),
+    ("set -o pipefail\npython3 -m pytest tests | tee x.log", False),
+    ("python3 -m pytest tests &", True),
+    ("set +e\npython3 -m pytest tests", True),
+    ("if python3 -m pytest tests; then echo ok; fi", True),
+    ("! python3 -m pytest tests", True),
+    ("echo start\npython3 -m pytest tests -q\necho end", False),
+    ("python3 -m pytest tests \\\n  -q", False),
+    ("# python3 -m pytest tests || true\npython3 -m pytest tests", False),
+])
+def test_pytest_runs_reads_a_run_block(run, swallowed):
+    runs = rf._pytest_runs(run)
+    if swallowed is None:
+        assert runs == []
+    else:
+        assert len(runs) == 1 and bool(runs[0]["swallow"]) is swallowed, runs
+
+
+def test_pytest_runs_survives_an_unclosed_quote_by_naming_it():
+    with pytest.raises(ValueError):
+        rf._pytest_runs("python3 -m pytest tests -k 'unclosed")
+
+
+@pytest.mark.parametrize("words,expected", [
+    (["tests", "-q"], {"paths": ["tests"]}),
+    (["-n", "auto", "--dist", "loadfile", "tests/replay"], {"paths": ["tests/replay"]}),
+    (["-p", "no:cacheprovider", "-rfE", "--durations=0", "a", "b"], {"paths": ["a", "b"]}),
+    (["--ignore", "x/y", "--ignore=z", "--ignore-glob", "*q*"], {"ignore": ["x/y", "z"], "ignore_glob": ["*q*"]}),
+    (["-k", "a and b", "t"], {"select": ["-k a and b"], "paths": ["t"]}),
+    (["-xk", "a", "t"], {"select": ["-k a"], "paths": ["t"]}),
+    (["-m", "slow", "t"], {"select": ["-m slow"]}),
+    (["--deselect", "t.py::x", "--deselect=u.py"], {"deselect": ["t.py::x", "u.py"]}),
+    (["--co", "--collect-only", "-h"], {"not_a_run": ["--co", "--collect-only", "-h"]}),
+    (["-o", "addopts=x", "-c", "other.ini"], {"config": ["-o", "-c"]}),
+    (["--", "-weird-name"], {"paths": ["-weird-name"]}),
+])
+def test_pytest_arguments_are_read_as_pytest_reads_them(words, expected):
+    got = rf._args(words)
+    for key, value in expected.items():
+        assert got[key] == value, (key, got)
+
+
+@pytest.mark.parametrize("arg,target,covers", [
+    ("tests", "tests/replay/test_faults.py", True), ("tests/", "tests/replay/test_faults.py", True),
+    ("./tests/replay", "tests/replay/test_faults.py", True), ("tests/replay/test_faults.py", "tests/replay/test_faults.py", True),
+    ("tests/replay/test_faults.py::test_x", "tests/replay/test_faults.py", True),
+    ("tests/rep", "tests/replay/test_faults.py", False), ("tests/replay/test_f.py", "tests/replay/test_faults.py", False),
+    (".", "tests/replay/test_faults.py", True), ("tests/replay/test_*.py", "tests/replay/test_faults.py", True),
+    ("hooks/tests", "tests/replay/test_faults.py", False),
+])
+def test_a_pytest_path_covers_what_it_holds(arg, target, covers):
+    assert rf._covers(arg, target) is covers
+
+
+def test_no_path_means_the_testpaths_of_pytest_ini(tmp_path):
+    root = _ci_repo(tmp_path)
+    (root / "pytest.ini").write_text("[pytest]\ntestpaths = hooks/tests tests\n", encoding="utf-8")
+    assert rf._testpaths(root) == ["hooks/tests", "tests"]
+    assert rf._testpaths(tmp_path) == ["."]
+    edit(root, WORKFLOW, "python3 -m pytest tests/test_artifact_graph.py -q", "python3 -m pytest -q")
+    got = rf.ci_enforces(root)["artifact_check_clean"]["workflow"]
+    # the artifact job now runs `pytest -q`: the testpaths, which hold the file
+    assert got["holds"] is True and got["job"] == "artifact-graph", got
 
 
 # ================================================================ all facts, the JSON dump, the command line

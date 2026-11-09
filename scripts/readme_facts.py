@@ -51,6 +51,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -613,6 +614,11 @@ def static_artifacts(root=None, *, with_static_totals: bool = False) -> dict:
     declarations = [a for ob in obligations for a in ob["artifacts"]]
     if not obligations or not declarations:
         raise FactError("the static half found no obligation template with an artifact in commands/*.md")
+    for ob in obligations:  # every artifact states its kind (json, markdown ...): the count by kind names each
+        for a in ob["artifacts"]:
+            if not isinstance(a.get("kind"), str) or not a["kind"]:
+                raise FactError(f"{ob.get('site')}: an artifact of the {ob.get('role')} obligation declares no `kind` "
+                                f"({a.get('path') or a.get('template') or 'no path either'}); it is counted by kind")
     paths = sorted({a["path"] for a in declarations if a.get("path")})
     return {
         "label": "file artifacts declared by the producers' obligation templates in commands/*.md, read "
@@ -929,6 +935,404 @@ _EXCEPTION_NAME = re.compile(r"(?i)exception|exempt|waiv|suppress|allowlist|whit
                              r"known[_-]?(?:violation|issue|failure)|expected[_-]?viol|baseline[_-]?viol")
 
 
+# ---- 9a. does the CI workflow really run the test? -----------------------------------------
+#
+# A test source that asserts something is no claim about CI until the workflow runs it. For a test file
+# (or, for the unit suite, the two directories) `_ci_runs` reads .github/workflows/baseline.yml and shows:
+#   * some step of some job runs `pytest` over it, directly or through a directory that holds it;
+#   * that step does not narrow the run: no -k / -m, no --deselect covering it, no --ignore (or
+#     --ignore-glob) covering it, no --collect-only / --co / --setup-plan / --fixtures / --markers /
+#     --help / --version, no --lf / --stepwise, no -o / -c, no node id; the same options in PYTEST_ADDOPTS
+#     count; with no path at all pytest runs `testpaths` of pytest.ini;
+#   * that step cannot fail without failing its job: no continue-on-error, no `if`, no `|| <not exit N>`,
+#     no pipe without pipefail, no `&`, no `set +e` before it, no `if`/`while`/`!` around it, no `&&`
+#     chain followed by more commands, no shell other than bash;
+#   * its job is not made conditional away or non-blocking: no continue-on-error, and an `if` only when
+#     it is the baseline job's own `if` (a job a draft pull request skips is skipped with the baseline
+#     job), `always()`, `!cancelled()`, `success()`, or `needs.<job>.result == 'success'` of a job that
+#     itself passes these rules;
+#   * a matrix that splits the tests over shards (an env value `${{ matrix.K }}/N`) lists the shards 1..N;
+#   * a step that ignores the test is not the only step that runs the directory: it counts only for
+#     what it does not ignore (it is listed under `ignored_by`).
+# These are lexical rules over the workflow text and YAML; a construct they do not know fails closed.
+
+_SHORT_WITH_VALUE = frozenset("kmnpcorW")
+_LONG_WITH_VALUE = frozenset({
+    "--durations", "--durations-min", "--dist", "--tb", "--maxfail", "--import-mode", "--basetemp", "--junitxml",
+    "--color", "--capture", "--log-level", "--log-file", "--confcutdir", "--numprocesses", "--max-worker-restart",
+    "--pythonwarnings", "--timeout", "--rootdir", "--ignore", "--ignore-glob", "--deselect", "--override-ini",
+    "--config-file", "--tx", "--maxprocesses", "--last-failed-no-failures", "--lfnf"})
+_NOT_A_RUN = frozenset({"--collect-only", "--co", "--setup-plan", "--fixtures", "--fixtures-per-test", "--markers",
+                        "--help", "-h", "--version", "-V"})
+_SELECTS = frozenset({"--lf", "--last-failed", "--sw", "--stepwise", "--sw-skip", "--stepwise-skip",
+                      "--last-failed-no-failures", "--lfnf"})
+_CONFIG = frozenset({"--override-ini", "--config-file"})
+_DRAFT_SKIP = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+_OPERATOR = re.compile(r"[;&|]+")
+_EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.S)
+
+
+def _args(tokens: list[str]) -> dict:
+    """The options and paths of the words that follow `pytest`."""
+    out = {"not_a_run": [], "select": [], "config": [], "ignore": [], "ignore_glob": [], "deselect": [], "paths": []}
+
+    def file(option: str, value: str) -> None:
+        if option in _NOT_A_RUN:
+            out["not_a_run"].append(option)
+        if option in _SELECTS or option in ("-k", "-m"):
+            out["select"].append(option + (f" {value}" if value and option in ("-k", "-m") else ""))
+        if option in _CONFIG or option in ("-o", "-c"):
+            out["config"].append(option)
+        if option == "--ignore":
+            out["ignore"].append(value)
+        if option == "--ignore-glob":
+            out["ignore_glob"].append(value)
+        if option == "--deselect":
+            out["deselect"].append(value)
+
+    i = 0
+    while i < len(tokens):
+        word = tokens[i]
+        if word == "--":
+            out["paths"] += tokens[i + 1:]
+            break
+        if word.startswith("--"):
+            name, eq, value = word.partition("=")
+            if name in _LONG_WITH_VALUE and not eq and i + 1 < len(tokens):
+                i += 1
+                value = tokens[i]
+            file(name, value)
+        elif word.startswith("-") and len(word) > 1:
+            cluster = word[1:]
+            for at, char in enumerate(cluster):
+                if char in _SHORT_WITH_VALUE:
+                    value = cluster[at + 1:].lstrip("=")
+                    if not value and i + 1 < len(tokens):
+                        i += 1
+                        value = tokens[i]
+                    file("-" + char, value)
+                    break
+                if char in "hV":
+                    file("-" + char, "")
+        else:
+            out["paths"].append(word)
+        i += 1
+    return out
+
+
+def _covers(arg: str, target: str) -> bool:
+    """Whether the pytest path argument `arg` selects the repository path `target` (itself or below it)."""
+    arg = arg.split("::", 1)[0]
+    arg = arg[2:] if arg.startswith("./") else arg
+    arg = arg.rstrip("/") if len(arg) > 1 else arg
+    if arg in ("", "."):
+        return True
+    if re.search(r"[*?\[]", arg):
+        return fnmatch.fnmatch(target, arg) or fnmatch.fnmatch(target, arg + "/*")
+    return target == arg or target.startswith(arg + "/")
+
+
+def _above(ignored: str, target: str) -> bool:
+    """Whether the ignored/deselected path is `target` or a directory holding it."""
+    ignored = ignored.split("::", 1)[0]
+    ignored = ignored[2:] if ignored.startswith("./") else ignored
+    ignored = ignored.rstrip("/")
+    return ignored in (".", "") or target == ignored or target.startswith(ignored + "/")
+
+
+def _commands(run: str) -> list[dict]:
+    """The commands of a run block, in order: each with its words and the operator (`;`, `&&`, `||`, `|`, `&`,
+    or a newline) before and after it. Comments, blank lines and `${{ }}` expressions (replaced by EXPR) are
+    dealt with; raises ValueError on a quote that never closes."""
+    text = _EXPRESSION.sub("EXPR", run).replace("\\\n", " ")
+    out, pending = [], "\n"
+    for line in text.splitlines():
+        lex = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lex.whitespace_split, lex.commenters = True, "#"
+        words, trailing = [], False
+        for word in lex:
+            trailing = bool(_OPERATOR.fullmatch(word))
+            if trailing:
+                if words:
+                    out.append({"tokens": words, "before": pending, "after": _operator(word)})
+                    words = []
+                pending = _operator(word)
+            else:
+                words.append(word)
+        if words:
+            out.append({"tokens": words, "before": pending, "after": "\n"})
+        if not trailing:
+            pending = "\n"
+    return out
+
+
+def _operator(word: str) -> str:
+    return "||" if word == "||" else "&&" if word == "&&" else "|" if "|" in word else "&" if "&" in word else ";"
+
+
+_WRAPPERS = ("sudo", "env", "exec", "time", "if", "elif", "while", "until", "!", "then", "do")
+
+
+def _pytest_spot(words: list[str]) -> int | None:
+    """Where `pytest` is the program a command runs (`pytest ...`, `python3 -m pytest ...`, behind env
+    assignments, sudo, env, exec, time or a shell keyword), not a word among the arguments of another."""
+    for at, word in enumerate(words):
+        if Path(word).name not in ("pytest", "py.test"):
+            continue
+        before = words[:at]
+        if before[-2:-1] and before[-1] == "-m" and Path(before[-2]).name.startswith("python"):
+            before = before[:-2]
+        if all(w in _WRAPPERS or re.fullmatch(r"\w+=.*", w) for w in before):
+            return at
+    return None
+
+
+def _pytest_runs(run: str, pipefail: bool = False) -> list[dict]:
+    """Each pytest invocation of a run block: its arguments (see _args) and the reasons its failure might
+    not fail the step. `pipefail`: the step's shell sets it (an explicit `shell: bash` does)."""
+    commands = _commands(run)
+    runs = []
+    for at, cmd in enumerate(commands):
+        words = cmd["tokens"]
+        spot = _pytest_spot(words)
+        if spot is None:
+            continue
+        swallow = []
+        if any(w in ("if", "elif", "while", "until", "!") for w in words[:spot]):
+            swallow.append("the command sits inside a condition (`if`, `while`, `!`)")
+        if any(c["tokens"][:2] in (["set", "+e"], ["set", "+o"]) for c in commands[:at]):
+            swallow.append("`set +e` precedes it")
+        if cmd["after"] == "||":
+            follow = commands[at + 1]["tokens"] if at + 1 < len(commands) else []
+            if not (follow[:1] == ["exit"] and len(follow) > 1 and follow[1] != "0") and follow[:1] != ["false"]:
+                swallow.append("`||` after it runs a command that does not fail the step")
+        if cmd["after"] == "|" and not pipefail and not any("pipefail" in " ".join(c["tokens"]) for c in commands[:at]):
+            swallow.append("a pipe after it hides its exit status (no pipefail)")
+        if cmd["after"] == "&":
+            swallow.append("it runs in the background")
+        if cmd["after"] == "&&":  # a && list only fails the step when it is the last thing the step does
+            tail = at
+            while tail + 1 < len(commands) and commands[tail]["after"] == "&&":
+                tail += 1
+            if tail + 1 < len(commands):
+                swallow.append("a `&&` list after it is followed by more commands")
+        runs.append({"args": _args(words[spot + 1:]), "swallow": swallow, "words": words[spot:]})
+    return runs
+
+
+def _expression(value) -> str:
+    return " ".join(re.sub(r"^\$\{\{\s*(.*?)\s*\}\}$", r"\1", str(value).strip(), flags=re.S).split())
+
+
+def _job_problems(doc: dict, job_id: str, reference_if: str, seen: tuple = ()) -> list[str]:
+    """Why a job might not run, or not fail the workflow, on a change that runs the baseline job (see 9a)."""
+    job = doc["jobs"].get(job_id)
+    if not isinstance(job, dict):
+        return [f"no job `{job_id}`"]
+    if job_id in seen:
+        return []
+    out = []
+    if job.get("continue-on-error") not in (None, False):
+        out.append(f"job `{job_id}` has continue-on-error")
+    needs = job.get("needs")
+    needs = [needs] if isinstance(needs, str) else list(needs or [])
+    expr = _expression(job["if"]) if "if" in job else None
+    recurse = list(needs)
+    # the baseline job's own `if` is the reference only when it is the draft skip (or there is none): a baseline
+    # job that is skipped on some other condition makes every job that shares that condition conditional too
+    if expr is not None and not (expr == reference_if and reference_if in ("", _DRAFT_SKIP)):
+        recurse = []
+        for conjunct in [c.strip() for c in expr.split("&&")]:
+            m = re.fullmatch(r"needs\.([\w-]+)\.result == 'success'", conjunct)
+            if conjunct in ("always()", "!cancelled()", "success()"):
+                continue
+            if m and m.group(1) in needs:
+                recurse.append(m.group(1))
+                continue
+            out.append(f"job `{job_id}` is conditional (`if: {expr}`)")
+            break
+    for need in recurse:
+        out += [f"needed job: {p}" for p in _job_problems(doc, need, reference_if, seen + (job_id,))]
+    matrix = (job.get("strategy") or {}).get("matrix") if isinstance(job.get("strategy"), dict) else None
+    env = {**(doc.get("env") or {}), **(job.get("env") or {})}
+    for step in job.get("steps") or []:
+        env.update((step.get("env") or {}) if isinstance(step, dict) else {})
+    for name, value in env.items():
+        m = re.fullmatch(r"\$\{\{\s*matrix\.([\w-]+)\s*\}\}/(\d+)", str(value).strip())
+        if m:  # REPLAY_SHARD: ${{ matrix.shard }}/6 splits the tests over shards: every shard must run
+            listed = matrix.get(m.group(1)) if isinstance(matrix, dict) else None
+            if listed != list(range(1, int(m.group(2)) + 1)) or {"include", "exclude"} & set(matrix or ()):
+                out.append(f"job `{job_id}` splits the tests over {m.group(2)} shards ({name}) but its matrix "
+                           f"`{m.group(1)}` is {listed}, not 1..{m.group(2)}")
+    return out
+
+
+def _step_lines(text: str) -> dict:
+    """{(job id, step index): (line of the step, line of its run)} from the workflow's YAML nodes."""
+    import yaml
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise FactError(f"cannot parse {BASELINE_WORKFLOW} as YAML: {exc}") from exc
+
+    def get(node, key):
+        if isinstance(node, yaml.MappingNode):
+            return next((v for k, v in node.value if getattr(k, "value", None) == key), None)
+        return None
+
+    out = {}
+    jobs = get(root, "jobs")
+    for job_key, job in (jobs.value if isinstance(jobs, yaml.MappingNode) else []):
+        steps = get(job, "steps")
+        for i, step in enumerate(steps.value if isinstance(steps, yaml.SequenceNode) else []):
+            run = get(step, "run")
+            out[(job_key.value, i)] = (step.start_mark.line + 1, run.start_mark.line + 1 if run is not None else None)
+    return out
+
+
+def _testpaths(root: Path) -> list[str]:
+    """What pytest runs when no path is given: `testpaths` of pytest.ini, else the whole tree."""
+    import configparser
+    path = root / "pytest.ini"
+    if path.is_file():
+        parser = configparser.ConfigParser()
+        try:
+            parser.read_string(path.read_text(encoding="utf-8"))
+        except (configparser.Error, OSError, UnicodeDecodeError):
+            return ["."]
+        return parser.get("pytest", "testpaths", fallback=".").split() or ["."]
+    return ["."]
+
+
+def _ci_runs(root: Path, targets: tuple, *, only_job: str | None = None, strict: bool = False,
+             pointed_at: str = "") -> dict:
+    """Whether .github/workflows/baseline.yml runs pytest over every path of `targets` (see 9a) in a step that
+    qualifies. `only_job` limits the search to one job; `strict` makes any --deselect disqualify. Returns holds,
+    file, line (of the pytest command of the first qualifying step), job, step, command, runs (every qualifying
+    step: job, step, line, command), ignored_by (steps that select a target but ignore part of it, with what
+    they ignore), rejected (steps that select it and are disqualified, with why), missing."""
+    text = _read(root, BASELINE_WORKFLOW)
+    doc = _yaml(text, BASELINE_WORKFLOW)
+    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+        raise FactError(f"{BASELINE_WORKFLOW}: no `jobs` mapping")
+    reference = doc["jobs"].get(doc.get("name"))
+    reference_if = _expression(reference["if"]) if isinstance(reference, dict) and "if" in reference else ""
+    lines, positions = text.splitlines(), _step_lines(text)
+    runs, ignored_by, rejected = [], [], []
+    for job_id, job in doc["jobs"].items():
+        if only_job is not None and job_id != only_job or not isinstance(job, dict):
+            continue
+        job_problems = None
+        for index, step in enumerate(job.get("steps") or []):
+            if not isinstance(step, dict) or not isinstance(step.get("run"), str) or "pytest" not in step["run"]:
+                continue
+            name = str(step.get("name") or f"step {index + 1}")
+            at = positions.get((job_id, index), (None, None))[1]
+            line = next((n for n in range(at, min(at + 12, len(lines)) + 1) if "pytest" in lines[n - 1]), at) if at else None
+            shell = step.get("shell") or (job.get("defaults") or {}).get("run", {}).get("shell") \
+                or (doc.get("defaults") or {}).get("run", {}).get("shell")
+            try:
+                found = _pytest_runs(step["run"], pipefail=shell == "bash")
+            except ValueError as exc:
+                rejected.append({"job": job_id, "step": name, "line": line, "why": [f"its run block cannot be read ({exc})"]})
+                continue
+            addopts = {**(doc.get("env") or {}), **(job.get("env") or {}), **(step.get("env") or {})}.get("PYTEST_ADDOPTS")
+            for inv in found:
+                args = dict(inv["args"])
+                if addopts is not None:
+                    if "${{" in str(addopts):
+                        inv = {**inv, "swallow": inv["swallow"] + ["PYTEST_ADDOPTS is set from an expression"]}
+                    extra = _args(shlex.split(str(addopts)))
+                    args = {k: args[k] + extra[k] for k in args}
+                paths = args["paths"] or _testpaths(root)
+                selected = [t for t in targets if any(_covers(p, t) for p in paths)]
+                if len(selected) != len(targets):
+                    continue
+                why, ignores = [], []
+                for t in targets:
+                    if any("::" in p and _covers(p, t) for p in paths) and not any(
+                            "::" not in p and _covers(p, t) for p in paths):
+                        why.append(f"runs only the node ids it names of {t}")
+                if args["not_a_run"]:
+                    why.append(f"only collects or lists tests ({', '.join(args['not_a_run'])})")
+                if args["select"]:
+                    why.append(f"selects tests ({', '.join(args['select'])})")
+                if args["config"]:
+                    why.append("overrides the pytest configuration (-o / -c)")
+                for t in targets:
+                    for d in args["deselect"]:
+                        if strict or _above(d, t):
+                            why.append(f"deselects tests (--deselect {d})")
+                    for pattern in args["ignore_glob"]:
+                        if any(fnmatch.fnmatch(x, pattern) for x in (t, "/" + t, "/work/" + t)):
+                            ignores.append(f"--ignore-glob={pattern}")
+                    for d in args["ignore"]:
+                        if _above(d, t):
+                            ignores.append(f"--ignore={d}")
+                if ignores:
+                    ignored_by.append({"job": job_id, "step": name, "line": line, "ignores": sorted(set(ignores))})
+                    continue
+                if step.get("working-directory") not in (None, ".", "./"):
+                    why.append(f"runs in another directory (working-directory: {step['working-directory']})")
+                if shell not in (None, "bash"):
+                    why.append(f"uses shell `{shell}`, whose handling of a failing command is not shown")
+                if step.get("continue-on-error") not in (None, False):
+                    why.append("can fail without failing the job (continue-on-error)")
+                if "if" in step:
+                    why.append("can fail without failing the job (the step has an `if`)")
+                for swallow in inv["swallow"]:
+                    why.append(f"can fail without failing the job ({swallow})")
+                if job_problems is None:
+                    job_problems = _job_problems(doc, job_id, reference_if)
+                if job_problems:
+                    why += job_problems
+                if why:
+                    rejected.append({"job": job_id, "step": name, "line": line, "why": why})
+                    continue
+                runs.append({"job": job_id, "step": name, "line": line, "command": " ".join(inv["words"]),
+                             "ignores": sorted(args["ignore"])})
+    where = " and ".join(targets)
+    missing = []
+    if not runs:
+        scope = f"job `{only_job}`" if only_job else f"any job of {BASELINE_WORKFLOW}"
+        if not (rejected or ignored_by):
+            missing.append(f"no step of {scope} runs pytest over {where} (directly or through its directory)")
+        for r in rejected:
+            missing.append(f"the pytest step `{r['step']}` of job `{r['job']}`: " + "; ".join(r["why"]))
+        for r in ignored_by:
+            missing.append(f"no step runs pytest over {where}: the one that reaches it, `{r['step']}` of job "
+                           f"`{r['job']}`, ignores it ({', '.join(r['ignores'])})")
+    first = runs[0] if runs else None
+    return {"holds": first is not None, "file": BASELINE_WORKFLOW, "line": first["line"] if first else None,
+            "job": first["job"] if first else None, "step": first["step"] if first else None,
+            "command": first["command"] if first else None, "runs": runs, "ignored_by": ignored_by,
+            "rejected": rejected, "missing": missing}
+
+
+def _ci_unreadable(reason: str) -> dict:
+    return {"holds": False, "file": BASELINE_WORKFLOW, "line": None, "job": None, "step": None, "command": None,
+            "runs": [], "ignored_by": [], "rejected": [], "missing": [reason]}
+
+
+def _with_ci(verdict: dict, root: Path, target: str) -> dict:
+    """`verdict` with the workflow's evidence that CI runs `target` (key `workflow`); without it, not holding."""
+    try:
+        wf = _ci_runs(root, (target,))
+    except FactError as exc:
+        wf = _ci_unreadable(str(exc))
+    verdict["workflow"] = wf
+    if not wf["holds"]:
+        verdict["holds"] = False
+        verdict["missing"] = verdict["missing"] + [f"CI does not run it: {m}" for m in wf["missing"]]
+        if "weaker" in verdict:
+            weaker = verdict["weaker"]
+            weaker.update(holds=False, missing=weaker["missing"] + [f"CI does not run it: {m}" for m in wf["missing"]])
+    if "weaker" in verdict:
+        verdict["weaker"]["workflow"] = wf
+    return verdict
+
+
+
 def _verdict(holds: bool, file: str, line: int | None, claim: str, assertions=(), missing=(), **extra) -> dict:
     return {"holds": holds, "claim": claim, "file": file, "line": line,
             "assertions": list(assertions), "missing": list(missing), **extra}
@@ -1148,37 +1552,36 @@ def _faults_returned_and_repaired(root: Path) -> dict:
 def _unit_suite_on_every_version(root: Path) -> dict:
     claim, rel = _CLAIM_UNIT, BASELINE_WORKFLOW
     versions = ci_python_versions(root)  # FactError when the matrix cannot be read: the caller reports it
-    text = _read(root, rel)
-    doc = _yaml(text, rel)
-    job = doc["jobs"][doc["name"]]
-    missing, hit = [], None
-    if job.get("continue-on-error") not in (None, False):
-        missing.append(f"job `{doc['name']}` has continue-on-error")
-    for step in job.get("steps") or []:
-        run = str(step.get("run", "")) if isinstance(step, dict) else ""
-        words = run.split()
-        if "pytest" in words and "hooks/tests" in words and "tests" in words:
-            if step.get("continue-on-error") not in (None, False) or "if" in step or re.search(r"\|\|\s*(?:true|:)", run):
-                missing.append(f"the pytest step `{step.get('name')}` can fail without failing the job (continue-on-error, if, or `|| true`)")
-            else:
-                hit = (step, words)
-            break
-    if hit is None and not missing:
-        missing.append(f"no step of job `{doc['name']}` runs pytest over hooks/tests and tests")
-    line = next((i for i, l in enumerate(text.splitlines(), 1) if "pytest hooks/tests tests" in l), None)
+    doc = _yaml(_read(root, rel), rel)
+    job_id = doc["name"]
+    wf = _ci_runs(root, ("hooks/tests", "tests"), only_job=job_id, strict=True)
     found = []
-    if hit is not None:
-        found.append({"what": "pytest over hooks/tests and tests in every matrix leg", "line": line,
-                      "source": f"{hit[0].get('name')}: " + " ".join(hit[1][:4])})
-    return _verdict(not missing, rel, line, claim, found, missing, versions=versions,
-                    ignored=sorted(w.split("=", 1)[1] for w in (hit[1] if hit else []) if w.startswith("--ignore=")))
+    if wf["holds"]:
+        step = next(s for s in doc["jobs"][job_id]["steps"] if s.get("name") == wf["step"])
+        found.append({"what": "pytest over hooks/tests and tests in every matrix leg", "line": wf["line"],
+                      "source": f"{wf['step']}: " + " ".join(step["run"].split()[:4])})
+    return _verdict(wf["holds"], rel, wf["line"], claim, found, wf["missing"], versions=versions,
+                    ignored=wf["runs"][0]["ignores"] if wf["holds"] else [], workflow=wf)
 
 
 def ci_enforces(root=None) -> dict:
     """What CI enforces, as five predicates over the test sources and the CI workflow. Each is a dict: holds (bool), claim, file,
     line (the line of the asserting statement), assertions (what was found, with lines), missing (what could
     not be found; non-empty whenever holds is false). Fail closed: evidence not found means holds is false.
-    This reads the sources only; whether the suite passes is what CI runs.
+    This reads the sources and the workflow only; whether the suite passes is what CI runs.
+
+    THE WORKFLOW. The first four predicates are about a test file, and a test file that asserts something
+    is a claim about CI only if the workflow runs it. So each also needs `workflow`.holds, the evidence
+    that .github/workflows/baseline.yml runs that file on every change that runs the baseline workflow
+    (rules in 9a above: a step of some job runs pytest over it, directly or through its directory; the
+    step and the job cannot be skipped or made non-blocking; nothing deselects, ignores or only collects
+    it). When it cannot be shown the predicate is false and `missing` ends with "CI does not run it: <why>"
+    (for no_site_without_class, `weaker`.holds is false too, with the same reason).
+    `workflow` keys: holds, file, line (of the pytest command of the first qualifying step), job, step,
+    command, runs (every qualifying step: job, step, line, command, ignores), ignored_by (steps that reach
+    the file and leave it out, with the --ignore they carry; they are not counted), rejected (steps that
+    reach it and are disqualified, with why), missing. unit_suite_on_every_version carries the same key,
+    for the two directories hooks/tests and tests, and rejects, besides, every --deselect.
 
     compliant_replays_clean  tests/replay/test_pipelines.py: test_compliant_run, parametrized over every
         compliant scenario in every settings mode, asserts `not r.blocks`, `not r.hook_errors` and
@@ -1201,25 +1604,36 @@ def ci_enforces(root=None) -> dict:
         numbers beyond FAULTS (F4, F5, F6, F8 ...) have tests of their own that this does not read.
     unit_suite_on_every_version  .github/workflows/baseline.yml: the job named like the workflow runs pytest
         over hooks/tests and tests in a step that is unconditional and cannot fail without failing the
-        job, in every leg of the matrix ci_python_versions reads (`versions`); `ignored` lists the paths the
-        step leaves out (--ignore=...), which other jobs or nobody run.
+        job (no continue-on-error, `if`, `|| true`, pipe, background ...), without -k / -m, --deselect,
+        --collect-only or any option that narrows the run, in every leg of the matrix ci_python_versions
+        reads (`versions`); `ignored` lists the paths the step leaves out (--ignore=...), which other jobs
+        or nobody run.
     """
     root = _root(root)
     return {
-        "compliant_replays_clean": _guarded(_compliant_replays, root, REPLAY_PIPELINES_TEST, _CLAIM_COMPLIANT),
-        "no_site_without_class": _guarded(_no_class_site_may_exist, root, DEAD_END_TEST, _CLAIM_NO_CLASS),
-        "artifact_check_clean": _guarded(_artifact_check_clean, root, ARTIFACT_CHECK_TEST, _CLAIM_ARTIFACT),
-        "faults_returned_and_repaired": _guarded(_faults_returned_and_repaired, root, FAULTS_TEST, _CLAIM_FAULTS),
+        "compliant_replays_clean": _guarded(_compliant_replays, root, REPLAY_PIPELINES_TEST, _CLAIM_COMPLIANT,
+                                            ci_target=REPLAY_PIPELINES_TEST),
+        "no_site_without_class": _guarded(_no_class_site_may_exist, root, DEAD_END_TEST, _CLAIM_NO_CLASS,
+                                          ci_target=DEAD_END_TEST),
+        "artifact_check_clean": _guarded(_artifact_check_clean, root, ARTIFACT_CHECK_TEST, _CLAIM_ARTIFACT,
+                                         ci_target=ARTIFACT_CHECK_TEST),
+        "faults_returned_and_repaired": _guarded(_faults_returned_and_repaired, root, FAULTS_TEST, _CLAIM_FAULTS,
+                                                 ci_target=FAULTS_TEST),
         "unit_suite_on_every_version": _guarded(_unit_suite_on_every_version, root, BASELINE_WORKFLOW, _CLAIM_UNIT),
     }
 
 
-def _guarded(predicate, root: Path, rel: str, claim: str) -> dict:
-    """The predicate's verdict; a source it cannot read or parse is evidence not found: holds is false."""
+def _guarded(predicate, root: Path, rel: str, claim: str, ci_target: str | None = None) -> dict:
+    """The predicate's verdict; a source it cannot read or parse is evidence not found: holds is false. With
+    `ci_target`, the verdict also needs the workflow to run that test (see 9a); its evidence is under `workflow`."""
     try:
-        return predicate(root)
+        verdict = predicate(root)
     except FactError as exc:
-        return _verdict(False, rel, None, claim, missing=[str(exc)])
+        verdict = _verdict(False, rel, None, claim, missing=[str(exc)])
+        if predicate is _no_class_site_may_exist:
+            verdict["weaker"] = {"holds": False, "claim": "a replay that reaches a blocking site with no class fails the suite",
+                                 "file": rel, "line": None, "asserted_at_lines": [], "missing": [str(exc)]}
+    return _with_ci(verdict, root, ci_target) if ci_target else verdict
 
 
 # ---------------------------------------------------------------------------------------------

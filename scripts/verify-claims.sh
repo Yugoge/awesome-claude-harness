@@ -4,6 +4,11 @@
 #   region check and the capture-provenance check, the adversarial-corpus check, and the
 #   enforcement-evidence gates (docs/ENFORCEMENT-LEDGER.md against the tracked settings.json
 #   and the guard sources).
+# What it does NOT measure: the hero's rendered glyph sizes. Without the Python playwright package
+#   and a Chromium (a default checkout and the baseline CI job install neither) the figures the
+#   README publishes are model predictions, not measurements. The region check then prints a NOTE
+#   and its last line says the glyph model was not measured; the step still passes. A run is only
+#   known to have measured them when that line says "glyph model asserted".
 # Usage: bash scripts/verify-claims.sh
 # Exit codes: 0 = all checks pass, 1 = one or more checks failed. Runs identically in CI and
 #   locally.
@@ -57,8 +62,10 @@ run_audit .github/assets/guard-hero.json .github/assets/guard-hero.svg
 #     asserts that every region sits inside its H2 section and the claim regions in order, that
 #     no number is typed by hand in the prose outside the regions, and that the hero's published
 #     glyph figure still equals what the browser measures (scripts/measure-hero-fold.py; that
-#     step needs a headless browser and reports itself UNVERIFIED, without failing, where there
-#     is none). A count region whose facts cannot be derived fails the check and names the input.
+#     step needs the Python playwright package and a headless browser, and where there is none it
+#     reports itself UNVERIFIED without failing: the published glyph figures are then model
+#     predictions, not measurements, and the check's last line says so). A count region whose
+#     facts cannot be derived fails the check and names the input.
 #     Landed HERE because this file is the aggregate gate and the lane that authored those
 #     gates may not edit it — an enforcement mechanism nobody invokes is advisory, whatever
 #     its own tests say. Neither call is suffixed `|| true` and neither is redirected away

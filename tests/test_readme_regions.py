@@ -13,6 +13,11 @@ What is covered:
 * the position rule (each region inside its H2 section, the claim regions in order) that replaced the
   headline-adjacency and above-the-fold assertions, and the glyph-model drift that is still consumed;
 * the number rule: no numeral typed by hand in the prose, except the declared cited figures;
+* write mode refuses before it writes (regions overlapping, duplicated, out of order, outside their sections,
+  unknown markers, CRLF) and replaces the README atomically, keeping its mode, link and line endings;
+* the number rule fails closed on what would hide prose from it (a fence or comment never closed, a backtick
+  that closes nothing) and no comment opener or closer inside code or a fence starts or ends a comment;
+* the success line says when the glyph model was not measured;
 * the real README.md passes the check, and scripts/verify-claims.sh still runs the generator's check and the
   hero-provenance check.
 
@@ -24,6 +29,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -208,13 +214,147 @@ def test_each_claim_region_holds_its_rows_in_the_closed_order(scratch_text):
     assert sorted(i for r in gen.CLAIM_REGIONS for i in ids[r]) == sorted(gen.ROW_IDS)
 
 
-def test_write_refuses_a_readme_that_lacks_a_regions_markers_before_deriving_anything(tmp_path):
+def _no_facts(monkeypatch):
+    """Write mode must refuse on the README alone: deriving the facts is the expensive step."""
+    def boom():
+        raise AssertionError("the facts were derived for a README that write mode had to refuse")
+    monkeypatch.setattr(gen, "expected_regions", boom)
+
+
+def _only(path: Path) -> list[str]:
+    """What the README's directory holds: the README, and no temporary file."""
+    return sorted(p.name for p in path.parent.iterdir())
+
+
+def _overlap(text):  # limits' END marker moved below disclosure's BEGIN marker
+    begin = gen.BEGIN.format(rid="disclosure")
+    return text.replace(gen.END.format(rid="limits"), "").replace(begin, begin + "\n" + gen.END.format(rid="limits"))
+
+
+def _duplicate_begin(text):  # a BEGIN pasted earlier than the real one
+    return text.replace("## Commands\n", "## Commands\n\n" + gen.BEGIN.format(rid="status") + "\n", 1)
+
+
+def _out_of_order(text):
+    a, b = region(text, "limits"), region(text, "disclosure")
+    return text.replace(a, "@@A@@").replace(b, a).replace("@@A@@", b)
+
+
+def _outside_section(text):
+    return cut(text, "limits").replace("## Commands\n", "## Commands\n\n" + region(text, "limits") + "\n", 1)
+
+
+def _end_before_begin(text):
+    begin, end = gen.BEGIN.format(rid="proof"), gen.END.format(rid="proof")
+    return text.replace(begin, "@@").replace(end, begin).replace("@@", end)
+
+
+@pytest.mark.parametrize("mutate,fragments", [
+    (_overlap, ["region 'limits' overlaps region 'disclosure'"]),
+    (_duplicate_begin, ["region 'status' is duplicated"]),
+    (_out_of_order, ["region 'limits' is out of order", "region 'disclosure' is out of order"]),
+    (_outside_section, ["region 'limits' lies outside the H2 section 'Status and known limits'"]),
+    (_end_before_begin, ["region 'proof' has 1 BEGIN and 1 END markers, but not a BEGIN followed by an END"]),
+    (lambda t: t.replace(gen.BEGIN.format(rid="commands"), ""), ["region 'commands'"]),
+    (lambda t: t + "\n" + gen.BEGIN.format(rid="extra") + "\n", ["names region 'extra'"]),
+    (lambda t: t.replace("\n", "\r\n"), ["[line-endings] line 1", "carriage return", "a CRLF README is refused"]),
+], ids=["overlap", "duplicate-begin", "out-of-order", "outside-section", "end-before-begin", "missing-begin",
+        "unknown-region", "crlf"])
+def test_write_refuses_a_readme_whose_regions_are_not_where_they_must_be(tmp_path, scratch_text, capsys, monkeypatch,
+                                                                         mutate, fragments):
+    """A span replaced where it overlaps another, or is not where it was taken to be, deletes the prose between
+    them; write mode used to exit 0 on each of these and drop dozens of lines."""
+    path = tmp_path / "README.md"
+    broken = mutate(scratch_text)
+    assert broken != scratch_text
+    path.write_bytes(broken.encode("utf-8"))
+    _no_facts(monkeypatch)
+    assert gen.cmd_write(path) == 1
+    err = capsys.readouterr().err
+    assert all(f in err for f in fragments), err
+    assert "write refused" in err and "was NOT touched" in err
+    assert path.read_bytes() == broken.encode("utf-8") and _only(path) == ["README.md"]
+
+
+def test_write_refuses_a_readme_that_lacks_a_regions_markers_before_deriving_anything(tmp_path, monkeypatch):
     path = tmp_path / "README.md"
     text = SKELETON.format(**{rid: empty_region(rid) for rid in gen.REGION_IDS}).replace(
         gen.BEGIN.format(rid="commands"), "")
     path.write_text(text, encoding="utf-8")
+    _no_facts(monkeypatch)
     assert gen.cmd_write(path) == 1
     assert path.read_text(encoding="utf-8") == text
+
+
+def test_write_replaces_the_readme_through_a_temporary_file_beside_it(tmp_path, scratch_text, monkeypatch):
+    path = tmp_path / "README.md"
+    stale = scratch_text.replace(region(scratch_text, "proof"), empty_region("proof"))
+    path.write_text(stale, encoding="utf-8")
+    seen, real = {}, os.replace
+
+    def spy(src, dst):
+        seen.update(src=Path(src), dst=Path(dst), src_text=Path(src).read_text(encoding="utf-8"),
+                    dst_text=Path(dst).read_text(encoding="utf-8"))
+        return real(src, dst)
+    monkeypatch.setattr(os, "replace", spy)
+    assert gen.cmd_write(path) == 0
+    assert seen["src"].parent == seen["dst"].parent == tmp_path and seen["src"] != seen["dst"]
+    assert seen["dst_text"] == stale  # the README itself was not touched until the rename
+    assert seen["src_text"] == path.read_text(encoding="utf-8") == scratch_text  # and the new one was whole by then
+    assert _only(path) == ["README.md"]
+
+
+@pytest.mark.parametrize("where", ["replace", "fsync"])
+def test_a_failure_while_writing_leaves_the_readme_whole_and_no_temporary_file(tmp_path, scratch_text, monkeypatch, where):
+    """A full disk (fsync) or a failed rename must not leave the README empty or partial."""
+    path = tmp_path / "README.md"
+    stale = scratch_text.replace(region(scratch_text, "proof"), empty_region("proof"))
+    path.write_text(stale, encoding="utf-8")
+
+    def fail(*_args):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(os, where, fail)
+    with pytest.raises(OSError, match="No space"):
+        gen.cmd_write(path)
+    monkeypatch.undo()
+    assert path.read_text(encoding="utf-8") == stale and _only(path) == ["README.md"]
+
+
+def test_write_keeps_the_mode_the_link_and_the_line_endings(tmp_path, scratch_text):
+    stale = scratch_text.replace(region(scratch_text, "proof"), empty_region("proof"))
+    real = tmp_path / "docs" / "README.md"
+    real.parent.mkdir()
+    real.write_text(stale.rstrip("\n"), encoding="utf-8")  # no final newline
+    real.chmod(0o640)
+    link = tmp_path / "README.md"
+    link.symlink_to(real)
+    assert gen.cmd_write(link) == 0
+    assert link.is_symlink() and os.stat(real).st_mode & 0o777 == 0o640
+    written = real.read_bytes()
+    assert written == scratch_text.rstrip("\n").encode("utf-8") and b"\r" not in written
+    assert sorted(p.name for p in real.parent.iterdir()) == ["README.md"]
+
+
+def test_write_refuses_a_readme_that_changed_while_the_facts_were_derived(tmp_path, scratch_text, capsys, monkeypatch):
+    path = tmp_path / "README.md"
+    stale = scratch_text.replace(region(scratch_text, "proof"), empty_region("proof"))
+    path.write_text(stale, encoding="utf-8")
+    derive = gen.expected_regions
+
+    def saved_meanwhile():
+        out = derive()
+        path.write_text(stale + "A paragraph someone saved meanwhile.\n", encoding="utf-8")
+        return out
+    monkeypatch.setattr(gen, "expected_regions", saved_meanwhile)
+    assert gen.cmd_write(path) == 1
+    assert "changed while the regions were being derived" in capsys.readouterr().err
+    assert path.read_text(encoding="utf-8").endswith("someone saved meanwhile.\n") and _only(path) == ["README.md"]
+
+
+def test_check_names_the_line_of_a_carriage_return(scratch, capsys):
+    scratch.write_bytes(scratch.read_bytes().replace(b"\n", b"\r\n"))
+    rc, err, _ = run_check(scratch, capsys)
+    assert rc == 2 and "[line-endings] line 1 of the README has a carriage return" in err
 
 
 # ================================================================ 2. the proof table
@@ -435,11 +575,31 @@ def test_dead_end_sites_says_how_many_of_how_many_and_that_it_is_a_limit(scratch
     state, text, evidence, tracked = new_row("dead-end-sites")
     assert state == "partial" and b["no_class"] > 0
     assert (evidence, tracked) == ("tests/replay/test_no_dead_end.py", "none")
+    assert text.startswith("**Blocking sites with no clearing class** — ")
     assert f"**{b['no_class']} of {b['sites']}** blocking sites" in text
     assert "The suite fails only when a replay reaches one" in text
     assert "known limit and not a proof that there are none" in text
     marker = f"<!-- claim-row id=dead-end-sites state=partial evidence={evidence} tracked=none -->"
     assert marker + "\n- " + text in region(scratch_text, "status")
+
+
+def test_dead_end_sites_names_no_stranding_it_cannot_show_and_gives_the_reasons_from_the_fact(monkeypatch):
+    """Most classless sites are a hook refusing because it cannot decide: not a stranding. The row says what the
+    enumerator says each is, counts generated from the fact, and does not call any of them a dead end."""
+    b = gen.fact("blocking_sites")
+    text = new_row("dead-end-sites")[1]
+    assert "Dead-end" not in text and "dead end" not in text.lower()
+    assert sum(b["no_class_reasons"].values()) == b["no_class"]
+    for reason, n in b["no_class_reasons"].items():
+        assert f"**{n}** × {reason}" in text, reason
+    ranked = sorted(b["no_class_reasons"].items(), key=lambda kv: (-kv[1], kv[0]))
+    assert text.index(f"× {ranked[0][0]}") < text.index(f"× {ranked[-1][0]}")  # most frequent first
+    with_fact(monkeypatch, "blocking_sites", lambda f: f.update(no_class=5, sites=40, no_class_reasons={"made up b": 2, "made up a": 3}))
+    text = new_row("dead-end-sites")[1]
+    assert "**5 of 40** blocking sites" in text
+    assert "The enumerator's reasons: **3** × made up a; **2** × made up b." in text
+    with_fact(monkeypatch, "blocking_sites", lambda f: f.update(no_class_reasons={}))
+    assert "reasons" not in new_row("dead-end-sites")[1]  # nothing is invented when the fact gives none
 
 
 def test_dead_end_sites_follows_the_count_and_what_the_suite_asserts(monkeypatch):
@@ -474,6 +634,48 @@ def test_the_existing_rows_keep_their_predicates_and_states(warm):
         assert gen.PREDICATES[rid] is getattr(gen, fn)
 
 
+def _settings_repo(tmp_path, monkeypatch, tracked: dict | None, working: dict | None):
+    """A scratch repository holding the facts module, with settings.json tracked as `tracked` and on disk as
+    `working` (None: left out), and the generator pointed at it."""
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy2(REPO / "scripts" / "readme_facts.py", root / "scripts" / "readme_facts.py")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env)
+    git("init", "-q")
+    if tracked is not None:
+        (root / "settings.json").write_text(json.dumps(tracked), encoding="utf-8")
+        git("add", "settings.json")
+    if working is not None:
+        (root / "settings.json").write_text(json.dumps(working), encoding="utf-8")
+    monkeypatch.setattr(gen, "REPO_ROOT", root)
+    monkeypatch.setattr(gen, "_FACT_MODULE", None)
+    monkeypatch.setattr(gen, "_FACTS", {})
+
+
+def deny(*rules):
+    return {"permissions": {"deny": list(rules)}}
+
+
+def test_the_deny_rules_are_counted_from_the_tracked_settings_not_the_working_file(tmp_path, monkeypatch):
+    """Every other fact reads settings.json as the git index holds it; a machine's working file may carry
+    additions no commit holds, and a fresh clone sees none of them."""
+    _settings_repo(tmp_path, monkeypatch, tracked=deny("Bash(rm:*)"), working=deny("Bash(git push:*)", "Bash(rm:*)"))
+    assert gen.measure_deny_rules() == (1, 0, "settings.json")  # the working file's git rule is not counted
+    assert gen.pred_known_limits()[1].startswith("**Known limits — this guard does not cover everything.**")
+
+
+def test_the_deny_rules_follow_the_index_and_are_not_measured_without_one(tmp_path, monkeypatch):
+    _settings_repo(tmp_path, monkeypatch, tracked=deny("Bash(git push:*)", "Bash(rm:*)"), working=deny())
+    assert gen.measure_deny_rules() == (2, 1, "settings.json")
+    _settings_repo(tmp_path / "untracked", monkeypatch, tracked=None, working=deny("Bash(git push:*)"))
+    assert gen.measure_deny_rules() is None  # on disk only: a fresh clone has none, so nothing is measured
+    state, text, *_ = gen.pred_known_limits()
+    assert state == "not-yet" and "could not be measured" in text
+
+
 def test_a_claim_row_whose_input_is_not_committed_is_false(monkeypatch):
     assert gen.pred_supported_builds()[0] == "passed"
     monkeypatch.setattr(gen, "is_committed", lambda rel: False)
@@ -497,7 +699,7 @@ def test_a_count_region_is_never_regenerated_from_a_stale_value(tmp_path, scratc
     with_fact(monkeypatch, "command_rows", error="command_rows: no command file (commands/*.md) in the git index")
     assert gen.cmd_write(stale) == 1
     err = capsys.readouterr().err
-    assert "region 'commands' cannot be computed" in err and "commands/*.md" in err and "NOT written" in err
+    assert "region 'commands' cannot be computed" in err and "commands/*.md" in err and "was NOT touched" in err
     assert stale.read_text(encoding="utf-8") == scratch_text  # not one byte written, not even the other regions
 
 
@@ -769,6 +971,105 @@ def test_a_numeral_in_the_prose_is_found(snippet, expected):
     assert [n for _line, n in gen.prose_numerals(snippet)] == expected
 
 
+# What would hide prose from the number rule has to be visible in the rendered page too, or the hiding is a bypass.
+# Every case below hid a numeral from the first version of the rule, which reported nothing.
+
+def violations_of(text: str) -> list[str]:
+    return [v for v in numbers(text) if "[cited-figure]" not in v]
+
+
+def test_a_code_fence_that_is_never_closed_is_a_violation_naming_its_line():
+    text = "# T\n\nIntro.\n\n```\ncode\n\nProse with 5 in it.\n"
+    v = violations_of(text)
+    assert len(v) == 1 and v[0].startswith("[number-rule] line 5:") and "never closed" in v[0]
+    assert "rest of the file is hidden" in v[0]
+
+
+def test_a_longer_or_other_fence_is_not_closed_by_a_shorter_or_other_one():
+    assert violations_of("````\ncode\n```\nProse 5\n") != []             # three backticks do not close four
+    assert violations_of("~~~\ncode\n```\nProse 5\n") != []              # a tilde fence needs a tilde fence
+    assert violations_of("```\ncode\n```\nProse 5\n")[0].startswith("[hand-typed-number] line 4")
+    inline = violations_of("```code``` then 4\nProse 5\n")  # backticks in the info string: an inline span, no fence
+    assert [x.split(":")[0] for x in inline] == ["[hand-typed-number] line 1", "[hand-typed-number] line 2"]
+
+
+@pytest.mark.parametrize("text,line", [
+    ("- a `b\n- c 5 d `e\n", 1),                                  # across list items
+    ("## Title `x\nprose 7 and `y`\n", 1),                         # across a heading
+    ("| a | `b |\n|---|---|\n| 5 | `c` |\n", 1),                  # across table rows
+    ("| a | b |\n|---|---|\n| `x | 8 |\n| y | z |\n", 3),       # across table cells
+    ("Intro `stray.\n\nSecond paragraph 6 `fine`.\n", 1),         # across paragraphs
+    ("A \\` escaped tick, then 9 and `code`.\n", None),            # an escaped backtick opens nothing
+])
+def test_a_stray_backtick_hides_nothing_and_is_named(text, line):
+    v = violations_of(text)
+    problems = [x for x in v if x.startswith("[number-rule]")]
+    if line is None:
+        assert problems == [] and any("the numeral '9'" in x for x in v)
+        return
+    assert [x.split(":")[0] for x in problems][:1] == [f"[number-rule] line {line}"], v
+    assert "no closing run" in problems[0] and "never pairs across them" in problems[0]
+    assert any(x.startswith("[hand-typed-number]") for x in v)  # and the numeral it would have hidden is found
+
+
+def test_a_balanced_span_still_hides_its_numeral_and_a_span_may_cross_lines_of_one_paragraph():
+    assert violations_of("Run `python3 -n 4` now, and `a\nb 5` too.\n") == []
+    assert violations_of("A ``tick ` and 6`` pair.\n") == []
+
+
+def test_an_html_comment_that_is_never_closed_is_a_violation_naming_its_line():
+    v = violations_of("# T\n\n<!-- opened\nand never closed\n")
+    assert len(v) == 1 and v[0].startswith("[number-rule] line 3:") and "comment" in v[0] and "never closed" in v[0]
+    v = violations_of("Text <!-- opened mid-line\n\nProse 9 -->\n")  # a renderer shows this as text
+    assert v[0].startswith("[number-rule] line 1:") and "not closed in the same paragraph" in v[0]
+    assert any("the numeral '9'" in x for x in v)
+
+
+def test_a_comment_opener_or_closer_inside_code_does_not_start_or_end_a_comment():
+    spans = "Write `<!--` to open a comment.\nProse 5 here.\nWrite `-->` to close it.\n"
+    v = violations_of(spans)
+    assert len(v) == 1 and "the numeral '5'" in v[0] and "line 2" in v[0]
+    fenced = "```\n<!--\n```\nProse 7 here.\n-->\n"
+    v = violations_of(fenced)
+    assert len(v) == 1 and "the numeral '7'" in v[0] and "line 4" in v[0]
+    assert violations_of("```\n-->\n```\n<!-- a comment 8 -->\n") == []
+    # inside a comment, as in the rendered page, the first closer ends it, a code span or not
+    v = violations_of("<!-- see `-->` and 6 -->\n")
+    assert any("the numeral '6'" in x for x in v)
+
+
+def test_a_comment_that_starts_a_line_may_run_over_blank_lines_and_closes_at_the_first_closer():
+    assert violations_of("<!-- one\n\ntwo 5\n\nthree -->\nProse.\n") == []
+    v = violations_of("<!-- one\ntwo --> then 6 here\n")
+    assert len(v) == 1 and "the numeral '6'" in v[0] and "line 2" in v[0]
+    assert violations_of("<!-- 4 --> Prose.\n<!--> Prose.\n") == []
+
+
+@pytest.mark.parametrize("snippet", [
+    '[a link](https://example.org/x "a title with 5 in it")\n',
+    "![an image 6](assets/x.svg 'and a title 7')\n",
+    '<img src="x.svg" alt="alt text 8" title="title 9">\n',
+    '<a href="https://example.org" title="10 things" data-n="11">link</a>\n',
+])
+def test_a_numeral_in_a_title_or_alt_stays_exempt(snippet):
+    assert gen.prose_numerals(snippet) == []
+
+
+@pytest.mark.parametrize("word,numeral", [("UTF-8", "8"), ("SHA-256", "256"), ("HTTP/2", "2"), ("a footnote[^1]", "1")])
+def test_the_known_false_positives_are_left_and_a_code_span_is_the_escape(word, numeral):
+    assert [n for _l, n in gen.prose_numerals(f"Uses {word} here.\n")] == [numeral]
+    wrapped = word.split("[")[0]
+    assert gen.prose_numerals(f"Uses `{wrapped}` here.\n") == []
+    for fragment in ("false positives", "UTF-8", "SHA-256", "HTTP/2", "footnote", "code span"):
+        assert fragment in gen.__doc__, fragment
+
+
+def test_the_problems_are_reported_by_the_check_with_their_tag(scratch, capsys):
+    edited(scratch, "Second step.", "Second step, with a stray ` tick.")
+    rc, err, _ = run_check(scratch, capsys)
+    assert rc == 2 and "[number-rule] line 7:" in err and "no closing run" in err
+
+
 def test_the_line_numbers_survive_everything_that_is_blanked():
     text = "# T\n\n<!-- one\ntwo -->\n\n```\ncode\n```\n\nprose 5\n"
     assert gen.prose_numerals(text) == [(10, "5")]
@@ -808,36 +1109,94 @@ def test_drift_is_a_violation_and_the_old_fold_assertions_are_not(tmp_path):
     drift = "1280x800/light: the browser renders the hero glyph at 9px but the published model predicts 7.55px"
     script = stub_measure(tmp_path, {"results": [COMBO], "model_drift": [drift],
                                      "failures": [drift, "1280x800/light: not above the fold: headline, limits"]})
-    violations, notes = gen.assert_glyph_model(tmp_path / "README.md", script)
-    assert violations == [f"[fold] {drift}"] and len(notes) == 1
+    violations, notes, measured = gen.assert_glyph_model(tmp_path / "README.md", script)
+    assert violations == [f"[fold] {drift}"] and len(notes) == 1 and measured is True
 
 
 def test_a_headline_and_limits_below_the_fold_and_the_glyph_floor_are_no_violation(tmp_path):
     script = stub_measure(tmp_path, {"results": [COMBO], "model_drift": [],
                                      "failures": ["1280x800/light: not above the fold: headline, limits",
                                                   "1280x800/light: hero glyph height 7.55px < 11.0px"]})
-    violations, notes = gen.assert_glyph_model(tmp_path / "README.md", script)
-    assert violations == [] and notes
+    violations, notes, measured = gen.assert_glyph_model(tmp_path / "README.md", script)
+    assert violations == [] and notes and measured is True
 
 
 def test_a_measurement_that_produced_nothing_is_a_violation_and_one_that_cannot_run_is_a_note(tmp_path):
     empty = stub_measure(tmp_path, {"results": [], "model_drift": []})
-    assert gen.assert_glyph_model(tmp_path / "README.md", empty)[0]
+    violations, _notes, measured = gen.assert_glyph_model(tmp_path / "README.md", empty)
+    assert violations and measured is False
     broken = tmp_path / "broken.py"
     broken.write_text("raise SystemExit('no browser')\n", encoding="utf-8")
-    violations, notes = gen.assert_glyph_model(tmp_path / "README.md", broken)
-    assert violations == [] and "UNVERIFIED" in notes[0]
-    violations, notes = gen.assert_glyph_model(tmp_path / "README.md", tmp_path / "absent.py")
-    assert violations == [] and "did NOT run" in notes[0]
+    violations, notes, measured = gen.assert_glyph_model(tmp_path / "README.md", broken)
+    assert violations == [] and "UNVERIFIED" in notes[0] and "no browser" in notes[0] and measured is False
+    violations, notes, measured = gen.assert_glyph_model(tmp_path / "README.md", tmp_path / "absent.py")
+    assert violations == [] and "did NOT run" in notes[0] and measured is False
+
+
+def test_a_missing_playwright_is_named_in_the_note(tmp_path):
+    script = tmp_path / "measure-hero-fold.py"
+    script.write_text("import playwright_that_is_not_installed\n", encoding="utf-8")
+    violations, notes, measured = gen.assert_glyph_model(tmp_path / "README.md", script)
+    assert violations == [] and measured is False
+    assert "ModuleNotFoundError" in notes[0] and "playwright_that_is_not_installed" in notes[0]
+    assert "model prediction" in notes[0] and "UNVERIFIED" in notes[0]
+
+
+def test_a_relative_readme_path_reaches_the_fold_script_as_an_absolute_one(tmp_path, monkeypatch):
+    """The fold script runs from the repository root, not from where the generator was started."""
+    log = tmp_path / "argv.json"
+    script = tmp_path / "measure-hero-fold.py"
+    script.write_text("import json, os, sys\n"
+                      f"json.dump([sys.argv[1:], os.getcwd()], open({str(log)!r}, 'w'))\n"
+                      f"print(json.dumps({{'results': [{COMBO!r}], 'model_drift': []}}))\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# r\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert gen.assert_glyph_model(Path("README.md"), script)[2] is True
+    argv, cwd = json.loads(log.read_text(encoding="utf-8"))
+    assert argv == ["--readme", str(tmp_path.resolve() / "README.md")]
+    assert Path(cwd).resolve() == gen.REPO_ROOT.resolve() != tmp_path.resolve()  # and it is another directory
 
 
 def test_check_consumes_the_drift_report_of_the_real_fold_script_when_it_runs(scratch, capsys, monkeypatch):
     calls = []
-    monkeypatch.setattr(gen, "assert_glyph_model", lambda readme: calls.append(readme) or (["[fold] drifted"], ["[fold] ran"]))
+    monkeypatch.setattr(gen, "assert_glyph_model",
+                        lambda readme: calls.append(readme) or (["[fold] drifted"], ["[fold] ran"], True))
     rc, err, out = run_check(scratch, capsys, fold=True)
     assert calls == [scratch] and rc == 2 and "[fold] drifted" in err and "[fold] ran" in out
     calls.clear()
     assert run_check(scratch, capsys, fold=False)[0] == 0 and calls == []  # --no-fold leaves the measurement out
+
+
+def test_the_success_line_says_what_was_measured(scratch, capsys, monkeypatch):
+    """It used to end '... and glyph model asserted' even when the fold measurement could not run."""
+    real = gen.assert_glyph_model
+    stub = scratch.parent / "no-browser.py"
+    stub.write_text("raise ModuleNotFoundError(\"No module named 'playwright'\")\n", encoding="utf-8")
+    monkeypatch.setattr(gen, "assert_glyph_model", lambda readme: real(readme, stub))
+    rc, err, out = run_check(scratch, capsys, fold=True)
+    assert rc == 0, err
+    assert "NOTE: [fold] the fold measurement produced no report" in out and "No module named 'playwright'" in out
+    ok = next(l for l in out.splitlines() if "OK  " in l)
+    assert "glyph model asserted" not in ok
+    assert "the glyph model was NOT measured, so the hero figures are model predictions" in ok
+    assert "position and hand-typed numbers asserted" in ok
+    drifting = stub_measure(scratch.parent, {"results": [COMBO], "model_drift": []})
+    monkeypatch.setattr(gen, "assert_glyph_model", lambda readme: real(readme, drifting))
+    rc, err, out = run_check(scratch, capsys, fold=True)
+    assert rc == 0 and "(position, hand-typed numbers and glyph model asserted)" in out
+    assert "NOT measured" not in out
+    rc, err, out = run_check(scratch, capsys, fold=False)
+    ok = next(l for l in out.splitlines() if "OK  " in l)
+    assert "glyph model was not measured (--no-fold), so the hero figures are model predictions" in ok
+    assert "glyph model asserted" not in ok
+
+
+def test_the_documentation_says_the_hero_figures_are_predictions_without_a_browser():
+    header = re.sub(r"(?m)^#\s?", "", VERIFY.read_text(encoding="utf-8").split("set -uo pipefail", 1)[0])
+    for text in (gen.__doc__, header):
+        flat = " ".join(text.lower().split())
+        assert "model predictions, not measurements" in flat, text[:200]
+        assert "playwright" in flat
 
 
 # ================================================================ 10. the real README, the command line, verify-claims.sh
@@ -857,22 +1216,39 @@ def test_the_real_readme_holds_each_region_in_its_section_in_order():
     assert {"Measured proof", "Commands", "Status and known limits"} <= set(order)
 
 
-def run_cli(*args, readme: Path | None = None):
+def run_cli(*args, readme: Path | None = None, env_extra: dict | None = None):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "PYTHONDONTWRITEBYTECODE"}
+    env.update(env_extra or {})
     return subprocess.run([sys.executable, str(SCRIPT), *args] + (["--readme", str(readme)] if readme else []),
                           capture_output=True, text=True, cwd=str(REPO), env=env, timeout=600)
 
 
-def pycache_files() -> set[str]:
-    return {str(p) for p in (REPO / "scripts").rglob("*.pyc")}
-
-
-def test_the_command_line_checks_the_real_readme_and_leaves_no_bytecode():
-    before = pycache_files()
-    done = run_cli("--check", "--no-fold")
+def test_the_command_line_checks_a_readme_and_its_last_line_says_what_was_asserted(scratch):
+    done = run_cli("--check", "--no-fold", readme=scratch)
     assert done.returncode == 0, done.stderr
-    assert "OK  11 rows and 5 canonical regions verified (position, hand-typed numbers asserted)" in done.stdout
-    assert pycache_files() == before
+    assert ("OK  11 rows and 5 canonical regions verified (position and hand-typed numbers asserted; the glyph "
+            "model was not measured (--no-fold), so the hero figures are model predictions)") in done.stdout
+
+
+def test_a_run_writes_no_bytecode_anywhere(tmp_path, scratch):
+    """Python is told to write every byte-code file into a directory only this test's processes use, so another
+    process cannot disturb the count: a file there after the run is one this run wrote. What loading the script's
+    own imports writes before it switches byte-code off is taken as the baseline (`--help` stops there)."""
+    prefix = tmp_path / "pyc"
+    env = {"PYTHONPYCACHEPREFIX": str(prefix)}
+
+    def written() -> set[str]:
+        return {str(p.relative_to(prefix)) for p in prefix.rglob("*.pyc")} if prefix.is_dir() else set()
+    assert run_cli("--help", env_extra=env).returncode == 0
+    baseline = written()
+    done = run_cli("--check", "--no-fold", readme=scratch, env_extra=env)
+    assert done.returncode == 0, done.stderr
+    assert written() == baseline, sorted(written() - baseline)
+    # the method does detect a write: a module imported with byte-code on lands in the prefix
+    (tmp_path / "probe.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(tmp_path)!r}); import probe"],
+                   check=True, env={**os.environ, **env, "PYTHONDONTWRITEBYTECODE": ""}, timeout=60)
+    assert any(name.endswith("probe.cpython-" + f"{sys.version_info[0]}{sys.version_info[1]}.pyc") for name in written())
 
 
 def test_the_command_line_exits_1_for_a_readme_it_cannot_read_and_for_missing_markers(tmp_path):
@@ -881,12 +1257,18 @@ def test_the_command_line_exits_1_for_a_readme_it_cannot_read_and_for_missing_ma
     bare = tmp_path / "README.md"
     bare.write_text("# nothing\n", encoding="utf-8")
     done = run_cli("--write", readme=bare)
-    assert done.returncode == 1 and "region 'proof' markers not found" in done.stderr
+    assert done.returncode == 1 and "region 'proof' is missing" in done.stderr and "was NOT touched" in done.stderr
     assert bare.read_text(encoding="utf-8") == "# nothing\n"
+    binary = tmp_path / "binary.md"
+    binary.write_bytes(b"\xff\xfe not utf-8")
+    assert run_cli("--check", "--no-fold", readme=binary).returncode == 1
     assert run_cli().returncode == 2  # one of --write and --check is required
 
 
 def make_verify_repo(tmp_path: Path) -> tuple[Path, dict, Path]:
+    """A repository in which every step of verify-claims.sh passes: the three audits (node is a stub that
+    succeeds, the assets exist), the corpus, and the generator, provenance and evidence scripts (stubs that log
+    their arguments and exit with the code the environment gives them, 0 by default)."""
     root, log = tmp_path / "repo", tmp_path / "calls.log"
     (root / "scripts").mkdir(parents=True)
     bindir = tmp_path / "bin"
@@ -899,6 +1281,12 @@ def make_verify_repo(tmp_path: Path) -> tuple[Path, dict, Path]:
             "' '.join(sys.argv[1:]) + '\\n')\nsys.exit(int(os.environ.get('STUB_RC_' + os.path.basename(sys.argv[0])[:-3].replace('-', '_'), '0')))\n")
     for name in ("generate-hero-status.py", "verify-hero-provenance.py", "check-enforcement-evidence.py"):
         (root / "scripts" / name).write_text(stub, encoding="utf-8")
+    for asset in ("demo-trace.json", "pipeline-hero.svg", "hook-trace.json", "hook-hero.svg", "guard-hero.json", "guard-hero.svg"):
+        (root / ".github" / "assets").mkdir(parents=True, exist_ok=True)
+        (root / ".github" / "assets" / asset).write_text("{}", encoding="utf-8")
+    corpus = root / "hooks" / "tests" / "fixtures" / "adversarial_corpus.json"
+    corpus.parent.mkdir(parents=True)
+    corpus.write_text('[{"case": 1}]', encoding="utf-8")
     (root / "settings.json").write_text('{"hooks": {}}\n', encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}", CALLS=str(log), HOME=str(tmp_path),
@@ -908,27 +1296,44 @@ def make_verify_repo(tmp_path: Path) -> tuple[Path, dict, Path]:
     return root, env, log
 
 
-def test_verify_claims_still_runs_the_generators_check_and_the_provenance_check(tmp_path):
+def verify(root: Path, env: dict):
+    return subprocess.run(["bash", "scripts/verify-claims.sh"], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+
+
+def test_verify_claims_runs_the_generators_check_and_the_provenance_check_and_passes_when_both_do(tmp_path):
     root, env, log = make_verify_repo(tmp_path)
-    done = subprocess.run(["bash", "scripts/verify-claims.sh"], cwd=root, env=env, capture_output=True, text=True, timeout=120)
-    out = done.stdout
-    assert "PASS: hero-status:" in out and "PASS: hero-provenance:" in out and "FAIL: hero-status" not in out
-    calls = log.read_text(encoding="utf-8").splitlines()
-    assert "generate-hero-status.py --check" in calls  # the check, with the fold measurement, as before
-    assert "verify-hero-provenance.py " in calls or "verify-hero-provenance.py" in [c.rstrip() for c in calls]
-    assert not any("--skip-rerun" in c or "--tamper" in c or "--no-fold" in c for c in calls)
-    failing = dict(env, STUB_RC_generate_hero_status="2")
-    done = subprocess.run(["bash", "scripts/verify-claims.sh"], cwd=root, env=failing, capture_output=True, text=True, timeout=120)
-    assert "FAIL: hero-status:" in done.stdout and done.returncode == 1
-    failing = dict(env, STUB_RC_verify_hero_provenance="2")
-    done = subprocess.run(["bash", "scripts/verify-claims.sh"], cwd=root, env=failing, capture_output=True, text=True, timeout=120)
-    assert "FAIL: hero-provenance:" in done.stdout and "PASS: hero-status:" in done.stdout
+    done = verify(root, env)
+    assert done.returncode == 0, done.stdout + done.stderr  # every step of the stub repository passes
+    assert "verify-claims: ALL CHECKS PASSED" in done.stdout
+    assert "PASS: hero-status:" in done.stdout and "PASS: hero-provenance:" in done.stdout
+    assert "FAIL" not in done.stdout
+    calls = [c.rstrip() for c in log.read_text(encoding="utf-8").splitlines()]
+    # unchanged in substance: the check as before (with the fold measurement), the provenance audit with its rerun
+    assert calls.count("generate-hero-status.py --check") == 1
+    assert calls.count("verify-hero-provenance.py") == 1
+    assert not any("--skip-rerun" in c or "--tamper" in c or "--no-fold" in c or "--write" in c for c in calls)
 
 
-def test_verify_claims_comments_describe_the_new_layout():
-    text = VERIFY.read_text(encoding="utf-8")
-    assert "five canonical regions" in text and "Measured proof" in text and "Status and known limits" in text
-    assert "headline-adjacent" not in text and "headline adjacency" not in text
+@pytest.mark.parametrize("failing,line,other", [
+    ("generate_hero_status", "hero-status:", "hero-provenance:"),
+    ("verify_hero_provenance", "hero-provenance:", "hero-status:"),
+])
+def test_verify_claims_fails_when_either_of_the_two_does_and_names_which(tmp_path, failing, line, other):
+    root, env, _log = make_verify_repo(tmp_path)
+    done = verify(root, dict(env, **{f"STUB_RC_{failing}": "2"}))
+    assert done.returncode == 1
+    assert f"FAIL: {line}" in done.stdout and f"PASS: {line}" not in done.stdout
+    assert f"PASS: {other}" in done.stdout  # the other one still ran and passed: every check reports
+    assert "verify-claims: FAILURES DETECTED" in done.stdout
+
+
+def test_verify_claims_invokes_the_two_checks_unconditionally_on_executable_lines():
+    code = [l for l in VERIFY.read_text(encoding="utf-8").splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    for command in ("python3 scripts/generate-hero-status.py --check", "python3 scripts/verify-hero-provenance.py"):
+        lines = [l for l in code if command in l]
+        assert lines == [f"if {command}; then"], (command, lines)  # once, as the condition of its PASS/FAIL branch
+    assert not [l for l in code if "generate-hero-status" in l and "|| true" in l]
+    assert not [l for l in code if "verify-hero-provenance" in l and ("|| true" in l or "--skip-rerun" in l)]
 
 
 def test_the_generator_has_no_personal_value_and_no_network_call():
