@@ -17,8 +17,8 @@
 # --strict (first argument; scripts/publish-public, D30): the guard is the one reader and decider of
 # the list for a publish too. It fails closed, refusing a list that is missing or holds no literal,
 # and first runs P8's engine in its default mode (ledger, residue, the literal rule over every file)
-# on a checkout of each pushed tip's tree with the list, so a hit names the file. Every report it
-# forwards has each listed literal masked, the longest first.
+# on a checkout of each pushed tip's tree with the object scan's copy of the list, so a hit names
+# the file. Every report it forwards has each listed literal masked, the longest first.
 set -uo pipefail
 refuse() { echo "pre-push: push REFUSED by the private-literal guard: $*" >&2; exit 1; }
 lits() {  # "<list line> <literal>", read as the engine reads the list
@@ -61,11 +61,14 @@ trees=(); [ -z "$strict" ] || for tip in "${tips[@]}"; do
   tree="$(git rev-parse -q --verify "$tip^{tree}" 2>/dev/null)" || refuse "strict: cannot look up the tree of a pushed tip"
   trees+=("$tree")
 done
+# The one copy of the list both scans use: a listed no-reply address blank, every other line as it is.
+awk '{ print (tolower($0) ~ /^[[:space:]]*(no-?reply@[^[:space:]]+|[^@[:space:]]+@users\.noreply\.github\.com)[[:space:]]*$/ ? "" : $0) }' \
+  "$list" > "$t/private-literals.txt" || refuse "cannot read private-literals.txt"
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 for tree in "${trees[@]}"; do  # strict: the engine's default mode on each pushed tree, the files named
   c="$t/tree" && git init -q "$c" && printf '%s\n' "$objects" > "$c/.git/objects/info/alternates" \
     && ! git -C "$c" cat-file -e "$tree:private-literals.txt" 2>/dev/null \
-    && git -C "$c" read-tree --reset -u "$tree" && cp "$list" "$c/private-literals.txt" \
+    && git -C "$c" read-tree --reset -u "$tree" && cp "$t/private-literals.txt" "$c/private-literals.txt" \
     || refuse "strict: cannot check out tree $tree (or it tracks private-literals.txt)"
   report="$(cd "$c" && bash "$engine" 2>&1)" \
     || { mask <<< "$report"; refuse "strict: scripts/check-public-core.sh failed on tree $tree (files named above)"; }
@@ -73,7 +76,5 @@ for tree in "${trees[@]}"; do  # strict: the engine's default mode on each pushe
 done
 cd "$t" && git init -q . 2>/dev/null && printf '%s\n' "$objects" > .git/objects/info/alternates \
   && git update-index --index-info < sent || refuse "cannot index the objects this push sends"
-awk '{ print (tolower($0) ~ /^[[:space:]]*(no-?reply@[^[:space:]]+|[^@[:space:]]+@users\.noreply\.github\.com)[[:space:]]*$/ ? "" : $0) }' \
-  "$list" > private-literals.txt || refuse "cannot read private-literals.txt"
 report="$(bash "$engine" --private-literals 2>&1)" \
   || { mask <<< "$report"; refuse "scripts/check-public-core.sh --private-literals failed (objects named above)"; }

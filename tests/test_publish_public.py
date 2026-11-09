@@ -14,6 +14,7 @@ from tests.test_landing import REPO, env, git, run, write  # noqa: F401  (env: t
 
 NAME, MAIL, TOKEN = "Jane Standin", "jane.standin@example.invalid", "tok-standin-4711"
 SHORT, LONG = "orbit-standin", "zeta-orbit-standin-vault"  # one listed literal inside another
+LIT = "acct-test-123"  # listed beside the public no-reply address
 PUBLIC = "Yugoge <196512512+Yugoge@users.noreply.github.com>"  # every publish commit's author and committer
 DEMO = ("Demo Standin", "demo@example.invalid")  # a machine identity no list holds: the guard lets it through
 ROWS = ("PUBLIC-CORE.md", "README.md", "policies/", "scripts/")
@@ -128,6 +129,26 @@ def test_a_stand_in_in_the_tree_refuses_with_nothing_pushed(repos, leak):
     assert {"content": "-> README.md:2", "path": "-> <path with private-literals.txt line 4> (path name)"}[leak] \
         in r.stderr
     assert all(v not in r.stderr for v in (NAME, MAIL, TOKEN)) and pub.state() == before
+
+
+def test_a_listed_no_reply_address_is_left_out_of_the_tree_check_as_in_the_object_scan(repos):
+    """P7b's seeding lists the home's git user.email whatever its shape, and a no-reply address is public:
+    scripts/publish-public itself holds the public one. The strict tree check scans the object scan's copy
+    of the list (listed no-reply addresses blank, every other value at its own line), so a clean tree
+    publishes, and a listed stand-in in a tracked file is still refused, the file and its list line named."""
+    priv, pub = repos
+    mail = PUBLIC[PUBLIC.index("<") + 1:-1]
+    assert mail in (priv.path / "scripts/publish-public").read_text()
+    write(priv.path / "private-literals.txt", f"# stand-ins\n{mail}\n{LIT}\n")
+    r = priv.publish("public")
+    assert (r.returncode, r.stdout.startswith("publish-public: published ")) == (0, True), r.stderr
+    assert pub("log", "-1", "--format=%an <%ae>|%cn <%ce>", "main") == f"{PUBLIC}|{PUBLIC}"
+    before = pub.state()
+    priv.commit("README.md", f"clean\nticket {LIT}\n")
+    r = priv.publish("public")
+    assert (r.returncode, r.stdout) == (1, "") and "check-public-core.sh failed on tree" in r.stderr
+    assert "(private-literals.txt line 3) -> README.md:2" in r.stderr
+    assert LIT not in r.stderr and pub.state() == before
 
 
 @pytest.mark.parametrize("short_first", [True, False])
