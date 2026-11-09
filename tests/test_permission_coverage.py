@@ -23,14 +23,18 @@ entry covers a channel-spelled line that takes arguments. A command text's line 
 allowed therefore names the harness home through the root the harness command prints, `<HARNESS_ROOT>` (R1's
 `HARNESS_ROOT=` line, the hook's own install: CLAUDE_HOME or not, any repository), which the session writes as
 the literal path; the channel stays where the old spelling asked as well. `cli_allows` models that decision
-and the last case holds every command text to it. An agent's Bash keeps the channel (R6): no printed root
-reaches a subagent, so the agent lines the CLI allowed in the old spelling ask now and stay outside that case.
+and the last case holds every command text to it. A subagent gets the same root as its start context
+(prompt-workflow.py at SubagentStart, P2-3), so the agent texts and the prompt includes they read are held to
+it line by line too; ASKS_SINCE_P2 are the agent lines still on the channel that 2.1.319 measured asking.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 CHANNEL = "${CLAUDE_HOME:-$HOME/.claude}"
@@ -125,7 +129,8 @@ def old_rules(rules: list[str]) -> list[str]:
 
 # ------------------------------------------------------------------ the texts' Bash commands
 def _texts() -> list[Path]:
-    return sorted([*REPO.glob("commands/*.md"), *REPO.glob("agents/*.md"), *REPO.glob("skills/*/SKILL.md")])
+    return sorted([*REPO.glob("commands/*.md"), *REPO.glob("agents/*.md"), *REPO.glob("skills/*/SKILL.md"),
+                   *REPO.glob("templates/prompt-includes/*.md")])
 
 
 def shell_commands(md: str):
@@ -381,8 +386,8 @@ NO_PRINTED_ROOT = ('python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow
 def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now():
     """Each command text's harness line the CLI allowed in its old spelling under the old list, both as written and
     with the script run directly (whichever the old text ran), is allowed by the CLI now: a `${...}` channel on it
-    would ask. Agent texts are outside: their Bash keeps the channel, as no printed root reaches a subagent; so is
-    the start-function fallback (NO_PRINTED_ROOT)."""
+    would ask. Agent and prompt-include texts have their own case (test_no_agent_line_the_cli_allowed_before_asks_now);
+    the start-function fallback (NO_PRINTED_ROOT) is outside."""
     rules = bash_rules(_allow())
     before = old_rules(rules)
     asks = []
@@ -392,6 +397,96 @@ def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now():
         if all(cli_allows(before, old) for old in old_spellings(line)) and not cli_allows(rules, line):
             asks.append(f"{where}: {line}")
     assert not asks, "\n".join(asks)
+
+
+# ------------------------------------------------------------------ agent and prompt-include texts
+# The agent lines that ran unasked in origin/master's spelling and ask under 2.1.319 on the channel: PR #10
+# c6717051862's 13 lines (P2-3; dev.md:1087's and qa.md:1936's spec-check line is checkpoint-marking.md's now),
+# re-measured through 2.1.319 headless from a product repository with the root its SubagentStart context
+# carries (channel: asks; `<HARNESS_ROOT>` filled and `~/.claude`: run). Each is written with the harness home
+# as {H}. Which spelling origin/master ran is history the texts no longer hold, so `old_spellings`' both-forms
+# model misses these `python3` and `bash` lines; the cases take them from this measurement.
+ASKS_SINCE_P2 = [
+    ("agents/changelog-analyst.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                                    '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'),
+    ("agents/cleaner.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                          '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'),
+    ("agents/dev.md", 'ls -la "{H}/scripts/"'),
+    ("agents/dev.md", 'cat "{H}/scripts/orchestrator.sh"'),
+    ("agents/dev.md", 'cat "{H}/scripts/check-file-references.sh"'),
+    ("agents/pm.md", 'bash "{H}/scripts/overnight-status.sh"'),
+    ("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  --output /dev/stdout  '
+                     '--task-id <task_id>'),
+    ("agents/spec.md", 'python3 "{H}/scripts/spec-check.py"'),
+    ("agents/spec.md", 'python3 "{H}/scripts/spec-verify/spec-verify-views.py"'),
+    ("agents/spec.md", 'python3 "{H}/scripts/spec-verify/spec-verify.py"'),
+    ("agents/test-executor.md", 'ls "{H}/venv/bin/activate"'),
+    ("agents/test-executor.md", 'python3 -m venv "{H}/venv"'),
+    ("templates/prompt-includes/checkpoint-marking.md", 'python3 "{H}/scripts/spec-check.py"'),
+]
+# The lines lane L3 has still to respell: each case is a strict xfail until L3 writes its harness home as
+# `<HARNESS_ROOT>`; when one XPASSes, delete its entry here (ASKS_SINCE_P2 keeps holding the line).
+L3_TO_RESPELL = list(ASKS_SINCE_P2)
+L3_PENDING = "P2-3, lane L3: write this line's harness home as <HARNESS_ROOT>, then remove this marker"
+
+
+def _key(file: str, line: str) -> tuple[str, str]:
+    """A line's file and text with the harness home as {H} in either spelling and no leading `python3` (the
+    include names spec-check.py without its interpreter), so a case keeps its key through L3's respelling."""
+    text = line.replace(CHANNEL + "/", "{H}/").replace(ROOT, "{H}/")
+    return file, re.sub(r"^python3 ", "", text)
+
+
+MEASURED = {_key(*entry) for entry in ASKS_SINCE_P2}
+PENDING = {_key(*entry) for entry in L3_TO_RESPELL}
+
+
+def agent_lines() -> list[tuple[str, str]]:
+    """(file:line, logical line) of each agent and prompt-include line naming the harness home."""
+    return list(dict.fromkeys((where, line) for where, line, _ in rewritten_commands()
+                              if where.startswith(("agents/", "templates/prompt-includes/"))))
+
+
+def _agent_cases():
+    seen: dict[str, int] = {}
+    for where, line in agent_lines():
+        seen[where] = seen.get(where, 0) + 1
+        pending = _key(where.rsplit(":", 1)[0], line) in PENDING
+        yield pytest.param(where, line, id=f"{where}#{seen[where]}",
+                           marks=[pytest.mark.xfail(strict=True, reason=L3_PENDING)] if pending else [])
+
+
+@functools.lru_cache(maxsize=None)
+def _rule_lists() -> tuple[list[str], list[str]]:
+    rules = bash_rules(_allow())
+    return rules, old_rules(rules)
+
+
+@pytest.mark.parametrize("where, line", list(_agent_cases()))
+def test_no_agent_line_the_cli_allowed_before_asks_now(where, line):
+    """An agent or prompt-include line the CLI allowed in its old spelling (ASKS_SINCE_P2, else both forms by
+    `old_spellings`) is allowed now: it names the harness home through the root its start context carries."""
+    rules, before = _rule_lists()
+    was = (_key(where.rsplit(":", 1)[0], line) in MEASURED
+           or all(cli_allows(before, old) for old in old_spellings(line)))
+    assert not was or cli_allows(rules, line), f"{where}: {line}"
+
+
+def test_each_measured_agent_line_is_in_the_texts():
+    keys = {_key(where.rsplit(":", 1)[0], line) for where, line in agent_lines()}
+    assert not [entry for entry in ASKS_SINCE_P2 if _key(*entry) not in keys]
+    assert set(L3_TO_RESPELL) <= set(ASKS_SINCE_P2)
+
+
+@pytest.mark.xfail(strict=True, reason="P2-3, integration: settings.json registers prompt-workflow.py at "
+                                       "SubagentStart, then remove this marker")
+def test_a_subagent_starts_with_the_printed_root():
+    """The agent lines' `<HARNESS_ROOT>` reaches a subagent only through prompt-workflow.py's SubagentStart answer
+    (hooks/tests/test_prompt_workflow_subagent_roots.py), registered for every agent type."""
+    groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SubagentStart", [])
+    assert any(group.get("matcher", "") in ("", "*")
+               and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
+               for group in groups)
 
 
 def test_the_cli_decision_model():

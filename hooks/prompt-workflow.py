@@ -20,6 +20,9 @@ Phase B (subsequent prompts, no slash command):
   - Reads the checklist from the transcript (lib.todo_canonical.checklist)
   - Injects current progress + exact next TodoWrite call template
 
+SubagentStart (subagent_roots): the same two root lines as the subagent's start
+context, since no UserPromptSubmit output reaches a subagent (P2-3).
+
 State: workflow-{sid}.json + overnight-state-{sid}.json. The checklist itself is
 the CLI's: every TodoWrite is in the transcript, which its readers read (P1b E7).
 """
@@ -1634,6 +1637,20 @@ def root_lines(state) -> str:
     return f'PROJECT_ROOT={project or PROJECT_DIR}\nHARNESS_ROOT={Path(__file__).resolve().parent.parent}'
 
 
+def subagent_roots(data: dict) -> str:
+    """A SubagentStart answer: root_lines as the subagent's additionalContext, so an agent
+    text's `<HARNESS_ROOT>` is written as the literal path the Bash allow entries match
+    (Claude Code asks for any `${...}` line). With the session's overnight record, its
+    worktree_path is PROJECT_ROOT, as at /dev-overnight."""
+    try:
+        import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+        state = overnight.locate(data.get('session_id'), data)[1]
+    except Exception:
+        state = None
+    return json.dumps({'hookSpecificOutput': {'hookEventName': 'SubagentStart',
+                                              'additionalContext': root_lines(state)}})
+
+
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
     """Write the workflow bookmark file."""
     bm = workflow_bookmark_path(sid)
@@ -1688,6 +1705,9 @@ def main():
         # must come from the payload: the session-id-keyed store scan can miss
         # the account's live transcript store (see _resolve_transcript_path).
         CURRENT_TRANSCRIPT_PATH = str(data.get('transcript_path') or '')
+        if data.get('hook_event_name') == 'SubagentStart':
+            print(subagent_roots(data))
+            sys.exit(0)
         user_input = data.get('prompt', '')
         # An ABSENT identity is not an identity. Resolving it to a literal made
         # one fallback both MINT a record under that literal and later SERVE it,
