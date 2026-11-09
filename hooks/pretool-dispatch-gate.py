@@ -12,11 +12,15 @@ exemptions, its failure direction; hooks/lib/gate_runner.py):
    gitignored deliverable (the one decider of that fact);
 4. pretool-obligation-gate.py (G1): the dispatch's obligation block is valid, and
    the producer it waits for has returned;
-5. consulted, not decided here: the hooks that refuse an Agent call from their own
-   registration (pretool-block-background-tasks.py, pretool-do-block-subagents.py,
-   pretool-spec-block-foreground-agent.py, pretool-workflow-gate.py). The gate runs
-   each only to learn whether it refuses this call; it reports nothing for them;
-6. pretool-commit-dispatch-attest.py, the witness: a changelog-analyst dispatch is
+5. pretool-spec-block-foreground-agent.py: no foreground dispatch while a /spec
+   interview's checklist has an open step;
+6. consulted, not decided here: the hooks that refuse an Agent call from their own
+   registration on every tool (pretool-block-background-tasks.py,
+   pretool-do-block-subagents.py, pretool-workflow-gate.py). The gate runs each only
+   to learn whether it refuses this call, and reports nothing for it;
+7. pretool-orchestrator-prompt-purity.py, an observer: its advice on a dispatch
+   prompt, which never refuses;
+8. pretool-commit-dispatch-attest.py, the witness: a changelog-analyst dispatch is
    recorded only when no rule above refused it and no consulted hook would, so the
    record never witnesses a dispatch that was refused. It never blocks.
 
@@ -30,17 +34,18 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 
-from lib.gate_runner import CONSULT, REFUSE, WITNESS, Rule, main  # noqa: E402
+from lib.gate_runner import CONSULT, OBSERVE, REFUSE, WITNESS, Rule, main  # noqa: E402
 
 RULES = [
     Rule("overnight-contract", str(HOOKS / "pretool-subagent-enforce.py"), REFUSE),
     Rule("g3-aggregate", str(HOOKS / "pretool-aggregate-check.py"), REFUSE),
     Rule("gitignore-preflight", str(HOOKS / "pretool-gitignore-preflight.py"), REFUSE),
     Rule("g1-obligation", str(HOOKS / "pretool-obligation-gate.py"), REFUSE),
-    Rule("background-dispatch", str(HOOKS / "pretool-block-background-tasks.py"), CONSULT),
-    Rule("do-no-dispatch", str(HOOKS / "pretool-do-block-subagents.py"), CONSULT),
-    Rule("spec-window", str(HOOKS / "pretool-spec-block-foreground-agent.py"), CONSULT),
+    Rule("spec-window", str(HOOKS / "pretool-spec-block-foreground-agent.py"), REFUSE),
+    Rule("background-agent", str(HOOKS / "pretool-block-background-tasks.py"), CONSULT),
+    Rule("do-block-subagents", str(HOOKS / "pretool-do-block-subagents.py"), CONSULT),
     Rule("checklist-started", str(HOOKS / "pretool-workflow-gate.py"), CONSULT),
+    Rule("prompt-purity", str(HOOKS / "pretool-orchestrator-prompt-purity.py"), OBSERVE),
     Rule("commit-dispatch-witness", str(HOOKS / "pretool-commit-dispatch-attest.py"), WITNESS),
 ]
 

@@ -11,7 +11,9 @@ exemptions, its failure direction; hooks/lib/gate_runner.py):
 3. subagentstop-artifact-contract-enforce.py (G2): every artifact the agent's own
    obligation declares exists, validates and carries its identity;
 4. subagentstop-cp-enforce.py: the agent leaves no pending checkpoint in its own
-   cp-state slot.
+   cp-state slot;
+5. subagentstop-restart-track.py, an observer: the response evidence /restart reads,
+   recorded whatever the rules above decided.
 
 Every refusal is returned to this producer at its own stop; the reasons of all
 refusing rules are reported together, once, with exit 2, so one round repairs them.
@@ -30,13 +32,14 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 
-from lib.gate_runner import REFUSE, Outcome, Rule, main  # noqa: E402
+from lib.gate_runner import OBSERVE, REFUSE, Outcome, Rule, main  # noqa: E402
 
 RULES = [
     Rule("codex-ledger", str(HOOKS / "subagentstop-codex-enforce.py"), REFUSE),
     Rule("qa-e2e", str(HOOKS / "subagentstop-e2e-enforce.py"), REFUSE),
     Rule("g2-artifact-contract", str(HOOKS / "subagentstop-artifact-contract-enforce.py"), REFUSE),
     Rule("cp-pending", str(HOOKS / "subagentstop-cp-enforce.py"), REFUSE),
+    Rule("restart-track", str(HOOKS / "subagentstop-restart-track.py"), OBSERVE),
 ]
 
 _E2E_ABSENT = re.compile(r"declared a qa-report\.v2 obligation \(task_id=[^)]*\) at (\S+) but no such file exists")
