@@ -123,6 +123,12 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   confirmation, starts with one commit of the clean tree; each later publish adds one commit. The switch runs last, after
   P13, with the owner's one confirmation.
 
+- **D31 The Codex review loop (2026-11-09).** "能跑起来是第一目标"; "给claude更多的辩论和拒绝的incentive"; "这些好的东西都加入流水线";
+  "我说了人不在，我只管管理" [running is the first goal; give Claude more incentive to argue and reject; put these good
+  rules into the pipeline; nobody is there, I only manage]. Every Codex call in the pipeline follows one protocol: one
+  complete pass, findings ranked so that running comes first, re-reviews that only verify, Claude classifies and may
+  reject, and a loop that ends without a person. Detail: `codex-review-loop.md`; P12's L2 and L3 apply it.
+
 ## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
 
 - **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
