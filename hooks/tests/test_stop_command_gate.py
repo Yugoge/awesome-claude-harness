@@ -1063,6 +1063,142 @@ def test_a6_push_holds_on_the_push_analysts_blocked_verdict_for_head(env, remote
     assert run(env) == (0, "")
 
 
+def _forge_file(repo, rel, text, mode="w"):
+    path = Path(repo, ".git", rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open(mode) as handle:
+        handle.write(text)
+
+
+def _forge_reflog(repo, _bare=None):
+    """An `update by push` entry appended to the tracking ref's reflog file, dated now on git's clock."""
+    GIT_CLOCK[0] += 1
+    old, new = git(repo, "rev-parse", "refs/remotes/origin/topic"), git(repo, "rev-parse", "HEAD")
+    _forge_file(repo, "logs/refs/remotes/origin/topic", f"{old} {new} t <t@example.invalid> {int(GIT_CLOCK[0])} +0000"
+                                                         "\tupdate by push\n", "a")
+
+
+def _forge_packed(repo, _bare=None):
+    """The tracking ref moved into packed-refs, there naming HEAD (no loose ref, no reflog entry)."""
+    Path(repo, ".git", "refs", "remotes", "origin", "topic").unlink()
+    _forge_file(repo, "packed-refs", f"{git(repo, 'rev-parse', 'HEAD')} refs/remotes/origin/topic\n", "a")
+
+
+# P5-61: the ways an agent writes or redirects what the /push Stop took as published, none of them a push.
+# Each value: the forging steps (git argument lists, or a callable on the repository), and the steps that
+# undo a redirect of origin itself (or a graft, which corrupts the push too) before the real push (none: the
+# push to the bare origin is enough).
+FORGES = {
+    "fetch-local-refspec": ([["fetch", "-q", ".", "HEAD:refs/remotes/origin/topic"]], []),
+    "update-ref": ([["update-ref", "refs/remotes/origin/topic", "HEAD"]], []),
+    "pull-refspec": ([["pull", "-q", "--ff-only", ".", "topic:refs/remotes/origin/topic"]], []),
+    "fetch-c-refspec": ([["-c", "remote.self.url=.", "-c", "remote.self.fetch=+refs/heads/*:refs/remotes/origin/*",
+                          "fetch", "-q", "self"]], []),
+    "config-refspec": ([["config", "remote.self.url", "."],
+                        ["config", "remote.self.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+                        ["fetch", "-q", "self"]], []),
+    "config-url": ([["config", "remote.origin.url", "."], ["fetch", "-q", "origin"]],
+                   [lambda repo, bare: git(repo, "config", "remote.origin.url", bare)]),
+    "config-insteadof": ([lambda repo, bare: git(repo, "config", f"url.{repo}.insteadOf", bare), ["fetch", "-q", "origin"]],
+                         [lambda repo, bare: git(repo, "config", "--unset", f"url.{repo}.insteadOf")]),
+    "upstream-local": ([["config", "branch.topic.remote", "."]], []),
+    "remote-add-self": ([["remote", "add", "self", "."], ["fetch", "-q", "self"]], []),
+    "symbolic-ref": ([["symbolic-ref", "refs/remotes/origin/topic", "refs/heads/topic"]], []),
+    "ref-file": ([lambda repo, bare: _forge_file(repo, "refs/remotes/origin/topic", git(repo, "rev-parse", "HEAD") + "\n")],
+                 []),
+    "packed-refs": ([_forge_packed], []),
+    "reflog-file": ([_forge_reflog], []),
+    "replace-graft": ([["replace", "--graft", "refs/remotes/origin/topic", "HEAD"]], []),
+    "grafts-file": ([lambda repo, bare: _forge_file(repo, "info/grafts", "{} {}\n".format(
+        git(repo, "rev-parse", "refs/remotes/origin/topic"), git(repo, "rev-parse", "HEAD")))],
+                    [lambda repo, bare: Path(repo, ".git", "info", "grafts").unlink()]),  # it re-parents the push too
+}
+
+
+def remote_lines(env, repo):
+    """The opener's remote lines (command_span.OPENER_REMOTE_LINE_RE) for the repository as it is now, added
+    to the opener's hook context: one per remote, its URL's digest, the branch, its tracking ref's commit
+    there and the branch's upstream ref where it is that remote's. P5-61's record of each remote at the
+    opener; its printer is the /push opener's UserPromptSubmit hook (not in this change)."""
+    branch = git(repo, "branch", "--show-current")
+    up = git(repo, "for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)", f"refs/heads/{branch}").split()
+    text = "".join(
+        f"[/push] remote at the opener: {name} {hashlib.sha256(git(repo, 'remote', 'get-url', name).encode()).hexdigest()[:16]} "
+        f"{branch} {git(repo, 'rev-parse', '--verify', '-q', f'refs/remotes/{name}/{branch}', check=False) or 'none'}"
+        + (f" upstream {up[1]}" if len(up) == 2 and up[0] == name else "") + "\n"
+        for name in git(repo, "remote").split())
+    env.tx.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit",
+                                                     "content": text}})
+
+
+def _steps(repo, bare, steps):
+    for step in steps:
+        step(repo, bare) if callable(step) else git(repo, *step)
+
+
+# The routes that redirect the remote itself (its URL, or a remote added): only the opener's remote lines
+# date and place the remote; the others hold on the remote's own branch with or without those lines.
+REDIRECTS = {"config-refspec", "config-url", "config-insteadof", "remote-add-self"}
+
+
+@pytest.mark.parametrize("route,lines", [(r, lines) for r in FORGES for lines in (True, False)
+                                         if lines or r not in REDIRECTS])
+def test_p5_61_a_forged_or_redirected_remote_record_releases_no_push_stop_until_the_push(env, remotes, route, lines):
+    """P5-61: the /push Stop took a locally written refs/remotes/<remote>/<branch> (its value or a reflog
+    entry of it), the branch's upstream from the repository's config, and git's ancestry through replace
+    objects and grafts as published. Every route here writes or redirects one of them after the /push
+    opener without a push: the Stop holds, naming the unpublished commit, until a push to the bare
+    origin lands (with a redirect of origin itself undone first)."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env)
+    if lines:
+        remote_lines(env, remotes)
+    forge, undo = FORGES[route]
+    bare = str(env.tmp / "origin.git")
+    _steps(remotes, bare, forge)
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, (route, text)
+    _steps(remotes, bare, undo)
+    git(remotes, "push", "-q", "origin", "topic")
+    assert run(env) == (0, ""), route
+
+
+def test_p5_61_an_upstream_moved_to_a_remote_that_had_head_before_the_opener_releases_nothing(env, remotes):
+    """P5-61, A6's "tracking fork: unpushed 2 even if origin had HEAD before the opener": after the opener
+    the agent sets the branch's upstream to origin, which held HEAD before it. The upstream the opener
+    recorded (fork) stays the one judged, until the push to it."""
+    git(remotes, "push", "-q", "fork", "topic")
+    git(remotes, "branch", "-q", "--set-upstream-to", "fork/topic")
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    git(remotes, "push", "-q", "origin", "topic")
+    push_opener(env)
+    remote_lines(env, remotes)
+    git(remotes, "branch", "-q", "--set-upstream-to", "origin/topic")
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published on refs/remotes/fork/topic" in text, text
+    git(remotes, "push", "-q", "fork", "topic")
+    assert run(env) == (0, "")
+
+
+def test_p5_61_a_remote_branch_ahead_at_a_commit_not_fetched_names_the_fetch(env, remotes):
+    """P5-61: the remote's own branch is read, so where it moved past HEAD (another clone pushed) to a commit
+    this repository lacks, HEAD's ancestry cannot be told: the gap names the fetch, after which HEAD,
+    behind the upstream, is published (A6: "behind it ... 0")."""
+    write_token(remotes)
+    other = env.tmp / "other"
+    git(env.tmp, "clone", "-q", "-b", "topic", str(env.tmp / "origin.git"), str(other))
+    ahead = commit(other, "o1.txt")
+    git(other, "push", "-q", "origin", "topic")
+    push_opener(env)
+    code, text = run(env)
+    assert code == 2 and (f"; origin: its refs/heads/topic is at {ahead}, which this repository lacks: fetch origin"
+                          in text), text
+    git(remotes, "fetch", "-q", "origin")
+    assert run(env) == (0, "")
+
+
 @pytest.mark.parametrize("command", ["merge", "push"])
 def test_a6_git_predicates_outside_a_repository_are_instrument_failures(env, command):
     env.tx.command(command)
