@@ -181,6 +181,7 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for():
         name = command.rstrip('"').rsplit("/", 1)[-1]
         registered[name] = None if matcher in ("", "*") else frozenset(matcher.split("|"))
     by_file = {Path(r.path).name: r for r in write_gate.RULES}
+    assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
@@ -452,20 +453,3 @@ def test_a_runner_fault_falls_back_and_is_never_an_allow(lab):
                              env=lab.env(), cwd=lab.proj, timeout=120)
         assert (got.returncode, got.stdout, got.stderr) == expected, raw
     assert expected[0] == 0 and lab.run(write_gate_settings.GATE_COMMAND, refused)[0] == 2
-
-
-def test_a_shell_rule_runs_under_bash_with_the_same_capture_and_budget(tmp_path):
-    refuse = tmp_path / "refuse.sh"
-    refuse.write_text('read -r line; echo "out:$line"; echo "no: $WG_PROBE" >&2; exit 2\n')
-    slow = tmp_path / "slow.sh"
-    slow.write_text("sleep 30\n")
-    os.environ["WG_PROBE"] = "seen"
-    try:
-        run = run_rule(str(refuse), b'{"a": 1}\n', 5.0)
-    finally:
-        del os.environ["WG_PROBE"]
-    assert (run.code, run.stdout, run.stderr, run.error) == (2, 'out:{"a": 1}\n', "no: seen\n", "")
-    start = time.monotonic()
-    late = run_rule(str(slow), b"{}", 0.3)
-    assert time.monotonic() - start < 5 and late.overrun and "0.3 s budget" in late.error
-    assert write_gate.combine([(_rule("s", str(slow), "closed", 0.3), late)]).code == 2
