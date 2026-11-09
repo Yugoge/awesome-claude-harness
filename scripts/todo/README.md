@@ -4,13 +4,13 @@ Organization and usage documentation for `todo/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 22
+- **Total files**: 13
 - **Subdirectories**: 0
-- **Naming convention**: kebab
+- **Naming convention**: lower
 
 ## Files
 - `clean.py` - Preloaded TodoList for /clean workflow
-- `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
+- `close.py` - the same five steps under every prompt (--auto walks each step over its parents;
 - `deep-search.py` - Python script
 - `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 - `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
