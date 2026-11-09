@@ -31,6 +31,7 @@ Blocked Bash operations:
   - git worktree add ...                          (worktree creation)
   - gh pr create / gh pr new ...                  (PR creation, flags interspersed)
   - gh pr checkout <N>  (unless --detach)         (creates a local PR branch)
+      `-d` and abbreviated long options are no gh option: gh stops, nothing created.
   - gh api repos/<o>/<r>/pulls  (POST)            (PR creation via the REST API)
   - git stash branch <name>                       (branch from a stash)
   - git fetch/pull <repo> <src>:refs/heads/<name> (refspec into a local branch)
@@ -601,12 +602,93 @@ def _is_gh_pr_create(args):
     return i < len(args) and args[i] in ('create', 'new')
 
 
+# `gh pr checkout`'s option table, from `gh pr checkout --help` (gh 2.89): `-b`
+# `--branch` and `-R` `--repo` take a value, the rest are booleans, and `--detach`
+# has NO short form (`-d` is not an option of this command). gh reads them with
+# spf13/pflag, which accepts no abbreviation of a long option (`--det` and
+# `--bran` are unknown flags, measured on gh 2.89).
+_GH_CHECKOUT_SHORT = {'b': 'branch', 'f': 'force', 'R': 'repo'}
+_GH_CHECKOUT_VALUE = {'branch', 'repo'}
+_GH_CHECKOUT_BOOL = {'detach', 'force', 'recurse-submodules', 'help'}
+_GH_BOOL_TRUE = {'1', 't', 'T', 'TRUE', 'true', 'True'}  # strconv.ParseBool, as pflag
+_GH_BOOL_FALSE = {'0', 'f', 'F', 'FALSE', 'false', 'False'}
+
+
+def _gh_checkout_parse(args):
+    """Read `gh pr checkout`'s arguments the way gh's flag parser (pflag) does.
+
+    Returns (ok, detach): ok is False when gh stops before it runs anything (an
+    unknown or malformed flag, a flag missing its value, a boolean given a value
+    that is not one, more than one positional argument, or `--help`), so nothing
+    is checked out and no branch is created; detach is True when the last
+    --detach given is true.
+    """
+    detach = helped = False
+    positionals = 0
+    i = 0
+    n = len(args)
+
+    def boolean(value):
+        return True if value in _GH_BOOL_TRUE else False if value in _GH_BOOL_FALSE else None
+
+    while i < n:
+        a = args[i]
+        i += 1
+        if a == '--':
+            positionals += n - i
+            break
+        if a.startswith('--'):
+            name, has_value, value = a[2:].partition('=')
+            if not name or name[0] in '-=':
+                return False, False
+            if name in _GH_CHECKOUT_VALUE:
+                if not has_value:
+                    if i >= n:
+                        return False, False
+                    i += 1  # the next word is the value, whatever it looks like
+            elif name in _GH_CHECKOUT_BOOL:
+                flag = boolean(value) if has_value else True
+                if flag is None:
+                    return False, False
+                if name == 'help':
+                    helped = flag  # like any boolean, the last one given wins
+                elif name == 'detach':
+                    detach = flag
+            else:
+                return False, False
+        elif a.startswith('-') and len(a) > 1:
+            cluster = a[1:]
+            while cluster:
+                letter = cluster[0]
+                name = _GH_CHECKOUT_SHORT.get(letter)
+                if name is None:
+                    return False, False  # unknown shorthand, or -h (help)
+                if len(cluster) > 2 and cluster[1] == '=':
+                    value, cluster = cluster[2:], ''
+                    if name == 'force' and boolean(value) is None:
+                        return False, False
+                elif name == 'force':
+                    cluster = cluster[1:]
+                elif len(cluster) > 1:
+                    cluster = ''  # the rest of the word is the value
+                elif i < n:
+                    i += 1
+                    cluster = ''
+                else:
+                    return False, False
+        else:
+            positionals += 1
+    return positionals <= 1 and not helped, detach
+
+
 def _is_gh_pr_checkout(args):
     """True iff `gh pr checkout <N>` (checks out a PR by CREATING a local branch).
 
     `gh pr checkout` materializes a local branch for the PR, so it is creation —
-    UNLESS `--detach` is present (detached HEAD, no branch ref created). The PR
-    list/view/status/diff subcommands are read-only and are NOT matched here.
+    UNLESS gh would stop before running it (_gh_checkout_parse: `-d`, an
+    abbreviation such as `--det`) or the last --detach given is true (detached
+    HEAD, no branch ref created). The PR list/view/status/diff subcommands are
+    read-only and are NOT matched here.
     """
     i = _gh_skip_flags(args, 0)
     if i >= len(args) or args[i] != 'pr':
@@ -614,8 +696,8 @@ def _is_gh_pr_checkout(args):
     i = _gh_skip_flags(args, i + 1)
     if i >= len(args) or args[i] != 'checkout':
         return False
-    # `--detach` anywhere in the checkout args downgrades to a detached HEAD.
-    return '--detach' not in args[i + 1:]
+    ok, detach = _gh_checkout_parse(args[i + 1:])
+    return ok and not detach
 
 
 # Write-method indicators for `gh api`: any of these makes the call a POST/write
