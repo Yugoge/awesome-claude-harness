@@ -360,14 +360,16 @@ STOP, TODO = ("Stop", None), ("PostToolUse", "TodoWrite")
 # scenario's events after the landing reach (the harness-home session writes no todo list); together
 # they must be every one that differs (test_your_settings_differs_only_where_a_replay_runs_it).
 EXERCISES = {PRE.name: {STOP, TODO}, HOME.name: {STOP}, A.name: {STOP, TODO}, B.name: {STOP, TODO}}
-# The registrations two phases ahead of P5 change, which those phases name and no scenario here reaches
-# after the landing (none asks with AskUserQuestion after it): P2's overnight guard on AskUserQuestion
-# too (P2_MATCHER: its registration under the old matcher goes, the new one comes) and P4's close-rating
-# hook (PostToolUse; P13-2 widened its matcher to AskUserQuestion|Agent). Each is held to exactly that
-# change; a replay that reaches one fails test_again_with_your_settings's `hooklist` part.
+# The registrations two phases ahead of P5 change, which those phases name: P2's overnight guard on
+# AskUserQuestion too (P2_MATCHER: its registration under the old matcher goes, the new one comes) and
+# P4's close-rating hook (PostToolUse; P13-2 widened its matcher to AskUserQuestion|Agent, so it also
+# observes every Agent dispatch). Each is held to exactly that change. None asks with AskUserQuestion after
+# the landing; REACHED names the scenarios whose events after the landing do reach one (a dispatch).
+RATING = ("PostToolUse", "AskUserQuestion|Agent")
 ELSEWHERE = {("PreToolUse", P2_MATCHER[0]): (["hooks/pretool-overnight-hook-guard.py"], []),
              ("PreToolUse", P2_MATCHER[1]): ([], ["hooks/pretool-overnight-hook-guard.py"]),
-             ("PostToolUse", "AskUserQuestion|Agent"): ([], ["hooks/posttool-close-rating.py"])}
+             RATING: ([], ["hooks/posttool-close-rating.py"])}
+REACHED = {PRE.name: {RATING}}
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that
@@ -576,7 +578,7 @@ def test_again_with_your_settings(live, case, part):
             assert land.get("hooklist") == "landed", land
             bad, hit, _n = _hooklist(live.name, r)
             assert not bad, f"{scn.name}: events after the landing that did not run this tree's hook list: {bad}"
-            assert hit == EXERCISES[scn.name], (scn.name, sorted(map(str, hit)), _differing(live.name))
+            assert hit == EXERCISES[scn.name] | REACHED.get(scn.name, set()), (scn.name, sorted(map(str, hit)), _differing(live.name))
         elif part == "a11":
             listed = "\n".join(_yours_lines(live.name, scn, r, base))
             new = [b for b, how, _ in _classified(r, base) if how == "NEW"]
