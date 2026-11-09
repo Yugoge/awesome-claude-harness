@@ -95,6 +95,9 @@ Bash policy bypass fix (T2.1):
     extract every shell write target (heredoc-stripped). Each extracted
     path is authorized as if it were a Write target. The bash command
     itself is also authorized for tool-list membership (target=None).
+  - The text of each shell -c string the command runs is read the same way,
+    as the command run plainly (T2-16, _bash_texts), here and in the
+    protected stage.
   - This closes the heredoc/redirect bypass where a subagent could
     write to a protected path via 'cat > FILE << EOF' or similar.
 
@@ -115,6 +118,7 @@ ends with the status and output it decided without the interpreter's teardown
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -187,8 +191,93 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
         return [tool_input.get("file_path")]
     if tool_name == "Bash":
         command = tool_input.get("command") or ""
-        return [None] + extract_bash_write_paths(command)
+        found = [t for text in _bash_texts(command) for t in extract_bash_write_paths(text)]
+        return [None] + list(dict.fromkeys(found))
     return [None]
+
+
+# -- shell -c layers (T2-16) ---------------------------------------------------
+# The write-target readers blank quoted text, so a write inside a shell's -c
+# string named no target: `bash -c "cp x <protected>"` exited 0 where the same
+# cp run plainly exits 2. Each layer's text is read here as its command run
+# plainly is. The layers are lib/git_command_classifier's (the walker the
+# privilege guard, bash-safety and the branch hook read them with): its texts,
+# where a value the outer shell computes reads as a run-time placeholder (an
+# unresolvable target, judged as the plain command's `$X` is), and the same
+# walk over the command with its `$` hidden, which keeps an outer expansion as
+# written. A double-quoted string found there written as its value, after the
+# shell's option word, is read in its place, on a line of its own, as the
+# command run plainly would hold it, so `$HOME` and a `T=<path>;` assignment
+# before the shell (TC-47) reach its words as they reach the plain command's; a
+# single-quoted one, which the outer shell neither expands nor passes its
+# variables to, and any other string are read alone.
+def _bash_texts(command) -> tuple:
+    """``command``, then the text of every shell -c layer it runs (above), each
+    read for write targets as a command is. The walk adds texts and never
+    removes the command: on a failure the texts it found still count. A
+    command that is no string is read as before: it names no target."""
+    return _layer_texts(command) if isinstance(command, str) else (command,)
+
+
+@functools.lru_cache(maxsize=4)  # read by the role rows' and the protected stage's targets alike
+def _layer_texts(command: str) -> tuple:
+    texts = [command]
+    if "sh" not in command:  # every shell's name holds "sh" (the walk's own hint)
+        return tuple(texts)
+    try:
+        from lib import git_command_classifier as walker
+
+        texts += list(walker.iter_shell_texts(command))[1:]
+        # `$` hidden as a private-use character the command does not hold: no shell syntax, so the walk reads it as text
+        hidden = next(chr(c) for c in range(0xE000, 0xF900) if chr(c) not in command)
+        _shell_layers(walker, command.replace("$", hidden), hidden, 0, texts, set())
+    except Exception:  # never let the walk cost the command its own reading
+        pass
+    return tuple(dict.fromkeys(texts))
+
+
+def _shown(walker, text: str, hidden: str) -> str:
+    return text.replace(hidden, "$").replace(walker._RUNTIME, walker._RUNTIME_PLACEHOLDER)
+
+
+def _operand_at(text: str, value: str, cursor: int) -> int:
+    """Offset of ``value`` as a double-quoted shell operand in ``text`` from
+    ``cursor`` (after an option word: `-c`, `-lc`, `--`), else -1."""
+    if '"' in value:  # an escaped quote: the operand is not written as its value
+        return -1
+    at = text.find('"%s"' % value, cursor)
+    while at >= 0 and (text[:at].split() or [""])[-1][:1] not in ("-", "+"):
+        at = text.find('"%s"' % value, at + 1)
+    return at
+
+
+def _shell_layers(walker, text: str, hidden: str, depth: int, texts: list, seen: set) -> None:
+    """Append to ``texts`` the layers ``text`` (its `$` hidden) runs, to the
+    walker's own depth limit: ``text`` with each double-quoted -c string read
+    in its place, every other string alone; text the walker cannot lex is
+    read as it reads it, what follows the shell's -c with the quotes dropped."""
+    if depth >= walker._MAX_SHELL_DEPTH:
+        return
+    spliced, cursor = text, 0
+    for kind, value, _fed, _built in walker._shell_c_strings(text):
+        if kind == "unlexable":
+            for m in walker._SHELL_C_SHAPE_RE.finditer(value):
+                rest = re.sub(r"['\"]", "", re.sub(r"\A\S*", "", value[m.end():]))
+                texts.append(_shown(walker, rest, hidden))
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        at = _operand_at(spliced, value, cursor)
+        if at < 0:
+            texts.append(_shown(walker, value, hidden))
+            _shell_layers(walker, value, hidden, depth + 1, texts, seen)
+            continue
+        spliced = "%s\n%s\n%s" % (spliced[:at], value, spliced[at + len(value) + 2:])
+        cursor = at + len(value) + 2
+    if spliced != text:
+        texts.append(_shown(walker, spliced, hidden))
+        _shell_layers(walker, spliced, hidden, depth + 1, texts, seen)
 
 
 _RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
@@ -1132,10 +1221,11 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
 
     found = [(t, False) for t in _write_targets(tool_name, targets)]
     if tool_name == "Bash" and isinstance(tool_input, dict):
-        try:  # on a failure the frozen extractor's targets still count, and the rules below still run
-            found += extract_bash_touched_paths(tool_input.get("command") or "")
-        except Exception:
-            pass
+        for text in _bash_texts(tool_input.get("command") or ""):  # the command, then each -c layer it runs
+            try:  # on a failure the frozen extractor's targets still count, and the rules below still run
+                found += extract_bash_touched_paths(text)
+            except Exception:
+                pass
     if not found:
         return
     base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
