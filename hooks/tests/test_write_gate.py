@@ -456,3 +456,22 @@ def test_a_runner_fault_falls_back_and_is_never_an_allow(lab):
                              env=lab.env(), cwd=lab.proj, timeout=120)
         assert (got.returncode, got.stdout, got.stderr) == expected, raw
     assert expected[0] == 0 and lab.run(write_gate_settings.GATE_COMMAND, refused)[0] == 2
+
+
+def test_a_rule_module_that_cannot_be_imported_leaves_the_other_rules_deciding(lab):
+    """The rule table imports the overwrite rule's module (so the artifact check sees the gate load
+    it). If that import fails, as with a half-written overwrite.py in the live harness home, the
+    table must still load: tool-policy still refuses, rather than the gate ending with exit 1."""
+    gate = HOOKS / "pretool-write-gate.py"
+    probe = textwrap.dedent(f"""
+        import importlib.util, sys
+        sys.path.insert(0, {str(HOOKS)!r})
+        sys.modules['lib.write_gate.overwrite'] = None  # the package's `from . import overwrite` now fails
+        spec = importlib.util.spec_from_file_location('gate', {str(gate)!r})
+        gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+        sys.exit(gate.main())
+        """)
+    refused = _payload("Write", {"file_path": f"{OUTSIDE}/src/app.py", "content": "x"}, "qa")
+    got = subprocess.run([sys.executable, "-c", probe], input=refused, capture_output=True, text=True,
+                         env=lab.env(), cwd=lab.proj, timeout=120)
+    assert got.returncode == 2 and "BLOCKED by tool-policy" in got.stderr, (got.returncode, got.stderr)
