@@ -16,11 +16,10 @@ from functools import reduce
 from pathlib import Path
 
 START, CAP = 50, 100  # a score starts at START, never exceeds CAP and has no lower bound
-POINTS = {  # event -> points by role ("*": any other role); per-event caps (qa_catch +2 a task) are the writer's
-    "qa_first_pass": {"dev": 2, "ba": 1}, "qa_fail": {"dev": -6, "ba": -6}, "qa_catch": {"qa": 1},
-    "escaped": {"*": -7, "qa": -3}, "close_catch": {"close-qa": 1}, "rerun_gap": {"*": -2}, "stop_blocked": {"*": -1},
-    "main_refused": {"main": -1}, "main_stop_blocked": {"main": -1}, "ba_option_chosen": {"ba": 3},
-    "ba_root_cause_refuted": {"ba": -4},
+POINTS = {  # (event, role) -> points ("*": any other role); per-event caps (qa_catch +2 a task) are the writer's
+    ("qa_first_pass", "dev"): 2, ("qa_first_pass", "ba"): 1, ("qa_fail", "dev"): -6, ("qa_fail", "ba"): -6, ("qa_catch", "qa"): 1,
+    ("escaped", "*"): -7, ("escaped", "qa"): -3, ("close_catch", "close-qa"): 1, ("rerun_gap", "*"): -2, ("stop_blocked", "*"): -1,
+    ("main_refused", "main"): -1, ("main_stop_blocked", "main"): -1, ("ba_option_chosen", "ba"): 3, ("ba_root_cause_refuted", "ba"): -4,
 }
 RATING_POINTS = {5: 3, 4: 1, 3: -3, 1: -6}  # to each role in the rating row's "roles" and to "main"
 RANKS = (("Disgraced", "<0", 0), ("Apprentice", "0-20", 21), ("Journeyman", "21-40", 41),  # name, range, next rank's
@@ -59,7 +58,7 @@ def project_key(cwd) -> str:
 
 
 def points_for(event: str, role: str) -> int | None:
-    return POINTS[event].get(role, POINTS[event].get("*"))
+    return POINTS.get((event, role), POINTS.get((event, "*")))
 
 
 def identity(role, pipeline) -> str | None:
@@ -168,9 +167,8 @@ def _plain(value) -> str:  # one line of printable text: control and format char
 
 def _why(row):
     """The row's why as plain text, without a task id, cut to 80 characters."""
-    tid = re.escape(str(row.get("task_id") or "\0"))
-    stamp = r"(?:dev-(?:command-)?)?\d{8}-\d{6}(?:-l?\d+)?"
-    return _plain(re.sub(rf"(?<![\w-]){tid}(?![\w-])|{stamp}", "", str(row.get("why") or "")))[:80]
+    tid, stamped = re.escape(str(row.get("task_id") or "\0")), _ob("task_stamp")  # an id is a run of [\w-] that holds a stamp, or the row's own
+    return _plain(re.sub(rf"(?P<own>(?<![\w-]){tid}(?![\w-]))|[\w-]+", lambda m: "" if m["own"] or stamped(m[0]) else m[0], str(row.get("why") or "")))[:80]
 
 
 def _by_identity(rows, project, as_of):

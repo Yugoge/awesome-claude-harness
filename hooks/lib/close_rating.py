@@ -9,6 +9,11 @@ import runpy
 import time
 from pathlib import Path
 
+try:  # as hooks.lib.close_rating (tests), or from hooks/lib on the path (the hook, score-update.sh): the writer's module, by name
+    from . import score_log
+except ImportError:
+    import score_log
+
 SOURCE_RE = re.compile(r"^close-rating:[A-Za-z0-9][A-Za-z0-9_-]{2,80}$")
 LABEL_TO_RATING = {"5 - Fully met": 5, "4 - Minor gaps": 4, "3 - Major gaps": 3, "1-2 - Not met": 1}
 
@@ -54,7 +59,7 @@ def rating_asked(transcript_path, task_id: str) -> bool:
 
 def append_row(log, row: dict) -> None:
     """score-update.sh's legacy rows go through score_log's writer, under the caller's lock."""
-    _lib("score_log").append(log, row)
+    score_log.append(log, row)
 
 
 def _utc(seconds: float) -> str:
@@ -75,7 +80,6 @@ def handle(payload) -> dict | None:
         unanswered = any(response.get(k) for k in ("afkTimeoutMs", "response", "followUp")) or any(
             isinstance(n, dict) and n.get("unanswered") for n in (notes.values() if isinstance(notes, dict) else ()))
         rating = LABEL_TO_RATING.get(answer) if isinstance(answer, str) and not unanswered else None
-        score_log = _lib("score_log")
         log, project = score_log.log_path(), score_log.project_key(payload["cwd"])
         if rating:
             dispatches = _lib("obligation")._task_records(task_id, os.environ.get("CLAUDE_PROJECT_DIR") or payload["cwd"], None)

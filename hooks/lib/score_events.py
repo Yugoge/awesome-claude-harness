@@ -1,5 +1,4 @@
 """Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry."""
-import importlib
 import json
 import os
 import re
@@ -7,9 +6,10 @@ import runpy
 from contextlib import suppress
 from datetime import datetime, timezone
 
-# as hooks.lib.score_events, or from hooks/lib on the path
-command_span, obligation, score_log = (importlib.import_module(f"{__package__}.{n}" if __package__ else n)
-                                       for n in ("command_span", "obligation", "score_log"))
+try:  # as hooks.lib.score_events, or from hooks/lib on the path
+    from . import command_span, obligation, score_log
+except ImportError:
+    import command_span, obligation, score_log  # noqa: E401
 
 
 def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict: the result's time, a one-line why without task id, ref (default: d's report)
@@ -72,13 +72,13 @@ def _written(ctx, d, excluded=command_span.EXCLUDED_TREES):  # the project-relat
 
 def qa_first_pass(ctx):  # the lane's first QA dispatch passed (a later pass, or one after an unreadable report, is not first)
     first = {(d["task"], d["lane"]): d for d in reversed(ctx["qa"])}.values()
-    yield from (_event(ctx, d, "qa_first_pass", role, "lane QA passed at the first round") for d in first if d["status"] == "pass" for role in score_log.POINTS["qa_first_pass"])
+    yield from (_event(ctx, d, "qa_first_pass", role, "lane QA passed at the first round") for d in first if d["status"] == "pass" for event, role in score_log.POINTS if event == "qa_first_pass")
 
 
 def qa_fail(ctx):  # a row per scored role the failures blame, with the first such failure's issue (reversed: the first wins)
     for d in ctx["qa"]:
-        blamed = {r: f.get("issue") or "lane QA failed" for f in reversed(d["fails"])  # a failure's primary_cause names the role it costs
-                  if (r := {"dev_implementation": "dev", "ba_spec": "ba"}.get(str(f.get("primary_cause"))))}
+        blamed = {r: f.get("issue") or "lane QA failed" for f in reversed(d["fails"])  # a failure's primary_cause, <role>_<cause>, names the role it costs
+                  if ("qa_fail", r := str(f.get("primary_cause")).partition("_")[0]) in score_log.POINTS}
         for role, issue in blamed.items():
             yield _event(ctx, d, "qa_fail", role, issue)
 
@@ -160,7 +160,8 @@ def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: fi
                     rows += [{"kind": "event", "project": ctx["project"], **e, "points": p}
                              for e in rule(ctx) if (p := score_log.points_for(e["event"], e["role"])) is not None]
             if rows:
-                with score_log.locked(log := score_log.log_path()):
+                log = score_log.log_path()
+                with score_log.locked(log):
                     score_log.append_all(log, rows)
 
 

@@ -285,7 +285,7 @@ def test_trend_is_the_score_now_minus_the_score_before_the_five_most_recent_task
      ("qa_catch", "qa", 1), ("escaped", "dev", -7), ("escaped", "ba", -7), ("escaped", "qa", -3),
      ("close_catch", "close-qa", 1), ("rerun_gap", "dev", -2), ("rerun_gap", "qa", -2), ("stop_blocked", "ba", -1),
      ("main_refused", "main", -1), ("main_stop_blocked", "main", -1), ("ba_option_chosen", "ba", 3),
-     ("ba_root_cause_refuted", "ba", -4), ("qa_catch", "dev", None), ("qa_fail", "qa", None)],
+     ("ba_root_cause_refuted", "ba", -4), ("qa_catch", "dev", None), ("qa_fail", "qa", None), ("no_such_event", "dev", None)],
 )
 def test_the_point_table(event: str, role: str, points: int | None) -> None:
     assert score_log.points_for(event, role) == points
@@ -557,6 +557,13 @@ def test_why_is_one_line_without_a_task_id_and_cut_to_80_characters(task: str) -
     assert len(miss) == 80 and "\n" not in miss and miss.startswith("QA failed")
     assert not re.search(r"\d{8}-\d{6}", miss) and not re.search(rf"(?<![\w-]){re.escape(task)}(?![\w-])", miss)
     assert score_log._why(_event(-6, task=task, why=task)) == ""  # nothing is left of a why that is only a task id
+
+
+def test_why_drops_a_whole_task_id_run_and_keeps_the_words_and_marks_around_it() -> None:
+    # an id is a run of word characters and hyphens that holds a stamp (any prefix, lane or suffix): the stamp's shape is obligation's
+    why = "see dev-command-20261101-100000-l2: 20261101-100000-login-flow (id=20261101-100000) kept-words"
+    assert score_log._why(_event(-6, task="other-task", why=why)) == "see : (id=) kept-words"
+    assert score_log._why(_event(-6, task="t1", why="t1: t10 x-t1 t1")) == ": t10 x-t1"  # the row's own id only as a whole run
 
 
 BAD = "\x1b\x07\x9b\x08\x00\x7f\u202e\u200b\u2028\u2029\u00ad\ud800"  # ESC BEL CSI BS NUL DEL bidi, zero-width, separators, soft hyphen, surrogate
