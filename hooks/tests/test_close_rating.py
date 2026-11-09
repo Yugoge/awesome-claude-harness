@@ -220,7 +220,7 @@ def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
     shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
     (root / "hooks" / "lib").mkdir(parents=True)
-    for name in ("roster.py", "close_rating.py"):
+    for name in ("roster.py", "close_rating.py", "score_log.py"):
         shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
     shutil.copytree(REPO_ROOT / "agents", root / "agents")
     _silent(_run(_payload("4 - Minor gaps"), config))
