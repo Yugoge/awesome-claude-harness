@@ -129,6 +129,15 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   complete pass, findings ranked so that running comes first, re-reviews that only verify, Claude classifies and may
   reject, and a loop that ends without a person. Detail: `codex-review-loop.md`; P12's L2 and L3 apply it.
 
+- **D32 A BA panel, scores with consequences, praise, /rating (2026-11-09).** The owner agreed to the proposal and set
+  the consequences: "dev 分数低：它的改动在正常 QA 之后，再多一轮独立QA检查"; "ba分数低：它的改动在正常 QA 之后，再多一轮独立QA检查";
+  "Qa分数低：每一次不使用--codex也强制加入codex辩论" [a low-score dev or BA gets one more independent QA round after its
+  normal QA; a low-score QA always debates Codex, even without --codex]. Three BAs analyse independently in /spec and in
+  /dev without a spec; /dev with a spec runs one BA. BAs compete: the one whose option the owner picks gains, the one
+  whose root cause is shown wrong loses. Praise from facts replaces the threat sentence. /rating shows the scores in
+  the terminal, no HTML. D18 is bounded: the owner decides solution-level choices; a measurement decides the rest.
+  This replaces D29's "warning only" low-score answer. Detail: `research/scoring-and-asking/P13-D32.md`.
+
 ## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
 
 - **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
