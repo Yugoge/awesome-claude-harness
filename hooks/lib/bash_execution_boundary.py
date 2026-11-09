@@ -1414,6 +1414,20 @@ INERT_ARGV_CONSUMERS = {
 }
 
 SHELLS = {"bash", "sh", "dash", "zsh", "ksh", "ksh93", "mksh", "ash", "rbash", "bash5"}
+# The shells whose grammar has the `[[ ... ]]` conditional compound command.
+# sh, dash and ash have none: there `[[` is an ordinary command name, so a
+# `&&` or `||` after it IS a command boundary and is read as one.
+COND_SHELLS = {"bash", "zsh", "ksh", "ksh93", "mksh", "rbash", "bash5"}
+# The unquoted reserved words that may precede `[[` while it is still the first
+# word of a command (`if [[`, `! [[`, `while ! [[`, `{ [[` ...). Any other word,
+# an assignment or a redirection before it makes `[[` an argument or a command
+# name, and then nothing inside it is a conditional expression.
+COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
+                                "until", "do", "{"))
+# Builtins that can stop `[[` from being read as the reserved word on a later
+# line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
+# command, and zsh's `disable -r` switches the reserved word off.
+COND_DISABLING_BUILTINS = frozenset(("alias", "disable"))
 # A shell's script operand in the quoted CLAUDE_HOME channel (P2 R6), each component plain: a named file.
 CLAUDE_HOME_FILE = re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+"')
 
@@ -2082,6 +2096,12 @@ class Analyzer:
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
         self._head, self.direct = None, False
+        # Whether the code being walked is read by a shell that has `[[ ]]`
+        # (see walk). Set per analyze_code call; a call that does not say so
+        # gets False, the old reading. Any alias text in the command, or a run
+        # of a COND_DISABLING_BUILTINS builtin, switches it off for the rest.
+        self._cond = False
+        self._cond_disabled = "alias" in raw.lower()
 
     def note_removal_position(self, shape, text):
         """Record EVERY parse-derived position a removal NAME was placed in.
@@ -2513,13 +2533,13 @@ class Analyzer:
         for kind, s, off in w.segs:
             if kind == "sub":
                 self.note("substitution", off)
-                self.analyze_code(s, Env(env.hashed, env.aliases))
+                self.analyze_code(s, Env(env.hashed, env.aliases), cond=self._cond)
             elif kind == "arith":
                 self.note("substitution", off)
                 self.scan_expansions(s, env)
             elif kind == "procsub":
                 self.note("procsub", off)
-                self.analyze_code(s, Env(env.hashed, env.aliases))
+                self.analyze_code(s, Env(env.hashed, env.aliases), cond=self._cond)
             elif kind == "param":
                 body = s.text
                 if body.startswith("!") or (
@@ -2556,7 +2576,7 @@ class Analyzer:
                     return
                 for kind, s, off in segs:
                     self.note("substitution", off)
-                    self.analyze_code(s, Env(env.hashed, env.aliases))
+                    self.analyze_code(s, Env(env.hashed, env.aliases), cond=self._cond)
                 continue
             if c == "$" and i + 1 < n and t[i + 1] in "({[":
                 segs = []
@@ -2568,7 +2588,8 @@ class Analyzer:
                 for kind, s, off in segs:
                     if kind == "sub":
                         self.note("substitution", off)
-                        self.analyze_code(s, Env(env.hashed, env.aliases))
+                        self.analyze_code(s, Env(env.hashed, env.aliases),
+                                          cond=self._cond)
                     elif kind == "arith":
                         self.note("substitution", off)
                         self.scan_expansions(s, env)
@@ -2585,8 +2606,19 @@ class Analyzer:
 
     # -- command-level walk --------------------------------------------------
 
-    def analyze_code(self, src, env):
+    def analyze_code(self, src, env, cond=False):
+        """Walk ``src`` as shell code.
+
+        ``cond`` says the shell reading this code has the `[[ ]]` conditional
+        (COND_SHELLS). Only a caller that knows the shell says so: the command
+        itself, its substitutions, `eval` and alias bodies (the same shell), and
+        a COND_SHELLS -c or stdin program. Every other caller (ssh, at, git
+        aliases, exec option values ...) hands the code to a shell this file
+        cannot name, so it keeps the default False and the old reading.
+        """
         self.depth += 1
+        outer = self._cond
+        self._cond = cond
         try:
             if self.depth > MAX_DEPTH:
                 self.structural("recursion_limit")
@@ -2598,19 +2630,61 @@ class Analyzer:
                 return
             self.walk(toks, env)
         finally:
+            self._cond = outer
             self.depth -= 1
+
+    def _opens_conditional(self, cur, tok):
+        """True when word ``tok`` is the reserved word `[[` of a new command.
+
+        `[[` is reserved only unquoted and only as a command's first word, after
+        nothing but the reserved words of COND_OPENER_PREFIX: `"[[" a || b`,
+        `A=1 [[ a || b ]]` and `>f [[ a || b ]]` run a command named `[[`, and
+        their `||` is a real boundary. The test is on the raw text, so every
+        quoted or escaped spelling stays an ordinary word.
+        """
+        if not self._cond or self._cond_disabled or tok[1].raw.text != "[[":
+            return False
+        return all(t[0] == "W" and t[1].raw.text in COND_OPENER_PREFIX for t in cur)
 
     def walk(self, toks, env):
         cur = []
         piped = False
         next_piped = False
+        # Inside `[[ ... ]]` (cond_depth is not None) the shell reads a
+        # conditional expression, not commands: `&&`, `||`, `!`, `(` and `)` are
+        # its operators and a line break between its terms is blank, so none of
+        # them ends the command, and every operand is a word of the one `[[`
+        # command, never a command head. Its expansions are still visited by
+        # flush like any other word's, so `[[ -n $(cmd) ]]` is analysed as code.
+        # Anything else (`;`, `&`, `|`, `;;`, a `)` that closes no `(` of the
+        # conditional, as in a case pattern `[[)`) cannot occur inside a
+        # conditional; there the walk falls back to the old reading and treats
+        # it as a boundary. The conditional ends at the first word whose value
+        # is `]]`, however quoted: ending it early only splits more.
+        cond_depth = None
         for tok in toks:
             if tok[0] == "OP":
                 op = tok[1]
+                if cond_depth is not None:
+                    if op in ("&&", "||", "\n"):
+                        continue
+                    if op == "(":
+                        cond_depth += 1
+                        continue
+                    if op == ")" and cond_depth > 0:
+                        cond_depth -= 1
+                        continue
+                    cond_depth = None
                 self.flush(cur, env, piped)
                 cur = []
                 piped = next_piped = (op in ("|", "|&"))
                 continue
+            if tok[0] == "W":
+                if cond_depth is None:
+                    if self._opens_conditional(cur, tok):
+                        cond_depth = 0
+                elif tok[1].literal() == "]]":
+                    cond_depth = None
             cur.append(tok)
         self.flush(cur, env, piped)
 
@@ -2774,12 +2848,14 @@ class Analyzer:
         if name in env.aliases:
             body = env.aliases[name]
             parts = [body] + [a.raw for a in args]
-            self.analyze_code(src_concat(parts), Env(env.hashed, {}))
+            self.analyze_code(src_concat(parts), Env(env.hashed, {}), cond=self._cond)
             return
         if name in env.hashed:
             name = env.hashed[name]
         base = basename(name)
         self.direct, self._head = head is self._head and self.depth == 1, None
+        if base in COND_DISABLING_BUILTINS:
+            self._cond_disabled = True
         if base in ("cd", "pushd", "set", "printf") or base in _SHELL_STATE_BUILTINS:
             self._shell_state(base, args)
 
@@ -3181,7 +3257,7 @@ class Analyzer:
                 self.scoped("dynamic_eval_argument", a.raw.text[:60])
                 return
             parts.append(a.content())
-        self.analyze_code(src_concat(parts), Env(env.hashed, env.aliases))
+        self.analyze_code(src_concat(parts), Env(env.hashed, env.aliases), cond=self._cond)
 
     def _h_source(self, name, args, redirs, env, piped):
         # The sourced file's contents are not in the command text. Nothing about
@@ -3630,7 +3706,8 @@ class Analyzer:
             if code_word.literal() is None:
                 self.scoped("dynamic_shell_code", code_word.raw.text[:60])
                 return
-            self.analyze_code(code_word.content(), Env(env.hashed, env.aliases))
+            self.analyze_code(code_word.content(), Env(env.hashed, env.aliases),
+                              cond=basename(name) in COND_SHELLS)
             return
         operands = args[i:]
         if operands and not read_stdin:
@@ -3659,7 +3736,8 @@ class Analyzer:
             return
         body = self._stdin_code(redirs)
         if body is not None:
-            self.analyze_code(body, Env(env.hashed, env.aliases))
+            self.analyze_code(body, Env(env.hashed, env.aliases),
+                              cond=basename(name) in COND_SHELLS)
             return
         self.scoped("shell_code_source_unknown", name)
 
@@ -4255,7 +4333,7 @@ def analyze(raw):
         result["census"]["obligations"] = len(cen["obligations"])
         return result
 
-    az.analyze_code(Src.from_raw(raw), Env())
+    az.analyze_code(Src.from_raw(raw), Env(), cond=True)
 
     undischarged = [ob for ob in cen["obligations"]
                     if (ob["kind"], ob["offset"]) not in az.discharged]
