@@ -547,9 +547,14 @@ def test_the_hook_waits_for_the_score_scripts_lock(config: Path) -> None:
 
 
 def test_no_venv_on_path_still_records(config: Path) -> None:
-    system = shutil.which("python3", path="/usr/bin:/bin")
-    assert system, "a system python3 under /usr/bin or /bin"
-    _summary(_run(_payload("4 - Minor gaps"), config, path="/usr/bin:/bin", python=system))
+    # PATH is the directories of a system python3 and of git (handle() asks git for the project key) found where this
+    # host keeps them, and no virtual environment's bin directory.
+    outside = os.pathsep.join(d for d in os.environ.get("PATH", "").split(os.pathsep)
+                              if d and not os.path.exists(os.path.join(d, os.pardir, "pyvenv.cfg")))
+    system, git = shutil.which("python3", path=outside), shutil.which("git", path=outside)
+    assert system and git, "a python3 and a git outside any virtual environment"
+    path = os.pathsep.join(dict.fromkeys(os.path.dirname(found) for found in (system, git)))
+    _summary(_run(_payload("4 - Minor gaps"), config, path=path, python=system))
     assert [row["rating"] for row in _rows(config)] == [4]
 
 
