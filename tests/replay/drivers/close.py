@@ -3,7 +3,7 @@
 that driver exists).
 
 The main agent types `/close <task-id>` (or `/close --auto`), passes the checklist the hook hands
-it (scripts/todo/close.py: Step 0 to Step 3b) to its first TodoWrite and completes one step per
+it (scripts/todo/close.py: Step 0 to Step 4) to its first TodoWrite and completes one step per
 TodoWrite call. What each step does is read from the tree's own text at run time:
 
 * Task-id resolution: the timestamp argument binds TASK_ID; on the /do path the do-report is
@@ -29,7 +29,7 @@ TodoWrite call. What each step does is read from the tree's own text at run time
   chain or the do-report). QA writes the close-report: a first report with the Player, a later
   round's section appended through the append helper the Overwrite policy names. A round-open
   return is echoed and routed (Routes), Step 0's call runs again, then a fresh round.
-* Step 3: the verdict echo, the Session Summary and the next step. Step 3b: the step's
+* Step 3: the verdict echo, the Session Summary and the next step. Step 4: the step's
   AskUserQuestion (its JSON block, the task id bound), answered as the `rating` argument says; the
   orchestrator does nothing with the answer. Stop.
 * `--auto`: the discovery block, then each step walked over every parent before it is completed;
@@ -79,7 +79,7 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|afk|decline|free[,...]   Step 3b's answer, per landed task in order (default label:
+  rating=label|4|skip|afk|decline|free[,...]   Step 4's answer, per landed task in order (default label:
                           the dialog's first option)
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
@@ -571,7 +571,7 @@ class DoProducer:
 PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "files", "inspector_reports",
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
-# The rating answers the owner may give (Step 3b's question), as the dialog returns them.
+# The rating answers the owner may give (Step 4's question), as the dialog returns them.
 RATINGS = ("label", "4", "skip", "afk", "decline", "free")
 
 
@@ -1275,13 +1275,13 @@ class CloseRun:
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")
         o.s.say(f"Next: /commit {self.tid} -m \"toy.add validates its arguments\"")
 
-    # ------------------------------------------------------------ Step 3b
+    # ------------------------------------------------------------ Step 4
     def rating_input(self) -> dict:
-        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 3b")) if '"questions"' in b.text)
+        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 4")) if '"questions"' in b.text)
         return json.loads(block.replace("<task-id>", self.tid))
 
     def step4(self, answer: str = "label") -> None:
-        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
+        """Step 4's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
         orchestrator does nothing with the answer."""
         tin = self.rating_input()
         q = tin["questions"][0]
@@ -1299,10 +1299,10 @@ class CloseRun:
                 return dict(base, answers={q["question"]: "it mostly worked"}, response="it mostly worked")
             pick = next((l for l in labels if l.startswith(answer + " ")), labels[0])
             return dict(base, answers={q["question"]: pick})
-        lab = self.label("Step 3b AskUserQuestion")
+        lab = self.label("Step 4 AskUserQuestion")
         c = self.o.s.tool("AskUserQuestion", tin, perform=perform, label=lab, deviation=self.devs.at(lab))
         self.asked.append((self.tid, answer))
-        fact(self.rp, "close Step 3b", {"task": "<task>", "header": q.get("header"), "labels": labels,
+        fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                         "multiSelect": q.get("multiSelect"), "source": (tin.get("metadata") or {}).get("source"),
                                         "answer": answer, "ok": c.ok, "blocked": c.blocked})
 
@@ -1321,10 +1321,10 @@ class CloseRun:
             return ""
         o.advance(label=self.label("TodoWrite Step 2 done, Step 3 in_progress"))
         self.step3(last)
-        o.advance(label=self.label("TodoWrite Step 3 done, Step 3b in_progress"))
+        o.advance(label=self.label("TodoWrite Step 3 done, Step 4 in_progress"))
         if self.landed:
             self.step4(self.ratings[0])
-        o.advance(label=self.label("TodoWrite Step 3b done"))
+        o.advance(label=self.label("TodoWrite Step 4 done"))
         return last
 
     def steps_1_2(self) -> str:
@@ -1453,9 +1453,9 @@ class CloseRun:
         o.advance(label="/close --auto TodoWrite Step 2 done, Step 3 in_progress")
         each(lambda k: self.step3(lasts[k]))
         o.s.say("\n".join([f"{st['tid']}: {st['outcome']}" for st in states] + skipped) or "no close_pending parent")
-        o.advance(label="/close --auto TodoWrite Step 3 done, Step 3b in_progress")
+        o.advance(label="/close --auto TodoWrite Step 3 done, Step 4 in_progress")
         each(lambda k: self.step4(self.ratings[k % len(self.ratings)]) if self.landed else None)
-        o.advance(label="/close --auto TodoWrite Step 3b done")
+        o.advance(label="/close --auto TodoWrite Step 4 done")
         results = [(st["tid"], st["outcome"]) for st in states]
         self.outcome = "; ".join(f"{t}: {oc}" for t, oc in results)
         ev = o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
