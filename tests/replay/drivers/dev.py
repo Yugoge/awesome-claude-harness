@@ -1027,8 +1027,8 @@ class DevCycle:
                  f"docs/dev/ba-panel-{sid}-r1.json": json.dumps(doc, indent=2) + "\n",
                  f"docs/dev/requirement-answers-{sid}-r1.json": json.dumps(
                      {"task_id": sid, "round": 1, "answers": answers}, indent=2) + "\n"}
-        with self.rp.acting("driver"):
-            for rel, text in files.items():
+        for rel, text in files.items():  # the panel file is /spec's panel QA's (commands/spec.md declares it for qa)
+            with self.rp.acting("agent:qa" if "/ba-panel-" in rel else "driver"):
                 os.makedirs(os.path.dirname(os.path.join(project, rel)), exist_ok=True)
                 with open(os.path.join(project, rel), "w") as fh:
                     fh.write(text)
