@@ -1064,6 +1064,12 @@ def _protected(path: str, removed: bool, home, config: str, state: str) -> str |
     rel, name = (_below(path, home) if home else None), os.path.basename(path)
     if rel and any(rel == p or rel.startswith(p + "/") for p in _HOME_PROTECTED):
         return f"the harness home's {rel}"
+    from lib.requirement_round import HOOK_OWNED  # R6: hook-owned, refused to every agent
+
+    if HOOK_OWNED.search(path.replace(os.sep, "/")):
+        return "an owner's answer, which only the PostToolUse AskUserQuestion hook writes"
+    if _below(path, os.path.join(os.path.dirname(config), "logs")) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
+        return "the score log or its lock, which only hooks write"
     if _below(path, config) and kept(name):
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):

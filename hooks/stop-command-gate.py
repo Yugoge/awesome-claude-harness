@@ -16,8 +16,9 @@ payload on stdin and decides, in order:
       CronCreate (overnight.WAKE_PROMPT) has no later CronDelete
       (overnight.open_wakes), naming its id; a time-lock it cannot read
       blocks the same way until the human's /stop;
-  (5) no gated span (stop-commands.json's GATED_COMMANDS): allow;
-  (6) the gaps: the todo half and the command's predicate, each held to the
+  (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
+  (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question; /spec has no
+      other gap); in a gated span the todo half and the command's predicate, each held to the
       command's text as the span loaded it (_loaded_lacks: a step or the
       close-rating question an update added or reworded after the session
       loaded its text is not asked of it; a cycle whose loaded text names or
@@ -648,6 +649,19 @@ def _push_gaps(root, payload, typed, since, now, branch, opened) -> list[str]:
     return gaps
 
 
+def p_text_question(span, payload) -> list[str]:
+    """R7 (D28): in a /spec or /dev-family span, a turn whose last main-agent text ends with a question asks it in
+    text; the one agent action that clears it is asking with AskUserQuestion, or ending without the question."""
+    text = payload.get("last_assistant_message")
+    if not _lib_round().ends_with_question(span.last_text() if text is None else text):
+        return []
+    return [f"{span.command}: the turn ends with a question in text; ask it with AskUserQuestion, or end without it."]
+
+
+def _lib_round():
+    return importlib.import_module("lib.requirement_round")
+
+
 PREDICATES = {
     "dev": p_dev, "redev": p_dev, "dev-command": p_dev, "do": p_do, "dev-overnight": p_overnight,
     "close": p_close, "commit": p_commit, "merge": p_merge, "push": p_push,
@@ -743,6 +757,7 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     transcript = payload.get("transcript_path") or ""
     span = command_span.active_span(transcript) if transcript else None  # (3)
     gated = span is not None and span.command in command_span.GATED_COMMANDS
+    asking = span is not None and span.command in _lib_round().ASK_COMMANDS  # /spec: R7 alone, never gated
     try:  # (4)
         lock = time_lock(payload)
     except Exception as exc:  # a window it cannot read holds in any span and mode, as an open one does
@@ -753,11 +768,12 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if lock[0] == 2:
         return lock
     terminal = lock[2]
-    if not gated:  # (5)
+    if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
     gaps = []
-    for part in (lambda: todo_gaps(span), lambda: PREDICATES[span.command](span, root, payload)):  # (6)
+    for part in ((lambda: todo_gaps(span), lambda: PREDICATES[span.command](span, root, payload)) if gated else ()) \
+            + ((lambda: p_text_question(span, payload),) if asking else ()):  # (6)
         try:
             gaps += part()
         except Exception as exc:
