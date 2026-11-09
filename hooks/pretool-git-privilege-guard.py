@@ -1661,8 +1661,8 @@ def _block_default_deny_push(command):
         'Command excerpt: %s\n' % command[:200]
         + 'For automated push, use the /push slash command (which sets '
         'CLAUDE_PUSH_COMMAND_ACTIVE=1 and writes a single-use grant).\n'
-        'For human-driven push, a human types /push (or '
-        '/allow git push for one call).\n'
+        'For human-driven push, exit the agent context and run '
+        'git push directly.\n'
         'Spec: spec-20260424-233926 section 5.2.4 (R4.3); '
         'ba-spec-20260425-redev2.md AC-A5.\n'
     )
