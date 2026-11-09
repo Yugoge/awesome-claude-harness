@@ -1,7 +1,7 @@
 # The Codex review loop: one complete pass, no loops on nits, Claude disputes (D31)
 
 Owner's ruling D31 (DECISIONS.md). Lanes L2 and L3 of P12 apply this to the files they own; it changes prompt text only.
-No new hook, gate or state file.
+No new hook, gate or state file. The field's experience behind these rules: `research/industry-2026-11-09.md` §4.
 
 ## What is wrong today (train 2 head, 99b4d69 / a99f32d)
 
