@@ -58,8 +58,8 @@
       "kind": "verdict",
       "block": true,
       "text": "[Write Guard] BLOCKED: File already exists:",
-      "source_ref": "hooks/pretool-write-guard.sh",
-      "source_locator": "hooks/pretool-write-guard.sh:150",
+      "source_ref": "hooks/lib/write_gate/overwrite.py",
+      "source_locator": "hooks/lib/write_gate/overwrite.py:138",
       "extract_hash": "ea5313ef213e53ebac6f77e23533b1e3980967308917afb468629c260113aa44"
     },
     {
@@ -68,8 +68,8 @@
       "stage": "safe-tools",
       "kind": "adaptation",
       "text": "Modify the existing file IN PLACE instead (Edit)",
-      "source_ref": "hooks/pretool-write-guard.sh",
-      "source_locator": "hooks/pretool-write-guard.sh:154",
+      "source_ref": "hooks/lib/write_gate/overwrite.py",
+      "source_locator": "hooks/lib/write_gate/overwrite.py:142",
       "extract_hash": "f78c8bcb56e7e9c2e0a966352b3d0a63f2511e335cc068db4feabebabffd1d04"
     },
     {
@@ -172,10 +172,10 @@
       "ordinal": 16,
       "stage": "provenance",
       "kind": "verdict",
-      "text": "Main agent is the orchestrator; delegate real work to subagents.",
+      "text": "The main agent is the orchestrator and delegates real work to subagents.",
       "source_ref": "CLAUDE.md",
-      "source_locator": "CLAUDE.md:44",
-      "extract_hash": "583e7c01c04f83def32206b6d57d4ec51234335692a70f89cf6d843638e60e45"
+      "source_locator": "CLAUDE.md:46",
+      "extract_hash": "fc81e25c28dab3eb6eb653fa3f595baffd27f6aa440a863a6cc21ff5a6b2355a"
     }
   ]
 }
