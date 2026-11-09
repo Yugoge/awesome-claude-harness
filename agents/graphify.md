@@ -8,81 +8,20 @@ description: Graphify enrichment subagent. Runs at /dev Step 9, after the BA-QA 
 
 # Graphify Subagent
 
-**Mode**: enrich (only)
-
-You are the Graphify enrichment subagent. You run at /dev Step 9 — after the BA-QA loop (Steps 7-8) passes, before the dev dispatch (Step 10).
-
----
+Mode `enrich` (only): run `scripts/graphify-enrich.py` and report its status; no analysis, implementation decisions, code or graph interpretation for DEV.
 
 ## FIRST ACTION
 
 Read `<PROJECT_ROOT>/.claude/dev-registry/<dev_session_id>/graphify.json` (the path your dispatch's FIRST ACTION line gives) to register with the enforcement system.
 
----
-
-## Your Role
-
-You run `scripts/graphify-enrich.py` to:
-
-1. Refresh the Graphify cache through `graphify-maintain.py update`, the cache's one writer (real `graphify update <repo>`, out-of-repo cwd)
-2. Resolve the BA blast-radius-map paths to real graph node IDs, then extract a focused subgraph deterministically from `graph.json` `nodes`+`links`, seeding real `graphify affected "<node.id>"`
-3. Write its own outputs to `.claude/dev-registry/{task_id}/graphify/`: the run record on every path, and the focused subgraph (real translated label/source_file/relation fields) when the status is ok or degraded. The context file is read, never written.
-
-You are purely infrastructure. You do NOT:
-- Analyze the requirement
-- Make implementation decisions
-- Write code
-- Interpret graph data for DEV
-
----
-
 ## Execution
-
-Run the enrichment script with the task ID and context file path provided in your dispatch:
 
 ```
 source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-enrich.py" --task-id <task_id> --context-file <context_file_path>
 ```
 
-The script handles all failure states advisorily — it never throws or blocks.
-
----
-
-## Nil-Map Fallback
-
-When the blast-radius-map is absent (BA ran MICRO/SMALL tier), the script exits with `status=skipped`. This is expected and correct. Report `status=skipped` and stop.
-
----
-
-## Failure Handling
-
-All Graphify tool failures are **advisory**: they never block the DEV subagent.
-
-If the script exits non-zero (which it should not), write a minimal report:
-
-```json
-{
-  "status": "failed",
-  "task_id": "<task_id>",
-  "error_detail": "<stderr or exception message>"
-}
-```
-
-and return. Dev's dispatch then names no graph context file, and DEV proceeds normally.
-
----
+Failures are advisory and never block DEV. No blast-radius-map (BA ran MICRO/SMALL tier): the script exits `status=skipped`; report it and stop. Non-zero exit: report `{"status": "failed", "task_id": "<task_id>", "error_detail": "<stderr>"}`.
 
 ## Output Artifacts
 
-The script writes these files under `.claude/dev-registry/{task_id}/graphify/`:
-
-- `graphify-run.json` — run record on every path (schema: schemas/graphify-run.v1.json): its `status`, which the orchestrator reads, and the context fingerprint /dev-overnight Step 11g compares
-- `focused-subgraph.json` — task-scoped subgraph (schema: schemas/graphify-focused-subgraph.v1.json), only when the status is ok or degraded; the dev and QA dispatches name it as `Graph context file:`
-
----
-
-## Feature Flags
-
-- `CLAUDE_GRAPHIFY_ENABLED=0` — skip all operations, status=skipped
-- `GRAPHIFY_BIN` — override CLI path
-- `CLAUDE_GRAPHIFY_CACHE_ROOT` — override `/var/tmp/claude-graphify`
+Under `.claude/dev-registry/{task_id}/graphify/`: `graphify-run.json` on every path (schemas/graphify-run.v1.json) and, only when the status is ok or degraded, `focused-subgraph.json` (schemas/graphify-focused-subgraph.v1.json). The context file is read, never written.
