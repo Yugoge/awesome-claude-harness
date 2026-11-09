@@ -79,9 +79,8 @@ ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
 # P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
 # unattended deny); a landed replay loads the base's settings.json, which has neither.
 P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block"}
-# P10 (R9): the clean settings form sets PYTHONDONTWRITEBYTECODE, so a session's hooks write no
-# bytecode into the tree; the base's settings.json has no such entry.
-P10_ENV = {"PYTHONDONTWRITEBYTECODE": "1"}
+# P10 (R9) added PYTHONDONTWRITEBYTECODE; P10-42 dropped it from the clean form, so P10 adds no env
+# entry, and the environment check below names no P10 entry: any env entry P10 adds fails it.
 # P9: settings.json's env arms subagentstop-cp-enforce.py as shipped (CP_ENFORCE_MODE=block); the
 # base's settings.json leaves it advisory.
 P9_ENV = {"CP_ENFORCE_MODE": "block"}
@@ -543,13 +542,13 @@ def test_your_settings_differs_only_where_a_replay_runs_it(name):
     """This tree's settings.json registers otherwise than the base's exactly at the registrations the
     scenarios below declare they run after the landing (EXERCISES), each checked in its replay, and at
     P2's and P4's own (ELSEWHERE); its environment differs by STOPGATE=block, P2's arming of G1 and
-    G3 (P2_ENV), P10's PYTHONDONTWRITEBYTECODE (P10_ENV) and P9's CP_ENFORCE_MODE (P9_ENV) alone."""
+    G3 (P2_ENV) and P9's CP_ENFORCE_MODE (P9_ENV) alone."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
     assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
     assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
     head = _head_settings()
-    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV | P9_ENV == \
+    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P9_ENV == \
         hookrun.settings_env(head) | ENV
 
 
