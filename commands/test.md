@@ -96,14 +96,14 @@ Writes `tests/reports/execution-context-<request_id>.json`, the context `agents/
     "project_root": "<abs-path>",
     "test_directory": "<abs-path>/tests",
     "venv_path": "<HARNESS_ROOT>/venv",
-    "validators": [{"type": "script|instruction", "path": "tests/scripts/<name>.py", "edge_case": "EC002", "priority": "critical"}]
+    "validators": [{"type": "script", "path": "tests/scripts/validate-venv-usage.py", "edge_case": "EC002", "priority": "critical"}]
   },
   "parameters": {"fail_fast": false, "verbose": true, "report_path": "tests/reports/execution-report-<request_id>.json"},
   "validation_report": {"status": "pass", "validators_checked": 10, "all_valid": true}
 }
 ```
 
-The validators come from the registry. `validation_report` holds the `status` and `validators_checked` you pass: `pass` (Step 9 sends only a pass here) and `N`, the `validator.validators_checked` you read in Step 9. Step 11 adds `context.checkpoint_commit`. `status=missing_registry`: run Step 6.
+The validators come from the registry (`type` is `script` or `instruction`). `validation_report` holds the `status` and `validators_checked` you pass: `pass` (Step 9 sends only a pass here) and `N`, the `validator.validators_checked` you read in Step 9. Step 11 adds `context.checkpoint_commit`. `status=missing_registry`: run Step 6.
 
 ### Step 11: Create Safety Checkpoint
 

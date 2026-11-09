@@ -194,6 +194,18 @@ def test_the_execution_context_holds_every_key_the_executor_says_it_reads(tmp_pa
     assert "commands/test.md" in section, "the agent must keep naming the command as the home of its input"
 
 
+def test_no_path_in_test_md_ends_in_a_placeholder():
+    """hooks/lib/declared_paths reads every "path" in the command files as a path a dispatch may declare. A value
+    that ends in a placeholder and a suffix ("tests/scripts/<name>.py") makes every target with that suffix
+    declarable, so every such write reads the session transcript (hooks/tests/test_tool_policy_derived_permission.py).
+    The Step 10 template therefore names its validator path in full, as the base template did."""
+    text = (ROOT / "commands" / "test.md").read_text(encoding="utf-8")
+    values = re.findall(r'"path"\s*:\s*"([^"]*)"', text)
+    assert values, "the Step 10 template carries a validator path"
+    for value in values:
+        assert not re.search(r"[<{][^<>{}]*[>}][^/]*$", value), f'"path": "{value}" ends in a placeholder'
+
+
 def test_execution_context_takes_the_passed_status_and_a_failed_status_is_not_all_valid(tmp_path):
     proj = project_with_registry(tmp_path)
     facts, _ = execution(proj, "fail", 7)
