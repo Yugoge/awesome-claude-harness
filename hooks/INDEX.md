@@ -221,7 +221,7 @@ hooks/
 ├── `posttool-push-gate-token-verify.py` - PostToolUse (matcher Write): exit-0 stub kept at its registered path (D15).
 ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
-├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
+├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: write the /dev-overnight cycle contract when PM TRIAGE returns
 ├── `posttool-todo-count.py` - PostToolUse hook (TodoWrite step count), retired to a no-op.
 ├── `posttool-todo-sequence.py` - PostToolUse hook (TodoWrite step sequence), retired to a no-op.
 ├── `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call

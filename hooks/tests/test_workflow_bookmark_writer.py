@@ -7,7 +7,9 @@ posttool-subagent-track.py (a subagent call recorded). All five writes now go
 through lib.todo_canonical.write_bookmark, and each keeps the bytes it wrote
 before. The writer replaces the file whole (a new file renamed over it), so a
 handle opened on the old bookmark keeps reading the old bytes; four of the five
-writes used to rewrite the file in place.
+writes used to rewrite the file in place. P10 R6 deleted the fifth,
+posttool-subagent-track.py's: only a Codex plan's bookmark reached it, and that
+path records its own subagent steps.
 
 Every site test fails on the code before the one writer: either the writer is
 missing, the site does not call it, or the site rewrites the file in place.
@@ -43,7 +45,6 @@ def _load(filename: str):
 
 PROMPT = _load("prompt-workflow.py")
 GATE = _load("pretool-workflow-gate.py")
-TRACKER = _load("posttool-subagent-track.py")
 LOCALE = locale.getpreferredencoding(False)  # what Path.write_text encodes with
 
 
@@ -59,8 +60,6 @@ def writes(monkeypatch):
         return writer(path, update, encoding)
 
     monkeypatch.setattr(TODO_CANONICAL, "write_bookmark", recorded)
-    # the tracker binds the name when it loads; the other two look it up at the write
-    monkeypatch.setattr(TRACKER, "write_bookmark", recorded, raising=False)
     return seen
 
 
@@ -269,33 +268,6 @@ def test_dev_start_counts_from_one_without_a_readable_generation(tmp_path, dev_s
         path.write_text(previous)
     assert dev_start("/dev x", "d2")["workflow_generation"] == 1
     assert json.loads(path.read_text())["workflow_generation"] == 1
-
-
-# ---------------------------------------------------------------- posttool-subagent-track.py
-
-def test_subagent_call_is_recorded_through_the_writer(tmp_path, writes):
-    path = _bookmark(tmp_path)
-    before = {"command": "dev", "last_todos": [{"content": "ré"}], "subagent_calls": {"0": True}}
-    path.write_text(json.dumps(before))
-    held = _Held(path)
-
-    TRACKER._record_subagent_call_legacy(path, "2")
-
-    assert writes == [path]
-    held.assert_replaced()
-    expected = dict(before, subagent_calls={"0": True, "2": True})
-    assert path.read_bytes() == json.dumps(expected).encode("ascii")
-
-
-@pytest.mark.parametrize("previous", [None, "{not json", "[1, 2]", "null"])
-def test_subagent_call_without_a_bookmark_writes_nothing(tmp_path, previous):
-    path = _bookmark(tmp_path)
-    if previous is not None:
-        path.write_text(previous)
-    TRACKER._record_subagent_call_legacy(path, "0")
-    assert sorted(p.name for p in path.parent.iterdir()) == ([path.name] if previous is not None else [])
-    if previous is not None:
-        assert path.read_text() == previous
 
 
 # ---------------------------------------------------------------- pretool-workflow-gate.py (Codex)

@@ -6,8 +6,8 @@ Phase A (slash command detected):
   - Runs the harness's scripts/todo/<command>.py to get the step list
   - Starts the bookmark .claude/workflow-{session_id}.json: the command, its
     arguments and the workflow instance. The Codex plan path of
-    pretool-workflow-gate.py and posttool-subagent-track.py update it; every
-    write goes through lib.todo_canonical.write_bookmark, its one writer
+    pretool-workflow-gate.py updates it; every write goes through
+    lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
   - For every harness command (stop_contract.harness_commands), first prints
