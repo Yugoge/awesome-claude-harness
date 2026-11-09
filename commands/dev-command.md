@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 `<timestamp>` and `<TASK_ID>` below are the hook's `Task id: …`, the bare id every artifact and the completion report carry. `DEV_SESSION_ID` (`dev-command-<timestamp>`) names the registry directory and the requirement document only; it is never an artifact id.
 
-This file keeps its own 16 steps (`scripts/todo/dev-command.py`). A step number inside `/dev`'s text is `/dev`'s: read it through this map.
+This file keeps its own 16 steps (`scripts/todo/dev-command.py`). A step number inside `/dev`'s text is `/dev`'s: read it through this map. Each obligation fence below also repeats `/dev`'s own two `codex_required` lines (they are not an addition): the codex gate reads them from this file's template.
 
 | Step here | `/dev` Step | Differs |
 |---|---|---|
@@ -51,7 +51,10 @@ As `/dev` Step 3.
 As `/dev` Step 4, with this command's differences: no test-writer, so BA owes no acceptance-criteria JSON; the singular dispatch (leave out the lane-adapter line); no `BA_SCORE_HEADER` (Steps 1-4 then use at most four Bash calls before this dispatch). In place of `/dev`'s worked example the obligation is:
 
 ```
-Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
 ```
 
 ### Step 5: BA Clarification Loop
@@ -67,7 +70,10 @@ As `/dev` Step 6.
 As `/dev` Step 7: one QA in BA-validation mode, all five dimensions (a dispatch that lists four is stale), the no-phases check inside `scope_alignment` among them. The obligation is:
 
 ```
-Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
 ```
 
 ### Step 8: BA-QA Iteration Loop (if QA rejects BA)
@@ -83,7 +89,10 @@ As `/dev` Step 9; its `Graph context file:` line, when graphify's run record say
 As `/dev` Step 10's dev dispatch, without its test-writer gate and dispatch, its `DEV_SCORE_HEADER` line, its `baseline_head_sha` and `baseline_dirty_snapshot` capture and lines, and its `Generated tests` line. Dev writes the file the requirement names (a project command under `<project>/.claude/commands/`, an agent under `.claude/agents/`, ...) and creates a script only for an operation that repeats (about five runs or more), a multi-step workflow, an integration or a performance-critical path; a one-time operation is the agent's own work. `hooks/pretool-claude-config-guard.py` lets this command's dev write the project command file (its dispatch carries its obligation block); any other write under `.claude/hooks/` or `.claude/commands/` needs the owner's `.claude/.hook-refactor-allow`. The obligation is:
 
 ```
-Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
 ```
 
 ### Step 11: Validate Dev Implementation
@@ -95,7 +104,10 @@ As `/dev` Step 12; when dev completed, go to Step 12.
 As `/dev` Step 13, without its `QA_SCORE_HEADER` line and its `Per-task active test manifest` line. The obligation is:
 
 ```
-Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
 ```
 
 ### Step 13: Process QA Results

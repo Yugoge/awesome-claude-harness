@@ -209,8 +209,9 @@ class DevCommandCycle:
         """Step <step>'s dispatch template as the file words it: /dev's template of the mapped step, with this
         step's obligation block in place of its own and without the lines the file leaves out."""
         fields = self.ref.template(f"Step {DEV_STEP[step]}", anchor=anchor)
-        mine = next(b.text.strip() for b in cmdtext.blocks(self.o.section(f"Step {step}"))
-                    if "embed `<obligation" in b.text)
+        # only the obligation sentence: the fence's codex lines are /dev's own, already in the template taken above
+        mine = next(l.strip() for b in cmdtext.blocks(self.o.section(f"Step {step}")) for l in b.text.splitlines()
+                    if "embed `<obligation" in l)
         lines = fields["prompt"].split("\n")
         at = next(i for i, l in enumerate(lines) if l.strip().startswith("Obligation block"))
         end = at
