@@ -244,7 +244,7 @@ Collect failed issues (build failures included), deferred issues and still-open 
 
 ### Step 5: Identify Patterns and Recommendations
 
-Flag categories or files that fail repeatedly and builds that were not consistently verified; review PO's `roadmap_proposals` and other specialist suggestions.
+Flag categories or files that fail repeatedly and builds that were not consistently verified; review the specialists' suggestions.
 
 RICE-score each entry of `recommendations_for_next_cycle` and sort by `rice.score` descending: `reach` (users affected, 1-10), `impact` (0.25 minimal, 0.5 low, 1.0 medium, 2.0 high, 3.0 massive), `confidence` (0.5 gut feel, 0.8 some data this cycle, 1.0 strong evidence across cycles), `effort` (1-10, tool-call-budget units), `score` = `(reach * impact * confidence) / effort`. RICE only sorts; it never overrides the human's `focus` or a Tier 1 classification.
 
