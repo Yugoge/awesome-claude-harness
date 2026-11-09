@@ -37,12 +37,17 @@ def _walk(d):  # the content blocks of dispatch d's own transcript, in order
         yield from (b for b in content if isinstance(b, dict)) if isinstance(content, list) else ()
 
 
+def _once(ctx, fn, *args):  # fn(*args), answered once per sweep (the store and transcript reads behind it are slow)
+    key = fn.__name__, *args
+    return ctx["memo"][key] if key in ctx["memo"] else ctx["memo"].setdefault(key, fn(*args))
+
+
 def _report(ctx, d, later):  # the report file; once the next dispatch of that file has overwritten it, d's own last Write of it
     path = os.path.join(ctx["cwd"], d["path"])
     with suppress(OSError, ValueError, TypeError, AttributeError, IndexError):  # missing, unreadable, malformed: no report
         mtime = os.stat(path).st_mtime
-        if not obligation.artifact_freshness_satisfied("json", mtime, d["ob"]["dispatched_at"]):
-            return None
+        if not os.path.realpath(path).startswith(os.path.realpath(ctx["cwd"]) + os.sep) or not obligation.artifact_freshness_satisfied("json", mtime, d["ob"]["dispatched_at"]):
+            return None  # stale, or a symlink out of the project
         if not later or mtime < obligation.parse_iso8601(later["ob"]["dispatched_at"]).timestamp():
             with open(path, encoding="utf-8") as handle:
                 return json.load(handle)
@@ -61,8 +66,8 @@ def _rel(ctx, loc):  # the project-relative file part of a "file:line" location
     return os.path.relpath(os.path.join(ctx["cwd"], re.sub(r"(?::\d+)+(?:-\d+)?$", "", str(loc).strip())), ctx["cwd"])
 
 
-def _written(ctx, d):  # the project-relative files dispatch d's own tool calls wrote (excluded=(): docs/dev files count too)
-    return set(getattr(command_span.write_set(d["sub"], ctx["cwd"], excluded=()), "written", ()))
+def _written(ctx, d, excluded=command_span.EXCLUDED_TREES):  # the project-relative files dispatch d's own tool calls wrote, outside the bookkeeping trees
+    return set(getattr(_once(ctx, command_span.write_set, d["sub"], ctx["cwd"], 0, excluded), "written", ()))
 
 
 def qa_first_pass(ctx):  # the lane's first QA dispatch passed (a later pass, or one after an unreadable report, is not first)
@@ -88,14 +93,14 @@ def qa_catch(ctx):  # a QA failure, the lane's next dev dispatch wrote a file a 
             if d["status"] == "pass" and pending.get(key) and pending[key][1] and taken.get(d["task"], 0) < 2:
                 taken[d["task"]] = taken.get(d["task"], 0) + 1
                 yield _event(ctx, d, "qa_catch", "qa", "a failure it reported was fixed in the file it named", f"qa_catch:{d['id']}")
-            pending[key] = [{_rel(ctx, f["location"]) for f in d["fails"] if f.get("location")}, None] if d["status"] == "fail" else None
+            pending[key] = [{n for f in d["fails"] if f.get("location") and not (n := _rel(ctx, f["location"])).startswith(command_span.EXCLUDED_TREES)}, None] if d["status"] == "fail" else None
 
 
 def _producer(ctx, d, path):  # (task, lane, identity) of the dispatch that owes path, and whether its lane's QA report now reads pass; (None, False): none, or a close-time one
-    ob = (obligation.declaring_dispatch(d["task"], path, ctx["cwd"], ctx["roots"]) or {}).get("obligation") or {}
+    ob = (_once(ctx, obligation.declaring_dispatch, d["task"], path, ctx["cwd"], ctx["roots"]) or {}).get("obligation") or {}
     group = (obligation.canonical_task_id(ob.get("task_id")), ob.get("lane"), score_log.identity(ob["role"], ob["pipeline"])) if ob.get("role") and ob.get("pipeline") != "close" else None
     return group, bool(group) and any(obligation.terminal_status("qa-report.v2", _report(ctx, {"path": a["path"], "ob": o}, None)) == "pass"
-                                      for r in obligation._task_records(d["task"], ctx["cwd"], ctx["roots"]) for o in [r["obligation"]] for a in o["artifacts"]  # every session's records
+                                      for r in _once(ctx, obligation._task_records, d["task"], ctx["cwd"], ctx["roots"]) for o in [r["obligation"]] for a in o["artifacts"]  # every session's records
                                       if score_log.identity(o.get("role"), o.get("pipeline")) == "qa" and a.get("schema") == "qa-report.v2"
                                       and (obligation.canonical_task_id(o.get("task_id")), o.get("lane")) == group[:2])
 
@@ -108,22 +113,22 @@ def _close_qa(ctx):  # ctx["close"]: close-QA rounds in order, each with verdict
         d["verdict"] = cv["classify_line"](cv["last_nonempty"](str(next((b.get("text") for b in reversed(blocks) if b.get("type") == "text"), ""))))
         wrote = "\n".join(str(v) for b in blocks for v in (b.get("input") or {}).values()).rpartition("## Findings")[2]  # after its last findings heading
         found = re.findall(r"(?m)^- `?([^\s`]+?)`?:\s", re.split(r"(?m)^## ", wrote)[0]) if d["verdict"] == "no" else []
-        d["finds"] = [(rel, *_producer(ctx, d, rel)) for rel in (_rel(ctx, p) for p in found)]
+        d["finds"] = [(rel, *_producer(ctx, d, rel)) for rel in list(dict.fromkeys(_rel(ctx, p) for p in found))[:5]]  # each file once, five at most
 
 
 def escaped(ctx):  # a close round opened a finding on a file whose producer's lane QA had passed: the producer and lane QA lose points
     for d in ctx["close"]:
-        for i, (path, group, passed) in enumerate(d.get("finds", ())):
+        for path, group, passed in d.get("finds", ()):
             for role in (group[2], "qa") if passed else ():
-                yield _event(ctx, d, "escaped", role, "close QA opened a finding after lane QA passed", f"escaped:{d['id']}:{i}:{role}", path)
+                yield _event(ctx, d, "escaped", role, "close QA opened a finding after lane QA passed", f"escaped:{d['task']}:{path}:{role}", path)
 
 
 def close_catch(ctx):  # a finding's producer wrote the cited file in a later dispatch and a later close round landed: close-qa's catch
     for d in ctx["close"]:
-        for i, (path, group, _) in enumerate(d.get("finds", ())):
-            fix = next((e for e in ctx["ds"] if group and e["n"] > d["n"] and (e["task"], e["lane"], e["who"]) == group and path in _written(ctx, e)), None)
+        for path, group, _ in d.get("finds", ()):
+            fix = next((e for e in ctx["ds"] if group and e["n"] > d["n"] and (e["task"], e["lane"], e["who"]) == group and path in _written(ctx, e, ())), None)
             for land in [m for m in ctx["close"] if fix and m["n"] > fix["n"] and m.get("verdict") == "yes"][:1]:
-                yield _event(ctx, land, "close_catch", "close-qa", "a close finding was fixed by its producer, then a round landed", f"close_catch:{land['id']}:{i}", path)
+                yield _event(ctx, land, "close_catch", "close-qa", "a close finding was fixed by its producer, then a round landed", f"close_catch:{land['task']}:{path}", path)
 
 
 def rerun_gap(ctx):  # a dispatch whose previous one in its group (task, lane, identity, declared paths) never touched them, nor wrote a producer question
@@ -132,10 +137,9 @@ def rerun_gap(ctx):  # a dispatch whose previous one in its group (task, lane, i
         paths = frozenset(a["path"] for a in d["ob"]["artifacts"] if a.get("path"))
         key = d["task"], d["lane"], d["who"], paths
         before, last[key] = last.get(key), d
-        if before and paths and os.path.isfile(before["sub"]):  # touched: any tool call of its own names the path (a Write, a heredoc, a helper script)
-            seen = " ".join(str(v) for b in _walk(before) for v in (b.get("input") or {}).values())
-            if not any(p in seen for p in paths | {f"docs/dev/producer-question-{before['ob']['task_id']}-{before['ob']['role']}.json"}):
-                yield _event(ctx, d, "rerun_gap", d["who"], "dispatched again after its previous dispatch left a declared artifact unwritten", f"rerun_gap:{d['id']}")
+        seen = " ".join(str(v) for b in _walk(before) for v in (b.get("input") or {}).values()) if before and paths and os.path.isfile(before["sub"]) else None
+        if seen is not None and not any(p in seen for p in paths | {f"docs/dev/producer-question-{before['ob']['task_id']}-{before['ob']['role']}.json"}):
+            yield _event(ctx, d, "rerun_gap", d["who"], "dispatched again after its previous dispatch left a declared artifact unwritten", f"rerun_gap:{d['id']}")  # touched = a tool call names the path
 
 
 RULES = [qa_first_pass, qa_fail, qa_catch, escaped, close_catch, rerun_gap]  # a rule is f(ctx) -> event dicts built with _event; list it here (ctx: tp, cwd, roots, project, ds, qa, close)
@@ -145,7 +149,8 @@ def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: fi
     with suppress(Exception):
         # a non-string path is refused: active_span would take an int for a file descriptor and close it
         if span := command_span.active_span(transcript_path) if isinstance(transcript_path, str) and isinstance(cwd, str) else None:
-            ctx, rows = {"tp": transcript_path, "cwd": cwd, "roots": [os.path.dirname(os.path.dirname(transcript_path))],  # the CLI's store root holds <slug>/<session>.jsonl
+            ctx, rows = {"tp": transcript_path, "memo": {}, "roots": (os.path.dirname(os.path.dirname(transcript_path)),),  # roots: the CLI's store, <slug>/<session>.jsonl
+                         "cwd": (cwd := os.environ.get("CLAUDE_PROJECT_DIR") or cwd),  # the project dir, as the rating handler resolves it
                          "ds": _dispatches(span, transcript_path), "project": score_log.project_key(cwd)}, []
             for facts in (_lane_qa, _close_qa):
                 with suppress(Exception):  # a rule's facts: a failure here costs only the rules that read them
@@ -156,8 +161,7 @@ def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: fi
                              for e in rule(ctx) if (p := score_log.points_for(e["event"], e["role"])) is not None]
             if rows:
                 with score_log.locked(log := score_log.log_path()):
-                    for row in rows:
-                        score_log.append(log, row)
+                    score_log.append_all(log, rows)
 
 
 def observe(payload):  # the PostToolUse hook's entry: the main agent's dispatches only

@@ -33,6 +33,8 @@ sys.path.insert(0, str(REPO_ROOT))
 from hooks.lib import obligation, score_events, score_log  # noqa: E402
 
 TASK = "20261109-120000"
+REPORT = f"docs/dev/dev-report-{TASK}.json"  # dev's own report, and ba's ticket: the files a close finding cites
+TICKET = f"docs/dev/ticket-{TASK}.md"
 OPENER = "<command-message>dev is running</command-message>\n<command-name>/dev</command-name>\n<command-args>x</command-args>"
 # the close-QA obligation commands/close.md Step 2 prints, with <TASK_ID> to bind
 CLOSE_OBLIGATION = next(line for line in (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8").splitlines()
@@ -409,10 +411,28 @@ def test_another_lanes_dev_dispatch_is_not_the_fix(cycle, monkeypatch):
     assert cycle.facts() == [("qa_fail", "dev", -6)]
 
 
-def test_a_fix_in_a_file_under_docs_dev_still_counts(cycle, monkeypatch):
-    fail_fix_pass(cycle, monkeypatch, wrote=["docs/dev/notes.md"], location="docs/dev/notes.md:3")
+@pytest.mark.parametrize("bookkeeping", [REPORT, "docs/dev/notes.md:3", ".claude/dev-registry/dev-x/dev.json", ".claude/scratch/s1/a.txt"])
+def test_a_failure_located_in_a_bookkeeping_file_gives_no_catch(cycle, monkeypatch, bookkeeping):
+    # a QA that names the dev's own report (which the re-dispatch rewrites anyway) is not credited with a catch
+    fail_fix_pass(cycle, monkeypatch, wrote=[bookkeeping.split(":")[0]], location=bookkeeping)
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_fail", "dev", -6)]
+
+
+def test_a_bookkeeping_location_does_not_hide_a_product_file_failure_that_was_fixed(cycle, monkeypatch):
+    cycle.qa()
+    cycle.report("fail", [failure("dev_implementation", REPORT + ":1"), failure("dev_implementation", "src/app.py:12")])
+    cycle.dispatch("dev", wrote=["src/app.py"])
+    cycle.qa()
+    cycle.report("pass")
     cycle.observe(monkeypatch)
     assert ("qa_catch", "qa", 1) in cycle.facts()
+
+
+def test_a_product_file_failure_still_needs_the_product_file_written(cycle, monkeypatch):
+    fail_fix_pass(cycle, monkeypatch, wrote=[REPORT, "docs/dev/notes.md"])  # only bookkeeping written; the failure names src/app.py
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_fail", "dev", -6)]
 
 
 def test_a_report_overwritten_by_the_next_dispatch_is_read_from_the_dispatchs_own_transcript(cycle, monkeypatch):
@@ -448,10 +468,6 @@ def test_a_report_read_before_it_was_overwritten_stays_scored(cycle, monkeypatch
 
 # ---- the close-time rules: escaped and close_catch ---------------------------------------------------------------
 
-REPORT = f"docs/dev/dev-report-{TASK}.json"
-TICKET = f"docs/dev/ticket-{TASK}.md"
-
-
 def closed(c: Cycle, lane_qa: str = "pass", close: bool = True) -> None:
     """The /dev span: ba's ticket, dev's work (it wrote src/app.py), lane QA's verdict; then the owner types /close."""
     c.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
@@ -468,7 +484,7 @@ def test_a_close_finding_on_a_dev_artifact_after_lane_qa_passed_is_escaped_for_d
     cycle.observe(monkeypatch)
     assert cycle.facts() == [("escaped", "dev", -7), ("escaped", "qa", -3)]
     for row in cycle.rows():
-        assert row["key"] == f"escaped:{ident}:0:{row['role']}" and row["task_id"] == TASK and row["ref"] == REPORT
+        assert row["key"] == f"escaped:{TASK}:{REPORT}:{row['role']}" and row["task_id"] == TASK and row["ref"] == REPORT
         assert row["ts"] == "2026-11-09T12:06:00Z" and "\n" not in row["why"] and TASK not in row["why"]
 
 
@@ -497,21 +513,21 @@ def test_a_close_in_a_later_session_reads_the_producer_and_its_lane_qa_from_the_
     closed(earlier, close=False)
     later = Cycle(tmp_path, session="later", command="close")
     later.clock = earlier.clock + timedelta(hours=1)
-    ident = later.close_qa([(REPORT, "a defect")])
+    later.close_qa([(REPORT, "a defect")])
     later.dispatch("dev", wrote=[REPORT])
-    landing = later.close_qa()
+    later.close_qa()
     later.observe(monkeypatch)
     assert later.facts() == [("close_catch", "close-qa", 1), ("escaped", "dev", -7), ("escaped", "qa", -3)]
-    assert {r["key"] for r in later.rows()} == {f"escaped:{ident}:0:dev", f"escaped:{ident}:0:qa", f"close_catch:{landing}:0"}
+    assert {r["key"] for r in later.rows()} == {f"escaped:{TASK}:{REPORT}:dev", f"escaped:{TASK}:{REPORT}:qa", f"close_catch:{TASK}:{REPORT}"}
 
 
 def test_each_finding_goes_to_its_own_producer_and_lane_qa_is_charged_for_each(cycle, monkeypatch):
     closed(cycle)
-    ident = cycle.close_qa([(REPORT, "first"), (TICKET, "second")])
+    cycle.close_qa([(REPORT, "first"), (TICKET, "second")])
     cycle.observe(monkeypatch)
     assert cycle.facts() == [("escaped", "ba", -7), ("escaped", "dev", -7), ("escaped", "qa", -3), ("escaped", "qa", -3)]
-    assert {r["key"] for r in cycle.rows()} == {f"escaped:{ident}:0:dev", f"escaped:{ident}:0:qa",
-                                                f"escaped:{ident}:1:ba", f"escaped:{ident}:1:qa"}
+    assert {r["key"] for r in cycle.rows()} == {f"escaped:{TASK}:{REPORT}:dev", f"escaped:{TASK}:{REPORT}:qa",
+                                                f"escaped:{TASK}:{TICKET}:ba", f"escaped:{TASK}:{TICKET}:qa"}
 
 
 @pytest.mark.parametrize("lane_qa", ["fail", "warning", "none"])
@@ -532,9 +548,10 @@ def test_lane_qa_is_judged_for_the_producers_own_lane(cycle, monkeypatch):
         cycle.qa(lane=lane)
         cycle.report(status, [failure("dev_implementation")] if status == "fail" else [], lane=lane)
     cycle.opener("close")
-    ident = cycle.close_qa([(f"docs/dev/dev-report-{TASK}-l1.json", "x"), (f"docs/dev/dev-report-{TASK}-l2.json", "y")])
+    cycle.close_qa([(f"docs/dev/dev-report-{TASK}-l1.json", "x"), (f"docs/dev/dev-report-{TASK}-l2.json", "y")])
     cycle.observe(monkeypatch)
-    assert sorted(r["key"] for r in cycle.rows() if r["event"] == "escaped") == [f"escaped:{ident}:0:dev", f"escaped:{ident}:0:qa"]
+    one = f"docs/dev/dev-report-{TASK}-l1.json"
+    assert sorted(r["key"] for r in cycle.rows() if r["event"] == "escaped") == [f"escaped:{TASK}:{one}:dev", f"escaped:{TASK}:{one}:qa"]
 
 
 @pytest.mark.parametrize("cited", ["README.md", f"docs/dev/context-{TASK}.json", "../outside.txt", "toy/missing.py:3"])
@@ -578,7 +595,7 @@ def test_a_fix_by_the_producer_and_a_landing_round_is_close_qas_catch(cycle, mon
     cycle.observe(monkeypatch)
     assert cycle.facts() == [("close_catch", "close-qa", 1), ("escaped", "dev", -7), ("escaped", "qa", -3)]
     catch = next(r for r in cycle.rows() if r["event"] == "close_catch")
-    assert catch["key"] == f"close_catch:{landing}:0" and catch["ref"] == REPORT and catch["task_id"] == TASK
+    assert catch["key"] == f"close_catch:{TASK}:{REPORT}" and catch["ref"] == REPORT and catch["task_id"] == TASK and landing
 
 
 @pytest.mark.parametrize("fixed,expected", [([REPORT], {0}), ([TICKET], {1}), ([REPORT, TICKET], {0, 1}), ([], set())])
@@ -589,19 +606,20 @@ def test_the_catch_is_one_row_for_each_finding_whose_file_was_fixed(cycle, monke
         cycle.dispatch("dev", wrote=[REPORT])
     if TICKET in fixed:
         cycle.dispatch("ba", wrote=[TICKET], artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
-    landing = cycle.close_qa()
+    cycle.close_qa()
     cycle.observe(monkeypatch)
-    assert {r["key"] for r in cycle.rows() if r["event"] == "close_catch"} == {f"close_catch:{landing}:{i}" for i in expected}
+    assert {r["key"] for r in cycle.rows() if r["event"] == "close_catch"} == {f"close_catch:{TASK}:{[REPORT, TICKET][i]}" for i in expected}
 
 
 def test_a_finding_is_caught_once_by_the_first_round_that_lands(cycle, monkeypatch):
     closed(cycle)
     cycle.close_qa([(REPORT, "a defect")])
     cycle.dispatch("dev", wrote=[REPORT])
-    first = cycle.close_qa()
-    cycle.close_qa()  # a second landing round, say a /close typed again
+    cycle.close_qa()
+    second = cycle.close_qa()  # a second landing round, say a /close typed again
     cycle.observe(monkeypatch)
-    assert [r["key"] for r in cycle.rows() if r["event"] == "close_catch"] == [f"close_catch:{first}:0"]
+    catches = [r for r in cycle.rows() if r["event"] == "close_catch"]
+    assert [r["key"] for r in catches] == [f"close_catch:{TASK}:{REPORT}"] and second not in catches[0]["key"]
 
 
 def test_a_fix_after_the_landing_round_is_no_catch(cycle, monkeypatch):
@@ -640,7 +658,7 @@ def test_no_catch_while_no_later_round_has_landed(cycle, monkeypatch):
     cycle.dispatch("dev", wrote=[REPORT])
     cycle.close_qa(verdict="CLOSE: YES - with disclosures: 1 items")  # any landed form lands
     cycle.observe(monkeypatch)
-    assert sum(r["event"] == "close_catch" for r in cycle.rows()) == 1  # both rounds' finding 0 share the landing's key
+    assert sum(r["event"] == "close_catch" for r in cycle.rows()) == 1  # the same file's finding, raised in two rounds, is one catch
 
 
 def test_a_fix_written_before_the_finding_is_no_catch(cycle, monkeypatch):
@@ -678,7 +696,7 @@ def test_a_close_round_that_came_back_as_a_launch_notice_is_scored_by_a_later_sw
     assert not any(r["event"] == "close_catch" for r in cycle.rows())
     cycle.complete_close_qa(landing, [], "CLOSE: YES")
     cycle.sweep(monkeypatch)
-    assert [r["key"] for r in cycle.rows() if r["event"] == "close_catch"] == [f"close_catch:{landing}:0"]
+    assert [r["key"] for r in cycle.rows() if r["event"] == "close_catch"] == [f"close_catch:{TASK}:{REPORT}"] and landing
 
 
 @pytest.mark.parametrize("findings", [
@@ -887,6 +905,145 @@ def test_running_rerun_gap_again_adds_no_row(cycle, monkeypatch):
     cycle.observe(monkeypatch)
     cycle.sweep(monkeypatch)
     assert len(gaps(cycle)) == 1 and len(cycle.rows()) == 1
+
+
+# ---- the observer's cost: one lock, one batch, one read of the log, bounded and shared lookups ------------------------
+
+def spy(monkeypatch, owner, name, answer=None):
+    calls = []
+    real = getattr(owner, name)
+
+    def wrapper(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs) if answer is None else answer
+
+    monkeypatch.setattr(owner, name, wrapper)
+    return calls
+
+
+def test_a_sweep_takes_the_lock_once_for_one_batch_and_none_when_it_has_no_row(cycle, monkeypatch):
+    locks, batches = spy(monkeypatch, score_log, "locked"), spy(monkeypatch, score_log, "append_all")
+    cycle.dispatch("dev")
+    cycle.observe(monkeypatch)
+    assert locks == batches == []
+    fail_fix_pass(cycle, monkeypatch, wrote=["src/app.py"])
+    cycle.observe(monkeypatch)
+    assert len(locks) == 1 and len(batches) == 1 and len(batches[0][1]) == 2
+
+
+def test_a_repeat_sweep_reads_the_log_once_and_writes_nothing(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, "a"), (TICKET, "b"), ("src/app.py", "c")])
+    cycle.observe(monkeypatch)
+    log = cycle.config / "logs" / "lifecycle.jsonl"
+    before, reads, real = log.read_bytes(), [], Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (reads.append(1) if self == log else None) or real(self))
+    cycle.observe(monkeypatch)
+    assert len(reads) == 1 and log.read_bytes() == before and len(before.splitlines()) == 6
+
+
+def test_one_file_in_many_bullets_is_looked_up_once_and_charged_once(cycle, monkeypatch):
+    closed(cycle)
+    lookups = spy(monkeypatch, obligation, "declaring_dispatch")
+    cycle.close_qa([(REPORT if i % 3 else f"{REPORT}:{i}", f"bullet {i}") for i in range(100)] + [(f"`{REPORT}`", "again")])
+    cycle.observe(monkeypatch)
+    assert len(lookups) == 1 and cycle.facts() == [("escaped", "dev", -7), ("escaped", "qa", -3)]
+
+
+def test_repeats_do_not_use_up_the_five_files_a_round_may_cite(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, f"bullet {i}") for i in range(7)] + [(TICKET, "a different file")])
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("escaped", "ba", -7), ("escaped", "dev", -7), ("escaped", "qa", -3), ("escaped", "qa", -3)]
+
+
+def test_a_round_looks_at_five_distinct_files_at_most(cycle, monkeypatch):
+    files = [f"src/f{i}.py" for i in range(8)]
+    cycle.dispatch("dev", wrote=files)
+    cycle.qa()
+    cycle.report("pass")
+    cycle.opener("close")
+    lookups = spy(monkeypatch, obligation, "declaring_dispatch")
+    cycle.close_qa([(name, "a defect") for name in files])
+    cycle.observe(monkeypatch)
+    assert [call[1] for call in lookups] == files[:5]
+    assert sum(r["event"] == "escaped" and r["role"] == "dev" for r in cycle.rows()) == 5
+
+
+def test_lookups_are_shared_across_rounds_and_the_store_is_read_once_a_task(cycle, monkeypatch):
+    closed(cycle)
+    lookups = spy(monkeypatch, obligation, "declaring_dispatch", {"obligation": {"task_id": TASK, "role": "dev", "pipeline": "dev"}})
+    scans = spy(monkeypatch, obligation, "_task_records")
+    for _ in range(3):
+        cycle.close_qa([(REPORT, "a"), (TICKET, "b"), ("src/app.py", "c")])
+    cycle.observe(monkeypatch)
+    assert sorted(call[1] for call in lookups) == sorted([REPORT, TICKET, "src/app.py"]) and len(scans) == 1
+
+
+def test_a_dispatchs_write_set_is_read_once_a_sweep(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, "a"), (TICKET, "b"), ("src/app.py", "c")])
+    cycle.dispatch("dev", wrote=[REPORT])
+    cycle.dispatch("dev", wrote=["src/app.py"])
+    cycle.close_qa()
+    reads = spy(monkeypatch, score_events.command_span, "write_set")
+    cycle.observe(monkeypatch)
+    ours = [call[:2] for call in reads if len(call) == 4]  # the observer's reads; declaring_dispatch makes its own, with two arguments
+    assert ours and len(ours) == len(set(ours))
+
+
+def test_the_same_unfixed_defect_is_charged_once_whatever_the_rounds(cycle, monkeypatch):
+    closed(cycle)
+    for _ in range(4):
+        cycle.close_qa([(REPORT, "still wrong")])
+        cycle.observe(monkeypatch)
+    assert cycle.facts() == [("escaped", "dev", -7), ("escaped", "qa", -3)]
+    cycle.close_qa([(REPORT, "still wrong"), (TICKET, "a new file")])  # a new file is a new defect
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("escaped", "ba", -7), ("escaped", "dev", -7), ("escaped", "qa", -3), ("escaped", "qa", -3)]
+
+
+def test_two_findings_fixed_in_different_rounds_are_two_catches(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, "first")])
+    cycle.dispatch("dev", wrote=[REPORT])
+    cycle.close_qa([(TICKET, "second")])
+    cycle.dispatch("ba", wrote=[TICKET], artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
+    cycle.close_qa()
+    cycle.observe(monkeypatch)
+    assert sorted(r["key"] for r in cycle.rows() if r["event"] == "close_catch") == [f"close_catch:{TASK}:{REPORT}", f"close_catch:{TASK}:{TICKET}"]
+
+
+def test_a_report_that_is_a_symlink_out_of_the_project_is_not_read(cycle, monkeypatch, tmp_path):
+    cycle.qa()
+    path = cycle.report("pass")
+    outside = tmp_path / "outside.json"
+    path.rename(outside)
+    path.symlink_to(outside)
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
+
+
+def test_a_report_that_is_a_symlink_inside_the_project_is_read(cycle, monkeypatch):
+    cycle.qa()
+    path = cycle.report("pass")
+    real = cycle.project / "src" / "real.json"
+    path.rename(real)
+    path.symlink_to(real)
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
+
+
+def test_project_relative_paths_resolve_from_the_project_dir_when_it_is_set(cycle, monkeypatch):
+    cycle.qa()
+    cycle.report("pass")
+    sub = str(cycle.project / "src")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cycle.config))
+    score_events.sweep(str(cycle.transcript), sub)  # the session's cwd moved into a subfolder: its docs/dev is not the project's
+    assert cycle.rows() == []
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(cycle.project))
+    score_events.sweep(str(cycle.transcript), sub)
+    assert cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
 
 
 # ---- facts and when they exist ------------------------------------------------------------------------------------
@@ -1151,14 +1308,43 @@ def test_a_good_run_prints_nothing(cycle, monkeypatch, capfd):
     assert capfd.readouterr() == ("", "") and len(cycle.rows()) == 2
 
 
-def test_an_unreadable_log_never_raises(cycle, monkeypatch):
+def test_a_damaged_line_in_the_middle_of_the_log_stays_and_the_new_rows_follow_it(cycle, monkeypatch):
+    # was: a damaged middle line stopped the writer (the old append refused such a log). score_log.append_all passes over it.
     cycle.qa()
     cycle.report("pass")
     log = cycle.config / "logs" / "lifecycle.jsonl"
     log.parent.mkdir(parents=True)
     log.write_text('{"kind": "event", "key": "a"}\nnot json\n{"kind": "event", "key": "b"}\n')
     cycle.observe(monkeypatch)
-    assert log.read_text().count("\n") == 3
+    lines = log.read_text().splitlines()
+    assert lines[:3] == ['{"kind": "event", "key": "a"}', "not json", '{"kind": "event", "key": "b"}']
+    assert [json.loads(line)["event"] for line in lines[3:]] == ["qa_first_pass", "qa_first_pass"] and len(lines) == 5
+
+
+def test_a_crash_truncated_tail_does_not_stop_recording(cycle, monkeypatch):
+    cycle.qa()
+    cycle.report("pass")
+    log = cycle.config / "logs" / "lifecycle.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text('{"kind": "event", "key": "a"}\n{"kind": "event", "ke')  # the process died mid-row
+    cycle.observe(monkeypatch)
+    lines = log.read_text().splitlines()
+    assert lines[0] == '{"kind": "event", "key": "a"}' and len(lines) == 3 and all(json.loads(line) for line in lines)
+    cycle.observe(monkeypatch)
+    assert len(log.read_text().splitlines()) == 3
+
+
+def test_a_lone_surrogate_in_a_row_does_not_lose_the_other_rows_of_the_sweep(cycle, monkeypatch):
+    def odd(ctx):
+        d = ctx["ds"][0]
+        yield score_events._event(ctx, d, "rerun_gap", "dev", "a why with \ud800 in it", "odd:1", ref="docs/\udfff.md")
+        yield score_events._event(ctx, d, "rerun_gap", "dev", "a plain one", "odd:2")
+
+    cycle.qa()
+    cycle.report("pass")
+    monkeypatch.setattr(score_events, "RULES", [odd, *score_events.RULES])
+    cycle.observe(monkeypatch)
+    assert {r["key"] for r in cycle.rows()} >= {"odd:1", "odd:2"} and len(cycle.rows()) == 4
 
 
 def test_observers_racing_give_each_row_once(cycle, monkeypatch):
