@@ -1087,7 +1087,11 @@ def _declared_write_allowed(role: str, tool: str, target):
 #    docs/clean/cleanup-execution-<id>.json), made after an AskUserQuestion of
 #    the span came back answered, writes the destination of each approved move
 #    or rename and the file of each approved fix_style (or fix) of that
-#    request's approvals, docs/clean/user-approvals-<id>.json (Step 13);
+#    request's approvals: docs/clean/user-approvals-<id>.json as the main
+#    agent's last Write of it (Step 13) before that dispatch left it in the
+#    session transcript, the record of what the owner approved, read as the
+#    dispatch records are and never from the file on disk, which nothing
+#    validates;
 #  - the rule-inspector: a subagent whose own dispatch is a rule-inspector
 #    dispatch of that span writes the project's root README.md and
 #    ARCHITECTURE.md (Step 4, every run);
@@ -1100,9 +1104,10 @@ def _declared_write_allowed(role: str, tool: str, target):
 # docs/clean/ files, a .git directory, or the harness home's hooks/,
 # policies/, schemas/, scripts/ or settings.json. A refused or unread record,
 # or approvals that cannot be read, hold nothing and grant nothing: the role
-# rows decide, as before. The cost is a directory listing for a write of any
-# other path, and the active span's calls only where approvals exist.
+# rows decide, as before. The cost is a directory check for any write, and the
+# active span's calls where the project has a docs/clean/ directory.
 _CLEAN_EXECUTION_RE = re.compile(r"docs/clean/cleanup-execution-([A-Za-z0-9][A-Za-z0-9._-]*)\.json\Z")
+_CLEAN_APPROVALS_RE = re.compile(r"user-approvals-([A-Za-z0-9][A-Za-z0-9._-]*)\.json")
 _CLEAN_ROOT_DOCS = ("README.md", "ARCHITECTURE.md")
 _CLEAN_MOVES = frozenset({"move", "rename"})
 _CLEAN_EDITS = frozenset({"fix_style", "fix"})
@@ -1133,14 +1138,12 @@ def _clean_grantable(path: str, project: str, home) -> bool:
     return not (inside and inside.split(os.sep)[0] in _CLEAN_HOME_SURFACE)
 
 
-def _clean_approved(project: str, request_id: str, home) -> tuple:
-    """(paths written, paths removed) by the approved actions of /clean request
-    ``request_id``, absolute and normalised (each in its written and real form)."""
+def _clean_approved(doc, project: str, home) -> tuple:
+    """(paths written, paths removed) by the approved actions of /clean approvals
+    document ``doc``, absolute and normalised (each in its written and real form)."""
     try:
-        with open(os.path.join(project, "docs", "clean", f"user-approvals-{request_id}.json")) as fh:
-            doc = json.load(fh)
         actions = (doc.get("user_approvals") or {}).get("approved_actions") or []
-    except (OSError, ValueError, AttributeError):
+    except AttributeError:
         return frozenset(), frozenset()
     written, removed = set(), set()
     for action in actions if isinstance(actions, list) else []:
@@ -1176,10 +1179,21 @@ def _clean_holds(data: dict, project: str) -> list:
     home = claude_home.resolve()
     home = os.path.normpath(str(home)) if home else None
     root = (frozenset(f for name in _CLEAN_ROOT_DOCS for f in _clean_forms(name, project)), frozenset())
-    holds, answered, read = [], False, {}
-    for use in span.uses("Agent", "Task", "AskUserQuestion"):
+    holds, answered, approvals, read = [], False, {}, {}
+    for use in span.uses("Agent", "Task", "AskUserQuestion", "Write"):
         if use.name == "AskUserQuestion":
             answered = answered or use.ok
+            continue
+        if use.name == "Write":  # the approvals as the main agent's last ok Write of them left them
+            path, text = use.input.get("file_path"), use.input.get("content")
+            found = _CLEAN_APPROVALS_RE.fullmatch(os.path.basename(path)) if isinstance(path, str) else None
+            if found and use.ok and isinstance(text, str) and _clean_forms(path, project) & _clean_forms(
+                    os.path.join("docs", "clean", os.path.basename(path)), project):
+                read.pop(found.group(1), None)
+                try:
+                    approvals[found.group(1)] = json.loads(text)
+                except ValueError:
+                    approvals.pop(found.group(1), None)
             continue
         if use.result_at is not None and not use.ok:  # refused, or it failed: no subagent wrote for it
             continue
@@ -1193,9 +1207,9 @@ def _clean_holds(data: dict, project: str) -> list:
                 continue
             for artifact in doc.get("artifacts") or []:
                 found = _CLEAN_EXECUTION_RE.match(str((artifact or {}).get("path") or ""))
-                if found:
+                if found and found.group(1) in approvals:
                     if found.group(1) not in read:
-                        read[found.group(1)] = _clean_approved(project, found.group(1), home)
+                        read[found.group(1)] = _clean_approved(approvals[found.group(1)], project, home)
                     holds.append(("cleaner", use.id, prompt) + read[found.group(1)])
     return holds
 
@@ -1219,17 +1233,10 @@ def _clean_dispatch(data: dict):
 
 
 def _clean_may_hold(writes: list, data: dict, project: str) -> bool:
-    """Whether a /clean producer can hold one of ``writes``: one is the project's
-    root README.md or ARCHITECTURE.md, or the project holds a request's approvals."""
-    base = data.get("cwd") or project
-    roots = {f for name in _CLEAN_ROOT_DOCS for f in _clean_forms(name, project)}
-    if any(_clean_forms(t, base) & roots for t in writes):
-        return True
-    try:
-        with os.scandir(os.path.join(project, "docs", "clean")) as entries:
-            return any(e.name.startswith("user-approvals-") and e.name.endswith(".json") for e in entries)
-    except OSError:
-        return False
+    """Whether a /clean's producer can hold one of ``writes``: the project has run
+    a /clean (a docs/clean/ directory, under which its reports and approvals
+    lie), so a project without one pays nothing for the transcript's reading."""
+    return os.path.isdir(os.path.join(project, "docs", "clean"))
 
 
 def clean_grant(data: dict, project: str | None = None, holds: list | None = None) -> tuple:

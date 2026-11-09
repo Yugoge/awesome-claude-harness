@@ -83,7 +83,8 @@ class Session:
     """A /clean session of ``project``: Step 4's rule-inspector, the inspectors, Step 13's question and
     Step 16's cleaner (running), each a started subagent; the approvals Step 13 writes."""
 
-    def __init__(self, root: Path, project: Path, approvals: list, asked: bool = True, after: str = ""):
+    def __init__(self, root: Path, project: Path, approvals: list, asked: bool = True, after: str = "",
+                 recorded: bool = True):
         self.project = project
         self.sid = "sess-" + uuid.uuid4().hex[:8]
         self.transcript = root / f"{self.sid}.jsonl"
@@ -103,6 +104,13 @@ class Session:
                                                              {"label": "Execute all", "description": "a"},
                                                              {"label": "Report only", "description": "r"}]}]},
                       "User answered: Execute all")
+        self.approvals_text = json.dumps(
+            {"request_id": RID, "mode": "execute_all", "user_approvals": {
+                "total_issues_in_report": len(approvals), "total_approved_actions": len(approvals),
+                "approved_actions": approvals, "rejected_actions": []}})
+        self.approvals_path = project / "docs" / "clean" / f"user-approvals-{RID}.json"
+        if recorded:  # Step 13: the main agent's Write of the approvals, before the cleaner's dispatch
+            self.tool("Write", {"file_path": str(self.approvals_path), "content": self.approvals_text}, "File created")
         self.dispatch("cleaner", CLEANER, done=False)
         if after:  # the owner typed another command: /clean's span is over
             self.records.append({"type": "user", "message": {"role": "user", "content":
@@ -111,10 +119,7 @@ class Session:
         self.transcript.write_text("".join(json.dumps(r) + "\n" for r in self.records))
         clean = project / "docs" / "clean"
         clean.mkdir(parents=True, exist_ok=True)
-        (clean / f"user-approvals-{RID}.json").write_text(json.dumps(
-            {"request_id": RID, "mode": "execute_all", "user_approvals": {
-                "total_issues_in_report": len(approvals), "total_approved_actions": len(approvals),
-                "approved_actions": approvals, "rejected_actions": []}}))
+        self.approvals_path.write_text(self.approvals_text)
 
     def tool(self, name: str, tool_input: dict, result: str | None) -> str:
         call = "toolu_" + uuid.uuid4().hex[:20]
@@ -277,6 +282,69 @@ def test_without_the_owners_answer_the_cleaner_holds_nothing(tmp_path):
     assert s.policy(tmp_path, "main", "Bash", MOVE).returncode == 0
 
 
+@pytest.mark.parametrize("on_disk", ["removed", "invalid", "rewritten"])
+def test_the_grant_is_the_recorded_write_not_the_file_on_disk(tmp_path, product, on_disk):
+    """The approvals the cleaner's grant derives from are the main agent's Write of them in the session
+    transcript; the file on disk, which nothing validates, neither adds to nor takes from them."""
+    if on_disk == "removed":
+        product.approvals_path.unlink()
+    elif on_disk == "invalid":
+        product.approvals_path.write_text("{not json")
+    else:
+        product.approvals_path.write_text(json.dumps({"user_approvals": {"approved_actions": [
+            _approved("x", "move", location="src/other.py", file="src/other.py", destination="src/elsewhere.py")]}}))
+    assert product.policy(tmp_path, "cleaner", "Bash", MOVE).returncode == 0
+    assert product.policy(tmp_path, "cleaner", "Edit", _edit(product.project / "scripts" / "run-tests.sh")).returncode == 0
+    _refused(product.policy(tmp_path, "cleaner", "Write", _write(product.project / "src" / "elsewhere.py")),
+             "matches denied_write_path_prefixes")
+    _refused(product.policy(tmp_path, "main", "Bash", MOVE), "only that cleaner writes it (D8)")
+
+
+def test_approvals_that_were_never_written_by_the_main_agent_grant_nothing(tmp_path):
+    """A file on disk with no Write of it in the span's transcript (another writer, a shell redirect) holds nothing."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    s = Session(tmp_path / "projects", project, PRODUCT_APPROVALS, recorded=False)
+    _refused(s.policy(tmp_path, "cleaner", "Bash", MOVE), "not in allowed_write_path_prefixes")
+    assert s.policy(tmp_path, "main", "Bash", MOVE).returncode == 0
+
+
+def test_a_write_the_cli_refused_or_made_after_the_dispatch_grants_nothing(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    s = Session(tmp_path / "projects", project, PRODUCT_APPROVALS, recorded=False)
+    clean = s.records
+    # the same Write, refused by a hook (an error result), and again after the cleaner was dispatched
+    call = s.tool("Write", {"file_path": str(s.approvals_path), "content": s.approvals_text}, None)
+    clean.append({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call, "is_error": True, "content": "PreToolUse:Write hook error"}]}})
+    s.tool("Write", {"file_path": str(s.approvals_path), "content": s.approvals_text}, "File created")
+    s.transcript.write_text("".join(json.dumps(r) + "\n" for r in clean))
+    s.tool("AskUserQuestion", {"questions": []}, "x")  # keeps the cleaner dispatch ahead of the later Write
+    _refused(s.policy(tmp_path, "cleaner", "Bash", MOVE), "not in allowed_write_path_prefixes")
+
+
+def test_the_last_write_of_the_approvals_before_the_dispatch_is_the_record(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    s = Session(tmp_path / "projects", project, PRODUCT_APPROVALS, recorded=False)
+    first = [_approved("f", "move", location="x.md", file="x.md", destination="docs/x.md")]
+    # a first Write, then the one the cleaner is dispatched after: only the second approves
+    for approvals in (first, PRODUCT_APPROVALS):
+        call = "toolu_" + uuid.uuid4().hex[:20]
+        doc = {"user_approvals": {"approved_actions": approvals}}
+        record = [{"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call, "name": "Write",
+             "input": {"file_path": str(s.approvals_path), "content": json.dumps(doc)}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": call, "content": "File created"}]}}]
+        s.records[-1:-1] = record  # before the running cleaner dispatch (the last record)
+    s.transcript.write_text("".join(json.dumps(r) + "\n" for r in s.records))
+    assert s.policy(tmp_path, "cleaner", "Bash", MOVE).returncode == 0
+    mv_first = {"command": "mkdir -p docs && mv x.md docs/x.md"}
+    _refused(s.policy(tmp_path, "cleaner", "Bash", mv_first), "not in allowed_write_path_prefixes")
+
+
 def test_after_the_clean_span_nothing_is_held(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
@@ -308,9 +376,7 @@ def test_the_harness_homes_config_surface_is_never_approved(tmp_path):
                  for i, d in enumerate(("hooks", "policies", "schemas", "scripts", "commands", "agents"))]
     approvals += [_approved("f9", "fix_style", location="settings.json:2"),
                   _approved("f10", "fix_style", location=".git/config:1")]
-    (home / "docs" / "clean" / f"user-approvals-{RID}.json").write_text(
-        json.dumps({"user_approvals": {"approved_actions": approvals}}))
-    written, removed = policy._clean_approved(str(home), RID, str(home))
+    written, removed = policy._clean_approved({"user_approvals": {"approved_actions": approvals}}, str(home), str(home))
     assert {os.path.relpath(p, home) for p in written} == {"commands/b", "agents/b"}
     assert {os.path.relpath(p, home) for p in removed} == {"commands/a", "agents/a"}
 
