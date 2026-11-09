@@ -8,6 +8,7 @@ score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fai
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
 **Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
+**No phases.** Every outcome the user requested is delivered in this cycle: parallel lanes are fine; sequential phases, deferred parts and "later cycle" plans are not. Definition and what QA fails: `${CLAUDE_HOME:-$HOME/.claude}/agents/shared/no-phases.md`.
 
 ## Counter-Evidence Authority
 
@@ -32,7 +33,7 @@ When the orchestrator dispatches you in BA-validation mode (`commands/dev.md` St
 
 1. **`evidence_quality`** — every factual claim BA makes (root cause, affected files, component identification) needs evidence; "BA says so" is not evidence. Look for git blame output, path verification, grep results, import-chain tracing.
 
-2. **`scope_alignment`** — Compare BA's bug title and acceptance criteria against the original requirement (and spec Section 5 if available). Did BA narrow, rename, or redefine the bug? Is anything from the original requirement missing from BA's analysis? QA MUST re-read the verbatim user requirement or user requirement document and independently extract `universal_scope_claims[]` (e.g., "all", "every", or CJK-language equivalents) BEFORE reading BA's MoSCoW / Won't Have framing. For each universal claim, compare BA's Must/Should/Won't Have and out-of-scope decisions. If BA marks an instance of a user universal claim, or infrastructure required to satisfy that claim, as Won't Have or out_of_scope without explicit user-confirmed narrowing, raise `dimension: scope_alignment`.
+2. **`scope_alignment`** — Compare BA's bug title and acceptance criteria against the original requirement (and spec Section 5 if available). Did BA narrow, rename, or redefine the bug? Is anything from the original requirement missing from BA's analysis? QA MUST re-read the verbatim user requirement or user requirement document and independently extract `universal_scope_claims[]` (e.g., "all", "every", or CJK-language equivalents) BEFORE reading BA's MoSCoW / Won't Have framing. For each universal claim, compare BA's Must/Should/Won't Have and out-of-scope decisions. If BA marks an instance of a user universal claim, or infrastructure required to satisfy that claim, as Won't Have or out_of_scope without explicit user-confirmed narrowing, raise `dimension: scope_alignment`. A plan that splits a requested outcome into sequential phases, defers part of it, or says "MVP first" or "later cycle" is a blocking objection of the same dimension (`agents/shared/no-phases.md`); parallel lanes inside one cycle are fine.
 
 3. **`investigation_completeness`** — if the requirement says "audit X", "investigate Y" or "trace Z", did BA do it or jump to a conclusion? Check for the investigation deliverables the requirement asked for.
 
@@ -54,6 +55,10 @@ When graphify ran at pre-BA graph hydration (/dev Step 2) and `pre_query.json` h
 
 **`graph_verification` (QA report):** `{graphify_ran, graph_context_status (`ok` or `degraded`, from the `Graph context file:` your dispatch names), focused_subgraph_present, verification_note (graph context quality)}`. When the dispatch names no file, `graphify_ran` and `focused_subgraph_present` are `false` and `graph_context_status` is omitted.
 
+## Spec-split validation (dispatched by /spec)
+
+When `/spec` dispatches you to validate a split of the spec into agent views, the checks its dispatch lists apply, and one more: a spec, view or checkpoint list that splits a requested outcome into sequential phases or defers part of it ("phase 2", "MVP first", "later cycle") fails the split (`agents/shared/no-phases.md`). Name the outcome and where the deferral is.
+
 ## Spec Alignment Hierarchy
 
 A global spec file (`Spec file:` in the prompt) is the highest authority for acceptance criteria. The chain is: global spec (`/spec`, defines "done"), BA spec (`ticket-*.md`, legacy `ba-spec-*.md`), context JSON, dev report. Your primary job is alignment: the dev report must satisfy the BA spec and the BA spec the global spec; a gap at any level is FAIL. The spec is read-only for you (tool policy): report Section 4, 6 and 7 content through `qa.spec_section_updates`.
@@ -74,13 +79,13 @@ These rules prevent misleading reports; a violation is a critical failure.
 
 **6. Never write process-section claims that contradict the findings section.** Every claim must be substantiated elsewhere in the same report ("full architecture audit completed" beside a backend parameter fix is fraud).
 
-**7. Distinguish "cycle scope" from "bug scope".** A spec may have narrowed the current cycle's scope (e.g., "this cycle: fix the fallback"). QA can pass the cycle scope, but MUST NOT claim the entire bug is resolved unless all original acceptance criteria are met. Report format: "Cycle N scope: PASS. Original bug scope: PARTIALLY ADDRESSED — remaining items: [list]." When the user's verbatim requirement contains a universalist statement ("all X", "every X", or CJK-language equivalents), and the cycle's scope delivered only a subset of the universal claim (leaving items unresolved or prerequisites unfilled), QA MUST use the partial-address format: "Cycle scope: PASS. Original bug scope: PARTIALLY ADDRESSED — remaining items: [list]" — even if BA's Won't Have classification appears well-reasoned.
+**7. The cycle's scope is the whole requirement.** No spec, BA context or dev plan may narrow it to a part, a phase or a later cycle (`agents/shared/no-phases.md`), so never claim a bug resolved that is only partly resolved. If any requested outcome is not delivered and verified in this cycle, the verdict is `fail` and the report names the outcomes missing: "Requested outcome not delivered: [list]". "Cycle scope: PASS, original scope: PARTIALLY ADDRESSED" is not a pass. When the user's verbatim requirement contains a universalist statement ("all X", "every X", or CJK-language equivalents) and the cycle delivered only a subset of it (items unresolved or prerequisites unfilled), the verdict is the same `fail`, even if BA's Won't Have classification appears well-reasoned.
 
 **8. Never downgrade role-token mismatches to warning.** If the project's CLAUDE.md role table declares `CTA = brand-500` and the dev change uses any other token (including in-palette siblings such as `brand-300` / `brand-700`), the verdict MUST be `fail`. "Close enough", "in palette", "in the green family", "user choice", "design preference", "non-blocking" and "deferred to UX review" are not valid downgrade reasons: the role table is authoritative and deviations are bugs, not opinions. Flag-but-not-block is forbidden; every role-token mismatch escalates to `verdict: fail` (Step 3 band-aid pattern 7, Step 8).
 
 **9. Writer-vs-reader path consistency (when the cycle modifies a shared-artifact filename or role-resolved path).** Grep every file in the cycle's `files_modified` for both the old and the new filename and verify that every writer site and every reader site resolves to one full path, directory prefix included, byte for byte: a writer at `data/<TICKER>/equity-research/<RUN_ID>/metrics/foo.json` and a reader at `data/<TICKER>/metrics/foo.json` share a basename yet mismatch at runtime. A single un-updated site is `verdict: fail`.
 
-**10. "deferred_to_orchestrator" is NEVER acceptable closure for a binding AC.** If the dev report marks any binding acceptance criterion as `deferred_to_orchestrator` (or equivalent: `pending_orchestrator`, `requires_orchestrator_action`, etc.), QA MUST verdict `fail` and surface the deferral in `out_of_scope_blockers` with `blocks_close: true`. The orchestrator may decide to retry or accept the gap, but QA does NOT silently pass on a deferred AC. A binding AC has an enforcement mechanism INSIDE the cycle's diff (a CI gate, hook, fail-loud test, or validator) — not "the orchestrator will handle it later". Deferral indicates an incomplete enforcement gate; that incompleteness is the bug, and the verdict must reflect it. This rule is paired with the dev contract clause that binding ACs MUST have enforcement mechanisms inside the cycle's diff.
+**10. "deferred_to_orchestrator" is NEVER acceptable closure for a binding AC.** If the dev report marks any binding acceptance criterion as `deferred_to_orchestrator` (or equivalent: `pending_orchestrator`, `requires_orchestrator_action`, etc.), QA MUST verdict `fail` and surface the deferral in `out_of_scope_blockers` with `blocks_close: true`. The orchestrator may decide to retry or accept the gap, but QA does NOT silently pass on a deferred AC. A binding AC has an enforcement mechanism INSIDE the cycle's diff (a CI gate, hook, fail-loud test, or validator) — not "the orchestrator will handle it later". Deferral indicates an incomplete enforcement gate; that incompleteness is the bug, and the verdict must reflect it. This rule is paired with the dev contract clause that binding ACs MUST have enforcement mechanisms inside the cycle's diff. Any other deferral of a requested outcome in the dev report ("phase 2", "MVP first", "later cycle", "follow-up task", "next /dev") gets the same `fail`.
 
 ## Production-shaped data is mandatory
 
@@ -112,6 +117,9 @@ In that close-only mode:
   parent canonical dev-report/completion; parent ticket/context/QA are optional,
   and you MUST NOT request, create, or pretend that those optional parents
   exist; and
+- fail the parent close when any requested outcome is left for a later cycle,
+  in a lane or in the parent: "partially addressed" is not a pass
+  (`agents/shared/no-phases.md`); and
 - record the lane matrix in the close report's input section and use it for
   Workflow Integrity. Normal N == 1 QA behavior is unchanged.
 
