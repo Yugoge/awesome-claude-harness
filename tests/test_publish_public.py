@@ -14,6 +14,8 @@ from tests.test_landing import REPO, env, git, run, write  # noqa: F401  (env: t
 
 NAME, MAIL, TOKEN = "Jane Standin", "jane.standin@example.invalid", "tok-standin-4711"
 SHORT, LONG = "orbit-standin", "zeta-orbit-standin-vault"  # one listed literal inside another
+PUBLIC = "Yugoge <196512512+Yugoge@users.noreply.github.com>"  # every publish commit's author and committer
+DEMO = ("Demo Standin", "demo@example.invalid")  # a machine identity no list holds: the guard lets it through
 ROWS = ("PUBLIC-CORE.md", "README.md", "policies/", "scripts/")
 LEDGER = ("# Public core (stand-in)\n<!-- BEGIN:public-core-manifest -->\n| Path | Class | Why |\n|---|---|---|\n"
           + "".join(f"| `{p}` | `public-core` | stand-in |\n" for p in ROWS) + "<!-- END:public-core-manifest -->\n")
@@ -44,8 +46,8 @@ class Repo:
         return self("for-each-ref"), set(self("cat-file", "--batch-all-objects", "--batch-check=%(objectname)").split())
 
     def publish(self, *args, cwd=None, **env):
-        """The identity is the clone's own config unless env overrides it; a publish writes nothing here
-        and leaves no scratch behind."""
+        """Git's identity here is the clone's own config unless env overrides it (the publish commit's is
+        fixed); a publish writes nothing here and leaves no scratch behind."""
         base = {k: v for k, v in self.env.items() if not k.startswith(("GIT_AUTHOR", "GIT_COMMITTER"))}
         before = snapshot(self.path)
         r = run([str(self.path / "scripts/publish-public"), *args], dict(base, **env), cwd or self.path, False)
@@ -89,21 +91,42 @@ def test_a_clean_tree_publishes_as_one_parentless_commit(repos):
     assert pub("rev-list", "--parents", "main") == head  # one commit, no parent
     assert pub("rev-parse", "main^{tree}") == tree
     meta = pub("log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", "main")
-    assert meta == f"Pat Example <pat@example.invalid>|Pat Example <pat@example.invalid>|Publish {src}"
+    assert meta == f"{PUBLIC}|{PUBLIC}|Publish {src}"
     assert abs(int(pub("log", "-1", "--format=%ct", "main")) - time.time()) < 600
 
 
-@pytest.mark.parametrize("leak", ["content", "path", "identity"])
-def test_a_stand_in_in_the_tree_or_the_identity_refuses_with_nothing_pushed(repos, leak):
+@pytest.mark.parametrize("via", ["config", "environment", "listed"])
+def test_the_publish_commit_carries_the_public_identity_whatever_git_s_identity_here(repos, via):
+    """Author and committer are always the owner's public no-reply identity: a stand-in in the clone's git
+    config or in GIT_AUTHOR_*/GIT_COMMITTER_* (one no list holds, which the guard would let through, or a
+    listed one, which it would refuse) appears nowhere in the published commit. The dates stay now."""
+    priv, pub = repos
+    name, mail = (NAME, MAIL) if via == "listed" else DEMO
+    if via == "config":
+        for key in ("user", "author", "committer"):
+            priv("config", f"{key}.name", name)
+            priv("config", f"{key}.email", mail)
+    env = {} if via == "config" else {f"GIT_{role}_{part}": value for role in ("AUTHOR", "COMMITTER")
+                                       for part, value in (("NAME", name), ("EMAIL", mail))}
+    r = priv.publish("public", **env)
+    assert r.returncode == 0 and r.stdout.startswith("publish-public: published ")
+    assert pub("log", "-1", "--format=%an <%ae>|%cn <%ce>", "main") == f"{PUBLIC}|{PUBLIC}"
+    raw = pub("cat-file", "commit", "main")
+    assert not [v for v in (name, mail, "Pat Example", "pat@example.invalid") if v in raw]
+    assert all(abs(int(pub("log", "-1", f"--format=%{d}", "main")) - time.time()) < 600 for d in ("at", "ct"))
+
+
+@pytest.mark.parametrize("leak", ["content", "path"])
+def test_a_stand_in_in_the_tree_refuses_with_nothing_pushed(repos, leak):
+    """A stand-in in git's identity here never reaches the publish commit (the test above)."""
     priv, pub = repos
     assert priv.publish("public").returncode == 0
     before = pub.state()
-    priv.commit(*{"content": ("README.md", f"clean\nticket {TOKEN}\n"), "path": (f"{TOKEN}/a.txt",),
-                  "identity": ("README.md", "cleaner\n")}[leak])
-    r = priv.publish("public", **({"GIT_AUTHOR_NAME": NAME} if leak == "identity" else {}))
+    priv.commit(*{"content": ("README.md", f"clean\nticket {TOKEN}\n"), "path": (f"{TOKEN}/a.txt",)}[leak])
+    r = priv.publish("public")
     assert (r.returncode, r.stdout) == (1, "") and r.stderr.splitlines()[-1].startswith("publish-public: REFUSED: ")
-    assert {"content": "-> README.md:2", "path": "-> <path with private-literals.txt line 4> (path name)",
-            "identity": "-> commit "}[leak] in r.stderr
+    assert {"content": "-> README.md:2", "path": "-> <path with private-literals.txt line 4> (path name)"}[leak] \
+        in r.stderr
     assert all(v not in r.stderr for v in (NAME, MAIL, TOKEN)) and pub.state() == before
 
 
