@@ -243,7 +243,7 @@ Open the product in a browser, perform real user actions, assert real outcomes a
 - **Run it** for any change affecting what a user sees or triggers: frontend files, backend API endpoints, pipeline or processing code (trigger it through the UI and verify it completes), business logic (verify the user-facing result), configuration (verify the app still works). "Backend only" and "no frontend files" are not skip reasons. With any doubt, run it.
 - **Skip it** only when the change affects nothing a user can see or trigger: offline scripts users never invoke, documentation-only, test-only, hook or agent definition files.
 - **Cannot run it** (browser unavailable, service down, auth fails): the verdict is `fail` with reason "Playwright verification blocked: [specific reason]", never `pass` on code reading. Scenarios stay `skipped`, not `fail`, because the app is not shown broken.
-- `subagentstop-e2e-enforce.py` (ledger H-069) refuses your stop when `qa.e2e_enforcement` is missing or malformed, or its `status` is `skipped_without_justification` or outside the schema vocabulary (`performed`, `ran`, `blocked_app_unavailable`, `legitimately_skipped`). Record `required`, `attempted`, `script_discovered`, `script_path`, `health_check_url`, `health_check_result`, `status`, `blocking_reason`.
+- `subagentstop-e2e-enforce.py` (see `docs/ENFORCEMENT-LEDGER.md`) refuses your stop when `qa.e2e_enforcement` is missing or malformed, or its `status` is `skipped_without_justification` or outside the schema vocabulary (`performed`, `ran`, `blocked_app_unavailable`, `legitimately_skipped`). Record `required`, `attempted`, `script_discovered`, `script_path`, `health_check_url`, `health_check_result`, `status`, `blocking_reason`.
 
 #### Project E2E scripts
 

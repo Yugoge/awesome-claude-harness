@@ -54,7 +54,7 @@ Report each violation under its `standard` slug.
 
 ## Report
 
-Write only the report your dispatch declares; `schemas/style-inspector-report.v1.json` is its schema and `hooks/subagentstop-artifact-contract-enforce.py` (ledger row H-086) checks it at your stop. `hooks/pretool-tool-policy.py` (ledger row H-020) limits your writes to the declared paths, your scratch directories, `docs/dev/overnight/` and `docs/codex/`.
+Write only the report your dispatch declares; `schemas/style-inspector-report.v1.json` is its schema and `hooks/subagentstop-artifact-contract-enforce.py` (see `docs/ENFORCEMENT-LEDGER.md`) checks it at your stop. `hooks/pretool-tool-policy.py` (see `docs/ENFORCEMENT-LEDGER.md`) limits your writes to the declared paths, your scratch directories, `docs/dev/overnight/` and `docs/codex/`.
 
 Update that file on every invocation; on the `complete` invocation it is the final report:
 

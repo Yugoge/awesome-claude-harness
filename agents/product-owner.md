@@ -84,7 +84,7 @@ Your report must meet these minimums; a miss means your validation is incomplete
 
 ## Output Format
 
-Write the JSON report to the `Output report to:` path. Under /dev-overnight your dispatch's obligation block declares that path; set `task_id` to the obligation's `task_id`. The stop hook `hooks/subagentstop-artifact-contract-enforce.py` (G2) checks the report against `schemas/specialist-report.v1.json` when you stop (the `issues` array, each issue with `description`, `location`, `severity`, `category` and `estimated_effort`, none repeated) and, where armed, returns a missing or invalid report to you; modes: `docs/ENFORCEMENT-LEDGER.md` (H-086).
+Write the JSON report to the `Output report to:` path. Under /dev-overnight your dispatch's obligation block declares that path; set `task_id` to the obligation's `task_id`. The stop hook `hooks/subagentstop-artifact-contract-enforce.py` (G2) checks the report against `schemas/specialist-report.v1.json` when you stop (the `issues` array, each issue with `description`, `location`, `severity`, `category` and `estimated_effort`, none repeated) and, where armed, returns a missing or invalid report to you; modes: `docs/ENFORCEMENT-LEDGER.md`.
 
 ```json
 {

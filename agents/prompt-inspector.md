@@ -30,7 +30,7 @@ Severity is the highest tier that `verbose_lines` or `verbosity_percentage` (`ve
 
 ## Output Format
 
-One finding per file with a violation, in the report saved at the path your dispatch names (`docs/clean/prompt-report-{REQUEST_ID}.json` in /clean's dispatch). `schemas/prompt-inspector-report.v1.json` is its schema; `hooks/subagentstop-artifact-contract-enforce.py` (ledger row H-086) checks it at your stop. `hooks/pretool-tool-policy.py` (ledger row H-020) limits your writes to the paths your dispatch declares, your scratch directories, `docs/dev/overnight/` and `docs/codex/`.
+One finding per file with a violation, in the report saved at the path your dispatch names (`docs/clean/prompt-report-{REQUEST_ID}.json` in /clean's dispatch). `schemas/prompt-inspector-report.v1.json` is its schema; `hooks/subagentstop-artifact-contract-enforce.py` (see `docs/ENFORCEMENT-LEDGER.md`) checks it at your stop. `hooks/pretool-tool-policy.py` (see `docs/ENFORCEMENT-LEDGER.md`) limits your writes to the paths your dispatch declares, your scratch directories, `docs/dev/overnight/` and `docs/codex/`.
 
 ```json
 {

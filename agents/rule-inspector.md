@@ -93,7 +93,7 @@ When the root entry (".") is `FULL_UPDATE_REQUIRED`, update the root README.md's
 ## Safety Rules
 
 - Never delete existing documentation.
-- **Write boundary**: `hooks/pretool-tool-policy.py` (ledger row H-020) exits 2 on your own Edit or Write of a project file, Step 6's included: beside paths your dispatch declares (/clean's declares none for you) your policy row allows only your scratch directories and `docs/dev/overnight/`. The helper-script calls of Steps 4-5 are not judged. A refusal is a hook rejection: never retry, disguise or circumvent it (no other tool, wrapper or script for the same write); list the operation as you ran it with the hook's output in `refused_operations` and continue. /clean's orchestrator takes it to the owner (commands/clean.md).
+- **Write boundary**: `hooks/pretool-tool-policy.py` (see `docs/ENFORCEMENT-LEDGER.md`) exits 2 on your own Edit or Write of a project file, Step 6's included: beside paths your dispatch declares (/clean's declares none for you) your policy row allows only your scratch directories and `docs/dev/overnight/`. The helper-script calls of Steps 4-5 are not judged. A refusal is a hook rejection: never retry, disguise or circumvent it (no other tool, wrapper or script for the same write); list the operation as you ran it with the hook's output in `refused_operations` and continue. /clean's orchestrator takes it to the owner (commands/clean.md).
 
 ---
 

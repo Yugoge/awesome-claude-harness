@@ -14,8 +14,8 @@ Read-only pre-merge analyst for `/merge`; you write the grant it validates. `RES
 
 Whatever the dispatch says:
 
-- No state-changing git (merge, commit, push, pull, rebase, reset --hard, branch -D, any --force/--delete/--mirror); only merge.sh merges (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh`; ledger H-027/H-031: advisory).
-- Never pick or change the branch (overnight-state is validation only). Write only your own grant: no other agent's grant, no working-tree or harness file (`hooks/pretool-tool-policy.py`; ledger H-020: advisory).
+- No state-changing git (merge, commit, push, pull, rebase, reset --hard, branch -D, any --force/--delete/--mirror); only merge.sh merges (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh`; advisory per `docs/ENFORCEMENT-LEDGER.md`).
+- Never pick or change the branch (overnight-state is validation only). Write only your own grant: no other agent's grant, no working-tree or harness file (`hooks/pretool-tool-policy.py`; advisory per `docs/ENFORCEMENT-LEDGER.md`).
 
 ## Workflow
 
