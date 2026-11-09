@@ -481,6 +481,22 @@ class Span:
                         if isinstance(b, dict) and b.get("type") == "text")
         return ""
 
+    def result_time(self, ident: str) -> float | None:
+        """The time the CLI recorded for call ``ident``'s tool_result (seconds since the epoch, to the
+        millisecond); None while none came back or its record carries none."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return None
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if any(b.get("type") == "tool_result" and b.get("tool_use_id") == ident for b in _blocks(record)):
+                try:
+                    return datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    return None
+        return None
+
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
         ob = _obligation()

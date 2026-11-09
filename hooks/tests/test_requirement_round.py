@@ -391,11 +391,32 @@ def test_r5_a_producer_question_is_asked_before_the_next_dispatch(project, tx):
     question = put(project, rr.QUESTION.format(task=TASK, role="ba"), {
         "task_id": TASK, "role": "ba", "need": "n", "why": "w", "default": "A",
         "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]})
+    os.utime(project / question, (tx.clock.timestamp(),) * 2)  # written by the dispatch that just came back
     assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])) == (
         f'ASK_FIRST: ask {question} with one AskUserQuestion, metadata.source "producer-question:{TASK}:ba", '
         "questions exactly as written; then dispatch.")
     tx.tool("AskUserQuestion", {"questions": [], "metadata": {"source": f"producer-question:{TASK}:ba"}})
     assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])) is None
+
+
+def test_r5_a_relayed_question_holds_back_no_quick_redispatch_and_a_rewritten_one_does(project, tx):
+    """The question's mtime is held to the ask's recorded time, not the dispatch's whole-second dispatched_at: a BA
+    re-dispatched within the 2 s freshness slack of its relayed question is not refused (replay CI, /dev clarify
+    armed); a question it writes again after the ask is."""
+    first = round_doc()
+    put(project, ROUND1, first)
+    tx.ask(first)
+    tx.dispatch("ba", [CONTEXT])
+    rel = put(project, rr.QUESTION.format(task=TASK, role="ba"), {
+        "task_id": TASK, "role": "ba", "need": "n", "why": "w", "default": "A",
+        "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]})
+    stamp = tx.clock.timestamp() + 0.5  # written while the dispatch ran
+    os.utime(project / rel, (stamp, stamp))
+    tx.tool("AskUserQuestion", {"questions": [], "metadata": {"source": f"producer-question:{TASK}:ba"}})
+    tx.dispatch("ba", [CONTEXT])
+    assert rr.ask_first(span(tx), project, obligation_doc("qa", [CONTEXT])) is None
+    os.utime(project / rel, (tx.clock.timestamp() + 0.5,) * 2)  # the re-dispatched BA wrote it again
+    assert rr.ask_first(span(tx), project, obligation_doc("qa", [CONTEXT])).startswith(f"ASK_FIRST: ask {rel} ")
 
 
 def test_r5_outside_a_spec_or_dev_span_nothing_is_refused(project, tmp_path):
@@ -452,12 +473,16 @@ def test_r5_a_second_producer_question_needs_its_own_ask_and_an_old_one_blocks_n
     doc = {"task_id": TASK, "role": "ba", "need": "n", "why": "w", "default": "A",
            "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]}
     source = {"metadata": {"source": f"producer-question:{TASK}:ba"}}
+    def write(body):  # written by the dispatch that just came back, on the transcript's clock
+        put(project, question, body)
+        os.utime(project / question, (tx.clock.timestamp(),) * 2)
+
     tx.dispatch("ba", [CONTEXT])
-    put(project, question, doc)
+    write(doc)
     tx.tool("AskUserQuestion", dict(source, questions=[]))
     assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])) is None
     tx.dispatch("ba", [CONTEXT])  # the re-dispatch writes its second question at the same path
-    put(project, question, dict(doc, need="a second decision"))
+    write(dict(doc, need="a second decision"))
     assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])).startswith(f"ASK_FIRST: ask {question}")
     tx.tool("AskUserQuestion", dict(source, questions=[]))
     assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])) is None

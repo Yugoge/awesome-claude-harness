@@ -96,10 +96,11 @@ def _source_key(source, canon):
     return kind, canon(task), tail
 
 
-def asked(span, source: str, file=None, after: int = 0) -> bool:
+def asked(span, source: str, file=None, after: int = 0, since: float | None = None) -> bool:
     """The span holds a main-agent AskUserQuestion after line ``after`` whose metadata.source is ``source`` (task ids
-    compared canonically) and that has a tool_result of any content, is_error included. With a round ``file`` its
-    questions must also equal the file's ask_view as canonical JSON, so a paraphrased round is not asked."""
+    compared canonically) and that has a tool_result of any content, is_error included, recorded at or after time
+    ``since`` when given. With a round ``file`` its questions must also equal the file's ask_view as canonical JSON,
+    so a paraphrased round is not asked."""
     if span is None:
         return False
     canon = _lib("obligation").canonical_task_id
@@ -113,7 +114,8 @@ def asked(span, source: str, file=None, after: int = 0) -> bool:
         meta = call.input.get("metadata")
         if call.line > after and call.result_line and isinstance(meta, dict) \
                 and _source_key(meta.get("source"), canon) == want \
-                and (view is None or canonical(call.input.get("questions")) == view):
+                and (view is None or canonical(call.input.get("questions")) == view) \
+                and (since is None or (span.result_time(call.id) or 0) >= since):
             return True
     return False
 
@@ -337,20 +339,15 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
         if rel in declared:
             return None
         owner = task if round_file else task_of(source.split(":")[1])
-        call, doc = latest.get((role, owner), (None, {}))
+        call = latest.get((role, owner), (None, None))[0]
         if call is None or not (call.result_line and call.ok):
             continue  # its producer's latest dispatch has not come back ok: the question is not yet its to ask
-        # A producer question is its producer's latest dispatch's own (written since it was dispatched) and is
-        # asked after that dispatch came back: an earlier question at the same path was relayed already.
-        if round_file is None and obligation.artifact_freshness_satisfied(
-                "json", path.stat().st_mtime, doc.get("dispatched_at")) is not True:
-            continue
         schema = "requirement-round.v1" if round_file else "producer-question.v1"
         # A round G2 refuses (an answered question again, a refuted BA's option) is never asked: its producer
         # writes it again, so it holds no dispatch back.
         if contract.validate_artifact_for_obligation(str(path), schema).get("status") == "pass" \
                 and not (round_file and check_round(project, {"task_id": task}, rel, span, answered=False)) \
-                and not asked(span, source, round_file, after=0 if round_file else call.result_line):
+                and not asked(span, source, round_file, since=None if round_file else path.stat().st_mtime):
             return (f"ASK_FIRST: ask {rel} with one AskUserQuestion, metadata.source \"{source}\", questions exactly "
                     "as written; then dispatch.")
     if declared and not all(_PRE_ASK.search(p or "") for p in declared) and not round_asked(span, project, task, 1):
