@@ -749,7 +749,7 @@
         ]
       },
       {
-        "matcher": "AskUserQuestion",
+        "matcher": "AskUserQuestion|Agent",
         "hooks": [
           {
             "type": "command",

@@ -1,5 +1,6 @@
-"""The native close rating (P4 R7; D9, D9a, D9b): hooks/lib/close_rating.py and
-hooks/posttool-close-rating.py, the rating log's one writer.
+"""The native close rating (P4 R7, P13-2 S4; D9, D9b): hooks/lib/close_rating.py and
+hooks/posttool-close-rating.py, the dispatcher of the score log's observers: it writes the owner's one rating row
+(through score_log) and prints the owner summary as a systemMessage.
 
 The hook runs as the CLI runs it: a subprocess fed a PostToolUse payload on
 stdin, with CLAUDE_CONFIG_DIR at a scratch directory. The AskUserQuestion
@@ -10,6 +11,8 @@ the tool_result block also carries the CLI's agentId trailer)."""
 from __future__ import annotations
 
 import fcntl
+import importlib.util
+import io
 import json
 import os
 import re
@@ -17,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -25,10 +29,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK = REPO_ROOT / "hooks" / "posttool-close-rating.py"
 sys.path.insert(0, str(REPO_ROOT))
-from hooks.lib import close_rating, command_span, obligation  # noqa: E402
+from hooks.lib import close_rating, command_span, obligation, score_log  # noqa: E402
+from hooks.lib.subagent_restart import project_slug  # noqa: E402
 
 TASK, OTHER = "20261101-120000", "20261101-130000"
 LABELS = ["5 - Fully met", "4 - Minor gaps", "3 - Major gaps", "1-2 - Not met"]
+KEY = score_log.project_key("/tmp")  # the project key of the payloads' default working directory
 
 
 def _question(task: str = TASK) -> str:
@@ -41,10 +47,10 @@ def _input(task: str = TASK, source: str | None = None) -> dict:
             "metadata": {"source": source if source is not None else f"close-rating:{task}"}}
 
 
-def _payload(answer=None, task: str = TASK, tool_use_id: str = "toolu_rate", **response) -> dict:
+def _payload(answer=None, task: str = TASK, tool_use_id: str = "toolu_rate", cwd: str = "/tmp", **response) -> dict:
     tool_input = _input(task)
     answers = {} if answer is None else {_question(task): answer}
-    return {"session_id": "sess", "transcript_path": "/nonexistent.jsonl", "cwd": "/tmp",
+    return {"session_id": "sess", "transcript_path": "/nonexistent.jsonl", "cwd": cwd,
             "permission_mode": "default", "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
             "tool_input": tool_input, "tool_use_id": tool_use_id,
             "tool_response": {"questions": tool_input["questions"], "answers": answers, **response}}
@@ -64,10 +70,12 @@ def _rows(config: Path) -> list:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
 
 
-def _run(payload, config: Path, path: str | None = None, python: str | None = None) -> subprocess.CompletedProcess:
+def _run(payload, config: Path, path: str | None = None, python: str | None = None,
+         **env_extra: str) -> subprocess.CompletedProcess:
     env = {"PATH": path or os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(config.parent),
-           "CLAUDE_CONFIG_DIR": str(config), "LANG": "C.UTF-8"}
-    return subprocess.run([python or sys.executable, str(HOOK)], input=json.dumps(payload), env=env,
+           "CLAUDE_CONFIG_DIR": str(config), "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", **env_extra}
+    return subprocess.run([python or sys.executable, str(HOOK)],
+                          input=payload if isinstance(payload, str) else json.dumps(payload), env=env,
                           capture_output=True, text=True, timeout=60)
 
 
@@ -75,28 +83,56 @@ def _silent(result: subprocess.CompletedProcess) -> None:
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
+def _summary(result: subprocess.CompletedProcess) -> str:
+    """The owner summary a run printed: exit 0, no stderr, one JSON line whose only key is systemMessage."""
+    assert (result.returncode, result.stderr) == (0, ""), result.stderr
+    [line] = result.stdout.splitlines()
+    [(name, text)] = json.loads(line).items()
+    assert name == "systemMessage" and 1 <= len(text.splitlines()) <= 5
+    return text
+
+
+def _event(role: str, event: str, points: int, why: str, task: str = TASK, **fields) -> dict:
+    return {"kind": "event", "ts": "2026-11-01T12:30:00Z", "project": KEY, "task_id": task, "role": role,
+            "event": event, "points": points, "key": f"{task}:{role}:{event}", "why": why, "ref": "r", **fields}
+
+
+def _seed(config: Path, *rows: dict) -> None:
+    _log(config).parent.mkdir(parents=True, exist_ok=True)
+    _log(config).write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+# dev lost 12 points over two cycles: the worst identity of every seeded log below
+SEEDED = (_event("dev", "qa_fail", -6, "edge case not tested", task=OTHER), _event("dev", "qa_fail", -6, "edge case not tested"),
+          _event("qa", "qa_catch", 1, "caught the missing edge case"))
+
+
 # --------------------------------------------------------------------------
 # The producer: exactly one row for an exact label, nothing otherwise (A7)
 # --------------------------------------------------------------------------
 
 def test_an_exact_label_writes_exactly_one_row(config: Path) -> None:
-    _silent(_run(_payload("4 - Minor gaps"), config))
-    rows = _rows(config)
-    assert len(rows) == 1 and set(rows[0]) == {"ts", "task_id", "rating", "tool_use_id"}
-    assert (rows[0]["task_id"], rows[0]["rating"], rows[0]["tool_use_id"]) == (TASK, 4, "toolu_rate")
-    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", rows[0]["ts"])
+    text = _summary(_run(_payload("4 - Minor gaps"), config))
+    [row] = _rows(config)
+    assert set(row) == {"kind", "ts", "project", "task_id", "rating", "roles", "tool_use_id"}
+    assert (row["kind"], row["project"], row["task_id"], row["rating"], row["roles"], row["tool_use_id"]) == (
+        "rating", KEY, TASK, 4, [], "toolu_rate")  # no dispatch record of the task: no role but main's
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", row["ts"])
+    assert "main 51 Skilled Craftsman" in text and "rating 4: +1 each" in text
 
 
 @pytest.mark.parametrize(("label", "rating"), zip(LABELS, [5, 4, 3, 1]))
 def test_each_label_maps_to_its_rating_and_1_2_is_stored_as_1(config: Path, label: str, rating: int) -> None:
-    _silent(_run(_payload(label), config))
+    _summary(_run(_payload(label), config))
     assert [row["rating"] for row in _rows(config)] == [rating]
 
 
-@pytest.mark.parametrize("case", ["skip", "free_text", "typed_response", "afk", "follow_up", "multi_select",
-                                  "label_case", "decline", "error_result", "no_response"])
-def test_no_answer_writes_no_row(config: Path, case: str) -> None:
-    payload = {
+NON_ANSWERS = ["skip", "free_text", "typed_response", "afk", "follow_up", "multi_select", "label_case", "decline",
+               "error_result", "no_response", "unanswered"]
+
+
+def _non_answer(case: str) -> dict:
+    return {
         "skip": _payload(None),
         "free_text": _payload("great"),
         "typed_response": _payload("4 - Minor gaps", response="wait, explain the gaps first"),
@@ -107,24 +143,52 @@ def test_no_answer_writes_no_row(config: Path, case: str) -> None:
         "decline": dict(_payload(None), tool_response="User declined to answer questions"),
         "error_result": dict(_payload(None), tool_response={"error": "Tool permission request failed"}),
         "no_response": {k: v for k, v in _payload("4 - Minor gaps").items() if k != "tool_response"},
+        "unanswered": _payload("4 - Minor gaps", annotations={_question(): {"unanswered": "skipped"}}),
     }[case]
-    _silent(_run(payload, config))
+
+
+@pytest.mark.parametrize("case", NON_ANSWERS)
+def test_no_answer_writes_no_row(config: Path, case: str) -> None:
+    _silent(_run(_non_answer(case), config))  # no log to read either: nothing to show
     assert not _log(config).exists()
 
 
+@pytest.mark.parametrize("case", NON_ANSWERS)
+def test_no_answer_writes_no_row_but_the_scores_are_still_shown(config: Path, case: str) -> None:
+    # B4 / D9b: Skip, free text, AFK, a decline, an error and a missing label write no rating row; the summary of
+    # the log as it stands is still returned, without this cycle's rating line.
+    _seed(config, *SEEDED)
+    text = _summary(_run(_non_answer(case), config))
+    assert _rows(config) == list(SEEDED)
+    assert text == score_log.render_owner_summary(list(SEEDED), KEY, "9999-12-31T23:59:59Z", TASK)
+    assert "rating" not in text and text.splitlines()[1] == f"This cycle {TASK}: dev -6 (edge case not tested), qa +1 (caught the missing edge case)"
+
+
 def test_a_re_rating_writes_no_second_row(config: Path) -> None:
-    _silent(_run(_payload("4 - Minor gaps"), config))
-    _silent(_run(_payload("5 - Fully met", tool_use_id="toolu_again"), config))
-    _silent(_run(_payload("3 - Major gaps", task=OTHER), config))
+    _summary(_run(_payload("4 - Minor gaps"), config))
+    again = _summary(_run(_payload("5 - Fully met", tool_use_id="toolu_again"), config))  # still shown, nothing written
+    _summary(_run(_payload("3 - Major gaps", task=OTHER), config))
     assert [(row["task_id"], row["rating"]) for row in _rows(config)] == [(TASK, 4), (OTHER, 3)]
+    assert "rating 4: +1 each" in again and "rating 5" not in again
 
 
 def test_a_rating_sourced_with_the_minted_prefix_and_one_without_are_one_task(config: Path) -> None:
     # First rating wins per canonical task id, as the predicates compare them.
-    _silent(_run(_payload("4 - Minor gaps", task=f"dev-{TASK}"), config))
-    _silent(_run(_payload("5 - Fully met", tool_use_id="toolu_again"), config))
-    _silent(_run(_payload("3 - Major gaps", task=f"dev-command-{TASK}", tool_use_id="toolu_third"), config))
+    _summary(_run(_payload("4 - Minor gaps", task=f"dev-{TASK}"), config))
+    _summary(_run(_payload("5 - Fully met", tool_use_id="toolu_again"), config))
+    _summary(_run(_payload("3 - Major gaps", task=f"dev-command-{TASK}", tool_use_id="toolu_third"), config))
     assert [(row["task_id"], row["rating"]) for row in _rows(config)] == [(f"dev-{TASK}", 4)]
+
+
+def test_an_event_row_or_a_kindless_row_of_the_same_task_does_not_stop_the_rating(config: Path) -> None:
+    # P4's defect: the old writer let any row holding the task id (an event row, a score-update.sh row) stop the
+    # owner's rating. Only a rating row of the same canonical task id does, and a kindless P4 rating row is not one.
+    kindless = {"ts": "2026-11-01T12:00:00Z", "task_id": TASK, "rating": 5, "tool_use_id": "toolu_p4"}
+    _seed(config, *SEEDED, kindless, dict(_event("dev", "qa_first_pass", 2, "first pass"), task_id=f"dev-{TASK}"))
+    _summary(_run(_payload("4 - Minor gaps"), config))
+    assert [r["rating"] for r in _rows(config) if r.get("kind") == "rating"] == [4]
+    _summary(_run(_payload("3 - Major gaps", task=f"dev-{TASK}", tool_use_id="toolu_again"), config))  # another spelling
+    assert [r["rating"] for r in _rows(config) if r.get("kind") == "rating"] == [4] and len(_rows(config)) == 6
 
 
 @pytest.mark.parametrize("source", ["remember", f"close-rating:{TASK}/x", "close-rating:ab", f"close-rating:{TASK}\n",
@@ -151,6 +215,192 @@ def test_a_question_set_with_more_than_the_rating_is_a_no_op(config: Path) -> No
     assert not _log(config).exists()
 
 
+@pytest.mark.parametrize("case", ["subagent", "another_source", "no_metadata", "two_questions", "another_tool"])
+def test_nothing_for_another_call_even_with_a_readable_log(config: Path, case: str) -> None:
+    # Not a main-agent close-rating call: no row and no summary, whatever the log holds.
+    _seed(config, *SEEDED)
+    payload = _payload("4 - Minor gaps")
+    if case == "subagent":
+        payload.update(agent_id="a1b2c3", agent_type="qa")
+    elif case == "another_source":
+        payload["tool_input"]["metadata"]["source"] = "remember"
+    elif case == "no_metadata":
+        del payload["tool_input"]["metadata"]
+    elif case == "two_questions":
+        payload["tool_input"]["questions"].append(dict(payload["tool_input"]["questions"][0], question="Anything else?"))
+    else:
+        payload["tool_name"] = "Bash"
+    _silent(_run(payload, config))
+    assert _rows(config) == list(SEEDED)
+
+
+@pytest.mark.parametrize("raw", ["", "not json", "null", "[]", '"AskUserQuestion"', "{}", '{"tool_name": "AskUserQuestion"}',
+                                 '{"tool_name": "AskUserQuestion", "tool_input": "x"}',
+                                 '{"tool_name": "AskUserQuestion", "tool_input": {"metadata": {"source": "close-rating:' + TASK + '"}}}',
+                                 '{"tool_name": 7}'])
+def test_garbage_input_gives_nothing_and_exits_0(config: Path, raw: str) -> None:
+    _seed(config, *SEEDED)
+    _silent(_run(raw, config))
+    assert _rows(config) == list(SEEDED)
+
+
+@pytest.mark.parametrize("cwd", [None, 7, ""])
+def test_a_payload_without_a_usable_working_directory_gives_nothing(config: Path, cwd) -> None:
+    payload = _payload("4 - Minor gaps")
+    payload["cwd"] = cwd
+    _seed(config, *SEEDED)
+    _silent(_run(payload, config))
+    assert _rows(config) == list(SEEDED)
+
+
+# --- the roles of a rating row: the scored identities of the task's dispatches, read when the row is written
+
+def _typed(text: str) -> dict:
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def _json(path: str, schema: str, task: str = TASK) -> dict:
+    return {"kind": "json", "path": path, "schema": schema, "identity": {"task_id": task}}
+
+
+def _dispatch(use_id: str, subagent_type: str, task: str, artifacts: list, pipeline: str = "dev",
+              profile: str = "singular", lane: str | None = None, **more) -> dict:
+    doc = {"task_id": task, "lane": lane, "lane_set": [lane] if lane else None, "role": subagent_type,
+           "pipeline": pipeline, "profile": "fanout-lane" if lane else profile,
+           "dispatched_at": "2026-11-01T12:00:00Z", "artifacts": artifacts, **more}
+    prompt = "FIRST ACTION: register.\n" + obligation.serialize_obligation(doc) + "\nDo the work."
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": use_id, "name": "Agent", "input": {"subagent_type": subagent_type, "prompt": prompt}}]}}
+
+
+def _store(config: Path, project: Path) -> Path:
+    """The project's transcript store under the throwaway config directory, filled with the sessions of one task
+    (dev, a lane's dev and the lane's QA in one session, close QA in a later one) and a dispatch of another task."""
+    folder = config / "projects" / project_slug(project)
+    folder.mkdir(parents=True)
+    lane = f"{TASK}-l1"
+    sessions = {
+        "s-dev": [_typed("/dev build it"),
+                  _dispatch("toolu_ba", "ba", TASK, [_json(f"docs/dev/context-{TASK}.json", "context.v1"),
+                                                      {"kind": "markdown", "path": f"docs/dev/ticket-{TASK}.md",
+                                                       "identity_anchor": TASK}]),
+                  _dispatch("toolu_dev", "dev", lane, [_json(f"docs/dev/dev-report-{lane}.json", "dev-report.v2")], lane="l1"),
+                  _dispatch("toolu_dev2", "dev", lane, [_json(f"docs/dev/dev-report-{lane}.json", "dev-report.v2")], lane="l1"),
+                  _dispatch("toolu_qa", "qa", lane, [_json(f"docs/dev/qa-report-{lane}.json", "qa-report.v2")], lane="l1")],
+        "s-close": [_typed(f"/close {TASK}"),
+                    _dispatch("toolu_cqa", "qa", TASK, [{"kind": "markdown", "path": f"docs/dev/close-report-{TASK}.md",
+                                                         "identity_anchor": TASK, "terminal_line_regex": "^CLOSE: YES.*$"}],
+                              pipeline="close", profile="final_verification", consistency="verdict_class")],
+        "s-other": [_typed("/dev another"),
+                    _dispatch("toolu_arch", "architect", OTHER, [_json("docs/dev/x.json", "dev-report.v2", OTHER)])],
+    }
+    for sid, records in sessions.items():
+        (folder / f"{sid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return folder
+
+
+def test_a_4_rating_writes_one_row_with_its_roles_and_the_summary_names_the_worst_identity(config: Path, tmp_path: Path) -> None:
+    # B4: the rating row holds the sorted, distinct scored identities of the TASK's dispatches (its lanes, every
+    # session of the project; qa in the close pipeline is close-qa; main is not listed; another task's dispatch is not
+    # the task's); the hook output is score_log's owner summary, which names the worst identity and why.
+    project = tmp_path / "proj"
+    project.mkdir()
+    _store(config, project)
+    key = score_log.project_key(project)
+    seeded = [dict(row, project=key) for row in SEEDED]
+    _seed(config, *seeded)
+    text = _summary(_run(_payload("4 - Minor gaps", cwd=str(project)), config))
+    rows = _rows(config)
+    assert rows[:3] == seeded and len(rows) == 4
+    assert rows[3] == {"kind": "rating", "ts": rows[3]["ts"], "project": key, "task_id": TASK, "rating": 4,
+                       "roles": ["ba", "close-qa", "dev", "qa"], "tool_use_id": "toolu_rate"}
+    assert text == score_log.render_owner_summary(rows, key, "9999-12-31T23:59:59Z", TASK)  # includes the row just written
+    first, cycle, worst = text.splitlines()
+    assert first == ("Scores (this project): ba 51 Skilled Craftsman (+1) | close-qa 51 Skilled Craftsman (+1) | "
+                     "dev 39 Journeyman (-11) | main 51 Skilled Craftsman (+1) | qa 52 Skilled Craftsman (+2)")
+    assert cycle == f"This cycle {TASK}: dev -6 (edge case not tested), qa +1 (caught the missing edge case), rating 4: +1 each"
+    assert worst == 'Worst: dev (Journeyman, 39); last miss: "edge case not tested"'
+    assert "hook" not in text.lower() and "PostToolUse" not in text
+
+
+def test_the_dispatch_store_is_the_project_dir_the_cli_names(config: Path, tmp_path: Path) -> None:
+    # A session whose shell moved into a subdirectory still finds its project's transcripts (CLAUDE_PROJECT_DIR).
+    project = tmp_path / "proj"
+    (project / "sub").mkdir(parents=True)
+    _store(config, project)
+    _summary(_run(_payload("5 - Fully met", cwd=str(project / "sub")), config, CLAUDE_PROJECT_DIR=str(project)))
+    assert [row["roles"] for row in _rows(config)] == [["ba", "close-qa", "dev", "qa"]]
+    _summary(_run(_payload("5 - Fully met", cwd=str(project / "sub"), task=OTHER), config, CLAUDE_PROJECT_DIR=str(project)))
+    assert [row["roles"] for row in _rows(config)][1] == ["architect"]
+
+
+def test_append_row_hands_a_legacy_row_to_the_score_log_writer(config: Path) -> None:
+    # score-update.sh's heredoc calls it under its own lock; a row with neither kind nor key is written as is, every time.
+    legacy = {"ts": "2026-11-01T00:00:00Z", "agent": "dev", "event": "qa_first_pass", "task_id": TASK, "reason": "na\u00efve"}
+    _log(config).parent.mkdir(parents=True)
+    close_rating.append_row(str(_log(config)), legacy)
+    close_rating.append_row(_log(config), legacy)
+    assert _log(config).read_text(encoding="utf-8") == (json.dumps(legacy, ensure_ascii=False) + "\n") * 2
+    assert not hasattr(close_rating, "append_rating")
+
+
+# --- the dispatcher: AskUserQuestion goes to close_rating.handle, Agent and Task to score_events.observe
+
+def _dispatch_run(monkeypatch, capsys, payload: dict, score_events) -> tuple[str, str]:
+    """main() of the hook in this process, fed `payload`, with `score_events` standing in for hooks/lib/score_events.py
+    (None: the module is absent). Returns what it printed on stdout and stderr."""
+    monkeypatch.setattr(sys, "path", list(sys.path))  # the hook puts hooks/lib on the path
+    monkeypatch.setitem(sys.modules, "score_events", score_events)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    spec = importlib.util.spec_from_file_location("posttool_close_rating_under_test", HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    hook.main()
+    out = capsys.readouterr()
+    return out.out, out.err
+
+
+def _stand_in(returns=None, raises: Exception | None = None):
+    module, module.calls = types.ModuleType("score_events"), []
+
+    def observe(payload):
+        module.calls.append(payload)
+        if raises:
+            raise raises
+        return returns
+
+    module.observe = observe
+    return module
+
+
+@pytest.mark.parametrize("tool", ["Agent", "Task"])
+def test_the_dispatch_tools_go_to_the_observer_and_its_dict_is_printed_as_one_json_line(monkeypatch, capsys, tool: str) -> None:
+    stand_in = _stand_in({"systemMessage": "seen \u00e9"})
+    payload = {"tool_name": tool, "tool_input": {"subagent_type": "dev"}, "tool_use_id": "toolu_x"}
+    assert _dispatch_run(monkeypatch, capsys, payload, stand_in) == ('{"systemMessage": "seen \\u00e9"}\n', "")
+    assert stand_in.calls == [payload]
+
+
+@pytest.mark.parametrize("tool", ["AskUserQuestion", "Bash", "Write", ""])
+def test_no_other_tool_reaches_the_observer(monkeypatch, capsys, config: Path, tool: str) -> None:
+    stand_in = _stand_in({"systemMessage": "must not be printed"})
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))  # AskUserQuestion goes to handle: no log here, nothing printed
+    assert _dispatch_run(monkeypatch, capsys, dict(_payload("4 - Minor gaps"), tool_name=tool), stand_in) == ("", "")
+    assert stand_in.calls == []
+
+
+@pytest.mark.parametrize("returns", [None, {}, [], "text", {"decision": "block", "reason": "x"}, {"continue": False},
+                                     {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": "x"}}])
+def test_the_dispatcher_prints_nothing_for_no_output_or_a_decision(monkeypatch, capsys, returns) -> None:
+    assert _dispatch_run(monkeypatch, capsys, {"tool_name": "Agent"}, _stand_in(returns)) == ("", "")
+
+
+@pytest.mark.parametrize("fault", ["absent", "crash"])
+def test_the_dispatcher_survives_the_observer_missing_or_failing(monkeypatch, capsys, fault: str) -> None:
+    stand_in = None if fault == "absent" else _stand_in(raises=RuntimeError("boom"))
+    assert _dispatch_run(monkeypatch, capsys, {"tool_name": "Agent", "tool_input": {}}, stand_in) == ("", "")
+
+
 def test_answers_the_model_wrote_into_its_input_are_never_read(config: Path) -> None:
     # TC-29 (pre-fill): the CLI drops `answers` from the model's input before
     # the dialog (AskUserQuestion.checkPermissions' updatedInput keeps title,
@@ -161,7 +411,7 @@ def test_answers_the_model_wrote_into_its_input_are_never_read(config: Path) -> 
     _silent(_run(prefilled, config))
     assert not _log(config).exists()
     prefilled["tool_response"]["answers"] = {_question(): "3 - Major gaps"}
-    _silent(_run(prefilled, config))
+    _summary(_run(prefilled, config))
     assert [row["rating"] for row in _rows(config)] == [3]
 
 
@@ -171,7 +421,7 @@ def test_twenty_parallel_invocations_for_twenty_tasks_give_twenty_rows(config: P
         results = list(pool.map(lambda t: _run(_payload("4 - Minor gaps", task=t, tool_use_id=f"toolu_{t}"), config),
                                 tasks))
     for result in results:
-        _silent(result)
+        _summary(result)
     lines = _log(config).read_text(encoding="utf-8").splitlines()
     assert len(lines) == 20
     assert sorted(json.loads(line)["task_id"] for line in lines) == tasks
@@ -191,22 +441,23 @@ def test_the_hook_waits_for_the_score_scripts_lock(config: Path) -> None:
         hook.stdin.close()
         time.sleep(1.0)
         assert hook.poll() is None and len(_rows(config)) == 1
-    assert hook.wait(timeout=60) == 0 and hook.stdout.read() == ""
+    assert hook.wait(timeout=60) == 0
+    assert "main 51 Skilled Craftsman" in json.loads(hook.stdout.read())["systemMessage"]
     assert [row.get("rating") for row in _rows(config)] == [None, 4]
 
 
 def test_no_venv_on_path_still_records(config: Path) -> None:
     system = shutil.which("python3", path="/usr/bin:/bin")
     assert system, "a system python3 under /usr/bin or /bin"
-    _silent(_run(_payload("4 - Minor gaps"), config, path="/usr/bin:/bin", python=system))
+    _summary(_run(_payload("4 - Minor gaps"), config, path="/usr/bin:/bin", python=system))
     assert [row["rating"] for row in _rows(config)] == [4]
 
 
-def test_the_shipped_settings_register_the_hook_once_for_askuserquestion() -> None:
+def test_the_shipped_settings_register_the_hook_once_for_askuserquestion_and_agent() -> None:
     settings = json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8"))
     found = [(event, group.get("matcher"), hook["command"]) for event, groups in settings["hooks"].items()
              for group in groups for hook in group["hooks"] if "posttool-close-rating.py" in hook["command"]]
-    assert found == [("PostToolUse", "AskUserQuestion",
+    assert found == [("PostToolUse", "AskUserQuestion|Agent",
                       'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py"')]
 
 
@@ -223,8 +474,8 @@ def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -
     for name in ("roster.py", "close_rating.py", "score_log.py"):
         shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
     shutil.copytree(REPO_ROOT / "agents", root / "agents")
-    _silent(_run(_payload("4 - Minor gaps"), config))
-    _silent(_run(_payload("1-2 - Not met", task=OTHER), config))
+    _summary(_run(_payload("4 - Minor gaps"), config))
+    _summary(_run(_payload("1-2 - Not met", task=OTHER), config))
 
     def score(script: str, *arguments: str, log: Path = _log(config)) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(root / "scripts" / script), *arguments,

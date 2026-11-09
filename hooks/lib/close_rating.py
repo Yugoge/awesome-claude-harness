@@ -1,11 +1,9 @@
-"""The owner's close rating (D9, D9a, D9b): the writer posttool-close-rating.py calls and the predicates P5's
-Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required asked, never
-answered: nothing here blocks. Rows share the score scripts' log, lock and writer; they skip rows without ``agent``."""
+"""The owner's close rating (D9, D9b), for posttool-close-rating.py and P5's Stop gate.
+handle(payload) writes the one rating row and returns the owner summary (a systemMessage); the Stop gate imports
+source_task, rating_required and rating_asked. The /close question is required asked, never answered: nothing here blocks."""
 from __future__ import annotations
 
-import fcntl
 import importlib
-import json
 import os
 import re
 import runpy
@@ -14,7 +12,6 @@ from pathlib import Path
 
 SOURCE_RE = re.compile(r"^close-rating:[A-Za-z0-9][A-Za-z0-9_-]{2,80}$")
 LABEL_TO_RATING = {"5 - Fully met": 5, "4 - Minor gaps": 4, "3 - Major gaps": 3, "1-2 - Not met": 1}
-TASK_ID_FIELD = re.compile(r'"task_id":\s*"([^"]*)"')
 
 
 def _lib(name: str):
@@ -57,22 +54,49 @@ def rating_asked(transcript_path, task_id: str) -> bool:
 
 
 def append_row(log, row: dict) -> None:
-    """The lifecycle log's one writer: a row appended and fsynced under the caller's exclusive lock on
-    <log>.lock (append_rating's rating; score-update.sh's rows, which its heredoc hands here)."""
-    with open(log, "a", encoding="utf-8") as handle:
-        print(json.dumps(row, ensure_ascii=False), file=handle, flush=True)
-        os.fsync(handle.fileno())
+    """score-update.sh's legacy rows (no kind, no key) reach the log through score_log's writer, under the caller's lock."""
+    _lib("score_log").append(log, row)
 
 
-def append_rating(task_id: str, rating: int, tool_use_id) -> None:
-    """Append {ts, task_id, rating, tool_use_id} to the lifecycle log under an exclusive lock on
-    the score scripts' <log>.lock; the task's first rating wins (canonical ids), read under the lock."""
-    log = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "lifecycle.jsonl"
-    canonical = _lib("obligation").canonical_task_id
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with open(f"{log}.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        rows = log.read_text(encoding="utf-8", errors="replace").splitlines() if log.exists() else ()
-        if canonical(task_id) not in {canonical(m[1]) for m in map(TASK_ID_FIELD.search, rows) if m}:
-            append_row(log, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "task_id": task_id,
-                             "rating": rating, "tool_use_id": tool_use_id})
+def _answered(question, response) -> int | None:
+    """The rating of the owner's answer: one of the four exact labels, with none of the CLI's marks of a non-answer
+    (afkTimeoutMs, free text, followUp, an annotation marked unanswered); None otherwise (Skip, free text, AFK, decline, error)."""
+    response = response if isinstance(response, dict) else {}
+    answers, notes = response.get("answers"), response.get("annotations")
+    if any(response.get(k) for k in ("afkTimeoutMs", "response", "followUp")) or any(
+            isinstance(n, dict) and n.get("unanswered") for n in (notes.values() if isinstance(notes, dict) else ())):
+        return None
+    answer = answers.get(question.get("question")) if isinstance(answers, dict) else None
+    return LABEL_TO_RATING.get(answer) if isinstance(answer, str) else None
+
+
+def _utc(seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+
+
+def handle(payload) -> dict | None:
+    """The main agent's close-rating question (one question, metadata.source close-rating:<task>): at most one rating row
+    through score_log, and {"systemMessage": owner summary}, returned even when no row was written (AFK, Skip, free text).
+    The row's roles are the scored identities of the task's dispatches in every session of the project, read now. None
+    for any other call or a log that cannot be read; never raises (a failure means no row, no output)."""
+    try:
+        tool_input = payload["tool_input"]
+        task_id, questions = source_task(tool_input), tool_input.get("questions")
+        if payload.get("tool_name") != "AskUserQuestion" or payload.get("agent_id") or not task_id \
+                or not isinstance(questions, list) or len(questions) != 1 or not os.path.isabs(payload["cwd"]):
+            return None
+        score_log, now = _lib("score_log"), time.time()
+        log, project = score_log.log_path(), score_log.project_key(payload["cwd"])
+        rating = _answered(questions[0], payload.get("tool_response"))
+        if rating:
+            store = os.environ.get("CLAUDE_PROJECT_DIR") or payload["cwd"]
+            dispatches = _lib("obligation")._task_records(task_id, store, None)  # obligation's cross-session reader
+            roles = sorted({score_log.identity(d["obligation"].get("role"), d["obligation"].get("pipeline")) for d in dispatches} - {None})
+            with score_log.locked(log):
+                score_log.append(log, {"kind": "rating", "ts": _utc(now), "project": project, "task_id": task_id,
+                                       "rating": rating, "roles": roles, "tool_use_id": payload.get("tool_use_id")})
+        rows = [row for _, row in score_log.read_lines(str(log))]
+        # as_of one second on: the row just written (ts truncated to the second) is before it
+        return {"systemMessage": score_log.render_owner_summary(rows, project, _utc(now + 1), task_id)}
+    except Exception:
+        return None
