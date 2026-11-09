@@ -69,6 +69,7 @@ COMPLIANT = (
     Scenario("/dev 2-lane fan-out", "dev", (("variant", "fanout"),), ("dev",), 140),
     Scenario("/dev qafail", "dev", (("variant", "qa-fail"),), ("dev",), 110),
     Scenario("/dev clarify", "dev", (("variant", "question"),), ("dev",), 100),
+    Scenario("/dev devquestion", "dev", (("variant", "dev-question"),), ("dev",), 100),
     Scenario("/redev", "redev", (), ("dev", "redev"), 170),
     Scenario("/dev-command", "dev_command", (("variant", "plain"),), ("dev-command",), 80),
     Scenario("/dev-overnight", "overnight", (("variant", "plain"),), ("dev-overnight",), 600),

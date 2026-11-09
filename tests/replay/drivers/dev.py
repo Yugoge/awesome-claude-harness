@@ -45,6 +45,14 @@ Driver arguments (cli.py --arg K=V):
                        the lane's dev is dispatched again; the next QA passes
   variant=question     BA writes its producer question; the orchestrator relays it with one
                        AskUserQuestion inside the turn and re-dispatches BA (Step 5) with the answer
+  variant=dev-question (P4 A16's devquestion; the replay suite's, not in VARIANTS, the artifact check's
+                       job list) Step 10's dev meets a decision the request does not settle and writes
+                       its producer question (agents/dev.md "Owner decision") instead of its report,
+                       editing nothing; Step 12's "If dev wrote its question artifact" relays it with
+                       one AskUserQuestion inside the turn and re-dispatches dev fresh (Step 10's
+                       template, a fresh dispatched_at) with the answer, in Step 5's two lines
+                       (`Clarification round:`, `Previous answers:`), as Step 12 says "as in Step 5";
+                       that dev does the work and writes its report; the cycle goes on as plain
   variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8), keeps its unchanged
                        acceptance criteria and must stop unblocked (else the replay raises); QA passes
   variant=formatter    as plain, the dev then running a formatter (FORMATTER) that rewrites toy/util.py,
@@ -189,6 +197,15 @@ QUESTION = {"need": "Which exception should add raise for a non-number argument?
             "options": [{"label": "TypeError", "description": "the Python convention for a wrong type"},
                         {"label": "ValueError", "description": "treat it as a bad value"}],
             "default": "TypeError", "why": "the request names TypeError but a caller may expect ValueError"}
+# variant=dev-question: the decision the dev meets in toy.add (bool is an int subclass, so the request's
+# "not a number" does not say whether add(True, 1) is accepted).
+DEV_QUESTION = {"need": "Should toy.add accept bool arguments, which Python treats as ints?",
+                "options": [{"label": "accept bool", "description": "bool counts as a number, as isinstance(True, int)"
+                                                                    " says; add(True, 1) keeps returning 2"},
+                            {"label": "reject bool", "description": "add(True, 1) raises TypeError naming argument a"}],
+                "default": "accept bool",
+                "why": "the request says 'not a number' and names no bool case; toy/__init__.py:2 adds any operands "
+                       "today, so either choice changes what a caller of add(True, 1) gets"}
 
 
 @dataclass(frozen=True)
@@ -343,6 +360,8 @@ class DevCycle:
         self.sc, self.tag, self.lane = scenario, "", None
         self.ba_outputs: list = []
         self.ba_question = None
+        self.dev_question = None   # variant=dev-question: the dev's producer question, until it is answered
+        self.dev_answers: list = []
         self.tw_expected = False
         self.qa_report_rel = ""
         devs = DEVIATIONS
@@ -647,9 +666,11 @@ class DevCycle:
 
     def step10_dev(self) -> None:
         sc = self.sc
-        self.dispatch_dev(self.L("Step 10 Agent(dev)"),
-                          sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first() else sc.final,
-                          sc.old, early_qa=self.variant == "qa-early")
+        d = self.dispatch_dev(self.L("Step 10 Agent(dev)"),
+                              sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first()
+                              else sc.final, sc.old, early_qa=self.variant == "qa-early",
+                              question=DEV_QUESTION if self.variant == "dev-question" else None)
+        self.dev_question = d.player.question_written
 
     def fails_first(self) -> bool:
         """Whether this lane's first final-verification QA fails (a qa-fail run)."""
@@ -661,7 +682,7 @@ class DevCycle:
         self.step10_dev()
 
     def dispatch_dev(self, label: str, new_code: str, old_code: str, context_rel: str | None = None,
-                     add_lines=(), early_qa: bool = False):
+                     add_lines=(), early_qa: bool = False, question: dict | None = None):
         o, sc = self.o, self.sc
         tpl = next(t for t in self.templates(10)
                    if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == self.step_role(10))
@@ -678,9 +699,27 @@ class DevCycle:
                     raise AssertionError("a QA dispatched before its dev returned was not refused")
                 return _work(sub, brief, player)
         act = agents.Act(work=work, content={"*": baseline}, summary=sc.dev_summary)
+        if question:  # the decision blocks the work: the dev edits nothing and writes its question instead
+            act = agents.Act(question=dict(question, schema=self.question_schema()),
+                             summary="an owner decision blocks the change")
         return self._dispatch(fields, act, label, subagent_type=self.step_role(10))
 
+    def relay_dev_question(self, label: str = "Step 12") -> None:
+        """Step 12's "If dev wrote its question artifact": relay it as in Step 5 (ONE AskUserQuestion) and
+        re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at), each round until
+        the dev writes its report."""
+        sc = self.sc
+        while self.dev_question:
+            q, answer = self.o.ask(self.dev_question, self.L(f"{label} AskUserQuestion"))
+            self.dev_answers.append({"question": q.get("need"), "answer": answer})
+            n = len(self.dev_answers)
+            add = [f"Clarification round: {n}", f"Previous answers: {json.dumps(self.dev_answers)}"]
+            d = self.dispatch_dev(self.L(f"{label} Agent(dev) clarification round {n}"), sc.final, sc.old,
+                                  add_lines=add)
+            self.dev_question = d.player.question_written
+
     def step12(self, label: str = "Step 12") -> None:
+        self.relay_dev_question(label)
         for rel in self.text_paths(12, "Read dev implementation report"):
             self.read(rel, f"{label} Read {rel}")
 
@@ -1079,7 +1118,7 @@ VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-f
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS + ("qa-never", "qa-early"):
+    if variant not in VARIANTS + ("qa-never", "qa-early", "dev-question"):
         raise ValueError(f"unknown variant {variant!r}")
     tier = rp.args.get("tier", "STANDARD")
     if variant.startswith("fanout"):
