@@ -1,0 +1,11 @@
+{
+  "pipelines_count": 1,
+  "ui_evidence_required": false,
+  "ui_pipeline": false,
+  "primary_artifact": "docs/research/llm-context-window-scaling.md",
+  "evidence_kind_required": [
+    "source_citation_count_min: 5",
+    "word_count_min: 800"
+  ],
+  "verdict_pattern": "PASS|WARNING"
+}

@@ -1,0 +1,7 @@
+{
+  "pipelines_count": 1,
+  "ui_evidence_required": false,
+  "ui_pipeline": false,
+  "evidence_kind_required": ["test_output", "curl_response", "log_excerpt"],
+  "verdict_pattern": "PASS"
+}

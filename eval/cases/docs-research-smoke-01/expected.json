@@ -1,0 +1,7 @@
+{
+  "ui_evidence_required": false,
+  "primary_artifact": "docs/research/forgejo-ci-options.md",
+  "evidence_kind_required": [
+    "source_citation_count_>=5"
+  ]
+}

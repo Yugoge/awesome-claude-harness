@@ -1,0 +1,10 @@
+{
+  "ui_evidence_required": true,
+  "evidence_kind_required": [
+    "screenshot_desktop",
+    "screenshot_mobile",
+    "trace",
+    "dom_measurement"
+  ],
+  "pipelines_count": 1
+}

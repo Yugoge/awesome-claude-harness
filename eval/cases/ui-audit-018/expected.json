@@ -1,0 +1,9 @@
+{
+  "pipelines_count": 1,
+  "ui_evidence_required": true,
+  "ui_specialist_mode": "AUDIT_MODE",
+  "pages_visited_minimum": 7,
+  "screenshots_minimum": 14,
+  "both_viewports_required": true,
+  "verdict_pattern": "PASS|WARNING"
+}

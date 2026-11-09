@@ -1,0 +1,11 @@
+{
+  "pipelines_count": 1,
+  "dev_only_modify": true,
+  "evidence_kind_required": ["hook_test_exit_code"],
+  "ui_evidence_required": false,
+  "enforced_pattern": [
+    {"scenario": "valid_input", "expected_exit": 0},
+    {"scenario": "invalid_input", "expected_exit": 2}
+  ],
+  "verdict_pattern": "PASS"
+}

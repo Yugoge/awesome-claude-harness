@@ -1,0 +1,8 @@
+{
+  "pipelines_count": 1,
+  "ui_evidence_required": true,
+  "viewport_count": 2,
+  "design_handoff_required": true,
+  "evidence_kind_required": ["screenshot_desktop", "screenshot_mobile", "trace", "dom_measurement"],
+  "verdict_pattern": "PASS"
+}

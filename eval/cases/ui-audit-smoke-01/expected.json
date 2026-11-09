@@ -1,0 +1,11 @@
+{
+  "ui_evidence_required": true,
+  "pages_visited_minimum": 7,
+  "screenshots_minimum": 14,
+  "both_viewports_required": true,
+  "evidence_kind_required": [
+    "screenshot_desktop",
+    "screenshot_mobile",
+    "trace"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "pipelines_count": 1,
+  "tier_distribution": {
+    "tier1": 1,
+    "tier2": 0,
+    "tier3": 0
+  },
+  "verdict_pattern": "pass|warning",
+  "evidence_kind_required": ["screenshot_desktop", "screenshot_mobile"],
+  "ui_evidence_required": true,
+  "both_viewports_required": true,
+  "specialist_selection_pattern": {
+    "ui_specialist": true,
+    "primary_specialist": "ui"
+  }
+}

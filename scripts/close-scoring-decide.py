@@ -127,10 +127,11 @@ def _resolve_close_report_path(repo_root: Path, task_id: str) -> Path:
          printed path actually EXISTS — it prints a ${CONTROL_ROOT:-/root}
          fallback path even on exit 1 (no candidate found), which must not be
          returned blindly.
-      3. Fallback: the code repo_root candidate if it exists; otherwise the
-         (known-missing) project candidate, so the missing-report message points
-         at the authoritative project location. The gate never crashes on a
-         missing-report condition.
+      3. Fallback: recheck the project candidate first, since another process
+         may have created it while the resolver ran; then try the code repo_root
+         candidate. If neither exists, return the project candidate so the
+         missing-report message points at the authoritative project location.
+         The gate never crashes on a missing-report condition.
     """
     import subprocess
 
@@ -164,13 +165,14 @@ def _resolve_close_report_path(repo_root: Path, task_id: str) -> Path:
         except (OSError, subprocess.SubprocessError):
             pass
 
-    # 3. Fallback: code repo_root candidate if it exists; otherwise return the
-    #    project candidate (step 1 already proved it missing) so the
-    #    missing-report message points at the authoritative project location.
-    repo_candidate = repo_root / "docs" / "dev" / f"close-report-{task_id}.md"
-    if repo_candidate.exists():
-        return repo_candidate
-    return project_candidate
+    # 3. Recheck the project candidate: it may have appeared while the resolver
+    #    ran. Then try the code root, retaining the project path for a missing
+    #    report so the diagnostic still names the authoritative project location.
+    _candidates = [
+        project_candidate,
+        repo_root / "docs" / "dev" / f"close-report-{task_id}.md",
+    ]
+    return next((p for p in _candidates if p.exists()), _candidates[0])
 
 
 def decide(close_report_path: Path, qa_ever_rejected: bool, repo_root: Path) -> tuple[dict, int]:

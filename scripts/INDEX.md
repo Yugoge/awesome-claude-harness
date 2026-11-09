@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 166
+*Last updated: 2026-11-09T04:35:36Z*
+**Total entries**: 149
 **Convention**: kebab
 
 ## Tree
@@ -41,11 +41,11 @@ scripts/
 │   ├── `spec-verify.py` - Every non-blank, non-separator line from the monolith must appear
 │   ├── `spec_verify_gated.py` - Three sibling checks that share the T5 ``is_strict_guide_mode`` gate and
 │   ├── `spec_verify_mandate.py` - Activated only when the monolith declares ``guide_version: 1`` (or higher)
-│   ├── `spec_verify_parsers.py` - Authoritative grammar: /root/docs/dev/specs/MONOLITH-WRITING-GUIDE.md R6.6
+│   ├── `spec_verify_parsers.py` - Grammar: the regexes below, for the `## Role: <agent>` headings and `consumers:`
 │   └── `spec_verify_summary.py` - Lives alongside `spec_verify_parsers.py` as a sibling sidecar because
 ├── todo/
 │   ├── `clean.py` - Preloaded TodoList for /clean workflow
-│   ├── `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
+│   ├── `close.py` - the same five steps under every prompt (--auto walks each step over its parents;
 │   ├── `deep-search.py` - Python script
 │   ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 │   ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
@@ -63,7 +63,7 @@ scripts/
 ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
 ├── `blast-radius-tool.py` - Two phases:
 ├── `bootstrap` - bootstrap file
-├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
+├── `break-overnight-lock.py` - The time-lock is released by the human-typed /stop record itself
 ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
 ├── `capability-doctor-strict.py` - Two properties this file exists to guarantee:
@@ -79,6 +79,7 @@ scripts/
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 ├── `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
+├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -138,6 +139,7 @@ scripts/
 ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 ├── `session-index.py` - Subcommands (all take --git-root):
 ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
+├── `size-ratchet.py` - Usage:
 ├── `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
 ├── `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the
 ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,

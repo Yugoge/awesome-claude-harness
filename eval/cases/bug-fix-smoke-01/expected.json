@@ -1,0 +1,11 @@
+{
+  "pipelines_count": 1,
+  "tier_distribution": {
+    "tier1": 1,
+    "tier2": 0,
+    "tier3": 0
+  },
+  "verdict_pattern": "pass|warning",
+  "evidence_kind_required": ["test_output"],
+  "ui_evidence_required": false
+}
