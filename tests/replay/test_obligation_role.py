@@ -9,7 +9,12 @@ hooks/lib, with no sandbox: the tree is read, nothing is run.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
+import io
 import re
+import subprocess
+import sys
+import tarfile
 import types
 from pathlib import Path
 
@@ -17,6 +22,7 @@ import pytest
 
 from tests.replay import agents, cmdtext
 from tests.replay.pipeline import Orchestrator
+from tests.replay.test_live_landing import TRANSITIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 SENTINEL = re.compile(r"(FIRST ACTION: Read \S*/\.claude/dev-registry/[^/\s]+/)([A-Za-z0-9_-]+)(\.json)")
@@ -25,8 +31,8 @@ SENTINEL = re.compile(r"(FIRST ACTION: Read \S*/\.claude/dev-registry/[^/\s]+/)(
 class _RP:
     """The little of a replay process the orchestrator's text reads touch."""
 
-    def __init__(self, project: Path):
-        self.layout = types.SimpleNamespace(harness=str(ROOT), project=str(project))
+    def __init__(self, project: Path, harness: Path = ROOT):
+        self.layout = types.SimpleNamespace(harness=str(harness), project=str(project))
 
     @contextlib.contextmanager
     def acting(self, role):
@@ -110,3 +116,31 @@ def test_no_orchestrator_site_reads_the_sentinel_for_a_role():
                    if "registry_role" in p.read_text(encoding="utf-8"))
     assert users == []
     assert agents.registry_role("FIRST ACTION: Read /p/.claude/dev-registry/s/qa.json.") == "qa"
+
+
+def test_an_old_trees_obligation_module_loads(tmp_path):
+    """The replay plays old trees too (test_live_landing's master, 2acc29b). That tree's
+    obligation.py defines dataclasses, which look their module up in sys.modules while the class
+    is made: run from its file without being registered there it does not load, and every role
+    read on that tree failed. The tree's own file loads, and its own grammar names the role."""
+    sha = TRANSITIONS["master"]
+    tar = subprocess.run(["git", "-C", str(ROOT), "archive", sha, "hooks/lib"], capture_output=True, check=True)
+    tree = tmp_path / "tree"
+    with tarfile.open(fileobj=io.BytesIO(tar.stdout)) as tf:
+        tf.extractall(tree, filter="data")
+    path = tree / "hooks" / "lib" / "obligation.py"
+    assert "@dataclass" in path.read_text(encoding="utf-8"), "the old tree's module is the dataclass one"
+    # The failure the loader avoids: the same file run unregistered does not load.
+    spec = importlib.util.spec_from_file_location("p64_unregistered_obligation", path)
+    with pytest.raises(AttributeError):
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    assert "p64_unregistered_obligation" not in sys.modules
+
+    t = agents.Tree(_RP(tmp_path, harness=tree))
+    mod = t.obligation()
+    assert mod is not None and Path(mod.__file__) == path
+    assert t.obligation() is mod  # loaded once
+    prompt = ("FIRST ACTION: Read /p/.claude/dev-registry/s/qa.json to register.\n"
+              '<obligation v="1">\n{"task_id": "20260101-000000", "role": "dev", "pipeline": "dev"}\n</obligation>\n')
+    assert t.obligation_role(prompt) == "dev"
+    assert t.obligation_role(prompt.split("<obligation")[0]) is None

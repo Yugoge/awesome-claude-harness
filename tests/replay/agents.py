@@ -40,6 +40,7 @@ agent file, all of the tree under test, read at run time.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import importlib.util
 import json
 import os
@@ -214,19 +215,24 @@ class Tree:
         return self._agent[role]
 
     def obligation(self):
-        """The tree's hooks/lib/obligation.py, loaded once (None when it does not load)."""
+        """The tree's hooks/lib/obligation.py, loaded once (None when it does not load). It is
+        registered in sys.modules under a name of its own for this tree while it runs (and stays
+        there): an older tree's module defines dataclasses, which look their module up there."""
         if self._obligation is None:
             lib = os.path.join(self.harness, "hooks", "lib")
             self._obligation = False
+            name = "replay_tree_obligation_" + hashlib.sha256(os.path.abspath(lib).encode()).hexdigest()[:16]
             with self.rp.acting("driver"):
-                spec = importlib.util.spec_from_file_location("replay_tree_obligation", os.path.join(lib, "obligation.py"))
+                spec = importlib.util.spec_from_file_location(name, os.path.join(lib, "obligation.py"))
                 if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
                     sys.path.insert(0, lib)
+                    sys.modules[name] = mod
                     try:
-                        mod = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(mod)
                         self._obligation = mod
                     except Exception:
+                        sys.modules.pop(name, None)
                         self._obligation = False
                     finally:
                         sys.path.remove(lib)
@@ -235,9 +241,21 @@ class Tree:
     def terminal_vocabulary(self) -> dict:
         """obligation.TERMINAL_VOCABULARY of the tree (schema id -> dotted path -> legal values)."""
         if self._terminal is None:
-            mod = self.obligation()
-            self._terminal = {k: {p: set(v) for p, v in d.items()}
-                              for k, d in getattr(mod, "TERMINAL_VOCABULARY", {}).items()}
+            lib = os.path.join(self.harness, "hooks", "lib")
+            self._terminal = {}
+            with self.rp.acting("driver"):
+                spec = importlib.util.spec_from_file_location("replay_tree_obligation", os.path.join(lib, "obligation.py"))
+                if spec and spec.loader:
+                    sys.path.insert(0, lib)
+                    try:
+                        mod = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(mod)
+                        self._terminal = {k: {p: set(v) for p, v in d.items()}
+                                          for k, d in getattr(mod, "TERMINAL_VOCABULARY", {}).items()}
+                    except Exception:
+                        self._terminal = {}
+                    finally:
+                        sys.path.remove(lib)
         return self._terminal
 
     def obligation_role(self, prompt: str) -> str | None:
