@@ -113,7 +113,10 @@ def main(argv: list[str] | None = None) -> int:
     nested_repo = git_top(os.path.realpath(home))
     _code, close_out, _err = run(["bash", helper("resolve-close-report.sh"), task_id])
     close_report = close_out.strip()
-    docs_root = Path(close_report).parent if close_report else Path(control_root) / "docs" / "dev"
+    # The close report is <project>/docs/dev/close-report-<id>.md and the task's dev and do reports sit
+    # beside it: the same <project>/docs/dev join their writers use.
+    report_project = Path(close_report).parent.parent.parent if close_report else Path(control_root)
+    docs_root = report_project / "docs" / "dev"
     project_root = docs_root.resolve().parent.parent
 
     code, out, _err = run([sys.executable, helper("late-repair-controller.py"), "resolve-effective-report",

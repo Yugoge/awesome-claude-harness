@@ -16,7 +16,7 @@ bash "<HARNESS_ROOT>/hooks/checkpoint.sh"
 `GIT_CHECKPOINT_MESSAGE` replaces the default `checkpoint` prefix of the snapshot message:
 
 ```bash
-GIT_CHECKPOINT_MESSAGE="Before refactoring" bash "<HARNESS_ROOT>/hooks/checkpoint.sh"
+GIT_CHECKPOINT_MESSAGE="Before refactoring" bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh"
 ```
 
 ## Report back

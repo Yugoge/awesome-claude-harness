@@ -228,6 +228,19 @@ def test_without_a_close_report_the_docs_root_is_the_resolvers_fallback(world) -
     assert out["repository_plan"] is None
 
 
+def test_the_reports_are_the_ones_beside_the_close_report_of_another_project(world) -> None:
+    tmp, control, home = world
+    other = tmp / "other-project"
+    report = _dev_report(other, TASK, ["owned.txt"])
+    close = _close_report(other)
+    _dev_report(control, TASK, ["seed.txt"])    # the control checkout's own report must not be the one read
+
+    out = _plan(control, _env(tmp, home, CLAUDE_PROJECT_DIR=str(other)))
+
+    assert Path(out["close_report"]) == close
+    assert Path(out["task_report"]) == report
+
+
 def test_the_session_id_comes_from_either_variable_and_the_manifest_path_follows_it(world) -> None:
     tmp, control, home = world
     _dev_report(control, TASK, ["owned.txt"])

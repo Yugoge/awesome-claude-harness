@@ -2,21 +2,23 @@
 """Steps 7, 10 and 11 of /test: the validation context, the execution context, the safety checkpoint.
 
     test-context.py validation --request-id ID [--timestamp T] [--project-root DIR]
-    test-context.py execution  --request-id ID [--timestamp T] [--project-root DIR]
+    test-context.py execution  --request-id ID --validation-status S --validators-checked N
+                               [--timestamp T] [--project-root DIR]
     test-context.py checkpoint --request-id ID [--project-root DIR]
 
 The project root defaults to the current directory; T defaults to now (ISO-8601, UTC). Facts go to
 stdout as key=value lines; the exit status is 0 for every state below (2 for wrong arguments).
 
-validation  Writes tests/reports/validation-context-<ID>.json in the Input Format of
-            agents/test-validator.md, the validators taken from tests/reports/validator-registry-<ID>.json.
-            Prints status=ok|missing_registry, context=<path>, validators.
+validation  Prints the validation context as one JSON line, in the Input Format of
+            agents/test-validator.md, the validators taken from tests/reports/validator-registry-<ID>.json;
+            the command hands that JSON to the validator in its dispatch, so no file is written.
+            Prints status=ok|missing_registry, validators, context=<JSON>.
 execution   Writes tests/reports/execution-context-<ID>.json in the Input Format of
             agents/test-executor.md: the same validators, parameters (fail_fast false, verbose true,
-            report_path tests/reports/execution-report-<ID>.json) and validation_report (status and
-            validators_checked read from tests/reports/validation-report-<ID>.json, all_valid when
-            the status is pass). Prints status=ok|missing_registry|missing_validation_report,
-            context=<path>, validators, validation_status.
+            report_path tests/reports/execution-report-<ID>.json) and validation_report (the status and
+            validators_checked the command read from the validator's report and passes in, all_valid when
+            the status is pass). Prints status=ok|missing_registry, context=<path>, validators,
+            validation_status.
 checkpoint  Runs hooks/checkpoint.sh "Before /test execution" (a snapshot on refs/checkpoints/<branch>,
             never on HEAD) and records the commit of that ref as context.checkpoint_commit in the
             execution context. Prints checkpoint_exit, checkpoint_ref, checkpoint_commit (none when
@@ -94,39 +96,22 @@ def cmd_validation(root: Path, request_id: str, timestamp: str) -> None:
         return
     document = base_context(root, "validation", request_id, timestamp, validators)
     document["validation_criteria"] = VALIDATION_CRITERIA
-    target = root / "tests" / "reports" / f"validation-context-{request_id}.json"
-    write_json(target, document)
-    emit(status="ok", context=target.relative_to(root).as_posix(), validators=len(validators))
+    emit(status="ok", validators=len(validators), context=json.dumps(document, ensure_ascii=False))
 
 
-def validation_report_summary(root: Path, request_id: str) -> dict | None:
-    report = read_json(root / "tests" / "reports" / f"validation-report-{request_id}.json")
-    if not isinstance(report, dict):
-        return None
-    body = report["validator"] if isinstance(report.get("validator"), dict) else report
-    status = body.get("status")
-    if not isinstance(status, str):
-        return None
-    return {"status": status, "validators_checked": body.get("validators_checked"), "all_valid": status == "pass"}
-
-
-def cmd_execution(root: Path, request_id: str, timestamp: str) -> None:
+def cmd_execution(root: Path, request_id: str, timestamp: str, status: str, checked: int) -> None:
     validators = registry_validators(root, request_id)
     if validators is None:
         emit(status="missing_registry")
         return
-    summary = validation_report_summary(root, request_id)
-    if summary is None:
-        emit(status="missing_validation_report")
-        return
     document = base_context(root, "execution", request_id, timestamp, validators)
     document["parameters"] = {"fail_fast": False, "verbose": True,
                               "report_path": f"tests/reports/execution-report-{request_id}.json"}
-    document["validation_report"] = summary
+    document["validation_report"] = {"status": status, "validators_checked": checked, "all_valid": status == "pass"}
     target = root / "tests" / "reports" / f"execution-context-{request_id}.json"
     write_json(target, document)
     emit(status="ok", context=target.relative_to(root).as_posix(), validators=len(validators),
-         validation_status=summary["status"])
+         validation_status=status)
 
 
 def git(root: Path, *args: str) -> str:
@@ -165,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("step", choices=("validation", "execution", "checkpoint"))
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--timestamp")
+    parser.add_argument("--validation-status", help="execution: validator.status of the validation report")
+    parser.add_argument("--validators-checked", type=int, help="execution: validator.validators_checked of it")
     parser.add_argument("--project-root", default=".")
     args = parser.parse_args(argv)
     root = Path(args.project_root).resolve()
@@ -172,7 +159,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "validation":
         cmd_validation(root, args.request_id, timestamp)
     elif args.step == "execution":
-        cmd_execution(root, args.request_id, timestamp)
+        if not args.validation_status or args.validators_checked is None:
+            parser.error("execution needs --validation-status and --validators-checked")
+        cmd_execution(root, args.request_id, timestamp, args.validation_status, args.validators_checked)
     else:
         cmd_checkpoint(root, args.request_id)
     return 0

@@ -5,7 +5,7 @@ disable-model-invocation: true
 
 # Test Command Orchestrator
 
-Checks the project's `tests/` validators against the edge cases found in its git history, then runs them. Two subagents do the judging: `test-validator` (syntax, dependencies, quality) and `test-executor` (runs the validators). They exchange JSON files in `tests/reports/`.
+Checks the project's `tests/` validators against the edge cases found in its git history, then runs them. Two subagents do the judging: `test-validator` (syntax, dependencies, quality) and `test-executor` (runs the validators). The validation context travels in the validator's dispatch; the reports and the execution context are JSON files in `tests/reports/`.
 
 Steps 1-7, 10 and 11 are scripts in `<HARNESS_ROOT>/scripts/steps/` that print `key=value` facts, read below by key. `<request_id>` and `<timestamp>` are the values Step 1 prints; pass them to every later script. No step ends the command with a failure: each missing prerequisite has a repair named in its step, and the command goes on.
 
@@ -34,7 +34,7 @@ Runs `scripts/analyze-git-edge-cases.sh` over the last 90 days of fix, bug, erro
 python3 "<HARNESS_ROOT>/scripts/steps/test-prepare.py" migrate
 ```
 
-When `test/` exists and `tests/` is absent or older, runs `scripts/migrate-test-to-tests.sh` (merges test/ into tests/, keeps a differing file as a `.from-test-folder` backup, safe to repeat). `migration=` is `migrated`, `none`, `failed` (go on; Step 5 checks the structure) or `both_exist` (tests/ is newer: leave both and tell the user the script can be run by hand). The command never removes `test/`; the user does once tests/ is reviewed.
+When `test/` exists and `tests/` is absent or older, runs `scripts/migrate-test-to-tests.sh` (merges test/ into tests/, keeps a differing file as a `.from-test-folder` backup, safe to repeat). `migration=` is `migrated` (tell the user to review any `tests/<path>.from-test-folder`: it holds the copy from test/ that differed from the one in tests/), `none`, `failed` (go on; Step 5 checks the structure) or `both_exist` (tests/ is newer: leave both and tell the user the script can be run by hand). The command never removes `test/`; the user does once tests/ is reviewed.
 
 ### Step 4: Cleanup tests/ Based on Git History
 
@@ -70,23 +70,23 @@ Writes `tests/reports/validator-registry-<request_id>.json`: every script valida
 python3 "<HARNESS_ROOT>/scripts/steps/test-context.py" validation --request-id <request_id> --timestamp <timestamp>
 ```
 
-Writes `tests/reports/validation-context-<request_id>.json` in the Input Format of `agents/test-validator.md` (that block is the contract; keep it there). `status=missing_registry`: run Step 6 again.
+Prints `status`, `validators` and `context`: the validation context as one JSON line, in the Input Format of `agents/test-validator.md` (that block is the contract; keep it there). It writes no file: Step 8 hands the JSON to the validator. `status=missing_registry`: run Step 6 again.
 
 ### Step 8: Invoke Test Validator
 
-Delegate to the test-validator subagent (Agent tool, `run_in_background: false`): check the validators listed in `tests/reports/validation-context-<request_id>.json`. It writes `tests/reports/validation-report-<request_id>.json` as `agents/test-validator.md` defines (`validator.status`, `validators_checked`, `syntax_errors`, `dependency_errors`, `quality_issues`, `edge_case_coverage`, `summary`).
+Delegate to the test-validator subagent (Agent tool, `run_in_background: false`), giving it the Step 7 `context` JSON unchanged as the context it receives: check the validators listed there. It writes `tests/reports/validation-report-<request_id>.json` as `agents/test-validator.md` defines (`validator.status`, `validators_checked`, `syntax_errors`, `dependency_errors`, `quality_issues`, `edge_case_coverage`, `summary`).
 
 ### Step 9: Process Validation Results
 
-Read `validator.status`. `pass`: Step 10. `fail`: present the errors, fix them, and re-run Step 8 until it passes.
+Read `validator.status` and `validator.validators_checked`. `pass`: Step 10. `fail`: present the errors, fix them, and re-run Step 8 until it passes. No readable report: re-run Step 8.
 
 ### Step 10: Build Execution Context
 
 ```bash
-python3 "<HARNESS_ROOT>/scripts/steps/test-context.py" execution --request-id <request_id> --timestamp <timestamp>
+python3 "<HARNESS_ROOT>/scripts/steps/test-context.py" execution --request-id <request_id> --timestamp <timestamp> --validation-status pass --validators-checked N
 ```
 
-Writes `tests/reports/execution-context-<request_id>.json` in the Input Format of `agents/test-executor.md`: the registry's validators, `parameters` (`fail_fast: false`, `verbose: true`, `report_path`) and the validation report's `status` and `validators_checked`. `status=missing_registry`: run Step 6; `status=missing_validation_report`: run Step 8 again.
+Writes `tests/reports/execution-context-<request_id>.json` in the Input Format of `agents/test-executor.md`: the registry's validators, `parameters` (`fail_fast: false`, `verbose: true`, `report_path`) and the validation report's `status` and `validators_checked`, as you pass them: `pass` (Step 9 sends only a pass here) and `N`, the `validator.validators_checked` you read in Step 9. `status=missing_registry`: run Step 6.
 
 ### Step 11: Create Safety Checkpoint
 

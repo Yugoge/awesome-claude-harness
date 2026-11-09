@@ -2,6 +2,8 @@
 
 The contexts must keep the shape the two agents document as their Input Format; the shape cases read that
 block from agents/test-validator.md and agents/test-executor.md, so a change to either side shows here.
+The validation context is printed for the validator's dispatch (no file); the validator report's status and
+validators_checked are passed to the execution step as arguments (the script reads no report file).
 """
 from __future__ import annotations
 
@@ -53,8 +55,9 @@ def project_with_registry(tmp_path: Path, name: str = "proj") -> Path:
     return proj
 
 
-def write_report(proj: Path, document: dict) -> None:
-    (proj / "tests" / "reports" / f"validation-report-{RID}.json").write_text(json.dumps(document))
+def execution(proj: Path, status: str = "pass", checked: int = 2, *more: str):
+    return run(proj, "execution", "--request-id", RID, "--timestamp", TS, "--validation-status", status,
+               "--validators-checked", str(checked), *more)
 
 
 def load(proj: Path, kind: str) -> dict:
@@ -77,12 +80,17 @@ def shape(value):
 
 
 # ------------------------------------------------------------------ Step 7: validation
+def printed_context(facts: dict) -> dict:
+    return json.loads(facts["context"])
+
+
 def test_validation_context_has_the_documented_shape_and_the_registry_validators(tmp_path):
     proj = project_with_registry(tmp_path)
     facts, proc = run(proj, "validation", "--request-id", RID, "--timestamp", TS)
     assert proc.returncode == 0
-    assert facts == {"status": "ok", "context": f"tests/reports/validation-context-{RID}.json", "validators": "2"}
-    context = load(proj, "validation")
+    assert list(facts) == ["status", "validators", "context"]
+    assert facts["status"] == "ok" and facts["validators"] == "2"
+    context = printed_context(facts)
     documented = agent_input_format("test-validator.md")
     assert shape(context) == shape(documented)
     assert context["orchestrator"] == documented["orchestrator"]
@@ -96,6 +104,15 @@ def test_validation_context_has_the_documented_shape_and_the_registry_validators
         {"type": "instruction", "path": "tests/instructions/claude-md-protection.md", "edge_case": "EC001",
          "priority": "high"},
     ]
+
+
+def test_validation_context_is_printed_for_the_dispatch_and_writes_no_file(tmp_path):
+    proj = project_with_registry(tmp_path)
+    before = sorted(p.name for p in (proj / "tests" / "reports").iterdir())
+    facts, proc = run(proj, "validation", "--request-id", RID, "--timestamp", TS)
+    assert proc.returncode == 0 and "\n" not in facts["context"]
+    assert sorted(p.name for p in (proj / "tests" / "reports").iterdir()) == before
+    assert not list(proj.rglob("validation-context-*"))
 
 
 def test_validation_context_without_the_registry_is_a_fact_and_writes_nothing(tmp_path):
@@ -115,15 +132,14 @@ def test_a_damaged_registry_counts_as_missing(tmp_path):
 
 def test_the_timestamp_defaults_to_now_in_iso_8601(tmp_path):
     proj = project_with_registry(tmp_path)
-    run(proj, "validation", "--request-id", RID)
-    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", load(proj, "validation")["timestamp"])
+    facts, _ = run(proj, "validation", "--request-id", RID)
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", printed_context(facts)["timestamp"])
 
 
 # ------------------------------------------------------------------ Step 10: execution
 def test_execution_context_has_the_documented_shape(tmp_path):
     proj = project_with_registry(tmp_path)
-    write_report(proj, {"request_id": RID, "validator": {"status": "pass", "validators_checked": 2}})
-    facts, proc = run(proj, "execution", "--request-id", RID, "--timestamp", TS)
+    facts, proc = execution(proj)
     assert proc.returncode == 0
     assert facts == {"status": "ok", "context": f"tests/reports/execution-context-{RID}.json", "validators": "2",
                      "validation_status": "pass"}
@@ -138,24 +154,39 @@ def test_execution_context_has_the_documented_shape(tmp_path):
     assert context["context"]["validators"][0]["edge_case"] == "EC002"
 
 
-def test_execution_context_reads_a_top_level_report_and_a_failed_status(tmp_path):
+def test_execution_context_takes_the_passed_status_and_a_failed_status_is_not_all_valid(tmp_path):
     proj = project_with_registry(tmp_path)
-    write_report(proj, {"status": "fail", "validators_checked": 2})
-    facts, _ = run(proj, "execution", "--request-id", RID)
+    facts, _ = execution(proj, "fail", 7)
     assert facts["validation_status"] == "fail"
-    assert load(proj, "execution")["validation_report"] == {"status": "fail", "validators_checked": 2, "all_valid": False}
+    assert load(proj, "execution")["validation_report"] == {"status": "fail", "validators_checked": 7, "all_valid": False}
 
 
-def test_execution_context_without_a_validation_report_or_registry_is_a_fact(tmp_path):
+def test_execution_context_reads_no_report_file(tmp_path):
+    """The passed values are the only source: a report on disk that says otherwise is not read."""
     proj = project_with_registry(tmp_path)
-    facts, proc = run(proj, "execution", "--request-id", RID)
-    assert proc.returncode == 0 and facts == {"status": "missing_validation_report"}
-    write_report(proj, {"unrelated": True})
-    assert run(proj, "execution", "--request-id", RID)[0] == {"status": "missing_validation_report"}
-    assert not (proj / "tests" / "reports" / f"execution-context-{RID}.json").exists()
+    (proj / "tests" / "reports" / f"validation-report-{RID}.json").write_text(
+        json.dumps({"validator": {"status": "fail", "validators_checked": 99}}))
+    execution(proj, "pass", 2)
+    assert load(proj, "execution")["validation_report"] == {"status": "pass", "validators_checked": 2, "all_valid": True}
+
+
+def test_execution_context_without_the_registry_is_a_fact_and_writes_nothing(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
-    assert run(empty, "execution", "--request-id", RID)[0] == {"status": "missing_registry"}
+    facts, proc = execution(empty)
+    assert proc.returncode == 0 and facts == {"status": "missing_registry"}
+    assert not list(empty.rglob("execution-context-*"))
+
+
+def test_execution_needs_the_status_and_the_count_from_the_validation_report(tmp_path):
+    proj = project_with_registry(tmp_path)
+    for args in (["--validation-status", "pass"], ["--validators-checked", "2"], []):
+        facts, proc = run(proj, "execution", "--request-id", RID, *args)
+        assert proc.returncode == 2 and facts == {}
+    proc = subprocess.run([sys.executable, str(SCRIPT), "execution", "--request-id", RID, "--validation-status",
+                           "pass", "--validators-checked", "many"], cwd=proj, text=True, capture_output=True)
+    assert proc.returncode == 2 and proc.stdout == ""
+    assert not (proj / "tests" / "reports" / f"execution-context-{RID}.json").exists()
 
 
 # ------------------------------------------------------------------ Step 11: checkpoint
@@ -163,8 +194,7 @@ def repo_with_context(tmp_path: Path, branch: str = "main") -> Path:
     proj = project_with_registry(tmp_path)
     git(proj, "init", "-q", "-b", branch, ".")
     git(proj, "commit", "-q", "--allow-empty", "-m", "base")
-    write_report(proj, {"validator": {"status": "pass", "validators_checked": 2}})
-    run(proj, "execution", "--request-id", RID)
+    execution(proj)
     (proj / "work.txt").write_text("changed\n")
     return proj
 
@@ -207,8 +237,7 @@ def test_checkpoint_with_nothing_to_snapshot_records_none_and_still_exits_zero(t
     (proj / ".gitignore").write_text("*\n")
     git(proj, "add", "-f", ".gitignore")
     git(proj, "commit", "-q", "-m", "base")
-    write_report(proj, {"validator": {"status": "pass", "validators_checked": 2}})
-    run(proj, "execution", "--request-id", RID)
+    execution(proj)
     facts, proc = run(proj, "checkpoint", "--request-id", RID)
     assert proc.returncode == 0 and facts["checkpoint_exit"] == "0"
     assert facts["checkpoint_commit"] == "none" and load(proj, "execution")["context"]["checkpoint_commit"] == "none"
@@ -224,8 +253,7 @@ def test_checkpoint_without_an_execution_context_still_takes_the_snapshot(tmp_pa
 
 def test_checkpoint_outside_a_git_repository_is_a_fact_not_a_failure(tmp_path):
     proj = project_with_registry(tmp_path)
-    write_report(proj, {"validator": {"status": "pass", "validators_checked": 2}})
-    run(proj, "execution", "--request-id", RID)
+    execution(proj)
     facts, proc = run(proj, "checkpoint", "--request-id", RID)
     assert proc.returncode == 0
     assert facts["checkpoint_commit"] == "none" and facts["context"] == "ok"
