@@ -138,6 +138,14 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   the terminal, no HTML. D18 is bounded: the owner decides solution-level choices; a measurement decides the rest.
   This replaces D29's "warning only" low-score answer. Detail: `research/scoring-and-asking/P13-D32.md`.
 
+- **D33 Parallel lanes yes, phases never (2026-11-09).** "/dev 的规则主动要求拆分：没问题啊！！！这里说的是并行的！但是很多时候claude理解成他娘的分阶段的！我永远不允许分阶段，我说了dev不允许失败"
+  [splitting into parallel lanes is fine; Claude often reads it as phases; phases are never allowed; dev must not
+  fail]. /dev's fan-out into parallel lanes inside one cycle stays. No spec, BA context, dev plan or report may split a
+  requested outcome into sequential phases, deferred parts, a "phase 2", an "MVP first" or work "for a later cycle":
+  every requested outcome is delivered in the same cycle, and the cycle ends only when all are done (D25). The owner is
+  never asked to open more /dev sessions. The spec-split QA and the BA-QA check fail a plan that phases or defers a
+  requested outcome; close QA fails a cycle that leaves one for later.
+
 ## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
 
 - **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
