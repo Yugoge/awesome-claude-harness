@@ -109,6 +109,7 @@ tests/
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
+├── `test_hero_demo_state_dir.py` - The hero demo honours an absolute CLAUDE_STATE_DIR end to end.
 ├── `test_hook_rejection_retry.py` - A hook-rejected operation is never retried on the owner's answer alone: only his /allow grant or his own run (dev, paseo-daemon, clean).
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 ├── `test_landing.py` - render-settings land, run from hooks/auto-commit.sh), migrate's push exclusion and the settings
