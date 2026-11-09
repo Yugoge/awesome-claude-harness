@@ -1,9 +1,7 @@
-"""The owner's close rating (D9, D9b), for posttool-close-rating.py and P5's Stop gate.
-handle() writes the owner's one rating row and returns the owner summary (a systemMessage).
-The Stop gate imports source_task, rating_required and rating_asked. The /close question is required
-asked, never answered: nothing here blocks."""
+"""The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports."""
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import re
@@ -55,20 +53,8 @@ def rating_asked(transcript_path, task_id: str) -> bool:
 
 
 def append_row(log, row: dict) -> None:
-    """score-update.sh's legacy rows (no kind, no key) reach the log through score_log's writer, under the caller's lock."""
+    """score-update.sh's legacy rows go through score_log's writer, under the caller's lock."""
     _lib("score_log").append(log, row)
-
-
-def _answered(question, response) -> int | None:
-    """The rating of the owner's answer: one of the four exact labels, with none of the CLI's marks of a non-answer
-    (afkTimeoutMs, free text, followUp, an annotation marked unanswered); None otherwise (Skip, free text, AFK, decline, error)."""
-    response = response if isinstance(response, dict) else {}
-    answers, notes = response.get("answers"), response.get("annotations")
-    if any(response.get(k) for k in ("afkTimeoutMs", "response", "followUp")) or any(
-            isinstance(n, dict) and n.get("unanswered") for n in (notes.values() if isinstance(notes, dict) else ())):
-        return None
-    answer = answers.get(question.get("question")) if isinstance(answers, dict) else None
-    return LABEL_TO_RATING.get(answer) if isinstance(answer, str) else None
 
 
 def _utc(seconds: float) -> str:
@@ -76,28 +62,30 @@ def _utc(seconds: float) -> str:
 
 
 def handle(payload) -> dict | None:
-    """The main agent's close-rating question (one question, metadata.source close-rating:<task>): at most one rating row
-    through score_log, and {"systemMessage": owner summary}, returned even when no row was written (AFK, Skip, free text).
-    The row's roles are the scored identities of the task's dispatches in every session of the project, read now. None
-    for any other call or a log that cannot be read; never raises (a failure means no row, no output)."""
+    """A main-agent close-rating call: at most one rating row, and the owner summary as a systemMessage; else None; never raises."""
     try:
         tool_input = payload["tool_input"]
-        task_id, questions = source_task(tool_input), tool_input.get("questions")
+        task_id, questions, response = source_task(tool_input), tool_input.get("questions"), payload.get("tool_response")
         if payload.get("tool_name") != "AskUserQuestion" or payload.get("agent_id") or not task_id \
                 or not isinstance(questions, list) or len(questions) != 1 or not os.path.isabs(payload["cwd"]):
             return None
-        score_log, now = _lib("score_log"), time.time()
+        response = response if isinstance(response, dict) else {}
+        answers, notes = response.get("answers"), response.get("annotations")
+        answer = answers.get(questions[0]["question"]) if isinstance(answers, dict) else None
+        unanswered = any(response.get(k) for k in ("afkTimeoutMs", "response", "followUp")) or any(
+            isinstance(n, dict) and n.get("unanswered") for n in (notes.values() if isinstance(notes, dict) else ()))
+        rating = LABEL_TO_RATING.get(answer) if isinstance(answer, str) and not unanswered else None
+        score_log = _lib("score_log")
         log, project = score_log.log_path(), score_log.project_key(payload["cwd"])
-        rating = _answered(questions[0], payload.get("tool_response"))
         if rating:
-            store = os.environ.get("CLAUDE_PROJECT_DIR") or payload["cwd"]
-            dispatches = _lib("obligation")._task_records(task_id, store, None)  # obligation's cross-session reader
+            dispatches = _lib("obligation")._task_records(task_id, os.environ.get("CLAUDE_PROJECT_DIR") or payload["cwd"], None)
             roles = sorted({score_log.identity(d["obligation"].get("role"), d["obligation"].get("pipeline")) for d in dispatches})
             with score_log.locked(log):
-                score_log.append(log, {"kind": "rating", "ts": _utc(now), "project": project, "task_id": task_id,
+                score_log.append(log, {"kind": "rating", "ts": _utc(time.time()), "project": project, "task_id": task_id,
                                        "rating": rating, "roles": roles, "tool_use_id": payload.get("tool_use_id")})
+        with contextlib.suppress(Exception):
+            _lib("score_events").sweep(payload["transcript_path"], payload["cwd"])
         rows = [row for _, row in score_log.read_lines(str(log))]
-        # as_of one second on: the row just written (ts truncated to the second) is before it
-        return {"systemMessage": score_log.render_owner_summary(rows, project, _utc(now + 1), task_id)}
+        return {"systemMessage": score_log.render_owner_summary(rows, project, _utc(time.time() + 1), task_id)}
     except Exception:
         return None

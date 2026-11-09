@@ -243,6 +243,17 @@ def test_garbage_input_gives_nothing_and_exits_0(config: Path, raw: str) -> None
     assert _rows(config) == list(SEEDED)
 
 
+@pytest.mark.parametrize("tool", ["Agent", "Task"])
+def test_a_dispatch_payload_through_the_hook_as_the_cli_runs_it_is_silent_and_writes_nothing_without_a_span(config: Path, tool: str) -> None:
+    # The Agent branch of the real hook with whatever hooks/lib/score_events.py is there: a dispatch in a session that
+    # holds no harness command span records nothing and prints nothing.
+    payload = {"session_id": "sess", "transcript_path": "/nonexistent.jsonl", "cwd": "/tmp", "hook_event_name": "PostToolUse",
+               "tool_name": tool, "tool_input": {"subagent_type": "dev", "prompt": "p"}, "tool_use_id": "toolu_d",
+               "tool_response": {"status": "completed"}}
+    _silent(_run(payload, config))
+    assert not _log(config).exists()
+
+
 @pytest.mark.parametrize("cwd", [None, 7, ""])
 def test_a_payload_without_a_usable_working_directory_gives_nothing(config: Path, cwd) -> None:
     payload = _payload("4 - Minor gaps")
