@@ -26,6 +26,8 @@ the literal path; the channel stays where the old spelling asked as well. `cli_a
 and the last case holds every command text to it. A subagent gets the same root as its start context
 (prompt-workflow.py at SubagentStart, P2-3), so the agent texts and the prompt includes they read are held to
 it line by line too; ASKS_SINCE_P2 are the agent lines still on the channel that 2.1.319 measured asking.
+The start-function fallback, which runs once a compaction dropped the command start's root, reads it from the
+session's start context, which prompt-workflow.py writes at SessionStart (P2-4); L1_TO_RESPELL are its two lines.
 """
 from __future__ import annotations
 
@@ -377,28 +379,6 @@ def test_each_kept_old_spelling_covers_a_line_only_it_covers():
         assert needed, f"{entry} covers no old spelling a running session holds"
 
 
-# The start-function fallback runs exactly when the hook output, and with it the HARNESS_ROOT= line,
-# is gone (a compaction removed it or the hook printed none), so no printed root can fill it: it keeps
-# the channel and asks rather than fail (P1c's dev_command ctx=compact and ctx=noid replays).
-NO_PRINTED_ROOT = ('python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start',)
-
-
-def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now():
-    """Each command text's harness line the CLI allowed in its old spelling under the old list, both as written and
-    with the script run directly (whichever the old text ran), is allowed by the CLI now: a `${...}` channel on it
-    would ask. Agent and prompt-include texts have their own case (test_no_agent_line_the_cli_allowed_before_asks_now);
-    the start-function fallback (NO_PRINTED_ROOT) is outside."""
-    rules = bash_rules(_allow())
-    before = old_rules(rules)
-    asks = []
-    for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()):
-        if not where.startswith("commands/") or line.startswith(NO_PRINTED_ROOT):
-            continue
-        if all(cli_allows(before, old) for old in old_spellings(line)) and not cli_allows(rules, line):
-            asks.append(f"{where}: {line}")
-    assert not asks, "\n".join(asks)
-
-
 # ------------------------------------------------------------------ agent and prompt-include texts
 # The agent lines that ran unasked in origin/master's spelling and ask under 2.1.319 on the channel: PR #10
 # c6717051862's 13 lines (P2-3; dev.md:1087's and qa.md:1936's spec-check line is checkpoint-marking.md's now),
@@ -484,6 +464,59 @@ def test_a_subagent_starts_with_the_printed_root():
     """The agent lines' `<HARNESS_ROOT>` reaches a subagent only through prompt-workflow.py's SubagentStart answer
     (hooks/tests/test_prompt_workflow_subagent_roots.py), registered for every agent type."""
     groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SubagentStart", [])
+    assert any(group.get("matcher", "") in ("", "*")
+               and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
+               for group in groups)
+
+
+# ------------------------------------------------------------------ command texts
+# The start-function fallback (dev.md and dev-command.md Step 1) runs when the command start's output is gone:
+# a compaction removed it, or the hook printed none. Its line kept the channel, so 2.1.319 asks ("A variable in
+# braces in this command can't be checked before it runs"; P2-4, headless against a mock API: the `~/.claude`
+# spelling runs unasked but misses a CLAUDE_HOME install, the literal root runs it unasked). prompt-workflow.py
+# answers SessionStart with the root lines too, and the CLI runs SessionStart again at a compaction, so the
+# root is in the main agent's context there (hooks/tests/test_prompt_workflow_session_roots.py). Each case is a
+# strict xfail until lane L1 writes the line's harness home as `<HARNESS_ROOT>`; when one XPASSes, delete its
+# entry here.
+L1_TO_RESPELL = [
+    ("commands/dev.md", 'python3 "{H}/hooks/prompt-workflow.py" start <<\'CMDEOF\''),
+    ("commands/dev-command.md", 'python3 "{H}/hooks/prompt-workflow.py" start <<\'CMDEOF\''),
+]
+L1_PENDING = "P2-4, lane L1: write this line's harness home as <HARNESS_ROOT>, then remove this marker"
+L1_KEYS = {_key(*entry) for entry in L1_TO_RESPELL}
+
+
+def _command_cases():
+    seen: dict[str, int] = {}
+    for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()
+                                     if where.startswith("commands/")):
+        seen[where] = seen.get(where, 0) + 1
+        pending = _key(where.rsplit(":", 1)[0], line) in L1_KEYS
+        yield pytest.param(where, line, id=f"{where}#{seen[where]}",
+                           marks=[pytest.mark.xfail(strict=True, reason=L1_PENDING)] if pending else [])
+
+
+@pytest.mark.parametrize("where, line", list(_command_cases()))
+def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now(where, line):
+    """Each command text's harness line the CLI allowed in its old spelling under the old list, both as written and
+    with the script run directly (whichever the old text ran), is allowed by the CLI now: a `${...}` channel on it
+    would ask. Agent and prompt-include texts have their own case (test_no_agent_line_the_cli_allowed_before_asks_now)."""
+    rules, before = _rule_lists()
+    was = all(cli_allows(before, old) for old in old_spellings(line))
+    assert not was or cli_allows(rules, line), f"{where}: {line}"
+
+
+def test_each_l1_line_is_in_the_texts():
+    keys = {_key(where.rsplit(":", 1)[0], line) for where, line, _ in rewritten_commands()}
+    assert L1_KEYS <= keys and len(L1_KEYS) == len(L1_TO_RESPELL)
+
+
+@pytest.mark.xfail(strict=True, reason="P2-4, integration: settings.json registers prompt-workflow.py at "
+                                       "SessionStart, then remove this marker")
+def test_a_session_starts_and_compacts_with_the_printed_root():
+    """The fallback's `<HARNESS_ROOT>` is in the main agent's context after a compaction only through
+    prompt-workflow.py's SessionStart answer, registered for every source (startup, resume, clear, compact)."""
+    groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SessionStart", [])
     assert any(group.get("matcher", "") in ("", "*")
                and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
                for group in groups)
