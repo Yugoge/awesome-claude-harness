@@ -47,6 +47,7 @@ dot-claude/
 │   ├── `paseo-daemon.md` - paseo multi-session monitoring and three-account dynamic scheduling control plane — bootstrap of a persistent disk-backed state machine (blueprint F1–F15, amended 22-entry runtime baseline). Human-only.
 │   ├── `pull.md` - Pull Command
 │   ├── `push.md` - Push Command
+│   ├── `rating.md` - Show every agent's score, rank, trend and latest scored events for this project, then your latest ratings. Terminal text only; it writes nothing.
 │   ├── `redev.md` - /redev is /dev when saving context — the /dev workflow (same arguments, steps, gates and artifacts) without re-emitting its text, under a fresh task id on every invocation. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 │   ├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID; when none is recoverable, continue the invoking session's own main agent.
 │   ├── `spec-update.md` - Update an existing spec, continue unfinished development, or write a temp session note.
@@ -510,6 +511,7 @@ dot-claude/
 │   ├── `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 │   ├── `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 │   ├── `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
+│   ├── `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 │   ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 │   ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 │   ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
@@ -678,6 +680,7 @@ dot-claude/
 │   ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 │   ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 │   ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
+│   ├── `test_rating_view.py` - /rating: scripts/rating-view.py prints the score log's per-agent view of the working directory's project as plain text, and commands/rating.md only runs that script.
 │   ├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
 │   ├── `test_release_pipeline_contract.py` - verifier
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.

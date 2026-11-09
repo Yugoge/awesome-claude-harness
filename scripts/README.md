@@ -76,6 +76,7 @@ Organization and usage documentation for `scripts/`.
 - `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
+- `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 - `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 - `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.

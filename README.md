@@ -660,7 +660,7 @@ Agents remove a tracked file with a non-forced `git rm` (with or without `-r`, `
 
 ---
 
-## The command surface: 21 slash commands
+## The command surface: 22 slash commands
 
 | Group | Command | What it does | When to use |
 |---|---|---|---|
@@ -683,6 +683,7 @@ Agents remove a tracked file with a non-forced `git rm` (with or without `-r`, `
 | **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID; with no recoverable subagent, continue the invoking session's own main agent. Optional trailing text is carried verbatim as guidance for the next phase. | A session/usage limit interrupted running subagents — or interrupted a session that had none, leaving only the main agent to continue. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
 | **Control** | `/tickets` | Read-only lifecycle table: the state and next action of every ticket, spec and lane. | Before `/close` or `/commit`, to see where every task stands. |
+| **Control** | `/rating` | Read-only terminal view of every agent's score, rank, trend and latest scored events for this project, and your latest ratings. | To see how the agents are doing, for example after you rate a cycle. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 
@@ -877,7 +878,7 @@ Each row maps to a capability in the dependency table above.
 ├── settings.json      # clean form: hook wiring and permissions (paseo module off)
 ├── settings.machine.example.json  # documented example of the untracked machine overlay
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 21 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 22 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration

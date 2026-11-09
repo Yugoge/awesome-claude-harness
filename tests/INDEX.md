@@ -124,6 +124,7 @@ tests/
 ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
+├── `test_rating_view.py` - /rating: scripts/rating-view.py prints the score log's per-agent view of the working directory's project as plain text, and commands/rating.md only runs that script.
 ├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
 ├── `test_release_pipeline_contract.py` - verifier
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
