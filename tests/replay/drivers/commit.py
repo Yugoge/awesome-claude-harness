@@ -96,6 +96,10 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   variant=late-repair-qa  the late-repair case to CLOSE: YES, then the task's QA report removed and
                           /commit typed in a later session (F8r): Step 3's call names the report, its
                           QA dispatch runs again, the commit lands
+  variant=codex-style-reject   `/commit <task-id> --codex` after /close: pre-commit QA runs the Codex round and the
+                          stub Codex rejects for a style reason; the text's sentences make that a finding QA
+                          classifies, not a verdict: one round, approved, committed (D31 replay 3; the rules are
+                          read from QA's prompt by drivers/_codex.py)
   cycle_variant=V         the /dev variant (drivers/dev.py; fanout runs the fan-out cycle)
   session=same|later      /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every other variant)
@@ -112,6 +116,7 @@ import shlex
 from .. import agents, cmdtext
 from ..pipeline import Deviations, Respelling, Orchestrator, utc_now
 from ..replay import Deviation
+from . import _codex
 from . import close as closedrv
 
 PIPELINE = "commit"
@@ -121,6 +126,10 @@ COST = {"auto": 482, "commit-route": 694, "full": 796}
 # The variants the artifact check replays (tests/artifact_graph/runtime.py): the docstring's others are run
 # on their own (`--arg variant=...`).
 VARIANTS = ["auto", "commit-route", "full"]
+# The Codex variant (D31's replay 3): not in VARIANTS, so the artifact check's shards do not replay it;
+# tests/replay/test_codex_loop.py does.
+CODEX_SCRIPTS = {"codex-style-reject": _codex.STYLE_REJECT}
+CODEX_VARIANTS = tuple(CODEX_SCRIPTS)
 
 RESPELLINGS = [
     Respelling("M1 controller", r"source venv/bin/activate && python3 scripts/late-repair-controller\.py",
@@ -222,8 +231,11 @@ def parse_disposition(stdout: str) -> dict:
 
 
 class CommitRun:
-    def __init__(self, rp, session, tid: str, producer=None, extra_devs=(), variant: str = "plain"):
+    def __init__(self, rp, session, tid: str, producer=None, extra_devs=(), variant: str = "plain", codex=None):
         self.rp, self.tid, self.producer, self.variant = rp, tid, producer, variant
+        # `--codex`: pre-commit QA runs the text's Codex round against the stub of `codex` = (rules, script)
+        self.codex = _codex.CommitCodex(self, codex[0], codex[1], lambda k, v: closedrv.fact(rp, k, v)) if codex else None
+        self.qa_codex = "true" if codex else "false"
         pairs = (list(DEVIATIONS.pairs) + list(closedrv.DEVIATIONS.pairs) + list(extra_devs)
                  + list(getattr(getattr(producer, "devs", None), "pairs", [])))
         self.devs = closedrv.kept_only(rp, Deviations(pairs))
@@ -704,7 +716,7 @@ class CommitRun:
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 6")) if "<obligation" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
         prompt = o.instantiate(tpl, self.tid)
-        rules = [(r"^PLAN_GROUPS$", json.dumps(groups)), (r"^QA_CODEX$", "false"), (r"^true\|false$", "false"),
+        rules = [(r"^PLAN_GROUPS$", json.dumps(groups)), (r"^QA_CODEX$", self.qa_codex), (r"^true\|false$", self.qa_codex),
                  (r"^TASK_ID or ", self.tid)]
         return o.bind(prompt, rules)
 
@@ -728,7 +740,8 @@ class CommitRun:
     def commit_qa(self, groups: list, label: str, verdict: str = "COMMIT: APPROVE", finding: str = "", prompt=None):
         o = self.o
         prompt = prompt or self.qa_prompt(groups)
-        player = agents.Player(o.tree, prompt, self.commit_qa_act(groups, verdict, finding), role="qa")
+        act = self.codex.act(groups) if self.codex else self.commit_qa_act(groups, verdict, finding)
+        player = agents.Player(o.tree, prompt, act, role="qa")
         lab = self.label(label)
         return o.s.dispatch("qa", prompt, description="pre-commit QA", body=player.body, result=player.final, label=lab,
                             deviation=self.devs.at(lab))
@@ -895,6 +908,8 @@ class CommitRun:
         text = self.stalled or f"/commit {self.tid}: {out}"
         ev = self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
         self.rp.terminal("commit", out in COMMITTED and self.clean(), ev, task=self.tid, outcome=out)
+        if self.codex:
+            self.codex.finish()
         return out
 
     def clean(self) -> bool:
@@ -1000,7 +1015,7 @@ def fanout_dev(rp):
 
 
 VARIANT_NAMES = ("plain", "route", "append", "auto", "commit-route", "full", "unclosed", "laneqa", "aggregate",
-                 "reject", "waits", "late-repair", "late-repair-drift", "late-repair-qa")
+                 "reject", "waits", "late-repair", "late-repair-drift", "late-repair-qa") + CODEX_VARIANTS
 
 
 def run(rp) -> None:
@@ -1008,8 +1023,15 @@ def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
     if variant not in VARIANT_NAMES:
         raise ValueError(f"unknown variant {variant!r}")
+    codex = None
+    if variant in CODEX_VARIANTS:
+        # The text's rules first, before any pipeline runs: a text without them (or at odds with the scripted
+        # run) stops the replay here, naming the sentence.
+        codex = (_codex.commit_rules(rp), CODEX_SCRIPTS[variant])
+        _codex.check_commit_script(*codex)
+        closedrv.fact(rp, "codex rules", codex[0].to_fact())
     # Acceptance 7 types the /close or /commit of its routing cases in a later session than the /dev.
-    session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") else "later")
+    session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") + CODEX_VARIANTS else "later")
     rp.pipeline = (closedrv.pipeline_name(after, rp) + "+close+commit" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
     if variant == "laneqa":  # the /dev session interrupted before its QA (Step 13) was ever dispatched
@@ -1025,7 +1047,7 @@ def run(rp) -> None:
     session = rp.later_session(s) if session_kind == "later" else s
     if variant not in ("unclosed", "laneqa", "waits"):
         close_variant = {"commit-route": "plain", "full": "append", "aggregate": "plain",
-                         "reject": "plain", "late-repair-qa": "late-repair"}.get(variant, variant)
+                         "reject": "plain", "late-repair-qa": "late-repair", "codex-style-reject": "plain"}.get(variant, variant)
         cr = closedrv.CloseRun(rp, session, tid, producer=producer, variant=close_variant, auto=variant == "auto")
         if variant == "auto":
             cr.run_auto()
@@ -1045,7 +1067,7 @@ def run(rp) -> None:
     if (variant in ("commit-route", "full", "aggregate", "waits", "late-repair", "late-repair-drift",
                     "late-repair-qa") and session_kind == "later"):
         session = rp.later_session(session)
-    run_ = CommitRun(rp, session, tid, producer=producer, variant=variant)
+    run_ = CommitRun(rp, session, tid, producer=producer, variant=variant, codex=codex)
     if variant == "waits":
         # `/commit` with no task context: the Task question; the stub owner picks the first candidate.
         run_.o.slash("", label=run_.label("typed (no task)"))
@@ -1059,4 +1081,4 @@ def run(rp) -> None:
         # `/commit --auto --force`: the Flags question, then --auto as the answer names it.
         CommitRun(rp, rp.later_session(session), tid, producer=producer).run_auto("--auto --force")
         return
-    run_.run()
+    run_.run(f"{tid} --codex" if codex else None)
