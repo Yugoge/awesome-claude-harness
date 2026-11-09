@@ -13,9 +13,8 @@ import re
 import time
 from pathlib import Path
 
-ASK_COMMANDS = frozenset({"spec", "dev", "redev", "dev-command"})
-DIMENSIONS = ("acceptance", "edge_cases", "intent", "scope")
-SOURCE_RE = re.compile(r"^(requirement-round|producer-question):([A-Za-z0-9][A-Za-z0-9_-]{2,80}):(r[1-9][0-9]*|ba|dev)$")
+SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "requirement-round.v1.json"
+SOURCE_RE = re.compile(r"^(requirement-round|producer-question):([A-Za-z0-9][A-Za-z0-9_-]{2,80}):(r[1-9][0-9]*|[a-z][a-z0-9-]*)$")
 ROUND = "docs/dev/requirement-round-{task}-r{n}.json"
 PANEL = "docs/dev/ba-panel-{task}-r1.json"
 ANSWERS = "docs/dev/requirement-answers-{task}-r{n}.json"
@@ -29,6 +28,15 @@ _PRE_ASK = re.compile(r"(?:^|/)docs/dev/(?:requirement-round-(.+)-r1\.json|ba-pa
 # choice written in plain words.
 _CODE_TOKEN = re.compile(r"`|::|\(\)|(?:[\w.-]+/)+[\w-]+\.\w+|\b[\w-]+\.(?:py|js|ts|tsx|jsx|json|md|sh|ya?ml|toml"
                          r"|txt|html|css|go|rs|java|rb|sql|ini|cfg)\b")
+
+
+def dimensions() -> list:
+    """The round's dimensions, as requirement-round.v1 enumerates them (its one home), sorted."""
+    try:
+        doc = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        return sorted(doc["properties"]["questions"]["items"]["properties"]["dimension"]["enum"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
 
 
 def _lib(name: str):
@@ -136,8 +144,11 @@ def runs_round(span) -> bool:
     if span is None:
         return False
     body = span.body()
-    if body is None:
-        return True
+    if body is None:  # held to the current text (Stop gate's _loaded_lacks)
+        try:
+            body = (Path(_lib("stop_contract").COMMANDS_DIR) / f"{span.command}.md").read_text(encoding="utf-8")
+        except (OSError, AttributeError):
+            body = ""
     todos = " ".join(str(t.get("content", "")) for t in span.last_todos() or () if isinstance(t, dict))
     return any(m in body or m in todos for m in ROUND_MARKERS)
 
@@ -214,8 +225,10 @@ def _asked_questions(project, task: str) -> list:
     return out
 
 
-def check_round(project, ob: dict, rel: str, span) -> list:
-    """What JSON Schema cannot say about a schema-valid round file ``rel`` of the obligation's task (R1, D29, D32)."""
+def check_round(project, ob: dict, rel: str, span, answered: bool = True) -> list:
+    """What JSON Schema cannot say about a schema-valid round file ``rel`` of the obligation's task (R1, D29, D32).
+    ``answered`` False leaves out the already-answered rule, the one rule that reads the answer files: G2 holds it,
+    and G1 decides on the round file alone (D24, one decider per artifact)."""
     doc, task = _load(Path(project) / rel) or {}, task_of(ob.get("task_id"))
     match = _ROUND_FILE.search(rel)
     n, errors = doc.get("round"), []
@@ -226,14 +239,13 @@ def check_round(project, ob: dict, rel: str, span) -> list:
     elif n > 1 and not round_asked(span, project, task, n - 1):
         errors.append(f"round r{n - 1} has not been asked; a round follows the asked one before it")
     spec = doc.get("spec_id")
-    if spec and not (Path(project) / f"docs/dev/specs/spec-{spec}.md").is_file():
-        errors.append(f"spec_id {spec!r} names no spec (docs/dev/specs/spec-{spec}.md)")
     questions = [q for q in doc.get("questions") or [] if isinstance(q, dict)]
-    if n == 1 and not spec and sorted(q.get("dimension") for q in questions) != list(DIMENSIONS):
-        errors.append("a round 1 without a spec asks exactly four questions, one per dimension: " + ", ".join(DIMENSIONS))
+    dims = dimensions()
+    if n == 1 and not spec and sorted(q.get("dimension") for q in questions) != dims:
+        errors.append("a round 1 without a spec asks exactly four questions, one per dimension: " + ", ".join(dims))
     # Answered in an earlier round of the task or in its spec's rounds; never this round's own (D29).
-    done = {_norm(q.get("question")): (t, ref) for t in {task, spec} - {None}
-            for ref, q, answered in _asked_questions(project, t) if answered and (t, ref.split(".")[0]) != (task, f"r{n}")}
+    done = {_norm(q.get("question")): (t, ref) for t in ({task, spec} - {None} if answered else ())
+            for ref, q, was in _asked_questions(project, t) if was and (t, ref.split(".")[0]) != (task, f"r{n}")}
     verified = {r.get("ba") for r in (doc.get("panel") or {}).get("reports") or [] if r.get("root_cause") == "verified"}
     for q in questions:
         options = [o for o in q.get("options") or [] if isinstance(o, dict)]
@@ -306,9 +318,9 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
     """G1 inside an ask span (R5), for the span's task: the refusal of a dispatch made before an owner question was
     asked, else None. A dispatch that declares the question file itself (its repair) or carries no obligation passes.
     ``current`` is the tool_use id of the dispatch being decided, never counted as its role's latest dispatch."""
-    if span is None or span.command not in ASK_COMMANDS or not isinstance(ob, dict) or not runs_round(span):
+    if span is None or not isinstance(ob, dict) or not runs_round(span):
         return None
-    task = task_of(ob.get("task_id") if span.command == "spec" else span.minted_id())
+    task = task_of(ob.get("task_id") if span.command == "spec" else span.minted_id())  # /spec mints no id
     if not task:
         return None
     declared = {a.get("path") for a in ob.get("artifacts") or [] if isinstance(a, dict)}
@@ -337,7 +349,7 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
         # A round G2 refuses (an answered question again, a refuted BA's option) is never asked: its producer
         # writes it again, so it holds no dispatch back.
         if contract.validate_artifact_for_obligation(str(path), schema).get("status") == "pass" \
-                and not (round_file and check_round(project, {"task_id": task}, rel, span)) \
+                and not (round_file and check_round(project, {"task_id": task}, rel, span, answered=False)) \
                 and not asked(span, source, round_file, after=0 if round_file else call.result_line):
             return (f"ASK_FIRST: ask {rel} with one AskUserQuestion, metadata.source \"{source}\", questions exactly "
                     "as written; then dispatch.")

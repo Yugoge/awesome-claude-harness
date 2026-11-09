@@ -113,7 +113,7 @@ PIPELINE = "dev"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508,
-        "formatter": 310}
+        "formatter": 310, "spec-round": 320}  # spec-round: estimated from plain's (one BA intake for the panel)
 
 REQUIREMENT = ("add input validation to toy.add: raise TypeError naming the offending argument "
                "when an argument is not a number")
@@ -1303,7 +1303,8 @@ class FanoutCycle(DevCycle):
         self.stop()
 
 
-VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail", "formatter")
+# spec-round is also an artifact-check job: its BA intake is round 1's requirement-round file's one traced producer.
+VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail", "formatter", "spec-round")
 # P13-1 (D28, D29, D32): the requirement round's variants; not artifact-check jobs (the round runs in every variant).
 ROUND_VARIANTS = ("spec-round", "round", "round-unasked", "round-paraphrase", "round-broken", "round-skip", "round-decline",
                   "round-afk", "devquestion", "round-many", "text-question", "panel-disagree", "panel-refuted")

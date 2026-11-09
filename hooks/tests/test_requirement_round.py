@@ -175,11 +175,12 @@ def test_a9_an_assume_that_is_not_one_of_its_labels_fails(project, tx):
     assert any("assume 'Maybe' is not one of its option labels" in e for e in check(project, ROUND1, tx))
 
 
-def test_a9_with_a_spec_one_question_is_enough_and_the_spec_must_exist(project, tx):
+def test_a9_with_a_spec_one_question_is_enough(project, tx):
+    """The spec itself is spec-verify's to decide (D24: one decider per artifact); the round reads only its id."""
     put(project, ROUND1, round_doc(questions=[q(1, "scope")], spec="20261108-090000"))
-    assert any("names no spec" in e for e in check(project, ROUND1, tx))
-    (project / "docs/dev/specs/spec-20261108-090000.md").write_text("# Spec\n")
     assert check(project, ROUND1, tx) == []
+    put(project, ROUND1, round_doc(questions=[q(1, "scope")]))
+    assert any("one per dimension" in e for e in check(project, ROUND1, tx))
 
 
 def test_a9_a_round_follows_the_asked_one_before_it(project, tx):
