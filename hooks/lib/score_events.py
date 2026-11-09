@@ -10,16 +10,12 @@ from datetime import datetime, timezone
 # as hooks.lib.score_events, or from hooks/lib on the path
 command_span, obligation, score_log = (importlib.import_module(f"{__package__}.{n}" if __package__ else n)
                                        for n in ("command_span", "obligation", "score_log"))
-CAUSE_ROLE = {"dev_implementation": "dev", "ba_spec": "ba"}  # a failure's primary_cause -> the role it costs
-
-
-def _utc(value=None):
-    return (obligation.parse_iso8601(value) or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict: the result's time, a one-line why without task id, ref (default: d's report)
-    return {"event": event, "role": role, "task_id": d["task"], "ts": _utc(d["at"]), "key": key or f"{event}:{d['id']}:{role}",
-            "why": score_log._why({"task_id": d["task"], "why": why}), "ref": ref or d["path"] or ""}
+    return {"event": event, "role": role, "task_id": d["task"], "key": key or f"{event}:{d['id']}:{role}",
+            "why": score_log._why({"task_id": d["task"], "why": why}), "ref": ref or d["path"] or "",
+            "ts": (obligation.parse_iso8601(d["at"]) or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
 def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored identity), task (canonical), lane, ob, path (lane QA's
@@ -27,12 +23,10 @@ def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored 
     with open(tp, "rb") as handle:
         for call, ob in span.obligations():
             handle.seek(uses[call.id].result_at)
-            record = json.loads(handle.readline())  # the CLI's record of the result: its timestamp, toolUseResult.agentId
-            agent = record.get("toolUseResult")
-            agent = agent.get("agentId") if isinstance(agent, dict) else None
+            result = (record := json.loads(handle.readline())).get("toolUseResult")  # the CLI's record of the result; the agentId in it names the subagent's transcript
             who = score_log.identity(ob.get("role"), ob.get("pipeline"))
             ds.append(dict(n=len(ds), id=call.id, who=who, task=obligation.canonical_task_id(ob.get("task_id")), lane=ob.get("lane"), ob=ob, at=record.get("timestamp"),
-                           sub=f"{os.path.splitext(tp)[0]}/subagents/agent-{agent}.jsonl",
+                           sub=f"{os.path.splitext(tp)[0]}/subagents/agent-{result.get('agentId') if isinstance(result, dict) else None}.jsonl",
                            path=next((a.get("path") for a in ob["artifacts"] if a.get("schema") == "qa-report.v2"), None) if who == "qa" else None))
     return [d for d in ds if d["task"]]
 
@@ -52,8 +46,7 @@ def _report(ctx, d, later):  # the report file; once the next dispatch of that f
         if not later or mtime < obligation.parse_iso8601(later["ob"]["dispatched_at"]).timestamp():
             with open(path, encoding="utf-8") as handle:
                 return json.load(handle)
-        wrote = [i.get("content") for b in _walk(d) if b.get("name") == "Write" and str((i := b.get("input") or {}).get("file_path")).endswith(d["path"])]
-        return json.loads(wrote[-1])  # overwritten: the file as d's own transcript last wrote it
+        return json.loads([i.get("content") for b in _walk(d) if b.get("name") == "Write" and str((i := b.get("input") or {}).get("file_path")).endswith(d["path"])][-1])  # overwritten: as d last wrote it
 
 
 def _lane_qa(ctx):  # ctx["qa"]: lane QA (role qa outside close) in order, each with rep (its report), status and fails (dicts)
@@ -61,13 +54,7 @@ def _lane_qa(ctx):  # ctx["qa"]: lane QA (role qa outside close) in order, each 
     for i, d in enumerate(qa):
         d["rep"] = _report(ctx, d, next((e for e in qa[i + 1:] if e["path"] == d["path"]), None))
         d["status"] = obligation.terminal_status("qa-report.v2", d["rep"])
-        found = d["rep"]["qa"].get("failures") if d["status"] == "fail" else None
-        d["fails"] = [f for f in found if isinstance(f, dict)] if isinstance(found, list) else []
-
-
-def _status(ctx, path):  # qa.status of a qa-report.v2 file; None when it cannot be read
-    with suppress(OSError, ValueError, TypeError, AttributeError), open(os.path.join(ctx["cwd"], path), encoding="utf-8") as handle:
-        return obligation.terminal_status("qa-report.v2", json.load(handle))
+        d["fails"] = [f for f in (d["rep"]["qa"].get("failures") if d["status"] == "fail" else None) or () if isinstance(f, dict)]
 
 
 def _rel(ctx, loc):  # the project-relative file part of a "file:line" location
@@ -79,14 +66,14 @@ def _written(ctx, d):  # the project-relative files dispatch d's own tool calls 
 
 
 def qa_first_pass(ctx):  # the lane's first QA dispatch passed (a later pass, or one after an unreadable report, is not first)
-    for d in {(d["task"], d["lane"]): d for d in reversed(ctx["qa"])}.values():
-        for role in score_log.POINTS["qa_first_pass"] if d["status"] == "pass" else ():
-            yield _event(ctx, d, "qa_first_pass", role, "lane QA passed at the first round")
+    first = {(d["task"], d["lane"]): d for d in reversed(ctx["qa"])}.values()
+    yield from (_event(ctx, d, "qa_first_pass", role, "lane QA passed at the first round") for d in first if d["status"] == "pass" for role in score_log.POINTS["qa_first_pass"])
 
 
 def qa_fail(ctx):  # a row per scored role the failures blame, with the first such failure's issue (reversed: the first wins)
     for d in ctx["qa"]:
-        blamed = {CAUSE_ROLE[c]: f.get("issue") or "lane QA failed" for f in reversed(d["fails"]) if (c := str(f.get("primary_cause"))) in CAUSE_ROLE}
+        blamed = {r: f.get("issue") or "lane QA failed" for f in reversed(d["fails"])  # a failure's primary_cause names the role it costs
+                  if (r := {"dev_implementation": "dev", "ba_spec": "ba"}.get(str(f.get("primary_cause"))))}
         for role, issue in blamed.items():
             yield _event(ctx, d, "qa_fail", role, issue)
 
@@ -105,15 +92,12 @@ def qa_catch(ctx):  # a QA failure, the lane's next dev dispatch wrote a file a 
 
 
 def _producer(ctx, d, path):  # (task, lane, identity) of the dispatch that owes path, and whether its lane's QA report now reads pass; (None, False): none, or a close-time one
-    roots = [os.path.dirname(os.path.dirname(ctx["tp"]))]
-    ob = (obligation.declaring_dispatch(d["task"], path, ctx["cwd"], roots) or {}).get("obligation") or {}
-    if not ob.get("role") or ob.get("pipeline") == "close":
-        return None, False
-    group = obligation.canonical_task_id(ob.get("task_id")), ob.get("lane"), score_log.identity(ob["role"], ob["pipeline"])
-    records = obligation._task_records(d["task"], ctx["cwd"], roots)  # every session's dispatch records of the task
-    return group, any(_status(ctx, a["path"]) == "pass" for r in records for o in [r["obligation"]] for a in o["artifacts"]
-                      if o.get("role") == "qa" and o.get("pipeline") != "close" and a.get("schema") == "qa-report.v2"
-                      and (obligation.canonical_task_id(o.get("task_id")), o.get("lane")) == group[:2])
+    ob = (obligation.declaring_dispatch(d["task"], path, ctx["cwd"], ctx["roots"]) or {}).get("obligation") or {}
+    group = (obligation.canonical_task_id(ob.get("task_id")), ob.get("lane"), score_log.identity(ob["role"], ob["pipeline"])) if ob.get("role") and ob.get("pipeline") != "close" else None
+    return group, bool(group) and any(obligation.terminal_status("qa-report.v2", _report(ctx, {"path": a["path"], "ob": o}, None)) == "pass"
+                                      for r in obligation._task_records(d["task"], ctx["cwd"], ctx["roots"]) for o in [r["obligation"]] for a in o["artifacts"]  # every session's records
+                                      if score_log.identity(o.get("role"), o.get("pipeline")) == "qa" and a.get("schema") == "qa-report.v2"
+                                      and (obligation.canonical_task_id(o.get("task_id")), o.get("lane")) == group[:2])
 
 
 def _close_qa(ctx):  # ctx["close"]: close-QA rounds in order, each with verdict (yes/no/unknown) and finds (cited file, producer group, lane QA passed)
@@ -122,8 +106,8 @@ def _close_qa(ctx):  # ctx["close"]: close-QA rounds in order, each with verdict
     for d in ctx["close"]:
         blocks = list(_walk(d))  # its reply is the last text it said (a launch notice carries none); its section, what it wrote or ran
         d["verdict"] = cv["classify_line"](cv["last_nonempty"](str(next((b.get("text") for b in reversed(blocks) if b.get("type") == "text"), ""))))
-        wrote = [str(v) for b in blocks for v in (b.get("input") or {}).values() if "## Findings" in str(v)]
-        found = re.findall(r"(?m)^- `?([^\s`]+?)`?:\s", re.split(r"(?m)^## ", wrote[-1].partition("## Findings")[2])[0]) if wrote and d["verdict"] == "no" else []
+        wrote = "\n".join(str(v) for b in blocks for v in (b.get("input") or {}).values()).rpartition("## Findings")[2]  # after its last findings heading
+        found = re.findall(r"(?m)^- `?([^\s`]+?)`?:\s", re.split(r"(?m)^## ", wrote)[0]) if d["verdict"] == "no" else []
         d["finds"] = [(rel, *_producer(ctx, d, rel)) for rel in (_rel(ctx, p) for p in found)]
 
 
@@ -142,28 +126,38 @@ def close_catch(ctx):  # a finding's producer wrote the cited file in a later di
                 yield _event(ctx, land, "close_catch", "close-qa", "a close finding was fixed by its producer, then a round landed", f"close_catch:{land['id']}:{i}", path)
 
 
-RULES = [qa_first_pass, qa_fail, qa_catch, escaped, close_catch]  # a rule is f(ctx) -> event dicts built with _event; list it here (ctx: span, tp, cwd, project, ds, qa, close)
+def rerun_gap(ctx):  # a dispatch whose previous one in its group (task, lane, identity, declared paths) never touched them, nor wrote a producer question
+    last = {}
+    for d in ctx["ds"]:
+        paths = frozenset(a["path"] for a in d["ob"]["artifacts"] if a.get("path"))
+        key = d["task"], d["lane"], d["who"], paths
+        before, last[key] = last.get(key), d
+        if before and paths and os.path.isfile(before["sub"]):  # touched: any tool call of its own names the path (a Write, a heredoc, a helper script)
+            seen = " ".join(str(v) for b in _walk(before) for v in (b.get("input") or {}).values())
+            if not any(p in seen for p in paths | {f"docs/dev/producer-question-{before['ob']['task_id']}-{before['ob']['role']}.json"}):
+                yield _event(ctx, d, "rerun_gap", d["who"], "dispatched again after its previous dispatch left a declared artifact unwritten", f"rerun_gap:{d['id']}")
+
+
+RULES = [qa_first_pass, qa_fail, qa_catch, escaped, close_catch, rerun_gap]  # a rule is f(ctx) -> event dicts built with _event; list it here (ctx: tp, cwd, roots, project, ds, qa, close)
 
 
 def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: first-row-per-key makes a repeat write nothing; never raises
     with suppress(Exception):
         # a non-string path is refused: active_span would take an int for a file descriptor and close it
-        span = command_span.active_span(transcript_path) if isinstance(transcript_path, str) and isinstance(cwd, str) else None
-        if span is None:
-            return
-        ctx, rows = {"span": span, "tp": transcript_path, "cwd": cwd, "ds": _dispatches(span, transcript_path), "project": score_log.project_key(cwd)}, []
-        _lane_qa(ctx)
-        with suppress(Exception):  # the close rules' facts: a failure here costs only them
-            _close_qa(ctx)
-        for rule in RULES:
-            with suppress(Exception):  # one failing rule never stops another (and writes nothing)
-                rows += [{"kind": "event", "ts": _utc(), "project": ctx["project"], "ref": "", **e, "points": p}
-                         for e in rule(ctx) if (p := score_log.points_for(e["event"], e["role"])) is not None]
-        if rows:
-            log = score_log.log_path()
-            with score_log.locked(log):
-                for row in rows:
-                    score_log.append(log, row)
+        if span := command_span.active_span(transcript_path) if isinstance(transcript_path, str) and isinstance(cwd, str) else None:
+            ctx, rows = {"tp": transcript_path, "cwd": cwd, "roots": [os.path.dirname(os.path.dirname(transcript_path))],  # the CLI's store root holds <slug>/<session>.jsonl
+                         "ds": _dispatches(span, transcript_path), "project": score_log.project_key(cwd)}, []
+            for facts in (_lane_qa, _close_qa):
+                with suppress(Exception):  # a rule's facts: a failure here costs only the rules that read them
+                    facts(ctx)
+            for rule in RULES:
+                with suppress(Exception):  # one failing rule never stops another (and writes nothing)
+                    rows += [{"kind": "event", "project": ctx["project"], **e, "points": p}
+                             for e in rule(ctx) if (p := score_log.points_for(e["event"], e["role"])) is not None]
+            if rows:
+                with score_log.locked(log := score_log.log_path()):
+                    for row in rows:
+                        score_log.append(log, row)
 
 
 def observe(payload):  # the PostToolUse hook's entry: the main agent's dispatches only

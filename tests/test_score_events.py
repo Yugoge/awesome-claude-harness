@@ -71,8 +71,10 @@ class Cycle:
 
     def dispatch(self, role: str, *, task: str = TASK, lane=None, pipeline: str = "dev", profile: str = "singular",
                  artifacts=None, wrote=(), launch: bool = False, ok: bool = True, stamp: bool = True, suffix: bool = True,
-                 reply: str = "done", extra=None) -> str:
-        """One Agent dispatch, its result 30 s later; `wrote` are files its subagent transcript shows it writing."""
+                 reply: str = "done", extra=None, declared: bool = True) -> str:
+        """One Agent dispatch, its result 30 s later; `wrote` are files its subagent transcript shows it writing, and
+        (with `declared`) so are the artifacts it declares: a producer that finishes writes them. QA's reports are
+        written by report() and a close round's by complete_close_qa()."""
         self.count += 1
         ident, agent = f"toolu_{self.count:03d}", f"agent{self.count:03d}"
         tid = f"{task}-{lane}" if lane and suffix else task
@@ -97,7 +99,7 @@ class Cycle:
         records = [{"type": "user", "isSidechain": True, "cwd": str(self.project), "message": {"role": "user", "content": prompt}},
                    {"type": "summary", "summary": "a record without a message"},
                    {"type": "assistant", "isSidechain": True, "message": {"role": "assistant", "content": [{"type": "text", "text": "start"}]}}]
-        for n, name in enumerate(wrote):
+        for n, name in enumerate([*wrote, *([a["path"] for a in artifacts if a.get("path")] if declared and role != "qa" else [])]):
             target = str(self.project / name)
             records += [{"type": "assistant", "isSidechain": True, "cwd": str(self.project), "message": {"role": "assistant", "content": [
                 {"type": "tool_use", "id": f"w{n}", "name": "Write", "input": {"file_path": target, "content": "x = 2\n"}}]}},
@@ -168,11 +170,15 @@ class Cycle:
         path.write_text(text if text is not None else json.dumps(body), encoding="utf-8")
         when = (mtime or self.clock).timestamp()
         os.utime(path, (when, when))
-        if kept and self.last_qa:
+        if self.last_qa:  # kept=False: written by a shell command that names it, so no Write of it is on record
+            tool = ("Write", {"file_path": str(path), "content": path.read_text(encoding="utf-8")}) if kept else ("Bash", {"command": f"python3 mk.py > {path}"})
+            ident = f"wr{path.stat().st_mtime_ns}"
+            records = [{"type": "assistant", "isSidechain": True, "cwd": str(self.project), "message": {
+                "role": "assistant", "content": [{"type": "tool_use", "id": ident, "name": tool[0], "input": tool[1]}]}},
+                {"type": "user", "isSidechain": True, "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": ident, "content": "ok"}]}}]
             with (self.subagents / f"agent-{self.agent[self.last_qa]}.jsonl").open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"type": "assistant", "isSidechain": True, "cwd": str(self.project), "message": {
-                    "role": "assistant", "content": [{"type": "tool_use", "id": "wr", "name": "Write",
-                                                      "input": {"file_path": str(path), "content": path.read_text(encoding="utf-8")}}]}}) + "\n")
+                handle.write("".join(json.dumps(r) + "\n" for r in records))
         return path
 
     def payload(self, **extra) -> dict:
@@ -539,6 +545,17 @@ def test_a_finding_with_no_declaring_dispatch_gives_no_row_and_no_error(cycle, m
     assert not any(r["event"] == "escaped" for r in cycle.rows()) and capfd.readouterr() == ("", "")
 
 
+def test_a_close_time_qa_report_is_not_the_producers_lane_qa(cycle, monkeypatch):
+    closed(cycle, "fail")
+    own = {"kind": "json", "path": "docs/dev/close-qa-report.json", "schema": "qa-report.v2", "identity": {"task_id": TASK}}
+    cycle.dispatch("qa", pipeline="close", profile="final_verification", artifacts=[own], declared=False)
+    (cycle.project / own["path"]).write_text(json.dumps({"qa": {"status": "pass"}}))
+    os.utime(cycle.project / own["path"], (cycle.clock.timestamp(),) * 2)  # fresh on the fake clock
+    cycle.close_qa([(REPORT, "a defect")])
+    cycle.observe(monkeypatch)
+    assert not any(r["event"] == "escaped" for r in cycle.rows())
+
+
 def test_a_finding_on_a_close_time_artifact_is_no_escape(cycle, monkeypatch):
     closed(cycle)
     cycle.close_qa([(f"docs/dev/close-report-{TASK}.md", "the report is defective")])
@@ -601,9 +618,9 @@ def test_no_catch_when_the_producers_fix_did_not_write_the_cited_file(cycle, mon
     closed(cycle)
     cycle.close_qa([(REPORT, "a defect")])
     if fix == "wrote nothing":
-        cycle.dispatch("dev", wrote=[])
+        cycle.dispatch("dev", wrote=[], declared=False)
     elif fix == "wrote another file":
-        cycle.dispatch("dev", wrote=["src/other.py"])
+        cycle.dispatch("dev", wrote=["src/other.py"], declared=False)
     elif fix == "another role wrote it":
         cycle.dispatch("ba", wrote=[REPORT], artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
     cycle.close_qa()
@@ -731,6 +748,145 @@ def test_a_failing_close_rule_does_not_stop_the_qa_rules(cycle, monkeypatch):
     monkeypatch.setattr(score_events, "RULES", [*score_events.RULES, boom])
     cycle.observe(monkeypatch)
     assert cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
+
+
+# ---- rerun_gap: a dispatch after one that left its declared artifacts unwritten -----------------------------------
+
+def gaps(c: Cycle) -> list[dict]:
+    return [r for r in c.rows() if r["event"] == "rerun_gap"]
+
+
+@pytest.mark.parametrize("wrote", [[], ["src/app.py"]])
+def test_a_dispatch_after_one_that_wrote_no_declared_artifact_scores_a_gap(cycle, monkeypatch, wrote):
+    cycle.dispatch("dev", wrote=wrote, declared=False)
+    again = cycle.dispatch("dev")
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("rerun_gap", "dev", -2)]
+    row = cycle.rows()[0]
+    assert row["key"] == f"rerun_gap:{again}" and row["task_id"] == TASK and TASK not in row["why"] and "\n" not in row["why"]
+    assert row["ts"] == "2026-11-09T12:03:00Z"  # when the dispatch that was a rerun came back, not its predecessor
+
+
+def test_every_dispatch_after_a_dispatch_that_left_a_gap_scores_one(cycle, monkeypatch):
+    cycle.dispatch("dev", declared=False)
+    second = cycle.dispatch("dev", declared=False)
+    third = cycle.dispatch("dev")
+    cycle.observe(monkeypatch)
+    assert sorted(r["key"] for r in gaps(cycle)) == [f"rerun_gap:{second}", f"rerun_gap:{third}"]
+
+
+@pytest.mark.parametrize("role", ["ba", "qa"])
+def test_the_gap_is_the_groups_scored_identity(cycle, monkeypatch, role):
+    if role == "qa":
+        cycle.qa()  # no report written by the first QA dispatch
+        cycle.qa()
+    else:
+        cycle.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}], declared=False)
+        cycle.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
+    cycle.observe(monkeypatch)
+    assert [r["role"] for r in gaps(cycle)] == [role]
+
+
+def test_a_first_dispatch_is_no_gap(cycle, monkeypatch):
+    cycle.dispatch("dev", declared=False)
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
+
+
+def test_a_re_dispatch_after_a_qa_failure_is_no_gap(cycle, monkeypatch):
+    fail_fix_pass(cycle, monkeypatch, wrote=["src/app.py"])
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_catch", "qa", 1), ("qa_fail", "dev", -6)] and not gaps(cycle)
+
+
+def test_a_re_dispatch_after_a_close_finding_is_no_gap(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, "a defect")])
+    cycle.dispatch("dev", wrote=[REPORT])
+    cycle.close_qa()
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+def test_a_re_dispatch_after_a_clarification_is_no_gap(cycle, monkeypatch):
+    cycle.dispatch("ba", wrote=[f"docs/dev/producer-question-{TASK}-ba.json"], declared=False,
+                   artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
+    cycle.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+def test_a_dispatch_that_declares_no_file_is_no_gap(cycle, monkeypatch):
+    answer = [{"kind": "response_line", "terminal_line_regex": "^done$"}]
+    cycle.dispatch("dev", artifacts=answer, declared=False)
+    cycle.dispatch("dev", artifacts=answer)
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+def test_a_dispatch_that_ended_in_an_api_error_is_not_a_dispatch_to_compare(cycle, monkeypatch):
+    cycle.dispatch("dev", declared=False, ok=False)
+    cycle.dispatch("dev")
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+@pytest.mark.parametrize("how", ["a shell command naming the artifact", "a Write of it"])
+def test_any_tool_call_that_names_the_artifact_leaves_no_gap(cycle, monkeypatch, how):
+    first = cycle.dispatch("dev", declared=False)
+    cycle.finish(first, [("Bash", {"command": f"python3 gen.py > {REPORT}"}) if "shell" in how else ("Write", {"file_path": str(cycle.project / REPORT), "content": "{}"})])
+    cycle.dispatch("dev")
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+def test_lanes_that_share_a_task_id_and_artifacts_are_other_groups(cycle, monkeypatch):
+    cycle.dispatch("dev", lane="l1", suffix=False, declared=False)
+    cycle.dispatch("dev", lane="l2", suffix=False)
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+@pytest.mark.parametrize("other", ["another artifact set", "another lane", "another task", "another role"])
+def test_a_dispatch_of_another_group_is_no_gap(cycle, monkeypatch, other):
+    cycle.dispatch("dev", declared=False)
+    if other == "another artifact set":
+        cycle.dispatch("dev", artifacts=[{"kind": "json", "path": "docs/dev/other.json", "schema": "dev-report.v2", "identity": {"task_id": TASK}}])
+    elif other == "another lane":
+        cycle.dispatch("dev", lane="l1")
+    elif other == "another task":
+        cycle.dispatch("dev", task="20261109-130000")
+    else:
+        cycle.dispatch("ba", artifacts=[{"kind": "json", "path": REPORT, "schema": "dev-report.v2", "identity": {"task_id": TASK}}])
+    cycle.observe(monkeypatch)
+    assert not gaps(cycle)
+
+
+def test_no_gap_is_scored_when_the_previous_dispatchs_transcript_is_gone_and_other_gaps_still_are(cycle, monkeypatch):
+    first = cycle.dispatch("dev", declared=False)
+    cycle.dispatch("dev")
+    (cycle.subagents / f"agent-{cycle.agent[first]}.jsonl").unlink()
+    cycle.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}], declared=False)
+    later = cycle.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
+    cycle.observe(monkeypatch)
+    assert [r["key"] for r in gaps(cycle)] == [f"rerun_gap:{later}"]
+
+
+def test_a_close_round_that_never_wrote_its_report_is_followed_by_a_gap(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa(launch=True)  # never completed: no section, no helper call
+    again = cycle.close_qa()
+    cycle.observe(monkeypatch)
+    assert [(r["role"], r["key"]) for r in gaps(cycle)] == [("close-qa", f"rerun_gap:{again}")]
+
+
+def test_running_rerun_gap_again_adds_no_row(cycle, monkeypatch):
+    cycle.dispatch("dev", declared=False)
+    cycle.dispatch("dev")
+    cycle.observe(monkeypatch)
+    cycle.observe(monkeypatch)
+    cycle.sweep(monkeypatch)
+    assert len(gaps(cycle)) == 1 and len(cycle.rows()) == 1
 
 
 # ---- facts and when they exist ------------------------------------------------------------------------------------
