@@ -34,13 +34,18 @@ import os
 import runpy
 from dataclasses import dataclass
 
-from . import overwrite as _overwrite
-
 HOOKS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # A rule module this package holds is named by import, not by a path string: the gate loads it
 # (it runs it as __main__), and the import states that, as the artifact check reads code. Its
 # reads then sit at its caller's position (a library's), not at a file nothing runs.
-_OVERWRITE = os.path.relpath(os.path.abspath(_overwrite.__file__), HOOKS_DIR)
+# A module that cannot be imported must not stop this table from loading: then the gate would
+# exit 1 and the CLI would skip every rule, tool-policy's fail-closed one included. The same
+# path is kept, so the broken rule fails alone, in its own direction, when the runner runs it.
+try:
+    from . import overwrite as _overwrite
+    _OVERWRITE = os.path.relpath(os.path.abspath(_overwrite.__file__), HOOKS_DIR)
+except Exception:
+    _OVERWRITE = os.path.join("lib", "write_gate", "overwrite.py")
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 

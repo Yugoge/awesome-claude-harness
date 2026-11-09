@@ -7,7 +7,10 @@
   docs/dev/context-*.json (hooks-audit O10): a newer context of another task changes nothing.
 - Minimum diff counts the uncommitted diff of the files the report names, never HEAD~5..HEAD
   (checkpoints do not move HEAD, so those commits are the user's own).
-- Where the old shell hook found its task (one context, the newest), the message text is the same.
+- Where the old shell hook found its task (one context, the newest), the message text is the same (the
+  old hooks are exit-0 stubs since P12, so they run as the P12 base shipped them: retired_hooks.py).
+- The two dispatch gates run it as their advise rule: its advice reaches the orchestrator on the dev
+  dispatch (hooks/pretool-dispatch-gate.py) and on its return (hooks/posttool-dispatch-record.py).
 """
 from __future__ import annotations
 
@@ -19,6 +22,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+import retired_hooks
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "hooks" / "lib" / "dev_loop_checks.py"
@@ -163,9 +168,34 @@ def test_a_fan_out_lane_reads_its_lane_context(proj):
     ("pretool-layer-match-gate.sh", "PostToolUse",
      lambda p: (_ctx(p, diagnosis_layer="L3"), _report(p, fix_layer="L4"))),
 ])
-def test_the_message_is_the_old_hooks_where_it_found_the_same_task(proj, hook, event, setup):
+def test_the_message_is_the_old_hooks_where_it_found_the_same_task(proj, tmp_path, hook, event, setup):
     setup(proj)
-    old = subprocess.run(["bash", str(ROOT / "hooks" / hook)], input="{}", capture_output=True, text=True,
+    old = subprocess.run(["bash", str(retired_hooks.materialize(hook, tmp_path / "retired"))], input="{}", capture_output=True, text=True,
                          env={**os.environ, "CLAUDE_PROJECT_DIR": str(proj)}, timeout=60)
     assert old.returncode == 0 and old.stderr
     assert _run(proj, event) == old.stderr.rstrip("\n")
+
+
+@pytest.mark.parametrize("gate, event, setup, head", [
+    ("pretool-dispatch-gate.py", "PreToolUse", lambda p: _ctx(p, **RETRY), "SAME-LAYER RETRY DETECTED"),
+    ("posttool-dispatch-record.py", "PostToolUse",
+     lambda p: (_ctx(p, diagnosis_layer="L3"), _report(p, fix_layer="L5")), "LAYER MISMATCH"),
+])
+def test_the_dispatch_gates_give_the_advice_to_the_orchestrator(proj, tmp_path, gate, event, setup, head):
+    setup(proj)
+    payload = {"hook_event_name": event, "tool_name": "Agent", "session_id": "s1", "cwd": str(proj),
+               "tool_input": {"description": "d", "subagent_type": "dev", "prompt": _prompt(),
+                              "run_in_background": False}}
+    if event == "PostToolUse":
+        payload["tool_response"] = {"content": "done"}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_")}
+    env.update(CLAUDE_PROJECT_DIR=str(proj), CLAUDE_STATE_DIR=str(tmp_path / "state"), HOME=str(tmp_path / "home"),
+               PYTHONDONTWRITEBYTECODE="1")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "home").mkdir()
+    proc = subprocess.run([sys.executable, str(ROOT / "hooks" / gate)], input=json.dumps(payload), capture_output=True,
+                          text=True, env=env, cwd=proj, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == event and head in out["additionalContext"], out
+    assert out["additionalContext"].count(head) == 1

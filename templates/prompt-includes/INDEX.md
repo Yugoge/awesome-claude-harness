@@ -1,7 +1,7 @@
 # prompt-includes
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-01T15:17:26Z*
+*Last updated: 2026-11-09T15:40:00Z*
 **Total entries**: 5
 **Convention**: kebab
 
@@ -10,7 +10,7 @@
 prompt-includes/
 ├── `anti-give-up.md` - Anti-Give-Up Discipline
 ├── `checkpoint-marking.md` - Checkpoint Marking Contract
-├── `codex-consultation.md` - Codex adversarial consultation
+├── `codex-consultation.md` - Codex consultation
 ├── `overnight-spec-integration.md` - Overnight Spec Integration
 └── `specialist-findings-intake.md` - Specialist Findings Intake Protocol
 ```

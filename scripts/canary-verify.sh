@@ -80,7 +80,9 @@ verify_bash_safety() {
 }
 
 verify_write_guard() {
-  local hook="${HOOKS_DIR}/pretool-write-guard.sh"
+  # The overwrite check is the write gate's overwrite rule (hooks/lib/write_gate/overwrite.py) since
+  # P12; hooks/pretool-write-guard.sh, which held it, is an exit-0 stub (D15).
+  local hook="${HOOKS_DIR}/pretool-write-gate.py"
   if [[ ! -f "${hook}" ]]; then
     emit_failure "missing: ${hook}"
     return
@@ -88,32 +90,30 @@ verify_write_guard() {
   # Allow case: Write to a path that does NOT yet exist must NOT exit 2.
   # mktemp is used here only to GENERATE a unique path; we delete the file
   # before the test so the path is non-existent at the moment of the Write
-  # call, matching the guard's "new file creation" allow path
-  # (hooks/pretool-write-guard.sh:127-128).
+  # call, matching the rule's "new file creation" allow path.
   local new_path
   new_path=$(mktemp -u -t canary-write-new.XXXXXX)
   local safe="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${new_path}\",\"content\":\"ok\"}}"
-  echo "${safe}" | bash "${hook}" >/dev/null 2>&1
+  echo "${safe}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   local rc=$?
   if [[ "${rc}" -ge 126 ]]; then
-    emit_failure "pretool-write-guard.sh exec error rc=${rc}"
+    emit_failure "pretool-write-gate.py exec error rc=${rc}"
   fi
   if [[ "${rc}" -eq 2 ]]; then
-    emit_failure "pretool-write-guard.sh BLOCKED a new-file Write (false-positive guard)"
+    emit_failure "pretool-write-gate.py BLOCKED a new-file Write (false-positive guard)"
   fi
-  # Deny case (spec-20260518-225715 Cycle 3 Debt 6 / AC-06): the guard MUST
-  # block Write attempts that target an EXISTING file (per
-  # hooks/pretool-write-guard.sh:120-128). Synthesize the payload by
-  # creating an existing file via mktemp, then send a Write payload that
-  # targets that path. Guard MUST exit 2.
+  # Deny case (spec-20260518-225715 Cycle 3 Debt 6 / AC-06): the gate MUST
+  # block Write attempts that target an EXISTING file. Synthesize the payload
+  # by creating an existing file via mktemp, then send a Write payload that
+  # targets that path. The gate MUST exit 2.
   local existing_file
   existing_file=$(mktemp -t canary-write-existing.XXXXXX)
   local deny="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${existing_file}\",\"content\":\"overwrite\"}}"
-  echo "${deny}" | bash "${hook}" >/dev/null 2>&1
+  echo "${deny}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   rc=$?
   rm -f "${existing_file}"
   if [[ "${rc}" -ne 2 ]]; then
-    emit_failure "pretool-write-guard.sh FAILED to block Write to existing file (rc=${rc}, expected 2; fail-open guard)"
+    emit_failure "pretool-write-gate.py FAILED to block Write to existing file (rc=${rc}, expected 2; fail-open guard)"
   fi
 }
 

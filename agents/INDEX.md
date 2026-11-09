@@ -1,13 +1,16 @@
 # agents
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 23
+*Last updated: 2026-11-09T15:40:00Z*
+**Total entries**: 26
 **Convention**: kebab
 
 ## Tree
 ```
 agents/
+├── shared/
+│   ├── `no-phases.md` - No phases, no deferral
+│   └── `specialist-protocol.md` - Specialist protocol (architect, product-owner, ui-specialist, user)
 ├── `architect.md` - Architecture review specialist: /dev and /dev-command dispatch it at Step 3 when their specialist assessment marks it RELEVANT, and /dev-overnight at Step 3 of an exploration cycle. Identifies structural issues, technical debt, optimization opportunities, dependency problems, and pattern inconsistencies. Returns structured JSON report.
 ├── `ba.md` - Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context).
 ├── `changelog-analyst.md` - Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit.

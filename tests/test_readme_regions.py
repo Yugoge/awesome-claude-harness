@@ -560,14 +560,18 @@ def test_enforcement_strength_reports_the_ledger_and_what_an_exit_code_is(scratc
 
 
 def test_enforcement_strength_follows_the_proof_layers(monkeypatch):
-    some = lambda e: e["by_proof_layer"].update({"host-observed": 5, "source-level": e["by_proof_layer"]["source-level"] - 5})
+    rows = {}
+
+    def some(e):
+        rows["n"] = e["rows"]
+        e["by_proof_layer"].update({"host-observed": 5, "source-level": e["by_proof_layer"]["source-level"] - 5})
     with_fact(monkeypatch, "enforcement_strength", some)
     state, text, *_ = new_row("enforcement-strength")
-    assert state == "partial" and "**5** of the 78 rows are host-observed." in text and "No row" not in text
+    assert state == "partial" and f"**5** of the {rows['n']} rows are host-observed." in text and "No row" not in text
     with_fact(monkeypatch, "enforcement_strength", lambda e: e.update(
         by_proof_layer={**e["by_proof_layer"], "host-observed": e["rows"]}))
     state, text, *_ = new_row("enforcement-strength")
-    assert state == "passed" and "all **78** ledger rows are host-observed" in text
+    assert state == "passed" and f"all **{rows['n']}** ledger rows are host-observed" in text
 
 
 def test_dead_end_sites_says_how_many_of_how_many_and_that_it_is_a_limit(scratch_text):

@@ -190,7 +190,7 @@ from dataclasses import dataclass, field
 
 from .. import agents, cmdtext, hookrun, roles
 from ..pipeline import Deviations, Orchestrator, Respelling, utc_now
-from ..replay import Deviation
+from ..replay import Deviation, rule_files
 from ..wake import Cron
 from . import dev as devdrv
 from .close import fact
@@ -2322,8 +2322,10 @@ class Night:
             return [pr for pr in self.probes if pred(pr)]
 
         def denied(pr, text):
-            return any(b["hook"].endswith("pretool-overnight-hook-guard.py") and b["rc"] == 2 and text in b["text"]
-                       for b in pr["blocks"])
+            # the guard reports itself, or through the merged gate that runs it as a rule (the write gate)
+            return any((b["hook"].endswith("pretool-overnight-hook-guard.py")
+                        or "hooks/pretool-overnight-hook-guard.py" in rule_files(b["hook"]))
+                       and b["rc"] == 2 and text in b["text"] for b in pr["blocks"])
         main_in = probe(lambda pr: pr["kind"] == "AskUserQuestion" and pr["who"] == "main" and pr["in_window"])
         sub_in = probe(lambda pr: pr["kind"] == "AskUserQuestion" and pr["who"] != "main" and pr["in_window"])
         main_after = probe(lambda pr: pr["kind"] == "AskUserQuestion" and pr["who"] == "main" and not pr["in_window"])

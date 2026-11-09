@@ -41,7 +41,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.replay import cmdtext, hookrun, sandbox, schemagen, suite
+from tests.replay import cmdtext, hookrun, sandbox, schemagen, sites, suite
 from tests.replay import test_faults as tf
 from tests.test_landing import append_allow, cli_write, env, git, landing_log, run  # noqa: F401
 
@@ -469,8 +469,13 @@ def test_r_e1_hook_level_the_template_report_passes_collection(tmp_path, env, fa
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps(doc, indent=2) + "\n")
     hooks = post(role, f'{role} for pipeline 0.\n<obligation v="1">{json.dumps(ob)}</obligation>\n')
-    check = hooks["hooks/posttool-overnight-file-check.py"]
+    check = hooks[FILE_CHECK]
     assert f"OVERNIGHT FILE CHECK: {role} obligation artifacts valid" in check["stdout"], check
+
+
+# The hook that reports the collection check's verdict: the check itself, or the merged gate that runs it
+# as a rule (hooks/posttool-dispatch-record.py since P12).
+FILE_CHECK = sites.reporter(suite.REPO, "hooks/posttool-overnight-file-check.py")
 
 
 def _e1_key(settings: str) -> str:
@@ -514,7 +519,7 @@ def test_r_e1_the_template_report_passes_collection_in_the_overnight_cycle(repla
         _assert_template_shape(json.loads(wrote[0]["tool_input"]["content"]), art)
         stops = tf.stops(r, agent)
         assert stops and not any(s["blocked"] for s in stops), f"{role}'s stop was blocked: {stops}"
-        check = next(h for h in events[post]["hooks"] if h["hook"] == "hooks/posttool-overnight-file-check.py")
+        check = next(h for h in events[post]["hooks"] if h["hook"] == FILE_CHECK)
         assert check["verdict"] == "ok" and \
             f"OVERNIGHT FILE CHECK: {role} obligation artifacts valid" in (check.get("stdout") or ""), \
             f"the collection check did not judge {art['path']} valid at {inv[post]['label']}: {check}"

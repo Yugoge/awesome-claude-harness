@@ -209,9 +209,7 @@ jobs:
         # The P12 principles as CI checks: hook strength as the enforcement ledger states it,
         # no dead file references, no 10-line block in two prompts, at most 3 emphasis words a
         # file, no registered hook whose output cannot reach the model, no state file with two
-        # writers. Off until P12's lanes L1-L5 clear today's findings: the integration lane
-        # deletes the `if:` line. `python3 -m tests.lint` prints the findings locally.
-        if: ${{ false }}
+        # writers. `python3 -m tests.lint` prints the findings locally.
         env:
           HARNESS_LINT: "1"
         run: python3 -m pytest tests/lint -q -p no:cacheprovider

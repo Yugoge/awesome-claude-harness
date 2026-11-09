@@ -5,39 +5,21 @@ disable-model-invocation: true
 
 # /stop — Overnight Lock Release
 
-The human's exit from this session's /dev-overnight before its end time. The human-typed `/stop` record in the session's transcript is the release: from it on, the time-lock lets the session stop with no closeout check and publishes the `cancelled_by_user` receipt, the loop prints no further cycle, and the AskUserQuestion deny lifts. Nothing an agent writes (a state field, a token, a file) releases the lock, and agents cannot self-invoke the wrapper (user-intent sentinel guard, see Implementation).
-
-## Usage
-
-```
-/stop
-```
-
-No arguments. Acts on this session's own overnight state only.
+The human's exit from an armed command, besides interrupting the session. The human-typed `/stop` record in the session's transcript is the release; nothing an agent writes (a state field, a token, a file) releases anything. No arguments: it acts on this session's own overnight state only. The Stop gate (`hooks/stop-command-gate.py`) reads the record and `hooks/pretool-wrapper-userintent.py` refuses an agent's own run of the wrapper; `docs/ENFORCEMENT-LEDGER.md` lists both as advisory.
 
 ## What it does
 
-1. The human-typed `/stop` opens a span no Stop gate holds: it ends any gated command (`/dev`, `/do`, `/close`, `/commit`, ..., even one whose gate is broken), and after `/dev-overnight` it releases this session's time-lock. After it, and the wake's `CronDelete` below, the next stop attempt succeeds.
+1. The typed `/stop` opens a span no Stop gate holds: it ends any gated command (`/dev`, `/do`, `/close`, `/commit`, ..., even one whose gate is broken). After `/dev-overnight` the time-lock lets the session stop with no closeout check and publishes the `cancelled_by_user` receipt, the loop prints no further cycle, and the AskUserQuestion deny lifts. After the wrapper and the `CronDelete` below, the next stop attempt succeeds.
 2. The wrapper records `current_phase: completed` in this session's overnight state (found from the main checkout, a worktree or a fresh clone) and releases its isolation fields. It leaves `end_time` as it was.
 
-## What it does NOT do
-
-- Does NOT remove the worktree (preserved for review/merge — use `/merge` when ready)
-- Does NOT delete the state file (left in place for cycle log inspection)
-- Does NOT touch in-flight subagents (kill those manually if needed)
+It does NOT remove the worktree (use `/merge` when ready), delete the state file (the cycle log stays for inspection) or touch in-flight subagents (kill those by hand).
 
 ## Implementation
 
-The orchestrator calls the wrapper exactly once:
+Call the wrapper exactly once:
 
 ```bash
 bash "<HARNESS_ROOT>/hooks/stop.sh"
 ```
 
 Then, as the last step, where this session scheduled the overnight wake (dev-overnight.md Step 0), call `CronDelete` with the job id that wake's `CronCreate` returned: a wake left scheduled would fire into the stopped session, and the time-lock refuses the session's Stop until it is deleted.
-
-The wrapper invokes `<HARNESS_ROOT>/scripts/break-overnight-lock.py`. Sentinel enforcement (written at `<state dir>/claude-stop-userintent-<sid>.flag` by `prompt-workflow.py` on user-typed `/stop`; consumed by the PreToolUse hook before the wrapper runs) prevents agent self-invocation.
-
-## Why this command exists
-
-The `/dev-overnight` time-lock holds the session until its end time by design. The human's exits are interrupting the session and typing `/stop`; editing the state file by hand releases nothing.

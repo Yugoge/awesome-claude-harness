@@ -20,7 +20,10 @@ exemptions, its failure direction; hooks/lib/gate_runner.py):
    to learn whether it refuses this call, and reports nothing for it;
 7. pretool-orchestrator-prompt-purity.py, an observer: its advice on a dispatch
    prompt, which never refuses;
-8. pretool-commit-dispatch-attest.py, the witness: a changelog-analyst dispatch is
+8. lib/dev_loop_checks.py advice(), advice only: for a dev dispatch, the layer
+   escalation and bisect checks of the task its obligation names, as
+   additionalContext; it never refuses;
+9. pretool-commit-dispatch-attest.py, the witness: a changelog-analyst dispatch is
    recorded only when no rule above refused it and no consulted hook would, so the
    record never witnesses a dispatch that was refused. It never blocks.
 
@@ -34,7 +37,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 
-from lib.gate_runner import CONSULT, OBSERVE, REFUSE, WITNESS, Rule, main  # noqa: E402
+from lib.gate_runner import ADVISE, CONSULT, OBSERVE, REFUSE, WITNESS, Rule, main  # noqa: E402
 
 RULES = [
     Rule("overnight-contract", str(HOOKS / "pretool-subagent-enforce.py"), REFUSE),
@@ -46,6 +49,7 @@ RULES = [
     Rule("do-block-subagents", str(HOOKS / "pretool-do-block-subagents.py"), CONSULT),
     Rule("checklist-started", str(HOOKS / "pretool-workflow-gate.py"), CONSULT),
     Rule("prompt-purity", str(HOOKS / "pretool-orchestrator-prompt-purity.py"), OBSERVE),
+    Rule("dev-loop-before", call="lib.dev_loop_checks:advice", kind=ADVISE),
     Rule("commit-dispatch-witness", str(HOOKS / "pretool-commit-dispatch-attest.py"), WITNESS),
 ]
 
