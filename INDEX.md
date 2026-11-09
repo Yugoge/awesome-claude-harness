@@ -430,6 +430,19 @@ dot-claude/
 │   │   ├── `spec_verify_mandate.py` - Activated only when the monolith declares ``guide_version: 1`` (or higher)
 │   │   ├── `spec_verify_parsers.py` - Authoritative grammar: /root/docs/dev/specs/MONOLITH-WRITING-GUIDE.md R6.6
 │   │   └── `spec_verify_summary.py` - Lives alongside `spec_verify_parsers.py` as a sibling sidecar because
+│   ├── steps/
+│   │   ├── `clean-merge-approvals.py` - /clean Step 16: merges the owner's approvals and the Step 15 checkpoint commit into the cleaner's context; prints context_with_approvals=<path>
+│   │   ├── `codex-run.py` - One Codex call through the codex-isolation wrapper named by CODEX_ISO_BIN (fail-closed, never a bare codex): modes review, exec, detach; tees the output and prints out=<path>
+│   │   ├── `commit-plan.py` - /commit Step 5 in one call: the task's report, the repository plan, the attribution slice and the manifest inputs, as one JSON object
+│   │   ├── `merge-snapshot.py` - /merge Steps 1 and 4: the pre-merge snapshot and the tip re-read as KEY=value lines
+│   │   ├── `paseo-bootstrap.py` - /paseo-daemon Bootstrap: `start` (ledger init, timers ensure, lease-acquire) and `accounts` (account-init per account); prints key=value facts
+│   │   ├── `pull-run.py` - /pull Steps 0-4: runs hooks/pull.sh, then prints the heads, branch, exit code, rebase state, exit phase and action as KEY=value lines
+│   │   ├── `push-snapshot.py` - /push Steps 0 and 2: the push remote and the pre-push snapshot as KEY=value lines
+│   │   ├── `spec-capture.py` - /spec design and evidence capture: persists one item under docs/dev/specs/<id>/ with a safe, collision-proof name
+│   │   ├── `spec-finalize.py` - /spec Step 6: `prepare` (Section 9 dangling-reference guard, id, line count) and `complete` (.split-complete marker, advisory lint)
+│   │   ├── `test-context.py` - /test Steps 7, 10, 11: the validator and executor input contexts and the safety checkpoint commit
+│   │   ├── `test-prepare.py` - /test Steps 1-4: init the tests/ folder and ids, the git edge-case analysis, the test/ to tests/ migration, the cleanup
+│   │   └── `test-validators.py` - /test Steps 5-6: the tests/ structure and validator-count check (facts, never exit 1) and the validator discovery
 │   ├── todo/
 │   │   ├── `clean.py` - Preloaded TodoList for /clean workflow
 │   │   ├── `close.py` - the same five steps under every prompt (--auto walks each step over its parents;
@@ -668,6 +681,8 @@ dot-claude/
 │   ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
 │   ├── `test_late_repair_route.py` - Covers AC-7..AC-11, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 │   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
+│   ├── `test_no_phases_spec_command.py` - commands/spec.md's split-QA criterion and wording carry the owner's no-phases ruling (D33)
+│   ├── `test_no_phases_spec_template.py` - templates/spec-template.md Section 7 carries the owner's no-phases ruling (D33), and the section structure stays
 │   ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
 │   ├── `test_parent_cycle_claimant_reader.py` - THE DEFECT.  Admission to a cycle's ownership-completeness claimant set was
@@ -695,6 +710,18 @@ dot-claude/
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 │   ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 │   ├── `test_step8_spec_update_markers.py` - COMMIT_STEP8_TRACE=1 emits the STEP8_* markers on stderr, and stage 4's unlinked spec is printed
+│   ├── `test_steps_clean_merge_approvals.py` - Runs scripts/steps/clean-merge-approvals.py against temporary directories
+│   ├── `test_steps_codex_run.py` - Runs scripts/steps/codex-run.py against temporary directories
+│   ├── `test_steps_commit_plan.py` - Runs scripts/steps/commit-plan.py against temporary directories
+│   ├── `test_steps_merge_snapshot.py` - Runs scripts/steps/merge-snapshot.py against temporary directories
+│   ├── `test_steps_paseo_bootstrap.py` - Runs scripts/steps/paseo-bootstrap.py against temporary directories
+│   ├── `test_steps_pull_run.py` - Runs scripts/steps/pull-run.py against temporary directories
+│   ├── `test_steps_push_snapshot.py` - Runs scripts/steps/push-snapshot.py against temporary directories
+│   ├── `test_steps_spec_capture.py` - Runs scripts/steps/spec-capture.py against temporary directories
+│   ├── `test_steps_spec_finalize.py` - Runs scripts/steps/spec-finalize.py against temporary directories
+│   ├── `test_steps_test_context.py` - Runs scripts/steps/test-context.py against temporary directories
+│   ├── `test_steps_test_prepare.py` - Runs scripts/steps/test-prepare.py against temporary directories
+│   ├── `test_steps_test_validators.py` - Runs scripts/steps/test-validators.py against temporary directories
 │   ├── `test_subagentstop_e2e_enforce.py` - A QA dispatch that carries an obligation is judged on exactly the qa-report
 │   ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 │   ├── `test_tool_policy_note_fail_closed.py` - hooks/pretool-tool-policy.py refuses a Bash write target with exit 2 and then

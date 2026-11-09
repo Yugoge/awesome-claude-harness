@@ -115,6 +115,7 @@ Organization and usage documentation for `scripts/`.
 - `modern-git-slot/`
 - `overnight-git/`
 - `spec-verify/`
+- `steps/`
 - `todo/`
 <!-- /AUTO:readme-stats -->
 
