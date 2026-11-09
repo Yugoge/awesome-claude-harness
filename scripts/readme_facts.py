@@ -987,11 +987,18 @@ def _no_class_site_may_exist(root: Path) -> dict:
                 break
         if hit:
             break
-    # What the suite does assert about a site with no class: a replay that reaches one fails.
+    # What the suite does assert about a site with no class: a replay that reaches one fails. That is an
+    # `if "-" in <classes>:` whose <classes> is built from the sites' classes (`catalog.of(s)`) and whose body
+    # appends a failure, in a function whose result a test asserts empty (`assert not bad`).
     weaker = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.If) and re.fullmatch(r"[\"']-[\"'] in \w+", ast.unparse(node.test)):
-            weaker = node
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        built = {t.id: ast.unparse(a.value) for a in ast.walk(fn) if isinstance(a, ast.Assign)
+                 for t in a.targets if isinstance(t, ast.Name)}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.If):
+                m = re.fullmatch(r"[\"']-[\"'] in (\w+)", ast.unparse(node.test))
+                if m and ".of(" in built.get(m.group(1), "") and ".append(" in "".join(ast.unparse(b) for b in node.body):
+                    weaker = node
     consumers = [a.lineno for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")
                  for a in _asserts(fn) if ast.unparse(a.test) == "not bad"]
     extra = {"weaker": {
@@ -999,7 +1006,9 @@ def _no_class_site_may_exist(root: Path) -> dict:
         "claim": "a replay that reaches a blocking site with no class fails the suite",
         "file": rel, "line": weaker.lineno if weaker else None,
         "asserted_at_lines": consumers,
-        "missing": [] if weaker and consumers else ["no `if \"-\" in classes` check feeding an `assert not bad`"],
+        "missing": [] if weaker and consumers else ["no check that fails a replay reaching a site of class \"-\" "
+                                                       "(an `if \"-\" in <classes>` appending a failure that a test "
+                                                       "asserts empty)"],
     }}
     if hit is None:
         return _verdict(False, rel, None, claim,
