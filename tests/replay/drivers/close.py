@@ -76,6 +76,12 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   variant=noba            route's /close, then the /dev session gone from the store and BA's ticket removed,
                           and /close typed again: the reader names no owner for the ticket (never /close's own
                           rating step), Routes asks the owner (header Request), the turn ends there (finding 1)
+  variant=codex-flip-items   `/close --codex`: a stub Codex answers one blocker and five style and edge items; QA's
+                          Codex review follows the text's CODEX REVIEW rules (drivers/_codex.py reads each from the
+                          sentence that states it): the producer is dispatched again once, round 2 is a re-review of
+                          the blocker, the close lands with the rest on the follow-up list (D31 replay 1)
+  variant=codex-endless   `/close --codex`: the stub reports a new item at every call; the text's round cap, not
+                          Codex, ends it: the close lands after round 3 (D31 replay 2)
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
@@ -101,6 +107,7 @@ import shlex
 from .. import agents, cmdtext, roles, schemagen
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
 from ..replay import Deviation
+from . import _codex
 
 PIPELINE = "close"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -131,6 +138,10 @@ DEVIATIONS = Deviations([
 ])
 
 CLOSE_YES_PLAIN = "CLOSE: YES — codex disabled by user"
+# The Codex review variants (D31's replays): QA runs the `--codex` path against a stub Codex (drivers/_codex.py).
+# They are not in VARIANTS, so the artifact check's shards do not replay them; tests/replay/test_codex_loop.py does.
+CODEX_SCRIPTS = {"codex-flip-items": _codex.FLIP_ITEMS, "codex-endless": _codex.ENDLESS}
+CODEX_VARIANTS = tuple(CODEX_SCRIPTS)
 FINDING = {"path": "toy/__init__.py", "detail": "add() states no contract: its docstring does not say it raises "
                                                 "TypeError naming a non-number argument (AC-01's behaviour is undocumented)"}
 PEER_LINE = "\n\nPEER = 1  # another task's line\n"
@@ -577,7 +588,7 @@ RATINGS = ("label", "4", "skip", "afk", "decline", "free")
 
 class CloseRun:
     def __init__(self, rp, session, tid: str, do_report: str | None = None, producer=None, variant: str = "plain",
-                 auto: bool = False, extra_devs=(), producers=None, typed: str = ""):
+                 auto: bool = False, extra_devs=(), producers=None, typed: str = "", codex=None):
         self.rp, self.tid, self.do_report, self.typed = rp, tid, do_report, typed
         self.producer, self.variant, self.auto = producer, variant, auto
         self.late = variant.startswith("late-repair")  # `/close --late-repair <task-id>` (the R4 section)
@@ -601,6 +612,10 @@ class CloseRun:
         self.stalled = ""
         self.ratings = [r.strip() for r in str(rp.args.get("rating", "label")).split(",") if r.strip()] or ["label"]
         self.asked: list = []          # (task id, answer) of each rating question
+        # `--codex`: QA runs the text's Codex review against the stub of `codex` = (rules, script); its landed
+        # form is branch 1's, not the codex-disabled one
+        self.codex = _codex.CloseCodex(self, codex[0], codex[1], lambda k, v: fact(rp, k, v)) if codex else None
+        self.yes_plain = codex[0].yes_line if codex else CLOSE_YES_PLAIN
 
     # ------------------------------------------------------------ text helpers
     def _rules(self):
@@ -608,7 +623,7 @@ class CloseRun:
             (r"^(?:TASK_ID|task-id|task_id)$", lambda m: self.tid),
             (r"^SESSION_ID$", lambda m: self.session_id),
             (r"^cycle-diff-file-list$", lambda m: " ".join(self.files)),
-            (r"^true\|false$", "false"),
+            (r"^true\|false$", lambda m: "true" if self.codex else "false"),
         ]
 
     def label(self, text: str) -> str:
@@ -982,7 +997,14 @@ class CloseRun:
         self.read(rel, self.label("Step 1 Read canonical dev report"))
         return list((self.load(rel).get("dev") or {}).get("files_modified") or [])
 
+    def no_registry(self) -> bool:
+        """Whether the text has a /do task leave out Step 1's registry call and the FIRST ACTION line of every
+        dispatch of Steps 1 and 2 (a /do task has no registry directory)."""
+        return bool(self.do_report) and "leave the FIRST ACTION line out" in self.o.section("Step 1")
+
     def registry_name(self) -> None:
+        if self.no_registry():
+            return
         c = self.run_text(self.o.block("Step 1", lang="bash", index=0), self.label("Step 1 Bash registry-dir"),
                           "The task's registry directory")
         self.session_id = (c.response.get("stdout") or "").strip() if c.ok else ""
@@ -1029,8 +1051,8 @@ class CloseRun:
         self.registry_name()
         self.inspector_reports = []
         for role, first, ob, report in self.inspector_bullets():
-            prompt = "\n".join([first, ob, f"--changed-files {' '.join(self.files)}",
-                                f"Write your report to: {report}"])
+            prompt = "\n".join(([] if self.no_registry() else [first]) + [ob, f"--changed-files {' '.join(self.files)}",
+                                                                          f"Write your report to: {report}"])
             prompt = o.bind(o.instantiate(prompt, self.tid))
             left = cmdtext.placeholders(prompt)
             if left:
@@ -1092,7 +1114,8 @@ class CloseRun:
         o = self.o
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 2")) if "<obligation" in b.text)
         lines = [line for line in tpl.split("\n")
-                 if self.spec_id or not line.strip().startswith("SECOND ACTION (only if SPEC_ID is non-empty")]
+                 if (self.spec_id or not line.strip().startswith("SECOND ACTION (only if SPEC_ID is non-empty"))
+                 and not (self.no_registry() and line.startswith("FIRST ACTION:"))]
         prompt = self.input_lines("\n".join(lines))
         if self.late:
             self.late_inputs("Step 2 inputs", **{"Input artifacts": [
@@ -1105,6 +1128,8 @@ class CloseRun:
         return f"docs/dev/close-report-{self.tid}.md"
 
     def close_qa_act(self, verdict: str, finding: dict | None, append: bool) -> agents.Act:
+        if self.codex:
+            return self.codex.act(append)
         o, tid = self.o, self.tid
         project = o.project
         inputs = ([self.do_report] if self.do_report else list(self.chain.get("report_paths") or [])) + self.inspector_reports
@@ -1207,6 +1232,8 @@ class CloseRun:
         """Close QA rounds until one lands; a round-open return is echoed and routed (Routes), Step 0's call
         runs again, then a fresh round."""
         o = self.o
+        if self.codex:
+            return self.codex.step2()
         first = getattr(self, "broken", None) or FIRSTS.get(self.variant)
         if first:
             first = {"path": first["path"], "detail": first["detail"], "new": first.get("new")}
@@ -1334,7 +1361,8 @@ class CloseRun:
         return self.step2()
 
     def run(self) -> str:
-        self.start(f"--late-repair {self.tid}" if self.late else self.typed or self.tid)
+        self.start(f"--late-repair {self.tid}" if self.late else f"--codex {self.tid}" if self.codex
+                   else self.typed or self.tid)
         if self.typed:
             self.resolve_typed()
         last = self.body()
@@ -1344,10 +1372,12 @@ class CloseRun:
         report_last, n = self.report_form()
         # /close's terminal form (P1c's suite): the report's last non-empty line is the disclosures form when
         # routing completed a repair (<n> its `## Disclosures` lines), else the plain form.
-        form = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
+        form = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else self.yes_plain
         ok = report_last == form and n == len(self.repairs)
         self.rp.terminal("close", (last or "").startswith("CLOSE: YES") and ok, ev, task=self.tid,
                          last_line=last, report_last_line=report_last, disclosures=n, repairs=len(self.routed))
+        if self.codex:
+            self.codex.finish()
         return last
 
     def report_form(self) -> tuple:
@@ -1415,14 +1445,12 @@ class CloseRun:
         if extra:
             self.mode_question(extra)
         disc = o.block("`--auto` mode", lang="bash", index=0)
-        c = self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents",
-                          capture=("CLOSE_PENDING_PARENTS",))
+        c = self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents")
         skipped = [l for l in ((c.response.get("stderr") or "") if c.ok else (c.error or "")).splitlines()
                    if ": skipped: " in l]
         fact(self.rp, "close --auto skipped", skipped)
-        lines = o.values.get("CLOSE_PENDING_PARENTS") or []
-        if isinstance(lines, str):
-            lines = [lines] if lines else []
+        # each stdout line's first word is a parent's task-id (the text's own reading of the call)
+        lines = ((c.response.get("stdout") or "") if c.ok else "").splitlines()
         parents = [line.split()[0] for line in lines if line.strip()]
         fact(self.rp, "close --auto parents", len(parents))
         states = []
@@ -1626,8 +1654,15 @@ def pipeline_name(after: str, rp) -> str:
 def run(rp) -> None:
     after = rp.args.get("after", "dev")
     variant = ALIASES.get(rp.args.get("variant", "plain"), rp.args.get("variant", "plain"))
-    if variant not in VARIANTS + ACCEPTANCE_VARIANTS:
+    if variant not in VARIANTS + ACCEPTANCE_VARIANTS + CODEX_VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
+    codex = None
+    if variant in CODEX_VARIANTS:
+        # The text's rules first, before any pipeline runs: a text without them (or at odds with the scripted
+        # run) stops the replay here, naming the sentence.
+        codex = (_codex.close_rules(rp), CODEX_SCRIPTS[variant])
+        _codex.check_script(*codex)
+        fact(rp, "codex rules", codex[0].to_fact())
     session_kind = rp.args.get("session", "same" if variant == "plain" else "later")
     rp.pipeline = (pipeline_name(after, rp) + "+close" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
@@ -1656,7 +1691,7 @@ def run(rp) -> None:
         return
     session = rp.later_session(s, end) if session_kind == "later" else s
     cr = CloseRun(rp, session, tid, producer=producer, variant=variant, auto=variant.startswith("auto"),
-                  producers=producers)
+                  producers=producers, codex=codex)
     cr.broken = broken
     if variant in ("auto", "auto-skip"):
         cr.run_auto()
