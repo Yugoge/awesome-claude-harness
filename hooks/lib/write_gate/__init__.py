@@ -68,7 +68,7 @@ RULES: tuple[Rule, ...] = (
           "the declaring dispatch's own write of a path it declares"), 20.0),
     Rule("cp-state", "pretool-cp-state-write-guard.py", WRITE_TOOLS | {"Bash"}, "subagent", "open",
          ("the main agent is not governed", "scripts/spec-check.py, the one cp-state writer"), 5.0),
-    Rule("overwrite", "lib/write_gate/overwrite.py", frozenset({"Write"}), "both", "open",
+    Rule("overwrite", "pretool-write-guard.sh", frozenset({"Write"}), "both", "open",
          ("/do consent (main agent; not for the bulk-commit sentinel)",
           "an /allow grant naming the target (main agent; not for the bulk-commit sentinel)"), 5.0),
     Rule("claude-config", "pretool-claude-config-guard.py", frozenset({"Edit", "Write", "MultiEdit", "Bash"}),

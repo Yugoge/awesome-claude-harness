@@ -6,8 +6,8 @@ lib/write_gate.RULES run in order, each in its own try (lib/rule_runner), and th
 answers combine into one (lib/write_gate.combine): every refusal is reported at once.
 The rules are the guards' own files, so each decides exactly as it did alone:
 pretool-bash-views-guard.py, pretool-overnight-hook-guard.py, pretool-tool-policy.py,
-pretool-cp-state-write-guard.py, lib/write_gate/overwrite.py (pretool-write-guard.sh's
-checks) and pretool-claude-config-guard.py.
+pretool-cp-state-write-guard.py, pretool-write-guard.sh (a shell rule, run under bash in
+its own process) and pretool-claude-config-guard.py.
 
 If the gate's own code fails (loading the rule table, or the runner around a rule), it runs
 each rule the call matches as a separate process, as the CLI ran them, so a fault here
@@ -34,7 +34,7 @@ def _tool(raw: bytes):
 def _fallback(raw: bytes) -> int:
     """Run each matching rule as its own process and combine the answers."""
     sys.path.insert(0, HOOKS_DIR)
-    from lib.rule_runner import RuleRun
+    from lib.rule_runner import RuleRun, interpreter
     from lib.write_gate import RULES, combine
     tool = _tool(raw)
     results = []
@@ -42,7 +42,7 @@ def _fallback(raw: bytes) -> int:
         if not rule.applies(tool):
             continue
         try:
-            proc = subprocess.run([sys.executable, rule.file], input=raw, capture_output=True,
+            proc = subprocess.run([interpreter(rule.file), rule.file], input=raw, capture_output=True,
                                   timeout=rule.budget)
             results.append((rule, RuleRun(proc.returncode, proc.stdout.decode("utf-8", "replace"),
                                           proc.stderr.decode("utf-8", "replace"))))

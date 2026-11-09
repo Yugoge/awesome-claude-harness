@@ -14,6 +14,9 @@ process instead of a new interpreter:
 - a rule that runs past its budget is stopped: a watchdog thread sends SIGUSR2 to
   the main thread (not SIGALRM, which lib/allowlist's regex timeout uses and resets).
 
+A shell rule (``*.sh``) cannot run in this process: it runs under bash as a process of
+its own, as the CLI ran it, with the same capture and budget.
+
 The caller decides what an error or an overrun means for that rule (its
 failure direction); this module only reports it.
 """
@@ -65,8 +68,32 @@ def _on_overrun(signum, frame):  # pragma: no cover - timing dependent
         raise RuleOverrun()
 
 
+def _run_shell_rule(path: str, payload: bytes, budget: float) -> RuleRun:
+    """A shell rule runs under bash in its own process, as the CLI ran it: the same payload on
+    stdin, the gate's environment and working directory, its output captured, killed at its budget."""
+    import subprocess
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(["bash", path], input=payload, capture_output=True, timeout=max(budget, 0.001))
+    except subprocess.TimeoutExpired:
+        return RuleRun(1, "", "", error=f"ran past its {budget:g} s budget", overrun=True,
+                       seconds=time.monotonic() - start)
+    except OSError as exc:
+        return RuleRun(1, "", "", error=f"{type(exc).__name__}: {exc}", seconds=time.monotonic() - start)
+    return RuleRun(proc.returncode, proc.stdout.decode("utf-8", "replace"), proc.stderr.decode("utf-8", "replace"),
+                   seconds=time.monotonic() - start)
+
+
+def interpreter(path: str) -> str:
+    """The program a rule file runs under when it runs as a process of its own."""
+    return "bash" if path.endswith(".sh") else sys.executable
+
+
 def run_rule(path: str, payload: bytes, budget: float) -> RuleRun:
-    """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds."""
+    """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds (a shell
+    rule, ``*.sh``, as its own bash process)."""
+    if path.endswith(".sh"):
+        return _run_shell_rule(path, payload, budget)
     saved_env = dict(os.environ)
     saved_cwd = os.getcwd()
     saved_argv, saved_path = list(sys.argv), list(sys.path)
