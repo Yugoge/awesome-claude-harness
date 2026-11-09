@@ -37,7 +37,9 @@ blocks); none of those is new.
 Again with your settings.json (A11's last clause). P5 registers otherwise than both bases: the Stop
 group is one entry, hooks/stop-launch.py (it runs the coordinator armed), for the coordinator, the
 do-report gate and the obligation gate; posttool-todo-sequence.py and posttool-todo-count.py leave
-PostToolUse TodoWrite. settings.json lands with the files it registers, in the one fast-forward, so
+PostToolUse TodoWrite. P12 registers its merged gates in place of the hooks they run as rules (the
+write gate on every tool; the dispatch gate, the dispatch record and the producer gate), git-warn on
+Bash, and no longer the anti-loop hooks and three stubs, so most tool events and every stop differ too. settings.json lands with the files it registers, in the one fast-forward, so
 the session that has this tree's list is the one (re)loaded on the landed home: each replay above runs
 again with landing.py's hooklist=landed, the base list and files before the landing, this tree's list,
 its env and files from it on (pre-merge and harness-home sessions: the whole session). Checked: from
@@ -71,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from tests.replay import hookrun, landing, suite
+from tests.replay import hookrun, landing, sites, suite
 
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
@@ -223,6 +225,21 @@ def _new_blocks(live: suite.Result, base: suite.Result | None) -> list[dict]:
     return [b for b, how, _ in _match(live, base) if how == "NEW"]
 
 
+_CATALOG: list = []
+
+
+def _reports(h: dict, hook: str, text: str) -> bool:
+    """The run `h` reports the verdict of the hook file `hook`: `hook` itself, or the merged gate that runs
+    it as a rule (this tree's list since P12), its text mapped to a site of `hook`'s own (sites.match)."""
+    if h["hook"] == hook:
+        return True
+    if sites.reporter(suite.REPO, hook) != h["hook"]:
+        return False
+    if not _CATALOG:
+        _CATALOG.append(sites.Enumerator(suite.REPO).sites())
+    return any(s.file == hook for s in sites.match(h["hook"], text, _CATALOG[0]))
+
+
 def _verdicts_after(r: suite.Result, verdict: str, hook: str | None = None) -> list[dict]:
     """Hook runs after the landing with `verdict` (error: also a traceback or GATE_ERROR/GATE_FAULT text)."""
     out = []
@@ -231,7 +248,7 @@ def _verdicts_after(r: suite.Result, verdict: str, hook: str | None = None) -> l
             text = (h.get("stderr") or "") + "\n" + (h.get("stdout") or "")
             hit = h["verdict"] == verdict or (verdict == "error" and (suite.TRACEBACK in (h.get("stderr") or "")
                                                                        or suite.GATE_TEXT.search(text)))
-            if hit and (hook is None or h["hook"] == hook):
+            if hit and (hook is None or _reports(h, hook, text)):
                 out.append({"step": ev.get("label"), "event": ev.get("event"), "hook": h["hook"], "rc": h["rc"],
                             "text": (h.get("stderr") or h.get("stdout") or "")[-400:]})
     return out + [e for e in r.hook_errors if e.get("hook") == "network"]
@@ -356,21 +373,40 @@ def test_b_overnight_through_its_todo_reset_to_the_stop_after_end_time(live):
 # ---------------------------------------------------------------- again with your settings.json
 
 STOP, TODO = ("Stop", None), ("PostToolUse", "TodoWrite")
+
+
+def _pre(*matchers) -> set:
+    return {("PreToolUse", m) for m in matchers}
+
+
+# P12's registrations a tool's events reach: every PreToolUse event meets the matcher-less group (it no
+# longer runs pretool-subagent-enforce.py) and "*" (the write gate in place of tool-policy), and each
+# tool the groups whose guards the merged gates now run; PostToolUse Bash runs git-warn, PostToolUse
+# Write no longer the token-verify stub, and Agent the two dispatch gates; every subagent stop the
+# producer gate.
+BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash") \
+    | {("PostToolUse", "Bash")}
+WRITE = _pre(None, "*", "Write", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
+             "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write")}
+AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "*")}
 # The registrations (event, matcher) where this tree's settings.json differs from the base's that each
-# scenario's events after the landing reach (the harness-home session writes no todo list); together
-# they must be every one that differs (test_your_settings_differs_only_where_a_replay_runs_it).
-# P13-1: the pre-merge /dev starts after the landing, on this tree's text, so it asks the requirement round:
-# it reaches the AskUserQuestion registrations (P2's guard under its new matcher, the AskUserQuestion hook).
-EXERCISES = {PRE.name: {STOP, TODO, ("PreToolUse", P2_MATCHER[1]), ("PostToolUse", "AskUserQuestion")},
-             HOME.name: {STOP}, A.name: {STOP, TODO}, B.name: {STOP, TODO}}
-# The registrations two phases ahead of P5 change, which those phases name and no other scenario here
-# reaches after the landing (none of them asks with AskUserQuestion after it): P2's overnight guard on AskUserQuestion
-# too (P2_MATCHER: its registration under the old matcher goes, the new one comes) and P4's close-rating
-# hook (PostToolUse AskUserQuestion). Each is held to exactly that change; a replay that reaches one
-# fails test_again_with_your_settings's `hooklist` part.
-ELSEWHERE = {("PreToolUse", P2_MATCHER[0]): (["hooks/pretool-overnight-hook-guard.py"], []),
-             ("PreToolUse", P2_MATCHER[1]): ([], ["hooks/pretool-overnight-hook-guard.py"]),
-             ("PostToolUse", "AskUserQuestion"): ([], ["hooks/posttool-close-rating.py"])}
+# scenario's events after the landing reach (the harness-home session writes no todo list, no file and
+# dispatches no agent); together they must be every one that differs
+# (test_your_settings_differs_only_where_a_replay_runs_it).
+# P13-1: the pre-merge /dev starts after the landing, on this tree's text, so it asks the requirement round and
+# also reaches the AskUserQuestion hook (held to its change in ELSEWHERE as well).
+EXERCISES = {PRE.name: {STOP, TODO, ("PostToolUse", "AskUserQuestion")} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
+             A.name: {STOP, TODO} | BASH | WRITE | AGENT, B.name: {STOP, TODO} | BASH | WRITE | AGENT}
+# The registrations that change where no scenario here reaches after the landing: P4's close-rating hook
+# (PostToolUse AskUserQuestion; only the pre-merge /dev's requirement round asks with AskUserQuestion after it), and two of P12's removals: the
+# base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no event's list
+# changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an exit-0
+# stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
+# one fails test_again_with_your_settings's `hooklist` part. (P2's overnight guard, under either matcher,
+# is a rule of P12's write gate: its old registration's removal is among those the scenarios reach.)
+ELSEWHERE = {("PostToolUse", "AskUserQuestion"): ([], ["hooks/posttool-close-rating.py"]),
+             ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
+             ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that
@@ -545,7 +581,7 @@ def _yours_params():
 def test_your_settings_differs_only_where_a_replay_runs_it(name):
     """This tree's settings.json registers otherwise than the base's exactly at the registrations the
     scenarios below declare they run after the landing (EXERCISES), each checked in its replay, and at
-    P2's and P4's own (ELSEWHERE); its environment differs by STOPGATE=block, P2's arming of G1 and
+    those no scenario reaches (ELSEWHERE); its environment differs by STOPGATE=block, P2's arming of G1 and
     G3 (P2_ENV), P10's PYTHONDONTWRITEBYTECODE (P10_ENV) and P9's CP_ENFORCE_MODE (P9_ENV) alone."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"

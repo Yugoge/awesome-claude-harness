@@ -35,8 +35,12 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   spec reaches its terminal.
   overnight       /dev-overnight (drivers/overnight.py, variant plain: one cycle, the Stop after
                   end_time, in a 20-minute window that holds Step 12's collection on a loaded host)
-                  with two departures, G2 advisory in its environment
-                  (CLAUDE_OBLIGATION_STOPGATE=advisory). Step 12's first dev writes its report
+                  with three departures, G2 advisory in its environment
+                  (CLAUDE_OBLIGATION_STOPGATE=advisory). At Step 12 the main agent first dispatches
+                  an Explore agent, a role the cycle contract has no entry for at that step: the
+                  overnight contract rule (pretool-subagent-enforce.py, a rule of the dispatch
+                  gate) refuses it, naming the step's expected dispatch, which is its next call.
+                  Step 12's first dev writes its report
                   with dev.status needs_review, a value dev-report.v2 does not allow: its own stop
                   passes (G2 advisory) and the collection check (posttool-overnight-file-check.py)
                   refuses its return, naming the report; the orchestrator's next round is the one
@@ -76,6 +80,13 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   check (the dispatch declares nothing, so the reports its transcript shows it
                   wrote) refuses the stop; at its next round it edits the report into the one its
                   schema asks for and stops: passes.
+  qa-declared     /dev (drivers/dev.py, plain), G2 advisory in its environment
+                  (CLAUDE_OBLIGATION_STOPGATE=advisory), whose Step 13 QA, dispatched with its
+                  obligation, stops without the QA report it declares (faults.py missing): the E2E
+                  rule (subagentstop-e2e-enforce.py, no switch, a rule of the producer gate) refuses
+                  the stop, naming the declared path (armed, G2 states that absence and the e2e
+                  line is left out of the gate's report); at its next round it writes the report
+                  and stops: passes; the cycle reaches its terminal.
   qa-report       /dev (drivers/dev.py, plain), G1 advisory in its environment
                   (CLAUDE_OBLIGATION_GATE=advisory), whose Step 13 QA dispatch carries no obligation
                   block (faults.py noblock); its FIRST ACTION read of the qa sentinel binds it to the
@@ -379,6 +390,16 @@ def _dev_early(rp) -> None:
     Early(rp, "plain", "STANDARD").run()
 
 
+def _qa_declared(rp) -> None:
+    from .. import faults
+    from .dev import DevCycle
+
+    # G2 advisory (its own switch), so the E2E rule, which has none, states the absent declared report.
+    rp.env["CLAUDE_OBLIGATION_STOPGATE"] = "advisory"
+    faults.install(rp, "missing@agent:qa Write docs/dev/qa-report-*")
+    DevCycle(rp, "plain", "STANDARD").run()
+
+
 def _ask_first(rp) -> None:
     """P13-1 R5: BA analysis dispatched before round 1 is asked is refused (ASK_FIRST); the main agent's
     AskUserQuestion of the round clears it, and its next dispatch passes (drivers/dev.py round-unasked)."""
@@ -444,6 +465,11 @@ def _overnight(rp) -> None:
             if self.spoiled:
                 return super().dispatch_dev(fields, p, old, new, label, attempt)
             self.spoiled = True
+            # A role the cycle contract has no entry for at this step: the contract rule refuses it.
+            off = self.o.s.dispatch("Explore", "Survey the toy package's other functions before the fix.",
+                                    description="survey toy", label=f"{self.L}{label} Agent(Explore) off the contract")
+            if not off.blocked:
+                raise RuntimeError("the dispatch off the cycle contract was not refused")
 
             def spoil(sub, b, pl):  # its report as the Player makes it, then dev.status needs_review
                 art = next(a for a in b.obligation["artifacts"] if a.get("schema") == "dev-report.v2")
@@ -477,6 +503,8 @@ def run(rp) -> None:
         return _spec_foreground(rp)
     if case == "qa-report":
         return _qa_report(rp)
+    if case == "qa-declared":
+        return _qa_declared(rp)
     if case == "ask-first":
         return _ask_first(rp)
     if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):

@@ -16,7 +16,16 @@ child whose exit the parent relays contributes gate blocks). It walks their code
 * helpers: a function that blocks unconditionally (the primitive in its own top-level body) is a
   helper; each call of it is the site, transitively, across the modules followed.
 
-unaccounted() cross-checks the walk against a plain token scan of each registered hook's own file.
+A merged gate (hooks/pretool-write-gate.py and the L5 gates) runs hook files as rules from a table it
+declares statically: a module-level `RULES` of `Rule(...)` calls in the gate file or a module it
+imports, each naming a file (a string relative to hooks/, or `HOOKS / "<file>"`) or a function
+(`call="module:function"`). Each rule file that can refuse (kind refuse, or no kind: the write gate's
+rules) is followed as a process of the gate, as a relayed child is: its sites carry the gate's
+registrations, narrowed to the rule's declared tools, so match() maps the gate's block to the rule's
+site. Consult, observe, witness and advise rules refuse nothing through the gate and add no site.
+
+unaccounted() cross-checks the walk against a plain token scan of each registered hook's own file
+(and of each refusing rule file).
 Each Site keeps its file, line, function, the source of the conditions guarding it (enclosing tests,
 early returns), the string constants of its message, and the registrations (event, matcher) of the
 hooks that reach it. classify() derives one class per site from that code and those registrations
@@ -57,6 +66,7 @@ class Site:
     helper_conds: list = field(default_factory=list)
     dynamic: bool = False  # the message interpolates a value (it can name the call it refuses)
     role: str = ""
+    rules: list = field(default_factory=list)  # the gate rule files it is reached through (none: [])
 
     @property
     def id(self) -> str:
@@ -66,12 +76,33 @@ class Site:
         return "\n".join(self.text + self.helper_text)
 
 
+RULE_KINDS = {"REFUSE": "refuse", "CONSULT": "consult", "OBSERVE": "observe", "WITNESS": "witness",
+              "ADVISE": "advise"}
+
+
+@dataclass(frozen=True)
+class GateRule:
+    """One rule of a merged gate's table: its hook file (repository-relative; "" for a function rule),
+    its function (`module:function`), its declared tools (None: every tool) and its kind."""
+    file: str
+    call: str
+    tools: frozenset | None
+    kind: str
+
+    @property
+    def relays(self) -> bool:
+        """The gate refuses when this rule does: its file's sites are the gate's."""
+        return bool(self.file) and self.kind == "refuse"
+
+
 # ------------------------------------------------------------------ registration
 
-def registered(tree: str) -> dict[str, list[tuple[str, str]]]:
-    """{hook file (repository-relative): [(event, matcher), ...]} from settings.json's hooks entries."""
-    with open(os.path.join(tree, "settings.json")) as fh:
-        settings = json.load(fh)
+def registered(tree: str, settings: dict | None = None) -> dict[str, list[tuple[str, str]]]:
+    """{hook file (repository-relative): [(event, matcher), ...]} from settings.json's hooks entries
+    (or those of `settings`, a hook list read elsewhere)."""
+    if settings is None:
+        with open(os.path.join(tree, "settings.json")) as fh:
+            settings = json.load(fh)
     out: dict[str, list] = {}
     for event, groups in (settings.get("hooks") or {}).items():
         for g in groups:
@@ -198,6 +229,66 @@ class PyModule:
                     break
             (procs if child else loads).append(rel)
         return sorted(set(procs)), sorted(set(loads))
+
+    def rule_table(self) -> list["GateRule"]:
+        """The rules of a module-level `RULES` table of `Rule(...)` calls (a merged gate's), in order."""
+        table = None
+        for st in self.ast.body:
+            targets = st.targets if isinstance(st, ast.Assign) else [st.target] if isinstance(st, ast.AnnAssign) else []
+            if any(isinstance(t, ast.Name) and t.id == "RULES" for t in targets) and \
+                    isinstance(st.value, (ast.List, ast.Tuple)):
+                table = st.value
+        out = []
+        for call in (table.elts if table is not None else ()):
+            if not (isinstance(call, ast.Call) and _call_name(call.func)[1] == "Rule"):
+                continue
+            kw = {k.arg: k.value for k in call.keywords if k.arg}
+            args = list(call.args)
+            path = kw.get("path", args[1] if len(args) > 1 else None)
+            kind_node = kw.get("kind")
+            tools_node = kw.get("tools")
+            if len(args) > 2:
+                if isinstance(args[2], ast.Name) and args[2].id in RULE_KINDS:
+                    kind_node = kind_node or args[2]
+                else:
+                    tools_node = tools_node or args[2]
+            kind = RULE_KINDS[kind_node.id] if isinstance(kind_node, ast.Name) and kind_node.id in RULE_KINDS \
+                else kind_node.value if isinstance(kind_node, ast.Constant) else "refuse"
+            call_text = kw["call"].value if isinstance(kw.get("call"), ast.Constant) else ""
+            out.append(GateRule(self._rule_file(path), call_text, self._tools(tools_node), kind))
+        return out
+
+    def _rule_file(self, node) -> str:
+        """hooks/<file> a rule's path expression names: a string relative to hooks/, or the string
+        pieces of a `HOOKS / "lib" / "<file>"` join (str() around it allowed)."""
+        if isinstance(node, ast.Call) and _call_name(node.func) == (None, "str") and node.args:
+            node = node.args[0]
+        consts = [n for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)] \
+            if node is not None else []
+        pieces = [n.value for n in sorted(consts, key=lambda n: (n.lineno, n.col_offset))]
+        rel = os.path.join("hooks", *pieces) if pieces else ""
+        return rel if rel and os.path.isfile(os.path.join(self.tree, rel)) else ""
+
+    def _tools(self, node):
+        """A rule's declared tool names: None (every tool) or a frozenset (`frozenset({...})`, a set, a
+        module constant holding one, or their `|`)."""
+        if node is None or isinstance(node, ast.Constant) and node.value is None:
+            return None
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            a, b = self._tools(node.left), self._tools(node.right)
+            return None if a is None or b is None else a | b
+        if isinstance(node, ast.Name):
+            for st in self.ast.body:
+                if isinstance(st, (ast.Assign, ast.AnnAssign)) and st.value is not None and any(
+                        isinstance(t, ast.Name) and t.id == node.id
+                        for t in (st.targets if isinstance(st, ast.Assign) else [st.target])):
+                    return self._tools(st.value)
+            return None
+        if isinstance(node, ast.Call) and _call_name(node.func)[1] in ("frozenset", "set") and node.args:
+            return self._tools(node.args[0])
+        if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+            return frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+        return None
 
     def imported_files(self) -> list[str]:
         return sorted({m for m, _ in self.imports.values()} - {self.rel})
@@ -688,9 +779,26 @@ class Enumerator:
         self.py: dict[str, PyModule] = {}
         self.sh: dict[str, ShModule] = {}
         self.children: dict[str, list[str]] = {}   # hook file -> child processes it runs
-        self.roles: dict[str, dict[str, str]] = {}  # hook -> {file: main|child|import}
+        self.roles: dict[str, dict[str, str]] = {}  # hook -> {file: main|child|rule|import}
+        self.tools: dict[str, dict[str, frozenset | None]] = {}  # hook -> {file reached only through
+        #                                            refusing rules: the union of their declared tools}
+        self.rules: dict[str, list[GateRule]] = {}   # hook -> the refusing rules of its gate table
+        self.via: dict[str, dict[str, list[str]]] = {}  # hook -> {file reached only through rules: their files}
         for hook in self.regs:
             self.roles[hook] = self._closure(hook)
+
+    def entries(self) -> list[str]:
+        """The files that run as a hook's own process: each registered hook, and each refusing rule
+        file of a registered gate."""
+        out = list(self.regs)
+        for hook in self.regs:
+            out += [r.file for r in self.rules[hook] if r.file not in out]
+        return out
+
+    def event(self, rel: str) -> str:
+        """An event `rel` runs at: its own registration's, or that of a gate running it as a rule."""
+        hosts = [rel] + [h for h in self.regs if any(r.file == rel for r in self.rules[h])]
+        return next((ev for h in hosts for ev, _ in self.regs.get(h, [])), "Stop")
 
     def module(self, rel: str):
         if rel.endswith(".py"):
@@ -706,9 +814,11 @@ class Enumerator:
             return self.sh[rel]
         return None
 
-    def _closure(self, hook: str) -> dict[str, str]:
-        roles = {hook: "main"}
-        todo = [hook]
+    def _walk(self, start: str, role: str) -> dict[str, str]:
+        """The files one process reaches from `start`: its children, imports, loads and sources. A gate
+        table's own rule files are no load of the gate: _closure follows them as rules."""
+        roles = {start: role}
+        todo = [start]
         while todo:
             rel = todo.pop()
             m = self.module(rel)
@@ -716,13 +826,14 @@ class Enumerator:
                 continue
             if isinstance(m, PyModule):
                 procs, loads = m.loaded_files()
-                if roles[rel] in ("main", "child"):
+                table = {r.file for r in m.rule_table()}
+                if roles[rel] in ("main", "child", "rule"):
                     self.children[rel] = procs
                     for f in procs:
                         if f not in roles:
                             roles[f] = "child"
                             todo.append(f)
-                nxt = [f for f in m.imported_files() if f.startswith("hooks/")] + loads
+                nxt = [f for f in m.imported_files() if f.startswith("hooks/")] + [f for f in loads if f not in table]
             else:
                 nxt = m.sourced()
             for f in nxt:
@@ -730,6 +841,41 @@ class Enumerator:
                     roles[f] = "import"
                     todo.append(f)
         return roles
+
+    def _closure(self, hook: str) -> dict[str, str]:
+        """The hook's files with their role; a refusing rule of a gate table it holds (in its file or a
+        module it imports) runs as the gate's process (role `rule`), with what that rule file reaches."""
+        roles = self._walk(hook, "main")
+        rules = [r for rel in list(roles) if isinstance(self.module(rel), PyModule)
+                 for r in self.module(rel).rule_table() if r.relays]
+        self.rules[hook] = rules
+        own, tools, via = set(roles), {}, {}
+        for r in rules:
+            for f, role in self._walk(r.file, "rule").items():
+                if f not in own:  # reached only through rules: the union of their tools (None: every tool)
+                    tools[f] = r.tools if f not in tools else \
+                        None if tools[f] is None or r.tools is None else tools[f] | r.tools
+                    via.setdefault(f, []).append(r.file)
+                if f not in roles or roles[f] == "import" and role != "import":
+                    roles[f] = role
+        self.tools[hook], self.via[hook] = tools, via
+        return roles
+
+    def _regs(self, hook: str, rel: str) -> list[tuple[str, str, str]]:
+        """The registrations (hook, event, matcher) that reach `rel`: the hook's own, narrowed to the
+        declared tools of the rules it is reached through; one the rules never run under is left out."""
+        tools = self.tools[hook].get(rel)
+        out = []
+        for ev, m in self.regs[hook]:
+            if rel in self.tools[hook] and tools is not None:
+                if m in ("", "*") or not re.fullmatch(r"[A-Za-z0-9_|]+", m):
+                    m = "|".join(sorted(tools))
+                else:
+                    m = "|".join(t for t in m.split("|") if t in tools)
+                    if not m:
+                        continue
+            out.append((hook, ev, m))
+        return out
 
     # ---- Python: which functions of an imported module a hook can call
     def _resolve(self, mod: PyModule, func) -> tuple | None:
@@ -929,16 +1075,17 @@ class Enumerator:
         out = []
         for s, ok_main, ok_import in self._py_sites(roles, argv):
             role = roles.get(s.file)
-            if role in ("main", "child") and not ok_main:
+            if role in ("main", "child", "rule") and not ok_main:
                 continue
             if role == "import" and (not ok_import or (s.file, s.func) not in reach and s.func != "<module>"):
                 continue
             out.append(s)
         out += self._sh_sites([f for f in roles if f.endswith(".sh")])
         for s in out:
-            s.regs = [(hook, ev, m) for ev, m in self.regs[hook]]
+            s.regs = self._regs(hook, s.file)
             s.role = roles.get(s.file)
-        return out
+            s.rules = sorted(self.via[hook].get(s.file, []))
+        return [s for s in out if s.regs]
 
     def sites(self) -> list[Site]:
         """Every site, once per (file, line), with every registered hook that reaches it."""
@@ -948,6 +1095,7 @@ class Enumerator:
                 if s.id in merged:
                     have = merged[s.id]
                     have.regs += [r for r in s.regs if r not in have.regs]
+                    have.rules = sorted(set(have.rules) | set(s.rules))
                 else:
                     merged[s.id] = s
         return sorted(merged.values(), key=lambda s: (s.file, s.line))
@@ -955,6 +1103,29 @@ class Enumerator:
 
 def sites(tree: str) -> list[Site]:
     return Enumerator(tree).sites()
+
+
+def reporter(tree: str, rule: str, settings: dict | None = None) -> str:
+    """The registered hook that reports the refusals of the hook file `rule`: `rule` itself where
+    settings.json (or `settings`) registers it, else the merged gate that runs it as a refusing rule."""
+    regs = registered(tree, settings)
+    if rule in regs:
+        return rule
+    return next((h for h in regs if any(r.relays and r.file == rule for r in gate_rules(tree, h))), "")
+
+
+def gate_rules(tree: str, hook: str) -> list[GateRule]:
+    """The rules of the gate table the hook file `hook` (repository-relative) declares, in its own file
+    or a module it imports; [] for a hook that is no merged gate."""
+    try:
+        mod = PyModule(os.path.abspath(tree), hook)
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return []
+    out = mod.rule_table()
+    for rel in mod.imported_files():
+        if not out and rel.startswith("hooks/"):
+            out = PyModule(mod.tree, rel).rule_table()
+    return out
 
 
 # ------------------------------------------------------------------ classes (X6 (ii))
@@ -1109,18 +1280,36 @@ def fragments(s: Site) -> list[str]:
     return sorted(set(out))
 
 
+DISTINCT = 20  # a message piece this long names its rule (shorter ones, "in session", recur across rules)
+
+
 def match(hook: str, text: str, catalog: list[Site]) -> list[Site]:
-    """The sites of `hook` whose message pieces the refusal `text` holds most of (ties: all of them)."""
-    best, out = 0, []
+    """The sites of `hook` whose message pieces the refusal `text` holds most of (ties: all of them). A
+    merged gate reports every refusing rule's reason in one text, as the rules would each have reported
+    their own: its sites are matched per rule they are reached through (Site.rules), each rule's best; a
+    rule beside the best one counts only where the text holds a piece of its message at least DISTINCT
+    characters long. Since another rule's words in the same text can tip one rule's best, a rule's site
+    whose every message piece the text holds counts beside that rule's best."""
+    best: dict[tuple, list] = {}  # rules -> [score, sites, longest piece held]
+    whole: dict[tuple, list] = {}  # rules -> the sites whose every piece the text holds
     for s in catalog:
         if not any(r[0] == hook for r in s.regs):
             continue
-        score = sum(len(f) if f in text else 40 if len(f) > 40 and f[:40] in text else 0 for f in fragments(s))
-        if score > best:
-            best, out = score, [s]
-        elif score == best and score:
-            out.append(s)
-    return out
+        pieces = fragments(s)
+        held = [len(f) if f in text else 40 for f in pieces if f in text or len(f) > 40 and f[:40] in text]
+        score = sum(held)
+        if s.rules and pieces and len(held) == len(pieces) and max(held) >= DISTINCT:
+            whole.setdefault(tuple(s.rules), []).append(s)
+        top = best.setdefault(tuple(s.rules), [0, [], 0])
+        if score > top[0]:
+            best[tuple(s.rules)] = [score, [s], max(held)]
+        elif score == top[0] and score:
+            top[1].append(s)
+            top[2] = max(top[2], max(held))
+    first = max((b[0] for b in best.values()), default=0)
+    out = {x.id: x for key, b in best.items() if b[0] and (b[0] == first or b[2] >= DISTINCT)
+           for x in b[1] + whole.get(key, [])}
+    return sorted(out.values(), key=lambda s: (s.file, s.line))
 
 
 def unaccounted(e: "Enumerator", hook: str, found: list[Site]) -> list[str]:

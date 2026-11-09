@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-08T05:59:58Z*
-**Total entries**: 60
+*Last updated: 2026-11-09T15:40:00Z*
+**Total entries**: 25
 **Convention**: kebab
 
 ## Tree
@@ -13,12 +13,13 @@ reference/
 ├── `close-commit-zero-failure-mechanism-20260928.md` - Close/commit zero-failure mechanism — converged design (2026-09-28/29)
 ├── `commit-dryrun-close-gate-ruling.md` - /commit dry-run close-gate relaxation: ruling record
 ├── `commit-gate-bypass-via-background-exec-20261005.md` - Commit gate bypassed by background execution — 2026-10-05
+├── `do-report-ledger-has-no-refresh-path-20261008.md` - The `/do` ledger has no refresh path, so a cycle that keeps working becomes unclosable
 ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 ├── `harness-gaps-found-20261005.md` - Harness gaps found during the 2026-10-05 tree-to-zero campaign
-├── `harness-issues-backlog.md` - 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
+├── `harness-issues-backlog.md` - harness 问题清单：/dev 会话里发现的新 harness 问题只记录于此、不在该会话修；harness 的 /spec 会话处理它们，条目的 spec 落库后删除
 ├── `install-compatibility-matrix.md` - Install compatibility matrix
 ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling

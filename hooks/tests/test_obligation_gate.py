@@ -415,25 +415,31 @@ def test_AC_L1_09_internal_crash_still_exits_0(tmp_path):
 
 
 def test_AC_L1_10_settings_json_registration_additive_only():
-    """AC-L1-10: the matcher="Agent" PreToolUse group has exactly one new
-    entry invoking pretool-obligation-gate.py; no other group is touched."""
+    """AC-L1-10: the matcher="Agent" PreToolUse group runs pretool-obligation-gate.py exactly once;
+    since P12 the group is the dispatch gate (hooks/pretool-dispatch-gate.py), which runs it as one
+    refuse rule, beside the hooks that shared the group with it."""
     settings_path = Path(REPO_ROOT) / "settings.json"
     data = json.loads(settings_path.read_text(encoding="utf-8"))
     agent_groups = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Agent"]
     assert len(agent_groups) == 1
     commands = [h["command"] for h in agent_groups[0]["hooks"]]
-    matches = [c for c in commands if "pretool-obligation-gate.py" in c]
-    assert len(matches) == 1, commands
-    # The 6 pre-existing sibling hooks must still all be present.
+    assert len(commands) == 1 and commands[0].rstrip('"').endswith("/hooks/pretool-dispatch-gate.py"), commands
+    gate = Path(REPO_ROOT) / "hooks" / "pretool-dispatch-gate.py"
+    ns = {"__name__": "gate", "__file__": str(gate)}
+    exec(compile(gate.read_text(encoding="utf-8"), str(gate), "exec"), ns)
+    rules = {Path(r.path).name if r.path else r.call: r.kind for r in ns["RULES"]}
+    assert rules.get("pretool-obligation-gate.py") == "refuse", rules
+    assert [r.path for r in ns["RULES"]].count(str(gate.parent / "pretool-obligation-gate.py")) == 1
+    # The pre-existing siblings still run on the dispatch: four as the gate's rules, and the two
+    # anti-loop hooks' checks (layer escalation, bisect) as lib/dev_loop_checks.py's advice.
     for sibling in (
-        "pretool-layer-escalation-check.sh",
-        "pretool-bisect-gate.sh",
         "pretool-spec-block-foreground-agent.py",
         "pretool-orchestrator-prompt-purity.py",
         "pretool-aggregate-check.py",
         "pretool-gitignore-preflight.py",
+        "lib.dev_loop_checks:advice",
     ):
-        assert any(sibling in c for c in commands), f"missing sibling hook {sibling}"
+        assert sibling in rules, f"missing sibling hook {sibling}"
 
 
 def test_AC_L1_11_advisory_mode_zero_behavioral_change(tmp_path):
