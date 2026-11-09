@@ -1,6 +1,7 @@
 """P2 A20 (b): three of P2's process classes on a fault replay of the replay suite.
 
-* the AskUserQuestion deny (hooks/pretool-overnight-hook-guard.py's AskUserQuestion branch, R10) and
+* the AskUserQuestion deny (hooks/pretool-overnight-hook-guard.py's AskUserQuestion branch, R10; reported by
+  the hook that runs it: the write gate since P12, sites.reporter) and
   D20's unattended decision: drivers/overnight.py variant=unattended, shipped and armed. Its pipeline 0
   meets, inside the window, a producer question an experiment settles (BA, Step 8), a stand-in
   spec-declared user gate and a producer question no experiment settles (dev, Step 12); an
@@ -25,10 +26,12 @@ import os
 
 import pytest
 
-from tests.replay import suite
+from tests.replay import sites, suite
 from tests.replay.drivers import overnight as night
 
-GUARD = "pretool-overnight-hook-guard.py"
+# The hook that reports the overnight guard's deny: the guard itself, or the merged gate that runs it as a
+# rule (hooks/pretool-write-gate.py since P12).
+GUARD = sites.reporter(suite.REPO, "hooks/pretool-overnight-hook-guard.py")
 # cost: its untraced wall seconds, as test_overnight_one_pipeline.py declares its windowed sibling's
 # (the 10-minute window, the launch and the closeout).
 UNATTENDED = suite.Scenario("/dev-overnight unattended decision (D20)", "overnight", (("variant", "unattended"),),
@@ -81,7 +84,7 @@ def test_unattended_overnight_denies_every_question_and_decides_without_the_owne
     assert len(asked) == 3 and [who for _w, who in where] == ["main", "subagent", "main"], where
     assert where[0][0].startswith("Step 8") and where[1][0].startswith("Step 12") and where[2][0] == "Step 21", where
     for ev, (_w, who) in zip(asked, where):
-        denied = [h for h in ev["hooks"] if h["hook"].endswith(GUARD)]
+        denied = [h for h in ev["hooks"] if h["hook"] == GUARD]
         assert len(denied) == 1 and denied[0]["rc"] == 2, (ev["label"], [(h["hook"], h["rc"]) for h in ev["hooks"]])
         assert night.DECIDE_TEXT[who] in denied[0]["stderr"], (ev["label"], denied[0]["stderr"])
     probes = [pr for pr in out["probes"] if pr["kind"] == "AskUserQuestion"]
