@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T06:24:47Z*
-**Total entries**: 773
+**Total entries**: 781
 **Convention**: kebab
 
 ## Tree
@@ -143,6 +143,8 @@ dot-claude/
 │   │   ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
 │   │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 │   │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+│   │   ├── `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
+│   │   ├── `score_log.py` - The score log (logs/lifecycle.jsonl): its reader, its one writer, the point values and every rule on its rows.
 │   │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 │   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
@@ -416,7 +418,7 @@ dot-claude/
 │   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   │   ├── `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
+│   │   ├── `score_log.py` - Re-export of hooks/lib/score_log.py (the same file name, so it is loaded by path) for score-update.sh and score-inject.sh.
 │   │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 │   │   ├── `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
 │   │   └── `soundness_gate.py` - HUNK-level failure attribution
@@ -614,6 +616,8 @@ dot-claude/
 │   │   ├── `roles.py` - Each helper returns an Act.work callable, work(sub, brief, player) -> content,
 │   │   ├── `sandbox.py` - One scratch root holds everything a replay touches:
 │   │   ├── `schemagen.py` - A simulated subagent writes each JSON artifact its obligation declares from the
+│   │   ├── `scorelog.py` - P13-2 B2: the score log of a replay, and the observer hook run once more on the final transcript.
+│   │   ├── `test_score_replay.py` - P13-2 B2, B3, B4: the score log after a replayed /dev cycle and after a /close that follows it, and the rating.
 │   │   └── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
 │   ├── score-inject-contract/
 │   │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
@@ -686,7 +690,8 @@ dot-claude/
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
-│   ├── `test_score_log.py` - scripts/score-update.sh and scripts/score-inject.sh both call read_lines in place
+│   ├── `test_score_events.py` - Score events from facts (hooks/lib/score_events.py): lane QA's first_pass, fail and catch rules, the close-time rules escaped and close_catch, and the observer.
+│   ├── `test_score_log.py` - The score log's one module (hooks/lib/score_log.py): its reader, its one writer, the score function and the two renderers (owner summary, /rating view); and the reader's two callers.
 │   ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 │   ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
 │   ├── `test_spec_check_agent_id_guard.py` - Lane b of task 20260921-134709. Self-contained and subprocess based: one scratch

@@ -43,8 +43,8 @@
 - `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
 - `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 - `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
-- `score_events.py` - Score events from facts: observe(payload) turns lane-QA reports and dev writes into rows of the score log.
-- `score_log.py` - A score, a rank, a trend and the text views are computed on read from its rows, never stored. Rows: event {kind,
+- `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
+- `score_log.py` - The score log (logs/lifecycle.jsonl): its reader, its one writer, the point values and every rule on its rows.
 - `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 - `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 - `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
