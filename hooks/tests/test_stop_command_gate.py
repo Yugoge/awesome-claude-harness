@@ -286,6 +286,86 @@ def test_a2_the_humans_stop_or_spec_opens_an_ungated_span(env, command):
     assert run(env) == (0, "")
 
 
+# A2's Esc case (P5-23). Esc interrupts the turn and runs no Stop hook (D4c); the next Stop the gate
+# sees follows the human's next prompt. Record shapes, as the CLI wrote them:
+# - The interrupt: a user record holding one text block "[Request interrupted by user]", with no
+#   origin, turnOrigin or isMeta. Measured on CLI 2.1.319 (a session transcript of the harness host,
+#   2026-11-09; that record was a subagent's, isSidechain true, so the main session's is written with
+#   isSidechain false); the replay kit writes the same record (tests/replay/drivers/overnight.py).
+# - Esc during a tool call: the call's error tool_result, then "[Request interrupted by user for tool
+#   use]". Not captured on that host; written from the CLI's interrupt texts.
+# - The typed plain prompt: an enqueue and a dequeue queue-operation, then a user record with string
+#   content, origin {"kind": "human"}, promptSource "sdk", turnOrigin "human" and turnPosition.
+#   Measured on the same host, CLI 2.1.319 (the main session's typed prompts).
+# - A typed command: the same human fields on txbuild's slash-command records (tools/proto/txbuild.py).
+# The gate reads none of the interrupt's text or fields (D4c): it is a prompt with no command in it,
+# so like any plain prompt it continues the span.
+CLI_FIELDS = {"userType": "external", "entrypoint": "cli", "isSidechain": False, "version": "2.1.319",
+              "gitBranch": "main"}
+REJECTED = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file "
+            "edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to "
+            "tell you how to proceed.")
+
+
+def interrupted_turn(env, during: str):
+    """The agent's turn after a blocked Stop, cut by Esc: no Stop runs."""
+    if during == "reply":
+        env.tx.say("Continuing with step 2: reading the failing build log")
+        text = "[Request interrupted by user]"
+    else:
+        env.tx.tool("Bash", {"command": "make build", "description": "Build"}, ok=False, result=REJECTED)
+        text = "[Request interrupted by user for tool use]"
+    env.tx.add({"type": "user", **CLI_FIELDS, "cwd": str(env.project), "promptId": "prompt-esc",
+                "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+
+
+def human_typed(env, text: str, index: int, command: str | None = None):
+    """A prompt the human typed (a plain one, or with ``command`` that slash command), as the CLI records it."""
+    env.tx.add({"type": "queue-operation", "operation": "enqueue", "content": text})
+    env.tx.add({"type": "queue-operation", "operation": "dequeue"})
+    content = text if command is None else (f"<command-message>{command} is running…</command-message>\n"
+                                            f"<command-name>/{command}</command-name>\n<command-args></command-args>")
+    env.tx.add({"type": "user", **CLI_FIELDS, "cwd": str(env.project), "permissionMode": "default",
+                "promptId": f"prompt-{index}", "origin": {"kind": "human"}, "promptSource": "sdk",
+                "turnOrigin": "human", "turnPosition": {"promptIndex": index, "turnIndex": index},
+                "message": {"role": "user", "content": content}})
+    if command is not None:
+        env.tx.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": [
+            {"type": "text", "text": f"body of {command}"}]}})
+
+
+@pytest.mark.parametrize("during", ["reply", "tool_call"])
+@pytest.mark.parametrize("after,code", [("plain", 2), ("stop", 0), ("spec", 0), ("plain_then_complete", 0)])
+def test_a2_esc_then_the_humans_next_prompt(env, monkeypatch, during, after, code):
+    """/dev at 1 of 17, no QA dispatch, blocked; Esc; then the human types: a plain prompt continues the
+    span (the same block), /stop or /spec opens an ungated one, and the completed span then holds."""
+    steps = dev_span(env, done=1)
+    qa = f"docs/dev/qa-report-{FAMILY}.json"
+    env.fake.answers[(FAMILY, "dev")] = [gap(qa, "MISSING_ARTIFACT", "absent")]
+    monkeypatch.setattr(chain_obligation, "declaring_dispatch", lambda task, path, root, roots=None: {
+        "source": "todo_step", "step": "Step 9: QA validation", "command": "dev"})
+    first, before = run(env)
+    assert first == 2 and before.startswith("COMMAND_GATE /dev: not complete\n")
+    interrupted_turn(env, during)
+    if after in ("stop", "spec"):
+        human_typed(env, f"/{after}", 2, command=after)
+    else:
+        human_typed(env, "keep going, but check the build log first", 2)
+    if after == "plain_then_complete":
+        env.tx.todos(steps, len(steps))
+        env.tx.dispatch(FAMILY, role="qa")
+        env.fake.answers[(FAMILY, "dev")] = []  # the QA report landed: P3's chain_pass
+    got, text = run(env)
+    assert got == code
+    if code == 2:
+        assert text == before  # the span's own gaps, as at the Stop before the Esc
+        assert f"- todo: not completed: {steps[1]['content']}" in text
+        assert f"GAP artifact={qa} problem=MISSING_ARTIFACT: absent lane=- step=\"Step 9: QA validation\"" in text
+    else:
+        assert text == ""
+    assert command_span.active_span(env.tx.path).command == ("dev" if after.startswith("plain") else after)
+
+
 def test_a2_all_ticked_without_a_dispatch_is_no_pipeline_dispatched(env):
     steps = dev_span(env, done=0, dispatch=False)
     env.tx.todos(steps, len(steps))
