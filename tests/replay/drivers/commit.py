@@ -25,8 +25,9 @@ tree's text spells each one, read at run time:
 * Step 7: changelog-analyst from the step's prompt block, the real commit in the toy project and
   the push-gate token as the tree's agent text writes it; the status block read and handled per
   its commit_status (a `hook_blocked` failure: the text's one AskUserQuestion, then Steps 5-7 again).
-* Step 8: the selection call (scripts/step7-spec-update.py) as the text spells it, its first stdout line
-  the outcome the text echoes.
+* Step 8: the selection as the text orders it, by the main agent's own Read, Glob and Grep calls and no
+  script (context spec_path, the close-report's continuation line, the specs glob), ending in the outcome
+  the text prints.
 * Routes, on a task with a late-repair run record: the record-stage call the text names after a BA, dev or QA
   stage was dispatched again.
 * `--auto`: Step 2's discovery call (the text's `--auto` section runs it) and each discovered parent walked
@@ -807,17 +808,81 @@ class CommitRun:
 
     # ------------------------------------------------------------ Step 8
     def step8(self) -> None:
-        """The selection call the text spells; its first stdout line is the outcome the text echoes. A spec
-        selected (stage 1 or 2) is recorded as a fact: the toy cycle links none, and no spec-update agent is played."""
-        o = self.o
-        control = o.values.get("CONTROL_ROOT") or o.project
-        c = self.run_text(o.block("Step 8", lang="bash", index=0), self.label("Step 8 Bash spec selection"),
-                          "Step 8: select the spec to update",
-                          rules=[(r"^CONTROL_ROOT$", control), (r"^commit_status$", "committed")])
-        out = [l for l in ((c.response.get("stdout") or "") if c.ok else (c.error or "")).split("\n") if l.strip()]
-        first = out[0] if out else ""
-        closedrv.fact(self.rp, "commit Step 8", {"ok": c.ok, "outcome": first.replace(self.tid, "<task>")})
-        o.s.say(first)
+        """The selection as the text orders it, made with the main agent's own calls and no script (a script
+        reading the close report here would be a second decider of it): the context's spec_path (Read), the close
+        report's continuation line (Read, the text's pattern on the lines outside fenced blocks), the specs of this
+        cycle (Glob, then the text's one content test, a Grep, on the files of its time window), ending in the
+        outcome the text prints. A spec that stage 1 or 2 names is recorded as a fact: the toy cycle links none,
+        and no spec-update agent is played."""
+        o, tid = self.o, self.tid
+        sec = re.sub(r"\s+", " ", o.section("Step 8"))
+
+        def text(pattern: str, what: str) -> str:
+            m = re.search(pattern, sec)
+            if m is None:
+                raise cmdtext.TextNotFound(f"Step 8: no {what}")
+            return m.group(1).replace("<TASK_ID>", tid)
+
+        docs = os.path.join(o.values.get("CONTROL_ROOT") or o.project, "docs/dev")
+        context = os.path.join(docs, text(r"`<DEV_DOCS_ROOT>/(context-<TASK_ID>\.json)`", "context file"))
+        report = os.path.join(docs, text(r"read `<DEV_DOCS_ROOT>/(close-report-<TASK_ID>\.md)`", "close report"))
+        sdir = os.path.join(docs, text(r"`<DEV_DOCS_ROOT>/(\w+)/spec-YYYYMMDD-HHMMSS\.md`", "specs directory"))
+        pattern = re.compile(text(r"match each line against ``(.+?)`` \(", "continuation pattern"))
+        marker = text(r"holding the literal line `(<!-- spec-continuation-of: <TASK_ID> -->)`", "marker line")
+        warning = text(r"print `(WARNING: [^`]+)`", "stage 2 warning")
+        none_, one, several = (text(p, w) for p, w in (
+            (r"No file: `([^`]+)`", "stage 4 outcome for no file"), (r"One file: `([^`]+)`", "stage 4 outcome for one"),
+            (r"Several: `([^`]+)`", "stage 4 outcome for several")))
+        project = os.path.dirname(os.path.dirname(docs))     # a relative spec path is the project root's
+
+        def read(path: str, what: str) -> str:
+            lab = self.label(f"Step 8 Read {what}")
+            c = o.s.read(path, label=lab, deviation=self.devs.at(lab))
+            return ((c.response.get("file") or {}).get("content") or "") if c.ok else ""
+
+        def is_file(path: str) -> bool:
+            return os.path.isfile(path if os.path.isabs(path) else os.path.join(project, path))
+
+        stage, found = 0, []
+        if os.path.isfile(context):
+            try:
+                doc = json.loads(read(context, "context"))
+            except ValueError:
+                doc = None
+            spec = doc.get("spec_path") if isinstance(doc, dict) else None
+            if spec and is_file(spec):
+                stage, found = 1, [spec]
+        if not stage:
+            outside, fenced = [], False
+            for line in read(report, "close-report").split("\n"):
+                if line.strip().startswith("```"):
+                    fenced = not fenced
+                elif not fenced:
+                    outside.append(line)
+            hits = [m.group(2) for m in map(pattern.match, outside) if m]
+            if len(hits) == 1 and is_file(hits[0]):
+                stage, found = 2, hits
+        if not stage:
+            lab = self.label("Step 8 Glob specs")
+            g = o.s.tool("Glob", {"pattern": "spec-*.md", "path": sdir}, label=lab, deviation=self.devs.at(lab))
+            mtime = os.path.getmtime(report) if os.path.isfile(report) else float("-inf")
+            window = [f for f in (g.response.get("filenames") or [] if g.ok else [])
+                      if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))
+                      and mtime - 24 * 3600 <= os.path.getmtime(f) <= mtime + 3600]
+            if window:
+                lab = self.label("Step 8 Grep spec marker")
+                m = o.s.tool("Grep", {"pattern": re.escape(marker), "path": sdir, "output_mode": "files_with_matches"},
+                             label=lab, deviation=self.devs.at(lab))
+                held = {os.path.join(sdir, f) for f in (m.response.get("filenames") or [])} if m.ok else set()
+                found = [f for f in window if f in held]
+        if stage:
+            outcome = warning if stage == 2 else f"Step 8: updating the spec {found[0]}"
+        else:
+            outcome = (none_ if not found else one.replace("<path>", found[0]) if len(found) == 1
+                       else several.replace("<paths>", ", ".join(found)))
+        closedrv.fact(self.rp, "commit Step 8", {"stage": stage or 4,
+                                                 "outcome": outcome.replace(project + os.sep, "").replace(tid, "<task>")})
+        o.s.say(outcome)
 
     # ------------------------------------------------------------ Step 7
     def hook_question(self) -> None:

@@ -569,24 +569,44 @@ where every acceptance criterion still holds without it, Hook Discipline #4).
 
 This step is dispatched from `/commit`'s own orchestrator context, never from within
 changelog-analyst, which has already returned. It runs only when `BULK=false`, `DRYRUN=false`,
-`TASK_ID` is set and changelog-analyst reported a real commit; otherwise it is skipped (a
-`push_gate_reconciled` result created no commit). One Bash call makes the selection, which reads
-only this task's artifacts and matches nothing of another cycle (`<commit_status>` is the status
-the analyst reported):
+`TASK_ID` is set and changelog-analyst reported a real commit (`commit_status` `committed`);
+otherwise it is skipped (a `push_gate_reconciled` result created no commit). Use absolute paths,
+with `<DEV_DOCS_ROOT>` = `<CONTROL_ROOT>/docs/dev`.
 
-```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/step7-spec-update.py" --task-id "$TASK_ID" --dev-docs-root "<CONTROL_ROOT>/docs/dev" --changelog-status <commit_status>
-```
+You make the selection yourself, in this order, and stop at the first stage that decides. Every
+predicate is anchored to the current `TASK_ID`; an artifact of another cycle is never matched.
 
-It prints what the selection chose and dispatches nothing itself (with `COMMIT_STEP8_TRACE=1` in
-its environment it also writes `STEP8_*` markers on stderr; nothing else changes). `Stage 1
-dispatch: <path>` or `Stage 2 dispatch: <path>` (the latter with a stderr WARNING that the spec
-was linked via the close-report, not `context.spec_path`) names the spec to update: dispatch the
-inline Agent below for it, with `<DEV_DOCS_ROOT>` the same `<CONTROL_ROOT>/docs/dev` (do not invoke
-`/spec-update` as a slash command). Any other line is the
-outcome: `Step 8 skipped: …`, `No spec associated with task-id <TASK_ID>`, or a stderr line that a
-spec was produced this cycle but is not linked in the context (one path, or several with `explicit
-context.spec_path required`). Echo it and dispatch nothing.
+1. **`context.spec_path`.** If `<DEV_DOCS_ROOT>/context-<TASK_ID>.json` has a non-null `spec_path`
+   that is a regular file, that file is the spec to update.
+2. **The close report's continuation line.** Otherwise read `<DEV_DOCS_ROOT>/close-report-<TASK_ID>.md`
+   outside its fenced code blocks and match each line against
+   ``^[-*+]?\s*Continuation spec(\s*\([^)]*\))?\s*:\s*`?(docs/dev/specs/spec-[^\s`]+\.md)`?\s*$``
+   (an optional list marker, an optional parenthetical qualifier and backticks around the path are
+   all accepted, as in ``- Continuation spec (from prior NO): `docs/dev/specs/spec-20260520-044700.md` ``).
+   Exactly one matching line whose path exists is the spec to update; print `WARNING: linked via
+   close-report, not context.spec_path`.
+3. **Specs of this cycle.** Otherwise take the files `<DEV_DOCS_ROOT>/specs/spec-YYYYMMDD-HHMMSS.md`
+   (that basename form only) modified between 24 hours before and 1 hour after the close report's
+   modification time and holding the literal line `<!-- spec-continuation-of: <TASK_ID> -->`. That
+   line is the only content test: no other search, no free-form scan of a spec.
+4. **Outcome (advisory: print, dispatch nothing).** No file: `No spec associated with task-id
+   <TASK_ID>`. One file: `spec produced this cycle but not linked in context: <path>`. Several:
+   `multiple specs produced this cycle without context linkage: <paths>; explicit context.spec_path
+   required`.
+
+A spec named by stage 1 or 2 is updated by the inline Agent below, with `<SPEC_PATH>` that file (do
+not invoke `/spec-update` as a slash command).
+
+With `COMMIT_STEP8_TRACE=1` in the environment, also write one marker line on stderr at each
+decision point and change nothing else (stdout, exit codes and dispatch stay as they are; the
+trace is off by default): `STEP8_SKIPPED: bulk=true`, `STEP8_SKIPPED: dryrun=true`,
+`STEP8_SKIPPED: task_id_empty` or `STEP8_SKIPPED: changelog_no_real_commit` at the skip that
+applies; `STEP8_SPEC_UPDATE_DISPATCHED: task-id=<TASK_ID> stage=<1|2> spec_path=<SPEC_PATH>`
+immediately before the Agent dispatch; `STEP8_NO_SPEC: task-id=<TASK_ID>` and `STEP8_UNLINKED_SPEC:
+task-id=<TASK_ID> count=<N> paths=<paths>` at stage 4's two outcomes. `scripts/step7-spec-update.py`
+is the tested reference of this selection and these markers
+(`tests/test_step8_spec_update_markers.py`); it is not a call of this step, because a script that
+reads the close report here would be a second decider of it.
 
 ```
 You are executing the spec-continuation logic for task-id=<TASK_ID>.
