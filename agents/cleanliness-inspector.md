@@ -76,7 +76,7 @@ Move uncategorized `docs/` root files by filename to guides/ (`*-{guide,tutorial
 
 ### 13. Obsolete Functionality Detection
 
-1. Git replacements: Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/analyze-git-edge-cases.sh" --output /tmp/claude-scratch/cleanliness-inspector/edge-cases.json --project-root "$PROJECT_ROOT"` (`--output` keeps it outside the project), Read it for bug-fix commits that superseded a feature whose old code remains.
+1. Git replacements: Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/analyze-git-edge-cases.sh" --project-root "$PROJECT_ROOT"` (it writes `docs/test/edge-case-analysis.json`, the file `/test` reads), then Read that file for bug-fix commits that superseded a feature whose old code remains.
 2. Env vars read in code (`$VAR`, `os.environ["VAR"]`) but defined nowhere.
 3. `legacy`, `deprecated`, `obsolete`, `TODO.*remove` comments older than 30 days.
 4. Unreachable code: `if false`, `if 0`, conditions on never-defined env vars.
