@@ -367,20 +367,40 @@ def _handle_with(monkeypatch, config: Path, payload: dict, **attributes) -> dict
     return close_rating.handle(payload)
 
 
-@pytest.mark.parametrize("case", ["4 - Minor gaps", "afk"])
-def test_a_close_rating_call_sweeps_once_before_the_summary_rating_or_not(monkeypatch, config: Path, case: str) -> None:
+def _sweeper(config: Path):
+    """A stand-in sweep that records its calls and scores the close QA: a fact row in the log, as the real one writes."""
     calls = []
 
-    def sweep(transcript_path, cwd):  # scores the close QA now: its row is in the log before the summary reads it
+    def sweep(transcript_path, cwd):
         calls.append((transcript_path, cwd))
         score_log.append(_log(config), _event("qa", "qa_catch", 1, "close QA swept in", key="swept"))
 
+    sweep.calls = calls
+    return sweep
+
+
+def test_an_answered_close_rating_sweeps_once_per_call_before_the_summary_new_row_or_not(monkeypatch, config: Path) -> None:
     _seed(config, *SEEDED)
-    payload = _non_answer("afk") if case == "afk" else _payload(case)
+    sweep, payload = _sweeper(config), _payload("4 - Minor gaps")
     out = _handle_with(monkeypatch, config, payload, sweep=sweep)
-    assert calls == [(payload["transcript_path"], payload["cwd"])]
-    assert "qa +1 (close QA swept in)" in out["systemMessage"]
-    assert [r.get("rating") for r in _rows(config) if r.get("kind") == "rating"] == ([] if case == "afk" else [4])
+    assert sweep.calls == [(payload["transcript_path"], payload["cwd"])]  # the rating row is written, then the sweep
+    assert "qa +1 (close QA swept in)" in out["systemMessage"] and "rating 4: +1 each" in out["systemMessage"]
+    again = _handle_with(monkeypatch, config, _payload("5 - Fully met", tool_use_id="toolu_again"), sweep=sweep)
+    assert len(sweep.calls) == 2  # a second rating of the task writes no row, still sweeps, still shows the summary
+    assert [r["rating"] for r in _rows(config) if r.get("kind") == "rating"] == [4]
+    assert again == out and sum(r.get("key") == "swept" for r in _rows(config)) == 1
+
+
+@pytest.mark.parametrize("case", NON_ANSWERS)
+def test_a_non_answer_neither_sweeps_nor_writes_but_the_summary_is_still_returned(monkeypatch, config: Path, case: str) -> None:
+    # D9b: Skip, free text, AFK, a decline, an error, an unanswered annotation, a list answer, a missing response:
+    # the hook records nothing (no rating row, no event row from a sweep); the summary only reads the log.
+    _seed(config, *SEEDED)
+    sweep = _sweeper(config)
+    out = _handle_with(monkeypatch, config, _non_answer(case), sweep=sweep)
+    assert sweep.calls == [] and _rows(config) == list(SEEDED)
+    assert out == {"systemMessage": score_log.render_owner_summary(list(SEEDED), KEY, "9999-12-31T23:59:59Z", TASK)}
+    assert "rating" not in out["systemMessage"]
 
 
 @pytest.mark.parametrize("case", ["subagent", "another_source", "another_tool"])
