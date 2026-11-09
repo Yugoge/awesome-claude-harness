@@ -84,7 +84,14 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           the Task question lists the close_pending task, the stub picks it; Step 3
                           closes it), its first Step 7 commit is refused by a hook (the
                           Authorize question, then Steps 5-7 again); then `/commit --auto --force`
-                          (the Flags question) (P4 acceptance 5's /commit cases)
+                          (the Flags question) (P4 acceptance 5's /commit cases). The refusal is
+                          the one the tree makes on that commit in a harness-shaped checkout
+                          (settings_filter_world): pretool-bash-safety.sh's commit guard,
+                          `unregistered-settings-filter` (the project's .gitattributes puts
+                          settings.json under the claude-settings filter, this clone never
+                          registered it, and the owner has a local edit to settings.json). The
+                          owner's answer `Authorize it` runs the remedy the hook names (scripts/
+                          bootstrap's filter registration, owner_register_filter); then Steps 5-7.
   variant=late-repair     BA's stage removed after /dev, `/close --late-repair` in a later
                           session (drivers/close.py's late-repair case: the route admitted, Steps 1-4),
                           then /commit in a later session: Step 3's call, Step 5's late-repair state and
@@ -107,7 +114,7 @@ import os
 import re
 import shlex
 
-from .. import agents, cmdtext
+from .. import agents, cmdtext, hookrun
 from ..pipeline import Deviations, Respelling, Orchestrator, utc_now
 from ..replay import Deviation
 from . import close as closedrv
@@ -136,9 +143,6 @@ RESPELLINGS = [
                "python3 ~/.claude/scripts/resolve-dev-report.py", "agents/changelog-analyst.md Phase 2 (:399 at 2acc29b)"),
 ]
 
-PRIVILEGE_DEVIATION = ("agent:changelog-analyst Bash stage and commit *", Deviation(
-    "hooks/pretool-git-privilege-guard.py", "looks like an unresolved shell variable reference",
-    "Phase 8's commit line as the agent text spells it"))
 DEVIATIONS = Deviations([
     # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (6/5)."
     # The command's own run of Bash blocks between two dispatches outnumbers the gate's cap of 5.
@@ -157,16 +161,11 @@ DEVIATIONS = Deviations([
     ("agent:changelog-analyst Bash stage and commit *", Deviation(
         "hooks/pretool-bash-safety.sh", "every execution boundary must be provably inert",
         "Phase 3's lock block as the agent text spells it")),
-    # DEVIATION: "BLOCKED: agent git commit - the -C argument '${GIT_ROOT}' looks like an unresolved shell
-    # variable reference, not a concrete path."
-    # pretool-git-privilege-guard.py refuses Phase 8's commit line as the agent text spells it
-    # (`git -C "${GIT_ROOT}" commit -F "<msgfile>"`, CP-2's permitted form).
     # DEVIATION: "BLOCKED: removal-policy — FORBIDDEN_REMOVAL filesystem_removal:rm"
     # pretool-bash-safety.sh refuses Phase 8's cleanup of the message file (`rm -f "${MSGFILE}"`).
     ("agent:changelog-analyst Bash rm MSGFILE *", Deviation(
         "hooks/pretool-bash-safety.sh", "FORBIDDEN_REMOVAL filesystem_removal:rm",
         "Phase 8's separate cleanup step as the agent text spells it")),
-    PRIVILEGE_DEVIATION,
 ])
 
 STATUS_BEGIN, STATUS_END = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---", "--- CHANGELOG-ANALYST-STATUS-END ---"
@@ -229,8 +228,7 @@ class CommitRun:
         self.outcome = ""
         self.rand = 0
         self.rounds = 0              # Step 6 rounds
-        self.hook_block = None       # (hook, text) of a refusal the analyst's commit met
-        self.refuse_commit = variant == "waits"  # the first Step 7 commit meets the privilege guard's refusal
+        self.hook_block = None       # {hook, first, text, command, repo} of a refusal the analyst's commit met
         self.reject_first = variant == "reject"
 
     def _rules(self):
@@ -518,7 +516,8 @@ class CommitRun:
             content = {"commit_status": status, "repository_results": results,
                        "baseline_check": {"verdict": "not_provided"}}
             if status == "failed" and self.hook_block:
-                content.update(failure_code="hook_blocked", failure_reason=": ".join(self.hook_block))
+                content.update(failure_code="hook_blocked",
+                               failure_reason=f"{self.hook_block['hook']}: {self.hook_block['first']}")
             elif status == "failed":
                 content.update(failure_code="git_error", failure_reason="no repository commit landed")
             player.act.content["changelog-status.v1"] = content
@@ -629,25 +628,30 @@ class CommitRun:
         sync = re.search(r"`(python3 [^`]*session-index\.py\"? sync-shared [^`]*)`",
                          cmdtext.section(self.analyst_text, "Phase 3: Serialization"))
         sync = " ".join(sync.group(1).split()) + "\n" if sync else ""
-        staged = "\n".join(cands)
+        commit = (commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile)
+                  .replace("<GIT_ROOT>", root))
         script = (f"GIT_ROOT={q}\n" + lock.rstrip("\n") + "\n"
                   f"git -C \"${{GIT_ROOT}}\" diff --cached --name-only\n"
                   + "\n".join(f'git -C "${{GIT_ROOT}}" add -- {shlex.quote(p)}' for p in cands) + "\n"
                   f"ACTUALLY_STAGED_PATHS=\"$(git -C \"${{GIT_ROOT}}\" diff --cached --name-only)\"\n"
-                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile)
-                  .replace("<GIT_ROOT>", root).rstrip("\n") + "\n"
+                  + commit.rstrip("\n") + "\n"
                   + reads.rstrip("\n") + "\n" + sync
                   + 'printf \'{"repo_root": "%s", "branch": "%s", "commit_sha": "%s"}\\n\' "$GIT_ROOT" "$BRANCH" "$COMMIT_SHA"\n')
         lab = f"{sub.role} Bash stage and commit {order}"
-        devs = [d for d in self.devs.at(lab) if d is not PRIVILEGE_DEVIATION[1]] if self.refuse_commit else None
-        c = sub.bash(script, "Phases 3-8: lock, stage, drift check, commit, descriptor", label=lab,
-                     deviation=devs)
+        c = sub.bash(script, "Phases 3-8: lock, stage, drift check, commit, descriptor", label=lab)
         desc = _last_json((c.response.get("stdout") or "") if c.ok else "") or {}
         sha = desc.get("commit_sha", "")
         if not c.ok or not sha or sha == head:
             if c.blocked:  # Error handling: a hook refusing the commit is hook_blocked, its output quoted
                 b = next((b for b in reversed(self.rp.blocks) if b["step"] == lab and not b["passed_by_deviation"]), {})
-                self.hook_block = (b.get("hook", "a hook"), b.get("first") or "")
+                # The hook's output verbatim (not the record's normalised text), as the run kept it: its head and,
+                # when the run cut a long refusal (its echoed command), its tail.
+                e = next((e for e in (c.pre.blocks if c.pre else []) if e["hook"] == b.get("hook")), {})
+                tail, head = hookrun.refusal(e) if e else b.get("text") or "", e.get("refusal_head") or ""
+                raw = tail if not head or tail.startswith(head[:200]) else f"{head}\n[...]\n{tail}"
+                line = next((l.strip() for l in commit.split("\n") if " commit -F " in l), "")
+                self.hook_block = {"hook": os.path.basename(b.get("hook") or "a hook"), "first": b.get("first") or "",
+                                   "text": raw.strip(), "command": line, "repo": root}
             result.update(status="failed")
             return result
         result.update(status="committed", commit_sha=sha,
@@ -800,19 +804,34 @@ class CommitRun:
             o.s.say(f"No spec associated with task-id {self.tid}")
 
     # ------------------------------------------------------------ Step 7
-    def hook_question(self) -> None:
-        """Step 7's hook-rejection question: the operation and the command to authorize, from the text."""
+    def hook_question(self) -> bool:
+        """Step 7's hook-rejection question, as the text spells it: header, question (the hook, the operation
+        and the exact command it refused, the hook's output verbatim), the two options; the authorizing
+        option's description the exact command the owner runs (the remedy the hook's output names, else an
+        `/allow` of the refused command). True when the owner authorizes: the owner then runs it."""
         sec = self.o.section("Step 7")
-        para = next(p for p in re.split(r"\n\s*\n", sec) if "**A hook rejection**" in p)
+        para = re.sub(r"\s+", " ", next(p for p in re.split(r"\n\s*\n", sec) if "**A hook rejection**" in p))
         header = re.search(r"header `([^`]+)`", para).group(1)
-        labels = re.findall(r"options `([^`]+)` \(description: ([^)]*)\) and `([^`]+)` \(description: ([^)]*)\)",
-                            re.sub(r"\s+", " ", para))
-        hook, text = self.hook_block
-        question = f"{hook} refused the analyst's `git commit` for task {self.tid}: authorize it? ({text})"
-        opts = ([(labels[0][0], f"/allow git commit for {self.tid}; /commit runs it again once the grant exists"),
-                 (labels[0][2], labels[0][3])] if labels else [("Authorize it", ""), ("Do not authorize", "")])
+        template = re.search(r"question `([^`]+)`", para).group(1)
+        yes, _, no, no_desc = re.search(r"options `([^`]+)` \(description: (.*?)\) and `([^`]+)` \(description: (.*)\)\.?\s*$",
+                                        para).groups()
+        hb = self.hook_block
+        op = f"`git commit` in {hb['repo']} (`{hb['command']}`)"
+        question = (template.replace("<hook>", hb["hook"]).replace("<the operation>", op)
+                    .replace("<TASK_ID>", self.tid) + "\n\n" + hb["text"])
+        remedy = re.search(r"^Run (.+?) in (\S+) first, then retry\.$", hb["text"], re.M)
+        how = (f"`cd {shlex.quote(remedy.group(2))} && {remedy.group(1)}` (the remedy {hb['hook']} names; this "
+               f"refusal runs before any /allow grant)" if remedy else f"`/allow {hb['command']}`")
+        opts = [(yes, f"{how}; /commit runs the operation again once it is done"), (no, no_desc)]
         ans = self.ask(header, question, opts, "Step 7 AskUserQuestion hook block")
-        closedrv.fact(self.rp, "owner authorizes", {"answer": ans, "operation": "git commit", "hook": hook})
+        closedrv.fact(self.rp, "owner authorizes", {"answer": ans, "operation": "git commit", "hook": hb["hook"],
+                                                    "command": hb["command"], "authorize": how})
+        if ans != yes:
+            return False
+        if not remedy:
+            raise RuntimeError(f"the owner's authorization for {hb['hook']} is an /allow grant this driver does not play")
+        owner_register_filter(self.rp, remedy.group(2), remedy.group(1))
+        return True
 
     def landing(self) -> str:
         """Steps 5-7 once; a hook_blocked failure asks, then Steps 5-7 run again."""
@@ -828,13 +847,13 @@ class CommitRun:
             approved = dict(self.plan_files)
             self.hook_block = None
             self.dispatch_analyst(False, approved, self.label(f"Step 7 Agent(changelog-analyst) {k}"))
-            self.refuse_commit = False
             cs = self.status.get("commit_status", "unknown")
             o.s.say(f"changelog-analyst: commit_status={cs}")
             if cs == "failed" and self.status.get("failure_code") == "hook_blocked" and self.hook_block:
                 o.s.say(f"ERROR: changelog-analyst failed with failure_code: hook_blocked. "
                         f"Reason: {self.status.get('failure_reason')}.")
-                self.hook_question()
+                if not self.hook_question():
+                    return "failed"  # not authorized: the operation is withdrawn, never retried
                 continue
             return cs
         return "failed"
@@ -983,6 +1002,65 @@ class CommitRun:
         return self.ask(header, question, opts, "Step 2 AskUserQuestion task")
 
 
+# ---------------------------------------------------------------- variant waits: the owner's world
+# A harness-shaped checkout, in the owner's terminal (no hook sees it): the project keeps a settings.json under
+# the harness's claude-settings filter (the tree's own .gitattributes line, settings.json, and the filter's
+# program scripts/install/render-settings, as a harness checkout holds them), and this clone never ran
+# scripts/bootstrap, so the filter is not registered. pretool-bash-safety.sh's commit guard refuses a git
+# commit in such a repository while its settings.json differs from HEAD (`unregistered-settings-filter`).
+WORLD_SETTINGS = '{\n  "permissions": {\n    "allow": []\n  }\n}\n'
+OWNER_SETTINGS = '{\n  "permissions": {\n    "allow": ["Bash(pytest:*)"]\n  }\n}\n'
+RENDERER = "scripts/install/render-settings"
+
+
+def settings_filter_world(rp) -> None:
+    """Before the /dev, as the project's own history: the settings filter's files, one owner commit."""
+    import shutil
+    from . import merge as mergedrv
+    p, h = rp.layout.project, rp.layout.harness
+    with open(os.path.join(h, ".gitattributes"), encoding="utf-8") as fh:
+        attrs = "".join(l for l in fh if re.search(r"\bsettings\.json\b.*\bfilter=claude-settings\b", l))
+    if not attrs:
+        raise cmdtext.TextNotFound("the tree's .gitattributes puts no settings.json under the claude-settings filter")
+    with rp.acting("owner"):
+        mergedrv._write(p, ".gitattributes", attrs)
+        mergedrv._write(p, "settings.json", WORLD_SETTINGS)
+        os.makedirs(os.path.join(p, os.path.dirname(RENDERER)), exist_ok=True)
+        shutil.copy2(os.path.join(h, RENDERER), os.path.join(p, RENDERER))
+        mergedrv._owner_git(p, "add", ".gitattributes", "settings.json", RENDERER)
+        mergedrv._owner_git(p, "commit", "-qm", "chore: keep settings.json under the claude-settings filter",
+                            date="2026-01-01T00:01:00+0000")
+    closedrv.fact(rp, "owner setup", {"label": "settings filter world", "gitattributes": attrs.strip(),
+                                      "filter_registered": False})
+
+
+def owner_settings_edit(rp) -> None:
+    """Before /commit, in the owner's terminal: a local edit to settings.json, never committed."""
+    from . import merge as mergedrv
+    with rp.acting("owner"):
+        mergedrv._write(rp.layout.project, "settings.json", OWNER_SETTINGS)
+    closedrv.fact(rp, "owner setup", {"label": "local settings.json edit", "committed": False})
+
+
+def owner_register_filter(rp, repo: str, remedy: str) -> None:
+    """The owner's run of the remedy the refusal names (`Run scripts/bootstrap in <repo> first`): the
+    settings-filter registration scripts/bootstrap's step 3 makes, its `_set_cfg` keys and values as the
+    tree's scripts/bootstrap writes them, in the repository's local git config. The rest of bootstrap
+    (venv, overlay, render, git hooks, doctor) builds a harness home, which the project is not."""
+    from . import merge as mergedrv
+    if not remedy.split()[0].endswith("scripts/bootstrap"):
+        raise RuntimeError(f"the refusal names a remedy this driver does not play: {remedy!r}")
+    with open(os.path.join(rp.layout.harness, "scripts", "bootstrap"), encoding="utf-8") as fh:
+        keys = re.findall(r'_set_cfg (filter\.claude-settings\.[\w.]+) (?:"([^"]*)"|(\w+))', fh.read())
+    keys = [(k, q or w) for k, q, w in keys]
+    if not any(k.endswith(".clean") for k, _ in keys):
+        raise cmdtext.TextNotFound("scripts/bootstrap registers no claude-settings clean filter")
+    with rp.acting("owner"):
+        for k, v in keys:
+            mergedrv._owner_git(repo, "config", "--local", "--replace-all", k, v)
+    closedrv.fact(rp, "owner remedy", {"remedy": remedy, "repo": repo, "keys": [k for k, _ in keys]})
+
+
 def fanout_dev(rp):
     from . import dev as devdrv
     cyc = devdrv.FanoutCycle(rp, "fanout", rp.args.get("tier", "STANDARD"), 2)
@@ -1003,6 +1081,8 @@ def run(rp) -> None:
     session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") else "later")
     rp.pipeline = (closedrv.pipeline_name(after, rp) + "+close+commit" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
+    if variant == "waits":
+        settings_filter_world(rp)
     if variant == "laneqa":  # the /dev session interrupted before its QA (Step 13) was ever dispatched
         producer, tid, s, cyc = closedrv.dev_cycle(rp, after, stop_before=13)
     elif variant == "aggregate":
@@ -1038,6 +1118,7 @@ def run(rp) -> None:
         session = rp.later_session(session)
     run_ = CommitRun(rp, session, tid, producer=producer, variant=variant)
     if variant == "waits":
+        owner_settings_edit(rp)
         # `/commit` with no task context: the Task question; the stub owner picks the first candidate.
         run_.o.slash("", label=run_.label("typed (no task)"))
         ans = run_.task_question()
