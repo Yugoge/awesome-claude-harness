@@ -19,7 +19,7 @@ hooks that read the contract on the same return.
 This hook writes no workflow bookmark. Whether a step's subagent ran is decided
 once: by the transcript in a Claude session (pretool-todo-validate.py's Gate 4)
 and by the Codex transcript's subagent evidence in the Codex plan path
-(pretool-workflow-gate.py, which records it in the bookmark it writes). Whether
+(pretool-workflow-gate.py, which records it in its own Codex plan record). Whether
 the dispatch produced its artifact is decided by posttool-overnight-file-check.py
 at the same PostToolUse and by the producer's own stop (G2), not here.
 

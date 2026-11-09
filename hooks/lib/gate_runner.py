@@ -1,4 +1,4 @@
-"""Run one event's rules in one process, in order (P12 L5).
+"""Run one event's rules in one process, in order.
 
 Claude Code starts every hook registered on an event at once, so two hooks that
 read and write the same file race, and a hook that records a dispatch cannot know

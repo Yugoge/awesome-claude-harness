@@ -189,7 +189,7 @@ def test_every_gate_rule_is_a_hook_file_and_in_a_valid_order(gate):
     assert len({r.path for r in rules}) == len(rules)
 
 
-# ---------------------------------------------------------------- the dispatch witness (C7)
+# ---------------------------------------------------------------- the dispatch witness
 
 
 @pytest.fixture
@@ -238,7 +238,7 @@ def test_a_dispatch_every_rule_lets_through_is_witnessed(env):
 
 
 def test_a_dispatch_another_hook_refuses_leaves_no_witness(env):
-    """The background rule refuses this dispatch from its own registration (C7's case: the
+    """The background rule refuses this dispatch from its own registration (the case where the
     orchestrator forgot run_in_background: false). The gate consults it: no witness is
     written, and the gate itself refuses nothing and repeats no reason."""
     payload = _analyst("Commit the task.")
