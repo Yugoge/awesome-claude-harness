@@ -5,7 +5,7 @@ completed, so no compliant /do of this tree ends with another status. A do-repor
 left only by a session that wrote it before the landing: the /do text of a7d3a9f (the master before
 train 2) names a second terminal, "blocked", for a task that could not be finished. So A4 (g) runs as a
 live landing (tests/replay/landing.py): the session loads a7d3a9f's settings.json and plays its /do text
-(drivers/do.py variant=blocked, left=half: toy.add checks argument a only, the user stops the task),
+(drivers/do.py variant=blocked; the case's left= says how much of the change the /do made),
 the /do Stop passes on the base's hooks with do.status "blocked", the harness home lands after that Stop,
 and `/close <task>` plays this tree's text. Each case runs with the base's settings.json kept for the
 whole session (D15, `kept`) and with this tree's from the landing on (`landed`, hooklist=landed).
@@ -18,13 +18,23 @@ Checked per case and settings file:
   - Step 0's first disposition is incomplete on the do-report alone (do.status:blocked);
   - Routes' /do bullet dispatches exactly one dev: the task's id, pipeline do, the dev-report declared;
   - the /close main agent writes no file (no Write, Edit, MultiEdit or NotebookEdit) and no subagent
-    writes the do-report; dev's report (dev.status completed) lists toy/__init__.py, which it edited;
+    writes the do-report; dev's report (dev.status completed) lists exactly the files it edited
+    (toy/__init__.py where the /do left part of the change, none where it left none);
   - Step 0 again: chain_pass (the G2-verified dev-report concludes the task, Q7); one close-QA round;
     `CLOSE: YES` as the close report's last line; the only question is Step 3b's rating;
-  - no hook error, no network attempt; no block other than the case's own:
-      plain  none;
-      g2     the routed dev's first stop, its dev-report written with dev.status short of completed
-             (drivers/close.py dev_stop=uncompleted), is refused by G2 and its second stop exits 0.
+  - no hook error, no network attempt; no block other than the case's own.
+The cases (left= of drivers/do.py; every one is a /do ending a compliant /do of a7d3a9f's text produces):
+  plain  left=half: toy.add checks argument a only, the user stops the task; dev adds b. No block.
+  g2     left=half, and the routed dev's first stop, its dev-report written with dev.status short of
+         completed (drivers/close.py dev_stop=uncompleted), is refused by G2; its second stop exits 0.
+  none   left=none: the user abandons the task before the change (P1b's acceptance 7 /do case); dev
+         makes it. Fails on the base at scripts/resolve-dev-artifact-chain.py:1750 (group 2): Step 0
+         prints FILES_NOT_DEV_REPORT on the do-report (it lists [], dev's report ["toy/__init__.py"])
+         and is still incomplete after 4 routing rounds, since no dispatch may rewrite the do-report.
+  all    left=all: the change is made, the toy tests stayed unauthorized (A4 (g) as P4 first ran it);
+         dev edits nothing. Fails on the base at scripts/resolve-dev-artifact-chain.py:1750 (group 2):
+         Step 0 prints FILES_NOT_DEV_REPORT on the do-report (it lists ["toy/__init__.py"], dev's
+         report []) and is still incomplete after 4 routing rounds.
 And on this tree's own text the driver refuses variant=blocked before typing the /do.
 REPLAY_WORK keeps the runs.
 """
@@ -44,9 +54,13 @@ G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 LAND = "after:/do Stop"
 SETTINGS = ("kept", "landed")
 WRITES = ("Write", "Edit", "MultiEdit", "NotebookEdit")
-CASES = {"plain": (), "g2": (("dev_stop", "uncompleted"),)}
+# case -> its driver arguments beside variant=blocked (the module text says what each plays)
+CASES = {"plain": (("left", "half"),), "g2": (("left", "half"), ("dev_stop", "uncompleted")),
+         "none": (("left", "none"),), "all": (("left", "all"),)}
+# case -> the files dev's report lists: the ones it edited, the rest of the change the /do left
+DEV_FILES = {"plain": ["toy/__init__.py"], "g2": ["toy/__init__.py"], "none": ["toy/__init__.py"], "all": []}
 # (case, cost: the wall seconds of its two replays side by side, for conftest.py's CI split)
-COSTS = {"plain": 70, "g2": 80}
+COSTS = {"plain": 70, "g2": 80, "none": 70, "all": 70}
 
 _LOCK = threading.Lock()
 _STATE: dict = {}
@@ -68,7 +82,7 @@ def _results(request, tmp_path_factory, case: str) -> dict:
             request.session.addfinalizer(r.guard.close)
             _STATE["runner"] = r
         scn = suite.Scenario(f"A4 (g) in-flight blocked do-report, {case}", "do",
-                             (("variant", "blocked"), ("left", "half")) + CASES[case], ("do", "close"), COSTS[case])
+                             (("variant", "blocked"),) + CASES[case], ("do", "close"), COSTS[case])
         extra = {"kept": (), "landed": (("hooklist", "landed"),)}
         items = [(scn, "shipped", (("land", LAND),) + extra[s], f"~{s}") for s in SETTINGS]
         _STATE[case] = dict(zip(SETTINGS, _STATE["runner"].run_all(items)))
@@ -156,13 +170,19 @@ def _verdict(case: str, r: suite.Result) -> list[str]:
            if u.get("name") in WRITES]
     if any(str(p).endswith(f"do-report-{tid}.json") for _n, _t, p in sub):
         bad.append(f"a subagent wrote the do-report: {sub}")
-    if not any(str(p).endswith("toy/__init__.py") and t == "Edit" for _n, t, p in sub):
-        bad.append(f"no subagent edited toy/__init__.py: {sub}")
+    # the project root as the replay's processes see it: where the /do wrote its do-report
+    project = next((str(u["input"]["file_path"])[:-len(f"/docs/dev/do-report-{tid}.json")]
+                    for u in _tool_uses(main) if u.get("name") == "Write"
+                    and str(u["input"].get("file_path", "")).endswith(f"/docs/dev/do-report-{tid}.json")), "")
+    edited = sorted({os.path.relpath(str(p), project) for _n, t, p in sub
+                     if not str(p).startswith((f"{project}/docs/dev/", f"{project}/.claude/"))})
+    if edited != DEV_FILES[case]:
+        bad.append(f"the product files subagents wrote: {edited}, expected {DEV_FILES[case]}")
     order = sorted((n for n in agents if agents[n]), key=lambda n: (agents[n][0].get("timestamp", ""), n))
     dev_uses = [u for n in order for u in _tool_uses(agents[n])]
     last = _final(dev_uses, f"dev-report-{tid}.json").get("dev") or {}
     if last.get("status") != "completed" or (last.get("files_modified") or []) + (last.get("files_created") or []) \
-            != ["toy/__init__.py"]:
+            != DEV_FILES[case]:
         bad.append(f"dev's last report: {last}")
     rounds = [f["value"] for f in r.facts if f.get("key") == "close QA round"]
     if len(rounds) != 1:
