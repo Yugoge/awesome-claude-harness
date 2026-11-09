@@ -194,6 +194,7 @@ class Tree:
         self._schemas: dict = {}
         self._agent: dict = {}
         self._terminal = None
+        self._obligation = None
 
     def schema(self, sid: str) -> dict:
         if sid not in self._schemas:
@@ -212,11 +213,11 @@ class Tree:
                     self._agent[role] = ""
         return self._agent[role]
 
-    def terminal_vocabulary(self) -> dict:
-        """obligation.TERMINAL_VOCABULARY of the tree (schema id -> dotted path -> legal values)."""
-        if self._terminal is None:
+    def obligation(self):
+        """The tree's hooks/lib/obligation.py, loaded once (None when it does not load)."""
+        if self._obligation is None:
             lib = os.path.join(self.harness, "hooks", "lib")
-            self._terminal = {}
+            self._obligation = False
             with self.rp.acting("driver"):
                 spec = importlib.util.spec_from_file_location("replay_tree_obligation", os.path.join(lib, "obligation.py"))
                 if spec and spec.loader:
@@ -224,13 +225,38 @@ class Tree:
                     try:
                         mod = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(mod)
-                        self._terminal = {k: {p: set(v) for p, v in d.items()}
-                                          for k, d in getattr(mod, "TERMINAL_VOCABULARY", {}).items()}
+                        self._obligation = mod
                     except Exception:
-                        self._terminal = {}
+                        self._obligation = False
                     finally:
                         sys.path.remove(lib)
+        return self._obligation or None
+
+    def terminal_vocabulary(self) -> dict:
+        """obligation.TERMINAL_VOCABULARY of the tree (schema id -> dotted path -> legal values)."""
+        if self._terminal is None:
+            mod = self.obligation()
+            self._terminal = {k: {p: set(v) for p, v in d.items()}
+                              for k, d in getattr(mod, "TERMINAL_VOCABULARY", {}).items()}
         return self._terminal
+
+    def obligation_role(self, prompt: str) -> str | None:
+        """The role a dispatch prompt's obligation block names, read with the tree's own grammar
+        (obligation.extract_obligation_block, the parser the hooks run on a dispatch prompt). A
+        prompt with no block, more than one, or a body that is not a JSON object names no role:
+        the FIRST ACTION sentinel's file name never stands in for it (D21)."""
+        mod = self.obligation()
+        if mod is None:
+            raise PlayError(f"{self.harness}/hooks/lib/obligation.py does not load")
+        got = mod.extract_obligation_block(prompt or "")
+        if not isinstance(got, mod.ExtractedBlock):
+            return None
+        try:
+            doc = json.loads(got.body)
+        except ValueError:
+            return None
+        role = doc.get("role") if isinstance(doc, dict) else None
+        return role if isinstance(role, str) and role else None
 
     def prefixed_forms(self, role: str) -> set[str]:
         """The id prefixes the role's Task-ID convention forbids in new artifacts (`dev-`, ...)."""

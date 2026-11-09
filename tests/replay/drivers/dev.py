@@ -654,7 +654,7 @@ class DevCycle:
                                           or ctx.get("risk_level") == "high")
         if self.tw_expected:  # the Step 10 template other than the dev dispatch's: the test-writer pre-dispatch
             fields = next(t for t in self.templates(10)
-                          if (t.get("subagent_type") or agents.registry_role(t["prompt"])) != self.step_role(10))
+                          if self.o.template_role(t, self.tid) != self.step_role(10))
             self._dispatch(fields, agents.Act(work=roles.test_writer()), self.L("Step 10 Agent(test-writer)"))
             for rel in self.text_paths(10, "After the test-writer subagent completes, verify on disk"):
                 self.read(rel, self.L(f"Step 10 Read {rel}"))
@@ -685,7 +685,7 @@ class DevCycle:
                      add_lines=(), early_qa: bool = False, question: dict | None = None):
         o, sc = self.o, self.sc
         tpl = next(t for t in self.templates(10)
-                   if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == self.step_role(10))
+                   if self.o.template_role(t, self.tid) == self.step_role(10))
         fields = with_lines(tpl, list(add_lines) + self.graph_lines, context_rel)
         baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}

@@ -476,7 +476,7 @@ class DevProducer:
             found.append(t)
             k += 1
         for t in found:
-            if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == role:
+            if o.template_role(t, self.cyc.tid) == role:
                 return t
         if len(found) == 1:
             return found[0]

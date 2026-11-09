@@ -385,12 +385,18 @@ class Orchestrator:
             raise cmdtext.TextNotFound(f"dispatch prompt: unbound placeholders {sorted(set(left))}")
         return prompt
 
+    def template_role(self, fields: dict, task_id: str = "") -> str | None:
+        """The role a dispatch template dispatches: its subagent_type, else the role of the obligation
+        block it instantiates (the block the hooks read), never its FIRST ACTION sentinel (D21)."""
+        return fields.get("subagent_type") or self.tree.obligation_role(
+            self.instantiate(fields.get("prompt", ""), task_id))
+
     def dispatch(self, fields: dict, act: agents.Act, label: str, task_id: str, subagent_type=None,
                  extra_rules=(), extra_line_rules=(), actor=None, lane=None, lane_set=None):
         prompt = self.render(fields, task_id, extra_rules, extra_line_rules, lane, lane_set)
-        atype = subagent_type or fields.get("subagent_type") or agents.registry_role(prompt)
+        atype = subagent_type or fields.get("subagent_type") or self.tree.obligation_role(prompt)
         if not atype:
-            raise cmdtext.TextNotFound(f"{label}: no subagent_type in the template or its FIRST ACTION line")
+            raise cmdtext.TextNotFound(f"{label}: no subagent_type in the template and no role in its obligation block")
         description = self.bind(fields.get("description", "") or atype, extra_rules)
         player = agents.Player(self.tree, prompt, act, role=atype)
         d = (actor or self.s.main).dispatch(atype, prompt, description=description, body=player.body,
