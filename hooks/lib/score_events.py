@@ -65,6 +65,11 @@ def _lane_qa(ctx):  # ctx["qa"]: lane QA (role qa outside close) in order, each 
         d["fails"] = [f for f in found if isinstance(f, dict)] if isinstance(found, list) else []
 
 
+def _status(ctx, path):  # qa.status of a qa-report.v2 file; None when it cannot be read
+    with suppress(OSError, ValueError, TypeError, AttributeError), open(os.path.join(ctx["cwd"], path), encoding="utf-8") as handle:
+        return obligation.terminal_status("qa-report.v2", json.load(handle))
+
+
 def _rel(ctx, loc):  # the project-relative file part of a "file:line" location
     return os.path.relpath(os.path.join(ctx["cwd"], re.sub(r"(?::\d+)+(?:-\d+)?$", "", str(loc).strip())), ctx["cwd"])
 
@@ -99,44 +104,41 @@ def qa_catch(ctx):  # a QA failure, the lane's next dev dispatch wrote a file a 
             pending[key] = [{_rel(ctx, f["location"]) for f in d["fails"] if f.get("location")}, None] if d["status"] == "fail" else None
 
 
-def _producer(ctx, d, path):  # (task, lane, identity) of the dispatch that owes path, and whether its lane's QA passed; (None, False): none, or a close-time one
-    owing = obligation.declaring_dispatch(d["task"], path, ctx["cwd"], roots=[os.path.dirname(os.path.dirname(ctx["tp"]))]) or {}
-    ob = owing.get("obligation") or {}
+def _producer(ctx, d, path):  # (task, lane, identity) of the dispatch that owes path, and whether its lane's QA report now reads pass; (None, False): none, or a close-time one
+    roots = [os.path.dirname(os.path.dirname(ctx["tp"]))]
+    ob = (obligation.declaring_dispatch(d["task"], path, ctx["cwd"], roots) or {}).get("obligation") or {}
     if not ob.get("role") or ob.get("pipeline") == "close":
         return None, False
     group = obligation.canonical_task_id(ob.get("task_id")), ob.get("lane"), score_log.identity(ob["role"], ob["pipeline"])
-    session = os.path.join(os.path.dirname(ctx["tp"]), owing["session_id"] + ".jsonl")  # its own session, whichever the close runs in
-    wide = dict(ctx, tp=session, span=command_span.transcript_span(session))
-    wide["ds"] = _dispatches(wide["span"], session)
-    _lane_qa(wide)
-    return group, any(q["status"] == "pass" and (q["task"], q["lane"]) == group[:2] for q in wide["qa"])
+    records = obligation._task_records(d["task"], ctx["cwd"], roots)  # every session's dispatch records of the task
+    return group, any(_status(ctx, a["path"]) == "pass" for r in records for o in [r["obligation"]] for a in o["artifacts"]
+                      if o.get("role") == "qa" and o.get("pipeline") != "close" and a.get("schema") == "qa-report.v2"
+                      and (obligation.canonical_task_id(o.get("task_id")), o.get("lane")) == group[:2])
 
 
-def _close_qa(ctx):  # ctx["close"]: close-QA rounds whose last words end in a verdict: verdict (yes/no), finds (cited file, producer group, lane QA passed)
-    cv, ctx["close"] = None, []
-    for d in (d for d in ctx["ds"] if d["who"] == "close-qa"):
-        cv = cv or runpy.run_path(os.path.join(os.path.dirname(__file__), "close-verdict.py"))
+def _close_qa(ctx):  # ctx["close"]: close-QA rounds in order, each with verdict (yes/no/unknown) and finds (cited file, producer group, lane QA passed)
+    ctx["close"] = [d for d in ctx["ds"] if d["who"] == "close-qa"]
+    cv = runpy.run_path(os.path.join(os.path.dirname(__file__), "close-verdict.py")) if ctx["close"] else None
+    for d in ctx["close"]:
         blocks = list(_walk(d))  # its reply is the last text it said (a launch notice carries none); its section, what it wrote or ran
         d["verdict"] = cv["classify_line"](cv["last_nonempty"](str(next((b.get("text") for b in reversed(blocks) if b.get("type") == "text"), ""))))
-        wrote = [str(v) for b in blocks for v in (b.get("input") if isinstance(b.get("input"), dict) else {}).values() if "## Findings" in str(v)]
+        wrote = [str(v) for b in blocks for v in (b.get("input") or {}).values() if "## Findings" in str(v)]
         found = re.findall(r"(?m)^- `?([^\s`]+?)`?:\s", re.split(r"(?m)^## ", wrote[-1].partition("## Findings")[2])[0]) if wrote and d["verdict"] == "no" else []
         d["finds"] = [(rel, *_producer(ctx, d, rel)) for rel in (_rel(ctx, p) for p in found)]
-        if d["verdict"] in ("yes", "no"):
-            ctx["close"].append(d)
 
 
 def escaped(ctx):  # a close round opened a finding on a file whose producer's lane QA had passed: the producer and lane QA lose points
     for d in ctx["close"]:
-        for i, (path, group, passed) in enumerate(d["finds"]):
-            for role in (group[2], "qa") if group and passed else ():
+        for i, (path, group, passed) in enumerate(d.get("finds", ())):
+            for role in (group[2], "qa") if passed else ():
                 yield _event(ctx, d, "escaped", role, "close QA opened a finding after lane QA passed", f"escaped:{d['id']}:{i}:{role}", path)
 
 
 def close_catch(ctx):  # a finding's producer wrote the cited file in a later dispatch and a later close round landed: close-qa's catch
     for d in ctx["close"]:
-        for i, (path, group, _) in enumerate(d["finds"]):
+        for i, (path, group, _) in enumerate(d.get("finds", ())):
             fix = next((e for e in ctx["ds"] if group and e["n"] > d["n"] and (e["task"], e["lane"], e["who"]) == group and path in _written(ctx, e)), None)
-            for land in [m for m in ctx["close"] if fix and m["n"] > fix["n"] and m["verdict"] == "yes"][:1]:
+            for land in [m for m in ctx["close"] if fix and m["n"] > fix["n"] and m.get("verdict") == "yes"][:1]:
                 yield _event(ctx, land, "close_catch", "close-qa", "a close finding was fixed by its producer, then a round landed", f"close_catch:{land['id']}:{i}", path)
 
 

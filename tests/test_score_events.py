@@ -46,17 +46,18 @@ def _z(when: datetime) -> str:
 class Cycle:
     """A /dev span in a temporary session: dispatches, QA reports and dev writes on one fake clock."""
 
-    def __init__(self, tmp_path: Path):
+    def __init__(self, tmp_path: Path, session: str = "sess", command: str = "dev"):
         self.project = tmp_path / "proj"
-        (self.project / "docs" / "dev").mkdir(parents=True)
-        (self.project / "src").mkdir()
+        (self.project / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+        (self.project / "src").mkdir(exist_ok=True)
         self.store = tmp_path / "projects" / obligation.project_slug(self.project)
-        self.transcript = self.store / "sess.jsonl"
-        self.subagents = self.store / "sess" / "subagents"
-        self.subagents.mkdir(parents=True)
+        self.session = session
+        self.transcript = self.store / f"{session}.jsonl"
+        self.subagents = self.store / session / "subagents"
+        self.subagents.mkdir(parents=True, exist_ok=True)
         self.config = tmp_path / "cfg"
         self.clock, self.count, self.agent, self.last_qa = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc), 0, {}, None
-        self.write({"type": "user", "message": {"role": "user", "content": OPENER}})
+        self.opener(command)
 
     def write(self, record: dict, stamp: bool = True) -> None:
         if stamp:
@@ -176,7 +177,7 @@ class Cycle:
 
     def payload(self, **extra) -> dict:
         return dict({"tool_name": "Agent", "transcript_path": str(self.transcript), "cwd": str(self.project),
-                     "session_id": "sess", "tool_use_id": "toolu_x"}, **extra)
+                     "session_id": self.session, "tool_use_id": "toolu_x"}, **extra)
 
     def observe(self, monkeypatch, **extra) -> None:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(self.config))
@@ -445,13 +446,14 @@ REPORT = f"docs/dev/dev-report-{TASK}.json"
 TICKET = f"docs/dev/ticket-{TASK}.md"
 
 
-def closed(c: Cycle, lane_qa: str = "pass") -> None:
+def closed(c: Cycle, lane_qa: str = "pass", close: bool = True) -> None:
     """The /dev span: ba's ticket, dev's work (it wrote src/app.py), lane QA's verdict; then the owner types /close."""
     c.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
     c.dispatch("dev", wrote=["src/app.py"])
     c.qa()
     c.report(lane_qa, [failure("dev_implementation")] if lane_qa == "fail" else [])
-    c.opener("close")
+    if close:
+        c.opener("close")
 
 
 def test_a_close_finding_on_a_dev_artifact_after_lane_qa_passed_is_escaped_for_dev_and_lane_qa(cycle, monkeypatch):
@@ -471,6 +473,30 @@ def test_a_finding_on_a_product_file_goes_to_the_dispatch_that_wrote_it(cycle, m
     cycle.close_qa([(cited, "add() has no contract")], via=via)
     cycle.observe(monkeypatch)
     assert cycle.facts() == [("escaped", "dev", -7), ("escaped", "qa", -3)]
+
+
+def test_the_last_section_a_round_wrote_is_the_one_that_counts(cycle, monkeypatch):
+    closed(cycle)
+    ident = cycle.close_qa(launch=True)
+    draft = "## Close attempt (round 1) x\n\n## Findings\n- " + TICKET + ": a draft\n\nCLOSE_FINDINGS: 1 items\n"
+    final = "## Close attempt (round 1) x\n\n## Findings\n- " + REPORT + ": the final text\n\nCLOSE_FINDINGS: 1 items\n"
+    cycle.finish(ident, [("Write", {"file_path": "/tmp/claude-scratch/s.md", "content": draft}),
+                         ("Write", {"file_path": "/tmp/claude-scratch/s.md", "content": final})], "CLOSE_FINDINGS: 1 items")
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("escaped", "dev", -7), ("escaped", "qa", -3)]
+
+
+def test_a_close_in_a_later_session_reads_the_producer_and_its_lane_qa_from_the_dev_session(tmp_path, monkeypatch):
+    earlier = Cycle(tmp_path, session="earlier")
+    closed(earlier, close=False)
+    later = Cycle(tmp_path, session="later", command="close")
+    later.clock = earlier.clock + timedelta(hours=1)
+    ident = later.close_qa([(REPORT, "a defect")])
+    later.dispatch("dev", wrote=[REPORT])
+    landing = later.close_qa()
+    later.observe(monkeypatch)
+    assert later.facts() == [("close_catch", "close-qa", 1), ("escaped", "dev", -7), ("escaped", "qa", -3)]
+    assert {r["key"] for r in later.rows()} == {f"escaped:{ident}:0:dev", f"escaped:{ident}:0:qa", f"close_catch:{landing}:0"}
 
 
 def test_each_finding_goes_to_its_own_producer_and_lane_qa_is_charged_for_each(cycle, monkeypatch):
@@ -551,6 +577,16 @@ def test_the_catch_is_one_row_for_each_finding_whose_file_was_fixed(cycle, monke
     assert {r["key"] for r in cycle.rows() if r["event"] == "close_catch"} == {f"close_catch:{landing}:{i}" for i in expected}
 
 
+def test_a_finding_is_caught_once_by_the_first_round_that_lands(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, "a defect")])
+    cycle.dispatch("dev", wrote=[REPORT])
+    first = cycle.close_qa()
+    cycle.close_qa()  # a second landing round, say a /close typed again
+    cycle.observe(monkeypatch)
+    assert [r["key"] for r in cycle.rows() if r["event"] == "close_catch"] == [f"close_catch:{first}:0"]
+
+
 def test_a_fix_after_the_landing_round_is_no_catch(cycle, monkeypatch):
     closed(cycle)
     cycle.close_qa([(REPORT, "a defect")])
@@ -629,13 +665,20 @@ def test_a_close_round_that_came_back_as_a_launch_notice_is_scored_by_a_later_sw
 
 
 @pytest.mark.parametrize("findings", [
-    [], ["- just words, no file", "-", "* a: b", "", "## Not findings", "- docs/dev/x.json: after the section"],
+    [], ["- just words, no file", "-", "* a: b", "", "## Not findings", f"- {REPORT}: a bullet of another section"],
     ["- : no path"], ["no bullet at all"]])
 def test_malformed_or_empty_findings_give_nothing(cycle, monkeypatch, capfd, findings):
     closed(cycle)
     cycle.close_qa(findings, verdict="CLOSE_FINDINGS: 2 items")
     cycle.observe(monkeypatch)
     assert not any(r["event"] == "escaped" for r in cycle.rows()) and capfd.readouterr() == ("", "")
+
+
+def test_a_landed_round_opens_no_finding_whatever_its_text_holds(cycle, monkeypatch):
+    closed(cycle)
+    cycle.close_qa([(REPORT, "a note on a line of the report")], verdict="CLOSE: YES")
+    cycle.observe(monkeypatch)
+    assert not any(r["event"] in ("escaped", "close_catch") for r in cycle.rows())
 
 
 def test_a_round_without_a_verdict_line_opens_and_lands_nothing(cycle, monkeypatch):
