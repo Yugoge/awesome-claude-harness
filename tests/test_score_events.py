@@ -79,7 +79,9 @@ class Cycle:
         self.write({"type": "user", "message": {"role": "user", "content": [dict(block, **({} if ok else {"is_error": True}))]},
                     "toolUseResult": shown}, stamp)
         self.agent[ident] = agent
-        records = []
+        records = [{"type": "user", "isSidechain": True, "cwd": str(self.project), "message": {"role": "user", "content": prompt}},
+                   {"type": "summary", "summary": "a record without a message"},
+                   {"type": "assistant", "isSidechain": True, "message": {"role": "assistant", "content": [{"type": "text", "text": "start"}]}}]
         for n, name in enumerate(wrote):
             target = str(self.project / name)
             records += [{"type": "assistant", "isSidechain": True, "cwd": str(self.project), "message": {"role": "assistant", "content": [
@@ -123,6 +125,10 @@ class Cycle:
     def observe(self, monkeypatch, **extra) -> None:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(self.config))
         score_events.observe(self.payload(**extra))
+
+    def sweep(self, monkeypatch) -> None:
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(self.config))
+        score_events.sweep(str(self.transcript), str(self.project))
 
     def rows(self) -> list[dict]:
         log = self.config / "logs" / "lifecycle.jsonl"
@@ -409,6 +415,41 @@ def test_a_dispatch_without_a_result_yet_is_not_scored(cycle, monkeypatch):
     assert cycle.rows() == []
 
 
+def test_sweep_alone_writes_the_rows_observe_writes(tmp_path, monkeypatch):
+    cycles = []
+    for name in ("by-observe", "by-sweep"):
+        c = Cycle(tmp_path / name)
+        fail_fix_pass(c, monkeypatch, wrote=["src/app.py"])
+        c.qa(lane="l2")
+        c.report("pass", lane="l2")
+        cycles.append(c)
+    cycles[0].observe(monkeypatch)
+    cycles[1].sweep(monkeypatch)
+    rows = [[{k: v for k, v in r.items() if k not in ("project", "ref")} for r in c.rows()] for c in cycles]
+    assert rows[0] == rows[1] and len(rows[0]) == 4
+    cycles[1].sweep(monkeypatch)
+    assert len(cycles[1].rows()) == 4
+
+
+def test_a_sweep_later_scores_the_dispatch_whose_result_was_not_yet_in_the_transcript(cycle, monkeypatch):
+    cycle.qa()
+    cycle.report("pass")
+    lines = cycle.transcript.read_text().splitlines()
+    cycle.transcript.write_text("\n".join(lines[:-1]) + "\n")  # the hook of the dispatch ran before its result was written
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
+    cycle.transcript.write_text("\n".join(lines) + "\n")
+    cycle.sweep(monkeypatch)  # the rating moment: the close-time sweep
+    assert cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
+
+
+@pytest.mark.parametrize("args", [(None, None), (5, "/x"), ("/nonexistent/t.jsonl", "/x"), ("t.jsonl", 7), ("", ""), (b"x", b"y")])
+def test_sweep_with_unusable_arguments_neither_raises_nor_prints(cycle, monkeypatch, capfd, args):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cycle.config))
+    assert score_events.sweep(*args) is None
+    assert capfd.readouterr() == ("", "") and cycle.rows() == []
+
+
 def test_a_dispatch_that_came_back_as_an_error_is_not_scored(cycle, monkeypatch):
     cycle.qa(ok=False)
     cycle.report("pass")
@@ -538,6 +579,28 @@ def test_one_rule_raising_does_not_stop_the_others(cycle, monkeypatch):
     cycle.observe(monkeypatch)
     assert ("qa_first_pass", "dev", 2) in cycle.facts() and ("qa_first_pass", "ba", 1) in cycle.facts()
     assert {r["key"] for r in cycle.rows() if r["event"] == "qa_fail"} <= {"boom:1"}
+
+
+def test_an_event_whose_role_the_points_table_does_not_know_is_no_row(cycle, monkeypatch):
+    def unscored(ctx):
+        yield {"event": "qa_fail", "role": "qa", "task_id": TASK, "key": "unscored:1", "why": "x"}  # the table scores qa_fail for dev and ba
+
+    cycle.qa()
+    cycle.report("pass")
+    monkeypatch.setattr(score_events, "RULES", [unscored, *score_events.RULES])
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
+
+
+def test_a_dispatch_result_that_is_not_an_object_does_not_stop_the_sweep(cycle, monkeypatch):
+    cycle.dispatch("dev")
+    cycle.qa()
+    cycle.report("pass")
+    lines = [json.loads(line) for line in cycle.transcript.read_text().splitlines()]
+    next(r for r in lines if r.get("toolUseResult", {}).get("agentId") == "agent001")["toolUseResult"] = "plain text"
+    cycle.transcript.write_text("".join(json.dumps(r) + "\n" for r in lines))
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
 
 
 def test_a_rule_is_added_by_listing_one_function(cycle, monkeypatch):
