@@ -233,9 +233,9 @@ def stand_in(project, ob: dict, span):
     n, path = found[-1]
     rel = ROUND.format(task=task, n=n)
     obligation = _lib("obligation")
-    if rel in declared or not path.name.startswith("requirement-round-") \
+    if rel in declared or not path.name.startswith("requirement-round-") or round_asked(span, project, task, n) \
             or obligation.artifact_freshness_satisfied("json", path.stat().st_mtime, ob.get("dispatched_at")) is not True:
-        return None
+        return None  # a stand-in is a new round: never one already asked, nor one from before this dispatch
     result = _lib("contract_runtime").validate_artifact_for_obligation(str(path), "requirement-round.v1")
     errors = list(result.get("errors") or [])[:10] if result.get("status") == "fail" else []
     errors += check_round(project, ob, rel, span) if not errors else []

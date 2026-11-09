@@ -1916,3 +1916,35 @@ def test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_
     assert not (real.project / "docs" / "dev" / f"qa-report-{FAMILY}.json").exists()
     chain_on_disk(wt)
     assert gate.decision(real.payload) == (0, "", "completed_by_deadline")
+
+
+# ---------------------------------------------------------------- P13-1 R7: a question asked in text (A8)
+QUESTION_GAP = "the turn ends with a question in text; ask it with AskUserQuestion, or end without it."
+
+
+@pytest.mark.parametrize("ending", ["Shall I go on?", "要继续吗？", "Done.\n\nAnything else?  \n"])
+def test_r7_a_dev_turn_ending_with_a_question_in_text_is_a_gap(env, ending):
+    steps = dev_span(env, done=0)
+    env.tx.todos(steps, len(steps))
+    assert run(env) == (0, "")
+    env.tx.say(ending)
+    code, text = run(env)
+    assert code == 2 and f"- dev: {QUESTION_GAP}\n" in text
+    assert run(env, last_assistant_message="Done.") == (0, "")  # the CLI's own last text, where it sends it
+    assert run(env, last_assistant_message=ending)[0] == 2
+
+
+def test_r7_spec_is_checked_for_the_text_question_only(env):
+    env.tx.command("spec", "a new report")
+    env.tx.say("Which report did you mean?")
+    assert run(env) == (2, f"COMMAND_GATE /spec: not complete\n- spec: {QUESTION_GAP}\nFinish the gaps above. "
+                           "Ask with AskUserQuestion only for a real decision the user must make.\n")
+    env.tx.say("The spec is written.")
+    assert run(env) == (0, "")
+    assert "spec" not in command_span.GATED_COMMANDS
+
+
+def test_r7_the_same_text_in_a_close_span_is_no_gap(env):
+    env.tx.command("close", "")
+    env.tx.say("Shall I go on?")
+    assert QUESTION_GAP not in run(env)[1]

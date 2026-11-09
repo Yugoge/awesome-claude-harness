@@ -1071,3 +1071,25 @@ def test_R17_a_refused_redispatch_has_not_returned(tmp_path):
     result = _order_run(home, project, steps, _stage("dev"))
     assert result.returncode == ORDER_EXIT
     assert "dispatch toolu_baqa2 (line" in result.stderr and "not returned" in result.stderr, result.stderr
+
+
+# --------------------------------------------------------------------------
+# P13-1 R5 (D28): inside a /spec or /dev-family span the owner is asked first
+# --------------------------------------------------------------------------
+
+def test_r5_ask_first_refuses_a_dispatch_before_round_1_is_asked(tmp_path):
+    """The gate's process, block mode: in /spec a BA analysis declaring its context before any round 1 was asked
+    is refused with ASK_FIRST (exit 2); BA intake, declaring round 1 itself, passes; advisory mode never refuses."""
+    home, project = _dirs(tmp_path)
+    context = [{"kind": "json", "path": f"docs/dev/context-{TASK_ID}.json", "schema": "context.v1",
+                "identity": {"task_id": TASK_ID}}]
+    intake = [{"kind": "json", "path": f"docs/dev/requirement-round-{TASK_ID}-r1.json",
+               "schema": "requirement-round.v1", "identity": {"task_id": TASK_ID}}]
+    for artifacts, code in ((context, 2), (intake, 0)):
+        prompt = _block(_obligation_doc(role="ba", pipeline="spec", artifacts=artifacts)) + "\nwork"
+        payload = _dispatch_payload(project, _unique_sid("r5"), _span_records("spec"), subagent_type="ba",
+                                    prompt=prompt)
+        result = _run_hook(home, project, payload, switch="block")
+        assert result.returncode == code, result.stderr
+        assert ("ASK_FIRST: no requirement round r1 of task" in result.stderr) is (code == 2)
+        assert _run_hook(home, project, payload, switch="advisory").returncode == 0
