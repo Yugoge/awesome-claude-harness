@@ -291,7 +291,7 @@ def test_cycle_two_of_a_session_on_the_old_prose_has_its_contract(main_root, pro
         assert ba.returncode == 0, ba.stderr
         assert _enforce(working, "8", "qa", cycles=2).returncode == 2
     else:
-        assert not contract.exists() and "CYCLE CONTRACT NOT WRITTEN: cycle 2" in rendered.stderr
+        assert not contract.exists() and "CYCLE CONTRACT NOT WRITTEN: cycle 2" in rendered.stdout
         assert ba.returncode == 2 and "Case A" in ba.stderr
 
 

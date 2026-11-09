@@ -1,11 +1,10 @@
 """The workflow bookmark has one writer (P1b goal 1, D24).
 
-<project>/.claude/workflow-<sid>.json had three producers: prompt-workflow.py
-(a command's start, and /dev's start), the Codex plan path of
-pretool-workflow-gate.py (its acknowledgement and its lock) and
-posttool-subagent-track.py (a subagent call recorded). All five writes now go
-through lib.todo_canonical.write_bookmark, and each keeps the bytes it wrote
-before. The writer replaces the file whole (a new file renamed over it), so a
+<project>/.claude/workflow-<sid>.json is written by prompt-workflow.py alone (a
+command's start, and /dev's start), through lib.todo_canonical.write_bookmark.
+The Codex plan path of pretool-workflow-gate.py keeps its plan state in its own
+record (the Codex todos file, keyed to the command start) and only reads the
+bookmark; posttool-subagent-track.py writes neither. The writer replaces the file whole (a new file renamed over it), so a
 handle opened on the old bookmark keeps reading the old bytes; four of the five
 writes used to rewrite the file in place.
 
@@ -59,8 +58,6 @@ def writes(monkeypatch):
         return writer(path, update, encoding)
 
     monkeypatch.setattr(TODO_CANONICAL, "write_bookmark", recorded)
-    # the tracker binds the name when it loads; the other two look it up at the write
-    monkeypatch.setattr(TRACKER, "write_bookmark", recorded, raising=False)
     return seen
 
 
@@ -273,29 +270,22 @@ def test_dev_start_counts_from_one_without_a_readable_generation(tmp_path, dev_s
 
 # ---------------------------------------------------------------- posttool-subagent-track.py
 
-def test_subagent_call_is_recorded_through_the_writer(tmp_path, writes):
+def test_the_subagent_tracker_writes_no_bookmark(tmp_path, monkeypatch, writes):
+    """A returned dispatch leaves the bookmark as it was: the tracker is no longer one
+    of its writers (Gate 4's evidence is the transcript's, or the Codex plan path's)."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     path = _bookmark(tmp_path)
-    before = {"command": "dev", "last_todos": [{"content": "ré"}], "subagent_calls": {"0": True}}
-    path.write_text(json.dumps(before))
-    held = _Held(path)
-
-    TRACKER._record_subagent_call_legacy(path, "2")
-
-    assert writes == [path]
-    held.assert_replaced()
-    expected = dict(before, subagent_calls={"0": True, "2": True})
-    assert path.read_bytes() == json.dumps(expected).encode("ascii")
-
-
-@pytest.mark.parametrize("previous", [None, "{not json", "[1, 2]", "null"])
-def test_subagent_call_without_a_bookmark_writes_nothing(tmp_path, previous):
-    path = _bookmark(tmp_path)
-    if previous is not None:
-        path.write_text(previous)
-    TRACKER._record_subagent_call_legacy(path, "0")
-    assert sorted(p.name for p in path.parent.iterdir()) == ([path.name] if previous is not None else [])
-    if previous is not None:
-        assert path.read_text() == previous
+    before = json.dumps({"command": "dev", "last_todos": [{"content": "Step 0 x", "status": "in_progress"}]})
+    path.write_text(before)
+    import subprocess
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS / "posttool-subagent-track.py")],
+        input=json.dumps({"session_id": "s1", "tool_name": "Agent",
+                          "tool_input": {"subagent_type": "dev", "prompt": "x"}}),
+        capture_output=True, text=True, env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp_path)))
+    assert proc.returncode == 0, proc.stderr
+    assert writes == [] and path.read_text() == before
+    assert not hasattr(TRACKER, "write_bookmark")
 
 
 # ---------------------------------------------------------------- pretool-workflow-gate.py (Codex)
@@ -304,44 +294,68 @@ def _todos(*statuses):
     return [{"content": f"Step {i} étape", "status": s} for i, s in enumerate(statuses)]
 
 
-def test_codex_acknowledgement_writes_through_the_writer(tmp_path, monkeypatch, writes):
+START = {"workflow_instance_id": "wi-1", "workflow_started_at_ms": 1_700_000_000_000}
+
+
+def _record(tmp_path):
+    return json.loads((tmp_path / "todos.json").read_text())
+
+
+def test_codex_acknowledgement_writes_its_record_not_the_bookmark(tmp_path, monkeypatch, writes):
+    """The Codex plan state goes to the gate's own record, published whole by rename;
+    the bookmark keeps its one writer, prompt-workflow.py."""
     monkeypatch.setattr(GATE, "official_todos_path", lambda sid: tmp_path / "todos.json")
     monkeypatch.setattr(GATE.time, "time_ns", lambda: 1_700_000_000_000 * 1_000_000)
     path = _bookmark(tmp_path)
-    state = {"command": "dev", "lock_reason": "not_started"}
-    path.write_text(json.dumps(state))
-    held = _Held(path)
+    before = json.dumps(dict(START, command="dev", lock_reason="not_started"))
+    path.write_text(before)
+    (tmp_path / "todos.json").write_text("[]")
+    held = _Held(tmp_path / "todos.json")
+    state = GATE.load_codex_state("s1", path)
 
     assert GATE.persist_codex_initialization("s1", path, state, _todos("in_progress", "pending"), implicit=True)
 
-    assert writes == [path]
+    assert writes == [] and path.read_text() == before
     held.assert_replaced()
-    assert "lock_reason" not in state and state["codex_plan_acknowledged_implicit"] is True
-    assert path.read_bytes() == json.dumps(state, ensure_ascii=False).encode(LOCALE)
+    record = _record(tmp_path)
+    assert record["command_start"] == ["wi-1", 1_700_000_000_000]
+    assert record["codex"]["codex_plan_acknowledged_implicit"] is True and "lock_reason" not in record["codex"]
+    assert record["codex"]["last_todos"] == _todos("in_progress", "pending")
+    assert GATE.load_codex_state("s1", path) == dict(START, command="dev", **record["codex"])
 
 
-def test_codex_acknowledgement_publishes_the_state_it_decided_on(tmp_path, monkeypatch):
-    """The gate's write is the whole state its checks ran on, as before the one
-    writer: what another hook wrote after the gate read the bookmark is not
-    merged in (write_bookmark's docstring; the race the lane report describes)."""
+def test_a_record_of_another_command_start_is_not_this_commands(tmp_path, monkeypatch):
+    """A new command start (a new bookmark) reads no plan state, as when its write
+    replaced the whole bookmark."""
     monkeypatch.setattr(GATE, "official_todos_path", lambda sid: tmp_path / "todos.json")
     path = _bookmark(tmp_path)
-    state = {"command": "dev"}
-    path.write_text(json.dumps({"command": "dev", "subagent_calls": {"0": True}}))
-
+    path.write_text(json.dumps(dict(START, command="dev")))
+    state = GATE.load_codex_state("s1", path)
     assert GATE.persist_codex_initialization("s1", path, state, _todos("in_progress"), implicit=False)
+    path.write_text(json.dumps(dict(START, workflow_instance_id="wi-2", command="close")))
+    assert GATE.load_codex_state("s1", path) == dict(START, workflow_instance_id="wi-2", command="close")
 
-    assert "subagent_calls" not in json.loads(path.read_text())
+
+def test_a_bookmark_that_still_carries_plan_state_is_read(tmp_path, monkeypatch):
+    """A Codex session whose bookmark was written before the record keeps its plan state."""
+    monkeypatch.setattr(GATE, "official_todos_path", lambda sid: tmp_path / "todos.json")
+    path = _bookmark(tmp_path)
+    legacy = dict(START, command="dev", todo_acknowledged=True, last_todos=_todos("in_progress"),
+                  subagent_calls={"0": True})
+    path.write_text(json.dumps(legacy))
+    (tmp_path / "todos.json").write_text(json.dumps(_todos("in_progress")))  # the old list form
+    assert GATE.load_codex_state("s1", path) == legacy
 
 
-def test_codex_sequence_lock_writes_through_the_writer(tmp_path, monkeypatch, writes, capsys):
+def test_codex_sequence_lock_writes_its_record_not_the_bookmark(tmp_path, monkeypatch, writes, capsys):
     monkeypatch.setenv("CLAUDE_COMPAT_RUNTIME", "codex")
+    monkeypatch.setattr(GATE, "official_todos_path", lambda sid: tmp_path / "todos.json")
     canonical = [{"content": f"Step {i} étape"} for i in range(3)]
     monkeypatch.setattr(GATE, "run_canonical_todos", lambda cmd, project, prompt="": canonical)
     path = _bookmark(tmp_path)
-    path.write_text(json.dumps({"command": "dev", "todo_acknowledged": True,
-                                "last_todos": _todos("in_progress", "pending", "pending")}, ensure_ascii=False))
-    held = _Held(path)
+    before = json.dumps(dict(START, command="dev", todo_acknowledged=True,
+                             last_todos=_todos("in_progress", "pending", "pending")), ensure_ascii=False)
+    path.write_text(before)
     plan = [{"step": f"Step {i} étape", "status": s}
             for i, s in enumerate(("in_progress", "pending", "in_progress"))]
     data = {"tool_name": "functions.update_plan", "tool_input": {"plan": plan}, "session_id": "s1"}
@@ -350,8 +364,6 @@ def test_codex_sequence_lock_writes_through_the_writer(tmp_path, monkeypatch, wr
         GATE.acknowledge_codex_plan(data, "s1", path, tmp_path)
 
     assert stop.value.code == 2 and "BLOCKED Codex update_plan for /dev" in capsys.readouterr().err
-    assert writes == [path]
-    held.assert_replaced()
-    expected = {"command": "dev", "todo_acknowledged": False,
-                "last_todos": _todos("in_progress", "pending", "pending"), "lock_reason": "sequence_violation"}
-    assert path.read_bytes() == json.dumps(expected, ensure_ascii=False).encode(LOCALE)
+    assert writes == [] and path.read_text() == before
+    assert _record(tmp_path)["codex"] == {"todo_acknowledged": False, "lock_reason": "sequence_violation",
+                                          "last_todos": _todos("in_progress", "pending", "pending")}

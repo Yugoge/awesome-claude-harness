@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -92,19 +91,15 @@ def main() -> int:
     if not sid:
         # Without a session id the attestation cannot be addressed to the
         # grant that will reference it. Fail closed by writing nothing: the
-        # guard refuses the commit and names the missing attestation.
-        sys.stderr.write(
-            "[commit-dispatch-attest] NOTE: changelog-analyst dispatch seen with no "
-            "session_id in the hook payload; no attestation written, so the privilege "
-            "guard will refuse the resulting commit.\n"
-        )
+        # guard refuses the commit and names the missing attestation (that
+        # refusal is what reaches the agent; a note here would not).
         return 0
 
     prompt = tool_input.get("prompt")
     prompt = prompt if isinstance(prompt, str) else ""
 
     try:
-        path = commit_pipeline.write_attestation(
+        commit_pipeline.write_attestation(
             sid,
             task_id=_task_id_from_prompt(prompt),
             dryrun=_dryrun_from_prompt(prompt),
@@ -120,8 +115,6 @@ def main() -> int:
         )
         return 0
 
-    if os.environ.get("CLAUDE_COMMIT_ATTEST_VERBOSE", "") == "1":
-        sys.stderr.write(f"[commit-dispatch-attest] wrote {path}\n")
     return 0
 
 
