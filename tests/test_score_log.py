@@ -1,5 +1,5 @@
 """The score log's one module (hooks/lib/score_log.py): its reader, its one writer, the score function and the
-three renderers (dispatch line, owner summary, /rating view); and the reader's two callers.
+two renderers (owner summary, /rating view); and the reader's two callers.
 
 scripts/score-update.sh and scripts/score-inject.sh both call read_lines (through the scripts/lib/score_log.py
 re-export) in place of a parse of their own and keep their own exit code for a refused log: 2 and 1.
@@ -197,8 +197,6 @@ def test_rows_without_kind_are_read_and_never_scored(tmp_path: Path) -> None:
     path = _log(tmp_path, "".join(json.dumps(row) + "\n" for row in rows))
     assert [row for _, row in score_log.read_lines(path)] == rows
     assert _score(rows) == _score(rows, "main") == 50
-    assert score_log.render_dispatch_line(rows, "dev", PROJECT, END) == \
-        "Your record (dev, this project): no record yet [Rank: Skilled Craftsman, 41-60]."
     assert score_log.render_owner_summary(rows, PROJECT, END, "20261101-100000") == "Scores (this project): no record yet."
 
 
@@ -505,46 +503,13 @@ def test_log_path_follows_the_config_directory_variable_and_creates_nothing(tmp_
     assert list(tmp_path.iterdir()) == []
 
 
-def test_the_dispatch_line_is_one_line_with_no_record_and_two_with_a_miss() -> None:
-    assert score_log.render_dispatch_line([], "dev", PROJECT, END) == \
-        "Your record (dev, this project): no record yet [Rank: Skilled Craftsman, 41-60]."
-    good = [_event(2, event="qa_first_pass", key="a")]
-    assert score_log.render_dispatch_line(good, "dev", PROJECT, END) == \
-        "Your record (dev, this project): 52 [Rank: Skilled Craftsman, 41-60], trend +2 over 5 tasks."
-    rows = [_event(-6, ts=_ts(1), why="old miss", key="a"), _event(-6, ts=_ts(2), why="edge case not tested", key="b"),
-            _event(3, ts=_ts(3), why="a good one", key="c")]
-    assert score_log.render_dispatch_line(rows, "dev", PROJECT, END).split("\n") == [
-        "Your record (dev, this project): 41 [Rank: Skilled Craftsman, 41-60], trend -9 over 5 tasks.",
-        'Most recent miss: "edge case not tested"']
-    assert score_log.render_dispatch_line(rows, "dev", PROJECT, _ts(3)).splitlines()[0].startswith("Your record (dev, this project): 38 [Rank: Journeyman")
-    assert len(score_log.render_dispatch_line(rows, "qa", PROJECT, END).splitlines()) == 1  # no row of qa's own
-
-
-@pytest.mark.parametrize(
-    ("value", "rank"),
-    [(-1, "Disgraced, <0"), (0, "Apprentice, 0-20"), (20, "Apprentice, 0-20"), (21, "Journeyman, 21-40"),
-     (41, "Skilled Craftsman, 41-60"), (61, "Senior Craftsman, 61-80"), (81, "Master, 81-100"), (100, "Master, 81-100")],
-)
-def test_the_dispatch_line_names_the_rank_and_its_range(value: int, rank: str) -> None:
-    line = score_log.render_dispatch_line([_event(value - 50)], "dev", PROJECT, END)
-    assert line.split("\n")[0].startswith(f"Your record (dev, this project): {value} [Rank: {rank}]")
-
-
 @pytest.mark.parametrize("task", ["20261101-100000", "dev-20261101-100000", "20261101-100000-l2", "login-fix", "t1"])
-def test_the_miss_line_has_no_task_id_is_one_line_and_is_cut_to_80_characters(task: str) -> None:
+def test_why_is_one_line_without_a_task_id_and_cut_to_80_characters(task: str) -> None:
     why = f"QA failed {task} and\nthen again for dev-command-20261101-100000-l1 because " + "the edge case was not tested " * 6
-    row = _event(-6, task=task, why=why)
-    line = score_log.render_dispatch_line([row], "dev", PROJECT, END)
-    assert len(line.split("\n")) == 2
-    miss = re.fullmatch(r'Most recent miss: "(.*)"', line.split("\n")[1]).group(1)
-    assert len(miss) == 80 and "\n" not in miss
-    assert not re.search(r"\d{8}-\d{6}", line) and not re.search(rf"(?<![\w-]){re.escape(task)}(?![\w-])", miss)
-    assert miss.startswith("QA failed")
-
-
-def test_a_miss_with_no_why_left_gives_one_line() -> None:
-    assert len(score_log.render_dispatch_line([_event(-6, why="", key="a")], "dev", PROJECT, END).splitlines()) == 1
-    assert len(score_log.render_dispatch_line([_event(-6, why="20261101-100000", key="a")], "dev", PROJECT, END).splitlines()) == 1
+    miss = score_log._why(_event(-6, task=task, why=why))
+    assert len(miss) == 80 and "\n" not in miss and miss.startswith("QA failed")
+    assert not re.search(r"\d{8}-\d{6}", miss) and not re.search(rf"(?<![\w-]){re.escape(task)}(?![\w-])", miss)
+    assert score_log._why(_event(-6, task=task, why=task)) == ""  # nothing is left of a why that is only a task id
 
 
 def _cycle() -> list:
@@ -654,9 +619,8 @@ def test_agents_are_listed_from_the_lowest_score_to_the_highest_with_score_and_r
     [(-1, "Disgraced, <0"), (0, "Apprentice, 0-20"), (20, "Apprentice, 0-20"), (21, "Journeyman, 21-40"), (40, "Journeyman, 21-40"),
      (41, "Skilled Craftsman, 41-60"), (61, "Senior Craftsman, 61-80"), (81, "Master, 81-100"), (100, "Master, 81-100")],
 )
-def test_the_view_names_the_rank_and_its_range_as_the_dispatch_line_does(value: int, rank: str) -> None:
+def test_the_view_names_the_rank_and_its_range(value: int, rank: str) -> None:
     assert _view([_event(value - 50)])[1] == f"dev: {value} [Rank: {rank}]"
-    assert f"{value} [Rank: {rank}]" in score_log.render_dispatch_line([_event(value - 50)], "dev", PROJECT, END)
 
 
 @pytest.mark.parametrize(

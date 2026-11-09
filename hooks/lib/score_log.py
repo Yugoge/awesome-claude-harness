@@ -165,15 +165,6 @@ def _by_identity(rows, project, as_of):
     return live, sorted(names)
 
 
-def render_dispatch_line(rows, identity, project, as_of) -> str:
-    """An agent's record and rank at dispatch, then its latest negative event's why (80 characters, no task id) when it has one."""
-    pairs = _mine(rows, identity, project, as_of)
-    rank, miss = "[Rank: %s, %s]" % _rank(_fold(pairs)), _last_miss(pairs)
-    line = f"Your record ({identity}, this project): " + (
-        f"{_fold(pairs)} {rank}, trend {trend(rows, identity, project, as_of):+d} over 5 tasks." if pairs else f"no record yet {rank}.")
-    return f'{line}\nMost recent miss: "{miss}"' if miss else line
-
-
 def render_owner_summary(rows, project, as_of, task_id) -> str:
     """Three lines for the owner after a rating: every identity's score, rank, trend; the rated cycle's points; the worst and why."""
     live, names = _by_identity(rows, project, as_of)
