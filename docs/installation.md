@@ -98,8 +98,10 @@ Init and the landing set `false` in the harness home when the key is absent, bec
 is the public repository; they never change a value you set. A value git cannot read as a boolean
 means no push. `/push` is not affected. The post-commit hook reads the switch through the
 harness's `hooks/lib/auto_push.sh`, found under `CLAUDE_HOME` or `~/.claude` (none there: no
-push, and with `GIT_AUTO_PUSH` at `"1"` the commit prints why); a copy made before this rule
-existed keeps its old test until you copy the hook again.
+push, and with `GIT_AUTO_PUSH` at `"1"` the commit prints why). A copy you made of an earlier
+version, byte for byte, is replaced by the current one at a turn end (the first one after this
+rule arrives, and again after each pull that writes the hook), in the harness home and in the
+repositories under `$HOME`; a copy you edited, or one a repository tracks, stays as it is.
 
 **Upgrading a home that predates the overlay.** A home that ran code from before the settings
 filter (its HEAD reflog, or `ORIG_HEAD`, holds such a revision) lands by itself at the next turn
@@ -108,8 +110,9 @@ end of any of its sessions; nothing has to be stopped or typed. `hooks/auto-comm
 it undoes what a conflicted stash pop of the pull left (`settings.json` from upstream, the paths
 the pop staged unstaged, the stash entry kept), migrates the previous personal settings into a
 new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
-`private-literals.txt` from values the machine already holds, renames aside post-commit hooks
-that push unless `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
+`private-literals.txt` from values the machine already holds, replaces post-commit hooks that are
+copies of an earlier `post-commit-auto-push` and renames aside the other ones that push unless
+`GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
 git-fswatch daemons running older code with their own environment (one in its git work, or in a
 repository with a stopped rebase, at a later turn end), and runs init steps 3-5. At each turn
 end it also sets `harness.autoPush false` in the home when the key is absent, already-landed
