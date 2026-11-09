@@ -76,15 +76,27 @@ class Deviation:
 
 
 _RULES: dict = {}
+# The Replay of this process (inner.py makes one): its harness is the tree under test. Inside a sandbox this
+# package is <sb>/replay, beside the tree's copy (<sb>/home/.claude), not inside a repository, so the tree
+# is never found from this file's own path there.
+_CURRENT: list = []
 
 
 def rule_files(hook: str) -> list:
-    """The refusing rule files of the merged gate `hook` of this tree (none: [])."""
-    if hook not in _RULES:
+    """The refusing rule files of the merged gate `hook` of the tree under test (none: []): the running
+    replay's harness, read as the driver; without a replay (a unit test), this repository."""
+    rp = _CURRENT[-1] if _CURRENT else None
+    tree = rp.layout.harness if rp else os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    key = (tree, hook)
+    if key not in _RULES:
         from . import sites
-        repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        _RULES[hook] = [r.file for r in sites.gate_rules(repo, hook) if r.relays]
-    return _RULES[hook]
+        if rp:
+            with rp.acting("driver"):
+                rules = sites.gate_rules(tree, hook)
+        else:
+            rules = sites.gate_rules(tree, hook)
+        _RULES[key] = [r.file for r in rules if r.relays]
+    return _RULES[key]
 
 
 class Event:
@@ -206,6 +218,7 @@ class Replay:
         self.event_names: set[str] = set()
         self.step_label = ""
         self._actors: list[str] = []
+        _CURRENT[:] = [self]  # rule_files reads the merged gates of this replay's tree
 
     # ------------------------------------------------------------ environment
     def _env(self, extra: dict) -> dict:
