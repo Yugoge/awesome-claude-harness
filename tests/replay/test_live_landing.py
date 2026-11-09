@@ -369,7 +369,7 @@ RATING = ("PostToolUse", "AskUserQuestion|Agent")
 ELSEWHERE = {("PreToolUse", P2_MATCHER[0]): (["hooks/pretool-overnight-hook-guard.py"], []),
              ("PreToolUse", P2_MATCHER[1]): ([], ["hooks/pretool-overnight-hook-guard.py"]),
              RATING: ([], ["hooks/posttool-close-rating.py"])}
-REACHED = {PRE.name: {RATING}}
+REACHED = {PRE.name: {RATING}, A.name: {RATING}}
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that

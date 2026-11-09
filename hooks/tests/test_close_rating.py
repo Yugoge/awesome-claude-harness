@@ -354,6 +354,62 @@ def test_append_row_hands_a_legacy_row_to_the_score_log_writer(config: Path) -> 
     assert not hasattr(close_rating, "append_rating")
 
 
+# --- the sweep: dispatches of the span not scored yet (the close QA, the cycle's last dispatch) count in the summary
+
+def _handle_with(monkeypatch, config: Path, payload: dict, **attributes) -> dict | None:
+    """close_rating.handle in this process over `config`, hooks/lib/score_events.py replaced by a module holding
+    `attributes` (sweep=None: the module is absent)."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    stand_in = types.ModuleType("hooks.lib.score_events")
+    vars(stand_in).update(attributes)
+    monkeypatch.setitem(sys.modules, "hooks.lib.score_events", None if attributes == {"sweep": None} else stand_in)
+    return close_rating.handle(payload)
+
+
+@pytest.mark.parametrize("case", ["4 - Minor gaps", "afk"])
+def test_a_close_rating_call_sweeps_once_before_the_summary_rating_or_not(monkeypatch, config: Path, case: str) -> None:
+    calls = []
+
+    def sweep(transcript_path, cwd):  # scores the close QA now: its row is in the log before the summary reads it
+        calls.append((transcript_path, cwd))
+        score_log.append(_log(config), _event("qa", "qa_catch", 1, "close QA swept in", key="swept"))
+
+    _seed(config, *SEEDED)
+    payload = _non_answer("afk") if case == "afk" else _payload(case)
+    out = _handle_with(monkeypatch, config, payload, sweep=sweep)
+    assert calls == [(payload["transcript_path"], payload["cwd"])]
+    assert "qa +1 (close QA swept in)" in out["systemMessage"]
+    assert [r.get("rating") for r in _rows(config) if r.get("kind") == "rating"] == ([] if case == "afk" else [4])
+
+
+@pytest.mark.parametrize("case", ["subagent", "another_source", "another_tool"])
+def test_no_sweep_for_a_call_that_is_not_the_main_agents_close_rating(monkeypatch, config: Path, case: str) -> None:
+    payload = _payload("4 - Minor gaps")
+    if case == "subagent":
+        payload["agent_id"] = "a1b2c3"
+    elif case == "another_source":
+        payload["tool_input"]["metadata"]["source"] = "remember"
+    else:
+        payload["tool_name"] = "Bash"
+    calls = []
+    assert _handle_with(monkeypatch, config, payload, sweep=lambda *args: calls.append(args)) is None and calls == []
+
+
+@pytest.mark.parametrize("fault", ["crash", "absent", "no_sweep"])
+def test_a_sweep_that_crashes_or_is_absent_changes_nothing_else(monkeypatch, config: Path, fault: str) -> None:
+    def crash(transcript_path, cwd):
+        raise RuntimeError("boom")
+
+    _seed(config, *SEEDED)
+    attributes = {"crash": {"sweep": crash}, "absent": {"sweep": None}, "no_sweep": {"observe": None}}[fault]
+    out = _handle_with(monkeypatch, config, _payload("4 - Minor gaps"), **attributes)
+    rows = _rows(config)
+    assert [r["rating"] for r in rows if r.get("kind") == "rating"] == [4] and len(rows) == 4
+    assert out == {"systemMessage": score_log.render_owner_summary(rows, KEY, "9999-12-31T23:59:59Z", TASK)}
+    assert "rating 4: +1 each" in out["systemMessage"]
+
+
 # --- the dispatcher: AskUserQuestion goes to close_rating.handle, Agent and Task to score_events.observe
 
 def _dispatch_run(monkeypatch, capsys, payload: dict, score_events) -> tuple[str, str]:
@@ -454,7 +510,7 @@ def test_the_hook_waits_for_the_score_scripts_lock(config: Path) -> None:
     _log(config).write_text('{"ts": "2026-11-01T00:00:00Z", "agent": "dev", "event": "qa_first_pass"}\n',
                             encoding="utf-8")
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(config.parent),
-           "CLAUDE_CONFIG_DIR": str(config)}
+           "CLAUDE_CONFIG_DIR": str(config), "PYTHONDONTWRITEBYTECODE": "1"}
     with open(f"{_log(config)}.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         hook = subprocess.Popen([sys.executable, str(HOOK)], stdin=subprocess.PIPE, env=env, text=True,
