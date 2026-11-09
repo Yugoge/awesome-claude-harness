@@ -11,7 +11,7 @@ There are two install paths. The **full install** is a clone plus one init run; 
 | Path | What you get | How |
 |---|---|---|
 | **Full harness** — clone + init | Every hook, agent, command and skill, the release pipeline, the settings overlay and filter, and the commit protection described below. Optional modules are chosen at init. | Clone the repository into any directory and run `scripts/bootstrap` (init) there. |
-| **Guardrails only** — installer `core` profile | Two blocking hooks (background-dispatch block, `EnterWorktree` block) plus the shared resolver and the preflight, copied into an isolated directory and registered additively in your existing Claude config home. No agents, commands, skills, overlay, filter or init. | `scripts/install/install --profile core` from a checkout ([below](#guardrails-only-the-installer-core-profile)). |
+| **Guardrails only** — installer `core` profile | The background-dispatch hook and the `EnterWorktree` hook (each exits 2 on the call it guards; the [enforcement ledger](ENFORCEMENT-LEDGER.md) labels both advisory) plus the shared resolver and the preflight, copied into an isolated directory and registered additively in your existing Claude config home. No agents, skills, overlay, filter or init, and one command, `/harness-doctor`, that runs the installed preflight. | `scripts/install/install --profile core` from a checkout ([below](#guardrails-only-the-installer-core-profile)). |
 
 Verify prerequisites — `python3`, `git`, `jq` (or run `scripts/doctor` for a full preflight):
 
@@ -34,8 +34,9 @@ git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude
 Init is idempotent and safe to re-run on a populated home. In order, it:
 
 1. reuses the harness venv `<harness-home>/venv` when it already imports `pytest`, `jsonschema`
-   and `yaml`; otherwise creates it with the first of `python3`, `python3.12`, `python3.11`,
-   `python3.10` that has a hash-locked lockfile under `requirements/`;
+   and `yaml`; installs them into it, hash-verified, when it exists without them; creates it when
+   absent, with the first of `python3`, `python3.12`, `python3.11`, `python3.10` that has a
+   hash-locked lockfile under `requirements/`;
 2. writes the machine overlay `<harness-home>/settings.machine.json` — **only when it is
    absent** — holding the module choices and `env.CLAUDE_HOME = <harness-home>`;
 3. registers the settings filter in the clone's local git config, sets `harness.autoPush false`
@@ -46,7 +47,7 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
    - the `TMPDIR` root named by the rendered settings (`/var/tmp/claude-scratch` by default), mode 1777;
    - the empty private-literal list `<harness-home>/private-literals.txt`, mode 0600;
    - `~/.config/claude/protected-runtime.json` (or the path in `CLAUDE_PROTECTED_RUNTIME_FILE`)
-     with `"schema_version": 1` and the 10 keys `protected_cmds`, `protected_launch_paths`,
+     with `"schema_version": 1` and the keys `protected_cmds`, `protected_launch_paths`,
      `protected_services`, `protected_hotfiles`, `protected_statefiles`,
      `protected_endpoint_paths`, `protected_proc_idents`, `protected_global_bins`,
      `protected_build_workspaces` and `protected_build_paths`, each an empty list;
@@ -62,15 +63,16 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
    pre-commit hook was not installed.
 
 `protected-runtime.json` configures the runtime guard (`hooks/lib/runtime_guard/`). Without a
-valid file the guard cannot tell what it protects and fails closed on the verb families it
-covers (`npm`, `node`, `npx`, `yarn`, `kill`, …). List your own services, launch paths and state
-files in it to have the guard protect them.
+valid file the guard cannot tell what it protects, so for the verb families it covers (`npm`,
+`node`, `npx`, `yarn`, `kill`, …) it returns a block verdict and `hooks/pretool-bash-safety.sh`
+exits 2 (the [enforcement ledger](ENFORCEMENT-LEDGER.md) labels that hook advisory). List your own
+services, launch paths and state files in it to have the guard protect them.
 
 | Init flag | Effect |
 |---|---|
-| `--yes` | Non-interactive: every optional module off. |
+| `--yes` | Non-interactive: asks nothing; every optional module not named by `--with` is off. |
 | `--with <module>` / `--without <module>` | Enable / disable a module without asking (repeatable; the known module is `paseo`). |
-| `--migrate-from <rev>` [`--settings-file <path>`] | Seed a **new** overlay from a previous personal `settings.json` — the file at git revision `<rev>`, or the given file — instead of the default overlay: the entries the clean form lacks (env values, permission entries, hook groups, top-level keys), the previous built-in defaults of the personal-value settings, and the enabled modules. Refused when an overlay already exists. |
+| `--migrate-from <rev>` [`--settings-file <path>`] | Seed a **new** overlay from a previous personal `settings.json` — the file at git revision `<rev>`, or the given file — instead of the default overlay: the entries the clean form lacks (env values, permission entries, hook groups, top-level keys), the previous built-in defaults of the personal-value settings, and the enabled modules; a previous `GIT_AUTO_PUSH` of `"1"` is not carried over. Ignored, with a note, when an overlay already exists (`scripts/install/render-settings migrate` itself refuses). |
 | `--force` | Back up and re-create the venv. Also lets the render replace a working `settings.json` holding entries the overlay does not explain (those entries are dropped — move them into the overlay first). |
 | `--no-doctor` | Skip the final `scripts/doctor` run. |
 | `--steps <list>` | Run only the given steps among 2-5 (comma-separated), without asking and without the venv, resolver and doctor steps (the landing below runs `--steps 3,4,5`). |
@@ -96,8 +98,8 @@ Init and the landing set `false` in the harness home when the key is absent, bec
 is the public repository; they never change a value you set. A value git cannot read as a boolean
 means no push. `/push` is not affected. The post-commit hook reads the switch through the
 harness's `hooks/lib/auto_push.sh`, found under `CLAUDE_HOME` or `~/.claude` (none there: no
-push, and the commit prints why); a copy made before this rule existed keeps its old test until
-you copy the hook again.
+push, and with `GIT_AUTO_PUSH` at `"1"` the commit prints why); a copy made before this rule
+existed keeps its old test until you copy the hook again.
 
 **Upgrading a home that predates the overlay.** A home that ran code from before the settings
 filter (its HEAD reflog, or `ORIG_HEAD`, holds such a revision) lands by itself at the next turn
@@ -133,19 +135,23 @@ claude
 configuration directory are one directory again.
 
 **The harness-home channel.** Every hook command in `settings.json` reaches its file through
-one expression, `"${CLAUDE_HOME:-$HOME/.claude}/hooks/<file>"`. The tracked file never sets
+one expression, `"${CLAUDE_HOME:-$HOME/.claude}/hooks/<file>"` (the `SessionStart` canary check
+reaches its script under `scripts/` the same way). The tracked file never sets
 `CLAUDE_HOME`: init writes it into the overlay's `env`, and Claude Code passes settings `env`
 values to every hook process and Bash tool command it starts. Without an overlay (a fresh clone
 before init) the fallback `$HOME/.claude` is the default install location. `CLAUDE_CONFIG_DIR`
 is deliberately not the channel: a multi-account setup may point it at a per-account directory
 that holds no harness. Scripts locate their harness home from their own location
-(`hooks/lib/claude_home.{sh,py}`); runtime state lives under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`.
+(`hooks/lib/claude_home.{sh,py}`); runtime state lives under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`,
+except the hook state root (consent flags, grants, sentinels), which is `$CLAUDE_STATE_DIR` when
+that is an absolute path and `/tmp` otherwise.
 
-`CLAUDE_HOME` is the one channel for harness paths: hook commands use it now, and prompt path
-substitution is planned on the same variable. Until then the prompts in `commands/` and
-`agents/` spell harness scripts as `~/.claude/...` — which is also why the harness-script
-permission allows use that literal form (Bash permission rules match the command text, with no
-variable expansion) — so prompt-issued commands assume the default location.
+`CLAUDE_HOME` is the one channel for harness paths: hook commands and the prompts in `commands/`
+and `agents/` use it. The prompts spell harness scripts as `${CLAUDE_HOME:-$HOME/.claude}/...` —
+which is also why the harness-script permission allows use that literal form (Bash permission
+rules match the command text, with no variable expansion; a few allow entries also keep the
+older `~/.claude/scripts/...` spelling) — so prompt-issued commands reach a clone outside the
+default location.
 
 ## Settings: one tracked source, a machine overlay, a git filter
 
@@ -153,8 +159,9 @@ variable expansion) — so prompt-issued commands assume the default location.
   hand-maintained settings file; there is no separate template. It carries no machine values:
   no install path, no `CLAUDE_HOME`, no personal tool paths, no CLI-owned keys.
 - **The overlay.** Everything machine-specific lives in `<harness-home>/settings.machine.json`
-  — untracked and gitignored, written only when absent: by init, or once by the landing on a
-  home upgraded from code before the filter (see the install section); never by agents.
+  — untracked and gitignored, created only when absent: by init, or once by the landing on a
+  home upgraded from code before the filter (see the install section), which later also drops
+  from its `hooks` the commands that HEAD retired or already runs; never by agents.
   [`settings.machine.example.json`](../settings.machine.example.json) documents every key:
   `modules`; `env` (sets or replaces a value); `permissions.allow` / `deny` / `ask` (appended —
   the overlay cannot remove a clean-form entry); `hooks` groups; any other top-level key
@@ -164,9 +171,10 @@ variable expansion) — so prompt-issued commands assume the default location.
   (`NAME` or `NAME.sh`, any directory path, also after an assignment, a `<` redirect or a listed
   wrapper or shell such as `sudo`, `timeout 30` or `bash -x`): reading, listing, editing or
   naming the script passes unless the name stands right after a command separator (`;`, `|`,
-  `(`), even in quotes, and a script piped into a shell or run by `find -exec` or an unlisted
-  wrapper (`watch`) is not seen. A set value replaces them with `|`-separated EREs, each matched
-  anywhere in the command.
+  `(`, `!`, `&`) — inside quotes that is only text, unless a word outside the quotes can run
+  text (a shell, `eval`, `ssh`, an interpreter, a `-c` or `-e` option) — and a script piped into
+  a shell or run by `find -exec` or an unlisted wrapper (`watch`) is not seen. A set value
+  replaces them with `|`-separated EREs, each matched anywhere in the command.
 - **The filter.** [`.gitattributes`](../.gitattributes) declares
   `/settings.json filter=claude-settings`; init registers its clean and smudge commands
   (`scripts/install/render-settings`) in the clone's local git config, with `required = true`.
@@ -203,24 +211,25 @@ Day to day:
 
 ## Optional module: paseo
 
-Init asks about one optional module, `paseo` (multi-session monitoring and scheduling,
-`/paseo-daemon`). It is off by default and with `--yes`. With it off, nothing paseo is
+Init asks about each optional module; today that is `paseo` (multi-session monitoring and
+scheduling, `/paseo-daemon`). It is off by default and with `--yes`. With it off, nothing paseo is
 registered and nothing fails because paseo is absent; its command and scripts stay in the tree
 for those who enable it. With it on, the module adds the allow entries `mcp__paseo__*` and
 `Bash(node scripts/paseo-usage-read.mjs:*)`, the `UserPromptSubmit` hook
-`hooks/userprompt-usage-snapshot.py`, and the `mcp__paseo__browser_run_code` matcher on the two
+`hooks/userprompt-usage-snapshot.py`, and the `mcp__paseo__browser_run_code` matcher on the
 runcode-watchdog groups; its accounts and model go into the overlay's `env`
 (`PASEO_DAEMON_ACCOUNTS`, `PASEO_DAEMON_MODEL`). The `Skill(paseo-daemon:*)` deny stays in the
 clean form either way.
 
 ## Doctor
 
-`scripts/doctor` is the preflight init ends with; run it any time. Besides `python3`, `git`, the
-venv, the manifest packages and the resolver, it checks the settings
+`scripts/doctor` is the preflight init ends with; run it any time. Besides `python3`, `git`, `jq`,
+`openssl`, the venv, the manifest packages and the resolver, it checks the settings
 (`scripts/install/render-settings check`):
 
-- every hook command resolves to an existing file under the harness home (it prints
-  `missing=<n>` and each missing path; a hook outside the clean form and the modules is named
+- every hook command resolves to an existing file under the harness home, other than an exit-0
+  `# STUB:` file that the clean form does not register (it prints `missing=<n>`, `stubs=<n>` when
+  there are any, and each offending path; a hook outside the clean form and the modules is named
   by its event only);
 - the filter is declared, registered and `required`, the staged clean form survives a
   smudge-then-clean round trip, and, when an overlay exists, the record of what render applied
@@ -228,16 +237,17 @@ venv, the manifest packages and the resolver, it checks the settings
 - every working-file entry is explained by the clean form, the enabled modules or the overlay;
   each one that is not fails the check, named by key path and count only — stage it if it is a
   public edit, or move it into the overlay;
-- `protected-runtime.json` loads with `schema_version` 1 and all 10 keys.
+- `protected-runtime.json` loads with `schema_version` 1 and all its required keys.
 
 It also lists, without failing, CLI-owned keys whose working value differs from the overlay.
-`scripts/doctor --strict` additionally runs a fresh host-capability handshake. Doctor exits
-non-zero when a required check fails.
+`scripts/doctor --strict` runs, in place of the checks above, a fresh host-capability handshake
+and prints a short compatibility report (`--verbose` adds the per-check detail). Doctor exits
+non-zero when a required check fails; with `--strict`, unless the fresh handshake passes.
 
 ## Guardrails only: the installer `core` profile
 
 The installer puts the guardrails in their own isolated directory and adds only a short,
-enumerable list of paths to your Claude config home — it never clones over it, and merges its two
+enumerable list of paths to your Claude config home — it never clones over it, and merges its
 hook registrations into your existing `settings.json` additively instead of replacing it:
 
 ```bash
@@ -246,11 +256,14 @@ scripts/install/install --profile core
 ```
 
 `--dry-run` prints every path it would create or modify and writes nothing. A strict preflight
-runs before the first mutation and aborts the install if the host fails it. `--config-dir` and
-`--prefix` override the detected Claude config home and the isolated install location.
+runs before the first mutation and aborts the install if a baseline dependency or the Python 3.10
+floor fails; a failing host-capability handshake prints an UNPROTECTED HOST verdict and aborts the
+install only with `--require-handshake`. `--config-dir` and `--prefix` override the detected
+Claude config home and the isolated install location.
 
-Remove everything it added — restoring any file it modified, and leaving files you created
-yourself in place — with:
+Remove everything it added — taking only its own hook registrations back out of `settings.json`
+(the pre-install file is written back whole only when `settings.json` is still exactly what the
+installer wrote), and leaving files you created yourself in place — with:
 
 ```bash
 scripts/install/uninstall
@@ -273,11 +286,11 @@ examples/guard-demo/run-demo.sh
 
 | Phase | Expected result | Exit code |
 |---|---|---|
-| STEP 1 — dangerous operation | BLOCKED (exit 2) by the guard, fail-closed | 2 |
+| STEP 1 — dangerous operation | The guard script exits 2 with its policy-deny marker | 2 |
 | STEP 2 — authorized fix | ALLOWED (exit 0) — operation is within policy | 0 |
 | STEP 3 — fix completes | Fix write landed on disk | — |
 
-Exit 0 = allow, exit 2 = block. See [`examples/guard-demo/run-demo.sh`](../examples/guard-demo/run-demo.sh) for details.
+Exit 0 = allow, exit 2 = deny. The demo drives the guard script directly and reads its exit code, so it shows what the script returns, not a Claude Code host stopping a call (the [enforcement ledger](ENFORCEMENT-LEDGER.md) labels the guard advisory). See [`examples/guard-demo/run-demo.sh`](../examples/guard-demo/run-demo.sh) for details.
 
 ## Portability
 
@@ -288,17 +301,17 @@ file has to be rewritten. What carries that, and where it stops:
 |---|---|---|
 | **No install path in the tracked settings** | Every hook command in `settings.json` reaches its file through `${CLAUDE_HOME:-$HOME/.claude}`; init writes `CLAUDE_HOME` into the untracked overlay `settings.machine.json` | Before init (no overlay) the fallback `$HOME/.claude` applies — the default install location |
 | **Scripts find their own home** | `hooks/lib/claude_home.{sh,py}` walk up from the script's location to the `settings.json + hooks/ + policies/ + scripts/` sentinel set | The repository may be cloned to any path |
-| **Runtime state follows Claude Code's configuration directory** | State paths resolve under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` | For a clone outside `~/.claude`, start Claude Code with `CLAUDE_CONFIG_DIR=<clone>` ([Other install locations](#other-install-locations)) |
+| **Runtime state follows Claude Code's configuration directory** | State paths resolve under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` (hook grants and flags: `$CLAUDE_STATE_DIR`, else `/tmp`) | For a clone outside `~/.claude`, start Claude Code with `CLAUDE_CONFIG_DIR=<clone>` ([Other install locations](#other-install-locations)) |
 | **Machine values stay out of commits** | Clean/smudge filter + overlay + the record of what render applied; the pre-commit hook's `render-settings check --staged` and private-literal rule, also run on checkpoint snapshots; CI's `check --staged` | Local protection needs init in that clone; CI has no overlay, so it cannot tell a personal entry from a public one |
 | **A broken install is reported, not silent** | `scripts/doctor`: every hook path resolves, the filter round-trips, `protected-runtime.json` loads | — |
-| **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → fail closed |
+| **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → the in-place overnight launch is refused |
 
 The prompts in `commands/`, `agents/` and `skills/` run harness files through the same
 `${CLAUDE_HOME:-$HOME/.claude}` channel and take the project root as
 `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}`, so the commands they issue reach a clone
-outside `~/.claude`. Not yet portable: one line of `commands/close.md` (its `--force` audit log)
-still names `~/.claude/...`; every other
-mention of `~/.claude` in the prompts only names the default location.
+outside `~/.claude`. Not yet portable: `commands/close.md` (its `--force` audit log) and
+`commands/redev.md` (its fallback read of `commands/dev.md`) still name `~/.claude/...`; every
+other mention of `~/.claude` in the prompts only names the default location.
 
 ## Dependencies
 
@@ -309,8 +322,8 @@ mention of `~/.claude` in the prompts only names the default location.
 | Tier 0 — core | Claude Code, Python 3 + venv, git ≥ 2.4x, jq, Bash/GNU userland | Everything | Guards fail silently / kernel inactive |
 | Tier 1 — release | openssl | /merge, /push nonce grants | Those commands fail at grant-write step |
 | Tier 1 — release | pytest + jsonschema + pyyaml (via bootstrap) | /test, generated AC tests | /test fails; test skeletons cannot execute |
-| Tier 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | Fail closed — the default in-place launch is refused (no state written); a `--worktree` launch runs, its non-worktree-local writes blocked (security-relevant) |
-| Tier 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | QA fails closed for user-facing changes |
+| Tier 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | The default in-place launch is refused (no state written); a `--worktree` launch runs, and the overnight hook guard exits 2 for a command it cannot prove worktree-local (security-relevant) |
+| Tier 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | `agents/qa.md` requires a `fail` verdict for a user-facing change that cannot be browser-verified |
 | Tier 3 — optional | Codex CLI + CODEX_ISO_BIN | --codex adversarial rounds | --codex unavailable; pipeline unaffected |
 | Tier 3 — optional | graphify + GRAPHIFY_BIN | Code-graph enrichment in Dev context | Dev skips enrichment; proceeds degraded |
 | Tier 3 — optional | websocket-client | Websocket enrichments | Silently skipped; core pipeline unaffected |
@@ -324,14 +337,14 @@ mention of `~/.claude` in the prompts only names the default location.
 | Python 3 + the harness venv at `<harness-home>/venv` | **REQUIRED** | Hook commands run `python3` (the git kernel, gates); several hooks, the helper scripts and the tests use the venv's interpreter. The venv is not tracked — init (`scripts/bootstrap`) creates it from a hash-locked lockfile and installs the manifest, or reuses one that already has the manifest packages. | Python hooks fail at import time; git kernel inactive. |
 | `git` | **REQUIRED** | The whole harness is git-native (checkpoints, grants, keystone). Any recent git (2.4x+) works for normal use; the overnight keystone needs **git ≥ 2.46** (verified by `scripts/overnight-git-selftest.sh`). | No checkpoints, no grant-gated git operations, no overnight loop. |
 | `git reference-transaction` hook (keystone) | **REQUIRED keystone** | The overnight keystone (`hooks/git-keystone/`) installs a `reference-transaction` hook into `<git-common-dir>/keystone-hooks/` and sets `core.hooksPath`; it fires atomically on every HEAD/ref move. Needs git ≥ 2.46. | Without it, the overnight session (in the checkout, or in its linked worktree under `--worktree`) has no structural protection against unauthorized `HEAD` rewrites. Core `/dev` pipeline is unaffected. |
-| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts across the pipeline. | Shell hooks that parse grant files or settings.json silently fail or misparse JSON. |
+| `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts across the pipeline. | Shell hooks that parse the cycle context (`docs/dev/context-*.json`) silently fail or misparse JSON. |
 | Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find` are used pervasively. The GNU forms are assumed — BSD/macOS variants differ in flags; install the GNU userland there. | Hook failures on BSD/macOS with wrong flag variants; `flock`-based serialization unavailable. |
-| `pytest`, `jsonschema`, `pyyaml` (the test/runtime manifest) | **REQUIRED** for `/test` + generated tests | Pinned in [`requirements.txt`](../requirements.txt) and installed automatically by `scripts/bootstrap`; `scripts/doctor` reports any that are missing. | `/test` fails; test-writer skeletons cannot be executed; schema validation unavailable. |
+| `pytest`, `jsonschema`, `pyyaml` (the test/runtime manifest) | **REQUIRED** for `/test` + generated tests | Declared as compatible ranges in [`requirements.txt`](../requirements.txt) and installed, hash-verified, from the per-interpreter lockfile `requirements/py3XX.txt` by `scripts/bootstrap`; `scripts/doctor` reports any that are missing. | `/test` fails; test-writer skeletons cannot be executed; schema validation unavailable. |
 | OpenAI Codex CLI + an isolation wrapper (`CODEX_ISO_BIN`) | **REQUIRED** for `--codex` / `/codex` | The adversarial second-opinion rounds shell out to the Codex CLI through a fail-closed isolation wrapper. **You must supply your own** Codex CLI and wrapper and point `CODEX_ISO_BIN` at it. | `--codex` / `/codex` unavailable; rest of the pipeline unaffected. |
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce / token generation in the grant-gated git release path. | `/merge` and `/push` cannot generate nonce-keyed grants → those commands fail at grant-write step. |
-| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. | The default in-place launch is refused, writing no state and naming bubblewrap and the `--worktree` remedy; a `--worktree` launch still works, and its non-worktree-local writes fail closed (security-relevant). |
+| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. | The default in-place launch is refused, writing no state and naming bubblewrap and the `--worktree` remedy; a `--worktree` launch still works, and the overnight hook guard exits 2 for a command it cannot prove worktree-local (security-relevant). |
 | `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`). Install: `<harness-home>/venv/bin/pip install graphifyy`, then put `graphify` on `PATH` or set `GRAPHIFY_BIN` to it in the overlay's `env`. | Code-graph context absent from Dev dispatch; Dev still runs — quality may be lower on large refactors. |
-| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes. Not needed for doc/config/non-user-facing cycles. | Non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified. |
+| [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes. Not needed for doc/config/non-user-facing cycles. | Non-user-facing cycles unaffected; for a user-facing change that cannot be browser-verified, `agents/qa.md` requires a `fail` verdict, while QA's stop hook (`hooks/subagentstop-e2e-enforce.py`) reads only the report's `e2e_enforcement.status` and cannot see whether the rendering happened. |
 | Python pkg `websocket-client` | OPTIONAL (graceful) | A few websocket enrichments; hooks fall back to lenient paths when missing. | Websocket enrichments silently skipped; fallback path active. |
 
 </details>
@@ -345,9 +358,9 @@ mention of `~/.claude` in the prompts only names the default location.
 | **`settings.json` won't load** | Validate both files: `python3 -m json.tool <harness-home>/settings.json` and `python3 -m json.tool <harness-home>/settings.machine.json` — a trailing comma or unquoted key surfaces here. Fix the overlay, then re-run init to re-render. |
 | **`git status` shows `settings.json` modified after init** | The working file holds an entry the overlay does not explain — typically a permission Claude Code wrote ("always allow"). `scripts/doctor` fails on such entries, naming their key paths; move the machine-specific ones into `settings.machine.json` and re-run init. |
 | **A commit is refused by the pre-commit hook** | It names the failed check: `settings.json` staged in machine form (register the filter with `scripts/bootstrap` and re-stage), `settings.machine.json` or `private-literals.txt` in the index (untrack it with `git rm --cached -- <path>`; the file stays on disk), a private literal at `file:line` (remove it from that file), or a missing check script. |
-| **`npm` / `node` / `kill` blocked by the runtime guard** | `protected-runtime.json` is missing or invalid (`~/.config/claude/protected-runtime.json`, or `$CLAUDE_PROTECTED_RUNTIME_FILE`). Init creates it when absent; `scripts/doctor` checks it. |
+| **`npm` / `node` / `kill` refused by the runtime guard** | `protected-runtime.json` is missing or invalid (`~/.config/claude/protected-runtime.json`, or `$CLAUDE_PROTECTED_RUNTIME_FILE`). Init creates it when absent; `scripts/doctor` checks it. |
 | **Helper scripts fail to import** | They expect the venv at `<harness-home>/venv`; re-run init (`scripts/bootstrap`), which creates it when it is missing. |
-| **A commit/push is being blocked** | That's the kernel doing its job — an agent needs a grant from `/commit` or `/push`. As a human, run the git command from your own shell, or use `/do` / `/allow`. |
-| **A command is blocked and I don't know why** | The blocking hook writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED by` lines — they name the hook and the rule. Check `/tmp/claude-grants/` for any pending structured grants. For grant-related blocks, `ls /tmp/claude-push-grant-*.json /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files. |
+| **A commit/push is being refused** | The git privilege guard (`hooks/pretool-git-privilege-guard.py`) exits 2 for an agent `git commit` or `git push` without a live grant from `/commit` or `/push`. As a human, run the git command from your own shell, or `/allow` the exact command; `/do` does not cover `git commit` or `git push`. |
+| **A command is refused and I don't know why** | The hook that refuses it writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED:` or `BLOCKED by` lines — they name the rule or the hook. Check `/tmp/claude-grants/` for any pending structured grants (`/tmp` is the default state directory; `CLAUDE_STATE_DIR` set to an absolute path replaces it). For grant-related refusals, `ls /tmp/claude-push-grant-*.json /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files. |
 | **Bootstrap / venv failure** | Verify Python 3 is installed: `python3 --version`. If the venv creation fails, check disk space and that `python3-venv` is installed (`apt install python3-venv` on Debian/Ubuntu). Init uses the first of `python3`, `python3.12`, `python3.11`, `python3.10` that has a lockfile under `requirements/`. Re-run init with `--force` to back up and recreate the venv: `<harness-home>/scripts/bootstrap --force`. |
 | **Resolver failure / wrong home detected** | Scripts resolve their own home structurally via `hooks/lib/claude_home.{sh,py}`; hook commands use `CLAUDE_HOME` from the overlay, falling back to `$HOME/.claude`. If either points at the wrong directory, check `env.CLAUDE_HOME` in `settings.machine.json` and run `scripts/doctor` for a preflight diagnostics report. |
