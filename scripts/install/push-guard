@@ -8,9 +8,12 @@
 # with this home's list. A hit refuses the push naming "<type> <id>:<line>", never the value. Only a
 # listed no-reply address is left out of the copy it scans (P7b's seeding lists git user.email).
 # No list or an empty one: nothing is scanned. It fails closed with one line naming the step and
-# writes nothing into this repository. Remote tips: the values git passes and, for a ref new to the
-# remote, the branches and tags <url> lists (D18: never the remote-tracking refs, stale after an
-# upstream rewrite); a tip this repository lacks excludes nothing, so stale history is still scanned.
+# writes nothing into this repository; after an error nothing is clean: an input line naming no local
+# object, a pushed tip this repository does not hold or (--strict) whose tree it cannot look up, any
+# step that cannot list, read or scan refuses. Remote tips: the values git passes and, for a ref new
+# to the remote, the branches and tags <url> lists (D18: never the remote-tracking refs, stale after
+# an upstream rewrite); a remote tip this repository lacks excludes nothing, so stale history is
+# still scanned.
 # --strict (first argument; scripts/publish-public, D30): the guard is the one reader and decider of
 # the list for a publish too. It fails closed, refusing a list that is missing or holds no literal,
 # and first runs P8's engine in its default mode (ledger, residue, the literal rule over every file)
@@ -36,7 +39,8 @@ list="${list%/*}/private-literals.txt"
 if [ -n "$strict" ]; then [ -n "$(lits)" ] || refuse "strict: private-literals.txt is missing or lists no literal"
 else [ -s "$list" ] || exit 0; fi
 tips=() not=() new=
-while read -r _ lo _ ro; do  # all zeros: a deleted ref (it sends nothing), or a ref new to the remote
+while read -r lr lo _ ro || [ -n "$lr" ]; do  # all zeros: a deleted ref (it sends nothing), or a ref new to the remote
+  [ -n "$lo" ] || refuse "cannot read the push's input: a line names no local object"
   [ -z "${lo//0}" ] || { tips+=("$lo"); [ -n "${ro//0}" ] || new=1; }; [ -z "${ro//0}" ] || not+=("$ro")
 done
 [ "${#tips[@]}" -gt 0 ] || exit 0
@@ -46,10 +50,17 @@ done
 objects="$(git rev-parse --path-format=absolute --git-path objects)" && t="$(mktemp -d)" \
   || refuse "cannot create a scratch directory"
 trap 'rm -rf "$t"' EXIT
+for tip in "${tips[@]}"; do  # --ignore-missing below is for the remote tips alone; a pushed one must be held
+  git cat-file -e "$tip" 2>/dev/null \
+    || refuse "cannot list the objects this push sends: a pushed tip is not in this repository"
+done
 git rev-list --objects --no-object-names --ignore-missing "${tips[@]}" --not "${not[@]}" \
   | git cat-file --batch-check=$'100644 %(objectname)\t%(objecttype) %(objectname)' > "$t/sent" \
   || refuse "cannot list the objects this push sends"
-trees=(); [ -z "$strict" ] || for tip in "${tips[@]}"; do trees+=($(git rev-parse -q --verify "$tip^{tree}")); done
+trees=(); [ -z "$strict" ] || for tip in "${tips[@]}"; do
+  tree="$(git rev-parse -q --verify "$tip^{tree}" 2>/dev/null)" || refuse "strict: cannot look up the tree of a pushed tip"
+  trees+=("$tree")
+done
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 for tree in "${trees[@]}"; do  # strict: the engine's default mode on each pushed tree, the files named
   c="$t/tree" && git init -q "$c" && printf '%s\n' "$objects" > "$c/.git/objects/info/alternates" \

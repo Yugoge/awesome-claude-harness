@@ -156,3 +156,44 @@ def test_strict_runs_the_engine_on_the_pushed_tree_naming_the_step_and_masking_t
         "pre-push: push REFUSED by the private-literal guard: strict: scripts/check-public-core.sh failed on tree "
         f"{tree} (files named above)")
     assert LIT not in r.stderr and not home.remote("main")
+
+
+def guard(home, line, *mode):
+    return run(["bash", "scripts/install/push-guard", *mode, "origin", "../origin.git"], home.env, home.path, False,
+               input=line)
+
+
+@pytest.mark.parametrize("mode", [(), ("--strict",)])
+def test_a_pushed_tip_this_repository_does_not_hold_refuses_naming_the_step(home, mode):
+    """After an error nothing is clean: a pushed object that cannot be listed stops the push. Only the remote
+    tips (--not) may be absent, a stale home lacking them."""
+    home.listing(*LISTED)
+    home.commit()
+    gone = "0123456789abcdef" * 2 + "01234567"
+    assert home("cat-file", "-e", gone, check=False).returncode != 0
+    r = guard(home, f"refs/heads/main {gone} refs/heads/main {'0' * 40}\n", *mode)
+    assert (r.returncode, r.stderr) == (1, "pre-push: push REFUSED by the private-literal guard: "
+                                           "cannot list the objects this push sends: a pushed tip is not in this "
+                                           "repository\n")
+
+
+def test_strict_refuses_a_pushed_tip_whose_tree_cannot_be_looked_up_naming_the_step(home):
+    home.listing(*LISTED)
+    home.commit()
+    blob = home("rev-parse", "HEAD:f.txt")  # held, sent, but it has no tree: no checkout to run the engine on
+    line = f"refs/tags/b {blob} refs/tags/b {'0' * 40}\n"
+    assert guard(home, line).returncode == 0  # an ordinary push scans the blob it sends: clean
+    r = guard(home, line, "--strict")
+    assert (r.returncode, r.stderr) == (1, "pre-push: push REFUSED by the private-literal guard: "
+                                           "strict: cannot look up the tree of a pushed tip\n")
+
+
+def test_every_line_of_the_input_is_read_or_the_push_refused(home):
+    home.listing(*LISTED)
+    head = home.commit(text=f"ticket {LIT}\n")
+    r = guard(home, f"refs/heads/master {head} refs/heads/master {'0' * 40}")  # its last line unterminated: scanned
+    assert r.returncode == 1 and f"-> blob {home('rev-parse', 'HEAD:f.txt')}:1" in r.stderr and LIT not in r.stderr
+    for mode in ((), ("--strict",)):  # a line naming no local object is no deletion
+        r = guard(home, "refs/heads/master\n", *mode)
+        assert (r.returncode, r.stderr) == (1, "pre-push: push REFUSED by the private-literal guard: "
+                                               "cannot read the push's input: a line names no local object\n")
