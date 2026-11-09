@@ -1,45 +1,9 @@
-#!/usr/bin/env python3
-"""The one reader of the score log (logs/lifecycle.jsonl).
+"""Re-export of hooks/lib/score_log.py, the score log's one module, for score-update.sh and score-inject.sh.
+Both files are called score_log, so this one loads the other by path; P13-3 deletes it with the two scripts."""
+import importlib.util
+import pathlib
 
-``scripts/score-update.sh`` (whose rows go through the log's one writer,
-``hooks/lib/close_rating.append_row``) and ``scripts/score-inject.sh`` read the
-whole log before they act. Both call ``read_lines``, so one rule decides which
-lines count and when the log is refused; each script keeps its own exit code for a
-refusal.
-
-A final line that does not parse is skipped, not refused: the writer appends one
-line at a time, so a crash mid-append leaves at most the last line partial.
-"""
-
-from __future__ import annotations
-
-import json
-
-
-class ScoreLogError(Exception):
-    """The log cannot be read, or a line before the last is malformed."""
-
-
-def read_lines(path: str) -> list[tuple[int, dict]]:
-    """Every entry of the log with its 1-based line number, in file order."""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            raw_lines = handle.readlines()
-    except (OSError, UnicodeDecodeError) as exc:
-        raise ScoreLogError(f"cannot read {path}: {exc}") from exc
-    entries = []
-    for index, raw_line in enumerate(raw_lines):
-        stripped = raw_line.rstrip("\n")
-        if not stripped:
-            continue
-        try:
-            entry = json.loads(stripped)
-        except json.JSONDecodeError:
-            entry = None
-        if isinstance(entry, dict):
-            entries.append((index + 1, entry))
-        elif index != len(raw_lines) - 1:
-            raise ScoreLogError(
-                f"malformed JSONL at line {index + 1} of {path} (not final line)"
-            )
-    return entries
+_spec = importlib.util.spec_from_file_location("hooks_lib_score_log", pathlib.Path(__file__).resolve().parents[2] / "hooks/lib/score_log.py")
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+globals().update({name: value for name, value in vars(_module).items() if not name.startswith("_")})

@@ -11,7 +11,7 @@
 - `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 - `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 - `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-- `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
+- `score_log.py` - Both files are called score_log, so this one loads the other by path; P13-3 deletes it with the two scripts.
 - `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 - `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
 - `soundness_gate.py` - HUNK-level failure attribution

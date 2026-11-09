@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 43
+- **Total files**: 44
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -43,6 +43,7 @@
 - `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
 - `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 - `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+- `score_log.py` - A score, a rank, a trend and the two text views are computed on read from its rows, never stored. Rows: event {kind,
 - `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 - `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 - `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
