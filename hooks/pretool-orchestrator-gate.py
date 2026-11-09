@@ -34,6 +34,11 @@ update the streak state.
 /do consent (lib.allowlist.has_do_consent) bypasses the limits AND does not
 update the streak state.
 
+A session whose open command span runs on an older command text than
+commands/<command>.md (in flight across an update, D15; detected as
+pretool-todo-validate.py's _in_flight detects it) reads each refusal in
+origin/master's (2acc29b's) wording; the rule and the counts are the same.
+
 State file: <state dir>/claude-tool-streak-<sid>.json --
   {"schema_version": 2, "per_tool_counts": {"Edit": 1},
    "bash_consecutive": {"last_tool": "Bash", "count": 2}}
@@ -160,8 +165,37 @@ def overnight_window_open(data: dict) -> bool:
         return False
 
 
-def block_permanent(tool_name: str) -> None:
+def in_flight(data: dict) -> bool:
+    """The payload's active command span runs on a command text the session
+    loaded before an update (D15): the text is not commands/<command>.md now.
+    The test is pretool-todo-validate.py's _in_flight (c8225f48), loaded from
+    that file. No span, no recorded text, or any error: not in flight."""
+    try:
+        import importlib.util
+        from types import SimpleNamespace
+        from lib import command_span
+        transcript = data.get("transcript_path")
+        span = command_span.active_span(transcript) if transcript else None
+        if span is None:
+            return False
+        spec = importlib.util.spec_from_file_location(
+            "_todo_validate_in_flight", Path(__file__).parent / "pretool-todo-validate.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return bool(module._in_flight(SimpleNamespace(span=span, command=span.command)))
+    except Exception:
+        return False
+
+
+def block_permanent(tool_name: str, data: dict) -> None:
     allowed = ", ".join(sorted(ALWAYS_ALLOWED))
+    if in_flight(data):  # origin/master's (2acc29b's) wording, which the session's text was written against
+        sys.stderr.write(
+            f"[Orchestrator Gate] Permanently blocked: {tool_name}\n"
+            f"Delegate to subagents (Agent tool) or run /do to unlock.\n"
+            f"Allowed without /do: {allowed}\n"
+        )
+        sys.exit(2)
     sys.stderr.write(
         f"[Orchestrator Gate] Permanently blocked: {tool_name} (/do does not unlock it).\n"
         f"Delegate to a subagent (Agent tool), or the user grants it once with /allow {tool_name}.\n"
@@ -170,7 +204,13 @@ def block_permanent(tool_name: str) -> None:
     sys.exit(2)
 
 
-def block_streak(tool_name: str, count: int, limit: int) -> None:
+def block_streak(tool_name: str, count: int, limit: int, data: dict) -> None:
+    if in_flight(data):  # origin/master's (2acc29b's) wording
+        sys.stderr.write(
+            f"[Orchestrator Gate] BLOCKED: {tool_name} used consecutively beyond limit ({count}/{limit}).\n"
+            f"Delegate to a subagent (Agent tool) or ask the user to run /do to unlock.\n"
+        )
+        sys.exit(2)
     sys.stderr.write(
         f"[Orchestrator Gate] BLOCKED: {tool_name} used consecutively beyond limit ({count}/{limit}): Bash "
         f"counts its calls since the last Agent dispatch or prompt, any other non-whitelisted tool its calls "
@@ -180,13 +220,13 @@ def block_streak(tool_name: str, count: int, limit: int) -> None:
     sys.exit(2)
 
 
-def enforce_streak_limit(tool_name: str, count: int) -> None:
+def enforce_streak_limit(tool_name: str, count: int, data: dict) -> None:
     if tool_name in ALWAYS_ALLOWED:
         if tool_name == "Bash" and count > BASH_MAX_CONSECUTIVE:
-            block_streak(tool_name, count, BASH_MAX_CONSECUTIVE)
+            block_streak(tool_name, count, BASH_MAX_CONSECUTIVE, data)
         return
     if count > NON_WHITELIST_MAX_CONSECUTIVE:
-        block_streak(tool_name, count, NON_WHITELIST_MAX_CONSECUTIVE)
+        block_streak(tool_name, count, NON_WHITELIST_MAX_CONSECUTIVE, data)
 
 
 def main():
@@ -262,7 +302,7 @@ def main():
         pass
 
     if tool_name in PERMANENTLY_BLOCKED:
-        block_permanent(tool_name)
+        block_permanent(tool_name, data)
 
     if has_do_consent(data):
         sys.exit(0)
@@ -290,7 +330,7 @@ def main():
             pass
 
     count = update_streak(sid, tool_name)
-    enforce_streak_limit(tool_name, count)
+    enforce_streak_limit(tool_name, count, data)
     sys.exit(0)
 
 
