@@ -97,14 +97,72 @@ def _matches_any(command: str, patterns: list) -> bool:
     return any(re.search(p, command) for p in patterns)
 
 
+# The harness home and the CLI's config dir named through a variable. The patterns above read raw
+# text, so `"${CLAUDE_HOME:-$HOME/.claude}/commands/x.md"` (the spelling the prompts use) or
+# `$CLAUDE_HOME/hooks/x.py` names no `.claude/<dir>/` and went through, where `~/.claude/...` is
+# refused. Either variable may hold a protected root in the shell that runs the command (an
+# assignment earlier in the same command, a profile), whatever the hook's own environment says,
+# so each spelling of them counts as the home (fails closed), as an unknown prefix before a
+# written-out `.claude/hooks/` is refused today.
+_HOME = '~/.claude'
+_HOME_VARS = ('CLAUDE_HOME', 'CLAUDE_CONFIG_DIR')
+_BARE_HOME_VAR = re.compile(r'\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)(?![A-Za-z0-9_])')
+_BRACE = re.compile(r'\$\{|\}')
+_PARAMETER = re.compile(r'([A-Za-z_][A-Za-z0-9_]*|[0-9]+)(:?[-=?+])?(.*)\Z', re.S)
+
+
+def _resolve_parameter(body: str) -> str:
+    """The text a `${body}` expansion (its inner expansions resolved) may stand for, as far as it is
+    known without running it: a home variable is the home (its `+` forms: the word used when it is
+    set); another variable's `-`, `=` and `+` forms are their word (the branch readable here)."""
+    found = _PARAMETER.match(body)
+    if not found:
+        return '${' + body + '}'
+    name, op, word = found.groups()
+    if name in _HOME_VARS:
+        return word if op and op.endswith('+') else _HOME
+    if op and op[-1] in '-=+':
+        return word
+    return '${' + body + '}'
+
+
+def _expand_parameters(text: str) -> str:
+    """``text`` with each balanced `${...}` replaced by _resolve_parameter, innermost first, in one
+    pass without recursion (a deep nesting cannot raise and so fail open); an unclosed one stays."""
+    stack, i = [[]], 0
+    for mark in _BRACE.finditer(text):
+        stack[-1].append(text[i:mark.start()])
+        i = mark.end()
+        if mark.group() == '${':
+            stack.append([])
+        elif len(stack) > 1:
+            body = ''.join(stack.pop())
+            stack[-1].append(_resolve_parameter(body))
+        else:
+            stack[-1].append('}')
+    stack[-1].append(text[i:])
+    while len(stack) > 1:
+        body = ''.join(stack.pop())
+        stack[-1].append('${' + body)
+    return ''.join(stack[0])
+
+
+def _home_spelled_out(command: str) -> str:
+    """``command`` with the home variables written as ~/.claude and its quotes removed, so a
+    home spelling reaches the patterns as `~/.claude/<dir>/` (`"$HOME/.claude"/commands/` too)."""
+    text = _BARE_HOME_VAR.sub(lambda _m: _HOME, _expand_parameters(command))
+    return text.replace('"', '').replace("'", '')
+
+
 def _classify_bash_target(command: str) -> str:
-    """Return 'hooks', 'commands', or '' for a Bash command."""
+    """Return 'hooks', 'commands', or '' for a Bash command, as written or with the home spelled out."""
     if not command:
         return ''
-    if _matches_any(command, _HOOK_PATTERNS):
-        return 'hooks'
-    if _matches_any(command, _CMD_PATTERNS):
-        return 'commands'
+    for text in dict.fromkeys((command, _home_spelled_out(command))):
+        if _matches_any(text, _HOOK_PATTERNS):
+            return 'hooks'
+        if _matches_any(text, _CMD_PATTERNS):
+            return 'commands'
     return ''
 
 
