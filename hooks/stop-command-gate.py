@@ -329,15 +329,28 @@ def _typed(span) -> list[tuple[str, str]]:
             for k, arg in enumerate(args) if not arg.startswith("-") and args[k - 1:k] != ["--reason"]]
 
 
-def _targets(span, root, action: str) -> list[str] | None:
-    """The typed tasks (_typed), else the families the span's dispatches named;
-    None: no task. --auto: the parents dev-lifecycle's --auto target function
-    lists at the opener's cut-off (a fresh scan) and the families the span
-    walked, which it stops listing once done; [] had none."""
+def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
+    """(targets, gaps) of a /close or a /commit, one rule for both (P5 review
+    M, P5-4): the typed tasks (_typed), else the families the span's dispatches
+    named; None: no task. A typed task that names no task or chain file
+    (_resolves; close.md asks for one) yields to the families the span
+    dispatched, the task the turn worked on the owner's answer, which no
+    predicate reads (D23); with none dispatched, the gaps name it. --auto: the
+    parents dev-lifecycle's --auto target function lists at the opener's
+    cut-off (a fresh scan) and the families the span walked, which it stops
+    listing once done; [] had none."""
     if "--auto" in shlex.split(span.args):
         lifecycle = _script("scripts/dev-lifecycle.py")
-        return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families())
-    return [task for _arg, task in _typed(span)] or sorted(span.session_families()) or None
+        return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families()), []
+    typed = _typed(span)
+    held = [arg for arg, task in typed if not _resolves(root, arg, task)]
+    if not held:
+        return [task for _arg, task in typed] or sorted(span.session_families()) or None, []
+    families = span.session_families()
+    if not families:
+        return None, [f"{action}: {arg} names no task or chain file, and no dispatch of this /{action} names a task"
+                      for arg in held]
+    return sorted({task for arg, task in typed if arg not in held} | families), []
 
 
 def _resolves(root, arg: str, task: str) -> bool:
@@ -412,17 +425,12 @@ def p_close(span, root, payload) -> list[str]:
     _cycle_names), and the close-rating question asked
     (D9b: asked, not answered) where it is required and the span's loaded text
     asks it (a /close the session took up before the question was added to
-    close.md never asks it: _loaded_lacks). A typed task that names no
-    task or chain file (_resolves; close.md asks for one) yields to the families
-    the span dispatched, the task the turn closed on the owner's answer, which
-    no predicate reads (D23); with none dispatched, its gap names it."""
-    typed = [] if "--auto" in shlex.split(span.args) else _typed(span)
-    held = [arg for arg, task in typed if not _resolves(root, arg, task)]
-    families = span.session_families() if held else set()
-    if held and not families:
-        return [f"close: {arg} names no task or chain file, and no dispatch of this /close names a task"
-                for arg in held]
-    targets = sorted({t for a, t in typed if a not in held} | families) if held else _targets(span, root, "close")
+    close.md never asks it: _loaded_lacks). Targets: _targets (a typed task
+    that names no task or chain file yields to the families the span
+    dispatched)."""
+    targets, unresolved = _targets(span, root, "close")
+    if unresolved:
+        return unresolved
     if targets is None:
         return ["close: no target task resolved"]
     close_rating = importlib.import_module("lib.close_rating")  # P4's
@@ -455,7 +463,9 @@ def _bulk_block(span):
 
 def p_commit(span, root, payload) -> list[str]:
     """/commit: --stage commit per target (a Task-id commit reachable from
-    HEAD in each plan repository; under its cycle's own name, _cycle_names);
+    HEAD in each plan repository; under its cycle's own name, _cycle_names),
+    the targets /close takes (_targets: a typed task that names no task or
+    chain file yields to the families the span dispatched, P5-4);
     --bulk: the bulk status block reports a
     landing; --dry-run: nothing beyond the todo half. Modes only if typed."""
     args = span.args.split()
@@ -467,7 +477,9 @@ def p_commit(span, root, payload) -> list[str]:
             return ["commit --bulk: no changelog-analyst status block in this /commit"]
         return [f"commit --bulk: changelog-analyst reports {block.get('commit_status')!r}: "
                 f"{block.get('failure_code')} {block.get('failure_reason') or ''}".rstrip()] if "failure_code" in block else []
-    targets = _targets(span, root, "commit")
+    targets, unresolved = _targets(span, root, "commit")
+    if unresolved:
+        return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
     names = _cycle_names(span)

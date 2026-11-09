@@ -1209,6 +1209,7 @@ def test_a6_git_predicates_outside_a_repository_are_instrument_failures(env, com
 def test_a6_commit_modes_only_if_typed(env):
     """Fake disposition (P3): --stage commit's Task-id check is P3's; on the real one:
     test_a6_real_commit_needs_p3s_task_id_commit_reachable_from_head."""
+    task_file(env)  # a typed id names a task (P5-4)
     env.tx.command("commit", FAMILY)
     env.fake.answers[(FAMILY, "commit")] = [gap(".", "MISSING_TASK_TRAILER", "no commit carries Task-id")]
     assert run(env)[0] == 2
@@ -1436,6 +1437,78 @@ def test_m_a_typed_close_task_naming_a_task_stays_the_target(env, monkeypatch, a
     code, text = run(env)
     assert code == 2 and f"close-report-{FAMILY}.md" in text, text
     assert {c[1] for c in env.fake.calls} == ({FAMILY, OTHER} if TYPO in args else {FAMILY})
+
+
+# P5-4 (finding M's /commit half): /commit takes its typed target through the rule /close takes since
+# 4ca4260 (the gate's _targets): a typed id that names no task yields to the families the span dispatched.
+def trailer_gap(task):
+    return [gap(".", "MISSING_TASK_TRAILER", f"no commit reachable from HEAD carries Task-id: {task}")]
+
+
+@pytest.mark.parametrize("args", [TYPO, f"docs/dev/ticket-{TYPO}.md", FAMILY[:-1], f"--codex {TYPO}"])
+def test_p5_4_a_typed_commit_task_naming_no_task_yields_to_the_task_the_span_committed(env, args):
+    """Fake disposition (P3): every task it is asked about lacks its Task-id commit until the case
+    lands one. Before P5-4 the /commit Stop held on the typed id whatever the span committed, a hold
+    no agent action clears (D25). Now it holds naming the typed value until a dispatch of the span
+    names a task (the owner's answer is no fact, D23); then the families the span dispatched are the
+    targets, held until their Task-id commit exists, and the typed id never is."""
+    task_file(env)
+    typed = args.split()[-1]
+    task = TYPO if "/" in typed else typed
+    env.fake.answers[(task, "commit")] = trailer_gap(task)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.tx.command("commit", args)
+    code, text = run(env)
+    assert code == 2 and text.splitlines()[1:2] == [
+        f"- commit: {typed} names no task or chain file, and no dispatch of this /commit names a task"], text
+    env.tx.ask(FAMILY)
+    assert run(env)[0] == 2 and env.fake.calls == []
+    env.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    code, text = run(env)
+    assert code == 2 and f"Task-id: {FAMILY}" in text and "names no task" not in text, text
+    env.fake.answers[(FAMILY, "commit")] = []  # the landing commit
+    assert run(env) == (0, "")
+    assert {c[1:3] for c in env.fake.calls} == {(FAMILY, "commit")}
+
+
+@pytest.mark.parametrize("args,held", [(FAMILY, f"ticket-{FAMILY}.md"),
+                                      (f"dev-{FAMILY}", f"dev-report-{FAMILY}-l1.json"),
+                                      (f"docs/dev/ticket-{FAMILY}.md", f"ticket-{FAMILY}.md"),
+                                      (f"{FAMILY} {TYPO}", f"ticket-{FAMILY}.md")])
+def test_p5_4_a_typed_commit_task_naming_a_task_stays_the_target(env, args, held):
+    """A typed /commit task that names a task or chain file stays the target, whatever the span
+    dispatched, held until its Task-id commit exists and then released; beside one that names
+    none, the families the span dispatched join it (as /close's, 4ca4260)."""
+    task_file(env, held)
+    env.tx.command("commit", args)
+    env.tx.ask(OTHER)
+    env.tx.dispatch(OTHER, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    code, text = run(env)
+    assert code == 2 and f"Task-id: {FAMILY}" in text and "names no task" not in text, text
+    assert {c[1] for c in env.fake.calls} == ({FAMILY, OTHER} if TYPO in args else {FAMILY})
+    env.fake.answers.clear()
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("mode", ["--dry-run", "--auto", "--bulk"])
+def test_p5_4_commit_modes_keep_their_verdicts_beside_a_mistyped_id(env, monkeypatch, mode):
+    """--dry-run asks nothing of the chain; --auto takes dev-lifecycle's target function's parents,
+    never a typed word; --bulk reads its status block: a mistyped id typed beside them changes none."""
+    lifecycle = types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY])
+    monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.fake.answers[(TYPO, "commit")] = trailer_gap(TYPO)
+    env.tx.command("commit", f"{mode} {TYPO}")
+    code, text = run(env)
+    if mode == "--dry-run":
+        assert (code, text) == (0, "") and env.fake.calls == []
+    elif mode == "--bulk":
+        assert code == 2 and "no changelog-analyst status block" in text and env.fake.calls == []
+    else:
+        assert code == 2 and f"Task-id: {FAMILY}" in text and TYPO not in text, text
+        env.fake.answers.clear()
+        assert run(env) == (0, "") and {c[1] for c in env.fake.calls} == {FAMILY}
 
 
 # ---------------------------------------------------------------- A11: modes
@@ -1779,6 +1852,27 @@ def test_a6_real_commit_needs_p3s_task_id_commit_reachable_from_head(real, repo)
     git(repo, "commit", "-q", "-m", f"land the change\n\nTask-id: {FAMILY}")
     assert run(real) == (0, "")
     real.tx.command("commit", "--dry-run")
+    assert run(real) == (0, "")
+
+
+def test_p5_4_real_a_mistyped_commit_is_released_by_the_landing_of_the_task_the_span_committed(real, repo):
+    """test_p5_4_a_typed_commit_task_naming_no_task_yields_to_the_task_the_span_committed on P3's real
+    --stage commit: before P5-4 the mistyped id stayed the target, and P3 held it (no chain, no
+    Task-id commit) after the corrected task landed."""
+    chain_on_disk(repo, close="CLOSE: YES")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "cycle artifacts")
+    real.tx.command("commit", TYPO)
+    code, text = run(real)
+    assert code == 2 and text.splitlines()[1] == (
+        f"- commit: {TYPO} names no task or chain file, and no dispatch of this /commit names a task"), text
+    real.tx.ask(FAMILY)
+    real.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    code, text = run(real)
+    assert code == 2 and "problem=MISSING_TASK_TRAILER" in text and TYPO not in text, text
+    (repo / "scripts" / "one.py").write_text("landed = True\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", f"land the change\n\nTask-id: {FAMILY}")
     assert run(real) == (0, "")
 
 
