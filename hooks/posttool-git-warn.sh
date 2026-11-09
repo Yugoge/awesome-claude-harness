@@ -5,7 +5,8 @@
 # which is "Bash" for every shell call, so the hook is registered on Bash and finds the
 # commit in the command it is given on stdin (the CLI passes hook input on stdin only).
 # PostToolUse runs only after the command succeeded. The warning goes to the model as
-# PostToolUse additionalContext; plain stdout would reach no one.
+# PostToolUse additionalContext; plain stdout would reach no one. It names where the files are (each
+# top-level directory with its count), not the files.
 
 if [ "$GIT_WARN_UNTRACKED" != "1" ]; then
   exit 0
@@ -34,10 +35,17 @@ except Exception:
 files = [line for line in out.splitlines() if line]
 if not files:
     sys.exit(0)
-shown = files[:20] + ([f"... and {len(files) - 20} more"] if len(files) > 20 else [])
-text = "\n".join([f"Warning: {len(files)} untracked file(s) after this commit:"]
-                 + [f"  - {f}" for f in shown]
-                 + ["Commit them with /commit if they belong to the change, or add them to .gitignore."])
+# Where they are, by top-level entry, not their names: a name can carry a task or spec id, and
+# an id this hook prints that its payload did not hold would read as one it minted.
+where = {}
+for f in files:
+    top = f.split("/", 1)[0] + ("/" if "/" in f else "")
+    where[top] = where.get(top, 0) + 1
+shown = [f"{top} ({n})" if top.endswith("/") else top for top, n in sorted(where.items())]
+text = "\n".join([f"Warning: {len(files)} untracked file(s) after this commit, in: " + ", ".join(shown[:20])
+                  + (f", and {len(shown) - 20} more" if len(shown) > 20 else ""),
+                  "Run git status to see them; commit them with /commit if they belong to the change, "
+                  "or add them to .gitignore."])
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}))
 ' 2>/dev/null
 

@@ -145,10 +145,14 @@ def test_a_run_code_timeout_is_told_to_the_model(tmp_path, repo):
 
 def test_untracked_files_after_a_commit_are_told_to_the_model(tmp_path, repo):
     (repo / "stray.txt").write_text("x\n")
+    (repo / "docs" / "dev").mkdir(parents=True)
+    for name in ("dev-report-20261109-101010.json", "qa-report-20261109-101010.json"):
+        (repo / "docs" / "dev" / name).write_text("{}\n")
     env = _env(tmp_path, GIT_WARN_UNTRACKED="1")
     p = _run("posttool-git-warn.sh", {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}}, env, repo)
     text = _context(p.stdout, "PostToolUse")
-    assert text.startswith("Warning: 1 untracked file(s) after this commit:\n  - stray.txt")
+    assert text.startswith("Warning: 3 untracked file(s) after this commit, in: docs/ (2), stray.txt\n")
+    assert "20261109-101010" not in p.stdout  # no id it was not handed: it mints none
     assert "--amend" not in text and "git add ." not in text
     for other in ({"tool_name": "Bash", "tool_input": {"command": "ls commit"}},
                   {"tool_name": "Bash", "tool_input": {"command": "echo git commit-tree"}}):
