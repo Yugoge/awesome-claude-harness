@@ -86,7 +86,24 @@ Read `validator.status` and `validator.validators_checked`. `pass`: Step 10. `fa
 python3 "<HARNESS_ROOT>/scripts/steps/test-context.py" execution --request-id <request_id> --timestamp <timestamp> --validation-status pass --validators-checked N
 ```
 
-Writes `tests/reports/execution-context-<request_id>.json` in the Input Format of `agents/test-executor.md`: the registry's validators, `parameters` (`fail_fast: false`, `verbose: true`, `report_path`) and the validation report's `status` and `validators_checked`, as you pass them: `pass` (Step 9 sends only a pass here) and `N`, the `validator.validators_checked` you read in Step 9. `status=missing_registry`: run Step 6.
+Writes `tests/reports/execution-context-<request_id>.json`, the context `agents/test-executor.md` reads (this is its template):
+
+```json
+{
+  "request_id": "test-YYYYMMDD-HHMMSS",
+  "timestamp": "ISO-8601",
+  "context": {
+    "project_root": "<abs-path>",
+    "test_directory": "<abs-path>/tests",
+    "venv_path": "<HARNESS_ROOT>/venv",
+    "validators": [{"type": "script|instruction", "path": "tests/scripts/<name>.py", "edge_case": "EC002", "priority": "critical"}]
+  },
+  "parameters": {"fail_fast": false, "verbose": true, "report_path": "tests/reports/execution-report-<request_id>.json"},
+  "validation_report": {"status": "pass", "validators_checked": 10, "all_valid": true}
+}
+```
+
+The validators come from the registry. `validation_report` holds the `status` and `validators_checked` you pass: `pass` (Step 9 sends only a pass here) and `N`, the `validator.validators_checked` you read in Step 9. Step 11 adds `context.checkpoint_commit`. `status=missing_registry`: run Step 6.
 
 ### Step 11: Create Safety Checkpoint
 

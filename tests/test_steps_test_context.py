@@ -1,9 +1,11 @@
 """scripts/steps/test-context.py: Steps 7, 10 and 11 of /test (validation context, execution context, checkpoint).
 
-The contexts must keep the shape the two agents document as their Input Format; the shape cases read that
-block from agents/test-validator.md and agents/test-executor.md, so a change to either side shows here.
-The validation context is printed for the validator's dispatch (no file); the validator report's status and
-validators_checked are passed to the execution step as arguments (the script reads no report file).
+The validation context keeps the shape agents/test-validator.md documents as its Input Format. The execution
+context keeps the template under Step 10 of commands/test.md, which agents/test-executor.md names as the home
+of its input, and holds every key that agent says it reads; the cases read those texts, so a change to either
+side shows here. The validation context is printed for the validator's dispatch (no file); the validator
+report's status and validators_checked are passed to the execution step as arguments (the script reads no
+report file).
 """
 from __future__ import annotations
 
@@ -71,6 +73,29 @@ def agent_input_format(agent: str) -> dict:
     return json.loads(re.search(r"```json\n(.*?)```", section, re.S).group(1))
 
 
+def step10_template() -> dict:
+    """The JSON template under '### Step 10' of commands/test.md: the home of the executor's input."""
+    text = (ROOT / "commands" / "test.md").read_text(encoding="utf-8")
+    section = text[text.index("### Step 10:"):text.index("### Step 11:")]
+    return json.loads(re.search(r"```json\n(.*?)```", section, re.S).group(1))
+
+
+def executor_input_section() -> str:
+    """The '## Input' section of agents/test-executor.md, which lists the keys the executor reads."""
+    text = (ROOT / "agents" / "test-executor.md").read_text(encoding="utf-8")
+    section = text[text.index("\n## Input\n"):]
+    return section[:section.index("\n## ", 1)]
+
+
+def has_path(document: dict, dotted: str) -> bool:
+    node = document
+    for key in dotted.removesuffix("[]").split("."):
+        if not isinstance(node, dict) or key not in node:
+            return False
+        node = node[key]
+    return True
+
+
 def shape(value):
     if isinstance(value, dict):
         return {key: shape(item) for key, item in value.items()}
@@ -93,7 +118,7 @@ def test_validation_context_has_the_documented_shape_and_the_registry_validators
     context = printed_context(facts)
     documented = agent_input_format("test-validator.md")
     assert shape(context) == shape(documented)
-    assert context["orchestrator"] == documented["orchestrator"]
+    assert "orchestrator" not in context, "the documented block has no orchestrator object"
     assert context["validation_criteria"] == documented["validation_criteria"]
     assert context["request_id"] == RID and context["timestamp"] == TS
     assert context["context"]["project_root"] == str(proj.resolve())
@@ -144,14 +169,29 @@ def test_execution_context_has_the_documented_shape(tmp_path):
     assert facts == {"status": "ok", "context": f"tests/reports/execution-context-{RID}.json", "validators": "2",
                      "validation_status": "pass"}
     context = load(proj, "execution")
-    documented = agent_input_format("test-executor.md")
-    assert shape({**context, "context": {**context["context"], "checkpoint_commit": "x"}}) == shape(documented)
-    assert context["orchestrator"] == documented["orchestrator"]
+    assert shape(context) == shape(step10_template())
+    assert "orchestrator" not in context
     assert context["parameters"] == {"fail_fast": False, "verbose": True,
                                      "report_path": f"tests/reports/execution-report-{RID}.json"}
     assert context["validation_report"] == {"status": "pass", "validators_checked": 2, "all_valid": True}
     assert "checkpoint_commit" not in context["context"]
     assert context["context"]["validators"][0]["edge_case"] == "EC002"
+
+
+def test_the_execution_context_holds_every_key_the_executor_says_it_reads(tmp_path):
+    proj = project_with_registry(tmp_path)
+    execution(proj)
+    context = load(proj, "execution")
+    section = executor_input_section()
+    keys = [token for token in re.findall(r"`([^`]+)`", section)
+            if token == "request_id" or re.fullmatch(r"[a-z_]+(\.[a-z_]+)+(\[\])?", token)]
+    assert len(keys) >= 8, f"the Input section lists the keys in backticks; found {keys}"
+    for key in keys:
+        assert has_path(context, key), f"agents/test-executor.md reads {key}, which the execution context lacks"
+    for field in ("type", "path", "edge_case", "priority"):
+        assert f"`{field}`" in section
+        assert all(field in validator for validator in context["context"]["validators"])
+    assert "commands/test.md" in section, "the agent must keep naming the command as the home of its input"
 
 
 def test_execution_context_takes_the_passed_status_and_a_failed_status_is_not_all_valid(tmp_path):
@@ -209,7 +249,9 @@ def test_checkpoint_records_the_commit_of_the_checkpoint_ref_in_the_execution_co
                      "rollback_tree": "git reset --hard refs/checkpoints/main", "context": "ok"}
     context = load(proj, "execution")
     assert context["context"]["checkpoint_commit"] == commit
-    assert shape(context) == shape(agent_input_format("test-executor.md"))
+    expected = step10_template()
+    expected["context"]["checkpoint_commit"] = commit
+    assert shape(context) == shape(expected), "Step 11 adds context.checkpoint_commit and nothing else"
     assert git(proj, "rev-parse", "HEAD") != commit, "the checkpoint never moves HEAD"
     assert not list((proj / "tests" / "reports").glob("*.tmp"))
 

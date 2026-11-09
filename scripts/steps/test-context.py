@@ -10,12 +10,14 @@ The project root defaults to the current directory; T defaults to now (ISO-8601,
 stdout as key=value lines; the exit status is 0 for every state below (2 for wrong arguments).
 
 validation  Prints the validation context as one JSON line, in the Input Format of
-            agents/test-validator.md, the validators taken from tests/reports/validator-registry-<ID>.json;
-            the command hands that JSON to the validator in its dispatch, so no file is written.
+            agents/test-validator.md (its validation_criteria arrays are empty there, so they are empty
+            here), the validators taken from tests/reports/validator-registry-<ID>.json; the command
+            hands that JSON to the validator in its dispatch, so no file is written.
             Prints status=ok|missing_registry, validators, context=<JSON>.
-execution   Writes tests/reports/execution-context-<ID>.json in the Input Format of
-            agents/test-executor.md: the same validators, parameters (fail_fast false, verbose true,
-            report_path tests/reports/execution-report-<ID>.json) and validation_report (the status and
+execution   Writes tests/reports/execution-context-<ID>.json in the template of commands/test.md Step 10
+            (agents/test-executor.md names that step as the home of its input): the same validators,
+            parameters (fail_fast false, verbose true, report_path
+            tests/reports/execution-report-<ID>.json) and validation_report (the status and
             validators_checked the command read from the validator's report and passes in, all_valid when
             the status is pass). Prints status=ok|missing_registry, context=<path>, validators,
             validation_status.
@@ -35,16 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
-REQUIREMENTS = {
-    "validation": "Validate test syntax, dependencies, and quality before execution",
-    "execution": "Execute all validated tests and generate comprehensive report",
-}
-VALIDATION_CRITERIA = {
-    "syntax": ["Python syntax valid", "No import errors", "Argparse defined"],
-    "dependencies": ["All imports available in venv", "No circular dependencies"],
-    "quality": ["Exit codes documented", "JSON output format", "Error handling present"],
-    "edge_cases": ["Prevents documented edge case", "Covers patterns from git analysis"],
-}
+# The block documents these four arrays as empty: the validator's own Validation Guidelines hold the checks.
+VALIDATION_CRITERIA = {"syntax": [], "dependencies": [], "quality": [], "edge_cases": []}
 
 
 def emit(**facts: object) -> None:
@@ -75,11 +69,10 @@ def registry_validators(root: Path, request_id: str) -> list | None:
     return [{key: item.get(key) for key in keys} for item in registry["validators"] if isinstance(item, dict)]
 
 
-def base_context(root: Path, phase: str, request_id: str, timestamp: str, validators: list) -> dict:
+def base_context(root: Path, request_id: str, timestamp: str, validators: list) -> dict:
     return {
         "request_id": request_id,
         "timestamp": timestamp,
-        "orchestrator": {"command": "test", "phase": phase, "requirement": REQUIREMENTS[phase]},
         "context": {
             "project_root": str(root),
             "test_directory": str(root / "tests"),
@@ -94,7 +87,7 @@ def cmd_validation(root: Path, request_id: str, timestamp: str) -> None:
     if validators is None:
         emit(status="missing_registry")
         return
-    document = base_context(root, "validation", request_id, timestamp, validators)
+    document = base_context(root, request_id, timestamp, validators)
     document["validation_criteria"] = VALIDATION_CRITERIA
     emit(status="ok", validators=len(validators), context=json.dumps(document, ensure_ascii=False))
 
@@ -104,7 +97,7 @@ def cmd_execution(root: Path, request_id: str, timestamp: str, status: str, chec
     if validators is None:
         emit(status="missing_registry")
         return
-    document = base_context(root, "execution", request_id, timestamp, validators)
+    document = base_context(root, request_id, timestamp, validators)
     document["parameters"] = {"fail_fast": False, "verbose": True,
                               "report_path": f"tests/reports/execution-report-{request_id}.json"}
     document["validation_report"] = {"status": status, "validators_checked": checked, "all_valid": status == "pass"}
