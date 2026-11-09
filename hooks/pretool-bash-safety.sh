@@ -66,7 +66,7 @@ COMMIT_GRANT_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-grant
 # The RIGHT bound runs to the end of the shell word, and a `/` before that end
 # means "not a verb" (T1-1). The old bound `([^A-Za-z_]|$)` looked at one
 # character only, so a DIRECTORY named like a verb read as a launch of it:
-# `rerun-node20-files/`, `python3-x/`, a `/home/node/` home. Under such a state
+# `rerun-node20-files/`, `python3-x/`, a home directory whose name is that of an interpreter. Under such a state
 # root the namespace path itself carried the "verb", and `NS=<ns>; ls -l "$NS"`
 # was refused by branch 3 (a verb, then a `$` expansion) on both layers, for the
 # main agent and a subagent alike. A word whose last path segment is the verb

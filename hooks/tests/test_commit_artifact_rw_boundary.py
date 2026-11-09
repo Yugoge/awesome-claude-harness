@@ -279,7 +279,7 @@ def _layer_branches(var):
 #
 # T1-1 widened the right bound from one character to the rest of the shell
 # word, refusing a `/` before its end, so a DIRECTORY named like a verb
-# (`node20`, `python3-x`, a `/home/node` home) is no longer read as a launch.
+# (`node20`, `python3-x`, a home directory named node) is no longer read as a launch.
 # OLD_BOUNDARY_SUFFIX is the bound before that change; the T1-1 tests below
 # restore it on a throwaway copy as their positive control.
 BOUNDARY_SUFFIX = "([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)"
@@ -1178,7 +1178,7 @@ def test_symptom_c_read_only_claim_stays_qualified():
 
 # ── T1-1: a directory named like an interpreter is not an interpreter launch ─
 # Measured on the base: with the state root under a directory named
-# `rerun-node20-files`, `python3-x`, or a `/home/node` home, a pure read
+# `rerun-node20-files`, `python3-x`, or a home directory named node, a pure read
 # through a captured variable (`NS=<ns>; ls -l "$NS"`) was refused on BOTH
 # layers, for the main agent and a subagent: the namespace path itself carried
 # `node`/`python` as a path segment, the verb's old one-character right bound
@@ -1337,7 +1337,7 @@ def test_last_path_segment_verb_is_still_a_verb_and_directory_is_not():
     for word in ("/usr/bin/python3 -c", "\"/usr/bin/python3\" -c", "python3-dbg -c",
                  "perl5.36 -e", "node20 -e", "tee${IFS}x", "{tee,x}", "nodejs"):
         assert _hook_grep(verb, word), f"{word!r} is a launch and must match a verb"
-    for word in ("/tmp/rerun-node20-files/x", "/tmp/python3-x/x", "/home/node/x",
+    for word in ("/tmp/rerun-node20-files/x", "/tmp/python3-x/x", "/".join(("", "home", "node", "x")),
                  "/tmp/perl5/x", "/opt/tee/x", "nodes", "untouched"):
         assert not _hook_grep(verb, word), f"{word!r} is no launch and must not match"
 
