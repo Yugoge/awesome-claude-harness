@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-09T15:39:48Z*
-**Total entries**: 874
+*Last updated: 2026-11-09T16:40:58Z*
+**Total entries**: 875
 **Convention**: kebab
 
 ## Tree
@@ -173,6 +173,7 @@ dot-claude/
 │   │   ├── `_fixtures_obligation_terminal.py` - hooks/tests/test_posttool_overnight_loop_terminal_gate.py (which pin that
 │   │   ├── `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 │   │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
+│   │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
 │   │   ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 │   │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   │   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
@@ -243,7 +244,7 @@ dot-claude/
 │   │   ├── `test_laneb_stop_coordinator.py` - LANE-B non-destructive receipt writers and serialized Stop coordinator.
 │   │   ├── `test_laneb_stop_overnight_timelock_scoping.py` - Its time-lock and wake check are the Stop gate's step 4 (hooks/stop-command-gate.py,
 │   │   ├── `test_merge_grant_write_check.py` - Experiment E11: the privilege guard's merge-grant check sat behind
-│   │   ├── `test_notification_idle_overnight.py` - hooks/notification-idle-overnight.py, retired to an exit-0 stub (P1b): settings.json still registers it.
+│   │   ├── `test_notification_idle_overnight.py` - (P12), and the file stays for a session that loaded an older hook list (D15)."""
 │   │   ├── `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
 │   │   ├── `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
 │   │   ├── `test_obligation_templates.py` - Two template forms exist: literal ``<obligation v="1">`` blocks, and the
@@ -266,7 +267,7 @@ dot-claude/
 │   │   ├── `test_pol_generative_sweeps.py` - AC-R02-10 .. AC-R02-16 (revision 2). Every deny-side population here is
 │   │   ├── `test_posttool_checkpoint_refusal.py` - Drives hooks/posttool-git-checkpoint.sh as settings.json registers it (PostToolUse on
 │   │   ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
-│   │   ├── `test_pretool_push_analyst_grant_guard.py` - registers it at PreToolUse Bash; scripts/execute-push.py validates and spends the grant."""
+│   │   ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 │   │   ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
 │   │   ├── `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
 │   │   ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the
@@ -317,10 +318,10 @@ dot-claude/
 │   │   ├── `test_workflow_bookmark_writer.py` - <project>/.claude/workflow-<sid>.json is written by prompt-workflow.py alone (a
 │   │   ├── `test_worktree_guard.py` - agent worktrees
 │   │   ├── `test_write_gate.py` - - The gate sees what the guards saw: each rule's tool set is its guard's registered matcher
-│   │   ├── `test_write_gate_overwrite_parity.py` - The write gate runs the Python form; the shell hook stays registered until the gate's
-│   │   ├── `test_write_guard_consent_process.py` - The /do bypass is hooks/lib/allowlist.py has_do_consent (main agent only); the hook takes it in t...
+│   │   ├── `test_write_gate_overwrite_parity.py` - The write gate runs the Python form. The shell hook is an exit-0 stub since the gate's registration
+│   │   ├── `test_write_guard_consent_process.py` - The file is an exit-0 stub since the write gate's registration landed (D15); its checks are the g...
 │   │   ├── `test_write_push_gate_token.py` - changelog-analyst (under /commit) and the cleaner (under /clean) both call it after
-│   │   └── `write_gate_settings.py` - ``gate_settings(settings)``: the seven write guards' PreToolUse registrations go, and
+│   │   └── `write_gate_settings.py` - At the P12 base (retired_hooks.BASE) settings.json registers 78 hooks of 77 files; the tracked file
 │   ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 │   ├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
@@ -359,7 +360,7 @@ dot-claude/
 │   ├── `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
 │   ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 │   ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
-│   ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
+│   ├── `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
 │   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
@@ -374,8 +375,8 @@ dot-claude/
 │   ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 │   ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 │   ├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
-│   ├── `pretool-layer-escalation-check.sh` - pretool-layer-escalation-check.sh
-│   ├── `pretool-layer-match-gate.sh` - pretool-layer-match-gate.sh
+│   ├── `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+│   ├── `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `pretool-obligation-gate.py` - WHY THIS HOOK EXISTS:
 │   ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 │   ├── `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
@@ -385,7 +386,7 @@ dot-claude/
 │   ├── `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
 │   ├── `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code
 │   ├── `pretool-spec-block-foreground-agent.py` - PreToolUse Hook: Block foreground Agent during an active /spec Interview
-│   ├── `pretool-subagent-code-block.py` - A subagent (payload agent_id) writing a code file (CODE_PATTERN) whose role
+│   ├── `pretool-subagent-code-block.py` - It printed a stderr warning when a subagent whose role does not resolve to dev
 │   ├── `pretool-subagent-enforce.py` - PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement (G1)
 │   ├── `pretool-todo-validate.py` - PreToolUse Hook: Validate TodoWrite input BEFORE execution
 │   ├── `pretool-tool-policy.py` - tool-policy.v1.json for all subagents
@@ -393,7 +394,7 @@ dot-claude/
 │   ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 │   ├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
 │   ├── `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
-│   ├── `pretool-write-guard.sh` - PreToolUse Hook - Block Write tool from overwriting existing files
+│   ├── `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 │   ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 │   ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 │   ├── `pull.sh` - pull.sh - Executable version of /pull command
@@ -418,8 +419,8 @@ dot-claude/
 │   ├── `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
 │   ├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
-│   ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
-│   ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
+│   ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+│   ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 │   ├── `subagentstop-codex-enforce.py` - Activation logic:
 │   ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).

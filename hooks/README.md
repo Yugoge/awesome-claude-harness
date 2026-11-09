@@ -48,7 +48,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
 - `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 - `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
-- `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
+- `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
 - `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 - `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
@@ -63,8 +63,8 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 - `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 - `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
-- `pretool-layer-escalation-check.sh` - pretool-layer-escalation-check.sh
-- `pretool-layer-match-gate.sh` - pretool-layer-match-gate.sh
+- `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+- `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-obligation-gate.py` - WHY THIS HOOK EXISTS:
 - `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 - `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
@@ -74,7 +74,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
 - `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code
 - `pretool-spec-block-foreground-agent.py` - PreToolUse Hook: Block foreground Agent during an active /spec Interview
-- `pretool-subagent-code-block.py` - A subagent (payload agent_id) writing a code file (CODE_PATTERN) whose role
+- `pretool-subagent-code-block.py` - It printed a stderr warning when a subagent whose role does not resolve to dev
 - `pretool-subagent-enforce.py` - PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement (G1)
 - `pretool-todo-validate.py` - PreToolUse Hook: Validate TodoWrite input BEFORE execution
 - `pretool-tool-policy.py` - tool-policy.v1.json for all subagents
@@ -82,7 +82,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 - `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
 - `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
-- `pretool-write-guard.sh` - PreToolUse Hook - Block Write tool from overwriting existing files
+- `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 - `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 - `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 - `pull.sh` - pull.sh - Executable version of /pull command
@@ -106,8 +106,8 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
 - `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
 - `stop.sh` - stop.sh - wrapper for /stop slash command
-- `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
-- `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
+- `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+- `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 - `subagentstop-codex-enforce.py` - Activation logic:
 - `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
