@@ -539,6 +539,18 @@ def _bare_pick(root, since: float) -> str | None:
     return branch or _git(root, "symbolic-ref", "--short", "-q", "HEAD")
 
 
+def _session_worktree(root, payload):
+    """The worktree the session works in: its cwd when that is a worktree of the project's repository
+    (/dev-overnight --worktree's Step 1 cds into the linked one, where /merge's Step 0 picks and merge.sh
+    merges; the project dir stays the main checkout), else the project dir."""
+    def common(path):
+        found = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        return os.path.realpath(found) if found else None
+    top = _git(payload["cwd"], "rev-parse", "--show-toplevel") if payload.get("cwd") else None
+    shared = common(top) if top else None
+    return top if shared and shared == common(root) else root
+
+
 def p_merge(span, root, payload) -> list[str]:
     """/merge [--no-commit] [<ref>] [INFERRED; A6]. Source: the typed ref, else
     the newest merge-analyst grant this session wrote here since the opener
@@ -548,8 +560,10 @@ def p_merge(span, root, payload) -> list[str]:
     MERGE_HEAD (--no-commit, while present) is a value of the source; else a merge
     entry in DEFAULT_BRANCH's reflog after the opener has one as its merged parent
     (a fast-forward: as its new value), or the source's value at the opener is in
-    DEFAULT_BRANCH ("Already up to date"); no source: no merge entry after it."""
+    DEFAULT_BRANCH ("Already up to date"); no source: no merge entry after it. All read in the
+    session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup."""
     _repository(root)
+    root = _session_worktree(root, payload)
     args = span.args.split()
     refs = [a for a in args if not a.startswith("-")]
     since = _since(span)

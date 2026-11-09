@@ -792,6 +792,112 @@ def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(en
     assert run(env) == (0, "")
 
 
+@pytest.fixture(params=["main", "worktree"])
+def linked(env, monkeypatch, request):
+    """/dev-overnight --worktree's shape: the main checkout (a repository with a local bare origin)
+    and the linked worktree the session's cwd is in (Step 1 cds into it), on Step 0's pick, the
+    overnight-state record's worktree_branch, which merge.sh's cleanup removes. The session's project
+    dir is the main checkout (the CLI's) or the worktree itself. The main checkout is on a working
+    branch: merge.sh checks the default branch out in the linked worktree, which git refuses while
+    another worktree has it. Branch ``other`` is no pick."""
+    GIT_CLOCK[0] = T0.timestamp() - 600
+    origin, main, tree = env.tmp / "origin.git", env.project, env.tmp / "overnight-x"
+    git(env.tmp, "init", "-q", "--bare", "-b", "master", str(origin))
+    git(main, "init", "-q", "-b", "master")
+    git(main, "config", "core.logAllRefUpdates", "true")
+    git(main, "remote", "add", "origin", str(origin))
+    commit(main, "base.txt")
+    git(main, "push", "-q", "-u", "origin", "master")
+    git(main, "remote", "set-head", "origin", "master")
+    branches(main, "other")
+    git(main, "checkout", "-q", "-b", "work")
+    git(main, "worktree", "add", "-q", "-b", "overnight-x", str(tree), "master")
+    commit(tree, "x.txt")
+    project = main if request.param == "main" else tree
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    (project / ".claude").mkdir(exist_ok=True)
+    (project / ".claude" / f"overnight-state-{SID}.json").write_text(json.dumps({"worktree_branch": "overnight-x"}))
+    env.payload["cwd"] = str(tree)
+    return tree
+
+
+def merge_sh(tree, *args):
+    """/merge Step 5 in the linked worktree: hooks/merge.sh itself, at git's clock."""
+    GIT_CLOCK[0] += 1
+    environment = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+                   "GIT_AUTHOR_DATE": f"@{int(GIT_CLOCK[0])} +0000",
+                   "GIT_COMMITTER_DATE": f"@{int(GIT_CLOCK[0])} +0000"}
+    done = subprocess.run(["bash", str(HOOKS / "merge.sh"), *args], cwd=str(tree), capture_output=True, text=True,
+                          env=environment, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout
+
+
+@pytest.mark.parametrize("grant", [False, True])
+@pytest.mark.parametrize("diverged", [False, True])
+def test_a6_bare_merge_from_a_linked_worktree_holds_once_steps_pick_merged_also_after_cleanup(
+        env, linked, diverged, grant):
+    """Bare /merge in the linked worktree: unmerged 2; merged by merge.sh (a fast-forward, or a merge
+    commit when the default branch moved) and cleaned up (branch, its reflog and the overnight-state
+    record gone) 0; with or without the merge-analyst's grant of Step 2, which names the pick too."""
+    if diverged:
+        git(env.project, "checkout", "-q", "master")
+        commit(env.project, "m.txt")
+        git(env.project, "checkout", "-q", "work")
+    pick = git(linked, "rev-parse", "HEAD")
+    opener_now(env, "merge")
+    code, text = run(env)
+    assert code == 2 and "no merge of overnight-x" in text  # unmerged
+    if grant:
+        write_grant(env, linked, "overnight-x")
+    merge_sh(linked, "overnight-x")
+    assert git(linked, "rev-parse", "--verify", "-q", "refs/heads/overnight-x", check=False) == ""
+    assert not list(Path(os.environ["CLAUDE_PROJECT_DIR"], ".claude").glob("overnight-state-*.json"))
+    assert run(env) == (0, "")
+    assert pick in git(linked, "rev-list", "--parents", "-n", "1", "master").split()
+
+
+def test_a6_bare_merge_from_a_linked_worktree_of_another_branch_than_steps_pick_blocks(env, linked):
+    """Step 0's pick is the branch the worktree's HEAD was on at the opener: git's own record of it
+    is the worktree's HEAD reflog (its value at the opener and the checkout entry that left it)."""
+    opener_now(env, "merge")
+    merge_sh(linked, "other")
+    code, text = run(env)
+    assert code == 2 and "no merge of overnight-x into refs/heads/master" in text
+    assert "checkout: moving from overnight-x to master" in git(linked, "reflog", "show", "--format=%gs", "HEAD")
+    merge_sh(linked, "overnight-x")  # the pick merged too: the gap closes
+    assert run(env) == (0, "")
+
+
+def test_a6_bare_merge_no_commit_from_a_linked_worktree_needs_merge_head_at_steps_pick(env, linked):
+    opener_now(env, "merge", "--no-commit")
+    merge_sh(linked, "--no-commit", "other")
+    code, text = run(env)
+    assert code == 2 and "MERGE_HEAD is" in text
+    git(linked, "merge", "--abort")
+    merge_sh(linked, "--no-commit", "overnight-x")
+    assert run(env) == (0, "")
+
+
+def test_a6_a_cwd_in_another_repository_does_not_stand_in_for_the_project(env, repo):
+    """Only a worktree of the project's own repository is read in its place: a cwd in a clone of it,
+    where Step 0's pick merged, leaves the project's unmerged pick the gap."""
+    branches(repo, "feature")
+    git(repo, "checkout", "-q", "feature")
+    elsewhere = env.tmp / "elsewhere"
+    git(env.tmp, "clone", "-q", "-b", "feature", str(repo), str(elsewhere))
+    git(elsewhere, "branch", "-q", "master", "origin/master")
+    env.payload["cwd"] = str(elsewhere)
+    opener_now(env, "merge")
+    git(elsewhere, "checkout", "-q", "master")
+    git(elsewhere, "merge", "-q", "--no-ff", "--no-edit", "feature")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text
+    env.payload["cwd"] = str(repo / "docs")  # the project's own checkout, from a subdirectory
+    assert run(env)[0] == 2
+
+
 def write_token(repo):
     """The push-gate token for the branch at HEAD, by its one writer, as /commit's changelog-analyst runs it."""
     writer = gate._script("scripts/write-push-gate-token.py")
