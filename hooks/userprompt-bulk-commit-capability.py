@@ -85,7 +85,6 @@ def main() -> int:
             print(
                 "[bulk-commit-capability] /commit --bulk seen but no session_id; "
                 "deferring to /commit Step 5 fallback",
-                file=sys.stderr,
             )
             return 0
         try:
@@ -93,11 +92,10 @@ def main() -> int:
         except SystemExit:
             pass
         except Exception as exc:  # noqa: BLE001 - hook must never block
-            print(f"[bulk-commit-capability] mint skipped: {exc}", file=sys.stderr)
+            print(f"[bulk-commit-capability] mint skipped: {exc}")
             return 0
         print(
             f"[bulk-commit-capability] bulk-commit capability minted for session {sid}",
-            file=sys.stderr,
         )
         return 0
     except Exception:
