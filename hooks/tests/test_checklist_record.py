@@ -118,7 +118,9 @@ def test_gate_holds_tools_until_an_ok_todowrite_and_writes_nothing(s):
     assert held.returncode == 2 and "CHECKLIST NOT STARTED" in held.stderr
     pre, post = s.todo(_frontier(0))
     assert pre.returncode == 0 and all(p.returncode == 0 for p in post)
-    assert "WORKFLOW PROGRESS (/dev)" in post[0].stdout
+    progress = json.loads(post[0].stdout)["hookSpecificOutput"]  # the model's channel at PostToolUse
+    assert progress["hookEventName"] == "PostToolUse"
+    assert progress["additionalContext"].startswith("WORKFLOW PROGRESS (/dev)")
     assert s.gate().returncode == 0
     assert list((s.project / ".claude").iterdir()) == []
     assert not (s.home / ".claude").exists()
