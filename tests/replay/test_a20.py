@@ -126,3 +126,17 @@ def test_a20_rerun_without_askuserquestion_completes_with_the_assumption_recorde
     assert not r.blocks and not r.hook_errors and r.reached(), r.explain()
     stops = [ev for ev in r.hook_events() if ev.get("event") == "Stop"]
     assert len(stops) == 1, [ev.get("label") for ev in stops]
+
+
+CLOSE = next(s for s in suite.COMPLIANT if s.name == "/close after /dev")
+
+
+@pytest.mark.replay(_key(CLOSE, (("rating", "none"),)), CLOSE.cost)
+def test_a20_rerun_without_askuserquestion_close_rating_holds_no_stop(replays):
+    """/close after /dev in a session that offers no AskUserQuestion: Step 3b's rating question cannot
+    be asked (no call); the close still completes with no blocked Stop (A20's rerun; PLAN-v2's residual:
+    there the close rating never blocks)."""
+    r = replays.get(_key(CLOSE, (("rating", "none"),)))
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not [ev for ev in r.hook_events() if ev.get("tool") == "AskUserQuestion"], r.explain()
+    assert not r.blocks and not r.hook_errors and r.reached(), r.explain()

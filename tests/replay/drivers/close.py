@@ -79,8 +79,9 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|afk|decline|free[,...]   Step 3b's answer, per landed task in order (default label:
-                          the dialog's first option)
+  rating=label|4|skip|afk|decline|free|none[,...]   Step 3b's answer, per landed task in order (default
+                          label: the dialog's first option); none: the session offers no AskUserQuestion
+                          (P5 A20's rerun without it), so the main agent makes no call and says why
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
 
@@ -572,7 +573,7 @@ PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "f
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
 # The rating answers the owner may give (Step 3b's question), as the dialog returns them.
-RATINGS = ("label", "4", "skip", "afk", "decline", "free")
+RATINGS = ("label", "4", "skip", "afk", "decline", "free", "none")
 
 
 class CloseRun:
@@ -1288,6 +1289,15 @@ class CloseRun:
         tin = self.rating_input()
         q = tin["questions"][0]
         labels = [opt["label"] for opt in q["options"]]
+        if answer == "none":
+            self.o.s.say(f"Step 3b: AskUserQuestion is not available in this session; the rating question for "
+                         f"{self.tid} cannot be asked.")
+            self.asked.append((self.tid, answer))
+            fact(self.rp, "close Step 3b", {"task": "<task>", "header": q.get("header"), "labels": labels,
+                                            "multiSelect": q.get("multiSelect"),
+                                            "source": (tin.get("metadata") or {}).get("source"),
+                                            "answer": answer, "ok": False, "blocked": False, "asked": False})
+            return
 
         def perform():
             if answer == "decline":
