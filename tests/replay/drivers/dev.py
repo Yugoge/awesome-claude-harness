@@ -496,9 +496,18 @@ class DevCycle:
             o.values["spec_path"] = "" if v == "none" else v
         # Every Bash block of Step 1 except the fallback the text keeps for a missing hook output.
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output is absent|not in your context")
-        o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
-                          capture=("spec_path", "SPEC_ID", "CP_STATE_DIR"))
+        calls = o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
+                                  capture=("spec_path", "SPEC_ID", "CP_STATE_DIR"))
         self.spec_id = o.values.get("SPEC_ID", "")
+        if not self.spec_id and o.values.get("spec_path"):  # "Its stdout JSON carries artifact_id (SPEC_ID below)"
+            for c in calls:
+                try:
+                    self.spec_id = json.loads((c.response or {}).get("stdout") or "{}").get("artifact_id") or ""
+                except ValueError:
+                    continue
+                if self.spec_id:
+                    o.values["SPEC_ID"] = self.spec_id
+                    break
         if not o.values.get("spec_path"):
             o.s.say("auto-detect skipped: newest spec predates this session")
 
@@ -583,6 +592,9 @@ class DevCycle:
             self._dispatch(o.template("Step 4", anchor="Mode: intake"), act, "Step 4 Agent(ba) intake",
                            subagent_type=self.ba_type)
             rel = f"docs/dev/requirement-round-{tid}-r1.json"
+            asked = {q["question"] for q in self.load(rel)["questions"]} if self.variant == "spec-round" else set()
+            if self.variant == "spec-round" and (not asked or asked & self.spec_answered):
+                raise AssertionError(f"/dev after /spec asked {sorted(asked)}; /spec answered {sorted(self.spec_answered)}")
         else:
             for angle in _round.ANGLES:
                 self.angle = angle
@@ -975,10 +987,33 @@ class DevCycle:
                          early_stops=getattr(self, "early_stops", []))
 
     # ------------------------------------------------------------ the whole cycle
+    SPEC_ID = "20261109-090000"
+
+    def seed_spec(self) -> str:
+        """spec-round (A6): what an earlier /spec left, as its writers wrote it: the spec, its panel round and
+        the owner's answers to two of its questions. Returns the spec's absolute path."""
+        project, sid = self.o.project, self.SPEC_ID
+        doc = _round.with_paths(_round.round1(sid, panel=_round.panel()), sid)
+        answers = {q["question"]: q["options"][0]["label"] for q in doc["questions"][:2]}
+        files = {f"docs/dev/specs/spec-{sid}.md": f"# Spec {sid}\n\n## Section 5: User's Acceptance Criterion\n\n"
+                                                  f"{self.sc.requirement}\n",
+                 f"docs/dev/ba-panel-{sid}-r1.json": json.dumps(doc, indent=2) + "\n",
+                 f"docs/dev/requirement-answers-{sid}-r1.json": json.dumps(
+                     {"task_id": sid, "round": 1, "answers": answers}, indent=2) + "\n"}
+        with self.rp.acting("driver"):
+            for rel, text in files.items():
+                os.makedirs(os.path.dirname(os.path.join(project, rel)), exist_ok=True)
+                with open(os.path.join(project, rel), "w") as fh:
+                    fh.write(text)
+        self.spec_answered = set(answers)
+        return os.path.join(project, f"docs/dev/specs/spec-{sid}.md")
+
     def run(self) -> None:
         o = self.o
-        self.start()
+        self.start(f"--spec {self.seed_spec()} {self.sc.requirement}" if self.variant == "spec-round" else None)
         self.step1()
+        if self.variant == "spec-round" and not self.spec_id:
+            raise AssertionError("/dev --spec resolved no spec id")
         self.to(2); self.step2()
         self.to(3); self.step3()
         self.to(4); self.step4()
@@ -1240,7 +1275,7 @@ class FanoutCycle(DevCycle):
 
 VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail", "formatter")
 # P13-1 (D28, D29, D32): the requirement round's variants; not artifact-check jobs (the round runs in every variant).
-ROUND_VARIANTS = ("round", "round-unasked", "round-paraphrase", "round-broken", "round-skip", "round-decline",
+ROUND_VARIANTS = ("spec-round", "round", "round-unasked", "round-paraphrase", "round-broken", "round-skip", "round-decline",
                   "round-afk", "devquestion", "round-many", "text-question", "panel-disagree", "panel-refuted")
 
 

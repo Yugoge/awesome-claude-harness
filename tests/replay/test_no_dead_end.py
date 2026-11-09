@@ -46,6 +46,7 @@ CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
 CASES["qa-report"] = suite.Scenario("dead end: qa-report", "_deadend", (("case", "qa-report"),), ("dev",), 100)
+CASES["ask-first"] = suite.Scenario("dead end: ask-first", "_deadend", (("case", "ask-first"),), ("dev",), 100)
 CASES["spec-foreground"] = suite.Scenario("dead end: spec-foreground", "_deadend", (("case", "spec-foreground"),),
                                           ("spec",), 110)
 # Its 20-minute window, waited for before Step 19's TIME CHECK, and the closeout (drivers/_deadend.py).
