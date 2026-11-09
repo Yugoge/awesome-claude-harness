@@ -1,5 +1,5 @@
 """The score log's one module (hooks/lib/score_log.py): its reader, its one writer, the score function and the
-two renderers; and the reader's two callers.
+three renderers (dispatch line, owner summary, /rating view); and the reader's two callers.
 
 scripts/score-update.sh and scripts/score-inject.sh both call read_lines (through the scripts/lib/score_log.py
 re-export) in place of a parse of their own and keep their own exit code for a refused log: 2 and 1.
