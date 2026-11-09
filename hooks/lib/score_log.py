@@ -66,6 +66,11 @@ def points_for(event: str, role: str) -> int | None:
     return POINTS[event].get(role, POINTS[event].get("*"))
 
 
+def identity(role, pipeline) -> str | None:
+    """The scored identity of a dispatch: its role; qa in the close pipeline is "close-qa", scored apart from lane qa."""
+    return "close-qa" if (role, pipeline) == ("qa", "close") else role or None
+
+
 def log_path() -> Path:
     """The score log: <CLAUDE_CONFIG_DIR when set and non-empty, else ~/.claude>/logs/lifecycle.jsonl. Creates nothing."""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "lifecycle.jsonl"

@@ -484,6 +484,15 @@ def test_project_key_is_the_hash_of_the_resolved_git_common_directory(tmp_path: 
     assert str(tmp_path) not in key
 
 
+@pytest.mark.parametrize(
+    ("role", "pipeline", "expected"),
+    [("qa", "close", "close-qa"), ("qa", "dev", "qa"), ("qa", None, "qa"), ("dev", "close", "dev"), ("ba", "dev", "ba"),
+     ("main", "close", "main"), ("close-qa", "close", "close-qa"), ("", "close", None), (None, "close", None), (None, None, None)],
+)
+def test_the_scored_identity_is_the_role_except_for_the_close_pipelines_qa(role, pipeline, expected) -> None:
+    assert score_log.identity(role, pipeline) == expected
+
+
 def test_log_path_follows_the_config_directory_variable_and_creates_nothing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
