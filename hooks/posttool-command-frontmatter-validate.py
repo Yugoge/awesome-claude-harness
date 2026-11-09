@@ -9,7 +9,9 @@ Checks format only:
 
 Hook type: PostToolUse (Write|Edit|NotebookEdit|MultiEdit matcher): it runs
 after the write, so an invalid file stays written.
-Exit codes: 0 = valid or not a command file, 1 = invalid (errors on stderr)
+Exit codes: 0 = valid or not a command file, 2 = invalid: the errors on stderr go to
+the model, which wrote the file and can fix it (a PostToolUse exit 2 cannot undo the
+write; any other non-zero status would show them to the user alone).
 """
 
 import json
@@ -78,7 +80,7 @@ def main():
     for e in errors:
         print(f'  - {e}', file=sys.stderr)
     print(f'\nCommand files must start with "---", have a closing "---", and include a "description" field.', file=sys.stderr)
-    sys.exit(1)
+    sys.exit(2)
 
 
 if __name__ == '__main__':
