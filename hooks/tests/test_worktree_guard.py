@@ -13,7 +13,11 @@ These tests pin the fix:
   * the cleanup it recommends passes every PreToolUse hook settings.json
     registers for Bash, really removes the worktree, and leaves the guard quiet;
   * the lesson, "a stale worktree causes merge conflicts", still reaches Claude
-    (PreToolUse additionalContext) and the user (systemMessage) on every call.
+    (PreToolUse additionalContext) and the user (systemMessage), whatever the
+    tool;
+  * it does not repeat on every call: the alert prints once for a stale set,
+    then stays silent until the set changes or the cache is older than
+    CACHE_TTL (about 1.2 KB of context per tool call before).
 
 Each test builds its own repository under tmp_path and its own guard cache
 (CLAUDE_STATE_DIR), and drives the real hook process the way Claude Code does:
@@ -129,13 +133,90 @@ def _tool_calls(repo, wt):
 def test_no_stale_state_blocks_any_tool(tmp_path, state):
     repo, worktrees = _scratch_repo(tmp_path, state)
     env = _env(tmp_path)
+    cache = tmp_path / "state" / "worktree-guard-cache"
     for tool, tool_input in _tool_calls(repo, worktrees[0]):
+        # The first call for a stale set carries the lesson, whatever the tool.
+        cache.unlink(missing_ok=True)
         proc = _guard(repo, env, tool, tool_input)
         assert proc.returncode == 0, (state, tool, proc.returncode, proc.stderr)
-        # The warning is on every call, not only the first: the cache holds the
-        # stale count and re-checks rather than going quiet.
         context, _ = _hook_output(proc)
         assert LESSON in context.lower(), (state, tool)
+        # The next call in the same state still never blocks, and is silent.
+        proc = _guard(repo, env, tool, tool_input)
+        assert (proc.returncode, proc.stdout) == (0, ""), (state, tool, proc.stderr)
+
+
+def _age_cache(tmp_path, seconds):
+    cache = tmp_path / "state" / "worktree-guard-cache"
+    old = cache.stat().st_mtime - seconds
+    os.utime(cache, (old, old))
+
+
+def test_alert_prints_once_per_stale_set_and_ttl(tmp_path):
+    """WG-1: the alert does not repeat on every tool call while the set stays."""
+    repo, (wt,) = _scratch_repo(tmp_path, "clean")
+    env = _env(tmp_path)
+    first = _guard(repo, env)
+    assert first.returncode == 0
+    context, _ = _hook_output(first)
+    assert LESSON in context.lower() and "1 agent worktree(s) behind master" in context
+    # Same stale set, cache fresh: silent.
+    second = _guard(repo, env, "Read", {"file_path": str(repo / "f")})
+    assert (second.returncode, second.stdout) == (0, "")
+    # The set changes (a second stale worktree): the alert prints again.
+    _git(repo, "worktree", "add", "-q", "-b", "worktree-agent-a2",
+         str(repo / ".claude/worktrees/agent-a2"), "master~1")
+    third = _guard(repo, env)
+    context, _ = _hook_output(third)
+    assert "2 agent worktree(s) behind master" in context and "agent-a2" in context
+    assert (_guard(repo, env).returncode, _guard(repo, env).stdout) == (0, "")
+    # A line of the set changes (master moves on: two commits behind): again.
+    (repo / "f").write_text("one\ntwo\nthree\n")
+    _git(repo, "commit", "-qam", "three")
+    context, _ = _hook_output(_guard(repo, env))
+    assert "agent-a1: 2 commits behind master" in context
+    assert _guard(repo, env).stdout == ""
+    # The cache is older than CACHE_TTL (60 s): the same set prints again.
+    _age_cache(tmp_path, 61)
+    context, _ = _hook_output(_guard(repo, env))
+    assert LESSON in context.lower()
+    assert _guard(repo, env).stdout == ""
+    # Silent calls do not refresh the cache, so the alert comes back on time.
+    _age_cache(tmp_path, 45)
+    assert _guard(repo, env).stdout == ""
+    _age_cache(tmp_path, 20)
+    context, _ = _hook_output(_guard(repo, env))
+    assert LESSON in context.lower()
+    # Clean state: nothing, on the first call and the next.
+    _git(repo, "worktree", "remove", str(wt))
+    _git(repo, "worktree", "remove", str(repo / ".claude/worktrees/agent-a2"))
+    for _ in range(2):
+        proc = _guard(repo, env)
+        assert (proc.returncode, proc.stdout) == (0, "")
+    # Stale again after the clean state: the "0" cache does not mute it for long.
+    _git(repo, "worktree", "add", "-q", "-b", "worktree-agent-a3",
+         str(repo / ".claude/worktrees/agent-a3"), "master~1")
+    _age_cache(tmp_path, 61)
+    context, _ = _hook_output(_guard(repo, env))
+    assert "agent-a3" in context
+
+
+def test_cache_with_a_future_mtime_does_not_mute_the_alert(tmp_path):
+    repo, _ = _scratch_repo(tmp_path, "clean")
+    env = _env(tmp_path)
+    _hook_output(_guard(repo, env))
+    _age_cache(tmp_path, -3600)
+    context, _ = _hook_output(_guard(repo, env))
+    assert LESSON in context.lower()
+
+
+def test_old_cache_format_alerts(tmp_path):
+    """A cache a previous version wrote (the bare count) never mutes the alert."""
+    repo, _ = _scratch_repo(tmp_path, "clean")
+    env = _env(tmp_path)
+    (tmp_path / "state" / "worktree-guard-cache").write_text("1\n")
+    context, _ = _hook_output(_guard(repo, env))
+    assert LESSON in context.lower()
 
 
 @pytest.mark.parametrize("state", STATES)
