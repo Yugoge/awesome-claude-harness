@@ -68,12 +68,12 @@ def main() -> int:
     try:
         sys.path.insert(0, HOOKS_DIR)
         from lib.rule_runner import run_rule
-        from lib.write_gate import RULES, combine
+        from lib.write_gate import LOADERS, RULES, combine
         tool = _tool(raw)
         rules = [rule for rule in RULES if rule.applies(tool)]
         # A rule's own failure is in its RuleRun; an exception here is the runner's, and
         # would otherwise end the gate with exit 1, which the CLI lets through.
-        results = [(rule, run_rule(rule.file, raw, rule.budget)) for rule in rules]
+        results = [(rule, run_rule(rule.file, raw, rule.budget, LOADERS.get(rule.name))) for rule in rules]
     except Exception:
         return _fallback(raw)
     return _emit(combine(results))

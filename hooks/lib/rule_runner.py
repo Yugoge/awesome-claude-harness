@@ -65,8 +65,11 @@ def _on_overrun(signum, frame):  # pragma: no cover - timing dependent
         raise RuleOverrun()
 
 
-def run_rule(path: str, payload: bytes, budget: float) -> RuleRun:
-    """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds."""
+def run_rule(path: str, payload: bytes, budget: float, load=None) -> RuleRun:
+    """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds.
+
+    ``load``, when given, is the zero-argument call that runs the rule file as ``__main__`` (its
+    owner states the file there, as a literal); by default ``runpy.run_path(path)``."""
     saved_env = dict(os.environ)
     saved_cwd = os.getcwd()
     saved_argv, saved_path = list(sys.argv), list(sys.path)
@@ -97,7 +100,10 @@ def run_rule(path: str, payload: bytes, budget: float) -> RuleRun:
         _ARMED[0] = True
         watchdog.start()
         try:
-            runpy.run_path(path, run_name="__main__")
+            if load is not None:
+                load()
+            else:
+                runpy.run_path(path, run_name="__main__")
         except SystemExit as stop:
             _ARMED[0] = False
             code, extra = _status(stop.code)

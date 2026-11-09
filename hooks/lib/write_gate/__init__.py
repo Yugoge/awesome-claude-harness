@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 from dataclasses import dataclass
 
 from . import overwrite as _overwrite
@@ -82,6 +83,23 @@ RULES: tuple[Rule, ...] = (
          ("the project's .claude/.hook-refactor-allow sentinel, made by hand",
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
 )
+
+
+# How the gate loads each rule: its file, run as __main__, named here as a literal. The table's
+# paths say which file a rule is; these calls are the loads, in the form the artifact check reads
+# (tests/artifact_graph: a file loaded by path is a library, and its decisions take the position
+# of the hook that loads it). Each must name its rule's file: test_write_gate.py checks it.
+LOADERS = {
+    "bash-views": lambda: runpy.run_path(os.path.join(HOOKS_DIR, "pretool-bash-views-guard.py"), run_name="__main__"),
+    "overnight-boundary": lambda: runpy.run_path(os.path.join(HOOKS_DIR, "pretool-overnight-hook-guard.py"),
+                                                 run_name="__main__"),
+    "tool-policy": lambda: runpy.run_path(os.path.join(HOOKS_DIR, "pretool-tool-policy.py"), run_name="__main__"),
+    "cp-state": lambda: runpy.run_path(os.path.join(HOOKS_DIR, "pretool-cp-state-write-guard.py"), run_name="__main__"),
+    "overwrite": lambda: runpy.run_path(os.path.join(HOOKS_DIR, "lib", "write_gate", "overwrite.py"),
+                                        run_name="__main__"),
+    "claude-config": lambda: runpy.run_path(os.path.join(HOOKS_DIR, "pretool-claude-config-guard.py"),
+                                            run_name="__main__"),
+}
 
 
 @dataclass

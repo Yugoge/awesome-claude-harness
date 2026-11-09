@@ -453,3 +453,16 @@ def test_a_runner_fault_falls_back_and_is_never_an_allow(lab):
                              env=lab.env(), cwd=lab.proj, timeout=120)
         assert (got.returncode, got.stdout, got.stderr) == expected, raw
     assert expected[0] == 0 and lab.run(write_gate_settings.GATE_COMMAND, refused)[0] == 2
+
+
+def test_each_rule_is_loaded_by_its_own_file(monkeypatch):
+    """The gate loads each rule through LOADERS, a literal path per rule (the form the artifact check
+    reads as a load); each must name exactly the file its table entry names."""
+    import runpy
+    seen = []
+    monkeypatch.setattr(runpy, "run_path", lambda path, run_name=None: seen.append((path, run_name)))
+    assert set(write_gate.LOADERS) == {r.name for r in write_gate.RULES}
+    for rule in write_gate.RULES:
+        seen.clear()
+        write_gate.LOADERS[rule.name]()
+        assert seen == [(rule.file, "__main__")], rule.name
