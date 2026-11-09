@@ -410,3 +410,21 @@ def test_the_fallback_answers_as_the_gate(lab, monkeypatch):
         got = subprocess.run([sys.executable, "-c", probe], input=raw, capture_output=True, text=True,
                              env=lab.env(), cwd=lab.proj, timeout=120)
         assert (got.returncode, got.stdout, got.stderr) == expected, raw
+
+
+def test_l4s_whole_registration_change():
+    """The registration change L4 asks the integration lane for (hooks/tests/write_gate_settings.py)."""
+    base = _settings()
+    s = write_gate_settings.l4_settings(base)
+    regs = [(event, g.get("matcher"), h["command"]) for event, groups in s["hooks"].items()
+            for g in groups for h in g["hooks"]]
+    gone = write_gate_settings.REPLACED + write_gate_settings.ANTI_LOOP + write_gate_settings.STUBS
+    assert not [r for r in regs if write_gate_settings._names(r[2], gone)]
+    dev_loop = [(e, m) for e, m, c in regs if c == write_gate_settings.DEV_LOOP_COMMAND]
+    assert dev_loop == [("PreToolUse", "Agent"), ("PostToolUse", "Agent")]
+    assert [m for e, m, c in regs if c.rstrip('"').endswith("/posttool-git-warn.sh")] == ["Bash"]
+    before = sum(len(g["hooks"]) for groups in base["hooks"].values() for g in groups)
+    assert len(regs) == before - 7 + 1 - 5 + 2 - 3
+    for _, _, command in regs:  # every registered file exists
+        path = command.split('$HOME/.claude}/')[-1].rstrip('"')
+        assert (ROOT / path).is_file(), command
