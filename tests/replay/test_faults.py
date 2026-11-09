@@ -21,6 +21,10 @@ faults.json; terminals.json), never from a list kept here:
   difference, and the dev's rewrite passes its next stop. F3a, a dev that wrote a harness hook file
   Python's compiler rejects (F3.a): G2 refuses its stop naming the file and the compiler's message,
   and the dev's rewrite of that file passes its next stop.
+* P1's and P2's disobedient producers at G2 (P1 armed replay V3-V5; P6 A13: still stopped after P6's
+  promotions): V3, a dev that writes no report, is F1; V4, a schema-invalid dev report, is F2; V5, a
+  lane's BA-QA report carrying another task_id than its obligation's identity: G2 refuses the QA's own
+  stop naming the report and `identity_mismatch`, and the QA's rewrite passes its next stop.
 * A grant claimed by the wrong role (P6 A8; F12, F12w): in /commit, after Step 5 minted the commit
   grant, the pre-commit QA spends it with a `git commit` of its own (F12) or Writes a file in the
   push-analyst's grant directory (F12w). The guard refuses that call on the QA's own PreToolUse,
@@ -70,6 +74,7 @@ from tests.replay import recovery, routing, suite
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 L1_DEV = "agent:dev Write docs/dev/dev-report-*-l1.json"
 L2_QA = "agent:qa Write docs/dev/qa-report-*-l2.json"
+L1_BA_QA = "agent:qa Write docs/dev/ba-qa-report-*-l1.json"
 L1_DEV_DISPATCH = "Step 10 [[]l1] Agent(dev)"
 L1_QA_DISPATCH = "Step 13 [[]l1] Agent(qa)"
 
@@ -87,6 +92,7 @@ FAULTS = {
     "F10": f"invalid@{L1_DEV}=+dev.files_modified:README.md",
     "F11": f"invalid@{L1_DEV}=dev.files_modified:[]",
     "F3a": "harness@agent:dev Edit toy/__init__.py=hooks/p6-f3a-probe.py",
+    "V5": f"invalid@{L1_BA_QA}=task_id:20250101-000000",
 }
 
 
@@ -100,6 +106,7 @@ CHECK = {
     "F10": r"declared but not written by this dev: README\.md",
     "F11": r"written but not declared: [^\n]*toy/__init__\.py",
     "F3a": r"harness_syntax_error",
+    "V5": r"identity_mismatch\n\s*identity\.task_id: obligation declares '[^']+', file has '20250101-000000'",
 }
 
 
