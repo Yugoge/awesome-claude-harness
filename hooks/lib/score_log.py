@@ -194,9 +194,9 @@ def render_owner_summary(rows, project, as_of, task_id) -> str:
     miss = next((_why(r) for r, points in reversed(_mine(live, worst, project, as_of)) if r["kind"] == "event" and points < 0), "")
     more = f", +{len(items) - 5} more" if len(items) > 5 else ""
     return "\n".join((
-        "Scores (this project): " + " | ".join(f"{_plain(n)[:20]} {s} {tier(s)} ({t:+d})" for n, (s, t) in stats.items()),
+        "Scores (this project): " + " | ".join(f"{_plain(n)[:24]} {s} {tier(s)} ({t:+d})" for n, (s, t) in stats.items()),
         (f"This cycle {_plain(task_id)}: " + (", ".join(items[:5]) or "no scored events"))[:200 - len(more)] + more,
-        f"Worst: {_plain(worst)[:20]} ({tier(stats[worst][0])}, {stats[worst][0]}); " + (f'last miss: "{miss}"' if miss else "no negative event"),
+        f"Worst: {_plain(worst)[:24]} ({tier(stats[worst][0])}, {stats[worst][0]}); " + (f'last miss: "{miss}"' if miss else "no negative event"),
     ))
 
 
