@@ -591,6 +591,16 @@ def test_the_cycle_line_shows_five_items_then_how_many_more_and_no_line_grows_wi
     assert "more" not in score_log.render_owner_summary(five, PROJECT, END, task)
 
 
+def test_identity_names_show_whole_up_to_24_characters_and_are_cut_beyond_in_the_scores_and_worst_lines() -> None:
+    task, names = "20261101-100000", ("cleanliness-inspector", "git-edge-case-analyst", "n" * 24, "m" * 25, "z" * 5000)
+    rows = [_event(-3 if name[0] == "z" else -1, name, task, _ts(n + 1), event="rerun_gap", key=str(n), why="x") for n, name in enumerate(names)]
+    lines = score_log.render_owner_summary(rows, PROJECT, END, task).split("\n")
+    for name in names:
+        assert f"{name[:24]} {49 if name[0] != 'z' else 47} Skilled Craftsman (" in lines[0]
+    assert "m" * 25 not in lines[0] and "z" * 25 not in lines[0] + lines[2]
+    assert lines[2].startswith(f"Worst: {'z' * 24} (")  # the longest name is the worst here, and is cut in this line too
+
+
 def test_the_trend_of_many_cycles_is_computed_in_one_pass() -> None:
     rows = [_event(1, ts=_ts(n), task=f"20261101-{n:06d}", key=str(n)) for n in range(20000)]
     started = time.monotonic()
