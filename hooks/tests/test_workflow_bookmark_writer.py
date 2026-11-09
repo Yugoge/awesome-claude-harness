@@ -1,11 +1,10 @@
 """The workflow bookmark has one writer (P1b goal 1, D24).
 
-<project>/.claude/workflow-<sid>.json had three producers: prompt-workflow.py
-(a command's start, and /dev's start), the Codex plan path of
-pretool-workflow-gate.py (its acknowledgement and its lock) and
-posttool-subagent-track.py (a subagent call recorded). All five writes now go
-through lib.todo_canonical.write_bookmark, and each keeps the bytes it wrote
-before. The writer replaces the file whole (a new file renamed over it), so a
+<project>/.claude/workflow-<sid>.json is written by prompt-workflow.py (a
+command's start, and /dev's start) and the Codex plan path of
+pretool-workflow-gate.py (its acknowledgement and its lock);
+posttool-subagent-track.py no longer writes it. Every write goes through
+lib.todo_canonical.write_bookmark, and each keeps the bytes it wrote before. The writer replaces the file whole (a new file renamed over it), so a
 handle opened on the old bookmark keeps reading the old bytes; four of the five
 writes used to rewrite the file in place.
 
@@ -59,8 +58,6 @@ def writes(monkeypatch):
         return writer(path, update, encoding)
 
     monkeypatch.setattr(TODO_CANONICAL, "write_bookmark", recorded)
-    # the tracker binds the name when it loads; the other two look it up at the write
-    monkeypatch.setattr(TRACKER, "write_bookmark", recorded, raising=False)
     return seen
 
 
@@ -273,29 +270,22 @@ def test_dev_start_counts_from_one_without_a_readable_generation(tmp_path, dev_s
 
 # ---------------------------------------------------------------- posttool-subagent-track.py
 
-def test_subagent_call_is_recorded_through_the_writer(tmp_path, writes):
+def test_the_subagent_tracker_writes_no_bookmark(tmp_path, monkeypatch, writes):
+    """A returned dispatch leaves the bookmark as it was: the tracker is no longer one
+    of its writers (Gate 4's evidence is the transcript's, or the Codex plan path's)."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     path = _bookmark(tmp_path)
-    before = {"command": "dev", "last_todos": [{"content": "ré"}], "subagent_calls": {"0": True}}
-    path.write_text(json.dumps(before))
-    held = _Held(path)
-
-    TRACKER._record_subagent_call_legacy(path, "2")
-
-    assert writes == [path]
-    held.assert_replaced()
-    expected = dict(before, subagent_calls={"0": True, "2": True})
-    assert path.read_bytes() == json.dumps(expected).encode("ascii")
-
-
-@pytest.mark.parametrize("previous", [None, "{not json", "[1, 2]", "null"])
-def test_subagent_call_without_a_bookmark_writes_nothing(tmp_path, previous):
-    path = _bookmark(tmp_path)
-    if previous is not None:
-        path.write_text(previous)
-    TRACKER._record_subagent_call_legacy(path, "0")
-    assert sorted(p.name for p in path.parent.iterdir()) == ([path.name] if previous is not None else [])
-    if previous is not None:
-        assert path.read_text() == previous
+    before = json.dumps({"command": "dev", "last_todos": [{"content": "Step 0 x", "status": "in_progress"}]})
+    path.write_text(before)
+    import subprocess
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS / "posttool-subagent-track.py")],
+        input=json.dumps({"session_id": "s1", "tool_name": "Agent",
+                          "tool_input": {"subagent_type": "dev", "prompt": "x"}}),
+        capture_output=True, text=True, env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp_path)))
+    assert proc.returncode == 0, proc.stderr
+    assert writes == [] and path.read_text() == before
+    assert not hasattr(TRACKER, "write_bookmark")
 
 
 # ---------------------------------------------------------------- pretool-workflow-gate.py (Codex)
