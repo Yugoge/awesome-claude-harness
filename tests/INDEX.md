@@ -91,6 +91,7 @@ tests/
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
 ├── `test_clean_orchestrator_merge.py` - clean-merge-reports reads the three inspector reports of the request the Step 3 context
+├── `test_close_rating_step_label.py` - P4-3: /close's rating step is "Step 4" (P4 R4, R7, R11, A3), not the "Step 3b" 376a9ae gave it.
 ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 ├── `test_commit_multi_repo_plan.py` - Python script
