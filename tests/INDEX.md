@@ -59,6 +59,8 @@ tests/
 │   ├── `roles.py` - Each helper returns an Act.work callable, work(sub, brief, player) -> content,
 │   ├── `sandbox.py` - One scratch root holds everything a replay touches:
 │   ├── `schemagen.py` - A simulated subagent writes each JSON artifact its obligation declares from the
+│   ├── `scorelog.py` - P13-2 B2: the score log of a replay, and the observer hook run once more on the final transcript.
+│   ├── `test_score_replay.py` - P13-2 B2: the score log after a replayed /dev cycle, and after a /close that follows it.
 │   └── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
 ├── score-inject-contract/
 │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with

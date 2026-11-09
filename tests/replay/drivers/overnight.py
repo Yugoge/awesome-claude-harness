@@ -1786,7 +1786,7 @@ class Night:
         extra = sections = None
         if verdict == "fail":  # the dev report's change leaves AC-01 unmet (drivers/dev.py's QA fail)
             extra = {"qa": {"failures": [sc.qa_failure], "overall_assessment": "AC-01 not met"}}
-            sections = {"6": sc.qa_failure["description"], "7": "name the offending argument in the TypeError message"}
+            sections = {"6": sc.qa_failure["issue"], "7": "name the offending argument in the TypeError message"}
         work = roles.qa(e2e={"status": "legitimately_skipped", "blocking_reason": sc.no_e2e},
                         guard_respell=o.respell, extra=extra)
 

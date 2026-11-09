@@ -55,6 +55,11 @@ Driver arguments (cli.py --arg K=V):
   stop_before=N        (singular cycle) the orchestrator ends its turn before Step N, claiming the
                        cycle done (P5 A20: stop_before=13, QA never dispatched); each such Stop is
                        recorded in the terminal's `early_stops`; the cycle then goes on with Step N
+  fail_at=<file>       (variants qa-fail, fanout-qa-fail) the failing QA's failure names <file> in its location
+                       instead of the file the lane's dev edits, so the re-dispatch fixes no file the failure
+                       names (the score log then holds a qa_fail row and no qa_catch row)
+  resweep=1            after the run, the score observer hook runs once more on the final transcript and the
+                       score log is kept (tests/replay/scorelog.py; any driver)
   lanes=N              fan-out lane count (2 or 3)
   lane_id=text|task    fan-out lane id base: `text` (default) the placeholder the adapter line
                        names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b, `<TASK_ID>-<lane-suffix>` on
@@ -183,8 +188,13 @@ TEST_BODY = ("import os, sys\nsys.path.insert(0, os.getcwd())\nfrom toy import a
 BA_QA_OBJECTION = {"dimension": "evidence_quality", "claim": "add has no input check",
                    "problem": "no reproduction is recorded",
                    "required_evidence": "the observed result of add('1', '2')"}
-QA_FAILURE = {"severity": "critical", "primary_cause": "dev_implementation",
-              "description": "TypeError carries no message naming the argument (AC-01)"}
+# One qa.failures[] entry as agents/qa.md spells it: severity, location (file:line), issue, recommendation and
+# the primary_cause that says whose fault it is. The location names the file the failing change is in, the file
+# the lane's dev edits again (hooks/lib/score_events.py reads it to tell whether a re-dispatch fixed the failure).
+QA_FAILURE = {"severity": "critical", "location": "toy/__init__.py:3",
+              "issue": "TypeError carries no message naming the argument (AC-01)",
+              "recommendation": "raise TypeError with a message naming the offending argument",
+              "primary_cause": "dev_implementation"}
 QUESTION = {"need": "Which exception should add raise for a non-number argument?",
             "options": [{"label": "TypeError", "description": "the Python convention for a wrong type"},
                         {"label": "ValueError", "description": "treat it as a bad value"}],
@@ -247,7 +257,7 @@ SCENARIO_SUB = Scenario(
     ba_summary="toy.util.sub gets an argument type check", dev_summary="toy.util.sub validates its arguments",
     objection={"dimension": "evidence_quality", "claim": "sub has no input check",
                "problem": "no reproduction is recorded", "required_evidence": "the observed result of sub(1, '2')"},
-    qa_failure=QA_FAILURE,
+    qa_failure=dict(QA_FAILURE, location="toy/util.py:3"),
     question={"need": "Which exception should sub raise for a non-number argument?",
               "options": QUESTION["options"], "default": "TypeError",
               "why": "the request names TypeError but a caller may expect ValueError"})
@@ -265,8 +275,9 @@ SCENARIO_README = Scenario(
     ba_summary="README.md gets a usage line for toy.add", dev_summary="README.md shows how to call toy.add",
     objection={"dimension": "evidence_quality", "claim": "README.md has no usage line",
                "problem": "no reading of the file is recorded", "required_evidence": "README.md's content"},
-    qa_failure={"severity": "critical", "primary_cause": "dev_implementation",
-                "description": "the usage line does not show add(2, 3) (AC-01)"},
+    qa_failure={"severity": "critical", "location": "README.md:3",
+                "issue": "the usage line does not show add(2, 3) (AC-01)",
+                "recommendation": "show add(2, 3) returning 5", "primary_cause": "dev_implementation"},
     question={"need": "Where should the usage line go?",
               "options": [{"label": "README.md", "description": "the file the request names"},
                           {"label": "docs/usage.md", "description": "a separate usage page"}],
@@ -692,7 +703,9 @@ class DevCycle:
         o, sc = self.o, self.sc
         extra = {}
         if verdict == "fail":
-            extra = {"qa": {"failures": [sc.qa_failure], "overall_assessment": "AC-01 not met",
+            at = self.rp.args.get("fail_at")  # the failure names another file than the one the lane's dev edits
+            extra = {"qa": {"failures": [dict(sc.qa_failure, location=f"{at}:1") if at else sc.qa_failure],
+                            "overall_assessment": "AC-01 not met",
                             "refined_context": {"must": "name the offending argument in the TypeError message"}}}
         work = roles.qa(e2e={"status": "legitimately_skipped", "blocking_reason": sc.no_e2e},
                         guard_respell=o.respell, extra=extra)
