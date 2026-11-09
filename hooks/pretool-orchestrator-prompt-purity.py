@@ -17,7 +17,8 @@ section "Hook Behavior Contract"):
       2. Shell-command tokens with option syntax (sed/jq/curl/git/...)
       3. Shell-syntax tokens ($(...) heredoc redirection chain pipe)
       4. Fenced bash blocks (```bash / ```sh / ```shell / ```zsh)
-  - On hit: emit a warning to stderr (warn-only — never blocks).
+  - On hit: tell the orchestrator (PreToolUse additionalContext JSON on stdout,
+    which the CLI adds to its context; warn-only — never blocks).
   - On miss: exit 0 silently.
   - Always exit 0 (this hook never hard-blocks).
   - Fail-open on parse errors / missing fields / unexpected exceptions
@@ -224,8 +225,9 @@ def _emit_block(category: str, snippet: str) -> None:
         f"  rule:     {RULE_DOC_POINTER}\n"
         f"  remedy:   {_GENERIC_REMEDY}\n"
     )
-    sys.stderr.write(msg)
-    sys.stderr.flush()
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                        "additionalContext": msg.rstrip()}}))
+    sys.stdout.flush()
 
 
 def _parse_payload():

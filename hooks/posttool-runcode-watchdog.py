@@ -5,8 +5,9 @@ PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes.
 Matcher: mcp__playwright__browser_run_code | mcp__paseo__browser_run_code
 
 Sends SIGTERM to the watchdog process started by the PreToolUse hook,
-preventing it from terminating JavaScript execution. Reports if a timeout
-already fired.
+preventing it from terminating JavaScript execution. If a timeout already
+fired, it tells the model (PostToolUse additionalContext JSON on stdout), which
+otherwise reads a cut-off result as the script's own.
 
 Exit codes:
   0: Always (post hooks should not block)
@@ -47,10 +48,9 @@ def _check_timeout_marker(pid_file: str):
     if not os.path.exists(marker_file):
         return
     timeout = os.environ.get("PLAYWRIGHT_RUNCODE_TIMEOUT", "30")
-    print(
-        f"browser_run_code was terminated after {timeout}s timeout",
-        file=sys.stderr,
-    )
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": f"browser_run_code was terminated after {timeout}s timeout"}}))
     try:
         os.unlink(marker_file)
     except OSError:

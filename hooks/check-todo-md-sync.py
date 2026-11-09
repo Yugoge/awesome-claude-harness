@@ -2,9 +2,10 @@
 """
 check-todo-md-sync.py — Session-start drift detector for todo scripts.
 
-For each ~/.claude/scripts/todo/<cmd>.py that has a matching
-~/.claude/commands/<cmd>.md, compare the ordered list of "Step N[x]"
-tokens between the two. Emit stderr warnings for:
+For each <harness home>/scripts/todo/<cmd>.py that has a matching
+<harness home>/commands/<cmd>.md, compare the ordered list of "Step N[x]"
+tokens between the two. Print a warning on stdout, which a SessionStart hook
+adds to the model's context (code.claude.com/docs/en/hooks), for:
   - tokens in .md but missing from .py (silent-dead-step bug)
   - tokens in .py but missing from .md (stale todo)
   - duplicate tokens present a different number of times on each side
@@ -24,9 +25,20 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-HOME = Path(os.path.expanduser("~"))
-TODO_DIR = HOME / ".claude" / "scripts" / "todo"
-COMMANDS_DIR = HOME / ".claude" / "commands"
+def _harness_home() -> Path:
+    """The harness this file belongs to (lib/claude_home), not whatever ~/.claude holds."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from lib.claude_home import resolve
+        home = resolve()
+    except Exception:
+        home = None
+    return home if home is not None else Path(__file__).resolve().parent.parent
+
+
+HARNESS_HOME = _harness_home()
+TODO_DIR = HARNESS_HOME / "scripts" / "todo"
+COMMANDS_DIR = HARNESS_HOME / "commands"
 
 # Matches workflow headings at Markdown levels 3 through 6, including nested
 # steps such as "#### Step 7: foo".  Level 1/2 headings are section titles in
@@ -174,7 +186,7 @@ def main() -> int:
     for py_path in sorted(TODO_DIR.glob("*.py")):
         warnings.extend(check_one(py_path))
     for w in warnings:
-        print(f"\u26a0\ufe0f [todo-md-sync] {w}", file=sys.stderr)
+        print(f"[todo-md-sync] {w}")
     return 0
 
 
