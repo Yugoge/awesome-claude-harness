@@ -107,8 +107,12 @@ AC = {"id": "AC-01", "type": "data", "given": "the toy project", "when": "the te
       "then": "its body runs python3 -m pytest -q tests/ from the repository root",
       "check": {"file": CMD_REL, "contains": "python3 -m pytest -q tests/"}}
 LAYER = "L5"  # infrastructure: developer tooling (the text's layer vocabulary)
-QA_FAILURE = {"severity": "critical", "primary_cause": "dev_implementation",
-              "description": "the command runs python3 -m pytest over the whole tree, not -q tests/ (AC-01)"}
+# One qa.failures[] entry as agents/qa.md spells it (severity, location "file:line", issue, recommendation,
+# primary_cause), as drivers/dev.py plays one: the location is the command file's line holding the incomplete call.
+QA_FAILURE = {"severity": "critical", "location": f"{CMD_REL}:{CMD_PARTIAL.splitlines().index('python3 -m pytest') + 1}",
+              "issue": "the command runs python3 -m pytest over the whole tree, not -q tests/ (AC-01)",
+              "recommendation": "run python3 -m pytest -q tests/ in the command body",
+              "primary_cause": "dev_implementation"}
 
 
 def _ba_content(tid: str) -> dict:

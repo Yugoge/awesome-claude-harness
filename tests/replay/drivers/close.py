@@ -80,12 +80,16 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
   rating=label|4|skip|decline|afk|free|dismissed[,...]   Step 3b's answer, per landed task in order (default label:
-                          the dialog's first option). As the CLI returns them (cli-facts Q3): label (the first
-                          option) and 4 ("4 - Minor gaps") are answers; free is a typed reply (the response field);
-                          afk is the dialog's timeout (afkTimeoutMs); dismissed is the app's Skip (the tool runs,
-                          annotations mark the question unanswered); skip (terminal Skip or "Chat about this") and
-                          decline (Esc) are the owner turning the dialog down: an error result, and no PostToolUse
-                          hook runs (replay.Rejected)
+                          the dialog's first option). label (the first option) and 4 ("4 - Minor gaps") are answers;
+                          free is a typed reply (the response field); afk is the dialog's timeout (afkTimeoutMs in
+                          the response). skip (terminal Skip, "Chat about this") and decline (Esc, decline) are the
+                          owner turning the dialog down: as the CLI does (read from its bundle, 2.1.319), the
+                          tool_result is an error, the user row carries toolDenialKind "user-rejected", and no
+                          PostToolUse and no PostToolUseFailure hook runs (replay.Rejected). dismissed is an
+                          app-side dismissal, UNCONFIRMED: the bundle has a client capability that marks a question
+                          unanswered (annotations[question].unanswered "skipped"), but which path the app takes
+                          when its user presses Skip is not settled by reading; played as the tool running with
+                          that annotation, so the hook runs and writes no rating row
   again=A[,B,...]         (not --auto) after Step 3b's question the same question for the same task is asked once
                           more for each answer listed, in order (a /close typed twice on one task): what the
                           score log's rating dedup and each answer's hook run are seen on, in one replay
@@ -1284,7 +1288,7 @@ class CloseRun:
             if answer == "skip":
                 raise Rejected("The user doesn't want to proceed with this tool use. The tool use was rejected.")
             base = {"questions": tin["questions"]}
-            if answer == "dismissed":
+            if answer == "dismissed":  # unconfirmed (see the module doc, rating=)
                 return dict(base, answers={}, annotations={q["question"]: {"unanswered": "skipped"}})
             if answer == "afk":
                 return dict(base, answers={}, afkTimeoutMs=60000)

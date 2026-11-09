@@ -62,9 +62,9 @@ class ToolError(Exception):
 
 
 class Rejected(ToolError):
-    """A permission dialog the owner turns down (Skip, Esc, decline): the CLI writes an error tool_result
-    (the user row carries toolDenialKind "user-rejected") and runs neither PostToolUse nor PostToolUseFailure
-    hooks, and it is no failed call (cli-facts Q3; drivers/close.py's rating answers skip and decline)."""
+    """A permission dialog the owner turns down in the terminal (Skip, Esc, decline): the tool_result is an error,
+    the user row carries toolDenialKind "user-rejected", and neither a PostToolUse nor a PostToolUseFailure hook
+    runs (read from the CLI bundle, 2.1.319). It is no failed call here: the owner chose it."""
 
 
 @dataclass

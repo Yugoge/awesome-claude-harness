@@ -7,21 +7,24 @@ each main-agent dispatch and appends score events to the sandbox's logs/lifecycl
 Edit calls the observer reads, and the lane QA's failure is a qa.failures[] entry in the shape agents/qa.md spells
 (severity, location, issue, recommendation, primary_cause).
 
-Five replays carry every assertion, each run with the driver argument `resweep=1` (tests/replay/scorelog.py:
+Six replays carry every assertion, each run with the driver argument `resweep=1` (tests/replay/scorelog.py:
 the observer hook run once more on the final transcript, the log kept as out/score-log.jsonl):
 
 * QA_FAIL_CLOSE: /dev (variant qa-fail: the lane's first QA fails, its dev is dispatched again, the next QA
   passes), then a clean /close in the same session, rated "4 - Minor gaps": the log gains qa_fail (dev) and
   qa_catch (qa), no rerun_gap, nothing for close-qa, and one rating row on the task id the events carry (B2, B3's
   clean close, B4's answer 4 and its dialog).
+* QA_FAIL_DEV: the same /dev cycle alone. Its final span is the /dev span, so its re-sweep derives qa_fail and
+  qa_catch again; QA_FAIL_CLOSE's final span is the /close span, which holds neither (B2's "replaying again adds
+  0 rows" for these two rows rests on this replay).
 * QA_FAIL_OTHER_FILE: the same cycle, the failure naming a file the re-dispatched dev does not edit
   (`fail_at`): qa_fail, and no qa_catch.
 * FIRST_PASS: /dev variant plain: qa_first_pass for dev and ba, nothing negative.
 * CLOSE_FINDINGS: a /dev cycle whose lane QA passes first, then a /close (variant append) whose first round opens
   a finding on the file the dev wrote, the dev writes it again and a later round lands (B3).
 * RATING_ANSWERS: a clean /close of a first-pass cycle whose rating question is asked seven times for the one
-  task (`again`): Skip and decline (the CLI runs no hook), a typed reply, the AFK timeout and the app's Skip (the
-  hook runs, no rating row), then "4 - Minor gaps" (the row), then "5 - Fully met" (writes nothing) (B4).
+  task (`again`): Skip and decline (the CLI runs no hook), a typed reply, the AFK timeout and an app-side dismissal
+  (unconfirmed; the hook runs, no rating row), then "4 - Minor gaps" (the row), then "5 - Fully met" (writes nothing) (B4).
 
 In each, the sweep of the final transcript a second time leaves the log byte for byte as it was, and runs
 without error beside the compliant run's 0 gate blocks and 0 hook errors.
@@ -49,6 +52,7 @@ QA_FAIL_CLOSE = suite.Scenario("score: /dev qa-fail, then /close", "close",
                                (("variant", "plain"), ("cycle_variant", "qa-fail"), ("rating", "4"), ("resweep", "1")),
                                ("dev", "close"), 150)
 OTHER_FILE = "toy/util.py"
+QA_FAIL_DEV = suite.Scenario("score: /dev qa-fail", "dev", (("variant", "qa-fail"), ("resweep", "1")), ("dev",), 110)
 QA_FAIL_OTHER_FILE = suite.Scenario("score: /dev qa-fail naming another file", "dev",
                                     (("variant", "qa-fail"), ("fail_at", OTHER_FILE), ("resweep", "1")),
                                     ("dev",), 110)
@@ -59,12 +63,14 @@ ANSWERS = ["skip", "decline", "free", "afk", "dismissed", "4", "5"]  # one task'
 RATING_ANSWERS = suite.Scenario("score: /close rating answers", "close",
                                 (("variant", "plain"), ("rating", ANSWERS[0]), ("again", ",".join(ANSWERS[1:])),
                                  ("resweep", "1")), ("dev", "close"), 150)
-SCENARIOS = {"qa-fail-close": QA_FAIL_CLOSE, "qa-fail-other-file": QA_FAIL_OTHER_FILE, "first-pass": FIRST_PASS,
-             "close-findings": CLOSE_FINDINGS, "rating-answers": RATING_ANSWERS}
+SCENARIOS = {"qa-fail-close": QA_FAIL_CLOSE, "qa-fail-dev": QA_FAIL_DEV, "qa-fail-other-file": QA_FAIL_OTHER_FILE,
+             "first-pass": FIRST_PASS, "close-findings": CLOSE_FINDINGS, "rating-answers": RATING_ANSWERS}
 # What a sweep of each replay's final transcript yields on an empty log: its final span is the /dev span of a
-# /dev-only run ("all" the rows), the /close span typed in a later session (the close-time events), or, for a /close
-# typed in the /dev's session, a span that holds no lane QA (none).
-REBUILT = {"qa-fail-close": [], "qa-fail-other-file": "all", "first-pass": "all", "rating-answers": [],
+# /dev-only run (every row the cycle logged: "all", or listed where the rows are the point: qa_fail and qa_catch),
+# the /close span typed in a later session (the close-time events), or, for a /close typed in the /dev's session, a
+# span that holds no lane QA (none: that re-sweep proves nothing about the /dev rows, the /dev-only runs do).
+REBUILT = {"qa-fail-close": [], "qa-fail-dev": [("qa_fail", "dev"), ("qa_catch", "qa")], "qa-fail-other-file": "all",
+           "first-pass": "all", "rating-answers": [],
            "close-findings": [("escaped", "dev"), ("escaped", "qa"), ("close_catch", "close-qa")]}
 KEYS = {name: suite.replay_key(scn, "shipped") for name, scn in SCENARIOS.items()}
 
@@ -100,8 +106,8 @@ def project(r) -> str:
 
 def dispatches(r) -> list[dict]:
     """Every main-agent dispatch of the replay in order, with what its subagent's own transcript says it did:
-    `role` (subagent_type), `tool_use_id`, `agent_id`, `identity` (the scored identity its prompt's obligation
-    names, None when it carries none), `wrote` (project-relative files of its Write and Edit calls) and `reports`
+    `role` (subagent_type), `tool_use_id`, `agent_id`, `result_at` (the time its result was recorded, as a
+    score row's ts), `identity` (the scored identity its prompt's obligation names, None when it carries none), `wrote` (project-relative files of its Write and Edit calls) and `reports`
     ({path: parsed content} of each qa-report it wrote)."""
     out, by_use, root = [], {}, project(r)
     mains = sorted(glob.glob(os.path.join(r.run_dir, "transcripts", "*", "*.jsonl")), key=lambda p: _jsonl(p)[0]["timestamp"])
@@ -115,9 +121,9 @@ def dispatches(r) -> list[dict]:
                     out.append({"role": block["input"]["subagent_type"], "tool_use_id": block["id"], "main": main,
                                 "identity": score_log.identity(ob.get("role"), ob.get("pipeline")) if ob else None})
                 elif block.get("type") == "tool_result" and isinstance(rec.get("toolUseResult"), dict):
-                    by_use[block["tool_use_id"]] = rec["toolUseResult"].get("agentId")
+                    by_use[block["tool_use_id"]] = rec["toolUseResult"].get("agentId"), rec["timestamp"]
     for d in out:
-        d["agent_id"] = by_use[d["tool_use_id"]]
+        d["agent_id"], d["result_at"] = by_use[d["tool_use_id"]]
         sub = os.path.join(d["main"][:-len(".jsonl")], "subagents", f"agent-{d['agent_id']}.jsonl")
         d["wrote"], d["reports"] = [], {}
         for rec in _jsonl(sub):
@@ -137,8 +143,9 @@ def lane_qa(r) -> list[dict]:
 
 
 def project_key(r) -> str:
-    """S1: the first 12 hex digits of the sha256 of the project's git common directory (hooks/lib/score_log.py project_key)."""
-    return hashlib.sha256(os.path.normpath(os.path.join(project(r), ".git")).encode()).hexdigest()[:12]
+    """S1: the first 12 hex digits of the sha256 of the real path of the project's git common directory (what
+    hooks/lib/score_log.py project_key hashes; the toy project is a plain checkout, so that directory is its .git)."""
+    return hashlib.sha256(os.path.realpath(os.path.join(project(r), ".git")).encode()).hexdigest()[:12]
 
 
 def task_of(r) -> str:
@@ -224,9 +231,9 @@ def rating_rows(r) -> list[dict]:
 
 # ---------------------------------------------------------------- B2: a QA fail, its fix, then /close
 
-@replay("qa-fail-close")
-def test_qa_fail_then_close_logs_qa_fail_for_dev_and_qa_catch_for_qa_and_no_rerun_gap(replays):
-    r = replays.get(KEYS["qa-fail-close"])
+@pytest.mark.parametrize("name", [pytest.param(n, id=n, marks=replay(n)) for n in ("qa-fail-close", "qa-fail-dev")])
+def test_a_qa_fail_and_its_fix_log_qa_fail_for_dev_and_qa_catch_for_qa_and_no_rerun_gap(replays, name):
+    r = replays.get(KEYS[name])  # /dev alone, or /dev and then a clean /close
     clean_run(r)
     rows = event_rows(r, [("qa_fail", "dev"), ("qa_catch", "qa")])
     fail, catch = (next(e for e in rows if e["event"] == name) for name in ("qa_fail", "qa_catch"))
@@ -318,10 +325,16 @@ def test_a_close_finding_after_lane_qa_passed_logs_escaped_for_dev_and_qa_and_cl
     rounds = [f["value"] for f in r.facts if f["key"] == "close QA round"]
     assert [x["verdict"].split(":")[0] for x in rounds] == ["CLOSE_FINDINGS", "CLOSE"], rounds
     assert [f["path"] for f in rounds[0]["findings"]] == [cited] and not rounds[1]["findings"], rounds
-    # each row stands for its own dispatch: the finding for the round that opened it, the catch for the round that landed
+    # a finding is charged once per cited file and role, however many rounds cite it: the key names the task, the
+    # cited file and the role, not a round (the rows of a re-sweep, or of a second round that cites it again, are the same rows)
+    assert {role: e["key"] for role, e in escaped.items()} == \
+        {role: f"escaped:{task_of(r)}:{cited}:{role}" for role in ("dev", "qa")}, escaped
+    assert caught["key"] == f"close_catch:{task_of(r)}:{cited}", caught
+    # each row still stands for its own dispatch, through the time its result was recorded: the finding for the round
+    # that opened it, the catch for the round that landed
     opened, landed = [d for d in dispatches(r) if d["identity"] == "close-qa"]
-    assert all(opened["tool_use_id"] in e["key"] for e in escaped.values()), (opened["tool_use_id"], escaped)
-    assert landed["tool_use_id"] in caught["key"], (landed["tool_use_id"], caught)
+    assert all(e["ts"] == opened["result_at"][:19] + "Z" for e in escaped.values()), (opened["result_at"], escaped)
+    assert caught["ts"] == landed["result_at"][:19] + "Z", (landed["result_at"], caught)
     # the cited artifact's producer is the dev whose own calls wrote it, before the finding and again after it
     order = [d["tool_use_id"] for d in dispatches(r)]
     devs = [d for d in dispatches(r) if d["role"] == "dev"]
@@ -379,7 +392,8 @@ def test_answering_4_minor_gaps_writes_one_rating_row_with_the_roles_and_prints_
     (worst,) = [line for line in lines if line.startswith("Worst:")]
     (failure,) = next(iter(lane_qa(r)[0]["reports"].values()))["qa"]["failures"]
     assert worst.startswith("Worst: dev ") and failure["issue"] in worst, (worst, failure)  # the one negative event is dev's
-    assert any(line.startswith("Scores") and all(f"{role} " in line for role in roles if role != "main") for line in lines), summary
+    # every identity is listed, its name cut to 24 characters (the summary bounds a name; the longest real role has 21)
+    assert any(line.startswith("Scores") and all(f"{role[:24]} " in line for role in roles if role != "main") for line in lines), summary
     assert any(line.startswith("This cycle") and "rating 4" in line for line in lines), summary
     assert not re.search(r"posttool|close-rating|PostToolUse|hooks/|\.py\b", summary), summary
 
