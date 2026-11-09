@@ -321,6 +321,71 @@ def test_the_in_flight_message_file_widens_nothing_else(tmp_path):
         link.unlink()
 
 
+# COMPATIBILITY (T2-11), with the cases above: the same text's nothing_to_commit_precommitted recovery route
+# (Recovery step 3, :1887) has the Write tool write its `git commit --allow-empty -F` message file at
+# /tmp/recovery-commit-<TASK_ID>-<short-rand>.txt, placeholders bound (a /dev and a /do task id).
+INFLIGHT_RECOVERY_MSGFILES = [
+    "/tmp/recovery-commit-<TASK_ID>-<short-rand>.txt".replace("<TASK_ID>", "20260101-000000")
+    .replace("<short-rand>", "r0001x"),
+    "/tmp/recovery-commit-<TASK_ID>-<short-rand>.txt".replace("<TASK_ID>", "do-20260101-000000-ab12")
+    .replace("<short-rand>", "a1b2"),
+]
+
+
+def test_an_in_flight_changelog_analyst_writes_its_recovery_commit_message_file(tmp_path, state):
+    home = tmp_path / "home"
+    for path in [*INFLIGHT_RECOVERY_MSGFILES, INFLIGHT_MSGFILES[0]]:
+        assert run("Write", {"file_path": path, "content": "chore(toy): recovery commit\n\nTask-id: 1\n"},
+                   "changelog-analyst", home, state) == (0, ""), path
+
+
+@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "push-analyst", PLUGIN, "general-purpose"])
+def test_no_other_caller_writes_the_in_flight_recovery_message_file(tmp_path, caller):
+    home = tmp_path / "home"
+    for path in INFLIGHT_RECOVERY_MSGFILES:
+        for tool, tool_input in [*_writes(path), ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"})]:
+            denial = _denial(*run(tool, tool_input, caller, home))
+            assert denial["role"] == (caller or "main") and denial["target"] == path, (tool, path)
+            assert denial["deny_reason"].endswith(INFLIGHT_REFUSED), denial
+
+
+def test_the_in_flight_recovery_message_file_widens_nothing_else(tmp_path):
+    """The recovery name is that one name too: by the Write tool, directly in /tmp, resolving to itself."""
+    home, path = tmp_path / "home", INFLIGHT_RECOVERY_MSGFILES[0]
+    near = ["/tmp/recovery-commit-1-r.txt.sh", "/tmp/recovery-commit-1-r.json", "/tmp/sub/recovery-commit-1-r.txt",
+            "/var/tmp/recovery-commit-1-r.txt", "/tmp/recovery-commitx.txt", "/tmp/recovery-commit-.txt",
+            "/tmp/recovery-commit-1/../x.txt", "/tmp/x-recovery-commit-1-r.txt", "/tmp/Recovery-commit-1-r.txt",
+            "/tmp/recovery-commit-msg-1.txt.bak", f"{PROJECT}/recovery-commit-1-r.txt"]
+    for target in near:
+        denial = _denial(*run("Write", {"file_path": target, "content": "x"}, "changelog-analyst", home))
+        assert INFLIGHT_REFUSED not in denial["deny_reason"], target
+    for tool, tool_input, reason in [("Bash", {"command": f"cat > {path} <<EOF\nx\nEOF"},
+                                      "not in allowed_write_path_prefixes"),
+                                     ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"},
+                                      "tool Edit not in allowed_tools")]:
+        assert reason in _denial(*run(tool, tool_input, "changelog-analyst", home))["deny_reason"], tool
+    link = Path(f"/tmp/recovery-commit-{uuid.uuid4().hex}.txt")
+    link.symlink_to(tmp_path / "elsewhere.txt")
+    try:
+        denial = _denial(*run("Write", {"file_path": str(link), "content": "x"}, "changelog-analyst", home))
+        assert "not in allowed_write_path_prefixes" in denial["deny_reason"]
+    finally:
+        link.unlink()
+
+
+def test_this_trees_recovery_route_writes_its_message_file_under_its_prefixes(tmp_path):
+    """The tree's own Recovery step 3 names its message file in the role's scratch directory, not the in-flight
+    name: its role row lets it through, with no compatibility rule."""
+    text = (ROOT / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
+    step = text[text.index("**Recovery step 3"):text.index("**Recovery step 4")]
+    names = re.findall(r"MSGFILE=(\S+?)`", step)
+    assert names and not any(re.search(r"/tmp/recovery-commit-", n) for n in names), names
+    for name in names:
+        path = name.replace("<unique>", "20260101-000000-r0001x")
+        assert path.startswith("/tmp/claude-scratch/changelog-analyst/"), path
+        assert run("Write", {"file_path": path, "content": "x"}, "changelog-analyst", tmp_path / "home") == (0, "")
+
+
 # -- in-flight compatibility: the registry entry 2acc29b's test-writer creates (train 2, A17) -----
 # COMPATIBILITY: these cases go with pretool-tool-policy.py's _check_inflight_entry_writes, once no
 # session predates train 2's landing. A session that took up origin/master's /dev text keeps its

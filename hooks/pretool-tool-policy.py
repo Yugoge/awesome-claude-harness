@@ -69,7 +69,8 @@ merge-analyst grants); a removal is no write (_check_grant_writes).
 
 In-flight compatibility (train 2, A17; D15), kept until no session predates
 train 2's landing: the commit message file 2acc29b's changelog-analyst text
-writes, /tmp/commit-msg-<name>.txt, is that analyst's own by the Write tool
+writes, /tmp/commit-msg-<name>.txt, and its recovery route's
+/tmp/recovery-commit-<name>.txt, are that analyst's own by the Write tool
 (its role's denials only) and no other caller's (_check_inflight_msg_writes);
 the test-writer entry 2acc29b's /dev text has its test-writer create in its
 own cycle's registry is that test-writer's own by the Write tool, its dispatch
@@ -665,17 +666,21 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
 # keeps that changelog-analyst text: its Phase 8 has the Write tool write the
 # file of its `git commit -F` at /tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt
 # (2acc29b agents/changelog-analyst.md:1099; :71 and :557 name the same file),
-# where the text since names one under the role's scratch directory. That
-# analyst's role used to go unresolved, so no role row applied; resolved from
-# the CLI's agent_type (P6), its row refuses the write and the in-flight
-# /commit ends failed. So that one name, directly in /tmp and resolving to
-# itself, written by the Write tool, is the changelog-analyst's own: its role's
-# denials apply to it, not its allow prefixes or the raw-temp rule, as to a
+# where the text since names one under the role's scratch directory. Its
+# nothing_to_commit_precommitted recovery route (Recovery step 3, :1887) writes
+# the file of its `git commit --allow-empty -F` at
+# /tmp/recovery-commit-<TASK_ID>-<short-rand>.txt; the text since names the
+# scratch-directory one there too (T2-11). That analyst's role used to go
+# unresolved, so no role row applied; resolved from the CLI's agent_type (P6),
+# its row refuses the write and the in-flight /commit ends failed. So those two
+# names, directly in /tmp and resolving to themselves, written by the Write
+# tool, are the changelog-analyst's own: its role's
+# denials apply to them, not its allow prefixes or the raw-temp rule, as to a
 # path its dispatch declares. No other caller, the main agent included, writes
-# a file of that name, by any write tool or Bash write target (D8). A subagent
+# a file of either name, by any write tool or Bash write target (D8). A subagent
 # whose role does not resolve is left as before (agent_resolver LOW-10).
 _INFLIGHT_MSG_ROLE = "changelog-analyst"
-_INFLIGHT_MSG_NAME = re.compile(r"commit-msg-[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
+_INFLIGHT_MSG_NAME = re.compile(r"(?:commit-msg|recovery-commit)-[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
 
 
 def _inflight_msg_named(path: str) -> bool:
@@ -686,7 +691,8 @@ def _inflight_msg_named(path: str) -> bool:
 def _inflight_msg_file(target: str, own: bool) -> bool:
     """Whether ``target`` names the in-flight analyst's message file: as
     written or as it resolves, or (``own``, the analyst's Write) written
-    /tmp/commit-msg-<name>.txt and resolving to that same file."""
+    /tmp/commit-msg-<name>.txt or /tmp/recovery-commit-<name>.txt and
+    resolving to that same file."""
     written = os.path.normpath(target)
     try:
         real = str(_resolved(target))
