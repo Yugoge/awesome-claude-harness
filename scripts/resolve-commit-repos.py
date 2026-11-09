@@ -606,9 +606,9 @@ def build_plan(
     # declaration channel, agents/changelog-analyst.md:783-843, subject to
     # its own dual-listing constraint below), or the plan would silently
     # admit a foreign seat's uncommitted work. files_created-only identities
-    # are exempt (a brand-new file's ledger entry is legitimately absent --
-    # see agents/dev.md/schemas/owned-edits-ledger.v1.json's minLength:1 on
-    # `old`); a dual-listed identity is not. Missing/empty owned_edits AND
+    # are exempt (a brand-new file's ledger entry is legitimately absent, or
+    # carries an empty `old` -- agents/dev.md's owned-edits ledger rule); a
+    # dual-listed identity is not. Missing/empty owned_edits AND
     # missing/empty baseline_dirty_snapshot both fall out of the same
     # set-difference with no special branch: an absent/empty input
     # canonicalizes to an empty identity-set, so a files_modified path
