@@ -7,7 +7,7 @@ After you type `/dev <requirement>`:
 1. A hook writes your words to disk as the binding spec before any agent runs, so no agent works from a reformulation.
 2. A BA agent finds the root cause and must cite evidence (file and line, search results, git history); a QA agent checks that analysis before any code exists. A question reaches you only for a decision the request, the code and sensible defaults cannot settle.
 3. Dev agents build, one issue per agent, in parallel lanes inside the one cycle; QA verifies and sends a failure back to dev until it passes.
-4. The Stop gate keeps the session open until every todo is done and every artifact is checked by code; only the finished work or your `/stop` releases it.
+4. The Stop gate keeps the session open until every todo is done and every artifact is checked by code; only the finished work, your `/stop` or switching the gate off in the environment releases it.
 5. You type `/close`, `/commit` and `/push` (and `/merge` for branches); agents review, commit and push under grants that hooks check.
 
 What is proven and what is not is stated under [Status and known limits](#status-and-known-limits).
@@ -20,10 +20,10 @@ What is proven and what is not is stated under [Status and known limits](#status
 
 Autonomous coding agents hurt in places the field has already documented. Each point names its source, then what this repository does about it.
 
-- **A person stays in the loop.** Practitioner guides keep developer review, testing and security review before merge ([Augment Code](https://www.augmentcode.com/guides/autonomous-engineering-loop), [Kilo](https://kilo.ai/articles/beyond-autocomplete)). In a study of 37,623 agent-authored pull requests, Claude Code's waited a median of 12.6 hours for a first human review ([arXiv](https://arxiv.org/pdf/2609.17598)). *Here:* BA and dev ask you, in the turn and with the question tool, only for a decision the request, the code and sensible defaults cannot settle. The gate before landing is automated verification, the case [one paper](https://arxiv.org/abs/2606.13175v1) argues for (an argument, not an empirical study): inspectors and QA at `/close`, QA before and after dev.
-- **Autonomy depends on a person building the test oracle.** The parallel-Claude C compiler rested on test suites and verifiers a human wrote, and on new tests added as mistakes showed ([Anthropic](https://anthropic.com/engineering/building-c-compiler)). *Here:* the oracle lives in `tests/` and runs in CI on every change. The replay suite drives each pipeline through the real hooks, the fault replays inject failures, and the artifact check demands one producer and a reader for every artifact.
-- **Instructions are not enforcement.** Hooks are the deterministic layer ([Claude Code docs](https://code.claude.com/docs/en/best-practices)); `CLAUDE.md` is context, not enforced configuration ([Towards AI](https://towardsai.com/p/machine-learning/claude-code-skills-vs-subagents-vs-hooks-vs-workflows-which-to-use-in-2026)). *Here:* what must hold is a hook, not a sentence in a prompt. [The ledger](docs/ENFORCEMENT-LEDGER.md) says how far each hook is proven, and a replay test enumerates every blocking site of the registered hooks and fails when a replay reaches one that no action clears. The sites the enumeration cannot classify are counted under [Status and known limits](#status-and-known-limits).
-- **Claims outrun the code.** Critics of Cursor's agent-built browser found recent commits that do not compile and failing CI on main ([The Register](https://www.theregister.com/2026/01/26/cursor_opinion/)). *Here:* every number in this README is produced from the repository by `scripts/readme_facts.py` and `scripts/generate-hero-status.py`, and `scripts/verify-claims.sh` fails CI when one drifts or a number is typed by hand.
+- **A person stays in the loop.** Practitioner guides keep developer review, testing and security review before merge ([Augment Code](https://www.augmentcode.com/guides/autonomous-engineering-loop), [Kilo](https://kilo.ai/articles/beyond-autocomplete)). In a study of 37,623 agent-authored pull requests, Claude Code's waited a median of 12.6 hours for a first human review ([arXiv](https://arxiv.org/pdf/2609.17598)). *Here:* a BA or dev agent raises a question and the orchestrator asks you, in the turn and with the question tool, only for a decision the request, the code and sensible defaults cannot settle. The gate before landing is automated verification, the case [one paper](https://arxiv.org/abs/2606.13175v1) argues for (an argument, not an empirical study): inspectors and QA at `/close`, QA before and after dev.
+- **Autonomy depends on a person building the test oracle.** The parallel-Claude C compiler rested on test suites and verifiers a human wrote, and on new tests added as mistakes showed ([Anthropic](https://anthropic.com/engineering/building-c-compiler)). *Here:* the oracle lives in `tests/` and runs in CI on every pull request. The replay suite drives each pipeline through the real hooks, the fault replays inject failures, and the artifact check demands one producer and a reader for every artifact.
+- **Instructions are not enforcement.** Hooks are the deterministic layer ([Claude Code docs](https://code.claude.com/docs/en/best-practices)); `CLAUDE.md` is context, not enforced configuration ([Towards AI](https://towardsai.com/p/machine-learning/claude-code-skills-vs-subagents-vs-hooks-vs-workflows-which-to-use-in-2026)). *Here:* what must hold is a hook, not a sentence in a prompt. [The ledger](docs/ENFORCEMENT-LEDGER.md) says how far each hook is proven, and a replay test fails when a replay reaches a blocking site that no action clears. The proof table counts the blocking sites its enumerator finds in the registered hooks' code, by class; those with no clearing class are counted under [Status and known limits](#status-and-known-limits).
+- **Claims outrun the code.** Critics of Cursor's agent-built browser found recent commits that do not compile and failing CI on main ([The Register](https://www.theregister.com/2026/01/26/cursor_opinion/)). *Here:* every figure this README states about the repository is produced from it by `scripts/readme_facts.py` and `scripts/generate-hero-status.py`, and `scripts/verify-claims.sh` fails CI when one drifts or a numeral is typed by hand outside a sourced, declared figure.
 
 **What still needs you:** the decisions the request, the code and sensible defaults cannot settle, and your rating of the work. `/close` asks one rating question after a landed cycle, and you may skip it. `/dev-overnight` asks nobody: it decides by experiment, else by the question's default, and lists each decision in its summary.
 
@@ -48,16 +48,25 @@ Counted from the repository by `scripts/readme_facts.py` and re-derived by `scri
 </p>
 <p align="center"><sub><em>An <strong>animated SVG replay generated from a captured log</strong> — every <em>terminal</em> line is a byte-exact slice of <a href=".github/assets/hero-capture.txt"><code>.github/assets/hero-capture.txt</code></a>, reproducible with <code>python3 scripts/capture-hero-run.py --check-only</code>. The demo deliberately pauses between beats so a person can read each refusal, and those waits really happened. The animation's own cadence is the renderer's, not the recording's. The hook decisions are real; the tool dispatch is a synthesized fixture. <strong><a href=".github/assets/hero-capture.txt">Read the raw capture</a></strong> for the full, untruncated text.</em></sub></p>
 
-## Quick start
+## Install
+
+### Full install: clone + init
 
 ```bash
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude   # needs an empty ~/.claude
-~/.claude/scripts/bootstrap            # init: asks once per optional module (Enter = off)
-~/.claude/scripts/doctor --strict      # preflight
+~/.claude/scripts/bootstrap            # init: asks once per optional module; ends with the preflight
 bash ~/.claude/examples/guard-demo/run-demo.sh   # watch a guard refuse, then allow
 ```
 
-Then, in Claude Code, type `/dev <your requirement>`. Other install locations, the guardrails-only profile and troubleshooting: [installation](docs/installation.md).
+Then, in Claude Code, type `/dev <your requirement>`.
+
+### Guardrails only: the installer core profile
+
+```bash
+scripts/install/install --profile core   # from a checkout; guardrails only, in an isolated directory
+```
+
+Other install locations, the settings overlay, dependencies and troubleshooting: [installation](docs/installation.md).
 
 ## The pipeline
 
@@ -121,8 +130,8 @@ Usage limit hit? `/restart` resumes every recoverable interrupted child in the c
 ## Design principles
 
 - **Hooks decide, prompts guide.** A rule that must hold is a hook that exits with the blocking code. Prompts carry judgment and point at the hook instead of repeating it. The ledger states, per hook, how far that is proven.
-- **No flow may strand you.** Every blocking site of every registered hook is enumerated, and a replay fails CI when it reaches one that no action clears. Your `/stop` and Esc are the exits no hook gates.
-- **One producer per fact.** Every artifact has one producer and at least one reader that decides on it; the artifact check enforces that in CI. Every number in this README has one producer, `scripts/readme_facts.py` or `scripts/generate-hero-status.py`, and `scripts/verify-claims.sh` re-derives it.
+- **No flow may strand you.** The suite's enumerator finds the blocking sites in the registered hooks' code, and a replay fails CI when it reaches one that no action clears. Your `/stop` and Esc are the exits no hook gates.
+- **One producer per fact.** Every artifact has one producer and at least one reader that decides on it; the artifact check enforces that in CI. Every figure about the repository in this README has one producer, `scripts/readme_facts.py` or `scripts/generate-hero-status.py`, and `scripts/verify-claims.sh` re-derives it.
 - **You decide what only you can; evidence decides the rest.** A question reaches you only when the request, the code and sensible defaults cannot settle it. In `/dev-overnight` an experiment decides, else the question's default, and the summary lists each decision.
 
 ## Status and known limits
