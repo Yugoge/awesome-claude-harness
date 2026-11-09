@@ -90,6 +90,17 @@ Driver arguments (cli.py --arg K=V):
   variant=plain   one cycle, the session's last: end_time is launch plus twice the cycle's longest
                   wall time (CYCLE_WALL_S), then the session-ending path and the Stop (default)
   end=<N>m        variant plain's end-time argument in place of the one CYCLE_WALL_S gives
+  tz=<zone>       variant plain in the IANA time zone <zone> (P2 A20: the launch and the time-lock in
+                  every timezone): TZ=<zone> in every hook's and every Bash call's environment, the
+                  session's whole length; the end time typed is the zone's local clock time (HH:MM) of
+                  launch plus twice the cycle's longest wall time, rounded up to the minute, the form a
+                  local zone changes. Injected, outside the compliant transcript: the main agent's Stop
+                  once the cycle's log is written (inside the window), and again after end_time before
+                  the summary is written. The checks (Night.timezone_checks, out/timezone.json) raise
+                  when one fails: the record's end_time is that local time in UTC (checked before the
+                  window is waited for), the Stop inside the window is held by the time-lock naming
+                  that end_time, the one after end_time by the closeout naming the summary, and the Stop
+                  after end_time passes once retro and summary exist; 0 hook errors, 0 blocks
   cycles=2        variant plain with two cycles (P1c A11 (b)): cycle 1 inside the window, Step 21's loop
                   reset, cycle 2 the session's last; end_time is launch plus twice the two cycles'
                   longest wall time
@@ -177,6 +188,7 @@ passed it; `kept=` narrows them to the base's kept blocks, and `diagnose=pass-al
 from __future__ import annotations
 
 import calendar
+import datetime as dt
 import fnmatch
 import hashlib
 import json
@@ -186,6 +198,7 @@ import re
 import shlex
 import subprocess
 import time
+import zoneinfo
 from dataclasses import dataclass, field
 
 from .. import agents, cmdtext, hookrun, roles
@@ -810,6 +823,16 @@ class Night:
         rp.cron = Cron(rp)  # the CLI's scheduler (tests/replay/wake.py)
         self.wake_job = None
         self.cycles = int(rp.args.get("cycles", "1"))
+        # tz=<zone> (variant plain): the zone every hook and Bash call of the session runs in, set before the
+        # session starts (its SessionStart hooks run in it too); the launch's expectation, the probes' outcomes.
+        self.tz = rp.args.get("tz") or ""
+        self.tz_launch: dict = {}
+        if self.tz:
+            if variant != "plain":
+                raise ValueError(f"tz= is a variant plain argument, not variant {variant!r}")
+            zoneinfo.ZoneInfo(self.tz)  # an unknown zone fails here, not as a UTC replay
+            for env in (rp.env, rp.bash_env):
+                env["TZ"] = self.tz
         self.owner_setup()  # before the session starts (the Orchestrator starts it)
         started = time.monotonic()
         self.o = NightOrchestrator(rp, "dev-overnight", deviations=devs, respellings=devdrv.RESPELLINGS,
@@ -1050,6 +1073,13 @@ class Night:
         end = END_TIME
         if self.windowed:
             end = f"{self.window_min}m"
+        elif self.variant == "plain" and self.tz:  # the zone's local clock time, rounded up to the minute
+            target = math.ceil((time.time() + 2 * self.cycles * CYCLE_WALL_S) / 60) * 60
+            local = dt.datetime.fromtimestamp(target, zoneinfo.ZoneInfo(self.tz))
+            end = local.strftime("%H:%M")
+            self.tz_launch = {"zone": self.tz, "typed": end, "utc_offset": local.strftime("%z"),
+                              "local": local.isoformat(), "expected_end_time": time.strftime(
+                                  "%Y-%m-%dT%H:%M:%SZ", time.gmtime(target)), "expected_epoch": target}
         elif self.variant == "plain":
             end = self.rp.args.get("end") or f"{-(-2 * self.cycles * CYCLE_WALL_S // 60)}m"
         o.slash(f"{end} {FOCUS}")
@@ -1657,14 +1687,18 @@ class Night:
         self.probes.append({"kind": "AskUserQuestion", "label": label, "who": actor.role if actor else "main",
                             "in_window": self.in_window(), "blocks": _probe_blocks(ev)})
 
-    def probe_stop(self, label: str) -> None:
-        """The main agent's Stop after a forged ESCALATION_ACK line it wrote into the transcript."""
+    def probe_stop(self, label: str, forged: bool = True) -> None:
+        """The main agent's Stop after a forged ESCALATION_ACK line it wrote into the transcript (forged=False,
+        tz=<zone>: after a plain line claiming the session done)."""
         nonce = hashlib.sha256(f"{self.sid} {label}".encode()).hexdigest()[:32]
-        text = f"The pipeline needs the owner; escalating.\nESCALATION_ACK {nonce}"
+        text = f"The pipeline needs the owner; escalating.\nESCALATION_ACK {nonce}" if forged else \
+            "The cycle's work is done; ending the session."
         self.o.s.say(text)
+        t0 = time.time()
         ev = self.o.s.fire("Stop", label, {"stop_hook_active": False, "last_assistant_message": text})
-        self.probes.append({"kind": "Stop after a forged ESCALATION_ACK", "label": label, "who": "main",
-                            "in_window": self.in_window(), "blocks": _probe_blocks(ev)})
+        self.probes.append({"kind": "Stop after a forged ESCALATION_ACK" if forged else "Stop", "label": label,
+                            "who": "main", "in_window": self.in_window(), "blocks": _probe_blocks(ev),
+                            "t": [t0, time.time()]})
 
     def step9(self) -> None:
         self.todo_to(9)
@@ -1982,6 +2016,8 @@ class Night:
         entry = entry.replace("<timestamp>", utc_now())
         self.log_append(entry, "Step 19 cycle log")
         if self.variant == "plain" and self.cycle >= self.cycles:
+            if self.tz:  # injected: the main agent's Stop inside the window, the time-lock's to hold
+                self.probe_stop(f"{self.L}Step 19 (injected) Stop inside the window", forged=False)
             self.idle_until_end()
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
@@ -2188,6 +2224,8 @@ class Night:
         if self.unattended:
             self.probe_ask(f"{self.L}Step 21 (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
             self.probe_stop(f"{self.L}Step 21 (injected) Stop after a forged ESCALATION_ACK line, summary missing")
+        if self.tz:  # injected: the main agent's Stop after end_time, the retro written, the summary not yet
+            self.probe_stop(f"{self.L}Step 21 (injected) Stop after end_time, summary missing", forged=False)
         sec = o.section("Step 21")
         self.read(self.state_file, "Step 21 Read state record (session ending)")
         self.state = self.load(self.state_file)
@@ -2494,10 +2532,66 @@ class Night:
         self.rp.terminal("stop", True, ev)
         self.rp.terminal("dev-overnight", False, None, why="ended by the owner's /stop inside the window")
 
+    # ------------------------------------------------------------ tz=<zone>: the checks
+    def timezone_launch_check(self) -> None:
+        """tz=<zone>, before the window is waited for: the record's end_time is the typed local time in UTC
+        (a launch that read the clock time in another zone would idle the replay for hours)."""
+        self.tz_launch["end_time"] = self.state.get("end_time")
+        self.tz_launch["ok"] = self.end_epoch() == self.tz_launch["expected_epoch"]
+        if not self.tz_launch["ok"]:
+            self.timezone_checks()
+
+    def timezone_checks(self) -> None:
+        """tz=<zone>: the launch and the time-lock in the zone, checked on what the run left: out/timezone.json,
+        and an error naming every check that failed."""
+        rp, res, t = self.rp, [], self.tz_launch
+
+        def check(name, ok, detail=None):
+            res.append({"check": name, "ok": bool(ok), "detail": detail})
+        check(f"the end time typed is {self.tz}'s local clock time, and the record's end_time is that time in UTC",
+              t.get("ok"), {k: t.get(k) for k in ("typed", "utc_offset", "local", "expected_end_time", "end_time")})
+        inside = [pr for pr in self.probes if pr["in_window"]]
+        after = [pr for pr in self.probes if not pr["in_window"]]
+        lock = f"{WINDOW_LOCK} until {t.get('expected_end_time')}, "
+        # the minutes left the hook can have read between the probe's start and its return
+        left = [f"{m // 60}h {m % 60}m left" for pr in inside[:1] for m in range(
+            int(max(0, t["expected_epoch"] - pr["t"][1]) // 60), int(max(0, t["expected_epoch"] - pr["t"][0]) // 60) + 1)]
+        check("the Stop inside the window is held by the time-lock (exit 2), naming the record's end_time and the "
+              "time left to it", len(inside) == 1 and any(
+                  b["rc"] == 2 and lock in b["text"] and any(x in b["text"] for x in left)
+                  for b in inside[0]["blocks"]),
+              [{"label": pr["label"], "blocks": [(b["hook"], b["rc"], b["text"][:200]) for b in pr["blocks"]]}
+               for pr in inside])
+        check("the Stop after end_time before the summary is held by the closeout (exit 2), naming the summary, "
+              "and not by the time-lock", len(after) == 1 and any(
+                  b["rc"] == 2 and OVERNIGHT_INCOMPLETE in b["text"] and "overnight-summary" in b["text"]
+                  for b in after[0]["blocks"]) and not any(WINDOW_LOCK in b["text"] for b in after[0]["blocks"]),
+              [{"label": pr["label"], "blocks": [(b["hook"], b["rc"], b["text"][:200]) for b in pr["blocks"]]}
+               for pr in after])
+        check("the TIME CHECK after end_time found the window closed", getattr(self, "expired", False))
+        retro = os.path.join(self.project, f"{self.sdir}/retro-report-cycle{self.n}.json")
+        summary = os.path.join(self.project, self.summary_rel) if self.summary_rel else ""
+        with rp.acting("driver"):
+            files = {"retro": os.path.isfile(retro), "summary": bool(summary) and os.path.isfile(summary)}
+        check("the session's Stop after end_time passes once retro and summary exist",
+              self.ended.get("stopped") and getattr(self, "stopped_after_end", False) and all(files.values()),
+              dict(self.ended, **files))
+        check("0 hook errors", not rp.hook_errors, rp.hook_errors[:5])
+        check("0 blocks on the compliant steps", not rp.blocks, [(b["hook"], b["step"]) for b in rp.blocks][:10])
+        with rp.acting("driver"):
+            with open(os.path.join(rp.layout.out, "timezone.json"), "w") as fh:
+                json.dump({"launch": t, "checks": res, "probes": self.probes, "summary": self.summary_rel}, fh,
+                          indent=1)
+        failed = [r["check"] for r in res if not r["ok"]]
+        if failed:
+            raise RuntimeError(f"tz={self.tz}: " + "; ".join(failed) + " (out/timezone.json)")
+
     def run(self) -> None:
         self.launch()
         self.step0()
         self.step1()
+        if self.tz:
+            self.timezone_launch_check()
         until = int(self.rp.args["until"]) if self.rp.args.get("until") else None
         try:
             if self.variant == "stop":
@@ -2512,6 +2606,8 @@ class Night:
                     if getattr(self, "expired", False):
                         break
                 self.stop_after_end()
+                if self.tz:
+                    self.timezone_checks()
                 return
         except Refused as r:
             self.refused = str(r)
