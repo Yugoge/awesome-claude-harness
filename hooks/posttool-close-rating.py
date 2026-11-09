@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """PostToolUse(AskUserQuestion|Agent): the dispatcher of the score log's observers (D9a, D28); it holds no logic.
-AskUserQuestion: close_rating.handle writes the owner's close rating row and returns the owner summary.
-Agent (and the legacy Task): score_events.observe records the dispatch's facts. The returned dict is printed as one
-JSON line. Quick, silent on any error, exit 0; it never prints decision, continue or updatedToolOutput (D9b)."""
+AskUserQuestion goes to close_rating.handle (the owner's rating row and summary), Agent and Task to score_events.observe
+(the dispatch's facts). The returned dict is printed as one JSON line. Quick, silent on any error, exit 0; it never
+prints decision, continue or updatedToolOutput (D9b)."""
 import json
 import sys
 from pathlib import Path

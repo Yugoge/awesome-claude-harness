@@ -363,11 +363,11 @@ EXERCISES = {PRE.name: {STOP, TODO}, HOME.name: {STOP}, A.name: {STOP, TODO}, B.
 # The registrations two phases ahead of P5 change, which those phases name and no scenario here reaches
 # after the landing (none asks with AskUserQuestion after it): P2's overnight guard on AskUserQuestion
 # too (P2_MATCHER: its registration under the old matcher goes, the new one comes) and P4's close-rating
-# hook (PostToolUse AskUserQuestion). Each is held to exactly that change; a replay that reaches one
-# fails test_again_with_your_settings's `hooklist` part.
+# hook (PostToolUse; P13-2 widened its matcher to AskUserQuestion|Agent). Each is held to exactly that
+# change; a replay that reaches one fails test_again_with_your_settings's `hooklist` part.
 ELSEWHERE = {("PreToolUse", P2_MATCHER[0]): (["hooks/pretool-overnight-hook-guard.py"], []),
              ("PreToolUse", P2_MATCHER[1]): ([], ["hooks/pretool-overnight-hook-guard.py"]),
-             ("PostToolUse", "AskUserQuestion"): ([], ["hooks/posttool-close-rating.py"])}
+             ("PostToolUse", "AskUserQuestion|Agent"): ([], ["hooks/posttool-close-rating.py"])}
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that

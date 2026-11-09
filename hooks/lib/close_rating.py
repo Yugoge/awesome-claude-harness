@@ -1,6 +1,7 @@
 """The owner's close rating (D9, D9b), for posttool-close-rating.py and P5's Stop gate.
-handle(payload) writes the one rating row and returns the owner summary (a systemMessage); the Stop gate imports
-source_task, rating_required and rating_asked. The /close question is required asked, never answered: nothing here blocks."""
+handle() writes the owner's one rating row and returns the owner summary (a systemMessage).
+The Stop gate imports source_task, rating_required and rating_asked. The /close question is required
+asked, never answered: nothing here blocks."""
 from __future__ import annotations
 
 import importlib
@@ -91,7 +92,7 @@ def handle(payload) -> dict | None:
         if rating:
             store = os.environ.get("CLAUDE_PROJECT_DIR") or payload["cwd"]
             dispatches = _lib("obligation")._task_records(task_id, store, None)  # obligation's cross-session reader
-            roles = sorted({score_log.identity(d["obligation"].get("role"), d["obligation"].get("pipeline")) for d in dispatches} - {None})
+            roles = sorted({score_log.identity(d["obligation"].get("role"), d["obligation"].get("pipeline")) for d in dispatches})
             with score_log.locked(log):
                 score_log.append(log, {"kind": "rating", "ts": _utc(now), "project": project, "task_id": task_id,
                                        "rating": rating, "roles": roles, "tool_use_id": payload.get("tool_use_id")})

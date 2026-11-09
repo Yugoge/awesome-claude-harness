@@ -1,6 +1,5 @@
 """The native close rating (P4 R7, P13-2 S4; D9, D9b): hooks/lib/close_rating.py and
-hooks/posttool-close-rating.py, the dispatcher of the score log's observers: it writes the owner's one rating row
-(through score_log) and prints the owner summary as a systemMessage.
+hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (through score_log).
 
 The hook runs as the CLI runs it: a subprocess fed a PostToolUse payload on
 stdin, with CLAUDE_CONFIG_DIR at a scratch directory. The AskUserQuestion
@@ -381,15 +380,27 @@ def test_the_dispatch_tools_go_to_the_observer_and_its_dict_is_printed_as_one_js
     assert stand_in.calls == [payload]
 
 
-@pytest.mark.parametrize("tool", ["AskUserQuestion", "Bash", "Write", ""])
-def test_no_other_tool_reaches_the_observer(monkeypatch, capsys, config: Path, tool: str) -> None:
+@pytest.mark.parametrize("tool", ["Bash", "Write", ""])
+def test_no_other_tool_reaches_the_observer_or_the_rating_handler(monkeypatch, capsys, tool: str) -> None:
     stand_in = _stand_in({"systemMessage": "must not be printed"})
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))  # AskUserQuestion goes to handle: no log here, nothing printed
+    rated = types.ModuleType("close_rating")
+    rated.handle = lambda payload: pytest.fail("close_rating.handle is for the question tool")
+    monkeypatch.setitem(sys.modules, "close_rating", rated)
     assert _dispatch_run(monkeypatch, capsys, dict(_payload("4 - Minor gaps"), tool_name=tool), stand_in) == ("", "")
     assert stand_in.calls == []
 
 
-@pytest.mark.parametrize("returns", [None, {}, [], "text", {"decision": "block", "reason": "x"}, {"continue": False},
+def test_the_question_tool_goes_to_the_rating_handler_and_not_to_the_observer(monkeypatch, capsys) -> None:
+    stand_in, seen = _stand_in({"systemMessage": "must not be printed"}), []
+    rated = types.ModuleType("close_rating")
+    rated.handle = lambda payload: seen.append(payload) or {"systemMessage": "rated"}
+    monkeypatch.setitem(sys.modules, "close_rating", rated)
+    payload = _payload("4 - Minor gaps")
+    assert _dispatch_run(monkeypatch, capsys, payload, stand_in) == ('{"systemMessage": "rated"}\n', "")
+    assert seen == [payload] and stand_in.calls == []
+
+
+@pytest.mark.parametrize("returns", [None, [], "text", {"decision": "block", "reason": "x"}, {"continue": False},
                                      {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": "x"}}])
 def test_the_dispatcher_prints_nothing_for_no_output_or_a_decision(monkeypatch, capsys, returns) -> None:
     assert _dispatch_run(monkeypatch, capsys, {"tool_name": "Agent"}, _stand_in(returns)) == ("", "")
