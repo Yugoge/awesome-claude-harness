@@ -555,11 +555,11 @@ class DoProducer:
         raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
 
     def pending_edits(self) -> list:
-        """The /do turn's changes not yet on disk (the user abandoned the task before them): the work dev,
-        dispatched along the do-report's route, completes."""
+        """The /do turn's changes not yet on disk (an in-flight /do left them undone, drivers/do.py
+        variant=blocked): the work dev, dispatched along the do-report's route, completes."""
         turn, out = self.turn, []
         with turn.rp.acting("driver"):
-            for rel, old, new in turn.edits:
+            for rel, old, new in turn.rest:
                 with open(os.path.join(turn.o.project, rel), encoding="utf-8") as fh:
                     if old in fh.read():
                         out.append((rel, old, new))
