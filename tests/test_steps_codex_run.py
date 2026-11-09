@@ -46,7 +46,10 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
 """
 FAKE_CODEX = '#!/bin/sh\necho "$@" >> "$FAKE_CODEX_MARKER"\n'
 MODEL_DEFAULT = 'model="gpt-5.6-sol"'
-EFFORT = 'reasoning_effort="xhigh"'
+EFFORT = 'model_reasoning_effort="xhigh"'
+# The Codex CLI key is `model_reasoning_effort`; a bare `reasoning_effort` is silently ignored, so the
+# level would never be applied. This matches that bare key and nothing that carries the `model_` prefix.
+BARE_EFFORT_KEY = re.compile(r"(?<!model_)reasoning_effort")
 
 
 class Box:
@@ -110,6 +113,40 @@ def assert_nothing_ran(box: Box, proc) -> None:
 
 
 # ---- the three modes -------------------------------------------------------------------------------------
+
+# The full argument vector the wrapper must receive, spelled out literally (not built from the script's own
+# constants): the subcommand, then each `-c` flag and its value in order, then the prompt.
+PINNED_ARGV = [
+    pytest.param(["review"],
+                 ["review", "-c", 'model="gpt-5.6-sol"', "-c", 'model_reasoning_effort="xhigh"'],
+                 id="review"),
+    pytest.param(["exec", "the prompt"],
+                 ["exec", "-c", 'model="gpt-5.6-sol"', "-c", 'model_reasoning_effort="xhigh"', "the prompt"],
+                 id="exec"),
+    pytest.param(["detach", "the prompt"],
+                 ["exec", "-c", 'model="gpt-5.6-sol"', "-c", 'model_reasoning_effort="xhigh"', "the prompt"],
+                 id="detach"),
+    pytest.param(["exec", "--model", "o3", "the prompt"],
+                 ["exec", "-c", 'model="o3"', "-c", 'model_reasoning_effort="xhigh"', "the prompt"],
+                 id="exec-custom-model"),
+]
+
+
+@pytest.mark.parametrize("args, expected", PINNED_ARGV)
+def test_every_mode_passes_exactly_the_model_and_model_reasoning_effort_overrides(box, args, expected):
+    proc = box.run(*args, env=box.env(CODEX_OUT_TASK_ID="T", CODEX_OUT_ROLE="r"))
+    assert proc.returncode == 0, proc.stderr
+    if args[0] == "detach":
+        box.wait_done()
+    argv = box.record()["argv"]
+    assert argv == expected
+    for arg in argv:
+        assert not BARE_EFFORT_KEY.search(arg), f"bare reasoning_effort key in {arg!r}"
+
+
+def test_the_script_source_names_the_effort_key_only_with_the_model_prefix():
+    assert not BARE_EFFORT_KEY.search(SCRIPT.read_text(encoding="utf-8"))
+    assert BARE_EFFORT_KEY.search('reasoning_effort="xhigh"') and not BARE_EFFORT_KEY.search(EFFORT)  # the guard bites
 
 def test_exec_calls_the_wrapper_with_model_effort_and_the_prompt_and_tees(box):
     proc = box.run("exec", "do the thing", env=box.env(CODEX_OUT_TASK_ID="T-1.0", CODEX_OUT_ROLE="dev"))

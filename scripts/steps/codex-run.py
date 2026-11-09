@@ -6,7 +6,8 @@
     codex-run.py detach  [--model M] [PROMPT]    (exec, detached: survives the tool call)
 
 PROMPT is one argument, or stdin when absent (a quoted heredoc needs no escaping). The model defaults
-to gpt-5.6-sol; reasoning effort is always xhigh.
+to gpt-5.6-sol; reasoning effort is always xhigh (every call passes `-c model="<model>"` and
+`-c model_reasoning_effort="xhigh"`).
 
 The wrapper is the executable named by $CODEX_ISO_BIN (default $HOME/bin/codex-iso): a fail-closed
 host policy that forces an isolated CODEX_HOME. This script never calls a bare `codex` and has no
@@ -34,6 +35,7 @@ import time
 from pathlib import Path
 
 DEFAULT_MODEL = "gpt-5.6-sol"
+EFFORT_KEY = "model_reasoning_effort"  # the Codex CLI key; without the model_ prefix it is silently ignored
 REASONING_EFFORT = "xhigh"
 FALLBACK_DIR = Path("/var/tmp/codex-outputs")
 SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
@@ -119,7 +121,7 @@ def parse(argv: list[str], stdin) -> tuple[str, str, str | None]:
 
 def build_command(wrapper: str, mode: str, model: str, prompt: str | None) -> list[str]:
     command = [wrapper, "review" if mode == "review" else "exec",
-               "-c", f'model="{model}"', "-c", f'reasoning_effort="{REASONING_EFFORT}"']
+               "-c", f'model="{model}"', "-c", f'{EFFORT_KEY}="{REASONING_EFFORT}"']
     return command + ([prompt] if prompt is not None else [])
 
 
