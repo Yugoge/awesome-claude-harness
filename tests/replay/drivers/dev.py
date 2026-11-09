@@ -60,6 +60,16 @@ Driver arguments (cli.py --arg K=V):
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
   variant=fanout-qa-fail  a fan-out cycle whose first lane's first QA fails; Step 16 re-dispatches
                        that lane's dev only and its QA passes; the other lanes are untouched
+  ask=answered|skip|decline|none   with variant=question: what the owner's side of Step 5's relay does
+                       (pipeline.Orchestrator.ask; P5 A20's rerun without AskUserQuestion): the default
+                       `answered` picks the recommended option; skip, decline and none leave the question
+                       unanswered (closed, refused, or no AskUserQuestion in the session), and the
+                       orchestrator takes the question's `default` as an assumption, says so, and carries it
+                       in Step 5's `Previous answers` entry (`assumption`), which BA records in its context
+                       (`clarification_answers`). commands/dev.md Step 5 names no route for an unanswered
+                       question; the assumption follows the plan's residual for a surface without
+                       AskUserQuestion (decide and record the assumption) and agents/dev.md's own rule
+                       (settle it from a sensible default, record the assumption)
   stop_before=N        (singular cycle) the orchestrator ends its turn before Step N, claiming the
                        cycle done (P5 A20: stop_before=13, QA never dispatched); each such Stop is
                        recorded in the terminal's `early_stops`; the cycle then goes on with Step N
@@ -567,8 +577,13 @@ class DevCycle:
         if not self.ba_question:
             return
         o = self.o
-        q, answer = o.ask(self.ba_question, self.L("Step 5 AskUserQuestion"))
-        self.answers.append({"question": q.get("need"), "answer": answer})
+        label = self.L("Step 5 AskUserQuestion")
+        q, answer = o.ask(self.ba_question, label)
+        entry = {"question": q.get("need"), "answer": answer}
+        assumed = next((a for a in o.assumptions if a["label"] == label), None)
+        if assumed:  # ask=skip|decline|none (A20's rerun): the default, carried as an assumption, not an answer
+            entry["assumption"] = f"no answer ({assumed['why']}); the question's default taken"
+        self.answers.append(entry)
         d = self.dispatch_ba("Step 5", self.L("Step 5 Agent(ba) clarification round 1"))
         self.ba_question = d.player.question_written
 

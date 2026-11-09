@@ -17,7 +17,8 @@ command file of the tree under test (commands/<name>.md, read at run time):
   block instantiated from the worked example or from the template's
   "embed ... here with role=..., artifacts=[...]" sentence, dispatched_at the
   current UTC time), and the subagent played by agents.Player;
-* ask(): one AskUserQuestion relaying a producer question artifact.
+* ask(): one AskUserQuestion relaying a producer question artifact (or, with the driver argument
+  `ask`, none answered: the question's default taken as a recorded assumption).
 
 Every call takes the deviations the driver declares for its step label
 (Deviations), so a block passes only where the driver's source quotes it.
@@ -41,6 +42,8 @@ _ASSIGN_RE = re.compile(r"(?:^[ \t]*|[;&|(][ \t]*|\bthen[ \t]+|\bexport[ \t]+|\b
 _FOR_RE = re.compile(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b")
 _SHELL_SPECIAL = {"HOME", "PATH", "PWD", "USER", "SHELL", "TMPDIR", "IFS", "RANDOM", "LINENO"}
 DROP, DROP_NEXT = object(), object()
+# Orchestrator.ask: what the owner's side of a relayed producer question does (driver argument `ask`).
+ASK_FORMS = ("answered", "skip", "decline", "none")
 
 
 @dataclass
@@ -117,6 +120,7 @@ class Orchestrator:
         self.hook_out = ""
         self.todos: list | None = None
         self.dispatches: list = []
+        self.assumptions: list = []         # ask(): each question taken by its default, unanswered
 
     # ------------------------------------------------------------ text
     def section(self, heading: str) -> str:
@@ -407,17 +411,45 @@ class Orchestrator:
 
     # ------------------------------------------------------------ owner questions
     def ask(self, rel_path: str, label: str):
-        """Relay a producer question artifact with ONE AskUserQuestion; returns (question doc, answer label)."""
+        """Relay a producer question artifact with ONE AskUserQuestion; returns (question doc, answer label).
+
+        The driver argument `ask` (P5 A20's rerun without AskUserQuestion) says what the owner's side does:
+        `answered` (default) the dialog's recommended option; `skip` the dialog closed with no answer
+        (answers {}); `decline` the call refused (an error tool_result, as a declined dialog or a
+        headless session's permission refusal); `none` the surface offers no AskUserQuestion, so the main
+        agent makes no call. In every form but `answered` the main agent takes the question's own
+        `default` as an assumption, says so, and records it in `assumptions` (the caller carries it into
+        the producer's re-dispatch); nothing is asked again."""
         path = os.path.join(self.project, rel_path)
         self.s.read(path, label=f"{label} Read question", deviation=self.devs.at(f"{label} Read question"))
         q = json.loads(agents.peek(self.rp, "main", path))
-        options = [{"label": o["label"] + (" (Recommended)" if o["label"] == q.get("default") else ""),
+        need, default = q.get("need", ""), q.get("default", "")
+        form = self.rp.args.get("ask", "answered")
+        if form not in ASK_FORMS:
+            raise ValueError(f"unknown ask form {form!r} (one of {', '.join(ASK_FORMS)})")
+        options = [{"label": o["label"] + (" (Recommended)" if o["label"] == default else ""),
                     "description": o.get("description", "")} for o in q.get("options", [])]
-        tin = {"questions": [{"question": q.get("need", ""), "header": (q.get("role") or "producer")[:12],
+        tin = {"questions": [{"question": need, "header": (q.get("role") or "producer")[:12],
                               "options": options, "multiSelect": False}]}
-        call = self.s.tool("AskUserQuestion", tin, label=label, deviation=self.devs.at(label))
-        ans = (call.response.get("answers") or {}).get(q.get("need", ""), q.get("default", ""))
-        return q, ans.replace(" (Recommended)", "")
+        ans = ""
+        if form != "none":
+            def perform():
+                if form == "decline":
+                    raise RuntimeError("User declined to answer questions")
+                return {"questions": tin["questions"], "answers": {}} if form == "skip" else None
+            call = self.s.tool("AskUserQuestion", tin, perform=None if form == "answered" else perform,
+                               label=label, deviation=self.devs.at(label))
+            ans = (call.response.get("answers") or {}).get(need, "").replace(" (Recommended)", "")
+        if ans:
+            return q, ans
+        why = {"none": "AskUserQuestion is not available in this session",
+               "skip": "the question was closed with no answer",
+               "decline": "the question was declined"}.get(form, "the question has no answer")
+        self.s.say(f"{(q.get('role') or 'producer').upper()} asks: {need} No answer: {why}. Assumption: "
+                   f"{default} (the question's default); continuing with it, recorded in the re-dispatch.")
+        self.assumptions.append({"label": label, "question": need, "options": [o["label"] for o in q.get("options", [])],
+                                 "assumption": default, "why": why, "form": form})
+        return q, default
 
 
 def _strip_comments(script: str) -> str:

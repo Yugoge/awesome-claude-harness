@@ -14,24 +14,35 @@ file adds the variants A20 names, armed:
 * a main-agent producer write: /dev plain whose main agent itself edits the QA report QA wrote
   (faults.py `foreign`): the D8 deny of pretool-tool-policy.py refuses it, and the cycle completes
   with no other block.
+* the rerun without AskUserQuestion: /dev question again, its Step 5 question left unanswered in
+  each form a session meets (pipeline.Orchestrator.ask's `ask` argument): `none`, a session that
+  offers no AskUserQuestion (no call is made); `skip`, the dialog closed with no answer; `decline`,
+  the call refused (an error tool_result, as a headless session's permission refusal). The
+  orchestrator takes the question's `default` as an assumption and says so; the re-dispatched BA's
+  prompt carries it in `Previous answers` and BA records it in its context (`clarification_answers`).
+  The cycle completes with no block at all, a blocked Stop included, and asks nothing again.
 
 The /dev gate's predicate is P3's disposition (scripts/resolve-dev-artifact-chain.py): the passing
 Stops these cases end with wait for P3's merge.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers import dev as devdrv
 
 NOQA = suite.Scenario("/dev QA never dispatched (A20)", "dev", (("variant", "plain"), ("stop_before", "13")),
                       ("dev",), 100)
 QUESTION = next(s for s in suite.COMPLIANT if s.name == "/dev clarify")
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
 FOREIGN = (("fault", "foreign@Step 14 Read *=docs/dev/qa-report-*.json"),)
+NO_ANSWER = ("none", "skip", "decline")
+QUESTION_DOC = devdrv.QUESTION  # the producer question BA writes in /dev question
 
 
 def _key(scn, faults=()):
@@ -73,3 +84,45 @@ def test_a20_a_main_agent_producer_write_is_denied_and_the_cycle_completes(repla
     denied = [b for b in r.blocks if b["step"].startswith("foreign ")]
     assert len(denied) == 1 and "(D8)" in (denied[0].get("text") or ""), r.explain()
     assert len(r.blocks) == 1 and not r.hook_errors and r.reached(), r.explain()
+
+
+def _payloads(r, event: str, tool: str) -> list[dict]:
+    """The payloads of the run's `event` hook invocations for `tool` (invocations.jsonl: what each hook saw)."""
+    out = []
+    with open(os.path.join(r.run_dir, "invocations.jsonl")) as fh:
+        for line in fh:
+            rec = json.loads(line)
+            if rec.get("event") == event and rec["payload"].get("tool_name") == tool:
+                out.append(dict(rec["payload"], label=rec.get("label")))
+    return out
+
+
+@pytest.mark.parametrize("form, key", [pytest.param(f, _key(QUESTION, (("ask", f),)), id=f,
+                                                    marks=pytest.mark.replay(_key(QUESTION, (("ask", f),)), QUESTION.cost))
+                                       for f in NO_ANSWER])
+def test_a20_rerun_without_askuserquestion_completes_with_the_assumption_recorded(form, key, replays):
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    asked = _payloads(r, "PreToolUse", "AskUserQuestion")
+    assert len(asked) == (0 if form == "none" else 1), [a["label"] for a in asked]
+    after = {ev.get("event") for ev in r.hook_events() if ev.get("tool") == "AskUserQuestion"}
+    assert after == ({"PostToolUseFailure", "PreToolUse"} if form == "decline" else
+                     {"PostToolUse", "PreToolUse"} if form == "skip" else set()), after
+    q = QUESTION_DOC
+    redispatch = [p for p in _payloads(r, "PreToolUse", "Agent")
+                  if "Clarification round: 1" in (p["tool_input"].get("prompt") or "")]
+    assert len(redispatch) == 1, [p["label"] for p in _payloads(r, "PreToolUse", "Agent")]
+    prev = next(line for line in redispatch[0]["tool_input"]["prompt"].split("\n")
+                if line.strip().startswith("Previous answers:"))
+    entries = json.loads(prev.split("Previous answers:", 1)[1])
+    assert [(e["question"], e["answer"]) for e in entries] == [(q["need"], q["default"])], prev
+    assert "no answer" in entries[0].get("assumption", ""), prev
+    context = [json.loads(p["tool_input"]["content"]) for p in _payloads(r, "PreToolUse", "Write")
+               if p.get("agent_type") == "ba" and "/context-" in p["tool_input"]["file_path"]]
+    assert context and context[-1].get("clarification_answers") == entries, context[-1:]
+    said = [line for f in glob.glob(os.path.join(r.run_dir, "transcripts", "*", "*.jsonl")) for line in open(f)
+            if "Assumption: " + q["default"] in line]
+    assert said, "the main agent did not say which assumption it took"
+    assert not r.blocks and not r.hook_errors and r.reached(), r.explain()
+    stops = [ev for ev in r.hook_events() if ev.get("event") == "Stop"]
+    assert len(stops) == 1, [ev.get("label") for ev in stops]
