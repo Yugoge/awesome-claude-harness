@@ -86,7 +86,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `push.sh` - push.sh - Executable version of /push command
 - `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 - `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
-- `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
+- `session-gitignore-propagate.sh` - SessionStart hook: list the harness's runtime paths in the product repo's .git/info/exclude
 - `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 - `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
 - `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
