@@ -323,17 +323,18 @@ def test_by_content_pairs_each_todo_with_its_own_step():
     assert todo_canonical.by_content(canonical, [{"content": "Step 99: not a step"}]) == [{}]
 
 
-def test_subagent_tracker_records_the_step_of_the_todos_content(night):
-    """posttool-subagent-track.py (the Codex plan's bookmark) pairs the in-progress todo with the canonical
-    step of its content: in a list without Step 0, PM Plan is index 1, and its call is recorded there."""
+def test_subagent_tracker_leaves_the_codex_plan_bookmark_alone(night):
+    """posttool-subagent-track.py writes no bookmark: a Codex plan step's subagent call is
+    the Codex transcript's evidence, which pretool-workflow-gate.py records itself."""
     old = _frontier(_canonical()[1:], 1)
     bookmark = night.project / ".claude" / f"workflow-{night.sid}.json"
-    bookmark.write_text(json.dumps({"command": "dev-overnight", "arguments": "", "last_todos": old}))
+    before = json.dumps({"command": "dev-overnight", "arguments": "", "last_todos": old})
+    bookmark.write_text(before)
     p = night.hook("posttool-subagent-track.py", "PostToolUse", tool_name="Agent",
                    tool_input={"subagent_type": "pm", "prompt": "PLAN: the test plan", "description": "pm plan"},
                    tool_response={"content": "done"})
     assert p.returncode == 0, p.stderr
-    assert json.loads(bookmark.read_text()).get("subagent_calls") == {"1": True}, p.stdout
+    assert bookmark.read_text() == before, p.stdout
 
 
 # ---------------------------------------------------------------- the write boundary and /restart's helper

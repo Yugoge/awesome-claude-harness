@@ -11,17 +11,17 @@
 CHECKPOINT_THRESHOLD=${GIT_CHECKPOINT_THRESHOLD:-10}  # Default: 10 files accumulated
 SILENT_MODE=${GIT_CHECKPOINT_SILENT:-0}
 
-# Worktree detection: parse TOOL_INPUT to find file_path, detect worktree context
+# Worktree detection: the payload on stdin names the file the tool wrote (the CLI passes
+# hook input on stdin only); a file inside .claude/worktrees/<name>/ is checkpointed in
+# that worktree instead of the main repo.
 GIT_DIR=""
-if [ -n "$TOOL_INPUT" ]; then
-  FILE_PATH=$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"//;s/"$//')
-
-  if [ -n "$FILE_PATH" ]; then
-    if echo "$FILE_PATH" | grep -q '/.claude/worktrees/[^/]\+/'; then
-      WORKTREE_ROOT=$(echo "$FILE_PATH" | sed 's|\(.*/.claude/worktrees/[^/]*/\).*|\1|')
-      if [ -d "$WORKTREE_ROOT" ]; then
-        GIT_DIR="$WORKTREE_ROOT"
-      fi
+INPUT=$(cat 2>/dev/null || true)
+FILE_PATH=$(printf '%s' "$INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"//;s/"$//')
+if [ -n "$FILE_PATH" ]; then
+  if echo "$FILE_PATH" | grep -q '/.claude/worktrees/[^/]\+/'; then
+    WORKTREE_ROOT=$(echo "$FILE_PATH" | sed 's|\(.*/.claude/worktrees/[^/]*/\).*|\1|')
+    if [ -d "$WORKTREE_ROOT" ]; then
+      GIT_DIR="$WORKTREE_ROOT"
     fi
   fi
 fi
@@ -55,27 +55,19 @@ if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
 
   write_checkpoint "$GIT_DIR" "posttool threshold (${TOTAL} files, threshold=${CHECKPOINT_THRESHOLD})" >&2
   RC=$?
+  # A snapshot that was refused or failed is told to the user (systemMessage) and to the
+  # model (additionalContext), as one JSON object that is the hook's whole stdout; plain
+  # PostToolUse stdout reaches neither (code.claude.com/docs/en/hooks). A snapshot that
+  # was written says nothing.
+  NOTICE=""
   if [ "$RC" -eq 3 ]; then
-    # Refused, nothing written: auto-commit.sh's notice as one JSON systemMessage, the whole stdout
-    # (code.claude.com/docs/en/hooks, read 2026-11-01: "Print nothing but the JSON object to stdout").
-    printf '{"systemMessage": "%s"}\n' \
-      "Checkpoint snapshot refused by $checkpoint_refused_by: nothing written, see logs/checkpoint.log"
-  elif [ "$SILENT_MODE" != "1" ]; then
-    echo "💾 Auto-checkpoint triggered: $TOTAL files pending"
-    if [ "$RC" -eq 0 ]; then
-      BRANCH=$($GIT_CMD branch --show-current 2>/dev/null)
-      if [ -n "$BRANCH" ]; then
-        SANITIZED=$(printf '%s' "$BRANCH" | tr '/' '-')
-      else
-        SHORT=$($GIT_CMD rev-parse --short HEAD 2>/dev/null)
-        SANITIZED="detached-${SHORT:-empty}"
-      fi
-      REF="refs/checkpoints/${SANITIZED}"
-      TIP=$($GIT_CMD rev-parse --short "$REF" 2>/dev/null)
-      echo "✅ Checkpoint saved: ${TIP:-?} on ${REF} (${TOTAL} files)${GIT_DIR:+ in $GIT_DIR}"
-    else
-      echo "⚠️  Checkpoint failed; see ~/.claude/logs/checkpoint.log"
-    fi
+    NOTICE="Checkpoint snapshot refused by $checkpoint_refused_by: nothing written, see logs/checkpoint.log"
+  elif [ "$RC" -ne 0 ] && [ "$SILENT_MODE" != "1" ]; then
+    NOTICE="Checkpoint failed (${TOTAL} files pending); see ~/.claude/logs/checkpoint.log"
+  fi
+  if [ -n "$NOTICE" ]; then
+    printf '{"systemMessage": "%s", "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s"}}\n' \
+      "$NOTICE" "$NOTICE"
   fi
 fi
 

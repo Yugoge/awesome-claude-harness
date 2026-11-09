@@ -19,8 +19,11 @@ Logic:
   4. Otherwise → block
 
 The Codex compatibility runtime (CLAUDE_COMPAT_RUNTIME=codex) keeps its own
-plan state in the bookmark (written through lib.todo_canonical.write_bookmark,
-its one writer): its update_plan calls are not in a Claude transcript.
+plan state, since its update_plan calls are not in a Claude transcript: this
+hook is the one writer of that record, the Codex todos file
+(official_todos_path), keyed to the command start prompt-workflow.py writes in
+the workflow bookmark, so a new command starts from no plan state. The bookmark
+itself has one writer, prompt-workflow.py; this hook only reads it.
 
 Exit codes:
   0: Allow tool use
@@ -55,6 +58,53 @@ def official_todos_path(session_id: str) -> Path:
     return Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'todos' / f'{session_id}-agent-{session_id}.json'
 
 
+# The Codex plan state this hook keeps, apart from the command start it reads from the bookmark.
+CODEX_FIELDS = (
+    'last_todos', 'todo_acknowledged', 'lock_reason', 'codex_step_started_at_ms',
+    'codex_plan_acknowledged', 'codex_plan_acknowledged_implicit', 'subagent_calls',
+    'codex_subagent_evidence',
+)
+
+
+def _command_start(state: dict) -> list:
+    """The command start a Codex plan record belongs to (prompt-workflow.py sets both)."""
+    return [state.get('workflow_instance_id'), state.get('workflow_started_at_ms')]
+
+
+def load_codex_state(session_id: str, bookmark_path: Path) -> dict:
+    """The bookmark's command start with this command's Codex plan state.
+
+    The plan state comes from the Codex todos record when it belongs to this
+    command start; otherwise from a bookmark that still carries it (one written
+    before the record existed), else there is none. Raises when the bookmark is
+    unreadable."""
+    start = json.loads(bookmark_path.read_text())
+    if not isinstance(start, dict):
+        raise ValueError('bookmark is not a JSON object')
+    state = {k: v for k, v in start.items() if k not in CODEX_FIELDS}
+    try:
+        record = json.loads(official_todos_path(session_id).read_text())
+    except Exception:
+        record = None
+    if (isinstance(record, dict) and record.get('command_start') == _command_start(start)
+            and isinstance(record.get('codex'), dict)):
+        state.update({k: v for k, v in record['codex'].items() if k in CODEX_FIELDS})
+    else:
+        state.update({k: start[k] for k in CODEX_FIELDS if k in start})
+    return state
+
+
+def save_codex_state(session_id: str, state: dict) -> None:
+    """Publish this command's Codex plan state, whole, by rename (this hook is its one writer)."""
+    path = official_todos_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {'command_start': _command_start(state),
+              'codex': {k: state[k] for k in CODEX_FIELDS if k in state}}
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    tmp.write_text(json.dumps(record, ensure_ascii=False))
+    os.replace(tmp, path)
+
+
 def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
     """Run the harness's canonical todo script (never the project's own
     scripts/todo) in project_dir and return the full step list.
@@ -84,23 +134,23 @@ def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> l
 def build_next_todowrite_call(session_id: str, cmd_name: str = '', project_dir: Path = None) -> str:
     """Return ready-to-use JSON for the next TodoWrite call (Codex runtime).
 
-    Primary source: the todos file the Codex plan path writes.
-    Fallback: canonical script (when file doesn't exist).
+    Primary source: this command's Codex plan state (load_codex_state).
+    Fallback: canonical script (when it has no plan yet).
     """
     try:
-        todos_file = official_todos_path(session_id)
-        if todos_file.exists():
-            todos = json.loads(todos_file.read_text())
+        state = {}
+        if project_dir:
+            try:
+                state = load_codex_state(session_id, project_dir / '.claude' / f'workflow-{session_id}.json')
+            except Exception:
+                state = {}
+        todos = state.get('last_todos')
+        if isinstance(todos, list) and todos:
+            pass
         elif cmd_name and project_dir:
             # Forward stored --force/etc. arguments so the hint matches the
             # argument-aware canonical variant (e.g. close.py 2-step forced list).
-            _args = ''
-            try:
-                _bm = project_dir / '.claude' / f'workflow-{session_id}.json'
-                _args = json.loads(_bm.read_text()).get('arguments', '')
-            except Exception:
-                _args = ''
-            todos = run_canonical_todos(cmd_name, project_dir, _args)
+            todos = run_canonical_todos(cmd_name, project_dir, state.get('arguments', ''))
             if not todos:
                 return ''
         else:
@@ -867,19 +917,14 @@ def persist_codex_initialization(
             if old_status != 'in_progress' or type(lower_bound) is not int:
                 started_at[str(idx)] = now_ms
         state['codex_step_started_at_ms'] = started_at
-        todos_file = official_todos_path(session_id)
-        todos_file.parent.mkdir(parents=True, exist_ok=True)
-        todos_file.write_text(json.dumps(todos, ensure_ascii=False))
         state['todo_acknowledged'] = True
         state['last_todos'] = todos
         state['codex_plan_acknowledged'] = True
         if implicit:
             state['codex_plan_acknowledged_implicit'] = True
         state.pop('lock_reason', None)
-        from lib.todo_canonical import write_bookmark
-        # The whole state the checks above ran on, as it always was: what another
-        # hook may have written since is not merged in (see write_bookmark).
-        write_bookmark(bookmark_path, lambda _current: json.dumps(state, ensure_ascii=False))
+        # The whole plan state the checks above ran on; this hook is its one writer.
+        save_codex_state(session_id, state)
     except Exception:
         return False
     return True
@@ -944,7 +989,7 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
         return True
 
     try:
-        state = json.loads(bookmark_path.read_text())
+        state = load_codex_state(session_id, bookmark_path)
     except Exception:
         return False
 
@@ -969,8 +1014,7 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
         try:
             state['todo_acknowledged'] = False
             state['lock_reason'] = 'sequence_violation'
-            from lib.todo_canonical import write_bookmark
-            write_bookmark(bookmark_path, lambda _current: json.dumps(state, ensure_ascii=False))
+            save_codex_state(session_id, state)
         except Exception:
             pass
         emit_codex_plan_block(cmd_name, violations, last_todos or todos)
@@ -1034,14 +1078,14 @@ def acknowledge_codex_canonical_bootstrap(
 
 
 def _codex_lock(data: dict, session_id: str, bookmark_path: Path, project_dir: Path):
-    """(command, lock reason, hint JSON) of the Codex plan state in the bookmark;
+    """(command, lock reason, hint JSON) of this command's Codex plan state;
     exits 0 when nothing holds the tool back."""
     # No bookmark → no active workflow → allow
     if not bookmark_path.exists():
         sys.exit(0)
 
     try:
-        state = json.loads(bookmark_path.read_text())
+        state = load_codex_state(session_id, bookmark_path)
     except Exception:
         sys.exit(0)
 
