@@ -1184,6 +1184,102 @@ def _command_injects_keystone_config(command: str) -> bool:
             return True
     return False
 
+
+# P2-5: `git config` that writes the keystone key. In --worktree mode the key sits in the shared
+# common-dir config, which only bubblewrap's read-only rebind kept Bash off: measured on d64fa96
+# with no bubblewrap, `git config --unset core.hooksPath` and `git config core.hooksPath /dev/null`
+# run from the working root passed every hook and removed the key (main agent and subagent).
+_CONFIG_READ_FLAGS = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color',
+                      '--get-colorbool', '-l', '--list'}
+_CONFIG_SECTION_OPS = {'--remove-section', '--rename-section', 'remove-section', 'rename-section'}
+_CONFIG_EDIT_OPS = {'-e', '--edit', 'edit'}
+
+
+def _git_subcommand_index(subtoks: list[str]) -> int:
+    """Index of the subcommand in one git invocation's argv (after `git`), skipping global
+    options and the operands of the value-taking ones; len(subtoks) when there is none."""
+    j = 0
+    while j < len(subtoks):
+        t = subtoks[j].strip('\'"')
+        if t in GIT_GLOBAL_VALUE_OPTS or t in ('-c', '--config-env'):
+            j += 2
+        elif t.startswith('-'):
+            j += 1
+        else:
+            return j
+    return j
+
+
+def _config_writes_keystone(subtoks: list[str]) -> bool:
+    """True iff this git invocation is a `git config` that is not a pure read and names the
+    keystone key (core.hooksPath, include.path, includeIf.*.path), removes or renames the
+    `core` section, or opens the config in an editor."""
+    k = _git_subcommand_index(subtoks)
+    if k >= len(subtoks) or subtoks[k].strip('\'"') != 'config':
+        return False
+    args = [t.strip('\'"').lower() for t in subtoks[k + 1:]]
+    opts = args[:args.index('--')] if '--' in args else args  # after `--` every word is a value
+    words = [a for a in opts if not a.startswith('-')]
+    verb = words[0] if words else ''  # `git config get|set|unset|edit|remove-section ...`
+    if verb in _CONFIG_EDIT_OPS or any(a in _CONFIG_EDIT_OPS for a in opts if a.startswith('-')):
+        return True
+    if (verb in _CONFIG_SECTION_OPS or any(a in _CONFIG_SECTION_OPS for a in opts if a.startswith('-'))) \
+            and 'core' in args:
+        return True
+    if not any(_config_key_redirects_keystone(a.split('=', 1)[0]) for a in args):
+        return False
+    return not (any(a in _CONFIG_READ_FLAGS for a in opts) or verb in ('get', 'list'))
+
+
+def _strip_shell_comments(command: str) -> str:
+    """The command without its `#` comments, which the shell never runs (P2-5: Step 1's comment
+    words "the git common dir" read as a git op on the main root). A `#` is a comment only at the
+    start of a word (after a blank) at the top level: never inside quotes, `$(...)`, `${...}`
+    or backticks, whose own quotes nest. Conservative: a command with a heredoc, or whose quoting
+    does not close, is returned unchanged (more text to read can only refuse more)."""
+    if '#' not in command or '<<' in command or re.search(r'\besac\b', command):
+        return command  # a heredoc body, or a `case` pattern's `)` inside `$(...)`, defeats the scan
+    out: list[str] = []
+    stack: list[list] = []  # [kind, depth]: "'", "$'", '"', '`', '$(', '${'
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        kind = stack[-1][0] if stack else ''
+        nxt = command[i + 1] if i + 1 < n else ''
+        if c == '\\' and kind != "'" and nxt:
+            out.append(c + nxt); i += 2; continue
+        if kind in ("'", "$'"):
+            if c == "'":
+                stack.pop()
+        elif kind == '`':
+            if c == '`':
+                stack.pop()
+        elif c == '$' and nxt and nxt in '({':
+            stack.append(['$' + nxt, 1]); out.append(c + nxt); i += 2; continue
+        elif kind == '"':
+            if c == '"':
+                stack.pop()
+            elif c == '`':
+                stack.append(['`', 0])
+        else:  # top level, `$(...)` or `${...}`: quotes nest here
+            if c == '$' and nxt == "'":
+                stack.append(["$'", 0]); out.append(c + nxt); i += 2; continue
+            if c in ('"', "'", '`'):
+                stack.append([c, 0])
+            elif kind in ('$(', '${') and c == ('(' if kind == '$(' else '{'):
+                stack[-1][1] += 1
+            elif kind in ('$(', '${') and c == (')' if kind == '$(' else '}'):
+                stack[-1][1] -= 1
+                if stack[-1][1] == 0:
+                    stack.pop()
+            elif not kind and c == '#' and (i == 0 or command[i - 1] in ' \t\n'):
+                while i < n and command[i] != '\n':
+                    i += 1
+                continue
+        out.append(c)
+        i += 1
+    return command if stack else ''.join(out)
+
 # fix-2 (Cycle-2): interpreter / subprocess launchers. The 2026-06-03 incident
 # vector is a python-subprocess `git -C <main> checkout other`. On git 2.43 the
 # keystone does NOT fire for a symref branch-switch (codex empirically confirmed),
@@ -1575,8 +1671,18 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             targets_main = True
         switches_protected = _mentions_protected_branch(positionals)
 
-        # M13: any git op whose effective dir is main-targeting -> block.
-        if targets_main:
+        # P2-5: the keystone key stays in every mode, bubblewrap or not, from any directory.
+        if _config_writes_keystone(subtoks):
+            _block(
+                '\nOVERNIGHT KEYSTONE CONFIG BLOCK: a git config write that names the keystone '
+                '(core.hooksPath, include.path, includeIf.*.path), removes or renames the core '
+                'section, or edits the config is forbidden for overnight actors; the keystone '
+                'stays as the launcher set it. Reading it (--get, --list) is allowed.\n'
+            )
+
+        # M13: any git op whose effective dir is main-targeting -> block. P2-5: `rev-parse` only
+        # reads (it runs no hook and writes no file), and Step 1 runs it in the main root.
+        if targets_main and sub != 'rev-parse':
             _block(
                 '\nOVERNIGHT MAIN-ROOT BLOCK: git op targeting the main '
                 'working directory (effective -C/cwd under main_root, outside '
@@ -1950,10 +2056,40 @@ def _command_is_worktree_local(command: str, main_root: str, worktree_path: str,
             rp = p
         if _path_under_prefix(rp, main_real) and not _path_under_prefix(rp, os.path.realpath(worktree_path or '')):
             return False
-    # a bare interpreter/subprocess that could write anywhere is not provably local
-    if _INTERPRETER_LAUNCHER_RE.search(command):
+    # a bare interpreter/subprocess that could write anywhere is not provably local; one that
+    # runs a harness script is the harness's own code (P2-5)
+    if _INTERPRETER_LAUNCHER_RE.search(_without_harness_launches(command, worktree_path)):
         return False
     return True
+
+
+# P2-5: an interpreter whose script operand is a file of this harness's hooks/ or scripts/, the
+# code the guard itself runs from. Measured on d64fa96 with no bubblewrap: /dev-overnight Step 1
+# (python3 hooks/lib/overnight.py, bash scripts/overnight-init.sh) was refused as "not provably
+# worktree-local", so a --worktree session could not start. Any other interpreter launch (`-c`,
+# `-m`, stdin, a script elsewhere) still fails closed.
+_HARNESS_LAUNCH_RE = re.compile(
+    r'(?<![\w./-])(?:/[\w./-]*/)?(?:python3?|bash|sh)[ \t]+("[^"\n]+"|\'[^\'\n]+\'|[^\s;&|()<>]+)')
+
+
+def _harness_script(operand: str, worktree_path: str) -> bool:
+    """True iff `operand` names a file of this harness's hooks/ or scripts/ (not in the worktree)."""
+    home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, operand.strip('\'"')))
+    if not os.path.isabs(t) or any(ch in t for ch in '$`*?[\\'):
+        return False
+    real = os.path.realpath(t)
+    own = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if worktree_path and _path_under_prefix(real, os.path.realpath(worktree_path)):
+        return False
+    return os.path.isfile(real) and any(
+        _path_under_prefix(real, os.path.join(own, d)) for d in ('hooks', 'scripts'))
+
+
+def _without_harness_launches(command: str, worktree_path: str) -> str:
+    """`command` with every interpreter launch of a harness script blanked out."""
+    return _HARNESS_LAUNCH_RE.sub(
+        lambda m: ' ' if _harness_script(m.group(1), worktree_path) else m.group(0), command)
 
 
 def _targets_git_config(file_path: str) -> bool:
@@ -2025,7 +2161,7 @@ def _raw_git_metadata_write_into_main(command: str, main_root: str,
 
 
 def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
-                          journal: tuple = ()) -> None:
+                          journal: tuple = (), run_command: str = '') -> None:
     """WRITE-HALF entry (fix-7): for the ACTIVE overnight actor's Bash command,
     re-exec it inside the bwrap RO-bind boundary (emit updatedInput.command) when
     the boundary is available; FAIL-CLOSED (deny non-worktree-local commands)
@@ -2050,7 +2186,7 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
             'keystone and the RO-bind). Use git inside the worktree instead.\n'
         )
     if _bwrap_boundary_available():
-        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind, journal)
+        argv = _build_bwrap_argv(run_command or command, main_root, worktree_path, isolation_kind, journal)
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
@@ -2159,8 +2295,10 @@ def main():
             # .git-ref writes / --work-tree-into-main / --git-dir-into-main /
             # interpreter-hidden main-git ops BEFORE any rewrite, so AC-W1's raw-
             # .git-write denial and AC-K6 are attributed to this retained layer.
-            _enforce_overnight_git_command(
-                tool_input.get('command', ''), main_root, worktree_path, main_git_dir)
+            # P2-5: the checks read the command without its comments; the shell never runs them.
+            raw_command = tool_input.get('command', '')
+            command = _strip_shell_comments(raw_command)
+            _enforce_overnight_git_command(command, main_root, worktree_path, main_git_dir)
             # STEP B: WRITE-HALF (fix-7) bwrap rewrite for the active overnight
             # actor — re-exec the surviving command inside the RO-bind boundary
             # (emit updatedInput.command + exit 0) when bwrap is available, else
@@ -2170,8 +2308,8 @@ def main():
             # helper against its blobs at the harness's HEAD (option (a)) cannot see what it runs:
             # measured, its hooks/lib modules load from untracked __pycache__ bytecode and the untracked
             # venv runs any .pth in it; a planted .pyc and .pth ran with the check passing.
-            _apply_write_boundary(tool_input.get('command', ''), gov_state, main_git_dir,
-                                  _restart_journal(payload))
+            _apply_write_boundary(command, gov_state, main_git_dir,
+                                  _restart_journal(payload), raw_command)
         elif classification == 'worktree_context':
             # VECTOR-3 fail-closed: cwd is inside an active worktree but no
             # governing overnight state could be resolved for it. We cannot derive
@@ -2179,7 +2317,7 @@ def main():
             # command is refused (it could move main HEAD or write main). A
             # non-git, non-interpreter command is left to the worktree-boundary
             # enforcement below.
-            _fail_closed_worktree_context(tool_input.get('command', ''))
+            _fail_closed_worktree_context(_strip_shell_comments(tool_input.get('command', '')))
     target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
     if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
             and target and _targets_git_config(target):
