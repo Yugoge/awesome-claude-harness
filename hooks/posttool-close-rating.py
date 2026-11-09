@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """PostToolUse(AskUserQuestion): the one writer of the owner's answers. It routes by metadata.source prefix to one
-handle(payload) per library and prints what the handler returns (hook JSON, or nothing):
+handle(payload) per library, which writes and returns nothing:
 - close-rating:<task-id> (D9): a row only for the main agent's (no agent_id) one close-rating question answered with
   one of the four exact labels in the CLI's tool_response (the CLI drops answers the model writes in its input);
 - requirement-round:<task>:r<n> and producer-question:<task>:<role> (D28): requirement_round.handle writes the
   answer file or the producer answer.
-Skip, free text, a decline, an error, an AFK auto-continue or any other payload: nothing. Never blocks, exit 0 (D9b)."""
+Skip, free text, a decline, an error, an AFK auto-continue or any other payload: nothing. Prints nothing, never
+blocks, exit 0 (D9b)."""
 import json
 import sys
 from pathlib import Path
@@ -41,9 +42,8 @@ def main() -> None:
         payload = json.load(sys.stdin)
         meta = payload["tool_input"].get("metadata") or {}
         route = ROUTES.get(str(meta.get("source", "")).partition(":")[0])
-        output = route(payload) if route else None
-        if output:
-            print(json.dumps(output))
+        if route:
+            route(payload)
     except Exception:
         pass
 
