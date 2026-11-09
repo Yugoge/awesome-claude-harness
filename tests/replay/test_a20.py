@@ -133,7 +133,7 @@ CLOSE = next(s for s in suite.COMPLIANT if s.name == "/close after /dev")
 
 @pytest.mark.replay(_key(CLOSE, (("rating", "none"),)), CLOSE.cost)
 def test_a20_rerun_without_askuserquestion_close_rating_holds_no_stop(replays):
-    """/close after /dev in a session that offers no AskUserQuestion: Step 3b's rating question cannot
+    """/close after /dev in a session that offers no AskUserQuestion: Step 4's rating question cannot
     be asked (no call); the close still completes with no blocked Stop (A20's rerun; PLAN-v2's residual:
     there the close rating never blocks)."""
     r = replays.get(_key(CLOSE, (("rating", "none"),)))

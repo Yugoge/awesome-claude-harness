@@ -21,7 +21,7 @@ Checked per case and settings file:
     writes the do-report; dev's report (dev.status completed) lists exactly the files it edited
     (toy/__init__.py where the /do left part of the change, none where it left none);
   - Step 0 again: chain_pass (the G2-verified dev-report concludes the task, Q7); one close-QA round;
-    `CLOSE: YES` as the close report's last line; the only question is Step 3b's rating;
+    `CLOSE: YES` as the close report's last line; the only question is Step 4's rating;
   - no hook error, no network attempt; no block other than the case's own.
 The cases (left= of drivers/do.py; every one is a /do ending a compliant /do of a7d3a9f's text produces):
   plain  left=half: toy.add checks argument a only, the user stops the task; dev adds b. No block.
