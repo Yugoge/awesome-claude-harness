@@ -8,14 +8,19 @@ Three-tier policy for the main agent:
      count; other tools between the Bash calls do not.
   2. Non-whitelist tools are allowed once TOTAL per tool name per turn
      (2nd same-name call blocked regardless of intervening tool calls).
+     Inside the session's open /dev-overnight window (lib/overnight
+     window_open) an Agent dispatch also resets these counts: the unattended
+     session is one turn, so there the turn's budget is the one between two
+     dispatches.
   3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are blocked even
      with /do consent; an /allow grant naming the tool is the one way
      through.
 
 bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
 increments it. An Agent (subagent) dispatch resets it to
-{"last_tool": "Agent", "count": 0}, and hooks/prompt-workflow.py removes
-the whole state file (per_tool_counts too) at each prompt. Every other tool
+{"last_tool": "Agent", "count": 0} (and, inside an open overnight window,
+empties per_tool_counts), and hooks/prompt-workflow.py removes the whole
+state file (per_tool_counts too) at each prompt. Every other tool
 (Read, TodoWrite, Glob, Grep, and any non-whitelist tool) leaves
 bash_consecutive byte-unchanged — interleaving a non-Agent tool between
 Bash calls does NOT launder the streak. The Agent-clear lives in main()
@@ -143,6 +148,18 @@ def update_streak(session_id: str, tool_name: str) -> int:
         return counts[tool_name]
 
 
+def overnight_window_open(data: dict) -> bool:
+    """The payload's session has its own /dev-overnight record with end_time
+    ahead and no human-typed /stop after its /dev-overnight (lib/overnight
+    window_open, the time-lock's one reading). Fails closed: any error keeps
+    the ordinary per-turn budget."""
+    try:
+        from lib import overnight
+        return bool(overnight.window_open(data))
+    except Exception:
+        return False
+
+
 def block_permanent(tool_name: str) -> None:
     allowed = ", ".join(sorted(ALWAYS_ALLOWED))
     sys.stderr.write(
@@ -216,10 +233,17 @@ def main():
     # (never deletes it — deleting would trip _parse_streak_state's type-guard
     # and wipe per_tool_counts). It is a pure state write that never blocks, so
     # placing it ahead of the bypasses changes no allow/deny outcome.
+    # Inside the session's open overnight window the dispatch also empties
+    # per_tool_counts: no prompt arrives there all night (one turn), so without
+    # it every Write/Edit after the first was refused until the session ended.
+    # Between two dispatches the budget stays one call per tool name, as one
+    # interactive turn's is; outside the window nothing but a prompt resets it.
     if tool_name == "Agent":
         try:
             state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
+            if overnight_window_open(data):
+                state["per_tool_counts"] = {}
             write_tool_streak(sid, state)
         except Exception:
             pass

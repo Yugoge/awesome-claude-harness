@@ -131,7 +131,7 @@ The main agent's purity is enforced at two points:
 
 **The orchestrator gate** (`hooks/pretool-orchestrator-gate.py`, `PreToolUse` matcher `*`):
 - **Whitelisted tools** are always allowed; `Bash` is additionally capped at 5 *consecutive* same-name calls (the 6th blocks).
-- **Non-whitelist tools** (`Edit`, `Write`, `WebFetch`, `NotebookEdit`, `EnterWorktree`, `mcp__playwright__*`, …) are allowed **once total per tool name per turn** — `NON_WHITELIST_MAX_CONSECUTIVE = 1`; the 2nd same-name call blocks regardless of intervening different calls.
+- **Non-whitelist tools** (`Edit`, `Write`, `WebFetch`, `NotebookEdit`, `EnterWorktree`, `mcp__playwright__*`, …) are allowed **once total per tool name per turn** — `NON_WHITELIST_MAX_CONSECUTIVE = 1`; the 2nd same-name call blocks regardless of intervening different calls. A prompt resets the counts; inside the session's open `/dev-overnight` window (no prompt arrives all night, so the session is one turn) an `Agent` dispatch resets them too, as it resets the Bash count.
 - **Permanently blocked**: `EnterPlanMode`, `ExitPlanMode` — even under `/do`.
 - **State** lives at `/tmp/claude-tool-streak-<sid>.json` (`schema_version: 2`, per-tool counts + a Bash-consecutive counter).
 - **Bypass**: a `/do` consent flag set this session makes the gate exit 0 for everything except permanently-blocked tools — and crucially `/do` does **not** mutate the streak state, preserving clean semantics.
