@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Description: Self-verifying headline-claims gate. Runs ALL THREE hero-provenance audits in
-#   --strict mode so any source-verification downgrade is a hard failure, the hero status and
-#   capture-provenance checks, the adversarial-corpus check, and the enforcement-evidence gates
-#   (docs/ENFORCEMENT-LEDGER.md against the tracked settings.json and the guard sources).
+#   --strict mode so any source-verification downgrade is a hard failure, the README
+#   region check and the capture-provenance check, the adversarial-corpus check, and the
+#   enforcement-evidence gates (docs/ENFORCEMENT-LEDGER.md against the tracked settings.json
+#   and the guard sources).
 # Usage: bash scripts/verify-claims.sh
 # Exit codes: 0 = all checks pass, 1 = one or more checks failed. Runs identically in CI and
 #   locally.
@@ -47,8 +48,17 @@ run_audit .github/assets/hook-trace.json .github/assets/hook-hero.svg
 run_audit .github/assets/guard-hero.json .github/assets/guard-hero.svg
 
 # ---------------------------------------------------------------------------
-# 3b. Hero status-region ratchet + hero capture provenance.
-#     These two gates protect the README's published claim rows and the hero capture chain.
+# 3b. README canonical-region ratchet + hero capture provenance.
+#     These two gates protect the README's generated regions and the hero capture chain.
+#     scripts/generate-hero-status.py --check re-derives the five canonical regions and
+#     byte-compares each with the README: "Measured proof" (the proof table) and "Commands"
+#     (the commands table), both counted from the repository by scripts/readme_facts.py, and
+#     the claim rows (limits, disclosure, status) under "Status and known limits". It also
+#     asserts that every region sits inside its H2 section and the claim regions in order, that
+#     no number is typed by hand in the prose outside the regions, and that the hero's published
+#     glyph figure still equals what the browser measures (scripts/measure-hero-fold.py; that
+#     step needs a headless browser and reports itself UNVERIFIED, without failing, where there
+#     is none). A count region whose facts cannot be derived fails the check and names the input.
 #     Landed HERE because this file is the aggregate gate and the lane that authored those
 #     gates may not edit it — an enforcement mechanism nobody invokes is advisory, whatever
 #     its own tests say. Neither call is suffixed `|| true` and neither is redirected away
@@ -61,9 +71,9 @@ run_audit .github/assets/guard-hero.json .github/assets/guard-hero.svg
 #     under --tamper, which is not passed here.
 # ---------------------------------------------------------------------------
 if python3 scripts/generate-hero-status.py --check; then
-  pass "hero-status: README claim rows match the generator's derivation (--check)"
+  pass "hero-status: README regions, positions and numbers match the generator's derivation (--check)"
 else
-  fail "hero-status: scripts/generate-hero-status.py --check reports the README status region has drifted"
+  fail "hero-status: scripts/generate-hero-status.py --check reports a README region has drifted, moved, or a number is typed by hand"
 fi
 
 if python3 scripts/verify-hero-provenance.py; then

@@ -21,7 +21,7 @@ Facts (function -> what it returns):
   hook_registrations        hook entries per event in the tracked settings.json; registered files
   enforcement_strength      the ledger's registered-hook rows by behavior and by proof layer
   command_rows              the commands table: name, argument hint, human-only flag, one-line summary
-  ci_enforces               three predicates over the test sources, each with the assertion's file:line
+  ci_enforces               five predicates over the test sources and the CI workflow, each with the assertion's file:line
 
 WHAT "READ" MEANS HERE. File contents come from the working tree, so an edit shows at once. Which
 files exist comes from the git index (`git ls-files`): an untracked scratch file is not a test, a
@@ -920,6 +920,11 @@ ARTIFACT_CHECK_MODULE = "tests/artifact_graph/check.py"
 _CLAIM_COMPLIANT = "a compliant replay of each pipeline meets no gate block, no hook error, and reaches its terminal"
 _CLAIM_NO_CLASS = "no blocking site may lack a clearing class (a site of class \"-\" fails the suite)"
 _CLAIM_ARTIFACT = "the artifact check asserts no violation and keeps no exception list"
+FAULTS_TEST = "tests/replay/test_faults.py"
+_CLAIM_FAULTS = ("an injected fault is returned by a gate to the actor that produced the faulted artifact, which "
+                 "repairs it with no human action, and the pipeline reaches its terminal")
+_CLAIM_UNIT = ("the unit suite (pytest over hooks/tests and tests) runs in the baseline job on every Python version "
+               "of its matrix, and a failing test fails the job")
 _EXCEPTION_NAME = re.compile(r"(?i)exception|exempt|waiv|suppress|allowlist|whitelist|grandfather|"
                              r"known[_-]?(?:violation|issue|failure)|expected[_-]?viol|baseline[_-]?viol")
 
@@ -1058,8 +1063,119 @@ def _artifact_check_clean(root: Path) -> dict:
     return _verdict(not missing, rel, hit.lineno if hit is not None else None, claim, found, missing)
 
 
+def _fault_table(tree: ast.Module) -> list[str]:
+    node = _module_value(tree, "FAULTS")
+    ids = [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)
+           and _FAULT_ID.fullmatch(k.value)] if isinstance(node, ast.Dict) else []
+    if not ids or len(ids) != len(node.keys):
+        raise FactError(f"{FAULTS_TEST}: FAULTS is no table keyed by fault ids (F<number>[letters])")
+    return ids
+
+
+def _treated_apart(test: ast.AST) -> tuple[set[str], list[str]]:
+    """(fault ids the test does not run through _returned_and_repaired, problems). A call made outside every
+    `if fault == "<id>":` covers all ids; one made only in such an if's else branch covers all but that id."""
+    calls = lambda nodes: any(isinstance(n, ast.Call) and _call_name(n) == "_returned_and_repaired"  # noqa: E731
+                              for node in nodes for n in ast.walk(node))
+    if any(isinstance(n, ast.Expr) and calls([n]) for n in test.body):
+        return set(), []
+    apart: set[str] = set()
+    for node in test.body:
+        if isinstance(node, ast.If) and calls(node.orelse) and not calls(node.body):
+            m = re.fullmatch(r"fault == ['\"]([^'\"]+)['\"]", ast.unparse(node.test))
+            if m:
+                apart.add(m.group(1))
+                continue
+        if isinstance(node, ast.If) and calls([node]):
+            return set(), ["cannot tell for which faults the test calls _returned_and_repaired"]
+    return apart, ([] if calls(test.body) else ["test_fault_returns_to_its_producer never calls _returned_and_repaired"])
+
+
+_REPAIR_ASSERTS = (
+    ("a gate returned the fault", r"r\.blocks"),
+    ("the block lands on the faulted artifact's producer", r"agent in expected"),
+    ("the producer's first stop is returned", r"mine and mine\[0\]\['blocked'\]"),
+    ("no block lands on another actor", r"not others"),
+    ("the producer's next stop passes", r"not mine\[-1\]\['blocked'\] and mine\[-1\]\['active'\]"),
+    ("the producer writes the repair after its returned stop", r"repaired"),
+    ("the faulted agent repaired", r"f\['repaired'\]"),
+    ("no human event after the injection", r"not human_events\(r, injected\)"),
+)
+
+
+def _faults_returned_and_repaired(root: Path) -> dict:
+    claim, rel = _CLAIM_FAULTS, FAULTS_TEST
+    tree = _parse(root, rel)
+    table = _fault_table(tree)
+    test = _function(tree, "test_fault_returns_to_its_producer")
+    helper = _function(tree, "_returned_and_repaired")
+    if test is None or helper is None:
+        return _verdict(False, rel, None, claim, missing=[f"no function {'test_fault_returns_to_its_producer' if test is None else '_returned_and_repaired'} in {rel}"])
+    missing, found = [], []
+    cases = _module_value(tree, "CASES")
+    iters = [ast.unparse(g.iter) for g in cases.generators] if isinstance(cases, ast.ListComp) else None
+    if iters != ["FAULTS", "suite.SETTINGS"]:
+        missing.append(f"CASES is not FAULTS x suite.SETTINGS (it iterates {iters})")
+    if not any("parametrize" in ast.unparse(d) and "CASES" in ast.unparse(d) for d in test.decorator_list):
+        missing.append("test_fault_returns_to_its_producer is not parametrized over CASES")
+    apart, problems = _treated_apart(test)
+    missing += problems
+    unknown = sorted(apart - set(table))
+    if unknown:
+        missing.append(f"the test treats apart {unknown}, which FAULTS does not list")
+    helper_asserts = _asserts(helper)
+    for what, pattern in _REPAIR_ASSERTS:
+        hit = next((a for a in helper_asserts if re.fullmatch(pattern, ast.unparse(a.test))), None)
+        if hit is None:
+            missing.append(f"_returned_and_repaired asserts nothing shaped `{pattern}` ({what})")
+        else:
+            found.append({"what": what, "line": hit.lineno, "source": ast.unparse(hit.test)})
+    for what, pattern in (("no hook error", r"not \w+\.hook_errors"), ("reaches its terminal", r"\w+\.reached\(\)")):
+        hit = next((a for a in _asserts(test) if re.fullmatch(pattern, ast.unparse(a.test))), None)
+        if hit is None:
+            missing.append(f"test_fault_returns_to_its_producer asserts nothing shaped `{pattern}` ({what})")
+        else:
+            found.append({"what": what, "line": hit.lineno, "source": ast.unparse(hit.test)})
+    if _skipped(test) or _skipped(helper):
+        missing.append("test_fault_returns_to_its_producer or _returned_and_repaired can skip or xfail")
+    covered = [i for i in table if i not in apart]
+    if not covered:
+        missing.append("no fault of FAULTS goes through _returned_and_repaired")
+    return _verdict(not missing, rel, found[0]["line"] if found else None, claim, found, missing,
+                    ids=covered, treated_apart=sorted(apart), table=table)
+
+
+def _unit_suite_on_every_version(root: Path) -> dict:
+    claim, rel = _CLAIM_UNIT, BASELINE_WORKFLOW
+    versions = ci_python_versions(root)  # FactError when the matrix cannot be read: the caller reports it
+    text = _read(root, rel)
+    doc = _yaml(text, rel)
+    job = doc["jobs"][doc["name"]]
+    missing, hit = [], None
+    if job.get("continue-on-error") not in (None, False):
+        missing.append(f"job `{doc['name']}` has continue-on-error")
+    for step in job.get("steps") or []:
+        run = str(step.get("run", "")) if isinstance(step, dict) else ""
+        words = run.split()
+        if "pytest" in words and "hooks/tests" in words and "tests" in words:
+            if step.get("continue-on-error") not in (None, False) or "if" in step or re.search(r"\|\|\s*(?:true|:)", run):
+                missing.append(f"the pytest step `{step.get('name')}` can fail without failing the job (continue-on-error, if, or `|| true`)")
+            else:
+                hit = (step, words)
+            break
+    if hit is None and not missing:
+        missing.append(f"no step of job `{doc['name']}` runs pytest over hooks/tests and tests")
+    line = next((i for i, l in enumerate(text.splitlines(), 1) if "pytest hooks/tests tests" in l), None)
+    found = []
+    if hit is not None:
+        found.append({"what": "pytest over hooks/tests and tests in every matrix leg", "line": line,
+                      "source": f"{hit[0].get('name')}: " + " ".join(hit[1][:4])})
+    return _verdict(not missing, rel, line, claim, found, missing, versions=versions,
+                    ignored=sorted(w.split("=", 1)[1] for w in (hit[1] if hit else []) if w.startswith("--ignore=")))
+
+
 def ci_enforces(root=None) -> dict:
-    """What CI enforces, as three predicates over the test sources. Each is a dict: holds (bool), claim, file,
+    """What CI enforces, as five predicates over the test sources and the CI workflow. Each is a dict: holds (bool), claim, file,
     line (the line of the asserting statement), assertions (what was found, with lines), missing (what could
     not be found; non-empty whenever holds is false). Fail closed: evidence not found means holds is false.
     This reads the sources only; whether the suite passes is what CI runs.
@@ -1075,12 +1191,26 @@ def ci_enforces(root=None) -> dict:
         `vs = check["violations"]` taken whole, cannot skip, and neither that file nor
         tests/artifact_graph/check.py names anything like an exception list (waiver, exemption,
         known-violation, allowlist ...; the pattern is in the `source` of the last assertion).
+    faults_returned_and_repaired  tests/replay/test_faults.py: test_fault_returns_to_its_producer, parametrized
+        over every fault of its FAULTS table in every settings mode, calls _returned_and_repaired for each
+        fault but the ones it treats apart (`treated_apart`, the stale report nothing produced), and that
+        helper asserts that a gate returned the fault, that the block landed on the producer of the faulted
+        artifact and on no one else, that the producer's first stop was returned and its next passed, that it
+        wrote the repair and that no human event followed; the test asserts no hook error and the terminal.
+        `ids` lists the faults that go through it, `table` every fault of FAULTS. The fault ids the suite
+        numbers beyond FAULTS (F4, F5, F6, F8 ...) have tests of their own that this does not read.
+    unit_suite_on_every_version  .github/workflows/baseline.yml: the job named like the workflow runs pytest
+        over hooks/tests and tests in a step that is unconditional and cannot fail without failing the
+        job, in every leg of the matrix ci_python_versions reads (`versions`); `ignored` lists the paths the
+        step leaves out (--ignore=...), which other jobs or nobody run.
     """
     root = _root(root)
     return {
         "compliant_replays_clean": _guarded(_compliant_replays, root, REPLAY_PIPELINES_TEST, _CLAIM_COMPLIANT),
         "no_site_without_class": _guarded(_no_class_site_may_exist, root, DEAD_END_TEST, _CLAIM_NO_CLASS),
         "artifact_check_clean": _guarded(_artifact_check_clean, root, ARTIFACT_CHECK_TEST, _CLAIM_ARTIFACT),
+        "faults_returned_and_repaired": _guarded(_faults_returned_and_repaired, root, FAULTS_TEST, _CLAIM_FAULTS),
+        "unit_suite_on_every_version": _guarded(_unit_suite_on_every_version, root, BASELINE_WORKFLOW, _CLAIM_UNIT),
     }
 
 

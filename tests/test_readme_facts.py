@@ -760,12 +760,14 @@ def test_command_rows_without_a_commands_directory_is_an_error(tmp_path):
 # ================================================================ 9. what CI enforces
 
 CI_FILES = {rel: REPO / rel for rel in ("tests/replay/test_pipelines.py", "tests/replay/test_no_dead_end.py",
-                                        "tests/test_artifact_graph.py", "tests/artifact_graph/check.py")}
+                                        "tests/test_artifact_graph.py", "tests/artifact_graph/check.py",
+                                        "tests/replay/test_faults.py", ".github/workflows/baseline.yml")}
 
 
 def test_ci_enforces_on_this_repository(real):
     got = real.facts["ci_enforces"]
-    assert set(got) == {"compliant_replays_clean", "no_site_without_class", "artifact_check_clean"}
+    assert set(got) == {"compliant_replays_clean", "no_site_without_class", "artifact_check_clean",
+                        "faults_returned_and_repaired", "unit_suite_on_every_version"}
     for name, verdict in got.items():
         assert set(verdict) >= {"holds", "claim", "file", "line", "assertions", "missing"}, name
         assert verdict["holds"] == (not verdict["missing"]), name  # false always says what was missing
@@ -785,6 +787,24 @@ def test_ci_enforces_on_this_repository(real):
     assert '"-" in classes' in line_of(b["weaker"]["file"], b["weaker"]["line"])
     for line in b["weaker"]["asserted_at_lines"]:
         assert "assert not bad" in line_of(b["weaker"]["file"], line)
+    # a fault is returned to its producer and repaired: the assertions are the helper's, each at its line
+    f = got["faults_returned_and_repaired"]
+    assert f["holds"] and f["file"] == "tests/replay/test_faults.py"
+    for item in f["assertions"]:
+        assert item["source"].replace("'", '"') in line_of(f["file"], item["line"]), item
+    assert {i["what"] for i in f["assertions"]} >= {"a gate returned the fault", "the producer's next stop passes",
+                                                     "the producer writes the repair after its returned stop",
+                                                     "no human event after the injection", "reaches its terminal"}
+    text = tracked_text(f["file"])
+    table = re.search(r"(?s)\nFAULTS = \{(.*?)\n\}", text).group(1)
+    assert f["table"] == re.findall(r'(?m)^    "(F\d+[a-z]*)":', table)  # every fault of the table, in its order
+    assert f["treated_apart"] == ["F3b"] and f["ids"] == [i for i in f["table"] if i != "F3b"]
+    # the unit suite: the baseline job's pytest step, in every leg of the matrix
+    u = got["unit_suite_on_every_version"]
+    assert u["holds"] and u["file"] == ".github/workflows/baseline.yml" and u["versions"] == real.facts["ci_python_versions"]
+    assert "pytest hooks/tests tests" in line_of(u["file"], u["line"])
+    step = tracked_text(u["file"]).split("- name: Run tests", 1)[1].split("- name:", 1)[0]  # the baseline job's pytest step
+    assert u["ignored"] == sorted(re.findall(r"--ignore=(\S+)", step))
 
 
 def _ci_repo(tmp_path):
@@ -854,11 +874,77 @@ def test_ci_enforces_artifact_check_follows_the_assertion_and_the_exception_name
     assert "WAIVERS" in " ".join(rf.ci_enforces(in_check)["artifact_check_clean"]["missing"])
 
 
+def test_ci_enforces_faults_follow_the_assertions(tmp_path):
+    rel = "tests/replay/test_faults.py"
+    base = rf.ci_enforces(_ci_repo(tmp_path))["faults_returned_and_repaired"]
+    assert base["holds"] and base["treated_apart"] == ["F3b"] and "F3b" not in base["ids"]
+    assert set(base["ids"]) | {"F3b"} == set(base["table"])
+    for gone, what in (("    assert r.blocks, ", "a gate returned the fault"),
+                       ("    assert agent in expected, ", "producer"),
+                       ("    assert mine and mine[0][\"blocked\"], ", "first stop is returned"),
+                       ("    assert not others, ", "another actor"),
+                       ("    assert not mine[-1][\"blocked\"] and mine[-1][\"active\"], ", "next stop passes"),
+                       ("    assert repaired, ", "writes the repair"),
+                       ("    assert f[\"repaired\"], ", "faulted agent repaired"),
+                       ("    assert not human_events(r, injected), ", "no human event"),
+                       ("    assert not r.hook_errors, ", "no hook error"),
+                       ("    assert r.reached(), ", "reaches its terminal")):
+        broken = _ci_repo(tmp_path / what.replace(" ", "_"))
+        line = next(l for l in (broken / rel).read_text().splitlines() if l.startswith(gone))
+        edit(broken, rel, line, "    pass  # " + line.strip()[:20])
+        verdict = rf.ci_enforces(broken)["faults_returned_and_repaired"]
+        assert verdict["holds"] is False and what in " ".join(verdict["missing"]), (what, verdict)
+    narrowed = _ci_repo(tmp_path / "narrowed")
+    edit(narrowed, rel, "for fault in FAULTS for s in suite.SETTINGS]", "for fault in FAULTS for s in suite.SETTINGS[:1]]")
+    assert "CASES is not FAULTS x suite.SETTINGS" in " ".join(rf.ci_enforces(narrowed)["faults_returned_and_repaired"]["missing"])
+    skipped = _ci_repo(tmp_path / "skipped")
+    edit(skipped, rel, "@pytest.mark.parametrize(\"fault,settings\", CASES)",
+         "@pytest.mark.skip" + chr(10) + "@pytest.mark.parametrize(\"fault,settings\", CASES)")
+    assert "skip" in " ".join(rf.ci_enforces(skipped)["faults_returned_and_repaired"]["missing"])
+    unreadable = _ci_repo(tmp_path / "unreadable")
+    edit(unreadable, rel, "    if fault == \"F3b\":", "    if fault in (\"F3b\", \"F9\"):")
+    verdict = rf.ci_enforces(unreadable)["faults_returned_and_repaired"]
+    assert verdict["holds"] is False and "cannot tell for which faults" in " ".join(verdict["missing"])
+    # a fault added to the table goes through the helper like the others
+    grown = _ci_repo(tmp_path / "grown")
+    edit(grown, rel, '    "F9": "bash@', '    "F10": "missing@x",\n    "F9": "bash@')
+    after = rf.ci_enforces(grown)["faults_returned_and_repaired"]
+    assert after["holds"] and "F10" in after["ids"] and len(after["table"]) == len(base["table"]) + 1
+    empty = _ci_repo(tmp_path / "empty")
+    edit(empty, rel, "FAULTS = {", "FAULTS = {}\nOTHER = {")
+    assert rf.ci_enforces(empty)["faults_returned_and_repaired"]["holds"] is False
+
+
+def test_ci_enforces_unit_suite_follows_the_workflow(tmp_path):
+    rel = ".github/workflows/baseline.yml"
+    base = rf.ci_enforces(_ci_repo(tmp_path))["unit_suite_on_every_version"]
+    assert base["holds"] and base["versions"] == ["3.10", "3.11", "3.12"] and "tests/replay" in base["ignored"]
+    grown = _ci_repo(tmp_path / "grown")
+    edit(grown, rel, "--ignore=tests/replay", "--ignore=tests/replay --ignore=tests/extra")
+    edit(grown, rel, '["3.10", "3.11", "3.12"]', '["3.11", "3.13"]')
+    after = rf.ci_enforces(grown)["unit_suite_on_every_version"]
+    assert after["versions"] == ["3.11", "3.13"] and "tests/extra" in after["ignored"]
+    for what, old, new, message in (
+            ("swallowed", "-n auto --dist loadfile", "-n auto --dist loadfile || true", "can fail without failing the job"),
+            ("continued", "      - name: Run tests\n", "      - name: Run tests\n        continue-on-error: true\n",
+             "can fail without failing the job"),
+            ("conditional", "      - name: Run tests\n", "      - name: Run tests\n        if: always()\n",
+             "can fail without failing the job"),
+            ("job continued", "    strategy:\n", "    continue-on-error: true\n    strategy:\n", "continue-on-error"),
+            ("not the unit suite", "pytest hooks/tests tests", "pytest tests", "runs pytest over hooks/tests and tests")):
+        broken = _ci_repo(tmp_path / what.replace(" ", "_"))
+        edit(broken, rel, old, new)
+        verdict = rf.ci_enforces(broken)["unit_suite_on_every_version"]
+        assert verdict["holds"] is False and message in " ".join(verdict["missing"]), (what, verdict)
+
+
 @pytest.mark.parametrize("gone,predicate", [
     ("tests/replay/test_pipelines.py", "compliant_replays_clean"),
     ("tests/replay/test_no_dead_end.py", "no_site_without_class"),
     ("tests/test_artifact_graph.py", "artifact_check_clean"),
     ("tests/artifact_graph/check.py", "artifact_check_clean"),
+    ("tests/replay/test_faults.py", "faults_returned_and_repaired"),
+    (".github/workflows/baseline.yml", "unit_suite_on_every_version"),
 ])
 def test_ci_enforces_fails_closed_on_a_missing_source(tmp_path, gone, predicate):
     files = dict(CI_FILES)
