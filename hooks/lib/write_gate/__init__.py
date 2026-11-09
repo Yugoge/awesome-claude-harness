@@ -33,7 +33,13 @@ import json
 import os
 from dataclasses import dataclass
 
+from . import overwrite as _overwrite
+
 HOOKS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# A rule module this package holds is named by import, not by a path string: the gate loads it
+# (it runs it as __main__), and the import states that, as the artifact check reads code. Its
+# reads then sit at its caller's position (a library's), not at a file nothing runs.
+_OVERWRITE = os.path.relpath(os.path.abspath(_overwrite.__file__), HOOKS_DIR)
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 
@@ -68,7 +74,7 @@ RULES: tuple[Rule, ...] = (
           "the declaring dispatch's own write of a path it declares"), 20.0),
     Rule("cp-state", "pretool-cp-state-write-guard.py", WRITE_TOOLS | {"Bash"}, "subagent", "open",
          ("the main agent is not governed", "scripts/spec-check.py, the one cp-state writer"), 5.0),
-    Rule("overwrite", "lib/write_gate/overwrite.py", frozenset({"Write"}), "both", "open",
+    Rule("overwrite", _OVERWRITE, frozenset({"Write"}), "both", "open",
          ("/do consent (main agent; not for the bulk-commit sentinel)",
           "an /allow grant naming the target (main agent; not for the bulk-commit sentinel)"), 5.0),
     Rule("claude-config", "pretool-claude-config-guard.py", frozenset({"Edit", "Write", "MultiEdit", "Bash"}),
