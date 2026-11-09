@@ -761,21 +761,62 @@ def branches(repo, *names):
     git(repo, "checkout", "-q", "master")
 
 
-def write_grant(env, repo, branch):
+def write_grant(env, repo, branch, verdict="approved", session=SID):
     """The merge-analyst's grant for ``branch``, as agents/merge-analyst.md Phase 8 writes it, at
     git's clock: one hooks/lib/merge_grant.py's check passes, as at the PostToolUse of that Write."""
     merge_grant, top = importlib.import_module("lib.merge_grant"), os.path.realpath(repo)
     request = f"{int(GIT_CLOCK[0]):032x}"
-    path = Path(merge_grant.grant_root(), hashlib.sha256(top.encode()).hexdigest()[:16], SID, f"{request}.json")
+    path = Path(merge_grant.grant_root(), hashlib.sha256(top.encode()).hexdigest()[:16], session, f"{request}.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     expires = (datetime.now(timezone.utc) + timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     path.write_text(json.dumps({
-        "verdict": "approved", "risks": [], "analysis_summary": "clean", "repo_root": top, "branch": branch,
+        "verdict": verdict, "risks": ["conflict markers in the diff"] if verdict == "blocked" else [],
+        "analysis_summary": "clean", "repo_root": top, "branch": branch,
         "source_tip": git(repo, "rev-parse", branch), "default_branch": "master",
-        "default_tip": git(repo, "rev-parse", "master"), "session_id": SID, "nonce": request, "expires_at": expires}))
+        "default_tip": git(repo, "rev-parse", "master"), "session_id": session, "nonce": request,
+        "expires_at": expires}))
     assert merge_grant.fault(str(path)) == ""
     GIT_CLOCK[0] += 1
     os.utime(path, (GIT_CLOCK[0], GIT_CLOCK[0]))
+
+
+@pytest.mark.parametrize("typed", [True, False])
+def test_mg1_a_blocked_merge_analyst_grant_for_the_sources_tip_releases_the_stop(env, repo, typed):
+    """/merge Step 3 refuses "merge-analyst blocked the merge" and R14 leaves the risks to the owner: the
+    agent cannot merge anyway, so the missing merge is no gap while this session's newest grant is
+    blocked for the source at its tip now. Narrow as p_push's: every other grant holds."""
+    branches(repo, "feature")
+    git(repo, "checkout", "-q", "feature")  # a bare /merge picks the branch HEAD is on
+    opener_now(env, "merge", "feature" if typed else "")
+    git(repo, "checkout", "-q", "master")
+    assert run(env)[0] == 2  # no grant yet
+    write_grant(env, repo, "feature", "blocked")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("what", ["other-tip", "other-branch", "older-grant", "other-session", "approved",
+                                  "approved-after-blocked"])
+def test_mg1_every_other_grant_still_holds_the_missing_merge(env, repo, what):
+    branches(repo, "feature", "other")
+    if what == "older-grant":
+        write_grant(env, repo, "feature", "blocked")  # an earlier /merge's, written before the opener
+    opener_now(env, "merge", "feature")
+    if what == "other-tip":
+        write_grant(env, repo, "feature", "blocked")
+        git(repo, "checkout", "-q", "feature")
+        commit(repo, "g.txt")  # the branch moves on: the grant names the tip before this commit
+        git(repo, "checkout", "-q", "master")
+    elif what == "other-branch":
+        write_grant(env, repo, "other", "blocked")
+    elif what == "other-session":
+        write_grant(env, repo, "feature", "blocked", session="another-session")
+    elif what == "approved":
+        write_grant(env, repo, "feature", "approved")
+    elif what == "approved-after-blocked":
+        write_grant(env, repo, "feature", "blocked")
+        write_grant(env, repo, "feature", "approved")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, (code, text)
 
 
 @pytest.mark.parametrize("typed", [True, False])

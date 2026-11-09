@@ -560,7 +560,9 @@ def p_merge(span, root, payload) -> list[str]:
     MERGE_HEAD (--no-commit, while present) is a value of the source; else a merge
     entry in DEFAULT_BRANCH's reflog after the opener has one as its merged parent
     (a fast-forward: as its new value), or the source's value at the opener is in
-    DEFAULT_BRANCH ("Already up to date"); no source: no merge entry after it. All read in the
+    DEFAULT_BRANCH ("Already up to date"), or this session's newest merge-analyst grant since the opener is
+    `blocked` for the source at its tip now (Step 3 refuses; R14 leaves the risks to the owner, and a
+    grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
     session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup."""
     _repository(root)
     root = _session_worktree(root, payload)
@@ -585,6 +587,9 @@ def p_merge(span, root, payload) -> list[str]:
              else m.startswith(f"merge {ref}:") for sha, m in landed) or (
             _ancestor(root, at, f"refs/heads/{default}") if at else not landed):
         gaps = []
+    elif at and (grant.get("verdict"), grant.get("branch"), grant.get("source_tip")) == (
+            "blocked", ref, _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")):
+        gaps = []  # Step 3: "merge-analyst blocked the merge"; the risks are the owner's to resolve (R14)
     else:
         gaps = [f"merge: no merge of {ref} into refs/heads/{default} after the /merge opener" if at else
                 f"merge: refs/heads/{default} took a merge after the opener; no merge-analyst grant of this "
