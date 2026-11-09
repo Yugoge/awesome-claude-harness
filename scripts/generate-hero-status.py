@@ -1,69 +1,128 @@
 #!/usr/bin/env python3
-"""Generate and ratchet the README's canonical status regions from repository state.
+"""Generate and ratchet the README's canonical regions from repository state.
 
-Description: One source of truth emits THREE marker-delimited canonical regions -- the
-  headline-adjacent limits line, the hero disclosure region, and the status strip -- and
-  re-derives them on demand to byte-compare against what is committed. No row's visible
-  text is ever hand-written; every row is computed from a named predicate.
+Description: One source of truth emits FIVE marker-delimited canonical regions and re-derives
+  them on demand to byte-compare against what is committed. Two are count regions, markdown
+  tables whose every cell comes from scripts/readme_facts.py: `proof` (the measured proof, under
+  "Measured proof") and `commands` (under "Commands"). Three are claim regions, in this order,
+  under "Status and known limits": `limits`, `disclosure` and `status`. No row's visible text is
+  ever hand-written; every claim row is computed from a named predicate.
 
 Usage: generate-hero-status.py --write [--readme <path>]   # regenerate the regions
        generate-hero-status.py --check [--readme <path>]   # the CI ratchet
-       generate-hero-status.py --check --no-fold           # skip the browser assertion
+       generate-hero-status.py --check --no-fold           # skip the glyph-model measurement
 
-Exit codes: 0 = ok, 1 = usage/IO error, 2 = one or more ratchet assertions failed
+Exit codes: 0 = ok, 1 = usage/IO error (--write: also a count region that cannot be computed),
+  2 = one or more ratchet assertions failed
 
-WHAT IS ASSERTED. Content (per-row and whole-region byte-compare, closed state enum,
-predicate agreement in both directions) AND position (region order, headline adjacency,
-above-the-fold visibility). Content-only assertions were a real gap: they refused every
-edit to the limits statement while allowing it to be MOVED anywhere in the document,
-which would have silently voided the adjacency an orchestrator ruling depends on.
+WHAT IS ASSERTED. Content (per-row and whole-region byte-compare, closed state enum, predicate
+agreement in both directions), POSITION (each region inside its H2 section, the claim regions in
+order, none missing or duplicated) and NUMBERS (no numeral typed by hand in the prose).
 
-NUMBERS ARE DERIVED, NEVER TRANSCRIBED. The disclosure region publishes the hero's
-recorded duration, loop period, first-proof offset, truncation count and rendered inline
-glyph height, each computed from a committed artifact at build time. The recorded duration
-is additionally cross-validated against the capture's own first and last timestamps, so a
-coordinated edit of this README and the evidence file together still cannot agree; the
-glyph height is cross-validated against a live browser by the fold measurement it is
-imported from, which fails if the published model and the measurement disagree.
+THE POSITION RULE REPLACED THE HEADLINE RULE. This script used to assert that the limits statement
+sat next to the headline, in the first screen, and that "headline" and "limits" were fully above
+the fold (scripts/measure-hero-fold.py). The owner moved the claim rows (limits, disclosure, status)
+out of the top of the README to a section near its end, "Status and known limits"; the headline
+text that measurement looks up no longer exists, so neither assertion can hold or mean anything
+there. Dropping them without a replacement would have let the limits move anywhere unseen, so what
+replaced them is assert_region_positions: every region must sit inside the H2 section named for it
+in SECTION_OF, the three claim regions must appear in the order limits, disclosure, status, and a
+region that is outside its section, duplicated, missing or out of order is a violation that names
+the region. The fold measurement is still run, and only its report of glyph-model drift is
+consumed (assert_glyph_model); the glyph floor and the old above-the-fold elements are not gated.
 
-WHY THREE REGIONS FROM ONE GENERATOR. The limits statement must sit ADJACENT to the
-headline, and it must also sit INSIDE the byte-compared canonical content. With a single
-contiguous block those are mutually exclusive: a limits row buried in the strip is not
-adjacent to the headline, and a limits line written next to the headline escapes the
-byte-compare and can be silently deleted by any lane editing this region. Emitting two
-marker-delimited regions from one generator satisfies both -- every assertion below is
-evaluated over their UNION.
+NUMBERS ARE DERIVED, NEVER TRANSCRIBED. Inside the regions every number is computed: the hero's
+recorded duration, loop period, first-proof offset and rendered glyph height from committed
+artifacts, and every count in the proof and commands tables from scripts/readme_facts.py. The
+recorded duration is cross-validated against the capture's own first and last timestamps, so a
+coordinated edit of this README and the evidence file together still cannot agree. OUTSIDE the
+regions a numeral in the prose is a violation (assert_no_hand_typed_numbers) unless it is an
+ordered-list marker, sits in a code span, fenced block, HTML comment, HTML tag or attribute (a
+title or alt among them), link target or title, or image, or is one of the externally cited
+figures declared once in CITED_FIGURES with the URL it comes from. A declared figure that no
+longer appears in the prose, or whose URL is absent, also fails. Numbers written as words are out
+of scope. Known false positives, left as they are: version-like words (UTF-8, SHA-256, HTTP/2),
+footnote markers and any other word with a digit after a non-letter. The escape is a code span.
 
-FAIL-CLOSED IN ONE DIRECTION ONLY. A predicate input that is missing, unreadable,
-unparseable, or not committed makes its predicate FALSE. The failure mode of a broken
-predicate is therefore continued honest disclosure, never a silent pass.
+THE NUMBER RULE FAILS CLOSED WHEN IT CANNOT READ THE PROSE. Whatever hides text from it must be
+visible in the rendered page too, or the rule would be bypassed by the hiding: a code fence that is
+never closed (the rest of the file would be hidden), an HTML comment that is never closed, and a
+backtick run with no closing run (an unbalanced code span) are each a violation that names the
+line. A code span never pairs across list items, table rows or cells, headings or paragraphs, so
+a stray backtick in one line cannot hide a numeral in another. A comment opener or closer inside a
+code span or a fenced block does not start or end a comment; inside a comment, as in the rendered
+page, the first closer ends it, a code span or not.
+
+WITHOUT A BROWSER THE HERO FIGURES ARE MODEL PREDICTIONS, NOT MEASUREMENTS. The glyph sizes in the
+disclosure region (and the legibility row built on them) are computed from the hero asset's
+viewBox, the README's image width and the model in scripts/measure-hero-fold.py. They become
+measurements only when that script runs and finds the model equal to a live browser, which needs
+the Python `playwright` package and a Chromium (assert_glyph_model consumes its model_drift).
+Neither a default checkout nor the baseline CI job installs them: there the check prints a NOTE
+that the glyph figure is UNVERIFIED, and its last line says that the glyph model was not measured.
+Only a run whose last line says "glyph model asserted" measured anything.
+
+WRITE MODE REFUSES BEFORE IT WRITES. It verifies the README first: the five regions present once
+each, disjoint, in the required order and inside their sections, and no carriage return in the
+file (the regions are byte-compared as LF text; a CRLF README is refused, never rewritten). Any
+problem is named and the README is left untouched. The new text goes to a temporary file in the
+README's own directory and is renamed over it, so a kill or a full disk cannot leave it empty or
+partial, and a README that changed while the facts were derived is refused rather than overwritten.
+
+FAIL-CLOSED IN ONE DIRECTION ONLY. A predicate input that is missing, unreadable, unparseable, or
+not committed makes its claim row FALSE (state not-yet, no figure published): the failure mode of
+a broken predicate is continued honest disclosure, never a silent pass. A count region has no such
+fallback: when a fact it needs cannot be derived, --check fails naming the missing input, and
+--write refuses to touch the README rather than print a value from an earlier run.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+# This script, the fact module and the fold measurement are loaded by path, and a run must leave
+# no __pycache__ behind in the tree it checks.
+sys.dont_write_bytecode = True
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ROW_IDS = ["known-limits", "hero-recording", "hero-legibility", "hero-glyph",
-           "supported-builds", "capability-check", "blackbox-tests", "release", "os"]
+           "supported-builds", "capability-check", "blackbox-tests", "release", "os",
+           "enforcement-strength", "dead-end-sites"]
 
 # The README under evaluation. Rebound by main() so a --readme copy is measured against its
 # OWN hero width rather than the repository's; a predicate that silently read the checked-in
 # README while checking a copy would report confident numbers about the wrong document.
 README_PATH = REPO_ROOT / "README.md"
 
-# Canonical regions, in the order they MUST appear in the document. `limits` first is not
-# cosmetic: an orchestrator ruling on the first screen rests on the limits statement
-# sitting adjacent to the headline, and adjacency that nothing asserts is adjacency that
-# any later edit can quietly remove.
-REGION_IDS = ("limits", "disclosure", "status")
+# Canonical regions. COUNT_REGIONS are tables built from scripts/readme_facts.py; CLAIM_REGIONS
+# hold the claim rows and MUST appear in this order (limits, then disclosure, then status).
+COUNT_REGIONS = ("proof", "commands")
+CLAIM_REGIONS = ("limits", "disclosure", "status")
+REGION_IDS = COUNT_REGIONS + CLAIM_REGIONS
 STATES = {"passed", "not-yet", "partial"}
+
+# The H2 section each region must sit inside (heading text, exact).
+STATUS_SECTION = "Status and known limits"
+SECTION_OF = {"proof": "Measured proof", "commands": "Commands",
+              "limits": STATUS_SECTION, "disclosure": STATUS_SECTION, "status": STATUS_SECTION}
+
+# Figures the README prose may quote from outside this repository: the numeral exactly as the
+# prose writes it, and the URL it comes from. The ONLY place such a number is declared. The check
+# fails when a source URL is absent from the README or a figure no longer appears in the prose.
+CITED_FIGURES = (
+    ("37,623", "https://arxiv.org/pdf/2609.17598"),
+    ("12.6", "https://arxiv.org/pdf/2609.17598"),
+)
 
 BEGIN = "<!-- BEGIN canonical-region id={rid} — generated by scripts/generate-hero-status.py; do not hand-edit -->"
 END = "<!-- END canonical-region id={rid} -->"
@@ -94,6 +153,59 @@ def is_committed(rel: str) -> bool:
     r = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel],
                        cwd=REPO_ROOT, capture_output=True, text=True)
     return r.returncode == 0
+
+
+# --------------------------------------------------------------------------------------
+# The repository's facts. Every count in the proof and commands tables, and in the two claim rows
+# built on them, comes from scripts/readme_facts.py -- the single producer of those figures. The
+# module is loaded by path (its name is not importable from a --readme copy's directory) and each
+# fact is computed ONCE per process: the blocking-site enumeration alone takes several seconds and
+# more than one region reads it. A failure is remembered too, so a missing input is reported once
+# and never retried into a different answer.
+# --------------------------------------------------------------------------------------
+
+FACTS_SCRIPT = "scripts/readme_facts.py"
+
+
+class FactUnavailable(RuntimeError):
+    """A fact could not be derived. The message names the missing or unusable input."""
+
+
+_FACT_MODULE = None
+_FACTS: dict[str, object] = {}
+
+
+def facts_module():
+    global _FACT_MODULE
+    if _FACT_MODULE is None:
+        path = REPO_ROOT / FACTS_SCRIPT
+        if not path.is_file():
+            raise FactUnavailable(f"missing input {FACTS_SCRIPT} (looked in {REPO_ROOT})")
+        try:
+            spec = importlib.util.spec_from_file_location("readme_facts_for_generator", path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module  # a dataclass in the module looks its own module up
+            spec.loader.exec_module(module)
+        except Exception as exc:  # noqa: BLE001 - whatever it did, the facts are not usable
+            raise FactUnavailable(f"cannot load {FACTS_SCRIPT}: {type(exc).__name__}: {exc}") from exc
+        _FACT_MODULE = module
+    return _FACT_MODULE
+
+
+def fact(name: str):
+    """The value of the named fact of scripts/readme_facts.py for this repository, or FactUnavailable."""
+    if name not in _FACTS:
+        try:
+            module = facts_module()
+            _FACTS[name] = module.FACTS[name](REPO_ROOT)
+        except FactUnavailable as exc:
+            _FACTS[name] = exc
+        except Exception as exc:  # noqa: BLE001 - FactError, or a fact that crashed
+            _FACTS[name] = FactUnavailable(f"{name}: {exc}")
+    value = _FACTS[name]
+    if isinstance(value, FactUnavailable):
+        raise value
+    return value
 
 
 # --------------------------------------------------------------------------------------
@@ -269,20 +381,29 @@ def glyph_facts() -> dict:
 # Named predicates. Each returns (state, visible_text, evidence, tracked).
 # --------------------------------------------------------------------------------------
 
+def tracked_settings_text() -> str:
+    """settings.json as the git index holds it, by the one reader every fact uses (scripts/readme_facts.py).
+
+    The working file on a machine may carry machine-only additions that no commit holds, and the
+    reader of a fresh clone sees none of them; a row computed from the working file would differ
+    between the two."""
+    try:
+        return facts_module()._tracked_settings_text(REPO_ROOT)
+    except FactUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001 - FactError, or the reader gone
+        raise FactUnavailable(f"the tracked settings.json cannot be read: {exc}") from exc
+
+
 def measure_deny_rules() -> tuple[int, int, str] | None:
-    """(total_deny, git_related_deny, source). None when no source is readable."""
-    for cand in ("settings.json",):
-        p = REPO_ROOT / cand
-        if not p.is_file():
-            continue
-        try:
-            deny = json.loads(p.read_text(encoding="utf-8")).get("permissions", {}).get("deny", [])
-        except Exception:
-            continue
-        if not isinstance(deny, list):
-            continue
-        return len(deny), sum(1 for r in deny if "git" in str(r).lower()), cand
-    return None
+    """(total_deny, git_related_deny, source). None when the tracked settings.json is not readable."""
+    try:
+        deny = json.loads(tracked_settings_text()).get("permissions", {}).get("deny", [])
+    except Exception:  # noqa: BLE001 - missing, not in the index, not JSON, not an object
+        return None
+    if not isinstance(deny, list):
+        return None
+    return len(deny), sum(1 for r in deny if "git" in str(r).lower()), "settings.json"
 
 
 def pred_known_limits() -> tuple[str, str, str, str]:
@@ -507,6 +628,86 @@ def pred_hero_glyph() -> tuple[str, str, str, str]:
             MEASURE_SCRIPT, "hero-glyph-floor")
 
 
+def _counts(by: dict) -> str:
+    """'50 advisory, 28 detected, 0 enforced': every value of a closed set, with its count."""
+    return ", ".join(f"**{n}** {label}" for label, n in by.items())
+
+
+def pred_enforcement_strength() -> tuple[str, str, str, str]:
+    """How far the ledger's rows are proven: their behavior labels and proof layers, counted.
+
+    partial while any row is short of host-observed (today: none is). The text always says what
+    an exit code is evidence of, because a reader who sees `enforced` or `detected` next to a hook
+    would otherwise take it for a measurement of a Claude Code host.
+    """
+    ledger = "docs/ENFORCEMENT-LEDGER.md"
+    try:
+        e = fact("enforcement_strength")
+    except FactUnavailable:
+        return ("not-yet",
+                f"**Enforcement strength** — `{ledger}` could not be read and reconciled with the "
+                f"tracked `settings.json` at build time, so no figure is published.",
+                "none", "none")
+    rows, observed = e["rows"], e["by_proof_layer"].get("host-observed", 0)
+    detail = (f"Behavior labels: {_counts(e['by_behavior'])}. "
+              f"Proof layers: {_counts(e['by_proof_layer'])}.")
+    if observed == rows:
+        return ("passed",
+                f"**Enforcement strength** — all **{rows}** ledger rows are host-observed. {detail}",
+                ledger, "none")
+    seen = ("No row is host-observed." if observed == 0
+            else f"**{observed}** of the {rows} rows are host-observed.")
+    return ("partial",
+            f"**Enforcement strength** — the ledger has **{rows}** rows, one per registered hook. "
+            f"{detail} {seen} A script that exits 2 is evidence about the script, not about a "
+            f"Claude Code host honouring it.",
+            ledger, "none")
+
+
+def _reasons(by_reason: dict) -> str:
+    """'**19** × <reason>; **1** × <reason>': the enumerator's own reasons, most frequent first."""
+    ranked = sorted(by_reason.items(), key=lambda kv: (-kv[1], kv[0]))
+    return "; ".join(f"**{n}** × {reason}" for reason, n in ranked)
+
+
+def pred_dead_end_sites() -> tuple[str, str, str, str]:
+    """How many blocking sites have no clearing class, why, and what the suite does and does not assert.
+
+    The row id says dead-end because the suite's own word for such a site is a dead end, but a site
+    the enumerator cannot class is not thereby a stranding: its stated reasons are counted here
+    (most are a hook refusing because it cannot decide), and nothing here calls it one. The suite
+    fails when a REPLAY reaches such a site; it does not fail because one exists. So zero replays
+    reaching one is not a proof that no flow can, and the row says so. It reads `passed` only if
+    there is no such site AND the suite asserts there can be none.
+    """
+    test = "tests/replay/test_no_dead_end.py"
+    label = "**Blocking sites with no clearing class**"
+    try:
+        b, ci = fact("blocking_sites"), fact("ci_enforces")
+    except FactUnavailable:
+        return ("not-yet",
+                f"{label} — the blocking sites of the registered hooks could not be "
+                "enumerated at build time, so no figure is published.", "none", "none")
+    n, total = b["no_class"], b["sites"]
+    asserted = ci["no_site_without_class"]["holds"]
+    if n == 0 and asserted:
+        return ("passed",
+                f"{label} — none of the **{total}** blocking sites of the registered "
+                f"hooks lacks a clearing class, and the suite fails if one does.", test, "none")
+    if n == 0:
+        return ("partial",
+                f"{label} — none of the **{total}** blocking sites of the registered "
+                f"hooks lacks a clearing class as counted here, but the suite does not assert "
+                f"that; it fails only when a replay reaches one. This is a known limit, not a "
+                f"proof that there are none.", test, "none")
+    reasons = b.get("no_class_reasons") or {}
+    why = f" The enumerator's reasons: {_reasons(reasons)}." if reasons else ""
+    return ("partial",
+            f"{label} — **{n} of {total}** blocking sites of the registered hooks have no "
+            f"clearing class.{why} The suite fails only when a replay reaches one, so this is a "
+            f"known limit and not a proof that there are none.", test, "none")
+
+
 PREDICATES = {
     "known-limits": pred_known_limits,
     "hero-recording": pred_hero_recording,
@@ -517,6 +718,8 @@ PREDICATES = {
     "blackbox-tests": pred_blackbox,
     "release": pred_release,
     "os": pred_os,
+    "enforcement-strength": pred_enforcement_strength,
+    "dead-end-sites": pred_dead_end_sites,
 }
 
 # Which canonical region each row renders into.
@@ -531,7 +734,7 @@ PROSE_REGIONS = {"limits", "disclosure"}
 
 def render_rows() -> dict[str, list[tuple[str, str]]]:
     """-> {region_id: [(marker_line, visible_line), ...]} in ROW_IDS order."""
-    out: dict[str, list[tuple[str, str]]] = {rid: [] for rid in REGION_IDS}
+    out: dict[str, list[tuple[str, str]]] = {rid: [] for rid in CLAIM_REGIONS}
     for rid in ROW_IDS:
         state, text, evidence, tracked = PREDICATES[rid]()
         if state not in STATES:
@@ -543,8 +746,156 @@ def render_rows() -> dict[str, list[tuple[str, str]]]:
     return out
 
 
-def render_region(rid: str, rows: list[tuple[str, str]]) -> str:
-    body = "\n".join(f"{m}\n{v}" for m, v in rows)
+# --------------------------------------------------------------------------------------
+# The count regions: markdown tables, every figure from scripts/readme_facts.py. A fact that
+# cannot be derived raises FactUnavailable out of the renderer, naming the input; nothing is
+# defaulted, because a stale value printed in its place is exactly what these regions exist to
+# refuse. The words around the figures (a row's label, what CI fails on) are prose; the sentence
+# that says a CI check holds is printed only when readme_facts' ci_enforces says the check's
+# assertion is there, and otherwise the cell says what is NOT asserted.
+# --------------------------------------------------------------------------------------
+
+PROOF_HEADER = ("Counted from the repository", "Now", "CI fails when")
+COMMANDS_HEADER = ("Command", "Typed by", "What it does")
+
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
+
+
+def _escape_prose(text: str) -> str:
+    return (text.replace("\\", "\\\\").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace("|", "\\|"))
+
+
+def md_cell(text: object) -> str:
+    """`text` made safe for one cell of a pipe table.
+
+    A pipe is escaped everywhere, inside a code span too (a table splits on it first); angle
+    brackets and the ampersand are escaped outside code spans so that a summary can be neither
+    read as HTML nor decode an entity; inside a code span they are literal already. Line breaks
+    become spaces, because a cell is one line.
+    """
+    text = " ".join(str(text).split())
+    out, last = [], 0
+    for m in _CODE_SPAN.finditer(text):
+        out.append(_escape_prose(text[last:m.start()]))
+        out.append(m.group(0).replace("|", "\\|"))
+        last = m.end()
+    out.append(_escape_prose(text[last:]))
+    return "".join(out)
+
+
+def code_span(text: str) -> str:
+    """`text` as an inline code span (a fence longer than any backtick run inside it)."""
+    longest = max((len(r) for r in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+    lines = ["| " + " | ".join(header) + " |", "|" + "|".join("---" for _ in header) + "|"]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def _n(value: int) -> str:
+    return f"{value:,}"
+
+
+def _not_asserted(verdict: dict) -> str:
+    return f"not asserted: {verdict['claim']} (`{verdict['file']}`)"
+
+
+def render_proof() -> str:
+    versions, replay = fact("ci_python_versions"), fact("replay_suite_size")
+    sites, arts = fact("blocking_sites"), fact("static_artifacts")
+    tests, hooks, ci = fact("count_tests"), fact("hook_registrations"), fact("ci_enforces")
+    rf = facts_module()
+
+    compliant = ci["compliant_replays_clean"]
+    pipelines_ci = (f"a compliant replay that meets a gate block or a hook error, or does not reach "
+                    f"its terminal, fails CI (`{compliant['file']}`)"
+                    if compliant["holds"] else _not_asserted(compliant))
+
+    faults = ci["faults_returned_and_repaired"]
+    regressions = f"; the regression replays are in `{rf.REPLAY_REGRESSIONS_TEST}`"
+    faults_ci = (f"a fault that no gate returns to its producer, or that its producer does not repair "
+                 f"without human action, fails CI for {len(faults['ids'])} of the "
+                 f"{replay['fault_ids']} variants (`{faults['file']}`)"
+                 if faults["holds"] else _not_asserted(faults)) + regressions
+
+    by = sites["by_class"]
+    unreachable = f", {by['U']} unreachable" if by.get("U") else ""
+    sites_now = (f"{sites['sites']} sites: {by['G']} own-obligation gates, {by['D']} denials of a "
+                 f"forbidden operation, {by['H']} time-lock{unreachable}; {sites['no_class']} "
+                 f"with no clearing class")
+    strong, weaker = ci["no_site_without_class"], ci["no_site_without_class"]["weaker"]
+    if strong["holds"]:
+        sites_ci = f"a blocking site with no clearing class fails CI (`{strong['file']}`)"
+    elif weaker["holds"]:
+        # The weaker claim is the one the suite makes. That no such site exists is not asserted.
+        sites_ci = (f"a replay that reaches a blocking site with no clearing class fails CI "
+                    f"(`{weaker['file']}`)")
+    else:
+        sites_ci = _not_asserted({"claim": weaker["claim"], "file": weaker["file"]})
+
+    artifact = ci["artifact_check_clean"]
+    artifacts_ci = ("an artifact without one producer or without a deciding reader fails the check, "
+                    f"which keeps no exception list (`{artifact['file']}`)"
+                    if artifact["holds"] else _not_asserted(artifact))
+
+    h, t = tests["hooks_tests"], tests["tests"]
+    unit = ci["unit_suite_on_every_version"]
+    left_out = ", ".join(f"`{p}`" for p in unit.get("ignored", []))
+    tests_ci = (f"the unit suite fails on any of {', '.join(unit['versions'])}"
+                + (f" (it leaves out {left_out})" if left_out else "")
+                if unit["holds"] else _not_asserted(unit))
+
+    events = ", ".join(f"{e} {n}" for e, n in sorted(hooks["by_event"].items(), key=lambda kv: (-kv[1], kv[0])))
+
+    rows = [
+        ("Python versions CI runs the baseline job on", ", ".join(versions),
+         f"a step of the baseline job fails on any of them (`{rf.BASELINE_WORKFLOW}`)"),
+        ("Pipelines replayed",
+         f"{replay['pipelines']} pipelines, {replay['compliant_scenarios']} compliant scenarios, "
+         f"{len(replay['settings_modes'])} settings modes ({', '.join(replay['settings_modes'])}), "
+         f"{replay['compliant_replays']} compliant replays", pipelines_ci),
+        ("Faults injected",
+         f"{replay['fault_classes']} fault classes in {replay['fault_ids']} variants; "
+         f"{replay['regression_replays']} regression replays ({', '.join(replay['regression_ids'])})",
+         faults_ci),
+        ("Blocking sites of the registered hooks", sites_now, sites_ci),
+        (arts["label"],
+         f"{arts['declared_file_artifacts']} (distinct path patterns, from {arts['artifact_declarations']} "
+         f"declarations in {arts['obligation_templates']} obligation templates)", artifacts_ci),
+        ("Tests, counted statically (parametrization not expanded)",
+         f"{_n(h['test_functions'] + t['test_functions'])} test functions in {h['files'] + t['files']} files: "
+         f"`hooks/tests` {_n(h['test_functions'])} in {h['files']} files, `tests` "
+         f"{_n(t['test_functions'])} in {t['files']} files", tests_ci),
+        ("Hook registrations in the tracked `settings.json`",
+         f"{hooks['entries']} entries in {hooks['events']} events ({events})",
+         f"ledger rows that differ from the registered hooks fail `{rf.GATE_SCRIPT}`"),
+    ]
+    return table(PROOF_HEADER, [tuple(md_cell(c) for c in r) for r in rows])
+
+
+def render_commands() -> str:
+    rows = []
+    for c in fact("command_rows"):
+        usage = f"/{c['name']}" + (f" {c['argument_hint']}" if c["argument_hint"] else "")
+        rows.append((md_cell(code_span(usage)), "owner only" if c["human_only"] else "owner or agent",
+                     md_cell(c["summary"])))
+    return table(COMMANDS_HEADER, rows)
+
+
+COUNT_RENDERERS = {"proof": render_proof, "commands": render_commands}
+
+
+def render_region(rid: str, body: object) -> str:
+    """The region as it must read in the README: BEGIN marker, body, END marker. `body` is the table
+    of a count region, or a claim region's [(marker_line, visible_line), ...]."""
+    if not isinstance(body, str):
+        body = "\n".join(f"{m}\n{v}" for m, v in body)
     return f"{BEGIN.format(rid=rid)}\n{body}\n{END.format(rid=rid)}"
 
 
@@ -568,141 +919,528 @@ def parse_committed_rows(region_text: str) -> list[tuple[str, str, dict]]:
     return out
 
 
-def _blocks_before(text: str, upto: int) -> list[str]:
-    return [b for b in re.split(r"\n\s*\n", text[:upto]) if b.strip()]
+# --------------------------------------------------------------------------------------
+# Reading the markdown: what is a fence, a comment, a code span. One sequential scan, in the order
+# a renderer reads: blocks first (a fence or an HTML comment that starts a line), then, inside one
+# paragraph, list item, table cell or heading at a time, whichever of a code span and an inline
+# comment comes first. The position rule needs the blocks; the number rule needs all of it.
+# --------------------------------------------------------------------------------------
+
+_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)")
+_HEADING_LINE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+_BREAK_LINE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
+_TABLE_DELIM = re.compile(r"^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$")
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+
+UNCLOSED_FENCE = ("the code fence opened here is never closed, so the rest of the file is hidden from "
+                  "the no-hand-typed-number rule")
+UNCLOSED_COMMENT = ("the HTML comment opened here is never closed, so the rest of the file is hidden "
+                    "from the no-hand-typed-number rule")
+UNCLOSED_INLINE_COMMENT = ("the HTML comment opened here is not closed in the same paragraph, so the "
+                           "page shows it as text; close it or remove it")
+UNBALANCED_SPAN = ("the backtick run here has no closing run of the same length in its paragraph, list "
+                   "item, table cell or heading (a code span never pairs across them), so it hides "
+                   "nothing; close it, or escape the backtick with a backslash")
 
 
-def _is_heading(block: str) -> bool:
-    first = block.strip().splitlines()[0] if block.strip() else ""
-    return bool(re.match(r"#{1,6}\s", first.strip()))
+def _blank(match: re.Match) -> str:
+    """The matched text with every character but a line break replaced by a space: offsets and line
+    numbers survive."""
+    return re.sub(r"[^\n]", " ", match.group(0))
 
 
-def assert_region_positions(text: str) -> list[str]:
-    """The limits region's POSITION, not merely its bytes.
+def _table_lines(lines: list[str]) -> set[int]:
+    """Indexes of the lines of GFM tables: a header, a delimiter row, and the rows up to a blank line."""
+    marked: set[int] = set()
+    for k in range(len(lines) - 1):
+        head, delim = lines[k], lines[k + 1]
+        if head.strip() and "|" in head + delim and _TABLE_DELIM.match(delim):
+            j = k
+            while j < len(lines) and lines[j].strip():
+                marked.add(j)
+                j += 1
+    return marked
 
-    The byte-compare already refuses any edit to the region's CONTENT, but it was blind to
-    the region being MOVED. That gap matters because an orchestrator ruling on the first
-    screen rests entirely on the limits statement sitting next to the headline: relocate it
-    below the status strip and every byte-level assertion still passes while the ruling's
-    premise silently evaporates.
-    """
-    out: list[str] = []
-    spans = {rid: region_span(text, rid) for rid in REGION_IDS}
-    limits = spans.get("limits")
-    if limits is None:
-        return ["[region-position] the limits region is absent, so its position cannot be enforced"]
 
-    for rid in REGION_IDS:
-        span = spans.get(rid)
-        if rid != "limits" and span and span[0] < limits[0]:
-            out.append(f"[region-position] region {rid!r} precedes the limits region; the "
-                       f"limits statement must come before every other canonical region")
+def _scan_inline(text: str, a: int, b: int, blank, problems: list, lineno) -> None:
+    """Blank the code spans and inline comments of text[a:b], one paragraph, list item, table cell or
+    heading. A backtick run without a closing run of its own length, and a comment without a closer
+    in the same unit, are problems and hide nothing."""
+    i = a
+    while i < b:
+        c = text[i]
+        if c == "\\":
+            i += 2
+        elif c == "`":
+            j = i
+            while j < b and text[j] == "`":
+                j += 1
+            n, k, close = j - i, j, None
+            while k < b:
+                if text[k] != "`":
+                    k += 1
+                    continue
+                m = k
+                while m < b and text[m] == "`":
+                    m += 1
+                if m - k == n:
+                    close = k
+                    break
+                k = m
+            if close is None:
+                problems.append((lineno(i), UNBALANCED_SPAN))
+                i = j
+            else:
+                blank(i, close + n)
+                i = close + n
+        elif text.startswith("<!--", i):
+            k = text.find("-->", i + 2, b)
+            if k < 0:
+                problems.append((lineno(i), UNCLOSED_INLINE_COMMENT))
+                i += 4
+            else:
+                blank(i, k + 3)
+                i = k + 3
+        else:
+            i += 1
 
-    blocks = _blocks_before(text, limits[0])
-    headline = next((i for i, b in enumerate(blocks)
-                     if re.match(r"##\s", b.strip().splitlines()[0].strip())), None)
-    if headline is None:
-        return out + ["[region-position] no headline block precedes the limits region, so "
-                      "headline adjacency cannot be established"]
 
-    between = blocks[headline + 1:]
-    if any(_is_heading(b) for b in between):
-        out.append("[region-position] a heading intervenes between the headline block and "
-                   "the limits region; the limits statement must qualify the headline")
-    if len(between) > 1:
-        out.append(f"[region-position] {len(between)} block elements separate the headline "
-                   f"block from the limits region; at most one is allowed")
+def _scan(text: str, inline: bool = True) -> tuple[str, list[tuple[int, str]]]:
+    """-> (text with the hidden parts blanked, [(line number, problem)]).
+
+    Hidden: fenced code blocks, HTML comments, and with `inline` the code spans (and comments that
+    start mid-line). A fence or a comment that is never closed is a problem, and so is an inline
+    construct that cannot be read as one (see _scan_inline)."""
+    masked = list(text)
+    problems: list[tuple[int, str]] = []
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, b):
+            if masked[k] != "\n":
+                masked[k] = " "
+
+    def lineno(offset: int) -> int:
+        return text.count("\n", 0, offset) + 1
+
+    lines = text.split("\n")
+    starts, offset = [], 0
+    for ln in lines:
+        starts.append(offset)
+        offset += len(ln) + 1
+    in_table = _table_lines(lines) if inline else set()
+    fence = None            # (character, length, line number) while inside a fenced block
+    comment_line = None     # line number of a comment that starts a line and is still open
+    unit = None             # [start, end) of the paragraph or list item being collected
+
+    def flush() -> None:
+        nonlocal unit
+        if unit is not None and inline:
+            _scan_inline(text, unit[0], unit[1], blank, problems, lineno)
+        unit = None
+
+    def add(a: int, b: int) -> None:
+        nonlocal unit
+        unit = [a, b] if unit is None else [unit[0], b]
+
+    for k, line in enumerate(lines):
+        s = starts[k]
+        e = s + len(line)
+        if fence is not None:
+            blank(s, e)
+            closing = _FENCE_OPEN.match(line)
+            if (closing and closing.group(1)[0] == fence[0] and len(closing.group(1)) >= fence[1]
+                    and not closing.group(2).strip()):
+                fence = None
+            continue
+        begin = s                       # where the part of this line that is still text begins
+        if comment_line is not None:
+            end = text.find("-->", s, e)
+            if end < 0:
+                blank(s, e)
+                continue
+            blank(s, end + 3)
+            comment_line, begin = None, end + 3
+        else:
+            opener = _FENCE_OPEN.match(line)
+            if opener and not (opener.group(1)[0] == "`" and "`" in opener.group(2)):
+                flush()
+                blank(s, e)
+                fence = (opener.group(1)[0], len(opener.group(1)), k + 1)
+                continue
+            lead = re.match(r" {0,3}<!--", line)
+            if lead:  # an HTML block: it may run over blank lines, to the first closer
+                flush()
+                end = text.find("-->", s + lead.end() - 2, e)
+                if end < 0:
+                    blank(s, e)
+                    comment_line = k + 1
+                    continue
+                blank(s, end + 3)
+                begin = end + 3
+        if not text[begin:e].strip():
+            flush()
+            continue
+        if begin == s and inline:
+            if k in in_table:
+                flush()
+                if not _TABLE_DELIM.match(line):
+                    cell, cut = s, [m.end() for m in _UNESCAPED_PIPE.finditer(line)]
+                    for stop in [c + s - 1 for c in cut] + [e]:
+                        _scan_inline(text, cell, stop, blank, problems, lineno)
+                        cell = stop + 1
+                continue
+            if _HEADING_LINE.match(line):
+                flush()
+                _scan_inline(text, s, e, blank, problems, lineno)
+                continue
+            if _BREAK_LINE.match(line):
+                flush()
+                continue
+            if _LIST_ITEM.match(line):
+                flush()
+        add(begin, e)
+    flush()
+    if fence is not None:
+        problems.append((fence[2], UNCLOSED_FENCE))
+    if comment_line is not None:
+        problems.append((comment_line, UNCLOSED_COMMENT))
+    return "".join(masked), sorted(problems)
+
+
+# --------------------------------------------------------------------------------------
+# Position: where each region sits, not only what it says.
+# --------------------------------------------------------------------------------------
+
+_MARKER_ANY = re.compile(r"<!-- (BEGIN|END) canonical-region id=(\S+)")
+
+
+def headings(text: str) -> list[tuple[int, str, int]]:
+    """-> [(level, title, offset of the heading line)] for the ATX headings that are real headings:
+    not inside a fenced block or an HTML comment."""
+    visible, _problems = _scan(text, inline=False)
+    out = []
+    for m in re.finditer(r"(?m)^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$", visible):
+        out.append((len(m.group(1)), m.group(2).strip(), m.start()))
     return out
 
 
-def assert_limits_above_fold(readme: Path) -> tuple[list[str], list[str]]:
-    """-> (violations, notes). The limits statement must survive where it is measured.
+def assert_region_positions(text: str) -> list[str]:
+    """Each region's POSITION, not merely its bytes.
 
-    Scoped deliberately to the combinations the fold measurement itself covers; broadening
-    to arbitrary widths would make the positive control unsatisfiable, which is the failure
-    mode the previous cycle shipped.
+    The byte-compare refuses any edit to a region's CONTENT but is blind to the region being MOVED:
+    a limits statement lifted out of "Status and known limits" into a section nobody reads still
+    passes every byte-level assertion. So, per region: exactly one BEGIN/END pair, lying inside the
+    H2 section named for it in SECTION_OF; the regions disjoint (one's END below another's BEGIN
+    would make write mode delete what lies between); and the claim regions in the order limits,
+    disclosure, status. A marker that names no region is a violation too. Every violation names the
+    region.
     """
-    script = REPO_ROOT / "scripts/measure-hero-fold.py"
+    out: list[str] = []
+    heads = headings(text)
+    spans: dict[str, tuple[int, int]] = {}
+    for kind, rid in sorted({(m.group(1), m.group(2)) for m in _MARKER_ANY.finditer(text)}):
+        if rid not in REGION_IDS:
+            out.append(f"[region-position] a {kind} marker names region {rid!r}, which is none of "
+                       f"{', '.join(REGION_IDS)}")
+    for rid in REGION_IDS:
+        begins, ends = text.count(BEGIN.format(rid=rid)), text.count(END.format(rid=rid))
+        if begins == 0 and ends == 0:
+            out.append(f"[region-position] region {rid!r} is missing: no BEGIN/END marker pair in the document")
+            continue
+        if begins > 1 or ends > 1:
+            out.append(f"[region-position] region {rid!r} is duplicated: {begins} BEGIN and {ends} END "
+                       f"markers, expected one of each")
+            continue
+        span = region_span(text, rid)
+        if span is None:
+            out.append(f"[region-position] region {rid!r} has {begins} BEGIN and {ends} END markers, "
+                       f"but not a BEGIN followed by an END")
+            continue
+        spans[rid] = span
+        title = SECTION_OF[rid]
+        sections = [(i, h) for i, h in enumerate(heads) if h[0] == 2 and h[1] == title]
+        if not sections:
+            out.append(f"[region-position] region {rid!r} has no H2 section {title!r} to sit in")
+            continue
+        if len(sections) > 1:
+            out.append(f"[region-position] region {rid!r}: the H2 heading {title!r} appears "
+                       f"{len(sections)} times; its section is ambiguous")
+            continue
+        i, (_level, _title, start) = sections[0]
+        stop = next((h[2] for h in heads[i + 1:] if h[0] <= 2), len(text))
+        if not (start <= span[0] and span[1] <= stop):
+            where = next((h[1] for h in reversed(heads) if h[0] == 2 and h[2] <= span[0]), "no H2 section")
+            out.append(f"[region-position] region {rid!r} lies outside the H2 section {title!r} "
+                       f"(it sits under {where!r})")
+
+    ordered = sorted(spans, key=lambda rid: spans[rid][0])
+    for before, after in zip(ordered, ordered[1:]):
+        if spans[before][1] > spans[after][0]:
+            out.append(f"[region-position] region {before!r} overlaps region {after!r}: its END marker "
+                       f"lies below the BEGIN marker of {after!r}, so rewriting one would delete the other "
+                       f"and what lies between")
+
+    present = [rid for rid in CLAIM_REGIONS if rid in spans]
+    found = sorted(present, key=lambda rid: spans[rid][0])
+    if found != present:
+        for rid in present:
+            if found.index(rid) != present.index(rid):
+                out.append(f"[region-position] region {rid!r} is out of order: the claim regions "
+                           f"appear as {', '.join(found)}, expected {', '.join(present)}")
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# Numbers: none typed by hand in the prose.
+# --------------------------------------------------------------------------------------
+
+_REGION_BLOCK = re.compile(r"<!-- BEGIN canonical-region id=[a-z-]+ .*?-->.*?<!-- END canonical-region id=[a-z-]+ -->", re.S)
+_HTML_CODE = re.compile(r"<(code|pre|kbd|samp)\b[^>]*>.*?</\1\s*>", re.S | re.I)
+_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]\[[^\]]*\]")
+_LINK_TARGET = re.compile(r"\]\((?:[^()\s]|\([^()]*\))*(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
+_REFERENCE = re.compile(r"(?m)^ {0,3}\[[^\]]+\]:[ \t]*\S.*$")
+_BARE_URL = re.compile(r"https?://[^\s<>\]\)]+")
+_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:\"[^\"<]*\"|'[^'<]*'|[^'\"<>])*>")
+_ENTITY = re.compile(r"&#?[A-Za-z0-9]+;")
+_LIST_MARKER = re.compile(r"(?m)^[ \t>]*\d{1,9}[.)](?=[ \t]|$)")
+# A numeral: digits, with . or , between digit groups. Not one when a letter, a digit, a dot or a
+# comma comes right before it (python3, L8, v1.2.3, R-E1 are names, not numbers). An underscore does
+# not shield it: `_6_` is emphasis around a number, and a name with a number in it belongs in a code span.
+_NUMERAL = re.compile(r"(?<![^\W_]|[.,])\d+(?:[.,]\d+)*")
+
+
+def _prose(text: str) -> tuple[str, list[tuple[int, str]]]:
+    """-> (the prose of `text`, the places where it could not be told from what is hidden).
+
+    Blanked, offsets and lines kept: the canonical regions, fenced blocks, HTML comments, code
+    (spans, and <code>/<pre> elements), images, link targets and titles, reference definitions,
+    URLs, HTML tags with their attributes, entities and ordered-list markers."""
+    view, problems = _scan(_REGION_BLOCK.sub(_blank, text))
+    view = _HTML_CODE.sub(_blank, view)
+    for pattern in (_IMAGE, _LINK_TARGET, _REFERENCE, _HTML_TAG, _BARE_URL, _ENTITY):
+        view = pattern.sub(_blank, view)
+    return _LIST_MARKER.sub(_blank, view), problems
+
+
+def prose_view(text: str) -> str:
+    """`text` with everything the number rule does not read blanked, offsets and lines kept."""
+    return _prose(text)[0]
+
+
+def prose_numerals(text: str) -> list[tuple[int, str]]:
+    """-> [(line number, numeral)] for every numeral in the prose of `text`, in order."""
+    view = prose_view(text)
+    return [(view.count("\n", 0, m.start()) + 1, m.group(0)) for m in _NUMERAL.finditer(view)]
+
+
+def assert_no_hand_typed_numbers(text: str) -> list[str]:
+    """A numeral in the prose outside the canonical regions is a violation, unless it is one of the
+    CITED_FIGURES. Also a violation: a source URL missing from the README, and a declared figure
+    that the prose no longer holds (a stale entry would excuse a number that is gone, and quietly
+    keep a hole open for the next one); and every place where the prose cannot be read as prose
+    (a fence or comment never closed, a backtick that closes nothing), because the rule would then
+    be blind to what that hides. Every violation names the line, and a stray numeral its number."""
+    out: list[str] = []
+    lines = text.splitlines()
+    declared = {figure for figure, _url in CITED_FIGURES}
+    view, problems = _prose(text)
+    for number, why in problems:
+        out.append(f"[number-rule] line {number}: {why}")
+    numerals = [(view.count("\n", 0, m.start()) + 1, m.group(0)) for m in _NUMERAL.finditer(view)]
+    for number, numeral in numerals:
+        if numeral not in declared:
+            out.append(f"[hand-typed-number] line {number}: the numeral {numeral!r} is typed by hand in "
+                       f"the prose ({lines[number - 1].strip()[:80]!r}); derive it in a canonical region, "
+                       f"or declare it in CITED_FIGURES with the URL it comes from")
+    present = {numeral for _number, numeral in numerals}
+    for figure, url in CITED_FIGURES:
+        if url not in text:
+            out.append(f"[cited-figure] the source of {figure!r}, {url}, is absent from the README")
+        if figure not in present:
+            out.append(f"[cited-figure] the declared figure {figure!r} (source {url}) no longer appears "
+                       f"in the prose; remove it from CITED_FIGURES")
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# The fold measurement: only its report of glyph-model drift is consumed.
+# --------------------------------------------------------------------------------------
+
+def assert_glyph_model(readme: Path, script: Path | None = None) -> tuple[list[str], list[str], bool]:
+    """-> (violations, notes, measured). Run the fold measurement and fail on its report of glyph-model drift.
+
+    `measured` is True only when the measurement ran and compared the model with a browser. When it
+    could not run (the Python playwright package and a Chromium are not installed by a default
+    checkout or by the baseline CI job) the published glyph figures are model predictions, and the
+    caller must not say otherwise.
+
+    The disclosure region publishes a glyph height derived from the fold script's model rather
+    than from a browser, because a status row must regenerate anywhere while that measurement needs
+    Chromium. `model_drift` is the fold script's own report that its model and its live
+    measurement disagree, and consuming it here is what makes the published figure MEASURED rather
+    than merely modelled.
+
+    Deliberately NOT the whole returncode or the whole failures list: those also carry the
+    glyph-floor verdict and the old above-the-fold assertions on a headline that no longer exists,
+    and importing them here would make them block this ratchet -- a scope change no ruling has
+    made, arrived at as a side effect. The floor stays disclosed and un-gated; only the honesty of
+    the published number is enforced.
+
+    The script runs from the repository root, so a relative README path is made absolute first.
+    """
+    script = script or REPO_ROOT / MEASURE_SCRIPT
     if not script.is_file():
-        return ([], [f"[fold] {script.name} is absent; the fold assertion did NOT run"])
+        return ([], [f"[fold] {script.name} is absent; the glyph-model measurement did NOT run"], False)
     try:
-        r = subprocess.run([sys.executable, str(script), "--readme", str(readme)],
+        r = subprocess.run([sys.executable, str(script), "--readme", str(Path(readme).resolve())],
                            cwd=REPO_ROOT, capture_output=True, text=True, timeout=600)
+    except Exception as exc:  # noqa: BLE001 - it could not even start
+        return ([], [f"[fold] the fold measurement could not be executed ({type(exc).__name__}: {exc}); "
+                     f"the published glyph figure is a model prediction, UNVERIFIED in this environment"], False)
+    try:
         data = json.loads(r.stdout)
-    except Exception as exc:
-        return ([], [f"[fold] the fold measurement could not be executed "
-                     f"({type(exc).__name__}); the limits region's fold position is "
-                     f"UNVERIFIED in this environment"])
+    except ValueError:
+        tail = next((l.strip() for l in reversed(r.stderr.splitlines()) if l.strip()), "no output")
+        return ([], [f"[fold] the fold measurement produced no report (exit {r.returncode}: {tail[:160]}); "
+                     f"the published glyph figure is a model prediction, UNVERIFIED in this environment"], False)
     results = data.get("results") or []
     if not results:
-        return (["[fold] the fold measurement produced no combinations to assert over"], [])
-    out = []
-    for res in results:
-        where = f"{res.get('viewport')}/{res.get('scheme')}"
-        above = res.get("above_fold") or {}
-        for element in ("headline", "limits"):
-            if not above.get(element):
-                out.append(f"[fold] the {element} is not fully above the fold at {where}")
-    # The disclosure region publishes a glyph height derived from the fold script's model
-    # rather than from a browser, because a status row must regenerate anywhere while that
-    # measurement needs Chromium. `model_drift` is the fold script's own report that its
-    # model and its live measurement disagree, and consuming it here is what makes the
-    # published figure MEASURED rather than merely modelled.
-    #
-    # Deliberately NOT the whole returncode or the whole failures list: those also carry the
-    # glyph-floor verdict, and importing that here would make the floor block this ratchet --
-    # a scope change no ruling has made, arrived at as a side effect. The floor stays
-    # disclosed and un-gated; only the honesty of the published number is enforced.
-    for drift in data.get("model_drift") or []:
-        out.append(f"[fold] {drift}")
-    return (out, [f"[fold] asserted over {len(results)} combinations (local preview; the "
-                  f"real page adds platform chrome above the README, so it can only sit lower)"])
+        return (["[fold] the fold measurement produced no combinations to compare the glyph model with"], [], False)
+    out = [f"[fold] {drift}" for drift in data.get("model_drift") or []]
+    return (out, [f"[fold] glyph model compared with the browser over {len(results)} combinations "
+                  f"(local preview, not GitHub's rendering)"], True)
+
+
+# --------------------------------------------------------------------------------------
+# The two commands.
+# --------------------------------------------------------------------------------------
+
+def expected_regions() -> tuple[dict[str, str], dict[str, str], dict[str, list[tuple[str, str]]]]:
+    """-> ({region_id: its regenerated text}, {region_id: why it cannot be computed}, the claim rows).
+
+    A claim region always can be (its rows degrade to not-yet). A count region whose facts cannot
+    be derived is reported with the reason and has no expected text: nothing stands in for it."""
+    rows = render_rows()
+    regions = {rid: render_region(rid, rows[rid]) for rid in CLAIM_REGIONS}
+    failed: dict[str, str] = {}
+    for rid in COUNT_REGIONS:
+        try:
+            regions[rid] = render_region(rid, COUNT_RENDERERS[rid]())
+        except FactUnavailable as exc:
+            failed[rid] = str(exc)
+    return regions, failed, rows
+
+
+def read_readme(readme: Path) -> tuple[bytes, str]:
+    """The README's bytes and its text, with no newline translation: what is compared is what is on disk."""
+    raw = readme.read_bytes()
+    return raw, raw.decode("utf-8")
+
+
+def carriage_return_line(text: str) -> int | None:
+    """The line of the first carriage return in `text`, or None."""
+    at = text.find("\r")
+    return None if at < 0 else text.count("\n", 0, at) + 1
+
+
+def write_atomic(path: Path, data: bytes) -> None:
+    """Replace `path` with `data` so that no reader, and no kill or full disk, ever sees it empty or
+    partial: the bytes go to a temporary file in the same directory (same file system), are flushed
+    to disk, take the old file's permissions, and are renamed over it. A symbolic link is followed,
+    so the link stays."""
+    target = Path(os.path.realpath(path))
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:  # make the rename durable too; best effort, not every file system allows it
+        dfd = os.open(str(target.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
+def refuse(readme: Path, reasons: list[str]) -> int:
+    for why in reasons:
+        print(f"generate-hero-status: FAIL: {why}", file=sys.stderr)
+    print(f"generate-hero-status: write refused; {readme} was NOT touched", file=sys.stderr)
+    return 1
 
 
 def cmd_write(readme: Path) -> int:
     global README_PATH
     README_PATH = readme
-    text = readme.read_text(encoding="utf-8")
-    rows = render_rows()
-    for rid in REGION_IDS:
-        span = region_span(text, rid)
-        if span is None:
-            print(f"generate-hero-status: region {rid!r} markers not found in {readme}",
-                  file=sys.stderr)
-            return 1
-        i, j = span
-        text = text[:i] + render_region(rid, rows[rid]) + text[j:]
-    readme.write_text(text, encoding="utf-8")
-    print(f"generate-hero-status: wrote both canonical regions into {readme}")
+    raw, text = read_readme(readme)
+    # The cheap preconditions first, before the facts (several seconds of work) are derived, and
+    # before anything is replaced: replacing a span that overlaps another, or that is not where it
+    # was taken to be, deletes the prose between them.
+    row = carriage_return_line(text)
+    if row is not None:
+        return refuse(readme, [f"[line-endings] line {row} of the README has a carriage return; the regions are "
+                               f"byte-compared as LF text, so a CRLF README is refused, not rewritten: "
+                               f"convert it to LF first"])
+    problems = assert_region_positions(text)
+    if problems:
+        return refuse(readme, problems)
+    regions, failed, _rows = expected_regions()
+    if failed:
+        return refuse(readme, [f"region {rid!r} cannot be computed: {why}" for rid, why in failed.items()])
+    spans = sorted((region_span(text, rid), rid) for rid in REGION_IDS)
+    pieces, at = [], 0
+    for (begin, end), rid in spans:
+        pieces += [text[at:begin], regions[rid]]
+        at = end
+    pieces.append(text[at:])
+    if readme.read_bytes() != raw:  # the facts took a while; someone saved the README meanwhile
+        return refuse(readme, ["the README changed while the regions were being derived; run it again"])
+    write_atomic(readme, "".join(pieces).encode("utf-8"))
+    print(f"generate-hero-status: wrote the {len(REGION_IDS)} canonical regions into {readme}")
     return 0
 
 
 def cmd_check(readme: Path, check_fold: bool = True) -> int:
-    """All four assertions, evaluated on EVERY run. Never short-circuits; every
-    violation names the offending row id."""
+    """Every assertion, evaluated on EVERY run. Never short-circuits; every violation names the
+    offending region or row id."""
     # Bound HERE rather than only in main() so any caller -- including an importer that calls
     # cmd_check directly -- measures the same document it byte-compares. Binding it in main()
     # alone left a path where the rows' numbers came from one README and the comparison from
     # another, and reported confidently about the wrong document.
     global README_PATH
     README_PATH = readme
-    text = readme.read_text(encoding="utf-8")
-    expected = render_rows()
+    _raw, text = read_readme(readme)
+    expected, failed, expected_rows = expected_regions()
     violations: list[str] = []
 
+    row = carriage_return_line(text)
+    if row is not None:
+        violations.append(f"[line-endings] line {row} of the README has a carriage return; the regions are "
+                          f"byte-compared as LF text")
+
     committed_rows: list[tuple[str, str, dict]] = []
-    for rid in REGION_IDS:
+    for rid in CLAIM_REGIONS:
         span = region_span(text, rid)
-        if span is None:
-            violations.append(f"[region:{rid}] canonical region markers are missing")
-            continue
-        committed_rows += parse_committed_rows(text[span[0]:span[1]])
+        if span is not None:
+            committed_rows += parse_committed_rows(text[span[0]:span[1]])
 
     seen: dict[str, int] = {}
     for _, _, f in committed_rows:
         seen[f["id"]] = seen.get(f["id"], 0) + 1
 
-    # (a) completeness: every row id present EXACTLY once across the UNION of regions.
+    # (a) completeness: every row id present EXACTLY once across the UNION of claim regions.
     for rid in ROW_IDS:
         n = seen.get(rid, 0)
         if n == 0:
@@ -722,26 +1460,19 @@ def cmd_check(readme: Path, check_fold: bool = True) -> int:
     # (c) predicate: state=passed IFF the named predicate holds -- bidirectional, so a
     #     stale not-yet left behind after an artifact appears also fails.
     expected_by_id = {}
-    for rid_region, pairs in expected.items():
+    for pairs in expected_rows.values():
         for marker, visible in pairs:
             m = MARKER_RE.match(marker)
             assert m
             expected_by_id[m.group("id")] = (marker, visible, m.groupdict())
     for _, _, f in committed_rows:
         exp = expected_by_id.get(f["id"])
-        if exp is None:
-            continue
-        if f["state"] != exp[2]["state"]:
+        if exp is not None and f["state"] != exp[2]["state"]:
             violations.append(
                 f"[predicate] row {f['id']!r} claims state={f['state']!r} but its named "
                 f"predicate evaluates to {exp[2]['state']!r}")
 
     # (d) per-row byte-compare, so every violation can name its row.
-    for _, _, f in committed_rows:
-        exp = expected_by_id.get(f["id"])
-        if exp is None:
-            continue
-        pass
     for rid in ROW_IDS:
         exp = expected_by_id[rid]
         got = next((r for r in committed_rows if r[2]["id"] == rid), None)
@@ -752,26 +1483,21 @@ def cmd_check(readme: Path, check_fold: bool = True) -> int:
         if got[1] != exp[1]:
             violations.append(f"[byte-compare] row {rid!r}: visible text differs from regenerated")
 
-    # (e) WHOLE-REGION byte-compare. The per-row compare above only inspects recognized
-    # marker/visible pairs, so free-standing authored prose inserted INSIDE a canonical
-    # region -- an extra fabricated bullet, a second copy of a region -- was invisible to
-    # it and exited 0. That was a genuine fail-open hole (codex review). Comparing the
-    # entire region against render_region() leaves no unreviewed bytes inside the fence.
+    # (e) WHOLE-REGION byte-compare, for all five regions. The per-row compare above only inspects
+    # recognized marker/visible pairs, so free-standing authored prose inserted INSIDE a canonical
+    # region -- an extra fabricated bullet, a second copy of a region -- was invisible to it and
+    # exited 0. Comparing the entire region against its regeneration leaves no unreviewed bytes
+    # inside the fence. A count region that cannot be regenerated fails here, with the reason.
     for rid in REGION_IDS:
-        span = region_span(text, rid)
-        if span is None:
+        if rid in failed:
+            violations.append(f"[region:{rid}] cannot be computed, so it cannot be verified: {failed[rid]}")
             continue
-        committed_region = text[span[0]:span[1]]
-        if committed_region != render_region(rid, expected[rid]):
+        span = region_span(text, rid)
+        if span is not None and text[span[0]:span[1]] != expected[rid]:
             violations.append(
                 f"[region-byte-compare] region {rid!r} does not match the regenerated "
                 f"region exactly (content inside the canonical fence was added, removed "
                 f"or reordered)")
-        # Exactly one begin/end pair per region.
-        if text.count(BEGIN.format(rid=rid)) != 1 or text.count(END.format(rid=rid)) != 1:
-            violations.append(
-                f"[region-byte-compare] region {rid!r} does not have exactly one "
-                f"BEGIN/END marker pair")
     # A claim-row marker outside every canonical region is an unreviewed claim.
     inside = "".join(text[region_span(text, r)[0]:region_span(text, r)[1]]
                      for r in REGION_IDS if region_span(text, r))
@@ -780,13 +1506,18 @@ def cmd_check(readme: Path, check_fold: bool = True) -> int:
             violations.append(f"[region-byte-compare] claim-row marker outside any "
                               f"canonical region: {ln.strip()[:80]}")
 
-    # (f) POSITION, not just bytes: region order and headline adjacency.
+    # (f) POSITION, not just bytes: each region in its section, the claim regions in order.
     violations += assert_region_positions(text)
 
-    # (g) the limits statement is actually visible where the fold is measured.
+    # (g) no numeral typed by hand in the prose.
+    violations += assert_no_hand_typed_numbers(text)
+
+    # (h) the published glyph figure still equals what a browser measures. Without a browser it is
+    # a model prediction, and the last line below must not say it was asserted.
     notes: list[str] = []
+    measured = False
     if check_fold:
-        fold_violations, fold_notes = assert_limits_above_fold(readme)
+        fold_violations, fold_notes, measured = assert_glyph_model(readme)
         violations += fold_violations
         notes += fold_notes
 
@@ -796,23 +1527,32 @@ def cmd_check(readme: Path, check_fold: bool = True) -> int:
         print(f"generate-hero-status: FAIL: {v}", file=sys.stderr)
     if violations:
         return 2
-    print(f"generate-hero-status: OK  {len(ROW_IDS)} rows verified across "
-          f"{len(REGION_IDS)} canonical regions (order, headline adjacency"
-          f"{' and fold position' if check_fold else ''} asserted)")
+    if measured:
+        scope = "position, hand-typed numbers and glyph model asserted"
+    else:
+        why = "was NOT measured, so the hero figures are model predictions" if check_fold else \
+            "was not measured (--no-fold), so the hero figures are model predictions"
+        scope = f"position and hand-typed numbers asserted; the glyph model {why}"
+    print(f"generate-hero-status: OK  {len(ROW_IDS)} rows and {len(REGION_IDS)} canonical regions "
+          f"verified ({scope})")
     return 0
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--readme", default=str(REPO_ROOT / "README.md"))
     ap.add_argument("--no-fold", action="store_true",
-                    help="skip the above-the-fold assertion (it needs a headless browser)")
+                    help="skip the glyph-model measurement (it needs a headless browser)")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--write", action="store_true")
     g.add_argument("--check", action="store_true")
     a = ap.parse_args()
     readme = Path(a.readme)
-    return cmd_write(readme) if a.write else cmd_check(readme, check_fold=not a.no_fold)
+    try:
+        return cmd_write(readme) if a.write else cmd_check(readme, check_fold=not a.no_fold)
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"generate-hero-status: cannot read or write {readme}: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
