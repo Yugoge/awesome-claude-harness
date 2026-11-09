@@ -26,8 +26,11 @@ Allow-list mechanism: The sentinel file `.claude/.hook-refactor-allow` at
 `$CLAUDE_PROJECT_DIR` (or cwd fallback). When present, this hook exits 0
 and lets the underlying tool run. The user creates this file by hand
 when they want to refactor hooks/commands; deleting it re-engages the
-guard. Without it, one write passes: /dev-command's dev writing the project
-command file the cycle develops (_dev_command_product_file).
+guard. Without it, two writes pass: /dev-command's dev writing the project
+command file the cycle develops (_dev_command_product_file), and the cleaner
+of an active /clean writing what that /clean's owner approved for it under
+commands/ (_clean_approved_edit, _clean_approved_bash; hooks/pretool-tool-policy.py
+holds the rule and refuses every other caller's write of those paths).
 
 Exit codes:
   0: Allow tool use
@@ -231,20 +234,83 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
         return False
 
 
+def _clean_grant(data: dict) -> tuple:
+    """(paths written, paths removed) the caller may write as the producer of what a
+    human-typed /clean's owner approved (P9-4): the cleaner's approved moves, renames and
+    fix_style edits of the active /clean span, read by hooks/pretool-tool-policy.py's one rule
+    (clean_grant), which also refuses every other caller's write of them. A /clean run in the
+    harness home approves moves and edits under commands/ (and agents/); nothing else is
+    exempted here. Anything unread is empty (blocked)."""
+    try:
+        if not data.get('agent_id'):
+            return frozenset(), frozenset()
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, here)
+        spec = importlib.util.spec_from_file_location('_tool_policy_clean', os.path.join(here, 'pretool-tool-policy.py'))
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        project = os.path.abspath(str(_project_dir()))
+        return policy.clean_grant(data, project)
+    except Exception:
+        return frozenset(), frozenset()
+
+
+def _forms(path: str) -> set:
+    path = os.path.join(str(_project_dir()), os.path.expanduser(path))
+    forms = {os.path.normpath(path)}
+    try:
+        forms.add(os.path.realpath(path))
+    except (OSError, ValueError):
+        pass
+    return forms
+
+
+def _clean_approved_edit(file_path: str, data: dict) -> bool:
+    """Whether file_path is a file /clean's owner approved for this caller to edit (above)."""
+    written, _removed = _clean_grant(data)
+    return bool(file_path) and bool(_forms(file_path) & written)
+
+
+def _clean_approved_bash(command: str, data: dict) -> bool:
+    """Whether every `.claude/commands/` the guard reads in ``command`` is spelled by a path
+    /clean's owner approved for this caller (a move's source or destination, a fixed file):
+    with each of those paths, as written absolute, real or below the home's spellings, taken
+    out of the command and of its home-spelled-out text, neither names a protected directory."""
+    written, removed = _clean_grant(data)
+    paths = written | removed
+    if not paths:
+        return False
+    home = os.path.realpath(os.path.expanduser(os.environ.get('CLAUDE_HOME') or '~/.claude'))
+    spellings = set()
+    for path in paths:
+        spellings.add(path)
+        rel = os.path.relpath(path, home)
+        if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+            spellings.update(f'{root}/{rel}' for root in (_HOME, '$HOME/.claude', '${HOME}/.claude'))
+    for text in dict.fromkeys((command, _home_spelled_out(command))):
+        for spelling in sorted(spellings, key=len, reverse=True):
+            text = text.replace(spelling, ' ')
+        if _matches_any(text, _HOOK_PATTERNS) or _matches_any(text, _CMD_PATTERNS):
+            return False
+    return True
+
+
 def _evaluate_write_edit(tool_name: str, tool_input: dict, data: dict) -> None:
     """Apply guard for Write/Edit/MultiEdit/NotebookEdit tools."""
     file_path = tool_input.get('file_path', '') or ''
     if _is_hooks_path(file_path):
         _block_path(tool_name, file_path, 'hooks')
-    if _is_commands_path(file_path) and not _dev_command_product_file(file_path, data):
+    if (_is_commands_path(file_path) and not _dev_command_product_file(file_path, data)
+            and not _clean_approved_edit(file_path, data)):
         _block_path(tool_name, file_path, 'commands')
 
 
-def _evaluate_bash(tool_input: dict) -> None:
+def _evaluate_bash(tool_input: dict, data: dict) -> None:
     """Apply guard for Bash tool."""
     command = tool_input.get('command', '') or ''
     kind = _classify_bash_target(command)
-    if kind:
+    if kind and not (kind == 'commands' and _clean_approved_bash(command, data)):
         _block_bash(command, kind)
 
 
@@ -253,7 +319,7 @@ def _evaluate(tool_name: str, tool_input: dict, data: dict) -> None:
     if tool_name in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
         _evaluate_write_edit(tool_name, tool_input, data)
     elif tool_name == 'Bash':
-        _evaluate_bash(tool_input)
+        _evaluate_bash(tool_input, data)
 
 
 def main() -> None:
