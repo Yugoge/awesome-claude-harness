@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 
 SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "requirement-round.v1.json"
+# command_span.COMMANDS_DIR's own expression: a path the artifact check resolves to the harness's commands/
+COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
 SOURCE_RE = re.compile(r"^(requirement-round|producer-question):([A-Za-z0-9][A-Za-z0-9_-]{2,80}):(r[1-9][0-9]*|[a-z][a-z0-9-]*)$")
 ROUND = "docs/dev/requirement-round-{task}-r{n}.json"
 PANEL = "docs/dev/ba-panel-{task}-r1.json"
@@ -148,8 +150,8 @@ def runs_round(span) -> bool:
     body = span.body()
     if body is None:  # held to the current text (Stop gate's _loaded_lacks)
         try:
-            body = (Path(_lib("stop_contract").COMMANDS_DIR) / f"{span.command}.md").read_text(encoding="utf-8")
-        except (OSError, AttributeError):
+            body = (COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8")
+        except OSError:
             body = ""
     todos = " ".join(str(t.get("content", "")) for t in span.last_todos() or () if isinstance(t, dict))
     return any(m in body or m in todos for m in ROUND_MARKERS)
