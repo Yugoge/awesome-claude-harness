@@ -84,9 +84,12 @@ def landing_work(inner=None):
 
 def dispatch(o, fields: dict, act, label: str, task_id: str, subagent_type=None, on_stop_block=None,
              stop_rounds: int = 2):
-    """pipeline.Orchestrator.dispatch with the subagent's next rounds after a stop block."""
+    """pipeline.Orchestrator.dispatch with the subagent's next rounds after a stop block. The role is the
+    explicit subagent_type, else the rendered prompt's obligation block's (never its FIRST ACTION sentinel)."""
     prompt = o.render(fields, task_id)
-    atype = subagent_type or fields.get("subagent_type") or agents.registry_role(prompt)
+    atype = subagent_type or fields.get("subagent_type") or o.tree.obligation_role(prompt)
+    if not atype:
+        raise agents.PlayError(f"{label}: no subagent_type in the template and no role in its obligation block")
     player = agents.Player(o.tree, prompt, act, role=atype)
     d = o.s.main.dispatch(atype, prompt, description=o.bind(fields.get("description", "") or atype),
                           body=player.body, result=player.final, label=label, deviation=o.devs.at(label),
@@ -141,7 +144,7 @@ def codex(sub, label: str = ""):
 
 def _dev_fields(cyc) -> dict:
     tpl = next(t for t in cyc.templates(10)
-               if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == cyc.step_role(10))
+               if cyc.o.template_role(t, cyc.tid) == cyc.step_role(10))
     return devdrv.with_lines(tpl, list(cyc.graph_lines))
 
 
