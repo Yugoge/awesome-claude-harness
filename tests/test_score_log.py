@@ -16,6 +16,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -356,7 +358,7 @@ def test_append_writes_one_line_and_the_first_row_per_key_wins(tmp_path: Path) -
         assert score_log.append(log, _event(-9, key="k1", why="again")) is False
         assert score_log.append(log, _event(-4, key="k2")) is True
     assert [(row["key"], row["points"]) for row in _log_rows(log)] == [("k1", -4), ("k2", -4)]
-    assert "naïve" in log.read_text(encoding="utf-8")  # not escaped
+    assert "naïve" in log.read_text(encoding="utf-8") and _log_rows(log)[0]["why"] == "naïve"  # kept as written, a faithful round trip
     assert [row["key"] for _, row in score_log.read_lines(str(log))] == ["k1", "k2"]
     assert Path(f"{log}.lock").exists()
 
@@ -371,14 +373,60 @@ def test_a_row_with_neither_kind_nor_key_is_written_unchanged_without_reading_th
     assert log.read_text(encoding="utf-8").splitlines()[2:] == [json.dumps(row, ensure_ascii=False)] * 2
 
 
-def test_a_damaged_log_is_refused_by_the_dedup_read_but_not_for_a_row_that_needs_none(tmp_path: Path) -> None:
+def test_a_damaged_line_before_the_end_does_not_stop_the_writer_but_the_strict_reader_still_refuses(tmp_path: Path) -> None:
     log = tmp_path / "lifecycle.jsonl"
-    log.write_text("{damaged\n" + json.dumps(_event(key="k1")) + "\n", encoding="utf-8")
-    for row in (_event(key="k1"), _event(key="k2"), _rating()):
-        with pytest.raises(score_log.ScoreLogError, match="line 1 .*not final line"):
-            score_log.append(log, row)
-    assert score_log.append(log, json.loads(LINE % 1)) is True  # score-update.sh's row: no dedup, no read
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 3
+    log.write_text("{damaged\n[1, 2]\n" + json.dumps(_event(key="k1")) + "\n" + json.dumps(_rating()) + "\n", encoding="utf-8")
+    assert score_log.append(log, _event(key="k1")) is False  # the scan passes over the damage and still finds the key
+    assert score_log.append(log, _rating()) is False  # and the rating
+    assert score_log.append(log, _event(key="k2")) is True and score_log.append(log, json.loads(LINE % 1)) is True
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 6
+    with pytest.raises(score_log.ScoreLogError, match="line 1 .*not final line"):  # the legacy scripts rely on this refusal
+        score_log.read_lines(str(log))
+
+
+def test_a_crash_fragment_at_the_end_is_cut_back_so_the_next_row_is_not_glued_to_it(tmp_path: Path) -> None:
+    log = tmp_path / "lifecycle.jsonl"
+    log.write_bytes((json.dumps(_event(key="k1")) + '\n{"kind": "event", "ke').encode())
+    assert score_log.append(log, _event(key="k2")) is True
+    assert [row["key"] for _, row in score_log.read_lines(str(log))] == ["k1", "k2"]  # the strict reader accepts it
+    assert log.read_bytes().endswith(b"\n")
+    log.write_bytes(b'{"kind": "ev')  # nothing but a fragment
+    assert score_log.append(log, _event(key="k3")) is True
+    assert [row["key"] for _, row in score_log.read_lines(str(log))] == ["k3"]
+    assert score_log.append_all(log, []) == 0 and log.read_bytes().endswith(b"\n")
+
+
+def test_append_all_dedups_a_batch_against_the_log_and_itself_and_writes_it_with_one_fsync(tmp_path: Path, monkeypatch) -> None:
+    log, task, fsyncs = tmp_path / "logs" / "lifecycle.jsonl", "20261101-100000", []
+    monkeypatch.setattr(os, "fsync", lambda fd: fsyncs.append(fd))
+    legacy = json.loads(LINE % 1)
+    batch = [_event(key="a"), _event(key="a", why="again"), _event(key="b"), legacy, _rating(4, task=task),
+             _rating(5, task=f"dev-{task}"), _event(task=task, key="c"), 7, None]  # the last two are no rows at all
+    with score_log.locked(log):
+        assert score_log.append_all(log, batch) == 5 and len(fsyncs) == 1
+        assert score_log.append_all(log, batch) == 1 and len(fsyncs) == 2  # only the legacy row repeats
+        assert score_log.append_all(log, []) == 0 and len(fsyncs) == 2
+    assert [row.get("key") or row.get("kind") or row["agent"] for row in _log_rows(log)] == ["a", "b", "dev", "rating", "c", "dev"]
+
+
+def test_append_all_reads_the_log_once_for_the_whole_batch(tmp_path: Path, monkeypatch) -> None:
+    log, reads, real = tmp_path / "lifecycle.jsonl", [], Path.read_bytes
+    log.write_text("".join(json.dumps(_event(key=f"old{n}")) + "\n" for n in range(200)), encoding="utf-8")
+    monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self) or real(self))
+    assert score_log.append_all(log, [_event(key=f"old{n}") for n in range(50)] + [_event(key=f"new{n}") for n in range(50)]) == 50
+    assert len(reads) == 1 and len(_log_rows(log)) == 250
+
+
+def test_a_lone_surrogate_or_an_unserialisable_row_does_not_stop_the_other_rows(tmp_path: Path) -> None:
+    log = tmp_path / "lifecycle.jsonl"
+    bad = {**_event(-6, "dev\ud800", key="s1", why="why\udc00"), "ref": "ref\ud83d"}
+    odd = {"agent": "dev", "reason": "naïve \ud800"}  # a legacy row with both
+    with score_log.locked(log):
+        assert score_log.append_all(log, [_event(key="ok0"), bad, {"key": "u", "x": object()}, odd, _event(key="ok1")]) == 4
+    rows = _log_rows(log)  # valid UTF-8 and valid JSON line by line
+    assert [row.get("key") or row["agent"] for row in rows] == ["ok0", "s1", "dev", "ok1"]
+    assert (rows[1]["role"], rows[1]["why"], rows[1]["ref"], rows[2]["reason"]) == ("dev\ud800", "why\udc00", "ref\ud83d", "naïve \ud800")
+    assert len(score_log.read_lines(str(log))) == 4
 
 
 def test_rating_dedup_compares_rating_rows_only_by_canonical_task_id(tmp_path: Path) -> None:
@@ -437,7 +485,6 @@ def test_locked_holds_the_exclusive_lock_on_the_log_lock_file(tmp_path: Path) ->
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released with the block
 
 
-@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
 def test_twenty_parallel_appends_from_separate_processes_give_twenty_intact_rows(tmp_path: Path) -> None:
     log = tmp_path / "logs" / "lifecycle.jsonl"
     assert _children(log, "-") == ["True"] * 20
@@ -447,7 +494,6 @@ def test_twenty_parallel_appends_from_separate_processes_give_twenty_intact_rows
     assert len(score_log.read_lines(str(log))) == 20
 
 
-@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
 def test_twenty_parallel_appends_of_one_key_write_it_once(tmp_path: Path) -> None:
     log = tmp_path / "logs" / "lifecycle.jsonl"
     assert sorted(_children(log, "same")) == ["False"] * 19 + ["True"]
@@ -460,9 +506,10 @@ def _git(repo: Path, *args: str) -> None:
                    check=True, capture_output=True, env=env)
 
 
-def test_project_key_is_the_hash_of_the_resolved_git_common_directory(tmp_path: Path) -> None:
+def test_project_key_is_the_hash_of_the_resolved_git_common_directory(tmp_path: Path, monkeypatch) -> None:
     if shutil.which("git") is None:
         pytest.skip("needs git")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))  # a temporary folder inside some work tree is still "outside" one
     one, two, plain = tmp_path / "one", tmp_path / "two", tmp_path / "plain"
     for repo in (one, two):
         subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
@@ -512,6 +559,45 @@ def test_why_is_one_line_without_a_task_id_and_cut_to_80_characters(task: str) -
     assert score_log._why(_event(-6, task=task, why=task)) == ""  # nothing is left of a why that is only a task id
 
 
+BAD = "\x1b\x07\x9b\x08\x00\x7f\u202e\u200b\u2028\u2029\u00ad\ud800"  # ESC BEL CSI BS NUL DEL bidi, zero-width, separators, soft hyphen, surrogate
+
+
+def _unsafe(text: str) -> list:
+    return [hex(ord(c)) for c in text if unicodedata.category(c) in ("Cc", "Cf", "Cs", "Zl", "Zp") and c != "\n"]
+
+
+def test_no_renderer_passes_a_control_or_format_character_through() -> None:
+    task = f"20261101-100000{BAD}"
+    rows = [_event(-6, f"dev{BAD}", task, _ts(1), why=f"reason{BAD}x {task}", event=f"qa_fail{BAD}", key="1"),
+            _rating(4, (f"qa{BAD}", f"dev{BAD}"), task, _ts(2))]
+    for text in (score_log.render_owner_summary(rows, PROJECT, END, task), score_log.render_rating_view(rows, PROJECT, END)):
+        assert _unsafe(text) == [] and "reason" in text and "dev" in text and "qa" in text
+    for character in BAD:  # the stored reason is clean as well, one character at a time
+        assert _unsafe(score_log._why(_event(-6, why=f"a{character}b"))) == [] and score_log._why(_event(-6, why=f"a{character}b")) == "a b"
+
+
+def test_the_cycle_line_shows_five_items_then_how_many_more_and_no_line_grows_without_bound() -> None:
+    task = "20261101-100000"
+    many = [_event(-1, "dev", task, _ts(1), event="rerun_gap", key=str(n), why="x") for n in range(100)]
+    lines = score_log.render_owner_summary(many, PROJECT, END, task).split("\n")
+    assert len(lines) == 3 and lines[1].count(" -1 (x)") == 5 and lines[1].endswith(", +95 more")
+    long = [_event(-1, "d" * 5000, "t" * 5000, _ts(1), event="e" * 5000, key=str(n), why="w" * 5000) for n in range(100)]
+    long += [_event(-1, "ba", task, _ts(1), key=f"ba{n}", why="w" * 5000) for n in range(100)]
+    for text in (score_log.render_owner_summary(long, PROJECT, END, task), score_log.render_owner_summary(long, PROJECT, END, "t" * 5000),
+                 score_log.render_rating_view(long + [_rating(4, ("d" * 5000,), "t" * 5000, _ts(2))], PROJECT, END)):
+        assert max(map(len, text.split("\n"))) <= 200
+    assert score_log.render_owner_summary(long, PROJECT, END, task).split("\n")[1].endswith(", +95 more")
+    five = [_event(-1, "dev", task, _ts(1), event="rerun_gap", key=str(n), why="x") for n in range(5)]
+    assert "more" not in score_log.render_owner_summary(five, PROJECT, END, task)
+
+
+def test_the_trend_of_many_cycles_is_computed_in_one_pass() -> None:
+    rows = [_event(1, ts=_ts(n), task=f"20261101-{n:06d}", key=str(n)) for n in range(20000)]
+    started = time.monotonic()
+    assert (score_log.score(rows, "dev", PROJECT, END), score_log.trend(rows, "dev", PROJECT, END)) == (100, 0)
+    assert time.monotonic() - started < 5  # folding every prefix again took minutes at this size
+
+
 def _cycle() -> list:
     task = "20261101-100000"
     return [
@@ -556,7 +642,7 @@ def test_the_owner_summary_edges() -> None:
     many = [_event(-1, name, f"dev-{task}-l1", _ts(n + 1), event="rerun_gap", key=str(n), why=f"{name} was rerun")
             for n, name in enumerate(("ba", "dev", "qa", "close-qa", "graphify", "main", "scribe"))]
     lines = score_log.render_owner_summary(many, PROJECT, END, task).split("\n")
-    assert len(lines) <= 5 and lines[1].count(" -1 (") == 7
+    assert len(lines) <= 5 and lines[1].count(" -1 (") == 5 and lines[1].endswith(", +2 more")
     assert lines[2].startswith("Worst: ba (")  # equal scores and trends: the first name
 
 

@@ -11,7 +11,7 @@ import json
 import os
 import re
 import subprocess
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from functools import reduce
 from pathlib import Path
 
@@ -42,10 +42,9 @@ def read_lines(path: str) -> list[tuple[int, dict]]:
     for index, raw_line in enumerate(raw_lines):
         if not (stripped := raw_line.rstrip("\n")):
             continue
-        try:
+        entry = None
+        with suppress(json.JSONDecodeError):
             entry = json.loads(stripped)
-        except json.JSONDecodeError:
-            entry = None
         if isinstance(entry, dict):
             entries.append((index + 1, entry))
         elif index != len(raw_lines) - 1:
@@ -85,19 +84,34 @@ def _ob(name):  # obligation is imported late: score-update.sh puts hooks/lib on
     return getattr(importlib.import_module(".obligation" if __package__ else "obligation", __package__ or None), name)
 
 
+def append_all(log, rows) -> int:
+    """Under ``locked(log)``: write the rows (a list) with one write and one fsync; returns how many. The first row per "key" wins; a
+    rating row yields only to a RATING row of the same canonical task id; a row with neither goes as is; an unserialisable one is skipped."""
+    def marks(row):  # what makes a row a repeat: its key, and for a rating row its canonical task id
+        found = {("key", row["key"])} if isinstance(row.get("key"), str) else set()
+        return found | {("rating", _ob("canonical_task_id")(row.get("task_id")))} if row.get("kind") == "rating" else found
+    data = Path(log).read_bytes() if os.path.exists(log) else b""
+    if data and not data.endswith(b"\n"):  # a crash left a fragment: cut it back to the last newline, or the next row is glued to it
+        os.truncate(log, len(data := data[:data.rfind(b"\n") + 1]))
+    seen, lines = set(), []
+    for line in data.decode("utf-8", "replace").split("\n") if any(isinstance(r, dict) and marks(r) for r in rows) else ():
+        with suppress(ValueError, AttributeError):  # a damaged line, or one that is no object: passed over, never raised
+            seen |= marks(json.loads(line))
+    for row in rows:
+        with suppress(TypeError, ValueError, AttributeError):  # an unserialisable row is skipped, the others still go
+            line, new = json.dumps(row, ensure_ascii=False).encode("utf-8", "backslashreplace"), marks(row)  # lone surrogates: \udXXX
+            if not new & seen:
+                lines.append(line + b"\n")
+                seen |= new
+    if lines:
+        with open(log, "ab", buffering=0) as handle:
+            handle.write(b"".join(lines))
+            os.fsync(handle.fileno())
+    return len(lines)
+
+
 def append(log, row: dict) -> bool:
-    """Under ``locked(log)``: append one fsynced line, True when written. The first row per "key" wins; a rating row yields
-    only to a RATING row of the same canonical task id; a row with neither (score-update.sh's) is written as is."""
-    rating, key = row.get("kind") == "rating", row.get("key")
-    if (rating or key is not None) and os.path.exists(log):
-        canonical = _ob("canonical_task_id")
-        if any((key is not None and old.get("key") == key) or (rating and old.get("kind") == "rating"
-               and canonical(old.get("task_id")) == canonical(row.get("task_id"))) for _, old in read_lines(str(log))):
-            return False
-    with open(log, "a", encoding="utf-8") as handle:
-        print(json.dumps(row, ensure_ascii=False), file=handle, flush=True)
-        os.fsync(handle.fileno())
-    return True
+    return append_all(log, [row]) == 1
 
 
 def _live(rows, project, as_of):
@@ -122,11 +136,12 @@ def _fold(pairs):
 
 
 def _history(pairs):
-    """The score at the start, then after each cycle (task family, by first appearance): the fold up to the next cycle's first row."""
-    family, first = _ob("task_family"), {}
-    for i, (r, _) in enumerate(pairs):
-        first.setdefault(family(r.get("task_id")), i)
-    return [START] + [_fold(pairs[:end]) for end in [*list(first.values())[1:], len(pairs)] if first]
+    """The score before each cycle (task family, by first appearance), then at the end: one pass, one running fold."""
+    family, before, value = _ob("task_family"), {}, START
+    for r, points in pairs:
+        before.setdefault(family(r.get("task_id")), value)
+        value = min(CAP, value + points)
+    return [*before.values(), value]
 
 
 def score(rows, identity, project, as_of) -> int:
@@ -147,15 +162,15 @@ def tier(value) -> str:
     return _rank(value)[0]
 
 
+def _plain(value) -> str:  # one line of printable text: control and format characters, separators and runs of white space become one space
+    return " ".join("".join(c if c.isprintable() else " " for c in str(value)).split())
+
+
 def _why(row):
-    """The row's why on one line, without a task id, cut to 80 characters."""
+    """The row's why as plain text, without a task id, cut to 80 characters."""
     tid = re.escape(str(row.get("task_id") or "\0"))
     stamp = r"(?:dev-(?:command-)?)?\d{8}-\d{6}(?:-l?\d+)?"
-    return " ".join(re.sub(rf"(?<![\w-]){tid}(?![\w-])|{stamp}", "", str(row.get("why") or "")).split())[:80]
-
-
-def _last_miss(pairs):
-    return next((_why(r) for r, points in reversed(pairs) if r["kind"] == "event" and points < 0), "")
+    return _plain(re.sub(rf"(?<![\w-]){tid}(?![\w-])|{stamp}", "", str(row.get("why") or "")))[:80]
 
 
 def _by_identity(rows, project, as_of):
@@ -172,15 +187,16 @@ def render_owner_summary(rows, project, as_of, task_id) -> str:
         return "Scores (this project): no record yet."
     stats, family = {n: (score(live, n, project, as_of), trend(live, n, project, as_of)) for n in names}, _ob("task_family")
     cycle = [r for r in live if family(r.get("task_id")) == family(task_id)]
-    items = [f"{r['role']} {r['points']:+d}" + (_why(r) and f" ({_why(r)})") for r in cycle
+    items = [f"{_plain(r.get('role'))} {r['points']:+d}" + (_why(r) and f" ({_why(r)})") for r in cycle
              if r["kind"] == "event" and type(r.get("points")) is int]
     items += [f"rating {r['rating']}: {RATING_POINTS[r['rating']]:+d} each" for r in cycle if r.get("rating") in RATING_POINTS]
     worst = min(stats, key=lambda n: (*stats[n], n))
-    miss = _last_miss(_mine(live, worst, project, as_of))
+    miss = next((_why(r) for r, points in reversed(_mine(live, worst, project, as_of)) if r["kind"] == "event" and points < 0), "")
+    more = f", +{len(items) - 5} more" if len(items) > 5 else ""
     return "\n".join((
-        "Scores (this project): " + " | ".join(f"{n} {s} {tier(s)} ({t:+d})" for n, (s, t) in stats.items()),
-        f"This cycle {task_id}: " + (", ".join(items) or "no scored events"),
-        f"Worst: {worst} ({tier(stats[worst][0])}, {stats[worst][0]}); " + (f'last miss: "{miss}"' if miss else "no negative event"),
+        "Scores (this project): " + " | ".join(f"{_plain(n)[:20]} {s} {tier(s)} ({t:+d})" for n, (s, t) in stats.items()),
+        (f"This cycle {_plain(task_id)}: " + (", ".join(items[:5]) or "no scored events"))[:200 - len(more)] + more,
+        f"Worst: {_plain(worst)[:20]} ({tier(stats[worst][0])}, {stats[worst][0]}); " + (f'last miss: "{miss}"' if miss else "no negative event"),
     ))
 
 
@@ -188,10 +204,6 @@ def glyphs(values) -> str:
     """One line of ▁▂▃▅▇, each number scaled between the lowest and the highest (rounded half up); all equal gives ▃ throughout."""
     low, high = min(values, default=0), max(values, default=0)
     return "".join("▁▂▃▅▇"[int((v - low) * 4 / (high - low) + .5) if high > low else 2] for v in values)
-
-
-def _plain(value) -> str:  # one line of printable text: control characters and runs of white space become one space
-    return " ".join("".join(c if c.isprintable() else " " for c in str(value)).split())
 
 
 def render_rating_view(rows, project, as_of) -> str:
@@ -206,4 +218,4 @@ def render_rating_view(rows, project, as_of) -> str:
         lines += [f"  {_plain(r.get('task_id'))}  {_plain(r.get('event'))}  {pts:+d}  {_plain(r.get('why') or '')[:80]}".rstrip()
                   for r, pts in reversed(mine[n]) if r["kind"] == "event"][:5] or ["  no events"]
     rated = [f"  {_plain(r.get('task_id'))}  {_plain(r.get('rating'))}" for r in reversed(live) if r["kind"] == "rating"][:5]
-    return "\n".join(lines + (["Your latest ratings, newest first"] + rated if rated else ["Your ratings: none yet"]))
+    return "\n".join(line[:200] for line in lines + (["Your latest ratings, newest first"] + rated if rated else ["Your ratings: none yet"]))
