@@ -658,18 +658,21 @@ def test_G1_role_the_active_command_declares_no_template_for_passes(tmp_path, co
     pytest.param(lambda: _span_records("dev") + _typed_command("spec") + [_assistant_text()],
                  id="dev_then_spec_latest_span_wins"),
 ])
-def test_G1_spec_span_qa_without_obligation_passes(tmp_path, records):
-    """Acceptance 3 (g): a QA dispatch without an obligation inside a /spec
-    span (the active span, even after an earlier /dev) -> exit 0 in block
-    mode, nothing logged."""
+def test_G1_spec_span_qa_without_obligation_is_refused(tmp_path, records):
+    """Acceptance 3 (g), as P13-1 changed it: /spec's templates now declare qa (panel QA's round 1, split QA's
+    verdict line), so inside a /spec span (the active span, even after an earlier /dev) a QA dispatch without an
+    obligation is refused in block mode, as in every command that declares the role; split QA with its own
+    obligation passes."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("g1spec")
     payload = _dispatch_payload(project, sid, records(), subagent_type="qa",
                                 prompt="judge the spec, no block")
     result = _run_hook(home, project, payload, switch="block")
-    assert result.returncode == 0, result.stderr
-    assert result.stderr == ""
-    assert _written_logs(home) == []
+    assert result.returncode == 2 and "reason=missing_block" in result.stderr, result.stderr
+    split_qa = _block(_obligation_doc(role="qa", pipeline="spec", artifacts=[
+        {"kind": "response_line", "terminal_line_regex": "^SPLIT QA: (pass|fail)$"}])) + "\njudge the split"
+    payload = _dispatch_payload(project, _unique_sid("g1spec"), records(), subagent_type="qa", prompt=split_qa)
+    assert _run_hook(home, project, payload, switch="block").returncode == 2  # before round 1 is asked: ASK_FIRST
 
 
 def test_G1_product_repo_without_schemas_loads_harness_registry(tmp_path):
@@ -763,7 +766,7 @@ def test_G1_declared_roles_come_from_the_active_command_templates():
     assert {"pm", "ba", "dev", "qa"} <= declared["dev-overnight"]
     assert {"qa", "style-inspector", "cleanliness-inspector", "prompt-inspector"} <= declared["close"]
     assert {"qa", "changelog-analyst"} <= declared["commit"]
-    assert declared["spec"] == {"spec"}
+    assert declared["spec"] == {"spec", "ba", "qa"}  # P13-1: the BA panel, panel QA and split QA
     assert declared["do"] == frozenset()
     # P1b E3's fallback: the analysts' templates declare their own obligation.
     assert declared["merge"] == {"merge-analyst"} and declared["push"] == {"push-analyst"}
@@ -1077,3 +1080,51 @@ def test_R17_a_refused_redispatch_has_not_returned(tmp_path):
     result = _order_run(home, project, steps, _stage("dev"))
     assert result.returncode == ORDER_EXIT
     assert "dispatch toolu_baqa2 (line" in result.stderr and "not returned" in result.stderr, result.stderr
+
+
+# --------------------------------------------------------------------------
+# P13-1 R5 (D28): inside a /spec or /dev-family span the owner is asked first
+# --------------------------------------------------------------------------
+
+def _round_span_records(command):
+    """A /<command> span whose loaded text asks the requirement round (P13-1): the rules bind only such a session."""
+    records = _span_records(command)
+    for r in records:
+        if r.get("isMeta"):
+            r["message"]["content"] = [{"type": "text", "text": f"Command body of {command}: requirement-round first."}]
+    return records
+
+
+def test_r5_ask_first_refuses_a_dispatch_before_round_1_is_asked(tmp_path):
+    """The gate's process, block mode: in /spec a BA analysis declaring its context before any round 1 was asked
+    is refused with ASK_FIRST (exit 2); BA intake, declaring round 1 itself, passes; advisory mode never refuses."""
+    home, project = _dirs(tmp_path)
+    context = [{"kind": "json", "path": f"docs/dev/context-{TASK_ID}.json", "schema": "context.v1",
+                "identity": {"task_id": TASK_ID}}]
+    intake = [{"kind": "json", "path": f"docs/dev/requirement-round-{TASK_ID}-r1.json",
+               "schema": "requirement-round.v1", "identity": {"task_id": TASK_ID}}]
+    for artifacts, code in ((context, 2), (intake, 0)):
+        prompt = _block(_obligation_doc(role="ba", pipeline="spec", artifacts=artifacts)) + "\nwork"
+        payload = _dispatch_payload(project, _unique_sid("r5"), _round_span_records("spec"), subagent_type="ba",
+                                    prompt=prompt)
+        result = _run_hook(home, project, payload, switch="block")
+        assert result.returncode == code, result.stderr
+        assert ("ASK_FIRST: no requirement round r1 of task" in result.stderr) is (code == 2)
+        assert _run_hook(home, project, payload, switch="advisory").returncode == 0
+
+
+def test_r5_a_session_whose_text_asks_no_round_is_not_held_to_it(tmp_path):
+    """Live landing (D15, D25): a /spec session that loaded an earlier text, which asks no requirement round, is
+    not refused ASK_FIRST after the hooks land: it follows the text it loaded."""
+    home, project = _dirs(tmp_path)
+    context = [{"kind": "json", "path": f"docs/dev/context-{TASK_ID}.json", "schema": "context.v1",
+                "identity": {"task_id": TASK_ID}}]
+    prompt = _block(_obligation_doc(role="ba", pipeline="spec", artifacts=context)) + "\nwork"
+    records = _span_records("spec")
+    for r in records:  # the CLI's record of the text the session loaded, linked to the opener (Span.body)
+        if r.get("origin") == {"kind": "human"} and "<command-name>" in str(r.get("message")):
+            r["uuid"] = "opener-r5old"
+        elif r.get("isMeta"):
+            r["parentUuid"] = "opener-r5old"
+    payload = _dispatch_payload(project, _unique_sid("r5old"), records, subagent_type="ba", prompt=prompt)
+    assert _run_hook(home, project, payload, switch="block").returncode == 0

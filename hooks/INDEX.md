@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-10T02:57:38Z*
+*Last updated: 2026-11-10T08:16:38Z*
 **Total entries**: 353
 **Convention**: kebab
 
@@ -265,7 +265,7 @@ hooks/
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-├── `posttool-close-rating.py` - AskUserQuestion goes to close_rating.handle (the owner's rating row and summary), Agent and Task ...
+├── `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here
 ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-dispatch-record.py` - The rules run in this order, each as its own hook would run alone

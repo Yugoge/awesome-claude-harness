@@ -31,6 +31,12 @@ OBLIGATION = ('<obligation v="1">\n' + json.dumps({
     "artifacts": [{"kind": "json", "path": REPORT, "schema": "dev-report.v2"}]}) + "\n</obligation>")
 
 
+def _index(label):
+    """The position of the canonical /dev step labelled ``label`` (``Step 10``): the tests name steps, not
+    places in the list, which the requirement round's Steps 4a-4c moved (P13-1)."""
+    return next(i for i, item in enumerate(_frontier(0)) if item["content"].startswith(f"{label}:"))
+
+
 def _frontier(n):
     out = json.loads(subprocess.run([sys.executable, str(HOOKS.parent / "scripts" / "todo" / "dev.py")],
                                     capture_output=True, text=True, check=True).stdout)
@@ -40,7 +46,7 @@ def _frontier(n):
 
 
 class _Cycle:
-    """A /dev span up to Step 10 (index 9) in progress, its earlier dispatches back."""
+    """A /dev span up to Step 10 in progress, every earlier step's canonical dispatch back."""
 
     def __init__(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "restart-state"))
@@ -51,8 +57,9 @@ class _Cycle:
         self.project = tmp_path / "project"
         (self.project / ".claude").mkdir(parents=True)
         self.add({"type": "user", "message": {"role": "user", "content": "/dev fix the bug"}})
-        for n in range(10):
-            role = {4: "ba", 7: "qa", 9: "graphify"}.get(n)
+        steps = _frontier(0)
+        for n in range(_index("Step 10") + 1):
+            role = (steps[n - 1].get("subagent_call") or {}).get("subagent_type") if n else None
             if role:
                 self.result(self.use("Agent", {"subagent_type": role, "prompt": "x", "description": role}))
             self.result(self.use("TodoWrite", {"todos": _frontier(n)}))
@@ -112,7 +119,7 @@ class _Cycle:
         self.result(self.use("Bash", {"command": FINALIZE}))
 
     def complete_step_10(self):
-        todos = _frontier(10)
+        todos = _frontier(_index("Step 10") + 1)
         tid = self.use("TodoWrite", {"todos": todos})
         payload = {"session_id": self.sid, "transcript_path": str(self.path), "hook_event_name": "PreToolUse",
                    "tool_name": "TodoWrite", "tool_input": {"todos": todos}, "tool_use_id": tid}
@@ -190,8 +197,9 @@ def test_completed_resumes_reads_only_a_complete_journal_never_the_capability(cy
 def test_a_reordered_list_is_refused_before_the_step_rules(cycle):
     """Self-check finding: with the lists paired by content, swapping two steps (the in-progress one
     moved) passed every step rule; a session's list keeps its text and order, so it is refused."""
-    todos = _frontier(9)
-    todos[9], todos[10] = todos[10], todos[9]
+    ten = _index("Step 10")
+    todos = _frontier(ten)
+    todos[ten], todos[ten + 1] = todos[ten + 1], todos[ten]
     tid = cycle.use("TodoWrite", {"todos": todos})
     payload = {"session_id": cycle.sid, "transcript_path": str(cycle.path), "hook_event_name": "PreToolUse",
                "tool_name": "TodoWrite", "tool_input": {"todos": todos}, "tool_use_id": tid}

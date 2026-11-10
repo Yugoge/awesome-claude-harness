@@ -489,6 +489,46 @@ def test_the_question_tool_goes_to_the_rating_handler_and_not_to_the_observer(mo
     assert seen == [payload] and stand_in.calls == []
 
 
+def _writers(monkeypatch, rating=None, answer=None) -> dict:
+    """close_rating and requirement_round as the hook imports them by name, each a stand-in whose handle records the
+    payloads it is handed and returns `rating` / `answer`."""
+    seen = {"close_rating": [], "requirement_round": []}
+    for name, returns in (("close_rating", rating), ("requirement_round", answer)):
+        module = types.ModuleType(name)
+        module.handle = lambda payload, name=name, returns=returns: seen[name].append(payload) or returns
+        monkeypatch.setitem(sys.modules, name, module)
+    return seen
+
+
+@pytest.mark.parametrize("source", [f"requirement-round:{TASK}:r1", f"producer-question:{TASK}:ba"])
+def test_a_requirement_round_or_producer_question_goes_to_the_round_writer_and_prints_nothing(monkeypatch, capsys, source) -> None:
+    # P13-1 (D28): the answer is a file, never a message, so what the round writer returns is not printed.
+    seen, stand_in = _writers(monkeypatch, {"systemMessage": "rated"}, {"systemMessage": "no"}), _stand_in({"systemMessage": "no"})
+    payload = dict(_payload("4 - Minor gaps"), tool_input=_input(source=source))
+    assert _dispatch_run(monkeypatch, capsys, payload, stand_in) == ("", "")
+    assert seen == {"close_rating": [], "requirement_round": [payload]} and stand_in.calls == []
+
+
+@pytest.mark.parametrize("meta", [{"source": "remember"}, {"source": f"close-ratings:{TASK}"}, {"source": 7}, {}, None,
+                                  "remember", "absent"])
+def test_a_question_of_another_source_reaches_no_handler_and_prints_nothing(monkeypatch, capsys, meta) -> None:
+    seen, stand_in = _writers(monkeypatch, {"systemMessage": "no"}, {"systemMessage": "no"}), _stand_in({"systemMessage": "no"})
+    payload = _payload("4 - Minor gaps")
+    if meta == "absent":
+        del payload["tool_input"]["metadata"]
+    else:
+        payload["tool_input"]["metadata"] = meta
+    assert _dispatch_run(monkeypatch, capsys, payload, stand_in) == ("", "")
+    assert seen == {"close_rating": [], "requirement_round": []} and stand_in.calls == []
+
+
+def test_a_close_rating_source_reaches_the_rating_handler_alone(monkeypatch, capsys) -> None:
+    seen, stand_in = _writers(monkeypatch, {"systemMessage": "rated"}, {"systemMessage": "no"}), _stand_in({"systemMessage": "no"})
+    payload = _payload("4 - Minor gaps")
+    assert _dispatch_run(monkeypatch, capsys, payload, stand_in) == ('{"systemMessage": "rated"}\n', "")
+    assert seen == {"close_rating": [payload], "requirement_round": []} and stand_in.calls == []
+
+
 @pytest.mark.parametrize("returns", [None, [], "text", {"decision": "block", "reason": "x"}, {"continue": False},
                                      {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": "x"}}])
 def test_the_dispatcher_prints_nothing_for_no_output_or_a_decision(monkeypatch, capsys, returns) -> None:

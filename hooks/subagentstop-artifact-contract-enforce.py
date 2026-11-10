@@ -64,6 +64,7 @@ from lib.claude_home import settings_switch
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
+from lib import requirement_round
 from lib import schema_registry
 
 def _load_stdin() -> dict:
@@ -806,6 +807,14 @@ def main() -> None:
                     sys.exit(0)
                 if question is not None:
                     failures.append(question)
+                # The main session's span: rounds are asked there (requirement_round.asked).
+                span = command_span.active_span(data.get("transcript_path") or resolution.transcript_path)
+                round_in = requirement_round.stand_in(project_dir, resolution.obligation, span)
+                if round_in == "valid":
+                    # D29: BA asks another round in place of its declared artifacts, with no cap.
+                    sys.exit(0)
+                if round_in is not None:
+                    failures.append(round_in)
                 for art in json_artifacts:
                     full_path = Path(project_dir) / art["path"]
                     result = contract_runtime.validate_artifact_for_obligation(
@@ -841,6 +850,14 @@ def main() -> None:
                                 }
                             )
                     echo += _lane_echo_findings(resolution.obligation, art, record)
+                    checks = {"requirement-round.v1": lambda: requirement_round.check_round(
+                                  project_dir, resolution.obligation, art["path"], span),
+                              "context.v1": lambda: requirement_round.check_analysis(
+                                  project_dir, resolution.obligation, record)}
+                    errors = checks[art["schema"]]() if art["schema"] in checks else []
+                    if errors:
+                        failures.append({"path": art["path"], "reason": "requirement_round_invalid",
+                                         "errors": errors[:10]})
                 markdown_waived_paths: set[str] = set()
                 for art in markdown_artifacts:
                     # M3: markdown-kind entries get the same producer-side

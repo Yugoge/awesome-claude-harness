@@ -396,14 +396,15 @@ AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "
 EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
              A.name: {STOP, TODO} | BASH | WRITE | AGENT, B.name: {STOP, TODO} | BASH | WRITE | AGENT}
 # The registrations that change where EXERCISES names none: P4's close-rating hook (PostToolUse; P13-2
-# widened its matcher to AskUserQuestion|Agent, so it also observes every Agent dispatch; none asks with
-# AskUserQuestion after the landing, and REACHED names the scenarios whose events after it do reach the hook,
-# a dispatch), and two of P12's removals: the base's posttool-git-warn.sh matcher, a regex on the tool name
-# that matches no tool (so no event's list changes; P12 registers the hook on Bash), and the Notification
-# idle_prompt registration of an exit-0 stub (no scenario raises a Notification). Each is held to exactly
-# that change; a replay that reaches one the REACHED entry of its scenario does not name fails
-# test_again_with_your_settings's `hooklist` part. (P2's overnight guard, under either matcher, is a rule
-# of P12's write gate: its old registration's removal is among those the scenarios reach.)
+# widened its matcher to AskUserQuestion|Agent, so the one registration observes every Agent dispatch and every
+# question the owner is asked; REACHED names the scenarios whose events after the landing do reach it: a
+# dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), and two of P12's
+# removals: the base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no
+# event's list changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an
+# exit-0 stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
+# one the REACHED entry of its scenario does not name fails test_again_with_your_settings's `hooklist` part.
+# (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
+# is among those the scenarios reach.)
 RATING = ("PostToolUse", "AskUserQuestion|Agent")
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
