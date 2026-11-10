@@ -174,7 +174,8 @@ def sandbox(tmp_path_factory):
         [sys.executable, str(config / "scripts" / "write-push-gate-token.py"), "--repo-root", str(repo),
          "--branch", "master", "--commit", "HEAD", "--print-path"],
         env=dict(env, CLAUDE_SESSION_ID=TOKEN_SESSION), capture_output=True, text=True, check=True)
-    settings = json.loads((config / "settings.json").read_text())
+    # each launcher (hooks/lib/hook_launch.py) read as the hooks it runs, each run here alone
+    settings = sites.expand_launchers(str(ROOT), json.loads((config / "settings.json").read_text()))
     hooks = []
     for entry in settings["hooks"]["PreToolUse"]:
         matcher = entry.get("matcher")

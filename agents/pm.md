@@ -227,7 +227,7 @@ The report goes to `docs/dev/overnight/<session_id>/triage-report-cycle<N>.json`
 
 ### Step 1: Read Inputs
 
-Read your triage report for this cycle, all pipeline QA and Dev reports of this cycle, and all previous retro reports (cumulative tracking). Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"` for session metrics (cycle number, window, fix rate, unresolved count) without parsing JSON by hand.
+Read your triage report for this cycle, all pipeline QA and Dev reports of this cycle, and all previous retro reports (cumulative tracking). Run `bash "<HARNESS_ROOT>/scripts/overnight-status.sh"` for session metrics (cycle number, window, fix rate, unresolved count) without parsing JSON by hand.
 
 ### Step 2: Verify Build Status
 

@@ -506,11 +506,21 @@ LEDGER = "docs/ENFORCEMENT-LEDGER.md"
 
 def hook_registrations(root=None) -> dict:
     """Hook entries per event in the tracked settings.json: one entry is one command object under
-    `hooks.<event>[].hooks[]`."""
+    `hooks.<event>[].hooks[]`, each launcher (hooks/lib/hook_launch.py) read as the hooks it runs
+    (hooks/lib/launch_settings.py, as scripts/check-enforcement-evidence.py reads it): a launcher
+    runs each of its hooks as that hook's own registration did, so each is one entry."""
+    root = _root(root)
     try:
-        hooks = _mapping(json.loads(_tracked_settings_text(_root(root)))).get("hooks")
+        settings = _mapping(json.loads(_tracked_settings_text(root)))
     except ValueError as exc:
         raise FactError(f"tracked settings.json is not JSON: {exc}") from exc
+    expander = Path(root) / "hooks" / "lib" / "launch_settings.py"
+    if expander.is_file():
+        spec = importlib.util.spec_from_file_location("_launch_settings", expander)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        settings = _mapping(mod.expand(settings, str(root)))
+    hooks = settings.get("hooks")
     if not isinstance(hooks, dict) or not hooks:
         raise FactError("tracked settings.json: `hooks` is missing or not a non-empty object")
     bad = [event for event, groups in hooks.items() if not isinstance(groups, list)]

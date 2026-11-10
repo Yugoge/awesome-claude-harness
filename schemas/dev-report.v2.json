@@ -43,7 +43,7 @@
     },
     "owned_edits": {
       "type": "object",
-      "description": "Per-file ledger of {old, new} edits authored by this cycle (schemas/owned-edits-ledger.v1.json documents the entry shape)."
+      "description": "Per-file ledger of {old, new} edits authored by this cycle (agents/dev.md gives the entry shape; scripts/stage-owned-hunks.py reads it)."
     },
     "pre_edit_snapshots": {
       "type": "object",

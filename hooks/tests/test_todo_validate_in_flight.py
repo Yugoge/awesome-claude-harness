@@ -2,7 +2,7 @@
 
 The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
 keeps that text while the hooks and the checklist scripts become the train's. origin/master's
-/close has three TodoSteps (1, 2, 3); the train's checklist has five (0, 1, 2, 3, 3b), so that
+/close has three TodoSteps (1, 2, 3); the train's checklist has five (0, 1, 2, 3, 4), so that
 session marks each step in_progress one step late: close QA is dispatched, and comes back, while
 Step 1 is in progress, and Step 2 goes in_progress after it. pretool-todo-validate.py reads the
 text the session loaded (command_span.Span.body): for such a span the returned call counts as Gate 4
@@ -140,7 +140,7 @@ def _close_one_step_late(s, text, qa=True, returned=True):
     """/close as origin/master's text paces the train's checklist: the inspectors while Step 0 is in
     progress, close QA while Step 1 is (Step 2 started only after it), then Step 2 completed."""
     s.command("close", TASK, text)
-    assert [t["content"].split(":")[0] for t in s.steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 3b"]
+    assert [t["content"].split(":")[0] for t in s.steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 4"]
     s.walk(0)
     for role in ("style-inspector", "cleanliness-inspector", "prompt-inspector"):
         s.agent(role)

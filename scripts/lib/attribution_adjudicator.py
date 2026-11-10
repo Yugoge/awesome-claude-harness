@@ -23,9 +23,10 @@ returns exactly one verdict:
   ENTANGLED             anything else with enough coverage to judge. NEVER
                         auto-resolved, side-selected or merged: an
                         escalation record naming the exact conflicting edge
-                        pair is emitted (schemas/owned-edits-ledger.v1.json
-                        x-classification-contract.escalation_record_properties
-                        E1..E7).
+                        pair is emitted (properties E1..E7, pinned by
+                        hooks/tests/test_attribution_adjudicator.py; their
+                        design draft, x-classification-contract, is blob
+                        dcc33193 of docs/reference/recoverable-discard-register-20261005.md).
   INSUFFICIENT_COVERAGE the journal window does not span back to the task
                         baseline (or the chain breaks / tail differs from disk /
                         a blob is unavailable). Explicitly NOT entangled: the

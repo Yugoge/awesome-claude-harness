@@ -328,7 +328,6 @@ hooks/
 ├── `pull.sh` - pull.sh - Executable version of /pull command
 ├── `push.sh` - push.sh - Executable version of /push command
 ├── `QUICKSTART.md` - Quick Start — the hooks layer
-├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 ├── `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
 ├── `session-gitignore-propagate.sh` - SessionStart hook: keep the harness's runtime directories out of a product repo's git status.
 ├── `session-info.sh` - session-info.sh — SessionStart: the session's directory, git state and project metadata, for the model.
