@@ -333,15 +333,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-doc-sync-check.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-restart-authorize.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-launch.py\"",
+            "timeout": 240
           }
         ]
       },
@@ -366,14 +359,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-bulk-commit-capability.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-harness-switch.sh\"",
             "timeout": 60
           }
@@ -385,49 +370,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-orchestrator-gate.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-block-background-tasks.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-do-block-subagents.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-read-size-guard.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-workflow-gate.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-write-gate.py\"",
-            "timeout": 70
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-launch.py\"",
+            "timeout": 945
           }
         ]
       },
@@ -437,51 +381,6 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-bash-safety.sh\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-wrapper-userintent.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-grep-backtrack-guard.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-cp-checkin.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-quality-gate.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-attribution-pre.py\"",
-            "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "TodoWrite",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-todo-validate.py\""
           }
         ]
       },
@@ -495,90 +394,21 @@
         ]
       },
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-block-branch-pr-worktree.py\""
-          }
-        ]
-      },
-      {
         "hooks": [
           {
             "type": "command",
             "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-worktree-guard.sh\""
           }
         ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-dispatch-gate.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__playwright__browser_run_code",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-runcode-watchdog.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-bulk-commit-detector.py\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-git-privilege-guard.py\""
-          }
-        ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-allowlist-consume.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "TodoWrite",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-todo-tracker.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-overnight-loop.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-attribution-post.py\"",
-            "timeout": 30
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-launch.py\"",
+            "timeout": 690
           }
         ]
       },
@@ -588,18 +418,6 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-git-checkpoint.sh\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-doc-sync.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-command-frontmatter-validate.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-lane-completeness-watch.py\""
           }
         ]
       },
@@ -609,51 +427,6 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-git-warn.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-dispatch-record.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "SendMessage",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-restart-sendmessage.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__playwright__browser_run_code",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-runcode-watchdog.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-codex-skill-ledger.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "AskUserQuestion|Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py\""
           }
         ]
       }

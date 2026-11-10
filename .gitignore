@@ -90,7 +90,8 @@ docs/*/
 # of execution, which is the exact failure the --coverage gate exists to detect.
 hooks/tests/.enforcement-run-manifest.json
 
-# The old score store: nothing writes it any more, and homes still hold it (P9's E1)
+# The old score store: nothing writes it any more (the scores live in logs/lifecycle.jsonl), and homes
+# still hold it; kept under D28 with logs/*
 /agent-scores.json
 /agent-scores.json.lock
 

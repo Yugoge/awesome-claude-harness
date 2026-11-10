@@ -178,14 +178,6 @@ def _own_record(session_id, root):
     return record if record is not None and record.get('session_id') == session_id else None
 
 
-def session_state(session_id, project_dir=None):
-    """One session's record (`_own_record`), else None. With no project_dir the
-    record is found by `locate`, which selects through `_own_record`, never this
-    function: no call here cycles back, so the artifact check's static half
-    follows a write through the located path to `write_state` in any order."""
-    return locate(session_id)[1] if project_dir is None else _own_record(session_id, project_dir)
-
-
 def _git(where, *args):
     """git's one-line answer in directory `where`, else None."""
     try:
