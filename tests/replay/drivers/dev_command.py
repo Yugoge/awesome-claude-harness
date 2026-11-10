@@ -414,7 +414,9 @@ class DevCommandCycle:
         g = o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label="Step 4 Glob prior tickets",
                      deviation=o.devs.at("Step 4 Glob prior tickets"))
         self.specs = [os.path.relpath(p, o.project) for p in g.response.get("filenames", [])] if g.ok else []
-        calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": CMD_REL})]
+        # <DEV_SESSION_ID> is the registry the start function printed (dev-command-<ts>), BA's FIRST ACTION one.
+        calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": CMD_REL,
+                                                    "<DEV_SESSION_ID>": self.reg})]
         act = agents.Act(content=_ba_content(self.tid), status="ready", text_calls=calls, respell=o.respell,
                          summary="a project slash command named test runs the toy package tests")
         o.dispatch(self.tpl(4), act, "Step 4 Agent(ba)", self.tid, subagent_type=self.step_role(4))

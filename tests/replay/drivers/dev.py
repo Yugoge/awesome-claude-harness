@@ -548,7 +548,9 @@ class DevCycle:
             return {"context.v1": {"acceptance_criteria_path": next(
                 a["path"] for a in b.obligation["artifacts"] if a.get("schema") == "acceptance-criteria.v1")}}
         # ba.md Step 9: the blast-radius tool's Phase 1 run, as the agent text spells it (not respelled, row 7).
-        calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": sc.rel})]
+        # <DEV_SESSION_ID> is the registry the start function printed, the one BA's FIRST ACTION names.
+        calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": sc.rel,
+                                                    "<DEV_SESSION_ID>": self.reg})]
         act = agents.Act(question=dict(sc.question, schema=self.question_schema()) if question else None,
                          content=content, status="ready", notes=notes, work=ac_path,
                          text_calls=[] if question else calls, respell=o.respell,

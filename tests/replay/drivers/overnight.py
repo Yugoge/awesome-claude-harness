@@ -1527,7 +1527,9 @@ class Night:
             _spec_updates(sub, b, sections)
             return {"context.v1": {"decisions_without_owner": [run_experiment(sub, experiment)]}} if experiment else {}
         act = agents.Act(content=content, status="ready", summary=sc.ba_summary, respell=self.o.respell, work=work,
-                         text_calls=[("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": sc.rel})])
+                         # <DEV_SESSION_ID> is Step 1's $SID, the registry BA's FIRST ACTION names.
+                         text_calls=[("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": sc.rel,
+                                                                        "<DEV_SESSION_ID>": self.sid})])
         return self.dispatch(fields, act, label, p.sfx, atype="ba", pipe=p)
 
     # ------------------------------------------------------------ variant=unattended: decisions
