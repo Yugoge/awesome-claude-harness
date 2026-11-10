@@ -35,6 +35,11 @@ The cases (A17, the A6 resolutions it names):
               The base's /close and /commit text is no longer played by this tree's drivers, so this
               case runs the base's own replay framework (tests/replay/base_driver/_p6_grant.py).
 
+A probe's refusing hook is read from the hook that reports it under the settings file that runs the event:
+the hook itself under the base's (`master`), the merged gate that runs it as a rule under this tree's
+(`base`: G2, codex-enforce and e2e-enforce are rules of the producer gate, the overnight guard of the
+write gate since P12, sites.reporter).
+
 Every case, with either settings file: no hook error and no Python traceback after the landing, and no
 exit 2 after it other than the case's own probes above. REPLAY_WORK keeps the runs; the table of each
 case is written there as live-landing-p6.md.
@@ -51,7 +56,7 @@ import time
 
 import pytest
 
-from tests.replay import hookrun, landing, suite
+from tests.replay import hookrun, landing, sites, suite
 
 OLD = "a7d3a9fec736c0e64b5a822ba5da788d4f178bda"
 SETTINGS = ("master", "base")
@@ -236,7 +241,13 @@ def _probe_events(case: str, events: list[dict]) -> dict:
     return found
 
 
-def _verdict(case: str, r: suite.Result) -> list[str]:
+def _reporter(hook: str, settings: str) -> str:
+    """The hook that reports `hook`'s refusals after the landing: `hook` under the base's settings.json
+    (master), else the hook this tree's settings.json reports it by (sites.reporter)."""
+    return hook if settings == "master" else sites.reporter(suite.REPO, hook)
+
+
+def _verdict(case: str, r: suite.Result, settings: str) -> list[str]:
     """Every way the replay departs from what A17 expects of the case (empty: as expected)."""
     bad = []
     if r.error or r.summary.get("driver_error"):
@@ -256,6 +267,7 @@ def _verdict(case: str, r: suite.Result) -> list[str]:
             bad.append(f"no {event} {label!r} #{nth} after the landing")
             continue
         got = _blocks(ev)
+        want = {_reporter(h, settings): rx for h, rx in want.items()}
         if set(got) != set(want) or any(not re.search(rx, got[h]) for h, rx in want.items()):
             bad.append(f"{event} {label!r} #{nth}: blocks {got}, expected {want or 'none'}")
     for ev in events:
@@ -310,7 +322,7 @@ def _report(root: str) -> None:
         if not got:
             continue
         rows.append({"case": case, **{f"{s} settings": _row(case, got[s]) for s in SETTINGS},
-                     "as A17 expects": "yes" if not any(_verdict(case, got[s]) for s in SETTINGS) else "NO"})
+                     "as A17 expects": "yes" if not any(_verdict(case, got[s], s) for s in SETTINGS) else "NO"})
     with open(os.path.join(root, "live-landing-p6.md"), "w") as fh:
         fh.write("# P6 A17 (P6-3) on the base\n\n" + suite.table(rows) + "\n")
 
@@ -321,7 +333,7 @@ def _report(root: str) -> None:
 @pytest.mark.parametrize("case", [pytest.param(c, marks=pytest.mark.replay(f"P6 A17 {c}", COSTS[c])) for c in COSTS])
 def test_inflight_subagent_meets_this_tree(request, tmp_path_factory, case, settings):
     r = _results(request, tmp_path_factory, case)[settings]
-    bad = _verdict(case, r)
+    bad = _verdict(case, r, settings)
     assert not bad, f"{case} ({settings} settings), {r.out}:\n  " + "\n  ".join(bad) + "\n" + r.explain()
 
 
