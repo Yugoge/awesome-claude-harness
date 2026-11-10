@@ -23,9 +23,9 @@ If `$ARGUMENTS` contains the literal token `--codex` (any position), strip it fr
 Then branch on the remaining text:
 
 - **Non-empty non-flag text**: it is the first requirement. Go to Step 3.
-- **Empty**: ask once, in one natural first-person sentence in the user's language (en or zh), worded differently each time; wait, and use the answer as the first requirement.
+- **Empty**: ask once with ONE AskUserQuestion in the user's language (en or zh): what should this spec be about, with 2-4 likely areas as options (the owner can type their own); use the answer as the first requirement.
 
-No framing interview, no acceptance-criteria questions, no preview-and-confirm gate.
+No preview-and-confirm gate. The owner's intent, scope, edge cases and acceptance are asked in the requirement round (Step 3a), never in plain text.
 
 ### Step 2: Clarify if truly unclear (max 3 rounds)
 
@@ -72,11 +72,63 @@ Only when Section 5 cannot be sketched at all: no topic, feature or issue, no ac
      prompt="Find and summarize <what the user mentioned>. Report: file paths, current behavior, relevant code snippets. Thoroughness: medium."
    )
    ```
-   Findings integrate when they arrive (Step 4); a discrepancy may surface as one targeted question but never gates the loop. While this interview's checklist has an open step, `hooks/pretool-spec-block-foreground-agent.py` exits 2 on a foreground Agent call other than the `spec` and `qa` subagents; the ledger lists it as advisory (H-026), since no host run has observed it prevent a call.
+   Findings integrate when they arrive (Step 4); a discrepancy may surface as one targeted question but never gates the loop. While this interview's checklist has an open step, `hooks/pretool-spec-block-foreground-agent.py` exits 2 on a foreground Agent call other than the `spec`, `qa` and `ba` subagents; the ledger lists it as advisory (H-026), since no host run has observed it prevent a call.
 
 6. Acknowledge that the spec was written, with the full `<spec_path>`, and that more requirements can be added whenever the user is ready. Brief, natural, first-person, in the user's language.
 
 Do not split, checkpoint or QA yet: finalize happens exactly once, in Step 6.
+
+### Step 3a: The requirement round (D28, D29, D32)
+
+Right after Section 5's first write, the owner is asked about the requirement. The task id of every dispatch here is the spec id, `<spec-id>`: the timestamp in `spec-<spec-id>.md`. Until round 1 is asked, the dispatch gate refuses every dispatch but round 1's own producers (`ASK_FIRST`), Finalize included.
+
+1. **Three BAs, in parallel and independent**: one response with three foreground Agent calls, angles A (root cause first, traced to the code), B (the smallest change that meets the requirement) and C (the owner's intent, the product view); none is given another's report:
+   ```
+   Use Agent tool with:
+   - subagent_type: "ba"
+   - run_in_background: false
+   - description: "BA panel <angle> for spec <spec-id>"
+   - prompt: "
+     You are the BA subagent. Follow <HARNESS_ROOT>/agents/ba.md instructions precisely.
+     Mode: panel
+     Angle: <angle>
+     Spec: <spec_path>
+     <If codex_required = true, include the literal next line; otherwise omit it>
+     codex_required: true
+     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     <obligation v="1">
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "ba", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "markdown", "path": "docs/dev/ba-panel-<spec-id>-<angle>.md", "identity_anchor": "<spec-id>", "terminal_line_regex": "^BA PANEL [ABC]: DONE$"}]}
+     </obligation>
+     Write your panel report only. Do not read another panel BA's report."
+   ```
+
+2. **Panel QA writes round 1** (`agents/qa.md` "Panel QA mode"): it checks each BA's evidence, marks every root cause verified, unsupported or refuted, lists the agreements and turns each disagreement into a decision point, recommended first:
+   ```
+   Use Agent tool with:
+   - subagent_type: "qa"
+   - run_in_background: false
+   - description: "Panel QA: verify the three BA reports and write round 1 for spec <spec-id>"
+   - prompt: "
+     You are the QA subagent in PANEL QA MODE. Follow <HARNESS_ROOT>/agents/qa.md "Panel QA mode" precisely.
+     Panel reports: docs/dev/ba-panel-<spec-id>-A.md, docs/dev/ba-panel-<spec-id>-B.md, docs/dev/ba-panel-<spec-id>-C.md
+     Spec: <spec_path>
+     <If codex_required = true, include the literal next line; otherwise omit it>
+     codex_required: true
+     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     <obligation v="1">
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "ba_validation", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "json", "path": "docs/dev/ba-panel-<spec-id>-r1.json", "schema": "requirement-round.v1", "identity": {"task_id": "<spec-id>"}}]}
+     </obligation>"
+   ```
+
+3. **Ask it**: ONE AskUserQuestion whose `questions` are the round file's questions verbatim with `id`, `dimension`, `assume`, `spec_ref` and each option's `ba` removed, and whose `metadata.source` is `requirement-round:<spec-id>:r<n>`. Never paraphrase it; Skip or no answer is fine (the round counts as asked). The PostToolUse AskUserQuestion hook writes the answers to `docs/dev/requirement-answers-<spec-id>-r<n>.json`.
+
+4. **Copy the answers into Section 5**, byte for byte, through the writer (it adds `### 5.N: Requirement round r<n>`; nothing is retyped):
+   ```bash
+   python3 "<HARNESS_ROOT>/scripts/spec-write.py" append --spec <spec_path> --section 5 --answers docs/dev/requirement-answers-<spec-id>-r<n>.json
+   ```
+   With no answer file (the owner skipped), append nothing.
+
+5. **The next round**: dispatch the chosen BA again (the BA whose option the owner chose; when they agreed or none was chosen, the one whose root cause panel QA verified, A, then B, then C), with sub-step 1's template plus the line `Answers: <every docs/dev/requirement-answers-<spec-id>-r<n>.json so far>`. It updates its panel report with the answers or, while a point still needs the owner, writes `docs/dev/requirement-round-<spec-id>-r<n+1>.json` instead; ask that round (3), copy it (4) and repeat. Rounds have no cap; a follow-up requirement in Step 4 that leaves a point open gets the same step.
 
 ### Step 4: Multi-turn accumulation loop
 
@@ -171,7 +223,8 @@ Proceed to Step 6 only on a strong signal.
      <obligation v="1">
      {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "spec", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "spec_views", "path": "docs/dev/specs/<spec-id>/views", "monolith": "docs/dev/specs/spec-<spec-id>.md"}]}
      </obligation>
-     Do the agent selection, the content extraction and the checkpoint generation, in that order.
+     Panel reports: docs/dev/ba-panel-<spec-id>-A.md, -B.md, -C.md; round files: docs/dev/ba-panel-<spec-id>-r1.json and any later docs/dev/requirement-round-<spec-id>-rN.json; answers: Section 5's Requirement round blocks.
+     Do the agent selection, the content extraction and the checkpoint generation, in that order; each owner decision of the rounds reaches the views that act on it.
      Return a JSON summary."
    ```
 
@@ -186,6 +239,10 @@ Proceed to Step 6 only on a strong signal.
      Monolith: <spec_path>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
+     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     <obligation v="1">
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^SPLIT QA: (pass|fail)$"}]}
+     </obligation>
 
      Check these criteria:
      1. ROLE MANDATE: If the spec defines role responsibilities (look for 'role split',
@@ -222,7 +279,8 @@ Proceed to Step 6 only on a strong signal.
         a later cycle: every requested outcome is delivered in one cycle. Parallel lanes inside
         one cycle are fine. Quote each offending line in `issues`.
 
-     Return JSON: {verdict: pass|fail, issues: [...], summary: '...'}
+     Return JSON: {verdict: pass|fail, issues: [...], summary: '...'}, then end your reply with the line
+     `SPLIT QA: pass` or `SPLIT QA: fail`, its verdict.
      "
    ```
 

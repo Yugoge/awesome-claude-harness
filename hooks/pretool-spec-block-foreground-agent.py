@@ -54,6 +54,9 @@ def _tool_is_exempt(data: dict) -> bool:
     # exemption is bounded to the /spec interview FSM window.
     if tool_input.get("subagent_type") == "qa":
         return True
+    # D28/D32: the requirement round's BA (intake, or the three panel BAs) runs inside the interview.
+    if tool_input.get("subagent_type") == "ba":
+        return True
     if data.get("agent_id"):
         return True
     return False

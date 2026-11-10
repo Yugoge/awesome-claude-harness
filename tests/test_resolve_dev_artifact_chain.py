@@ -1784,3 +1784,17 @@ def test_r12_fanout_reads_no_undeclared_unsuffixed_parent_artifact(tmp_path: Pat
     for key in stale:
         assert parents[key].name not in named
     assert _relative(tmp_path, parents["qa"]) not in result["report_paths"]
+
+
+def test_the_tasks_round_and_answer_files_join_its_commit_whitelist(tmp_path: Path) -> None:
+    """P13-1 R4: the owner's questions and answers commit with the task; the chain's own paths are unchanged."""
+    _make_singular(tmp_path)
+    dev = tmp_path / "docs" / "dev"
+    names = [f"requirement-round-{TASK_ID}-r1.json", f"requirement-answers-{TASK_ID}-r1.json",
+             f"ba-panel-{TASK_ID}-r1.json", f"ba-panel-{TASK_ID}-A.md", f"producer-answer-{TASK_ID}-ba-0123abcd.json"]
+    for name in names + ["requirement-round-20990101-000000-r1.json"]:
+        _write(dev / name, "{}")
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass"
+    added = [p for p in result["commit_whitelist_artifacts"] if p not in result["artifact_paths"]]
+    assert sorted(added) == sorted(f"docs/dev/{n}" for n in names)

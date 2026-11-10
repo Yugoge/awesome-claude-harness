@@ -393,10 +393,12 @@ AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "
 # scenario's events after the landing reach (the harness-home session writes no todo list, no file and
 # dispatches no agent); together they must be every one that differs
 # (test_your_settings_differs_only_where_a_replay_runs_it).
-EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
+# P13-1: the pre-merge /dev starts after the landing, on this tree's text, so it asks the requirement round and
+# also reaches the AskUserQuestion hook (held to its change in ELSEWHERE as well).
+EXERCISES = {PRE.name: {STOP, TODO, ("PostToolUse", "AskUserQuestion")} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
              A.name: {STOP, TODO} | BASH | WRITE | AGENT, B.name: {STOP, TODO} | BASH | WRITE | AGENT}
 # The registrations that change where no scenario here reaches after the landing: P4's close-rating hook
-# (PostToolUse AskUserQuestion; none asks with AskUserQuestion after it), and two of P12's removals: the
+# (PostToolUse AskUserQuestion; only the pre-merge /dev's requirement round asks with AskUserQuestion after it), and two of P12's removals: the
 # base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no event's list
 # changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an exit-0
 # stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
@@ -584,7 +586,9 @@ def test_your_settings_differs_only_where_a_replay_runs_it(name):
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
     assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
-    assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
+    # ELSEWHERE's registrations are held to their exact change above; since P13-1 the pre-merge /dev also
+    # reaches two of them (EXERCISES), so neither side counts them here.
+    assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()) - set(ELSEWHERE), differing
     head = _head_settings()
     assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV | P9_ENV == \
         hookrun.settings_env(head) | ENV

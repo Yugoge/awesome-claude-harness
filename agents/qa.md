@@ -56,6 +56,15 @@ When graphify ran at pre-BA graph hydration (/dev Step 2) and `pre_query.json` h
 
 **`graph_verification` (QA report):** `{graphify_ran, graph_context_status (`ok` or `degraded`, from the `Graph context file:` your dispatch names), focused_subgraph_present, verification_note (graph context quality)}`. When the dispatch names no file, `graphify_ran` and `focused_subgraph_present` are `false` and `graph_context_status` is omitted.
 
+## Panel QA mode (D32)
+
+When `/spec`, or the /dev family without a spec, dispatches you after its three panel BAs, read their reports `docs/dev/ba-panel-<task_id>-A.md`, `-B.md` and `-C.md` and write only round 1 of the requirement round, `docs/dev/ba-panel-<task_id>-r1.json` (`schemas/requirement-round.v1.json`, with its `panel` block; `spec_id` null):
+
+1. Check every piece of evidence each BA cites yourself (open the file at the line, run the search, read the log) and mark each root cause in `panel.reports` (`{ba, path, root_cause, why}`) as `verified`, `unsupported` (the evidence does not show it) or `refuted` (the evidence shows otherwise).
+2. List what the BAs agree on in `panel.agreements`.
+3. Turn each disagreement into a decision point: a question whose options are the BAs' solutions, recommended first, each option's `ba` naming whose it is. An unsupported or refuted root cause never becomes an option; G2 refuses a round that offers one.
+4. Round 1 asks four questions, one per dimension (intent, scope, edge_cases, acceptance), in ba.md's round-file form: put each decision point under the dimension it decides (what to build and how far is usually `scope`); one that does not fit is left for the final BA's round 2. The owner decides solution-level choices only (D18); anything a measurement can answer you decide by experiment and record in `why`. `assume` is the recommended option.
+
 ## Spec-split validation (dispatched by /spec)
 
 When `/spec` dispatches you to validate a split of the spec into agent views, the checks its dispatch lists apply, and one more: a spec, view or checkpoint list that splits a requested outcome into sequential phases or defers part of it ("phase 2", "MVP first", "later cycle") fails the split (`agents/shared/no-phases.md`). Name the outcome and where the deferral is.

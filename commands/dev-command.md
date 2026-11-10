@@ -9,14 +9,17 @@ group: Develop
 
 `<timestamp>` and `<TASK_ID>` below are the hook's `Task id: …`, the bare id every artifact and the completion report carry. `DEV_SESSION_ID` (`dev-command-<timestamp>`) names the registry directory and the requirement document only; it is never an artifact id.
 
-This file keeps its own 16 steps (`scripts/todo/dev-command.py`). A step number inside `/dev`'s text is `/dev`'s: read it through this map. Each obligation fence below also repeats `/dev`'s own two `codex_required` lines (they are not an addition): the codex gate reads them from this file's template.
+This file keeps its own 16 steps, Step 4 with its 4a-4c (`scripts/todo/dev-command.py`). A step number inside `/dev`'s text is `/dev`'s: read it through this map. Each obligation fence below also repeats `/dev`'s own two `codex_required` lines (they are not an addition): the codex gate reads them from this file's template.
 
 | Step here | `/dev` Step | Differs |
 |---|---|---|
 | 1 Parse Development Requirement | 1 | the start-function fallback |
 | 2 Graphify pre-BA hydrator | 2 | no |
 | 3 Specialist Consultation | 3 | no |
-| 4 Delegate to BA Subagent | 4 | obligation; no score header |
+| 4 The Requirement Round | 4 | obligation |
+| 4a Panel QA Writes Round 1 | 4a | obligation |
+| 4b Ask Each Round | 4b | no |
+| 4c BA Analysis | 4c | obligation; no score header |
 | 5 BA Clarification Loop | 5 | obligation |
 | 6 Validate BA Output | 6 | no |
 | 7 QA Validates BA Conclusions | 7 | obligation |
@@ -48,20 +51,57 @@ As `/dev` Step 2.
 
 As `/dev` Step 3.
 
-### Step 4: Delegate to BA Subagent
+### Step 4: The Requirement Round
 
-As `/dev` Step 4, with this command's differences: no test-writer, so BA owes no acceptance-criteria JSON; the singular dispatch (leave out the lane-adapter line); no `BA_SCORE_HEADER` (Steps 1-4 then use at most four Bash calls before this dispatch). In place of `/dev`'s worked example the obligation is:
+As `/dev` Step 4 (the BA panel without a spec, one BA intake with one), each with `pipeline="dev-command"` in place of `"dev"`:
+
+```
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"markdown","path":"docs/dev/ba-panel-<timestamp>-<angle>.md","identity_anchor":"<timestamp>","terminal_line_regex":"^BA PANEL [ABC]: DONE$"}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+  Mode: panel
+```
+
+```
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/requirement-round-<timestamp>-r1.json","schema":"requirement-round.v1","identity":{"task_id":"<timestamp>"}}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+  Mode: intake
+```
+
+### Step 4a: Panel QA Writes Round 1 (without a spec)
+
+As `/dev` Step 4a, with this obligation:
+
+```
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-panel-<timestamp>-r1.json","schema":"requirement-round.v1","identity":{"task_id":"<timestamp>"}}].
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+  You are the QA subagent in PANEL QA MODE.
+```
+
+### Step 4b: Ask Each Round with AskUserQuestion
+
+As `/dev` Step 4b.
+
+### Step 4c: BA Analysis (the final BA context)
+
+As `/dev` Step 4c, with this command's differences: no test-writer, so BA owes no acceptance-criteria JSON; the singular dispatch (leave out the lane-adapter line); no `BA_SCORE_HEADER` (Steps 1-4 then use at most four Bash calls before this dispatch). In place of `/dev`'s worked example the obligation is:
 
 ```
   Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
+  Mode: analysis
 ```
 
 ### Step 5: BA Clarification Loop
 
-As `/dev` Step 5; the BA dispatched again carries Step 4's obligation with a fresh `dispatched_at`.
+As `/dev` Step 5; the BA dispatched again carries Step 4c's obligation with a fresh `dispatched_at`.
 
 ### Step 6: Validate BA Output
 
@@ -80,7 +120,7 @@ As `/dev` Step 7: one QA in BA-validation mode, all five dimensions (a dispatch 
 
 ### Step 8: BA-QA Iteration Loop (if QA rejects BA)
 
-As `/dev` Step 8; the BA dispatched again carries Step 4's obligation with a fresh `dispatched_at`.
+As `/dev` Step 8; the BA dispatched again carries Step 4c's obligation with a fresh `dispatched_at`.
 
 ### Step 9: Graphify enrichment (mirrors commands/dev.md)
 
