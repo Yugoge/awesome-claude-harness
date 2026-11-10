@@ -185,9 +185,9 @@ def render_owner_summary(rows, project, as_of, task_id) -> str:
         return "Scores (this project): no record yet."
     stats, family = {n: (score(live, n, project, as_of), trend(live, n, project, as_of)) for n in names}, _ob("task_family")
     cycle = [r for r in live if family(r.get("task_id")) == family(task_id)]
-    items = [f"{_plain(r.get('role'))} {r['points']:+d}" + (_why(r) and f" ({_why(r)})") for r in cycle
-             if r["kind"] == "event" and type(r.get("points")) is int]
-    items += [f"rating {r['rating']}: {RATING_POINTS[r['rating']]:+d} each" for r in cycle if r.get("rating") in RATING_POINTS]
+    items = [f"rating {r['rating']}: {RATING_POINTS[r['rating']]:+d} each" for r in cycle if r.get("rating") in RATING_POINTS]  # first: the cut at 200 characters never drops it
+    items += [f"{_plain(r.get('role'))} {r['points']:+d}" + (_why(r) and f" ({_why(r)})") for r in cycle
+              if r["kind"] == "event" and type(r.get("points")) is int]
     worst = min(stats, key=lambda n: (*stats[n], n))
     miss = next((_why(r) for r, points in reversed(_mine(live, worst, project, as_of)) if r["kind"] == "event" and points < 0), "")
     more = f", +{len(items) - 5} more" if len(items) > 5 else ""

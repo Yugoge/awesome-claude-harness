@@ -142,7 +142,20 @@ def rerun_gap(ctx):  # a dispatch whose previous one in its group (task, lane, i
             yield _event(ctx, d, "rerun_gap", d["who"], "dispatched again after its previous dispatch left a declared artifact unwritten", f"rerun_gap:{d['id']}")  # touched = a tool call names the path
 
 
-RULES = [qa_first_pass, qa_fail, qa_catch, escaped, close_catch, rerun_gap]  # a rule is f(ctx) -> event dicts built with _event; list it here (ctx: tp, cwd, roots, project, ds, qa, close)
+def ba_panel(ctx):  # a BA panel's round 1 (its panel QA's file) and the owner's answers to it: a refuted root cause costs its BA, the BA whose option the owner chose gains
+    for d in (d for d in ctx["ds"] if d["who"] == "qa"):
+        files = requirement_round.PANEL.format(task=d["task"]), requirement_round.ANSWERS.format(task=d["task"], n=1)
+        if files[0] not in (a.get("path") for a in d["ob"]["artifacts"]):
+            continue
+        panel, answers = (_report(ctx, {"path": p, "ob": d["ob"]}, None) or {} for p in files)  # the answers file is the hook's alone: Skip, AFK or a decline leave none
+        yield from (_event(ctx, d, "ba_root_cause_refuted", "ba", f"panel QA refuted BA {r['ba']}'s root cause", f"ba_root_cause_refuted:{d['task']}:{r['ba']}", files[0])
+                    for r in (panel.get("panel") or {}).get("reports") or () if r.get("root_cause") == "refuted" and r.get("ba"))
+        picked = answers.get("answers") or {}  # the chosen BA is read as /dev Step 4c does: the first question whose answer is the label of an option that names a BA
+        if ba := next((o["ba"] for q in panel.get("questions") or () for o in q.get("options") or () if o.get("ba") and picked.get(q.get("question")) == o.get("label")), None):
+            yield _event(ctx, {**d, "at": answers.get("asked_at")}, "ba_option_chosen", "ba", f"the owner chose BA {ba}'s option", f"ba_option_chosen:{d['task']}", files[1])
+
+
+RULES = [qa_first_pass, qa_fail, qa_catch, escaped, close_catch, rerun_gap, ba_panel]  # a rule is f(ctx) -> event dicts built with _event; list it here (ctx: tp, cwd, roots, project, ds, qa, close)
 
 
 def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: first-row-per-key makes a repeat write nothing; never raises

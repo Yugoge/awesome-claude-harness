@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
 """PostToolUse(AskUserQuestion|Agent): the one writer of the owner's answers and the score log's dispatcher.
 A question goes by its source prefix to one handler, an Agent call to the observer; no logic here.
-By tool_name:
-- AskUserQuestion goes by the prefix of metadata.source to one handle(payload) per library: close-rating:<task-id>
-  (D9) to close_rating.handle, a row only for the main agent's one question answered with one of the four exact
-  labels in the CLI's tool_response (the CLI drops answers the model writes in its input), and it returns the owner
-  summary; requirement-round:<task>:r<n> and producer-question:<task>:<role> (D28) to requirement_round.handle,
-  which writes the answer file or the producer answer and prints nothing; any other source writes and prints nothing;
-- Agent and Task go to score_events.observe (the dispatch's facts), which prints nothing.
-The dict a route returns (the rating's summary) is printed as one JSON line. Skip, free text, a decline, an error, an
-AFK auto-continue or any other payload writes nothing (D9b). Quick, silent on any error, exit 0; it never prints
-decision, continue or updatedToolOutput."""
+close-rating:<task-id> (D9) to close_rating.handle (a row for one of the four exact labels in the CLI's tool_response; the owner summary it returns is printed as one JSON line);
+requirement-round:<task>:r<n> and producer-question:<task>:<role> (D28) to requirement_round.handle (the answer file, nothing printed); Agent and Task to score_events.observe (nothing printed).
+Any other source, Skip, free text, a decline, an error and an AFK auto-continue write nothing (D9b). Quick, silent on any error, exit 0; never prints decision, continue or updatedToolOutput."""
 import json
 import sys
 from pathlib import Path

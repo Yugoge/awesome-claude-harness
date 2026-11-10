@@ -86,9 +86,9 @@ def scratch_scripts(tmp_path: Path) -> Path:
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
     shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
     # score-update.sh's agents are the roster: hooks/lib/roster.py over agents/; the re-export loads the one
-    # module, hooks/lib/score_log.py; its rows go through close_rating.py's append_row.
+    # module, hooks/lib/score_log.py, whose append writes its rows.
     (root / "hooks" / "lib").mkdir(parents=True)
-    for name in ("roster.py", "close_rating.py", "score_log.py"):
+    for name in ("roster.py", "score_log.py"):
         shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
     shutil.copytree(REPO_ROOT / "agents", root / "agents")
     return root
@@ -598,6 +598,15 @@ def test_the_cycle_line_shows_five_items_then_how_many_more_and_no_line_grows_wi
     assert "more" not in score_log.render_owner_summary(five, PROJECT, END, task)
 
 
+def test_the_rating_leads_the_cycle_line_so_the_cut_at_200_characters_and_the_more_count_never_drop_it() -> None:
+    task = "20261101-100000"
+    events = [_event(-1, role, task, _ts(n), event="rerun_gap", key=str(n), why="w" * 70) for n, role in enumerate(["dev", "ba", "qa", "dev", "ba", "qa"], 1)]
+    for rows in (events[:3] + [_rating(4, task=task, ts=_ts(9))], events + [_rating(4, task=task, ts=_ts(9))]):  # cut at 200 characters; and over five items
+        line = score_log.render_owner_summary(rows, PROJECT, END, task).split("\n")[1]
+        assert line.startswith(f"This cycle {task}: rating 4: +1 each, dev -1 (") and len(line) <= 200, line
+    assert line.endswith(", +2 more")
+
+
 def test_identity_names_show_whole_up_to_24_characters_and_are_cut_beyond_in_the_scores_and_worst_lines() -> None:
     task, names = "20261101-100000", ("cleanliness-inspector", "git-edge-case-analyst", "n" * 24, "m" * 25, "z" * 5000)
     rows = [_event(-3 if name[0] == "z" else -1, name, task, _ts(n + 1), event="rerun_gap", key=str(n), why="x") for n, name in enumerate(names)]
@@ -632,8 +641,8 @@ def test_the_owner_summary_has_scores_the_cycle_points_and_the_worst_identity() 
     assert len(lines) <= 5
     assert lines[0] == ("Scores (this project): ba 53 Skilled Craftsman (+3) | dev 45 Skilled Craftsman (-5) | "
                         "main 50 Skilled Craftsman (+0) | qa 52 Skilled Craftsman (+2)")
-    assert lines[1].startswith("This cycle 20261101-100000: ") and "dev -6 (edge case not tested)" in lines[1]
-    assert "qa +1 (caught it)" in lines[1] and lines[1].endswith("rating 4: +1 each") and "old cycle" not in lines[1]
+    assert lines[1].startswith("This cycle 20261101-100000: rating 4: +1 each, ") and "dev -6 (edge case not tested)" in lines[1]  # the rating leads: the line is cut at 200
+    assert "qa +1 (caught it)" in lines[1] and "old cycle" not in lines[1]
     assert lines[2] == 'Worst: dev (Skilled Craftsman, 45); last miss: "edge case not tested"'
 
 

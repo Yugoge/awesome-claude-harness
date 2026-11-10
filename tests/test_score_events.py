@@ -11,7 +11,12 @@ The close-time shapes follow what the pipeline really produces: the close-QA obl
 Step 2 prints (read from that file); a round's section is the one tests/replay/drivers/close.py appends to
 docs/dev/close-report-<task>.md (a "## Findings" list of "- <path>: <detail>" lines, then the verdict line last), written
 with the Write tool and handed to scripts/close-report-append.py, or put in a Bash heredoc; its reply ends in the
-verdict line (CLOSE_FINDINGS: <n> items, or CLOSE: YES)."""
+verdict line (CLOSE_FINDINGS: <n> items, or CLOSE: YES).
+
+The BA panel's shapes follow requirement-round.v1 and the hook that writes the owner's answers (hooks/lib/requirement_round.py): panel
+QA's dispatch declares docs/dev/ba-panel-<task>-r1.json, which holds each BA's root cause (verified, unsupported or refuted) and the
+round's questions, each option naming the BA it comes from; the answers file (docs/dev/requirement-answers-<task>-r1.json) holds
+the owner's answer to each question by its text, and exists only when the owner answered."""
 
 from __future__ import annotations
 
@@ -918,6 +923,193 @@ def test_running_rerun_gap_again_adds_no_row(cycle, monkeypatch):
     cycle.observe(monkeypatch)
     cycle.sweep(monkeypatch)
     assert len(gaps(cycle)) == 1 and len(cycle.rows()) == 1
+
+
+# ---- the BA panel: ba_root_cause_refuted and ba_option_chosen --------------------------------------------------------
+
+PANEL = requirement_round.PANEL.format(task=TASK)
+ANSWERS = requirement_round.ANSWERS.format(task=TASK, n=1)
+SCOPE = "How far should the change reach?"
+OPTION = {"A": "Fix it where it starts", "B": "Change only this function", "C": "Match what you see"}  # the label of each BA's solution
+PLAIN = {"A": "verified", "B": "verified", "C": "verified"}
+
+
+def panel_round(c: Cycle, verdicts=PLAIN, *, task: str = TASK, declares: str | None = None, text: str | None = None) -> str:
+    """Panel QA's dispatch (it declares round 1's panel file, `declares` another path) and the file it wrote: one question offering
+    the solution of each BA whose root cause is verified (an unsupported or refuted one is no option), the verdicts in panel.reports."""
+    rel = requirement_round.PANEL.format(task=task)
+    ident = c.dispatch("qa", task=task, profile="ba_validation", wrote=[rel], declared=False, artifacts=[
+        {"kind": "json", "path": declares or rel, "schema": "requirement-round.v1", "identity": {"task_id": task}}])
+    doc = {"task_id": task, "round": 1, "spec_id": None,
+           "panel": {"reports": [{"ba": ba, "path": f"docs/dev/ba-panel-{task}-{ba}.md", "root_cause": v, "why": "checked its evidence"}
+                                 for ba, v in verdicts.items()], "agreements": []},
+           "questions": [{"id": "q1", "dimension": "scope", "header": "Scope", "question": SCOPE, "multiSelect": False,
+                          "options": [{"label": OPTION[ba], "description": "its solution", "ba": ba} for ba, v in verdicts.items() if v == "verified"],
+                          "assume": OPTION["A"], "spec_ref": None}]}
+    path = c.project / rel
+    path.write_text(text if text is not None else json.dumps(doc), encoding="utf-8")
+    os.utime(path, (c.clock.timestamp(),) * 2)
+    return ident
+
+
+def owner_answers(c: Cycle, answers, *, task: str = TASK, mtime=None) -> str:
+    """The file the PostToolUse hook writes when the owner answers round 1 (requirement_round.handle), asked_at on the fake clock."""
+    asked = _z(c.tick(120)).replace(".000Z", "Z")
+    path = c.project / requirement_round.ANSWERS.format(task=task, n=1)
+    path.write_text(json.dumps({"task_id": task, "round": 1, "source": f"requirement-round:{task}:r1", "tool_use_id": "toolu_ask", "asked_at": asked,
+                                "questions": [], "answers": answers, "response": None, "annotations": None}), encoding="utf-8")
+    when = (mtime or c.clock).timestamp()
+    os.utime(path, (when, when))
+    return asked
+
+
+def panel_rows(c: Cycle) -> list[dict]:
+    return [r for r in c.rows() if r["event"] in ("ba_option_chosen", "ba_root_cause_refuted")]
+
+
+@pytest.mark.parametrize("chosen", ["A", "B", "C"])
+def test_the_owner_choosing_a_bas_option_gives_ba_three_once_for_the_task(cycle, monkeypatch, chosen):
+    panel_round(cycle)
+    asked = owner_answers(cycle, {SCOPE: OPTION[chosen], "Another question?": "Yes"})
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("ba_option_chosen", "ba", 3)]
+    (row,) = cycle.rows()
+    assert row["key"] == f"ba_option_chosen:{TASK}" and row["ref"] == ANSWERS and row["task_id"] == TASK and row["ts"] == asked
+    assert f"BA {chosen}" in row["why"] and TASK not in row["why"] and "\n" not in row["why"]
+
+
+def test_a_refuted_root_cause_gives_its_ba_minus_four_and_never_reached_the_owner(cycle, monkeypatch):
+    ident = panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"})
+    owner_answers(cycle, {SCOPE: OPTION["B"]})
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("ba_option_chosen", "ba", 3), ("ba_root_cause_refuted", "ba", -4)]
+    refuted = next(r for r in cycle.rows() if r["event"] == "ba_root_cause_refuted")
+    assert refuted["key"] == f"ba_root_cause_refuted:{TASK}:C" and refuted["ref"] == PANEL and refuted["ts"] == "2026-11-09T12:01:30Z"
+    assert "BA C" in refuted["why"] and TASK not in refuted["why"] and refuted["key"].find(ident) == -1
+
+
+def test_each_refuted_root_cause_is_a_row_and_a_refuted_ba_cannot_be_the_chosen_one(cycle, monkeypatch):
+    panel_round(cycle, {"A": "refuted", "B": "verified", "C": "refuted"})
+    owner_answers(cycle, {SCOPE: OPTION["A"]})  # the owner was never offered A's option: this answer is no option's label
+    cycle.observe(monkeypatch)
+    assert sorted(r["key"] for r in cycle.rows()) == [f"ba_root_cause_refuted:{TASK}:A", f"ba_root_cause_refuted:{TASK}:C"]
+    assert cycle.facts() == [("ba_root_cause_refuted", "ba", -4)] * 2
+
+
+def test_an_unsupported_root_cause_gives_no_event(cycle, monkeypatch):
+    panel_round(cycle, {"A": "verified", "B": "unsupported", "C": "unsupported"})
+    owner_answers(cycle, {SCOPE: OPTION["A"]})
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("ba_option_chosen", "ba", 3)]
+
+
+@pytest.mark.parametrize("answers", [
+    "none",  # Skip, AFK or a decline: the hook wrote no answer file
+    {},  # the file with no answer in it
+    None,  # a free-text reply only: no answers
+    {SCOPE: "Something else, said in words"},  # an answer that is none of the options' labels
+    {"Another question?": OPTION["A"]},  # a label given to a question that is not the one offering it
+    {SCOPE: ""}])
+def test_a_skipped_or_absent_or_unmatched_answer_gives_no_chosen_option(cycle, monkeypatch, answers):
+    panel_round(cycle)
+    if answers != "none":
+        owner_answers(cycle, answers)
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
+
+
+def test_the_chosen_ba_is_the_first_questions_option_that_names_one(cycle, monkeypatch):
+    panel_round(cycle)
+    path = cycle.project / PANEL
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    plain = {"id": "q2", "dimension": "intent", "header": "Intent", "question": "What should change?", "multiSelect": False, "assume": "Right",
+             "spec_ref": None, "options": [{"label": "Right", "description": "x"}, {"label": OPTION["C"], "description": "no BA is named here"}]}
+    doc["questions"] = [plain, *doc["questions"], {**plain, "id": "q3", "question": "And then?", "options": [
+        {"label": "Fix", "description": "x", "ba": "C"}, {"label": "Leave", "description": "y"}]}]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    os.utime(path, (cycle.clock.timestamp(),) * 2)
+    owner_answers(cycle, {"What should change?": "Right", SCOPE: OPTION["B"], "And then?": "Fix"})
+    cycle.observe(monkeypatch)
+    (row,) = cycle.rows()
+    assert row["event"] == "ba_option_chosen" and "BA B" in row["why"]  # an option with no ba is no BA's, a later question's choice does not outrank
+
+
+def test_a_sweep_again_or_a_second_panel_dispatch_adds_no_row(cycle, monkeypatch):
+    panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"})
+    owner_answers(cycle, {SCOPE: OPTION["A"]})
+    cycle.observe(monkeypatch)
+    log = cycle.config / "logs" / "lifecycle.jsonl"
+    before = log.read_bytes()
+    cycle.observe(monkeypatch)
+    cycle.sweep(monkeypatch)
+    assert log.read_bytes() == before and len(panel_rows(cycle)) == 2
+    panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"})  # the panel QA dispatched again: the same two keys
+    cycle.observe(monkeypatch)
+    assert log.read_bytes() == before
+
+
+def test_the_rows_of_a_sweep_are_the_same_on_an_empty_log(cycle, monkeypatch):
+    panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"})
+    owner_answers(cycle, {SCOPE: OPTION["B"]})
+    cycle.observe(monkeypatch)
+    first = cycle.rows()
+    (cycle.config / "logs" / "lifecycle.jsonl").unlink()
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == first and len(first) == 2
+
+
+def test_the_answer_comes_after_the_panel_qa_and_a_stale_file_is_not_the_answer(cycle, monkeypatch):
+    panel_round(cycle)
+    owner_answers(cycle, {SCOPE: OPTION["A"]}, mtime=cycle.clock - timedelta(days=1))  # older than the dispatch that is to produce it
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
+
+
+def test_an_answer_file_outside_the_project_is_not_read(cycle, monkeypatch, tmp_path):
+    panel_round(cycle)
+    owner_answers(cycle, {SCOPE: OPTION["A"]})
+    real = cycle.project / ANSWERS
+    moved = tmp_path / "elsewhere.json"
+    real.rename(moved)
+    real.symlink_to(moved)
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
+
+
+@pytest.mark.parametrize("text", ["{not json", "[]", '"x"', '{"panel": []}', '{"panel": {"reports": [5, null]}, "questions": [7]}'])
+def test_a_panel_file_that_cannot_be_read_gives_nothing_and_no_error(cycle, monkeypatch, capfd, text):
+    panel_round(cycle, text=text)
+    owner_answers(cycle, {SCOPE: OPTION["A"]})
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == [] and capfd.readouterr() == ("", "")
+
+
+def test_a_qa_that_does_not_declare_the_panel_file_gives_nothing(cycle, monkeypatch):
+    panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"}, declares=f"docs/dev/ba-qa-report-{TASK}.json")
+    owner_answers(cycle, {SCOPE: OPTION["A"]})
+    cycle.qa()  # a lane QA of the same task
+    cycle.report("pass")
+    cycle.observe(monkeypatch)
+    assert panel_rows(cycle) == [] and cycle.facts() == [("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
+
+
+def test_a_panel_of_another_task_gives_nothing_for_this_one(cycle, monkeypatch):
+    other = "20261109-130000"
+    panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"}, task=other)
+    owner_answers(cycle, {SCOPE: OPTION["A"]}, task=other)
+    cycle.observe(monkeypatch)
+    assert {r["task_id"] for r in cycle.rows()} == {other} and len(cycle.rows()) == 2
+    assert all(other in r["key"] for r in cycle.rows())
+
+
+def test_the_panel_rule_does_not_stop_the_others_and_the_others_do_not_stop_it(cycle, monkeypatch):
+    panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"})
+    owner_answers(cycle, {SCOPE: OPTION["A"]})
+    cycle.qa()
+    cycle.report("pass")
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("ba_option_chosen", "ba", 3), ("ba_root_cause_refuted", "ba", -4), ("qa_first_pass", "ba", 1), ("qa_first_pass", "dev", 2)]
+    assert score_log.points_for("ba_option_chosen", "ba") == 3 and score_log.points_for("ba_root_cause_refuted", "ba") == -4
 
 
 # ---- the observer's cost: one lock, one batch, one read of the log, bounded and shared lookups ------------------------

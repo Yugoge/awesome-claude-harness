@@ -7,7 +7,7 @@ each main-agent dispatch and appends score events to the sandbox's logs/lifecycl
 Edit calls the observer reads, and the lane QA's failure is a qa.failures[] entry in the shape agents/qa.md spells
 (severity, location, issue, recommendation, primary_cause).
 
-Six replays carry every assertion, each run with the driver argument `resweep=1` (tests/replay/scorelog.py:
+Eight replays carry every assertion, each run with the driver argument `resweep=1` (tests/replay/scorelog.py:
 the observer hook run once more on the final transcript, the log kept as out/score-log.jsonl):
 
 * QA_FAIL_CLOSE: /dev (variant qa-fail: the lane's first QA fails, its dev is dispatched again, the next QA
@@ -19,7 +19,12 @@ the observer hook run once more on the final transcript, the log kept as out/sco
   0 rows" for these two rows rests on this replay).
 * QA_FAIL_OTHER_FILE: the same cycle, the failure naming a file the re-dispatched dev does not edit
   (`fail_at`): qa_fail, and no qa_catch.
-* FIRST_PASS: /dev variant plain: qa_first_pass for dev and ba, nothing negative.
+* FIRST_PASS: /dev variant plain: qa_first_pass for dev and ba, nothing negative, and ba_option_chosen for ba: a /dev without a
+  spec runs the BA panel, and the replayed owner answers its round with each question's first option (D32), so every
+  such replay logs that event beside its others.
+* PANEL_DISAGREE, PANEL_REFUTED: /dev variants panel-disagree (two BAs name different root causes, panel QA turns it into one
+  decision point, the owner's answer picks BA A) and panel-refuted (panel QA refuted BA C's root cause: its option never
+  reaches the owner, and the log gains ba_root_cause_refuted for ba).
 * CLOSE_FINDINGS: a /dev cycle whose lane QA passes first, then a /close (variant append) whose first round opens
   a finding on the file the dev wrote, the dev writes it again and a later round lands (B3).
 * RATING_ANSWERS: a clean /close of a first-pass cycle whose rating question is asked seven times for the one
@@ -41,6 +46,7 @@ import pytest
 
 from hooks.lib import score_log
 from tests.replay import suite
+from tests.replay.drivers import _round
 
 OBSERVER = "hooks/posttool-close-rating.py"
 ZULU = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -59,20 +65,25 @@ QA_FAIL_OTHER_FILE = suite.Scenario("score: /dev qa-fail naming another file", "
 FIRST_PASS = suite.Scenario("score: /dev first pass", "dev", (("variant", "plain"), ("resweep", "1")), ("dev",), 90)
 CLOSE_FINDINGS = suite.Scenario("score: /close finding after lane QA passed", "close",
                                 (("variant", "append"), ("resweep", "1")), ("dev", "close"), 180)
+PANEL_DISAGREE = suite.Scenario("score: /dev panel disagree", "dev", (("variant", "panel-disagree"), ("resweep", "1")), ("dev",), 110)
+PANEL_REFUTED = suite.Scenario("score: /dev panel refuted", "dev", (("variant", "panel-refuted"), ("resweep", "1")), ("dev",), 110)
 ANSWERS = ["skip", "decline", "free", "afk", "dismissed", "4", "5"]  # one task's rating dialog, asked once for each
 RATING_ANSWERS = suite.Scenario("score: /close rating answers", "close",
                                 (("variant", "plain"), ("rating", ANSWERS[0]), ("again", ",".join(ANSWERS[1:])),
                                  ("resweep", "1")), ("dev", "close"), 150)
 SCENARIOS = {"qa-fail-close": QA_FAIL_CLOSE, "qa-fail-dev": QA_FAIL_DEV, "qa-fail-other-file": QA_FAIL_OTHER_FILE,
-             "first-pass": FIRST_PASS, "close-findings": CLOSE_FINDINGS, "rating-answers": RATING_ANSWERS}
+             "first-pass": FIRST_PASS, "close-findings": CLOSE_FINDINGS, "rating-answers": RATING_ANSWERS,
+             "panel-disagree": PANEL_DISAGREE, "panel-refuted": PANEL_REFUTED}
 # What a sweep of each replay's final transcript yields on an empty log: its final span is the /dev span of a
-# /dev-only run (every row the cycle logged: "all", or listed where the rows are the point: qa_fail and qa_catch),
+# /dev-only run (every row the cycle logged: "all", or listed where the rows are the point: qa_fail and qa_catch, with the
+# cycle's ba_option_chosen),
 # the /close span typed in a later session (the close-time events), or, for a /close typed in the /dev's session, a
 # span that holds no lane QA (none: that re-sweep proves nothing about the /dev rows, the /dev-only runs do).
-REBUILT = {"qa-fail-close": [], "qa-fail-dev": [("qa_fail", "dev"), ("qa_catch", "qa")], "qa-fail-other-file": "all",
-           "first-pass": "all", "rating-answers": [],
+REBUILT = {"qa-fail-close": [], "qa-fail-dev": [("qa_fail", "dev"), ("qa_catch", "qa"), ("ba_option_chosen", "ba")], "qa-fail-other-file": "all",
+           "first-pass": "all", "panel-disagree": "all", "panel-refuted": "all", "rating-answers": [],
            "close-findings": [("escaped", "dev"), ("escaped", "qa"), ("close_catch", "close-qa")]}
 KEYS = {name: suite.replay_key(scn, "shipped") for name, scn in SCENARIOS.items()}
+BLOCKED = {"panel-refuted": ("Step 4a Agent(qa) panel QA offering a refuted option",)}  # the steps a replay is refused at (the others: none)
 
 
 def replay(name: str):
@@ -152,11 +163,13 @@ def task_of(r) -> str:
     return r.terminal("dev")["task"]
 
 
-def clean_run(r) -> None:
-    """The compliant run's terms: 0 gate blocks, 0 hook errors, every command at its terminal; and the score
-    observer ran once on each main-agent dispatch's return, exit 0, nothing printed."""
+def clean_run(r, blocks: tuple = ()) -> None:
+    """The compliant run's terms: 0 gate blocks (`blocks`: the steps, as label prefixes, the replay is expected to be refused at),
+    0 hook errors, every command at its terminal; and the score observer ran once on each main-agent dispatch's return,
+    exit 0, nothing printed."""
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
-    assert not r.blocks, "a compliant run met a gate block:\n" + r.explain()
+    steps = [b["step"] for b in r.blocks]
+    assert len(steps) == len(blocks) and all(s.startswith(b) for s, b in zip(steps, blocks)), "a compliant run met a gate block:\n" + r.explain()
     assert not r.hook_errors, "a compliant run met a hook error:\n" + r.explain()
     assert r.reached(), "a pipeline did not reach its terminal:\n" + r.explain()
     returns = [ev for ev in r.hook_events() if ev["event"] == "PostToolUse" and ev.get("tool") == "Agent"]
@@ -169,15 +182,17 @@ def event_rows(r, shape: list[tuple], refs: dict | None = None) -> list[dict]:
     """The log holds exactly the events `shape` lists ((event, role), in any order), each a well-formed row:
     kind event, this project's key, this cycle's canonical task id, the rule's points, one line of why text
     without the task id, as ref the lane QA's report path (`refs` names another for an event: the artifact a
-    close finding cites), a UTC time and a key no other row has."""
-    rows = events(r)
+    close finding cites; the BA panel's two events cite theirs: the owner's answer file, panel QA's round file),
+    a UTC time and a key no other row has."""
+    rows, task = events(r), task_of(r)
+    refs = {"ba_option_chosen": f"docs/dev/requirement-answers-{task}-r1.json", "ba_root_cause_refuted": f"docs/dev/ba-panel-{task}-r1.json", **(refs or {})}
     assert sorted((e["event"], e["role"]) for e in rows) == sorted(shape), rows
     assert len({e["key"] for e in rows}) == len(rows), rows
     for e in rows:
         assert e["kind"] == "event" and e["project"] == project_key(r) and e["task_id"] == task_of(r), e
         assert e["points"] == score_log.points_for(e["event"], e["role"]), e
         assert e["why"].strip() and "\n" not in e["why"] and task_of(r) not in e["why"], e
-        assert e["ref"] == (refs or {}).get(e["event"], f"docs/dev/qa-report-{task_of(r)}.json") and ZULU.match(e["ts"]), e
+        assert e["ref"] == refs.get(e["event"], f"docs/dev/qa-report-{task_of(r)}.json") and ZULU.match(e["ts"]), e
     return rows
 
 
@@ -235,7 +250,7 @@ def rating_rows(r) -> list[dict]:
 def test_a_qa_fail_and_its_fix_log_qa_fail_for_dev_and_qa_catch_for_qa_and_no_rerun_gap(replays, name):
     r = replays.get(KEYS[name])  # /dev alone, or /dev and then a clean /close
     clean_run(r)
-    rows = event_rows(r, [("qa_fail", "dev"), ("qa_catch", "qa")])
+    rows = event_rows(r, [("qa_fail", "dev"), ("qa_catch", "qa"), ("ba_option_chosen", "ba")])  # and the owner's pick of a BA's option (D32)
     fail, catch = (next(e for e in rows if e["event"] == name) for name in ("qa_fail", "qa_catch"))
     assert fail["points"] < 0 < catch["points"] and fail["ts"] <= catch["ts"]
     # what the driver played: the first QA round's failure, blamed on the dev, naming the file the dev's re-dispatch writes
@@ -257,7 +272,7 @@ def test_a_qa_fail_and_its_fix_log_qa_fail_for_dev_and_qa_catch_for_qa_and_no_re
 def test_a_qa_fail_whose_fix_touches_no_named_file_gives_no_qa_catch(replays):
     r = replays.get(KEYS["qa-fail-other-file"])
     clean_run(r)
-    (fail,) = event_rows(r, [("qa_fail", "dev")])
+    (fail,) = [e for e in event_rows(r, [("qa_fail", "dev"), ("ba_option_chosen", "ba")]) if e["event"] == "qa_fail"]
     first = lane_qa(r)[0]
     (failure,) = next(iter(first["reports"].values()))["qa"]["failures"]
     assert failure["location"].rpartition(":")[0] == OTHER_FILE and failure["primary_cause"] == "dev_implementation", failure
@@ -272,11 +287,61 @@ def test_a_qa_fail_whose_fix_touches_no_named_file_gives_no_qa_catch(replays):
 def test_a_first_pass_cycle_gives_qa_first_pass_for_dev_and_ba_and_nothing_negative(replays):
     r = replays.get(KEYS["first-pass"])
     clean_run(r)
-    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba")])
+    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba"), ("ba_option_chosen", "ba")])
     assert all(e["points"] > 0 for e in rows) and not [e for e in events(r) if e["points"] < 0]
     (qa,) = lane_qa(r)
-    assert all(qa["tool_use_id"] in e["key"] for e in rows), (qa["tool_use_id"], rows)
+    first, (chosen,) = [e for e in rows if e["event"] == "qa_first_pass"], [e for e in rows if e["event"] == "ba_option_chosen"]
+    assert len(first) == 2 and all(qa["tool_use_id"] in e["key"] for e in first), (qa["tool_use_id"], rows)  # a row of the lane QA's round names it
+    assert chosen["key"] == f"ba_option_chosen:{task_of(r)}", chosen  # the owner's pick stands for the task, not for a dispatch
     assert list(qa["reports"].values())[0]["qa"]["status"] == "pass"
+
+
+# ---------------------------------------------------------------- D32: the BA panel's two events
+
+def panel_ask(r) -> dict:
+    """The one AskUserQuestion that asks round 1 of the cycle (metadata.source requirement-round:<task id>:r1), as the main agent made it."""
+    (ask,) = [q for q in asks(r) if q["input"].get("metadata", {}).get("source") == f"requirement-round:{task_of(r)}:r1"]
+    assert ask["is_error"] is False and not any("ba" in o for q in ask["input"]["questions"] for o in q["options"]), ask
+    return ask
+
+
+@replay("panel-disagree")
+def test_the_owners_answer_picking_a_bas_option_logs_ba_option_chosen_for_ba(replays):
+    r = replays.get(KEYS["panel-disagree"])
+    clean_run(r)
+    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba"), ("ba_option_chosen", "ba")])
+    (chosen,) = [e for e in rows if e["event"] == "ba_option_chosen"]
+    assert chosen["points"] == 3 and chosen["key"] == f"ba_option_chosen:{task_of(r)}" and "BA A" in chosen["why"], chosen
+    # what the driver played (variant panel-disagree: B names another root cause than A): the three panel BAs in order, panel QA's
+    # one round-1 file, the owner asked once and taking each question's first option, which on the scope question is BA A's solution
+    panel_rel = f"docs/dev/ba-panel-{task_of(r)}-r1.json"
+    bas, (panel_qa,) = [d for d in dispatches(r) if d["role"] == "ba"][:3], [d for d in dispatches(r) if d["role"] == "qa" and panel_rel in d["wrote"]]
+    assert [d["wrote"] for d in bas] == [[f"docs/dev/ba-panel-{task_of(r)}-{angle}.md"] for angle in _round.ANGLES], [d["wrote"] for d in bas]
+    scope = next(q for q in panel_ask(r)["input"]["questions"] if q["header"] == "Scope")
+    assert scope["options"][0]["label"] == _round.SOLUTION["A"][0], scope
+    order = [d["tool_use_id"] for d in dispatches(r)]
+    assert order.index(bas[-1]["tool_use_id"]) < order.index(panel_qa["tool_use_id"]) < order.index(dispatches(r)[-1]["tool_use_id"])
+    assert chosen["ts"] >= panel_qa["result_at"][:19] + "Z" and not [e for e in events(r) if e["event"] == "ba_root_cause_refuted"]
+
+
+@replay("panel-refuted")
+def test_a_refuted_root_cause_logs_ba_root_cause_refuted_and_its_option_never_reaches_the_owner(replays):
+    r = replays.get(KEYS["panel-refuted"])
+    clean_run(r, BLOCKED["panel-refuted"])
+    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba"), ("ba_option_chosen", "ba"), ("ba_root_cause_refuted", "ba")])
+    (refuted,) = [e for e in rows if e["event"] == "ba_root_cause_refuted"]
+    assert refuted["points"] == -4 and refuted["key"] == f"ba_root_cause_refuted:{task_of(r)}:C" and "BA C" in refuted["why"], refuted
+    (chosen,) = [e for e in rows if e["event"] == "ba_option_chosen"]
+    assert chosen["points"] == 3 and "BA A" in chosen["why"], chosen  # the owner still chose among the options that reached it
+    # what the driver played: panel QA first offered the refuted BA's option, was refused and wrote round 1 again without it
+    panel_rel = f"docs/dev/ba-panel-{task_of(r)}-r1.json"
+    (panel_qa,) = [d for d in dispatches(r) if d["role"] == "qa" and panel_rel in d["wrote"]]
+    assert panel_qa["wrote"].count(panel_rel) == 2, panel_qa["wrote"]
+    # no question to the owner names that option (its label or its description), whatever the question
+    label, description = _round.SOLUTION["C"]
+    offered = [o for a in asks(r) for q in a["input"]["questions"] for o in q["options"]]
+    assert offered and not [o for o in offered if label in (o["label"], o.get("description")) or description in (o["label"], o.get("description"))], offered
+    assert refuted["ts"] <= chosen["ts"] and panel_ask(r)["is_error"] is False
 
 
 # ---------------------------------------------------------------- B2: replaying again adds 0 rows
@@ -284,7 +349,7 @@ def test_a_first_pass_cycle_gives_qa_first_pass_for_dev_and_ba_and_nothing_negat
 @pytest.mark.parametrize("name", [pytest.param(n, id=n, marks=replay(n)) for n in SCENARIOS])
 def test_sweeping_the_final_transcript_again_leaves_the_log_byte_for_byte_unchanged(replays, name):
     r = replays.get(KEYS[name])
-    clean_run(r)
+    clean_run(r, BLOCKED.get(name, ()))
     sweep = r.fact("score resweep")
     assert sweep and sweep.get("hooks") == 1, f"the observer hook was not run again: {sweep}"
     assert (sweep["rc"], sweep["stdout"], sweep["stderr"]) == (0, "", ""), sweep
@@ -311,8 +376,8 @@ def test_a_close_finding_after_lane_qa_passed_logs_escaped_for_dev_and_qa_and_cl
     r = replays.get(KEYS["close-findings"])
     clean_run(r)
     cited = "toy/__init__.py"
-    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba"), ("escaped", "dev"), ("escaped", "qa"),
-                          ("close_catch", "close-qa")], refs={"escaped": cited, "close_catch": cited})
+    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba"), ("ba_option_chosen", "ba"), ("escaped", "dev"),
+                          ("escaped", "qa"), ("close_catch", "close-qa")], refs={"escaped": cited, "close_catch": cited})
     first = {e["role"]: e for e in rows if e["event"] == "qa_first_pass"}
     escaped = {e["role"]: e for e in rows if e["event"] == "escaped"}
     (caught,) = [e for e in rows if e["event"] == "close_catch"]

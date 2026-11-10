@@ -9,7 +9,7 @@ import runpy
 import time
 from pathlib import Path
 
-try:  # as hooks.lib.close_rating (tests), or from hooks/lib on the path (the hook, score-update.sh): the writer's module, by name
+try:  # as hooks.lib.close_rating (tests), or from hooks/lib on the path (the hook): the writer's module, by name
     from . import score_log
 except ImportError:
     import score_log
@@ -54,11 +54,6 @@ def rating_asked(transcript_path, task_id: str) -> bool:
     span = _lib("command_span").active_span(transcript_path)
     landed = _landed(span, task_id)
     return landed > 0 and _lib("requirement_round").asked(span, f"close-rating:{task_id}", after=landed)
-
-
-def append_row(log, row: dict) -> None:
-    """score-update.sh's legacy rows go through score_log's writer, under the caller's lock."""
-    score_log.append(log, row)
 
 
 def _utc(seconds: float) -> str:

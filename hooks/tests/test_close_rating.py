@@ -328,7 +328,7 @@ def test_a_4_rating_writes_one_row_with_its_roles_and_the_summary_names_the_wors
     first, cycle, worst = text.splitlines()
     assert first == ("Scores (this project): ba 51 Skilled Craftsman (+1) | close-qa 51 Skilled Craftsman (+1) | "
                      "dev 39 Journeyman (-11) | main 51 Skilled Craftsman (+1) | qa 52 Skilled Craftsman (+2)")
-    assert cycle == f"This cycle {TASK}: dev -6 (edge case not tested), qa +1 (caught the missing edge case), rating 4: +1 each"
+    assert cycle == f"This cycle {TASK}: rating 4: +1 each, dev -6 (edge case not tested), qa +1 (caught the missing edge case)"
     assert worst == 'Worst: dev (Journeyman, 39); last miss: "edge case not tested"'
     assert "hook" not in text.lower() and "PostToolUse" not in text
 
@@ -342,16 +342,6 @@ def test_the_dispatch_store_is_the_project_dir_the_cli_names(config: Path, tmp_p
     assert [row["roles"] for row in _rows(config)] == [["ba", "close-qa", "dev", "qa"]]
     _summary(_run(_payload("5 - Fully met", cwd=str(project / "sub"), task=OTHER), config, CLAUDE_PROJECT_DIR=str(project)))
     assert [row["roles"] for row in _rows(config)][1] == ["architect"]
-
-
-def test_append_row_hands_a_legacy_row_to_the_score_log_writer(config: Path) -> None:
-    # score-update.sh's heredoc calls it under its own lock; a row with neither kind nor key is written as is, every time.
-    legacy = {"ts": "2026-11-01T00:00:00Z", "agent": "dev", "event": "qa_first_pass", "task_id": TASK, "reason": "na\u00efve"}
-    _log(config).parent.mkdir(parents=True)
-    close_rating.append_row(str(_log(config)), legacy)
-    close_rating.append_row(_log(config), legacy)
-    assert _log(config).read_text(encoding="utf-8") == (json.dumps(legacy, ensure_ascii=False) + "\n") * 2
-    assert not hasattr(close_rating, "append_rating")
 
 
 # --- the sweep: dispatches of the span not scored yet (the close QA, the cycle's last dispatch) count in the summary
@@ -616,7 +606,7 @@ def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
     shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
     (root / "hooks" / "lib").mkdir(parents=True)
-    for name in ("roster.py", "close_rating.py", "score_log.py"):
+    for name in ("roster.py", "score_log.py"):
         shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
     shutil.copytree(REPO_ROOT / "agents", root / "agents")
     _summary(_run(_payload("4 - Minor gaps"), config))
@@ -632,7 +622,7 @@ def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -
     assert update.returncode == 0, update.stderr
     rows = _rows(config)
     assert [row.get("rating") for row in rows[:2]] == [4, 1] and rows[2]["agent"] == "dev" and len(rows) == 3
-    # score-update.sh appends through the rating's writer (append_row): no log yet, its row as before
+    # score-update.sh appends through the log's one writer (score_log.append): no log yet, its row as before
     fresh = tmp_path / "fresh" / "lifecycle.jsonl"
     update = score("score-update.sh", "--agent", "dev", "--event", "qa_first_pass", "--note", "naïve", log=fresh)
     assert update.returncode == 0, update.stderr
