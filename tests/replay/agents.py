@@ -396,7 +396,10 @@ class Player:
         for clabel, command in self.act.calls:
             sub.bash(command, clabel, label=f"{label} Bash {clabel}")
         for heading, binds in self.act.text_calls:
-            for k, cmd in enumerate(self.tree.section_commands(self.role, heading, dict(binds, **self._id_binds())), 1):
+            # The subagent's start context prints HARNESS_ROOT (prompt-workflow.py's SubagentStart
+            # answer), the tree's harness home, so the role's text may write it as <HARNESS_ROOT>.
+            binds = dict(binds, **self._id_binds(), **{"<HARNESS_ROOT>": self.tree.harness})
+            for k, cmd in enumerate(self.tree.section_commands(self.role, heading, binds), 1):
                 clabel = f"{label} Bash {heading}" + (f" #{k}" if k > 1 else "")
                 if self.act.respell:
                     cmd = self.act.respell(cmd, clabel)

@@ -354,6 +354,9 @@ class DevCommandCycle:
             self.read_patterns()
         typed = f"/{o.typed} {REQUIREMENT}"
         cmd = re.sub(r"(?m)^<the command exactly as typed[^\n]*>$", lambda m: typed, blk.text)
+        # The main agent writes the printed HARNESS_ROOT (SessionStart's, which a compaction keeps) as the
+        # literal path, as Pipeline.run does for its own calls; o.s.bash does not substitute it.
+        cmd = cmd.replace("<HARNESS_ROOT>", o.harness)
         c = self.gated(lambda label: o.s.bash(cmd, "Re-read this command's start", label=label,
                                               deviation=o.devs.at(label)),
                        f"Step 1 Bash start function ({ctx})")
