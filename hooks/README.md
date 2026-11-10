@@ -87,7 +87,6 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 - `pull.sh` - pull.sh - Executable version of /pull command
 - `push.sh` - push.sh - Executable version of /push command
-- `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 - `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
 - `session-gitignore-propagate.sh` - SessionStart hook: keep the harness's runtime directories out of a product repo's git status.
 - `session-info.sh` - session-info.sh — SessionStart: the session's directory, git state and project metadata, for the model.

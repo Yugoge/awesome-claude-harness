@@ -82,8 +82,8 @@ failed check, when:
   refused until `git rm --cached -- <path>` untracks it (the file stays on disk);
 - a line the staged change adds, or the path of a file it adds or changes, contains a literal
   from the private-literal list (`scripts/check-public-core.sh --private-literals`);
-- the sentinel-lint or `hooks/pre-commit-check.sh` step fails, or a script a check needs is
-  missing (fail closed).
+- the `hooks/pre-commit-check.sh` step fails, or a script a check needs is missing (fail
+  closed).
 
 A pre-commit hook that was already there is kept as `pre-commit.local` and runs after these
 checks. Init installs the hook only into this repository's own hooks directory (step 5 of [init](installation.md#full-install-clone--init)).

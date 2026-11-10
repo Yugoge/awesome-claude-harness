@@ -554,13 +554,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# repo-hash) instead of the author literal <author-path> on a fresh non-root clone.\""
     },
     {
-      "path": "hooks/sentinel-lint.sh",
-      "fingerprint": "d78a80bf96b99193",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "hooks/session-promote-hook.sh",
       "fingerprint": "623f2626cd6b576b",
       "ordinal": 1,

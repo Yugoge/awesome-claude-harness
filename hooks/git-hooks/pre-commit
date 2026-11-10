@@ -29,13 +29,6 @@ if ! report="$(bash "$top/scripts/check-public-core.sh" --private-literals 2>&1)
   refuse "private-literal check: scripts/check-public-core.sh --private-literals failed"
 fi
 
-# 4. Sentinel lint, only when an orchestrator file (dev.md, dev-command.md, dev-overnight.md) is staged.
-staged="$(git diff --cached --name-only)" || refuse "sentinel lint: cannot list the staged paths"
-if printf '%s\n' "$staged" | grep -qE '^commands/dev(\.md|-command\.md|-overnight\.md)$'; then
-  need "sentinel lint" hooks/sentinel-lint.sh
-  bash "$top/hooks/sentinel-lint.sh" || refuse "sentinel lint: hooks/sentinel-lint.sh failed"
-fi
-
-# 5. Chain to the displaced hook, if any.
+# 4. Chain to the displaced hook, if any.
 [ -x "$hook_dir/pre-commit.local" ] && exec "$hook_dir/pre-commit.local" "$@"
 exit 0

@@ -400,7 +400,6 @@ dot-claude/
 │   ├── `pull.sh` - pull.sh - Executable version of /pull command
 │   ├── `push.sh` - push.sh - Executable version of /push command
 │   ├── `QUICKSTART.md` - Quick Start — the hooks layer
-│   ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 │   ├── `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
 │   ├── `session-gitignore-propagate.sh` - SessionStart hook: keep the harness's runtime directories out of a product repo's git status.
 │   ├── `session-info.sh` - session-info.sh — SessionStart: the session's directory, git state and project metadata, for the model.
@@ -811,6 +810,7 @@ dot-claude/
 │   ├── `test_paseo_daemon_timers.py` - scripts/paseo-daemon-timers.py (task 20260926-111239)
 │   ├── `test_paseo_usage_read.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 │   ├── `test_permission_coverage.py` - entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn)
+│   ├── `test_pre_commit_dev_command_files.py` - The fail-closed pre-commit hook (hooks/git-hooks/pre-commit) lets a commit stage the
 │   ├── `test_private_literal_rule.py` - pre-commit hook hooks/git-hooks/pre-commit
 │   ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 │   ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
