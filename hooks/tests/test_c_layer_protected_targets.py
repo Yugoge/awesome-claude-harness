@@ -24,12 +24,12 @@ bash-safety's analyzer is given time (CLAUDE_HOOK_BOUNDARY_TIMEOUT): its degrade
 a timeout under load, refuses any `$`, which would say nothing about the layer, so a degraded
 verdict fails the test.
 
-Measured on this head, three hooks refuse any of these commands: bash-safety (every rm, plainly and
-in a layer alike), the claude config guard (cp, mv and tee into `.claude/hooks/`, plainly and in a
-layer alike, its pattern reading the raw text) and tool-policy, which reads no write inside a
--c string. Every case where a layer exits lower than its plain command is one of tool-policy's
-(KNOWN_GAPS); on master a7d3a9fe each of those layer forms exits 0 at tool-policy too, and no hook
-there refuses a layer form this head allows. They are pre-existing gaps, strict xfail here.
+Three hooks refuse any of these commands: bash-safety (every rm, plainly and in a layer alike), the
+claude config guard (cp, mv and tee into `.claude/hooks/`, plainly and in a layer alike, its pattern
+reading the raw text) and tool-policy. On 99b4d69e every case where a layer exited lower than its
+plain command was one of tool-policy's (KNOWN_GAPS: tool-policy read no write inside a -c string;
+on master a7d3a9fe each of those layer forms exits 0 at tool-policy too), held as strict xfails.
+T2-16 has tool-policy read each layer as its command run plainly, so each of them now passes.
 """
 import hashlib
 import json
@@ -110,10 +110,12 @@ def _pair(program, target, form, spell):
     return command, 'bash -c "%s"' % command
 
 
-# -- the measured gaps ----------------------------------------------------------------------------
+# -- the former gaps (T2-16) ----------------------------------------------------------------------
 # tool-policy reads a Bash command's write targets with lib/bash_write_targets.py, which blanks
-# quoted text before it looks for a write, so a write inside a -c string names no target there: a
-# layer exits 0 at tool-policy for every case below, where its top-level form exits 2. Two of its
+# quoted text before it looks for a write, so a write inside a -c string named no target there: up
+# to T2-16 a layer exited 0 at tool-policy for every case below, where its top-level form exits 2.
+# tool-policy now reads each -c layer (lib/git_command_classifier's walk) as its command run plainly,
+# and the layer exits 2 as well (hooks/tests/test_tool_policy_c_layer_writes.py). Two of its
 # stages refuse the top-level form: the protected stage (P5 R2/R3, both actors) for the harness
 # home's protected files and the push-gate token, as cp, mv, tee, truncate and rm write or remove
 # them; and the dev role's rows (subagent), whose reader names what cp, mv and tee write, for the
@@ -121,7 +123,7 @@ def _pair(program, target, form, spell):
 # refused plainly: that reader follows `T=<target>; tee $T` to its target (TC-47). On master
 # a7d3a9fe each of these layer forms exits 0 at tool-policy too (master has no protected stage, and
 # its role rows read the same blanked text): pre-existing, the follow-up "tool-policy reads no write
-# inside a -c string", not fixed in this file.
+# inside a -c string" (T2-16).
 _POLICY_PROTECTED = {"home .git/hooks", "~/.claude/hooks", "config dir settings.machine.json", "push-gate token"}
 _POLICY_TOUCHED = {"cp", "mv", "tee", "truncate", "rm"}  # the protected stage's reader names their target
 _POLICY_WRITTEN = {"cp", "mv", "tee"}  # the role rows' reader names their target
@@ -138,9 +140,6 @@ def _policy_refuses_plainly(program, target, form, actor):
 KNOWN_GAPS = {(program, target, form, actor, POLICY)
               for program in WRITERS for target in TARGETS for form in FORMS for actor in ACTORS
               if _policy_refuses_plainly(program, target, form, actor)}
-GAP_REASON = ("pre-existing gap (a follow-up after train 2): tool-policy reads no write inside a -c string, "
-              "its write-target reader blanking quoted text; on master a7d3a9fe this layer form exits 0 at "
-              "tool-policy too")
 
 
 # -- the sandbox ------------------------------------------------------------------------------------
@@ -258,16 +257,15 @@ def test_a_layer_exits_no_lower_than_its_plain_command_at_every_hook(
 _GAP_IDS = ["%s|%s|%s|%s|%s" % gap for gap in sorted(KNOWN_GAPS)]
 
 
-@pytest.mark.xfail(strict=True, reason=GAP_REASON)
 @pytest.mark.parametrize("program,target,form,actor,hook", sorted(KNOWN_GAPS), ids=_GAP_IDS)
-def test_a_known_gap_the_layer_exits_lower_at(sandbox, verdicts, program, target, form, actor, hook):
+def test_a_former_gap_the_layer_exits_no_lower_at(sandbox, verdicts, program, target, form, actor, hook):
     top, layer = _pair(program, target, form, _spell(sandbox))
     assert not _lower(verdicts, top, layer, ACTORS[actor], [hook]), (top, layer, hook)
 
 
 @pytest.mark.parametrize("program,target,form,actor,hook", sorted(KNOWN_GAPS), ids=_GAP_IDS)
 def test_a_known_gaps_top_level_form_is_refused(sandbox, verdicts, program, target, form, actor, hook):
-    # Each gap is a refusal the layer loses: its top-level form is refused, so KNOWN_GAPS stays exact.
+    # Each former gap was a refusal the layer lost: its top-level form is refused, so KNOWN_GAPS stays exact.
     top, _layer = _pair(program, target, form, _spell(sandbox))
     assert verdicts[(hook, top, ACTORS[actor])][0] == 2, top
 

@@ -13,6 +13,7 @@
 - `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
 - `test_agent_resolver.py` - Covers the bug: cp-state files that were never checked out (crashed/
 - `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
+- `test_allow_grant_quoted_separators.py` - FR-2: a `;`, `&&`, `||`, `|` or newline inside a quoted commit message is text to the `/allow` grant matcher; a real second command still is not
 - `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 - `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
 - `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
