@@ -26,7 +26,7 @@ CURRENT_SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}" |
 CURRENT_DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}" || echo "MISSING")
 ```
 
-Each case writes the Phase 8 grant with `verdict=blocked` and that risk, then stops:
+/merge refused a MISSING tip and a self-merge before dispatch, so each case means a tip moved since. Each writes the Phase 8 grant with `verdict=blocked`, that risk and the tips read here (the only ones `hooks/lib/merge_grant.py` keeps), then stops; a MISSING tip names no commit a grant can carry, so that case prints its risk and stops with none (Error handling):
 
 - "MISSING" tip: risks=["Ref `<ref>` does not resolve to a commit object"]
 - Equal tips: risks=["Self-merge: `<RESOLVED_REF>` and `<DEFAULT_BRANCH>` are the same commit — nothing to merge"]
@@ -108,9 +108,9 @@ Write the JSON (Write tool):
   "analysis_summary": "<1-3 sentence summary>",
   "repo_root": "<REPO_ROOT>",
   "branch": "<RESOLVED_REF>",
-  "source_tip": "<SOURCE_TIP>",
+  "source_tip": "<CURRENT_SOURCE_TIP>",
   "default_branch": "<DEFAULT_BRANCH>",
-  "default_tip": "<DEFAULT_TIP>",
+  "default_tip": "<CURRENT_DEFAULT_TIP>",
   "session_id": "<SESSION_ID>",
   "nonce": "<REQUEST_ID>",
   "expires_at": "<ISO-8601 UTC>"
