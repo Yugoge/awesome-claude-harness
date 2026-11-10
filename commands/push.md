@@ -1,6 +1,8 @@
 ---
 description: "Push Command"
 disable-model-invocation: true
+summary: "Publish the current branch through the push wrapper after the push analyst reviews what would go out; it needs a commit made by /commit."
+group: Ship
 ---
 
 # Push Command

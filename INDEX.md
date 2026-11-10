@@ -571,7 +571,7 @@ dot-claude/
 │   ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 │   ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 │   ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
-│   ├── `generate-hero-status.py` - Description: One source of truth emits FIVE marker-delimited canonical regions and re-derives
+│   ├── `generate-hero-status.py` - Description: One source of truth emits SIX marker-delimited canonical regions in two documents and
 │   ├── `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 │   ├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 │   ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -581,7 +581,7 @@ dot-claude/
 │   ├── `iterate-failed-pipelines.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 │   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
-│   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
+│   ├── `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
 │   ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 │   ├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 │   ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names

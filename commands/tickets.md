@@ -1,6 +1,8 @@
 ---
 description: Read-only Unfuddle-style lifecycle table of every ticket/spec/lane.
 argument-hint: "[--format table|json]"
+summary: "Print a read-only table of every ticket, spec and lane, with its state and next action."
+group: Control
 ---
 
 # /tickets

@@ -2,6 +2,8 @@
 description: Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 argument-hint: [prompt or --review or --model <model> <prompt>]
 allowed-tools: [Bash, Read, Glob, Grep]
+summary: "Ask OpenAI Codex for a second opinion, a code review or a delegated coding task, through an isolated wrapper."
+group: Control
 ---
 
 # Codex CLI Integration

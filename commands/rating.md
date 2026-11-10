@@ -1,5 +1,7 @@
 ---
 description: Show every agent's score, rank, trend and latest scored events for this project, then your latest ratings. Terminal text only; it writes nothing.
+summary: "Show every agent's score, rank, trend and latest scored events for this project, then your latest ratings; it writes nothing."
+group: Control
 disable-model-invocation: true
 ---
 
