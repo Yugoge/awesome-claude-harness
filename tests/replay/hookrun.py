@@ -43,6 +43,8 @@ TAIL = 4000
 HEAD = 1000  # a refusal's opening characters kept beside the tail; its first line is kept whole
 _HOOK_PATH_RE = re.compile(r"""[^"'\s]*?/((?:hooks|scripts)/[^"'\s]+)""")
 RECORD_ENV = "CLAUDE_HOOK_LAUNCH_RECORD_FD"  # hooks/lib/hook_launch.py's
+MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # hooks/lib/hook_launch.py's: where a launcher marks the hook it runs
+MARKS_DIR: list = []  # the replay's marker directory (Replay sets it; trace.py reads the marks)
 LAUNCHED_COMMAND = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/%s"'  # a hook's own registration, before the launchers
 
 
@@ -235,6 +237,8 @@ def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
     recs = _Records() if h["hook"].endswith(".py") else None
     if recs is not None:
         env = dict(env, **{RECORD_ENV: str(recs.w)})
+        if MARKS_DIR:
+            env[MARK_ENV] = MARKS_DIR[-1]
     try:
         p = subprocess.run(h["command"], shell=True, input=payload_raw, capture_output=True, text=True,
                            env=env, cwd=cwd, timeout=h["timeout"], errors="replace",

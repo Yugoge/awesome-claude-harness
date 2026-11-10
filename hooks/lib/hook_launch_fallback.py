@@ -130,6 +130,7 @@ def main(event, rules, raw=None) -> int:
     """The dispatcher's entry when lib/hook_launch.py cannot load."""
     if raw is None:
         raw = sys.stdin.buffer.read()
+    os.environ.pop("CLAUDE_HOOK_LAUNCH_MARKS", None)  # its hooks run as processes: the trace names them
     fd = os.environ.pop("CLAUDE_HOOK_LAUNCH_RECORD_FD", "")
     try:
         fd = int(fd) if fd else None

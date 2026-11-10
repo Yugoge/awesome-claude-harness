@@ -48,8 +48,9 @@ process. hooks/lib/launch_settings.py expands the dispatchers back into one
 registration per hook (the old shape) for the readers that need it.
 
 The replay suite asks for each hook's own result (env ``RECORD_ENV``, a file
-descriptor to write them to), so its records keep naming the hook files; the hooks
-never see that variable.
+descriptor to write them to), so its records keep naming the hook files, and a
+traced replay asks the launcher to mark which hook it runs (env ``MARK_ENV``), so the
+trace names the hook as the component; the hooks never see either variable.
 """
 from __future__ import annotations
 
@@ -64,6 +65,7 @@ from dataclasses import dataclass
 HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TIMEOUT = 60.0          # the CLI's default hook timeout, seconds
 RECORD_ENV = "CLAUDE_HOOK_LAUNCH_RECORD_FD"
+MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # a traced replay's marker directory (tests/replay/trace.py)
 TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"})
 PLAIN_CONTEXT_EVENTS = frozenset({"UserPromptSubmit", "SessionStart"})
 TIMEOUT = "timeout"             # a hook's status when it ran past its timeout
@@ -223,8 +225,8 @@ def run_process(rule: Rule, raw: bytes, timeout: float | None = None) -> Result:
 
 
 class Dispatch:
-    def __init__(self, event: str, rules, raw: bytes, record_fd=None):
-        self.event, self.raw = event, raw
+    def __init__(self, event: str, rules, raw: bytes, record_fd=None, marks=None):
+        self.event, self.raw, self.marks = event, raw, marks
         self.rules = selected(rules, event, raw)
         self.results: list = []
         self.record_fd = record_fd
@@ -242,6 +244,7 @@ class Dispatch:
         for rule in self.rules:
             if self.finished:
                 break
+            self.mark(rule.path)
             try:
                 if run_rule is None:
                     raise RuntimeError("lib/rule_runner.py did not load")
@@ -250,6 +253,7 @@ class Dispatch:
                 res = Result(rule, TIMEOUT if rr.overrun else rr.code, rr.stdout, rr.stderr, rr.seconds)
             except Exception:  # the runner's own fault: this hook runs as the CLI ran it
                 res = run_process(rule, self.raw)
+            self.mark(None)
             with self.lock:
                 if self.finished:
                     break
@@ -273,6 +277,18 @@ class Dispatch:
         _write(self.real[1], err)
         from lib.rule_runner import _REAL_OS_EXIT
         _REAL_OS_EXIT(code)
+
+    def mark(self, path) -> None:
+        """For a traced replay only: name the hook this process now runs (None: the launcher's own
+        code), by opening a marker file the trace reads (tests/replay/trace.py LAUNCH_MARK)."""
+        if not self.marks:
+            return
+        from urllib.parse import quote
+        name = "launch." + (quote("hooks/" + path, safe="") if path else "-")
+        try:
+            os.close(os.open(os.path.join(self.marks, name), os.O_WRONLY | os.O_CREAT, 0o644))
+        except OSError:
+            pass
 
     def record(self) -> None:
         if self.record_fd is None:
@@ -309,8 +325,9 @@ def main(event: str, rules, raw: bytes | None = None) -> int:
     if raw is None:
         raw = sys.stdin.buffer.read()
     fd = record_fd()
+    marks = os.environ.pop(MARK_ENV, "") or None
     try:
-        d = Dispatch(event, rules, raw, fd)
+        d = Dispatch(event, rules, raw, fd, marks)
     except Exception:  # before any hook ran: every hook as its own process
         from lib import hook_launch_fallback
         return hook_launch_fallback.run(event, rules, raw, fd)

@@ -99,6 +99,14 @@ def rule_files(hook: str) -> list:
     return _RULES[key]
 
 
+def _inv_hooks(rec: dict) -> list:
+    out = []
+    for h in rec.get("launched", rec["hooks"]):
+        out.append(h)
+        out.extend(h.get("rules") or [])
+    return out
+
+
 class Event:
     def __init__(self, rec: dict):
         self.rec = rec
@@ -222,6 +230,7 @@ class Replay:
         self.step_label = ""
         self._actors: list[str] = []
         _CURRENT[:] = [self]  # rule_files reads the merged gates of this replay's tree
+        hookrun.MARKS_DIR[:] = [layout.markers]  # a launcher marks the hook it runs (trace.py)
 
     # ------------------------------------------------------------ environment
     def _env(self, extra: dict) -> dict:
@@ -332,12 +341,16 @@ class Replay:
             if launched["hook"] in old_paths:
                 for d in launchdiff.compare(self, event, launched, old_paths[launched["hook"]]):
                     self.launch_diffs.append(dict(d, step=label, event=event))
+        inv_hooks = _inv_hooks(rec)
         rec["launched"] = [{k: v for k, v in r.items() if k != "rules"} for r in rec.get("launched", [])]
         self._inv.write(json.dumps({"seq": self.n_events + 1, "event": event, "label": label,
                                     "payload": dict(payload, hook_event_name=event), "transcripts": sizes,
+                                    # the processes started, and each hook a launcher ran with the
+                                    # command it had alone: E1's differential re-runs a hook by the
+                                    # origin the trace names (a launcher's hook, by its mark)
                                     "hooks": [{k: h[k] for k in ("hook", "command", "matcher", "timeout", "rc",
                                                                  "verdict", "how")}
-                                              for h in rec.get("launched", rec["hooks"])]})
+                                              for h in inv_hooks]})
                         + "\n")
         self._inv.flush()
         rec.update(label=label, session=session.sid, tool=payload.get("tool_name"),

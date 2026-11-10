@@ -337,6 +337,18 @@ def test_the_record_channel_is_out_of_the_hooks_environment(tmp_path):
     assert p.stdout.decode() == "absent\n" and rec[0]["stdout"] == "absent\n" and rec[0]["rc"] == 0
 
 
+def test_a_traced_replay_learns_which_hook_runs_and_the_hooks_never_see_it(tmp_path):
+    show = _hook(tmp_path, "show", f"print(os.environ.get({hook_launch.MARK_ENV!r}, 'absent'))\n")
+    launcher = _launcher(tmp_path, "UserPromptSubmit", [("show", show, None, 5)])
+    marks = tmp_path / "marks"
+    marks.mkdir()
+    env = dict(os.environ, **{hook_launch.MARK_ENV: str(marks)})
+    p = subprocess.run([sys.executable, launcher], input=b"{}", capture_output=True, env=env, timeout=30)
+    assert p.stdout.decode() == "absent\n"
+    names = sorted(f.name for f in marks.iterdir())
+    assert names == sorted(["launch.-", "launch.hooks%2F" + show.replace("/", "%2F")]), names
+
+
 # ------------------------------------------------------------------ combining
 
 def _r(code, out="", err="", path="h.py"):
