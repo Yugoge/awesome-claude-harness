@@ -18,6 +18,8 @@ means one clone per account: a switch covers exactly the home it is typed in.
             background job of the harness acts (hooks/lib/harness_switch.{py,sh}). One file
             decides, so the hooks are all on or all off.
   state     state.json: mode, since, the switching session, last_off_at
+  overnight every live /dev-overnight run the session can find is ended (its record's
+            harness_off_at, through hooks/lib/overnight.py), so on arms no time-lock
   settings  settings.json in its off form (scripts/install/render-settings "the harness
             switch"): no harness hook, env var or permission rule from the next session on
   hide      a sparse checkout leaves CLAUDE.md, commands/ (but commands/harness.md), agents/
@@ -60,7 +62,7 @@ KEPT_COMMAND = "commands/harness.md"
 SPARSE_HEADER = "# harness-switch: /harness off hides the harness's prompts; /harness on removes this"
 SPARSE_PATTERNS = ("/*", "!/CLAUDE.md", "!/commands/*", "/" + KEPT_COMMAND, "!/agents/", "!/skills/")
 WAKE_TAG = "[awesome-claude-harness/overnight-wake-v1]"  # hooks/lib/overnight.py WAKE_PROMPT
-OFF_STEPS = ("save", "marker", "state", "settings", "hide")
+OFF_STEPS = ("save", "marker", "state", "overnight", "settings", "hide")
 ON_STEPS = ("show", "settings", "marker", "state", "cleanup")
 EXIT_ON, EXIT_OFF, EXIT_PARTIAL = 0, 3, 4
 
@@ -171,13 +173,16 @@ def settings_blob():
     return git_out("rev-parse", ":settings.json")
 
 
-def settings_off(state):
-    """Write the off form of the working settings.json; record what was written."""
+def settings_off(state, report):
+    """Write the off form of the working settings.json; record what was written. A file that is
+    missing or not a JSON object is left as it is, and the report says so."""
     rs = render_settings()
     data = read_bytes(SETTINGS)
     working = rs.parse(data) if data is not None else None
     if working is None:
-        raise SwitchError("settings.json is missing or not a JSON object; fix it, then /harness off again")
+        report.append("settings.json is missing or not a JSON object, so it was left as it is; fix it, "
+                      "then /harness off again")
+        return
     out = rs.canon(rs.off_form(working, clean_form(rs)))
     if out != data:
         rs._write_atomic(SETTINGS, out)
@@ -379,6 +384,33 @@ def mode_at(state, when):
     return mode
 
 
+def end_overnight(ctx, when):
+    """End every live /dev-overnight run whose record the session can find (hooks/lib/overnight.py:
+    the payload's project, CLAUDE_PROJECT_DIR, the working directory, its git top level), through
+    the record's one writer: its `harness_off_at` makes every verdict on it False, so after
+    /harness on it arms no time-lock and holds no isolation."""
+    lib = os.path.join(HOME, "hooks", "lib", "overnight.py")
+    spec = importlib.util.spec_from_file_location("_harness_switch_overnight", lib)
+    overnight = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, os.path.dirname(lib))
+    try:
+        spec.loader.exec_module(overnight)
+    finally:
+        sys.path.pop(0)
+    ended = []
+    for d in overnight.candidate_project_dirs(ctx.get("cwd")):
+        for sf in sorted(overnight.Path(d).glob(".claude/overnight-state-*.json")):
+            record = overnight.read_state(sf)
+            if record is None or str(sf) in ended:
+                continue
+            verdicts = overnight.state_verdicts(record)
+            if verdicts.window_live or verdicts.before_end or verdicts.isolation_held:
+                record.update(harness_off_at=when, current_phase="completed")
+                overnight.write_state(sf, record)
+                ended.append(str(sf))
+    return ended
+
+
 def journal_step(journal, step):
     journal.setdefault("done", []).append(step)
     write_json(JOURNAL, journal)
@@ -391,9 +423,7 @@ def run_off(journal, ctx, report):
     done = journal.setdefault("done", [])
     if "save" not in done:
         data = read_bytes(SETTINGS)
-        if data is None:
-            raise SwitchError("settings.json is missing")
-        if settings_form() != "off":  # an off form (a repeated off) is never the form to restore
+        if data is not None and settings_form() == "on":  # an off form is never the form to restore
             write_atomic(SAVED, data)
         if is_checkout() and not ours(sparse_file()):  # nor is the switch's own sparse checkout
             sparse_save()
@@ -410,8 +440,13 @@ def run_off(journal, ctx, report):
         state["home"] = HOME
         write_json(STATE, state)
         journal_step(journal, "state")
+    if "overnight" not in done:
+        ended = end_overnight(ctx, journal["started"])
+        if ended:
+            report.append("ended %d /dev-overnight run(s) that were live: %s" % (len(ended), ", ".join(ended)))
+        journal_step(journal, "overnight")
     if "settings" not in done:
-        settings_off(state)
+        settings_off(state, report)
         write_json(STATE, state)
         journal_step(journal, "settings")
     if "hide" not in done:
@@ -578,8 +613,8 @@ def status_lines(ctx):
     lines.append("Restart needed: " + restart)
     if mode == "off":
         lines.append("In force: no harness hook runs; checkpoint snapshots, the git-fswatch sync, the "
-                     "landing, automatic pushes and the keystone are inert; /dev-overnight runs started "
-                     "before the switch are over")
+                     "landing, automatic pushes and the keystone are inert; the /dev-overnight runs live "
+                     "at the switch are over")
         lines.append("Next session: settings.json without harness hooks, env vars or permission rules; "
                      "no harness CLAUDE.md, commands (but /harness), agents or skills")
     lines.append("Kept: MCP servers, plugins, login and credentials, session history, the owner's own "
@@ -621,7 +656,8 @@ def cmd_hook():
     args = parse_prompt(prompt)
     if args is None:
         return 0
-    ctx = {"session_id": payload.get("session_id"), "transcript_path": payload.get("transcript_path")}
+    ctx = {"session_id": payload.get("session_id"), "transcript_path": payload.get("transcript_path"),
+           "cwd": payload.get("cwd") if isinstance(payload.get("cwd"), str) else None}
     verb = args.split()[0] if args else "status"
     if verb not in ("off", "on", "status") or len(args.split()) > 1:
         emit("HARNESS SWITCH: usage: /harness off | on | status (nothing changed). Tell the owner so.",

@@ -263,8 +263,9 @@ scheduled prompt (`hooks/pretool-harness-switch-guard.py`).
   `<home>/.harness-switch/off` exists.
 - **No background work.** Checkpoint snapshots, the git-fswatch sync (the daemon keeps running
   and does nothing), the landing, automatic pushes and the keystone are inert.
-- **No live overnight run.** A `/dev-overnight` run that started before the switch is over, so
-  after `/harness on` it arms no time-lock. The command's own text has the session delete its
+- **No live overnight run.** A `/dev-overnight` run live at the switch is over, so after
+  `/harness on` it arms no time-lock. Its record gets `harness_off_at`, through
+  `hooks/lib/overnight.py`'s one writer; the switch finds the records from the session's project. The command's own text has the session delete its
   wake, and while off the hook refuses the wake's prompts.
 - **From the next session.**
   - settings.json is in its off form: no harness hook, env var or permission rule (the

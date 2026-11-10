@@ -18,7 +18,6 @@ import sys
 
 DIR_NAME = ".harness-switch"
 MARKER = "off"
-STATE = "state.json"  # scripts/harness-switch's record: mode, since, last_off_at, ...
 
 
 def harness_home() -> str:
@@ -38,18 +37,3 @@ def exit_if_off() -> None:
     """End the calling hook with exit 0 and no output while the switch is off."""
     if is_off():
         sys.exit(0)
-
-
-def last_off_at(home: str | None = None):
-    """When the switch was last turned off (an aware UTC datetime), else None: from the switch's
-    record, which keeps it after /harness on. hooks/lib/overnight.py ends every /dev-overnight run
-    that started before it, so a run cut by /harness off arms no time-lock after /harness on."""
-    import json
-    from datetime import datetime, timezone
-    try:
-        with open(os.path.join(home or harness_home(), DIR_NAME, STATE), encoding="utf-8") as fh:
-            value = json.load(fh).get("last_off_at")
-        when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None
-    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
