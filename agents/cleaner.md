@@ -66,7 +66,7 @@ cleanup: Execute approved cleanup actions
 After each successful commit (exit code 0), write the push-gate token with its one writer (changelog-analyst runs it under `/commit`):
 
 ```bash
-python3 "<HARNESS_ROOT>/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 `GIT_ROOT` is `git rev-parse --show-toplevel`, `BRANCH` is `git branch --show-current`, and `COMMIT_SHA` is the sha `git rev-parse HEAD` printed right after your commit. On exit 4 (another session's token holds the path) print a WARNING and continue; `scripts/write-push-gate-token.py` lists its exit codes.

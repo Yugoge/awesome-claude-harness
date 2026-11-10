@@ -305,7 +305,7 @@ Bulk mode keeps its two-repository `${CONTROL_ROOT}` / `${NESTED_REPO}` loop.
 After each successful commit (every admitted repository independently), once the fd-9 flock is released, write the token with its one writer, using the repository root, branch and FINAL commit sha from the Phase 3 descriptor:
 
 ```bash
-python3 "<HARNESS_ROOT>/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 The writer resolves the token path under the hook state directory that `hooks/push.sh` reads (the path rule lives in `scripts/write-push-gate-token.py`), so the command line carries neither token content nor path (CP-3). Exit codes:

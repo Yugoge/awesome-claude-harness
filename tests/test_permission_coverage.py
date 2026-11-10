@@ -425,11 +425,23 @@ def agent_lines() -> list[tuple[str, str]]:
 
 
 # Measured lines still on the channel because a replay player that is not this group's cannot fill
-# `<HARNESS_ROOT>` yet: tests/replay/agents.py (group 3) plays agents/qa.md's Phase 6 block without the root its
-# start context carries, so the respelled line would fail every replay that reaches QA. Respell the line and
-# remove its entry here when that player binds `<HARNESS_ROOT>` (PR #29).
-REPLAY_PENDING = {_key("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  '
-                                        '--output /dev/stdout  --task-id <task_id>')}
+# `<HARNESS_ROOT>` yet, each with that player (group 3's). Respell the line and remove its entry here when that
+# player binds `<HARNESS_ROOT>` (PR #29).
+# - tests/replay/agents.py plays agents/qa.md's Phase 6 block without the root its start context carries, so the
+#   respelled line would fail every replay that reaches QA.
+# - tests/replay/drivers/commit.py (`token`, Phase 10) and drivers/clean.py (`token`, "5. Git Operations") run the
+#   token writer's block with only <GIT_ROOT>, <BRANCH> and <COMMIT_SHA> filled, as the subagent's Bash: respelled
+#   (cba0424), python3 opened `<HARNESS_ROOT>/scripts/write-push-gate-token.py` under the project and exited 2, so
+#   no push-gate token was written and /commit's terminal (drivers/commit.py `clean`) failed in every replay that
+#   commits (run 42758819736, shards 4-6: /push, F4c, F8c, F8r, D31 (3)); /clean's token went unwritten silently.
+REPLAY_PENDING = {
+    _key("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  '
+                         '--output /dev/stdout  --task-id <task_id>'): "tests/replay/agents.py",
+    _key("agents/changelog-analyst.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                                        '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'): "tests/replay/drivers/commit.py",
+    _key("agents/cleaner.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                              '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'): "tests/replay/drivers/clean.py",
+}
 
 
 def _agent_cases():
@@ -437,10 +449,10 @@ def _agent_cases():
     for where, line in agent_lines():
         seen[where] = seen.get(where, 0) + 1
         marks = ()
-        if _key(where.rsplit(":", 1)[0], line) in REPLAY_PENDING:
-            marks = pytest.mark.xfail(strict=True, reason="P2-3, group 3: tests/replay/agents.py binds "
-                                                          "<HARNESS_ROOT>; then respell this line and remove "
-                                                          "its REPLAY_PENDING entry")
+        player = REPLAY_PENDING.get(_key(where.rsplit(":", 1)[0], line))
+        if player:
+            marks = pytest.mark.xfail(strict=True, reason=f"P2-3, group 3: {player} binds <HARNESS_ROOT>; then "
+                                                          "respell this line and remove its REPLAY_PENDING entry")
         yield pytest.param(where, line, id=f"{where}#{seen[where]}", marks=marks)
 
 
