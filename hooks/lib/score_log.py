@@ -33,10 +33,12 @@ REMINDERS = {  # rank -> its one-line reminder at a dispatch (D29): the next ste
     "Senior Craftsman": "Reminder: a good record; keep the checks that earned it.",
     "Master": "Reminder: an excellent record; do not cut corners to stay fast, one escaped defect costs more than a task earns.",
 }
-CONSEQUENCES = {  # role -> what a low record costs it (D32), added to its reminder; the Stop gate and the Codex gate hold it (score_view)
-    "dev": "An independent QA round follows your normal QA.", "ba": "An independent QA round follows your normal BA-QA check.",
-    "qa": "This round includes a Codex debate, --codex or not: follow templates/prompt-includes/codex-consultation.md (harness home) before you stop.",
-}
+CONSEQUENCES = (  # (role, what a low record costs it as the agent is told, the same as the main agent is told): D32; the Stop gate and the Codex gate hold it
+    ("dev", "An independent QA round follows your normal QA.", "one more independent QA round after the normal one"),
+    ("ba", "An independent QA round follows your normal BA-QA check.", "one more independent QA round after the normal one"),
+    ("qa", "This round includes a Codex debate, --codex or not: follow templates/prompt-includes/codex-consultation.md (harness home) before you stop.",
+     "a Codex debate every round, --codex or not"),
+)
 
 
 class ScoreLogError(Exception):
@@ -85,14 +87,14 @@ def log_path() -> Path:
 
 @contextmanager
 def locked(log):
-    """The exclusive lock on <log>.lock (the file score-update.sh locks) that ``append`` needs its caller to hold."""
+    """The exclusive lock on <log>.lock, which every writer of the log takes and ``append`` needs its caller to hold."""
     os.makedirs(os.path.dirname(os.path.abspath(log)), exist_ok=True)
     with open(f"{log}.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield
 
 
-def _ob(name):  # obligation is imported late: score-update.sh puts hooks/lib on the path only after this module
+def _ob(name):  # obligation is imported late: a caller may put hooks/lib on the path only after this module
     return getattr(importlib.import_module(".obligation" if __package__ else "obligation", __package__ or None), name)
 
 
@@ -229,7 +231,7 @@ def render_dispatch_line(rows, identity, project, as_of) -> str:
     pairs, name = _mine(rows, identity, project, as_of), _plain(identity)[:24]
     value = _fold(pairs)
     rank, band = _rank(value)
-    reminder = REMINDERS[rank] + (" " + CONSEQUENCES[identity] if value < LOW_BELOW and identity in CONSEQUENCES else "")
+    reminder = " ".join([REMINDERS[rank], *(text for role, text, _ in CONSEQUENCES if role == identity and value < LOW_BELOW)])
     if not pairs:
         return f"No record yet for {name} in this project: Rank {rank}, {band}. {reminder}"
     for cap in (80, 40, 20, 0):  # the facts give way first when the 400 bytes are short
@@ -242,16 +244,17 @@ def render_dispatch_line(rows, identity, project, as_of) -> str:
     return text
 
 
-def render_main_line(rows, project, as_of, roles=("dev", "ba", "qa")) -> str:
-    """One line for the main agent at the start of an ask span: its own score, rank and newest miss, then the roles whose record is low (D32)."""
+def render_main_line(rows, project, as_of) -> str:
+    """One line for the main agent at the start of an ask span: its own score, rank and newest miss, then the roles whose record is low and what that costs them (D32)."""
     pairs = _mine(rows, "main", project, as_of)
-    value = _fold(pairs)
+    value, miss = _fold(pairs), _facts(pairs, 80)[1]
     rank, band = _rank(value)
-    miss = _facts(pairs, 80)[1]
-    extra = [r for r in roles if r != "qa" and low(rows, r, project, as_of)]
-    notice = ([f"{'/'.join(extra)}: one more independent QA round after the normal one"] if extra else []) + (
-        ["qa: a Codex debate every round, --codex or not"] if "qa" in roles and low(rows, "qa", project, as_of) else [])
-    return f"Your record (main): {value} [Rank: {rank}, {band}]." + (f" Recent miss: {miss}." if miss else "") + (f" Low record: {'; '.join(notice)}." if notice else "")
+    costs: dict = {}  # what a low record costs -> the roles it costs, in table order
+    for role, _, said in CONSEQUENCES:
+        if low(rows, role, project, as_of):
+            costs.setdefault(said, []).append(role)
+    notice = "; ".join(f"{'/'.join(roles)}: {said}" for said, roles in costs.items())
+    return f"Your record (main): {value} [Rank: {rank}, {band}]." + (f" Recent miss: {miss}." if miss else "") + (f" Low record: {notice}." if notice else "")
 
 
 def glyphs(values) -> str:

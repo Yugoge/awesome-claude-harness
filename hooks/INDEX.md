@@ -86,7 +86,7 @@ hooks/
 │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   ├── `specialist_yield.py` - Public API:
-│   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS
+│   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
 │   ├── `stop_contract.py` - is a prompt the human typed (TC-4)
 │   ├── `subagent.py` - is_subagent_context() and supporting helpers, for the hooks that import it
 │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
@@ -351,7 +351,7 @@ hooks/
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
-├── `subagentstart-score-inject.py` - SubagentStart: shows the starting subagent its own record (D29, D32): score, rank and trend, its newest good event and newest miss as facts,
+├── `subagentstart-record.py` - SubagentStart: shows the starting subagent its own record (D29, D32): score, rank and trend, its newest good event and newest miss as facts,
 ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).

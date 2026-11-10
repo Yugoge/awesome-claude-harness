@@ -694,7 +694,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstart-score-inject.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstart-record.py\""
           }
         ]
       }

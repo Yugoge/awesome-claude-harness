@@ -2,6 +2,7 @@
 transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one score; a score earned inside the command counts from the next."""
 from __future__ import annotations
 
+import json
 import os
 import time
 from contextlib import suppress
@@ -12,8 +13,9 @@ except ImportError:
     import command_span, obligation, roster, score_log  # noqa: E401
 
 NO_INJECTION = ("close", "commit", "merge", "push")  # spans whose dispatches see no score: /close and /commit stay out of scoring
-ASK_COMMANDS = ("spec", "dev", "redev", "dev-command")  # the spans that open with the main agent's own line (the ask spans)
+ASK_COMMANDS = tuple(json.loads(command_span.COMMAND_SETS_FILE.read_text(encoding="utf-8"))["ASK_COMMANDS"])  # the ask spans: they open with the main agent's own line
 ROUNDS = (("dev", "final_verification"), ("ba", "ba_validation"))  # role, the profile of the QA dispatch that judges its work
+DEV_PIPELINES = ("dev", "dev-command")  # the obligations of /dev and /redev, and of /dev-command
 
 
 def _utc(seconds) -> str:
@@ -56,19 +58,15 @@ def extra_round_gaps(span, cwd) -> list[str]:
     """/dev, /redev, /dev-command (D32): a lane whose dev has a low record owes a second, independent final-verification QA dispatch after the dev's last
     dispatch, and a BA with a low record a second BA-validation one after its last: one such dispatch so far is the gap. A lane's QA fail sends its dev again."""
     ds = [(call.line, obligation.task_family(ob.get("task_id")), ob.get("lane"), ob.get("role"), ob.get("profile"))
-          for call, ob in span.obligations() if ob.get("pipeline") == "dev" and call.ok]
-    gaps = []
-    for role, profile in ROUNDS:
-        last = {(fam, lane): line for line, fam, lane, who, _ in ds if who == role}  # the last dispatch of the role per lane: span order
-        for (fam, lane), line in (last.items() if last and is_low(role, cwd, span) else ()):
-            if sum(1 for at, f, ln, who, prof in ds if (who, prof, f, ln) == ("qa", profile, fam, lane) and at > line) == 1:
-                gaps.append(f"dev: lane {lane or fam} owes one more independent {profile} QA dispatch: {role}'s record is low (D32); dispatch QA once more, "
-                            f"as the first, with file paths only and nothing of the first round")
-    return gaps
+          for call, ob in span.obligations() if ob.get("pipeline") in DEV_PIPELINES and call.ok]
+    return [f"dev: lane {lane or fam} owes one more independent {profile} QA dispatch: {role}'s record is low (D32); dispatch QA once more, as the first, with file paths only and nothing of the first round"
+            for role, profile in ROUNDS if is_low(role, cwd, span)
+            for (fam, lane), line in {(fam, lane): line for line, fam, lane, who, _ in ds if who == role}.items()  # the role's last dispatch per lane: span order
+            if sum(1 for at, f, ln, who, prof in ds if (who, prof, f, ln) == ("qa", profile, fam, lane) and at > line) == 1]
 
 
 def codex_forced(payload, own) -> bool:
     """The stopping agent is a /dev-family QA whose record is low: its round holds a Codex debate whether or not --codex was given (D32). An error is no."""
     with suppress(Exception):
-        return own.get("role") == "qa" and own.get("pipeline") == "dev" and is_low("qa", payload["cwd"], command_span.active_span(payload["transcript_path"]))
+        return own.get("role") == "qa" and own.get("pipeline") in DEV_PIPELINES and is_low("qa", payload["cwd"], command_span.active_span(payload["transcript_path"]))
     return False

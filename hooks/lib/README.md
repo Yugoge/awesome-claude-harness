@@ -55,7 +55,7 @@
 - `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 - `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 - `specialist_yield.py` - Public API:
-- `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS
+- `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
 - `stop_contract.py` - is a prompt the human typed (TC-4)
 - `subagent.py` - is_subagent_context() and supporting helpers, for the hooks that import it
 - `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This

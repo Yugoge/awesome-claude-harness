@@ -1,7 +1,7 @@
 """P13-3 (D29, D32): what a score shows at a dispatch and what a low one costs.
 
 hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/lib/score_view.py reads the log for the hooks:
-hooks/subagentstart-score-inject.py (run here as a process), the Stop gate's extra-round gaps and the Codex gate's forced debate."""
+hooks/subagentstart-record.py (run here as a process), the Stop gate's extra-round gaps and the Codex gate's forced debate."""
 from __future__ import annotations
 
 import json
@@ -17,10 +17,11 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from hooks.lib import obligation, score_log, score_view  # noqa: E402
 
-HOOK = REPO / "hooks" / "subagentstart-score-inject.py"
+HOOK = REPO / "hooks" / "subagentstart-record.py"
 CODEX_HOOK = REPO / "hooks" / "subagentstop-codex-enforce.py"
 PROJECT, END = "a" * 12, "2999-01-01T00:00:00Z"
 TASK = "20261101-100000"
+COST = {role: text for role, text, _ in score_log.CONSEQUENCES}  # what a low record costs each role, as the agent is told
 RANKS = [(-1, "Disgraced"), (0, "Apprentice"), (20, "Apprentice"), (21, "Journeyman"), (40, "Journeyman"), (41, "Skilled Craftsman"),
          (60, "Skilled Craftsman"), (61, "Senior Craftsman"), (80, "Senior Craftsman"), (81, "Master"), (100, "Master")]
 
@@ -78,7 +79,7 @@ def test_no_view_threatens(value: int) -> None:
 def test_the_facts_give_way_first_when_the_400_bytes_are_short() -> None:
     long = "x" * 80
     text = _view([_event("qa", -60, long, 1), _event("qa", 2, long, 2)], "qa")
-    assert len(text.encode()) <= 400 and score_log.CONSEQUENCES["qa"] in text and "[Rank: Disgraced" in text
+    assert len(text.encode()) <= 400 and COST["qa"] in text and "[Rank: Disgraced" in text
 
 
 def test_the_view_of_a_row_without_kind_or_of_a_rating_alone_is_still_one_view() -> None:
@@ -93,7 +94,7 @@ def test_the_view_of_a_row_without_kind_or_of_a_rating_alone_is_still_one_view()
 @pytest.mark.parametrize(("value", "low"), [(-1, True), (0, True), (20, True), (21, False), (50, False), (100, False)])
 def test_a_record_is_low_in_the_two_lowest_ranks(value: int, low: bool) -> None:
     assert score_log.low(_at("dev", value), "dev", PROJECT, END) is low
-    assert (score_log.CONSEQUENCES["dev"] in _view(_at("dev", value))) is low
+    assert (COST["dev"] in _view(_at("dev", value))) is low
 
 
 def test_the_consequence_is_the_roles_own() -> None:
@@ -175,10 +176,10 @@ def test_the_hook_reads_the_record_as_of_the_span_opener(tmp_path: Path) -> None
 
 # ---------------------------------------------------------------- the Stop gate's extra round (D32)
 
-def _span(*dispatches):
+def _span(*dispatches, pipeline="dev"):
     """A span holding ok dispatches (line, role, profile, lane): the shapes extra_round_gaps reads."""
     calls = [(types.SimpleNamespace(line=line, ok=True), {"task_id": TASK + (f"-{lane}" if lane else ""), "lane": lane, "role": role,
-                                                          "pipeline": "dev", "profile": profile}) for line, role, profile, lane in dispatches]
+                                                          "pipeline": pipeline, "profile": profile}) for line, role, profile, lane in dispatches]
     return types.SimpleNamespace(obligations=lambda: calls)
 
 
@@ -199,6 +200,13 @@ def test_a_low_dev_owes_a_second_final_verification_after_its_last_dispatch(low)
     again = _span((1, "dev", "singular", None), (2, "qa", "final_verification", None), (3, "qa", "final_verification", None), (4, "dev", "singular", None),
                   (5, "qa", "final_verification", None))
     assert len(score_view.extra_round_gaps(again, "/p")) == 1
+
+
+@pytest.mark.parametrize(("pipeline", "owes"), [("dev", 1), ("dev-command", 1), ("close", 0), ("commit", 0)])
+def test_the_extra_round_is_owed_in_the_dev_family_pipelines_only(low, pipeline: str, owes: int) -> None:
+    low("dev")
+    span = _span((1, "dev", "singular", None), (2, "qa", "final_verification", None), pipeline=pipeline)
+    assert len(score_view.extra_round_gaps(span, "/p")) == owes
 
 
 def test_a_low_ba_owes_a_second_ba_validation_and_only_its_own_profile_counts(low) -> None:
@@ -246,7 +254,7 @@ QA_PROMPT = "FIRST ACTION: Read the sentinel.\n" + obligation.serialize_obligati
      "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{TASK}.json", "schema": "qa-report.v2", "identity": {"task_id": TASK, "request_id": TASK}}]})
 
 
-def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", command="dev", prompt=QA_PROMPT) -> subprocess.CompletedProcess:
+def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", command="dev", prompt=QA_PROMPT, again=False) -> subprocess.CompletedProcess:
     project, config = tmp_path / "project", tmp_path / "cfg"
     registry = project / ".claude" / "dev-registry" / f"dev-{TASK}"
     registry.mkdir(parents=True)
@@ -262,7 +270,7 @@ def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", com
     (config / "logs").mkdir(parents=True)
     key = score_log.project_key(project)
     (config / "logs" / "lifecycle.jsonl").write_text("".join(json.dumps({**r, "project": key}) + "\n" for r in rows), encoding="utf-8")
-    payload = {"agent_id": "aqa", "agent_type": role, "session_id": "s", "cwd": str(project), "transcript_path": str(_tx(tmp_path / "t.jsonl", command)),
+    payload = {"stop_hook_active": again, "agent_id": "aqa", "agent_type": role, "session_id": "s", "cwd": str(project), "transcript_path": str(_tx(tmp_path / "t.jsonl", command)),
                "agent_transcript_path": str(sub)}
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_CONFIG_DIR": str(config), "HOME": str(tmp_path / "home"), "PYTHONDONTWRITEBYTECODE": "1"}
     return subprocess.run([sys.executable, str(CODEX_HOOK)], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=60)
@@ -274,9 +282,21 @@ def test_a_low_qa_debates_codex_without_the_flag_and_its_ledger_entry_lets_it_st
     assert _codex_stop(tmp_path / "b", _at("qa", 10), ledger=True).returncode == 0  # any codex call, failed or not, is the entry
 
 
+def test_a_qa_bound_by_its_low_record_alone_is_let_go_on_its_second_stop(tmp_path: Path) -> None:
+    # codex may be unavailable and no flag turns the rule off (D25): the block is asked once; the flag's own binding has no such release
+    assert _codex_stop(tmp_path, _at("qa", 10), again=True).returncode == 0
+    flagged = _codex_stop(tmp_path / "b", _at("qa", 10), flag=True, prompt=QA_PROMPT + "\ncodex_required: true\n", again=True)
+    assert flagged.returncode == 2 and "CODEX_ENFORCE_BLOCKED" in flagged.stderr
+
+
 @pytest.mark.parametrize(("rows", "case"), [(_at("qa", 30), "a record that is not low"), ([], "no record"), (_at("dev", 10), "another role's low record")])
 def test_a_qa_that_is_not_low_is_not_bound_without_the_flag(tmp_path: Path, rows, case: str) -> None:
     assert _codex_stop(tmp_path, rows).returncode == 0, case
+
+
+def test_a_dev_command_qa_is_bound_like_a_dev_qa(tmp_path: Path) -> None:
+    prompt = QA_PROMPT.replace('"pipeline": "dev"', '"pipeline": "dev-command"')
+    assert prompt != QA_PROMPT and _codex_stop(tmp_path, _at("qa", 10), command="dev-command", prompt=prompt).returncode == 2
 
 
 def test_the_forced_debate_binds_only_a_dev_family_qa(tmp_path: Path) -> None:

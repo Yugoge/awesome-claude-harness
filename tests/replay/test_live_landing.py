@@ -409,7 +409,7 @@ EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | 
 RATING = ("PostToolUse", "AskUserQuestion|Agent")
 START = ("SubagentStart", None)  # P13-3's score injector, registered on every agent start
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
-             START: ([], ["hooks/subagentstart-score-inject.py"]),
+             START: ([], ["hooks/subagentstart-record.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
 REACHED = {PRE.name: {RATING, START}, A.name: {RATING, START}, B.name: {RATING, START}}  # P13-3: a dispatch starts an agent

@@ -24,10 +24,8 @@ Activation logic:
      activates codex on it. No role list here says which agents are bound.
      A dispatch whose own obligation names pipeline close or commit is not
      bound by the flag. Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
-  7. A QA of a /dev-family cycle whose record is low (lib/score_view.py, D32) is
-     bound whatever the flag and the line: steps 4 and 6 hold it with no
-     `codex-enforce.json` and no line, and the ledger entry of any codex call,
-     failed or not, lets it stop.
+  7. A QA of a /dev-family cycle whose record is low (lib/score_view.py, D32) is bound with no flag and no line; any codex call,
+     failed or not, or a second stop after the block (`stop_hook_active`: codex may be unavailable) lets it stop.
 
 Exit codes:
   0: Allow stop (pass-through).
@@ -90,7 +88,8 @@ def main() -> None:
     registry = agent_cycle.registry_dir(data, own, project_dir)
     # A /dev-family QA whose record is low debates Codex whether or not --codex armed the cycle (D32)
     forced = registry is not None and score_view.codex_forced(data, own)
-    if registry is None or not (forced or _read_json(registry / "codex-enforce.json").get("enabled")):
+    enabled = registry is not None and _read_json(registry / "codex-enforce.json").get("enabled")
+    if registry is None or not (forced or enabled):
         # No cycle, or no (or a disabled) enforcement flag in it
         sys.exit(0)
     dev_session_id = registry.name
@@ -106,8 +105,10 @@ def main() -> None:
     # codex flag /dev --codex armed for /dev's own; the role is bound as G2 binds it.
     if own.get("pipeline") in ("close", "commit") and (not agent_type or own.get("role") == agent_type):
         sys.exit(0)
-    if (not forced and not CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
-            and not _template_asks(resolution, agent_type, data.get("agent_transcript_path"))):
+    asked = enabled and (CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
+                         or _template_asks(resolution, agent_type, data.get("agent_transcript_path")))
+    # bound by its low record alone, a QA is let go on its second stop (D25: codex may be unavailable, no flag turns this off)
+    if not asked and (not forced or data.get("stop_hook_active")):
         sys.exit(0)
 
     # No ledger entry: block stop

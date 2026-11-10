@@ -26,6 +26,7 @@ from hooks.lib import score_log
 from tests.replay import suite
 from tests.replay.test_score_replay import OBLIGATION, clean_run, dispatches
 
+COST = {role: text for role, text, _ in score_log.CONSEQUENCES}
 LOW_FIXTURE, HIGH_FIXTURE = "dev:apprentice,ba:disgraced,qa:journeyman", "dev:skilled,ba:senior,qa:master"
 RANK_OF = {"apprentice": "Apprentice", "disgraced": "Disgraced", "journeyman": "Journeyman", "skilled": "Skilled Craftsman",
            "senior": "Senior Craftsman", "master": "Master", "restored": "Journeyman"}
@@ -57,7 +58,7 @@ def starts(r) -> list[dict]:
     out = []
     for ev in r.hook_events():
         if ev["event"] == "SubagentStart":
-            (run,) = [h for h in ev["hooks"] if h["hook"] == "hooks/subagentstart-score-inject.py"]
+            (run,) = [h for h in ev["hooks"] if h["hook"] == "hooks/subagentstart-record.py"]
             assert (run["rc"], run["verdict"], run["stderr"]) == (0, "ok", ""), run
             text = json.loads(run["stdout"])["hookSpecificOutput"]["additionalContext"] if run["stdout"].strip() else ""
             out.append({"type": ev["agent_type"], "label": ev["label"], "text": text, "label_n": len(out)})
@@ -133,7 +134,7 @@ def test_with_the_score_not_low_one_qa_round_runs(replays, name):
     assert len(rounds(r, "qa", "final_verification")) == (2 if name == "qa-fail-high" else 1)  # (a QA fail's re-dispatch: one round each time)
     assert len(rounds(r, "qa", "ba_validation")) == 2  # panel QA, then BA's final context
     assert "Your record (main)" in opener_text(r) and "Low record" not in opener_text(r)
-    assert not any(score_log.CONSEQUENCES[role] in s["text"] for s in starts(r) for role in score_log.CONSEQUENCES), "no start text names a consequence"
+    assert not any(text in s["text"] for s in starts(r) for _, text, _ in score_log.CONSEQUENCES), "no start text names a consequence"
 
 
 # ---------------------------------------------------------------- a low QA debates Codex without --codex (D32)
@@ -144,7 +145,7 @@ def test_a_low_qa_holds_a_codex_debate_in_every_round_without_the_flag(replays):
     clean_run(r)  # no stop was refused: each QA stopped only after it called codex (R-022 binds it with no flag and no line)
     assert "Low record: qa: a Codex debate every round, --codex or not" in opener_text(r) and "independent QA round" not in opener_text(r)
     qa = [s for s in starts(r) if s["type"] == "qa"]
-    assert len(qa) == 3 and all(score_log.CONSEQUENCES["qa"] in s["text"] for s in qa)  # panel QA, BA validation, final verification
+    assert len(qa) == 3 and all(COST["qa"] in s["text"] for s in qa)  # panel QA, BA validation, final verification
     called = [ev for ev in r.hook_events() if ev["event"] == "PostToolUse" and ev.get("tool") == "Skill" and ev["agent_type"] == "qa"]
     assert len(called) == 3  # every QA round: one codex call, and the ledger hook ran on it
     assert all(any(h["hook"] == "hooks/posttool-codex-skill-ledger.py" and (h["rc"], h["verdict"]) == (0, "ok") for h in ev["hooks"]) for ev in called)
@@ -163,7 +164,7 @@ def test_a_close_span_gets_no_start_text_and_no_new_block(replays):
     before = [e for e in events[:opener] if e["event"] == "SubagentStart"]
     assert in_close and before
     for ev in in_close:  # the hook ran (it is registered on every start) and printed nothing
-        (run,) = [h for h in ev["hooks"] if h["hook"] == "hooks/subagentstart-score-inject.py"]
+        (run,) = [h for h in ev["hooks"] if h["hook"] == "hooks/subagentstart-record.py"]
         assert (run["rc"], run["verdict"], run["stdout"], run["stderr"]) == (0, "ok", "", ""), run
     assert all(any(h["stdout"].strip() for h in ev["hooks"]) for ev in before)  # while the /dev span's starts did
     assert [b for b in r.blocks if b["event"] in ("SubagentStart", "Stop", "SubagentStop")] == [], r.blocks
