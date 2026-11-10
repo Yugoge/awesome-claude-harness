@@ -3,9 +3,16 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
-TEXT = (Path(__file__).resolve().parent.parent / "commands" / "close.md").read_text(encoding="utf-8")
+import pytest
+
+REPO = Path(__file__).resolve().parent.parent
+TEXT = (REPO / "commands" / "close.md").read_text(encoding="utf-8")
+# P13-2 B6: the producer side reads and mentions no score log (the acceptance test's grep, word for word)
+PRODUCERS = ("commands/close.md", "commands/commit.md", "agents/changelog-analyst.md")
+SCORE_LOG_WORDS = re.compile(r"score_log|lifecycle\.jsonl|score-(inject|update)")
 
 
 def _section(heading: str) -> str:
@@ -18,7 +25,7 @@ def _section(heading: str) -> str:
 
 def test_retired_routing_and_scoring_vocabulary_is_gone() -> None:
     for word in ("close-route-select", "route_finding", "artifact_role", "aggregate-dev-report.py", "write-enforce-flag",
-                 "pass_with_exceptions", "<options>", "user_rating", "score-update", "close-scoring-decide",
+                 "pass_with_exceptions", "<options>", "user_rating", "score-update",
                  "arbitration", "ARBITRATION", "AWAITING_INPUT", "R15", "FORCED", "jq ", "continue-cycle.md"):
         assert word not in TEXT, word
     assert not re.search(r"awaiting.input", TEXT, re.I)
@@ -90,6 +97,27 @@ def test_commit_routes_a_do_task_with_the_close_template_and_rule() -> None:
     flat = " ".join(item.split())
     assert "concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it)" in flat
     assert "the `/commit` orchestrator writes no report" in flat
+
+
+def _score_log_mentions(root: Path) -> list[str]:
+    """The producer files under `root` with a line the acceptance grep would print."""
+    return [name for name in PRODUCERS if SCORE_LOG_WORDS.search((root / name).read_text(encoding="utf-8"))]
+
+
+def test_the_producer_side_mentions_no_score_log() -> None:
+    assert _score_log_mentions(REPO) == []
+
+
+@pytest.mark.parametrize("word", ["score_log", "lifecycle.jsonl", "score-inject", "score-update"])
+@pytest.mark.parametrize("name", PRODUCERS)
+def test_the_b6_check_fails_on_a_copy_that_mentions_the_score_log(tmp_path: Path, name: str, word: str) -> None:
+    for each in PRODUCERS:  # copies: the real files are never edited
+        (tmp_path / each).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / each, tmp_path / each)
+    assert _score_log_mentions(tmp_path) == []
+    with open(tmp_path / name, "a", encoding="utf-8") as copy:
+        copy.write(f"\nRead {word} first.\n")
+    assert _score_log_mentions(tmp_path) == [name]
 
 
 # --- P12: the slimmed text keeps its rules; D31's Codex review loop in Step 2 ---------------------------------

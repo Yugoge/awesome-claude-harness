@@ -32,7 +32,6 @@ Organization and usage documentation for `scripts/`.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
-- `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 - `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -77,6 +76,7 @@ Organization and usage documentation for `scripts/`.
 - `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
+- `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 - `readme_facts.py` - Description: One module, one function per fact, one source per function. No number is typed here:
 - `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 - `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
