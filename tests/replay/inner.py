@@ -59,6 +59,9 @@ def main(argv=None) -> int:
     if rp.args.get("land") or rp.args.get("blocks"):  # P1c A11: the live landing (tests/replay/landing.py)
         from . import landing
         landing.install(rp)
+    if rp.args.get("removal"):  # P10 A25: a recoverable and a refused git rm (tests/replay/removal.py)
+        from . import removal
+        removal.install(rp, rp.args["removal"])
     t0, err = time.time(), ""
     rp.mark("run", "begin")
     try:
@@ -66,6 +69,9 @@ def main(argv=None) -> int:
     except Exception:
         err = traceback.format_exc()
     rp.mark("run", "end")
+    if not cfg.get("traced"):  # untraced: the trace and its artifact map see no extra git call
+        from . import endstate
+        endstate.record(rp)
     rp.finish(time.time() - t0, err)
     if cfg.get("scan_outside"):
         lines = scan_outside(cfg["scan_outside"], [lay.sb] + cfg.get("scan_skip", []), t0 - 1)

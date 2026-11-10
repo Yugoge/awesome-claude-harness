@@ -53,6 +53,7 @@ tests/
 ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+├── `test_cp_checkin_own_role_sentinel.py` - T2-10: a subagent reading its own role's sentinel writes its agent-index entry
 ├── `test_cp_enforce_own_slot.py` - cp-state slot's pending checkpoints (P1c X6)
 ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every

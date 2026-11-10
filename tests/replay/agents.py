@@ -40,6 +40,7 @@ agent file, all of the tree under test, read at run time.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import importlib.util
 import json
 import os
@@ -194,6 +195,7 @@ class Tree:
         self._schemas: dict = {}
         self._agent: dict = {}
         self._terminal = None
+        self._obligation = None
 
     def schema(self, sid: str) -> dict:
         if sid not in self._schemas:
@@ -211,6 +213,30 @@ class Tree:
                 except OSError:
                     self._agent[role] = ""
         return self._agent[role]
+
+    def obligation(self):
+        """The tree's hooks/lib/obligation.py, loaded once (None when it does not load). It is
+        registered in sys.modules under a name of its own for this tree while it runs (and stays
+        there): an older tree's module defines dataclasses, which look their module up there."""
+        if self._obligation is None:
+            lib = os.path.join(self.harness, "hooks", "lib")
+            self._obligation = False
+            name = "replay_tree_obligation_" + hashlib.sha256(os.path.abspath(lib).encode()).hexdigest()[:16]
+            with self.rp.acting("driver"):
+                spec = importlib.util.spec_from_file_location(name, os.path.join(lib, "obligation.py"))
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    sys.path.insert(0, lib)
+                    sys.modules[name] = mod
+                    try:
+                        spec.loader.exec_module(mod)
+                        self._obligation = mod
+                    except Exception:
+                        sys.modules.pop(name, None)
+                        self._obligation = False
+                    finally:
+                        sys.path.remove(lib)
+        return self._obligation or None
 
     def terminal_vocabulary(self) -> dict:
         """obligation.TERMINAL_VOCABULARY of the tree (schema id -> dotted path -> legal values)."""
@@ -231,6 +257,24 @@ class Tree:
                     finally:
                         sys.path.remove(lib)
         return self._terminal
+
+    def obligation_role(self, prompt: str) -> str | None:
+        """The role a dispatch prompt's obligation block names, read with the tree's own grammar
+        (obligation.extract_obligation_block, the parser the hooks run on a dispatch prompt). A
+        prompt with no block, more than one, or a body that is not a JSON object names no role:
+        the FIRST ACTION sentinel's file name never stands in for it (D21)."""
+        mod = self.obligation()
+        if mod is None:
+            raise PlayError(f"{self.harness}/hooks/lib/obligation.py does not load")
+        got = mod.extract_obligation_block(prompt or "")
+        if not isinstance(got, mod.ExtractedBlock):
+            return None
+        try:
+            doc = json.loads(got.body)
+        except ValueError:
+            return None
+        role = doc.get("role") if isinstance(doc, dict) else None
+        return role if isinstance(role, str) and role else None
 
     def prefixed_forms(self, role: str) -> set[str]:
         """The id prefixes the role's Task-ID convention forbids in new artifacts (`dev-`, ...)."""
@@ -352,7 +396,10 @@ class Player:
         for clabel, command in self.act.calls:
             sub.bash(command, clabel, label=f"{label} Bash {clabel}")
         for heading, binds in self.act.text_calls:
-            for k, cmd in enumerate(self.tree.section_commands(self.role, heading, dict(binds, **self._id_binds())), 1):
+            # The subagent's start context prints HARNESS_ROOT (prompt-workflow.py's SubagentStart
+            # answer), the tree's harness home, so the role's text may write it as <HARNESS_ROOT>.
+            binds = dict(binds, **self._id_binds(), **{"<HARNESS_ROOT>": self.tree.harness})
+            for k, cmd in enumerate(self.tree.section_commands(self.role, heading, binds), 1):
                 clabel = f"{label} Bash {heading}" + (f" #{k}" if k > 1 else "")
                 if self.act.respell:
                     cmd = self.act.respell(cmd, clabel)

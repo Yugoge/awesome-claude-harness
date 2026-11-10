@@ -3,7 +3,7 @@
 that driver exists).
 
 The main agent types `/close <task-id>` (or `/close --auto`), passes the checklist the hook hands
-it (scripts/todo/close.py: Step 0 to Step 3b) to its first TodoWrite and completes one step per
+it (scripts/todo/close.py: Step 0 to Step 4) to its first TodoWrite and completes one step per
 TodoWrite call. What each step does is read from the tree's own text at run time:
 
 * Task-id resolution: the timestamp argument binds TASK_ID; on the /do path the do-report is
@@ -29,7 +29,7 @@ TodoWrite call. What each step does is read from the tree's own text at run time
   chain or the do-report). QA writes the close-report: a first report with the Player, a later
   round's section appended through the append helper the Overwrite policy names. A round-open
   return is echoed and routed (Routes), Step 0's call runs again, then a fresh round.
-* Step 3: the verdict echo, the Session Summary and the next step. Step 3b: the step's
+* Step 3: the verdict echo, the Session Summary and the next step. Step 4: the step's
   AskUserQuestion (its JSON block, the task id bound), answered as the `rating` argument says; the
   orchestrator does nothing with the answer. Stop.
 * `--auto`: the discovery block, then each step walked over every parent before it is completed;
@@ -85,8 +85,9 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|afk|decline|free[,...]   Step 3b's answer, per landed task in order (default label:
-                          the dialog's first option)
+  rating=label|4|skip|afk|decline|free|none[,...]   Step 4's answer, per landed task in order (default
+                          label: the dialog's first option); none: the session offers no AskUserQuestion
+                          (P5 A20's rerun without it), so the main agent makes no call and says why
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
 
@@ -487,7 +488,7 @@ class DevProducer:
             found.append(t)
             k += 1
         for t in found:
-            if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == role:
+            if o.template_role(t, self.cyc.tid) == role:
                 return t
         if len(found) == 1:
             return found[0]
@@ -565,11 +566,11 @@ class DoProducer:
         raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
 
     def pending_edits(self) -> list:
-        """The /do turn's changes not yet on disk (the user abandoned the task before them): the work dev,
-        dispatched along the do-report's route, completes."""
+        """The /do turn's changes not yet on disk (an in-flight /do left them undone, drivers/do.py
+        variant=blocked): the work dev, dispatched along the do-report's route, completes."""
         turn, out = self.turn, []
         with turn.rp.acting("driver"):
-            for rel, old, new in turn.edits:
+            for rel, old, new in turn.rest:
                 with open(os.path.join(turn.o.project, rel), encoding="utf-8") as fh:
                     if old in fh.read():
                         out.append((rel, old, new))
@@ -582,8 +583,8 @@ class DoProducer:
 PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "files", "inspector_reports",
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
-# The rating answers the owner may give (Step 3b's question), as the dialog returns them.
-RATINGS = ("label", "4", "skip", "afk", "decline", "free")
+# The rating answers the owner may give (Step 4's question), as the dialog returns them.
+RATINGS = ("label", "4", "skip", "afk", "decline", "free", "none")
 
 
 class CloseRun:
@@ -940,7 +941,9 @@ class CloseRun:
         done: dict = {}
         if edits is None and hasattr(self.producer, "pending_edits"):
             edits = self.producer.pending_edits()
-        dev_work = roles.dev(list(edits or []), baseline_fallback=True)
+        # The files dev declares are the ones it wrote (agents/dev.md's file-list rule, since P6): no
+        # baseline is needed to derive them, so a /do task's absent baseline takes no fallback.
+        dev_work = roles.dev(list(edits or []))
 
         def work(sub, brief, player):
             done.update(dev_work(sub, brief, player) or {})
@@ -951,7 +954,7 @@ class CloseRun:
                 agents.put(sub, os.path.join(o.project, art["path"]), json.dumps(doc, indent=2) + "\n",
                            f"{sub.role} Write {art['path']}")
             return done
-        # no baseline was captured for a /do task: the agent text's fallback (empty values, git status)
+        # no baseline was captured for a /do task: the two baseline fields are the agent text's empty strings
         act = agents.Act(work=work, content={"do-report.v1": {"do": {"status": "completed"}},
                                              "dev-report.v2": {"baseline_head_sha": "", "baseline_dirty_snapshot": ""}},
                          faults={a["path"]: "missing" for a in arts} if short else {},
@@ -1302,17 +1305,26 @@ class CloseRun:
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")
         o.s.say(f"Next: /commit {self.tid} -m \"toy.add validates its arguments\"")
 
-    # ------------------------------------------------------------ Step 3b
+    # ------------------------------------------------------------ Step 4
     def rating_input(self) -> dict:
-        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 3b")) if '"questions"' in b.text)
+        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 4")) if '"questions"' in b.text)
         return json.loads(block.replace("<task-id>", self.tid))
 
     def step4(self, answer: str = "label") -> None:
-        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
+        """Step 4's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
         orchestrator does nothing with the answer."""
         tin = self.rating_input()
         q = tin["questions"][0]
         labels = [opt["label"] for opt in q["options"]]
+        if answer == "none":
+            self.o.s.say(f"Step 4: AskUserQuestion is not available in this session; the rating question for "
+                         f"{self.tid} cannot be asked.")
+            self.asked.append((self.tid, answer))
+            fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
+                                            "multiSelect": q.get("multiSelect"),
+                                            "source": (tin.get("metadata") or {}).get("source"),
+                                            "answer": answer, "ok": False, "blocked": False, "asked": False})
+            return
 
         def perform():
             if answer == "decline":
@@ -1326,10 +1338,10 @@ class CloseRun:
                 return dict(base, answers={q["question"]: "it mostly worked"}, response="it mostly worked")
             pick = next((l for l in labels if l.startswith(answer + " ")), labels[0])
             return dict(base, answers={q["question"]: pick})
-        lab = self.label("Step 3b AskUserQuestion")
+        lab = self.label("Step 4 AskUserQuestion")
         c = self.o.s.tool("AskUserQuestion", tin, perform=perform, label=lab, deviation=self.devs.at(lab))
         self.asked.append((self.tid, answer))
-        fact(self.rp, "close Step 3b", {"task": "<task>", "header": q.get("header"), "labels": labels,
+        fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                         "multiSelect": q.get("multiSelect"), "source": (tin.get("metadata") or {}).get("source"),
                                         "answer": answer, "ok": c.ok, "blocked": c.blocked})
 
@@ -1348,10 +1360,10 @@ class CloseRun:
             return ""
         o.advance(label=self.label("TodoWrite Step 2 done, Step 3 in_progress"))
         self.step3(last)
-        o.advance(label=self.label("TodoWrite Step 3 done, Step 3b in_progress"))
+        o.advance(label=self.label("TodoWrite Step 3 done, Step 4 in_progress"))
         if self.landed:
             self.step4(self.ratings[0])
-        o.advance(label=self.label("TodoWrite Step 3b done"))
+        o.advance(label=self.label("TodoWrite Step 4 done"))
         return last
 
     def steps_1_2(self) -> str:
@@ -1481,9 +1493,9 @@ class CloseRun:
         o.advance(label="/close --auto TodoWrite Step 2 done, Step 3 in_progress")
         each(lambda k: self.step3(lasts[k]))
         o.s.say("\n".join([f"{st['tid']}: {st['outcome']}" for st in states] + skipped) or "no close_pending parent")
-        o.advance(label="/close --auto TodoWrite Step 3 done, Step 3b in_progress")
+        o.advance(label="/close --auto TodoWrite Step 3 done, Step 4 in_progress")
         each(lambda k: self.step4(self.ratings[k % len(self.ratings)]) if self.landed else None)
-        o.advance(label="/close --auto TodoWrite Step 3b done")
+        o.advance(label="/close --auto TodoWrite Step 4 done")
         results = [(st["tid"], st["outcome"]) for st in states]
         self.outcome = "; ".join(f"{t}: {oc}" for t, oc in results)
         ev = o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))

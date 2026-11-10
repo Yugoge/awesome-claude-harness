@@ -72,3 +72,33 @@ def test_owner_stop_deletes_the_wake_and_none_fires(replays, key):
     labels = [(ev["event"], ev["label"]) for ev in r.hook_events()]
     at = labels.index(("PostToolUse", "/stop CronDelete wake"))
     assert not [x for x in labels[at:] if x[0] == "Stop"], labels[at:]
+
+
+# ---------------------------------------------------------------- P4 A16: the dev's producer question
+
+DEVQUESTION = next(s for s in suite.COMPLIANT if s.name == "/dev devquestion")
+
+
+@pytest.mark.parametrize("key", [pytest.param(suite.replay_key(DEVQUESTION, s), id=s,
+                                              marks=pytest.mark.replay(suite.replay_key(DEVQUESTION, s),
+                                                                       DEVQUESTION.cost))
+                                 for s in suite.SETTINGS])
+def test_dev_question_pauses_and_the_same_role_resumes(replays, key):
+    """A16's devquestion (D23: a question only pauses): Step 10's dev writes its producer question and
+    edits nothing, its stop passes; Step 12 relays it with ONE AskUserQuestion inside the turn and the
+    re-dispatched dev writes the report; no block, no Stop before the cycle's last."""
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    evs = r.hook_events()
+    asked = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("tool") == "AskUserQuestion"]
+    assert asked == ["Step 12 AskUserQuestion"], asked
+    dev_writes = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("agent_type") == "dev"
+                  and ev.get("tool") in ("Write", "Edit")]
+    first = dev_writes.index(next(w for w in dev_writes if "docs/dev/dev-report-" in w or "toy/" in w))
+    assert first == 1 and "docs/dev/producer-question-" in dev_writes[0] and dev_writes[0].endswith("-dev.json"), \
+        dev_writes
+    stops = [ev["label"] for ev in evs if ev.get("event") == "SubagentStop" and ev.get("agent_type") == "dev"]
+    assert stops == ["Step 10 Agent(dev) stop", "Step 12 Agent(dev) clarification round 1 stop"], stops
+    main_stops = [ev["label"] for ev in evs if ev.get("event") == "Stop"]
+    assert main_stops == ["Stop"], main_stops
+    assert not r.blocks and not r.hook_errors and r.reached(), r.explain()

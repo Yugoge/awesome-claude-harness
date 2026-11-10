@@ -21,6 +21,11 @@ through tests/replay/faults.py) reach the gates of the pipelines' own flows, and
 reached and cleared by one of the session's replays (test_every_gate_site_is_reached_and_cleared;
 no site is exempt).
 
+A D site a fault replay reaches (a grant claimed by the wrong role, faults.py `claim`) is shown the same
+way: the denied actor's next call passes every hook and the replay reaches its terminal
+(test_fault_denial_is_named_and_its_actor_goes_on); the coverage step prints those D sites beside the
+G sites.
+
 (iii) Two refusals hold: the /do Stops after an AskUserQuestion answer, with the do-report still
 missing, are refused (D23); a dev stop ending in a forged `ESCALATION_ACK <nonce>` line is refused
 like the one before it (faults.py `forged`).
@@ -38,6 +43,7 @@ import re
 import pytest
 
 from tests.replay import sites, suite
+from tests.replay.test_faults import CLAIMS, FAULTS as FAULT_SPECS
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
             "todo-first")
@@ -90,6 +96,16 @@ FAULTS = {
     # canonical aggregate is missing at that lane's stop (G2's canonical wire, C5)
     "last lane report written by a shell redirection": (FANOUT, "shipped",
                                                         "bash@agent:dev Write docs/dev/dev-report-*-l2.json"),
+    # P6 A20 (test_faults.py's F10, F11, F3a, armed): G2's file lists and F3.a at the dev's own stop
+    "dev report lists a file it did not write": (FANOUT, "armed", FAULT_SPECS["F10"]),
+    "dev report omits a file it wrote": (FANOUT, "armed", FAULT_SPECS["F11"]),
+    "dev wrote a syntax-broken harness hook": (FANOUT, "armed", FAULT_SPECS["F3a"]),
+}
+COMMIT = next(s for s in suite.COMPLIANT if s.name == "/commit")
+# fault -> (scenario, settings, spec) of a denial: test_faults.py's F12 and F12w, a grant claimed by the wrong role
+DENIALS = {
+    "commit grant spent by the wrong role": (COMMIT, "armed", CLAIMS["F12"][0]),
+    "push-analyst grant written by the wrong role": (COMMIT, "armed", CLAIMS["F12w"][0]),
 }
 FORGED = re.compile(r"^ESCALATION_ACK [0-9a-f]+\s*$", re.M)
 
@@ -99,7 +115,7 @@ def case_key(case: str) -> str:
 
 
 def fault_key(fault: str) -> str:
-    scn, settings, spec = FAULTS[fault]
+    scn, settings, spec = FAULTS[fault] if fault in FAULTS else DENIALS[fault]
     return suite.replay_key(scn, settings, (("fault", spec),) if spec else ())
 
 
@@ -114,6 +130,7 @@ def _reads_every_replay_of_this_file(test):
     it runs, and a CI shard that runs it runs them all (conftest.py groups them)."""
     for key, cost in [(case_key(c), CASES[c].cost) for c in CASES] + \
             [(fault_key(f), FAULTS[f][0].cost) for f in FAULTS] + \
+            [(fault_key(f), DENIALS[f][0].cost) for f in DENIALS] + \
             [(suite.replay_key(WAKE_LATE, st), WAKE_LATE.cost) for st in suite.SETTINGS]:
         test = pytest.mark.replay(key, cost)(test)
     return test
@@ -290,6 +307,24 @@ def test_fault_gate_is_cleared_by_its_producers_next_round(replays, catalog, fau
     assert not bad, "\n".join(bad)
 
 
+@pytest.mark.parametrize("denial", [pytest.param(f, id=re.sub(r"\W+", "-", f),
+                                                 marks=pytest.mark.replay(fault_key(f), DENIALS[f][0].cost)) for f in DENIALS])
+def test_fault_denial_is_named_and_its_actor_goes_on(replays, catalog, denial):
+    """A wrong-role claim (faults.py `claim`) meets the D site that denies the call it makes, naming it;
+    the denied actor's next call passes every hook and the pipeline reaches its terminal."""
+    r = replays.get(fault_key(denial))
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    bl, evs = blocks(r, catalog), events(r)
+    print(f"\n{denial}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(s.id + ' ' + catalog.of(s) for s in b['sites'])}"
+                                      for b in bl))
+    assert bl and all(b["sites"] for b in bl), f"{denial}: no block, or one mapping to no site:\n{r.explain()}"
+    assert all(catalog.of(s) == "D" for b in bl for s in b["sites"]), f"{denial} met a block at a site other than D"
+    assert all(cleared(evs, b["ev"]) for b in bl), f"{denial}: the denied actor's next call was refused"
+    bad = check_replay(r, catalog, compliant=False)
+    assert not bad, "\n".join(bad)
+    assert r.reached(), r.explain()
+
+
 # ---------------------------------------------------------------- every G site, reached and cleared
 
 @_reads_every_replay_of_this_file
@@ -298,6 +333,7 @@ def test_every_gate_site_is_reached_and_cleared(replays, catalog):
     the same actor's next event of the same kind passes every hook and the replay exits 0 at its
     terminal. A site no replay reaches fails here: give it a replay, or delete it with its proof (U)."""
     cleared_by, failed = collections.defaultdict(set), collections.defaultdict(set)
+    denial_keys, denied = {fault_key(f) for f in DENIALS}, []
     for (key, _settings, _faults), r in replays._results.items():
         if not r.summary:
             continue
@@ -307,6 +343,8 @@ def test_every_gate_site_is_reached_and_cleared(replays, catalog):
             for s in b["sites"]:
                 name = f"{r.scenario.name} ({r.settings}{', ' + _faults[0][1] if _faults else ''})"
                 (cleared_by if ok and cleared(evs, b["ev"]) else failed)[s.id].add(name)
+                if catalog.of(s) == "D" and key in denial_keys and not (ok and cleared(evs, b["ev"])):
+                    denied.append(f"{s.id} {s.func}: {name}")
     rows, unreached = [], []
     for s in catalog.sites:
         if catalog.of(s) != "G":
@@ -317,7 +355,12 @@ def test_every_gate_site_is_reached_and_cleared(replays, catalog):
             unreached.append(f"{s.id} {s.func}: " + ("reached by " + "; ".join(sorted(failed[s.id])) +
                                                      " but not cleared" if failed[s.id] else "no replay reaches it"))
     print("\nG sites, the replays that reach them and clear them:\n" + suite.table(rows))
+    d_rows = [{"site": s.id, "function": s.func, "denied, the actor's next call allowed, in": "; ".join(
+        sorted(cleared_by[s.id])) or "-", "reached, not cleared": "; ".join(sorted(failed[s.id])) or "-"}
+        for s in catalog.sites if catalog.of(s) == "D" and (cleared_by[s.id] or failed[s.id])]
+    print("\nD sites the session's replays reach (a fault's denial):\n" + suite.table(d_rows))
     assert not unreached, "G sites with no replay that reaches and clears them:\n  " + "\n  ".join(unreached)
+    assert not denied, "D sites a denial fault reaches whose actor's next call is refused:\n  " + "\n  ".join(denied)
 
 
 # ---------------------------------------------------------------- (iv) recall over the session

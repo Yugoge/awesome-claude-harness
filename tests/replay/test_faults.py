@@ -16,6 +16,20 @@ faults.json; terminals.json), never from a list kept here:
   AskUserQuestion answer);
 * F2g: the stop that ends with the forged ESCALATION_ACK line is blocked like the one before it;
 * F3b (a stale report nothing in the pipeline produced): no block names it, the terminal is reached.
+* P6's file lists (A3.a, A20): F10, a lane's dev report listing a file nobody wrote, and F11, one
+  omitting the file the dev wrote: G2 refuses the dev's own stop naming the report and the
+  difference, and the dev's rewrite passes its next stop. F3a, a dev that wrote a harness hook file
+  Python's compiler rejects (F3.a): G2 refuses its stop naming the file and the compiler's message,
+  and the dev's rewrite of that file passes its next stop.
+* P1's and P2's disobedient producers at G2 (P1 armed replay V3-V5; P6 A13: still stopped after P6's
+  promotions): V3, a dev that writes no report, is F1; V4, a schema-invalid dev report, is F2; V5, a
+  lane's BA-QA report carrying another task_id than its obligation's identity: G2 refuses the QA's own
+  stop naming the report and `identity_mismatch`, and the QA's rewrite passes its next stop.
+* A grant claimed by the wrong role (P6 A8; F12, F12w): in /commit, after Step 5 minted the commit
+  grant, the pre-commit QA spends it with a `git commit` of its own (F12) or Writes a file in the
+  push-analyst's grant directory (F12w). The guard refuses that call on the QA's own PreToolUse,
+  naming the QA's role and the role the grant belongs to; nothing is spent or written, the QA's next
+  call and its stop pass, the changelog-analyst spends the grant and the commit lands; no human event.
 * F9 (the last lane writes its report by a shell redirection, which the canonical aggregate's
   producer, the lane-completeness watch on Write and Edit, never sees): the block lands on that
   lane's own stop and names the canonical aggregate and `canonical_missing`; the lane's repair runs
@@ -55,11 +69,12 @@ import re
 
 import pytest
 
-from tests.replay import recovery, routing, suite
+from tests.replay import recovery, routing, sites, suite
 
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 L1_DEV = "agent:dev Write docs/dev/dev-report-*-l1.json"
 L2_QA = "agent:qa Write docs/dev/qa-report-*-l2.json"
+L1_BA_QA = "agent:qa Write docs/dev/ba-qa-report-*-l1.json"
 L1_DEV_DISPATCH = "Step 10 [[]l1] Agent(dev)"
 L1_QA_DISPATCH = "Step 13 [[]l1] Agent(qa)"
 
@@ -74,6 +89,10 @@ FAULTS = {
     "F7": f"pretemplate@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
     "F7b": f"noblock@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
     "F9": "bash@agent:dev Write docs/dev/dev-report-*-l2.json",
+    "F10": f"invalid@{L1_DEV}=+dev.files_modified:README.md",
+    "F11": f"invalid@{L1_DEV}=dev.files_modified:[]",
+    "F3a": "harness@agent:dev Edit toy/__init__.py=hooks/p6-f3a-probe.py",
+    "V5": f"invalid@{L1_BA_QA}=task_id:20250101-000000",
 }
 
 
@@ -84,6 +103,10 @@ CHECK = {
     "F2j": r"JSON|[Pp]ars|[Dd]ecod|Expecting|Unterminated",
     "F7": r"needs_review|required_values", "F7b": r"needs_review|missing_block",
     "F9": r"canonical_missing",
+    "F10": r"declared but not written by this dev: README\.md",
+    "F11": r"written but not declared: [^\n]*toy/__init__\.py",
+    "F3a": r"harness_syntax_error",
+    "V5": r"identity_mismatch\n\s*identity\.task_id: obligation declares '[^']+', file has '20250101-000000'",
 }
 
 
@@ -134,8 +157,9 @@ def writers(r, path: str) -> list[tuple[int, str]]:
     out = []
     for i, ev in enumerate(invocations(r)):
         p = ev["payload"]
+        fp = (p.get("tool_input") or {}).get("file_path") or ""
         if ev["event"] == "PostToolUse" and p.get("tool_name") in ("Write", "Edit") and \
-                ((p.get("tool_input") or {}).get("file_path") or "").endswith("/" + path):
+                (fp == path if os.path.isabs(path) else fp.endswith("/" + path)):
             out.append((i, p.get("agent_id")))
     return out
 
@@ -277,6 +301,11 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
         again = [ev["label"] for ev in invocations(r) if ev["event"] == "PreToolUse"
                  and ev["payload"].get("tool_name") == "Agent" and "(next round)" in ev["label"]]
         assert not again, f"F9: a dispatch was sent again: {again}"
+    if fault == "F3a":
+        f = next(f for f in fault_records(r) if f.get("kind") == "harness")
+        assert f["written"] and f["declared"], f"F3a: the broken file was not written and declared: {f}"
+        named = [b for b in blocks(r) if re.search(r"\(p6-f3a-probe\.py, line \d+\)", b["text"])]
+        assert named, "F3a: no block names the compiler's message:\n" + r.explain()
     if fault == "F2g":
         f = next(f for f in fault_records(r) if f.get("kind") == "forged")
         forged = [s for s in stops(r, f["agent"]) if "ESCALATION_ACK" in s["message"]]
@@ -284,6 +313,53 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
         assert f["rounds"] == 2, f"F2g: the repair did not follow the forged round: {f}"
     assert r.reached(), f"{fault}: the pipeline did not reach its terminal:\n" + r.explain()
     print(json.dumps(row(fault, settings, r)))
+
+
+# ---------------------------------------------------------------- F12, F12w: a grant claimed by the wrong role
+_COMMIT_SCN = next(s for s in suite.COMPLIANT if s.name == "/commit")
+_QA_CALL = "agent:qa Bash diff *"  # the pre-commit QA's first call: Step 5's commit grant is live
+# Each claim's refusing hook file, by the hook that reports it: the file itself, or the merged gate that runs
+# it as a rule (tool-policy: hooks/pretool-write-gate.py since P12, sites.reporter).
+CLAIMS = {
+    "F12": (f"claim@{_QA_CALL}=Bash:git -C {{project}} commit -m 'a commit the reviewer claims'",
+            sites.reporter(suite.REPO, "hooks/pretool-git-privilege-guard.py"), r"caller's role is 'qa'[^\n]*'changelog-analyst'"),
+    "F12w": (f"claim@{_QA_CALL}=Write:{{state}}/agentic-commit/push-analyst/claimed/{{task}}.json",
+             sites.reporter(suite.REPO, "hooks/pretool-tool-policy.py"), r'"role":"qa"[^\n]*push-analyst grant directory; only the push-analyst'),
+}
+
+
+def claim_key(fault: str, settings: str) -> str:
+    return suite.replay_key(_COMMIT_SCN, settings, (("fault", CLAIMS[fault][0]),))
+
+
+@pytest.mark.parametrize("fault,settings", [
+    pytest.param(f, s, id=f"{f}-{s}", marks=pytest.mark.replay(claim_key(f, s), _COMMIT_SCN.cost))
+    for f in CLAIMS for s in suite.SETTINGS])
+def test_a_grant_claimed_by_the_wrong_role_is_refused_and_the_commit_lands(replays, fault, settings):
+    r = replays.get(claim_key(fault, settings))
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.hook_errors, f"{fault}: a hook error:\n" + r.explain()
+    _spec, hook, said = CLAIMS[fault]
+    f = next((f for f in fault_records(r) if f.get("kind") == "claim"), None)
+    assert f and f["denied"] and f["hooks"] == [hook], f"{fault}: the claim was not refused by {hook}: {f}"
+    assert not f.get("landed"), f"{fault}: the refused Write landed: {f}"
+    bl = blocks(r)
+    assert bl and all(b["step"] == f["call"] and b["agent"] == f["agent"] and b["hook"] == hook for b in bl), \
+        f"{fault}: a block other than the claim's:\n" + r.explain()
+    assert all(re.search(said, b["text"]) for b in bl), f"{fault}: the refusal names no role: {bl[0]['text'][:600]}"
+    evs, at = invocations(r), first_index(r, f["call"])
+    nxt = next((ev for ev in evs[at + 1:] if ev["event"] == "PreToolUse" and ev["payload"].get("agent_id") == f["agent"]),
+               None)
+    assert nxt and not any(h["verdict"] == "block" for h in nxt["hooks"]), f"{fault}: the QA's next call: {nxt}"
+    mine = stops(r, f["agent"])
+    assert mine and not any(s["blocked"] for s in mine), f"{fault}: the QA's stop was blocked: {mine}"
+    assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
+    assert not human_events(r, at), f"{fault}: human events after the claim: {human_events(r, at)}"
+    assert r.reached(), f"{fault}: the pipeline did not reach its terminal:\n" + r.explain()
+    print(json.dumps({"fault": fault, "mode": settings, "blocking hook": os.path.basename(hook),
+                      "call refused": f["call"], "receiving actor = claimant": True,
+                      "role named": re.search(said, bl[0]["text"]).group(0), "grant spent by": "changelog-analyst",
+                      "human events": 0}))
 
 
 def _restart_cases(scenario: str, fault: str) -> list:

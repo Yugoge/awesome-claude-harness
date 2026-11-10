@@ -45,6 +45,14 @@ Driver arguments (cli.py --arg K=V):
                        the lane's dev is dispatched again; the next QA passes
   variant=question     BA writes its producer question; the orchestrator relays it with one
                        AskUserQuestion inside the turn and re-dispatches BA (Step 5) with the answer
+  variant=dev-question (P4 A16's devquestion; the replay suite's, not in VARIANTS, the artifact check's
+                       job list) Step 10's dev meets a decision the request does not settle and writes
+                       its producer question (agents/dev.md "Owner decision") instead of its report,
+                       editing nothing; Step 12's "If dev wrote its question artifact" relays it with
+                       one AskUserQuestion inside the turn and re-dispatches dev fresh (Step 10's
+                       template, a fresh dispatched_at) with the answer, in Step 5's two lines
+                       (`Clarification round:`, `Previous answers:`), as Step 12 says "as in Step 5";
+                       that dev does the work and writes its report; the cycle goes on as plain
   variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8), keeps its unchanged
                        acceptance criteria and must stop unblocked (else the replay raises); QA passes
   variant=formatter    as plain, the dev then running a formatter (FORMATTER) that rewrites toy/util.py,
@@ -52,6 +60,16 @@ Driver arguments (cli.py --arg K=V):
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
   variant=fanout-qa-fail  a fan-out cycle whose first lane's first QA fails; Step 16 re-dispatches
                        that lane's dev only and its QA passes; the other lanes are untouched
+  ask=answered|skip|decline|none   with variant=question: what the owner's side of Step 5's relay does
+                       (pipeline.Orchestrator.ask; P5 A20's rerun without AskUserQuestion): the default
+                       `answered` picks the recommended option; skip, decline and none leave the question
+                       unanswered (closed, refused, or no AskUserQuestion in the session), and the
+                       orchestrator takes the question's `default` as an assumption, says so, and carries it
+                       in Step 5's `Previous answers` entry (`assumption`), which BA records in its context
+                       (`clarification_answers`). commands/dev.md Step 5 names no route for an unanswered
+                       question; the assumption follows the plan's residual for a surface without
+                       AskUserQuestion (decide and record the assumption) and agents/dev.md's own rule
+                       (settle it from a sensible default, record the assumption)
   stop_before=N        (singular cycle) the orchestrator ends its turn before Step N, claiming the
                        cycle done (P5 A20: stop_before=13, QA never dispatched); each such Stop is
                        recorded in the terminal's `early_stops`; the cycle then goes on with Step N
@@ -189,6 +207,15 @@ QUESTION = {"need": "Which exception should add raise for a non-number argument?
             "options": [{"label": "TypeError", "description": "the Python convention for a wrong type"},
                         {"label": "ValueError", "description": "treat it as a bad value"}],
             "default": "TypeError", "why": "the request names TypeError but a caller may expect ValueError"}
+# variant=dev-question: the decision the dev meets in toy.add (bool is an int subclass, so the request's
+# "not a number" does not say whether add(True, 1) is accepted).
+DEV_QUESTION = {"need": "Should toy.add accept bool arguments, which Python treats as ints?",
+                "options": [{"label": "accept bool", "description": "bool counts as a number, as isinstance(True, int)"
+                                                                    " says; add(True, 1) keeps returning 2"},
+                            {"label": "reject bool", "description": "add(True, 1) raises TypeError naming argument a"}],
+                "default": "accept bool",
+                "why": "the request says 'not a number' and names no bool case; toy/__init__.py:2 adds any operands "
+                       "today, so either choice changes what a caller of add(True, 1) gets"}
 
 
 @dataclass(frozen=True)
@@ -343,6 +370,8 @@ class DevCycle:
         self.sc, self.tag, self.lane = scenario, "", None
         self.ba_outputs: list = []
         self.ba_question = None
+        self.dev_question = None   # variant=dev-question: the dev's producer question, until it is answered
+        self.dev_answers: list = []
         self.tw_expected = False
         self.qa_report_rel = ""
         devs = DEVIATIONS
@@ -548,8 +577,13 @@ class DevCycle:
         if not self.ba_question:
             return
         o = self.o
-        q, answer = o.ask(self.ba_question, self.L("Step 5 AskUserQuestion"))
-        self.answers.append({"question": q.get("need"), "answer": answer})
+        label = self.L("Step 5 AskUserQuestion")
+        q, answer = o.ask(self.ba_question, label)
+        entry = {"question": q.get("need"), "answer": answer}
+        assumed = next((a for a in o.assumptions if a["label"] == label), None)
+        if assumed:  # ask=skip|decline|none (A20's rerun): the default, carried as an assumption, not an answer
+            entry["assumption"] = f"no answer ({assumed['why']}); the question's default taken"
+        self.answers.append(entry)
         d = self.dispatch_ba("Step 5", self.L("Step 5 Agent(ba) clarification round 1"))
         self.ba_question = d.player.question_written
 
@@ -635,7 +669,7 @@ class DevCycle:
                                           or ctx.get("risk_level") == "high")
         if self.tw_expected:  # the Step 10 template other than the dev dispatch's: the test-writer pre-dispatch
             fields = next(t for t in self.templates(10)
-                          if (t.get("subagent_type") or agents.registry_role(t["prompt"])) != self.step_role(10))
+                          if self.o.template_role(t, self.tid) != self.step_role(10))
             self._dispatch(fields, agents.Act(work=roles.test_writer()), self.L("Step 10 Agent(test-writer)"))
             for rel in self.text_paths(10, "After the test-writer subagent completes, verify on disk"):
                 self.read(rel, self.L(f"Step 10 Read {rel}"))
@@ -647,9 +681,11 @@ class DevCycle:
 
     def step10_dev(self) -> None:
         sc = self.sc
-        self.dispatch_dev(self.L("Step 10 Agent(dev)"),
-                          sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first() else sc.final,
-                          sc.old, early_qa=self.variant == "qa-early")
+        d = self.dispatch_dev(self.L("Step 10 Agent(dev)"),
+                              sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first()
+                              else sc.final, sc.old, early_qa=self.variant == "qa-early",
+                              question=DEV_QUESTION if self.variant == "dev-question" else None)
+        self.dev_question = d.player.question_written
 
     def fails_first(self) -> bool:
         """Whether this lane's first final-verification QA fails (a qa-fail run)."""
@@ -661,10 +697,10 @@ class DevCycle:
         self.step10_dev()
 
     def dispatch_dev(self, label: str, new_code: str, old_code: str, context_rel: str | None = None,
-                     add_lines=(), early_qa: bool = False):
+                     add_lines=(), early_qa: bool = False, question: dict | None = None):
         o, sc = self.o, self.sc
         tpl = next(t for t in self.templates(10)
-                   if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == self.step_role(10))
+                   if self.o.template_role(t, self.tid) == self.step_role(10))
         fields = with_lines(tpl, list(add_lines) + self.graph_lines, context_rel)
         baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
@@ -678,9 +714,27 @@ class DevCycle:
                     raise AssertionError("a QA dispatched before its dev returned was not refused")
                 return _work(sub, brief, player)
         act = agents.Act(work=work, content={"*": baseline}, summary=sc.dev_summary)
+        if question:  # the decision blocks the work: the dev edits nothing and writes its question instead
+            act = agents.Act(question=dict(question, schema=self.question_schema()),
+                             summary="an owner decision blocks the change")
         return self._dispatch(fields, act, label, subagent_type=self.step_role(10))
 
+    def relay_dev_question(self, label: str = "Step 12") -> None:
+        """Step 12's "If dev wrote its question artifact": relay it as in Step 5 (ONE AskUserQuestion) and
+        re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at), each round until
+        the dev writes its report."""
+        sc = self.sc
+        while self.dev_question:
+            q, answer = self.o.ask(self.dev_question, self.L(f"{label} AskUserQuestion"))
+            self.dev_answers.append({"question": q.get("need"), "answer": answer})
+            n = len(self.dev_answers)
+            add = [f"Clarification round: {n}", f"Previous answers: {json.dumps(self.dev_answers)}"]
+            d = self.dispatch_dev(self.L(f"{label} Agent(dev) clarification round {n}"), sc.final, sc.old,
+                                  add_lines=add)
+            self.dev_question = d.player.question_written
+
     def step12(self, label: str = "Step 12") -> None:
+        self.relay_dev_question(label)
         for rel in self.text_paths(12, "Read dev implementation report"):
             self.read(rel, f"{label} Read {rel}")
 
@@ -1079,7 +1133,7 @@ VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-f
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS + ("qa-never", "qa-early"):
+    if variant not in VARIANTS + ("qa-never", "qa-early", "dev-question"):
         raise ValueError(f"unknown variant {variant!r}")
     tier = rp.args.get("tier", "STANDARD")
     if variant.startswith("fanout"):
