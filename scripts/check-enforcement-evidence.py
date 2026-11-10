@@ -318,6 +318,11 @@ def expand_launchers(data, root):
     path = os.path.join(root, "hooks", "lib", "launch_settings.py")
     if not isinstance(data, dict) or not os.path.isfile(path):
         return data
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict) or not all(
+            isinstance(groups, list) and all(isinstance(g, dict) and isinstance(g.get("hooks", []), list)
+                                             for g in groups) for groups in hooks.values()):
+        return data  # malformed: the caller's own checks name what is wrong, as without a launcher
     import importlib.util
     spec = importlib.util.spec_from_file_location("_launch_settings", path)
     mod = importlib.util.module_from_spec(spec)
@@ -328,7 +333,13 @@ def expand_launchers(data, root):
 def settings_triples(settings_path):
     """Flatten settings.json to the (event_class, matcher, hook) triple set, each launcher
     (hooks/lib/hook_launch.py) read as the hooks it runs (hooks/lib/launch_settings.py)."""
-    data = expand_launchers(read_json(settings_path), os.path.dirname(os.path.abspath(settings_path)))
+    # The tree the settings belong to: the settings file's own directory, else (a settings blob read
+    # through a pipe, as scripts/verify-claims.sh passes `<(git cat-file blob :settings.json)`) this
+    # gate's own tree.
+    roots = [os.path.dirname(os.path.abspath(settings_path)),
+             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    root = next((r for r in roots if os.path.isfile(os.path.join(r, "hooks", "lib", "launch_settings.py"))), roots[0])
+    data = expand_launchers(read_json(settings_path), root)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict) or not hooks:
         raise Fail(f"{settings_path}: 'hooks' missing or not a non-empty object")
