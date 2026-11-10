@@ -8,7 +8,7 @@ group: Control
 
 # /harness — the owner's switch
 
-The switch already ran when this prompt arrived: the owner's typed `/harness ...` is handled by `hooks/userprompt-harness-switch.sh`, a UserPromptSubmit hook, which runs `scripts/harness-switch` and hands you its report as context starting with `HARNESS SWITCH`. Nothing an agent does switches the harness: the command carries `disable-model-invocation: true` and a `Skill(harness:*)` deny, and while the harness is on, `hooks/pretool-harness-switch-guard.py` refuses every other path (the switch's program or state, the harness's settings files, a settings `disableAllHooks`, a scheduled or sent prompt that types `/harness`).
+The switch already ran when this prompt arrived: the owner's typed `/harness ...` is handled by `hooks/userprompt-harness-switch.sh`, a UserPromptSubmit hook, which runs `scripts/harness-switch` and hands you its report as context starting with `HARNESS SWITCH`. Nothing an agent does switches the harness: the command carries `disable-model-invocation: true` and a `Skill(harness:*)` deny, and while the harness is on, `hooks/pretool-harness-switch-guard.py` refuses every other path (the switch's program or state, the harness's settings files, a settings `disableAllHooks`, a scheduled or sent prompt that types `/harness`), and the hook itself refuses off and on in a session started from inside another Claude Code session (a `claude` an agent's script launched).
 
 ## What you do
 

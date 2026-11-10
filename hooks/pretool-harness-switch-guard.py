@@ -10,7 +10,8 @@ subagent, each other path by which an agent call could switch the harness or fak
   Bash                  running scripts/harness-switch or the switch hook; touching the switch's
                         state <H>/.harness-switch/ other than reading it; typing `/harness on|off`
                         into a Claude Code session the command starts; writing the home's
-                        settings files (settings.json, settings.machine.json, settings.local.json)
+                        settings files (settings.json, settings.machine.json, settings.local.json);
+                        writing disableAllHooks into any settings*.json, in any project
   Write / Edit / MultiEdit / NotebookEdit
                         a file under <H>/.harness-switch/; the home's settings files; any
                         settings*.json that would set disableAllHooks; a script outside a harness
@@ -44,6 +45,11 @@ GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "c
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
+SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
+NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
+REDIRECT = re.compile(r"^(?:\d*|&)>>?\|?(.*)\Z", re.S)
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1")
+MESSAGE = re.compile(r"\bgit\b[^\n]*\b(?:commit|tag|notes|merge|revert)\b|\bgh\b[^\n]*\b(?:pr|issue|release)\b")
 
 
 def refuse(what: str) -> int:
@@ -82,9 +88,15 @@ def _in_harness_checkout(path: str) -> bool:
         d = parent
 
 
-def _segments(command: str, depth: int = 0) -> list:
+def _is_shell_text(words: list, i: int) -> bool:
+    """True when words[i] is shell text a command runs: bash -c "...", eval "..."."""
+    return i > 0 and (os.path.basename(words[0]) == "eval" or bool(re.fullmatch(r"-[A-Za-z]*c", words[i - 1])))
+
+
+def _segments(command: str, depth: int = 0, shell_text_only: bool = False) -> list:
     """The simple commands of `command` as word lists, quotes respected; a word that is itself a
-    command (bash -c "...", sh -c, eval) is read as its own commands too."""
+    command (bash -c "...", sh -c, eval) is read as its own commands too. With `shell_text_only`
+    only those words are: a commit message with spaces is prose, not commands."""
     out = []
     for line in command.splitlines() or [""]:
         try:
@@ -105,9 +117,9 @@ def _segments(command: str, depth: int = 0) -> list:
             out.append(current)
     if depth < 3:
         for words in list(out):
-            for word in words:
-                if any(c in word for c in " ;|&\n"):
-                    out.extend(_segments(word, depth + 1))
+            for i, word in enumerate(words):
+                if any(c in word for c in " ;|&\n") and (not shell_text_only or _is_shell_text(words, i)):
+                    out.extend(_segments(word, depth + 1, shell_text_only))
     return out
 
 
@@ -122,7 +134,59 @@ def _read_only(words: list) -> bool:
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 
 
+def _without_message_bodies(command: str) -> str:
+    """`command` minus the bodies of heredocs that feed a commit, tag or PR message: prose, not
+    code. Every other heredoc body stays: a script a command writes, or an interpreter reads."""
+    out, end, keep = [], None, True
+    for line in command.splitlines():
+        if end is not None:
+            if line.strip() == end:
+                end = None
+            elif keep:
+                out.append(line)
+            continue
+        out.append(line)
+        m = HEREDOC.search(line)
+        if m:
+            end, keep = m.group(2), not MESSAGE.search(line)
+    return "\n".join(out)
+
+
+def _written_words(words: list) -> list:
+    """The words of one simple command that name what it writes: the targets of its redirections,
+    and, for a command that is not read-only (cp, mv, tee, sed -i, python, ...), every word."""
+    plain = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    everything = bool(plain) and not _read_only(plain)
+    if everything and os.path.basename(plain[0]) == "sed":
+        everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in plain[1:])
+    named, after = [], False
+    for w in words:
+        m = REDIRECT.match(w)
+        if after:
+            named.append(w)
+            after = False
+        elif m:
+            if m.group(1):
+                named.append(m.group(1))
+            else:
+                after = True
+        elif everything:
+            named.append(w)
+    return named
+
+
+def writes_settings_file(command: str) -> bool:
+    """True when `command` writes a settings*.json file, in any directory."""
+    for words in _segments(_without_message_bodies(command), shell_text_only=True):
+        if any(NAMES_SETTINGS.search(w) for w in _written_words(words)):
+            return True
+    return False
+
+
 def check_bash(command: str, cwd: str) -> int:
+    if "disableAllHooks" in command and writes_settings_file(command):
+        return refuse("this Bash command writes disableAllHooks into a settings file, which would switch every "
+                      "hook off")
     if TYPED.search(command) and NESTED.search(command):
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
@@ -160,7 +224,7 @@ def check_write(tool: str, ti: dict, cwd: str) -> int:
         return refuse("this %s writes the switch's state (%s)" % (tool, raw))
     text = _new_text(tool, ti)
     name = os.path.basename(path)
-    if re.fullmatch(r"settings(?:\.[\w-]+)?\.json", name) and "disableAllHooks" in text:
+    if SETTINGS_ANY.fullmatch(name) and "disableAllHooks" in text:
         return refuse("this %s sets disableAllHooks in %s, which would switch every hook off" % (tool, raw))
     if path in _settings_files() and not _allow_settings(cwd):
         return refuse("this %s writes the harness home's %s" % (tool, name))

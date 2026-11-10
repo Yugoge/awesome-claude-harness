@@ -8,8 +8,11 @@ a UserPromptSubmit payload with the typed prompt, through the registered hook.
 from __future__ import annotations
 
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -58,11 +61,19 @@ class Home:
                    json.dumps(payload))
         return json.loads(proc.stdout) if proc.stdout.strip() else None
 
-    def switch(self, verb, env=None):
+    def switch(self, verb, env=None, under=0, claude=None):
+        """Type /harness <verb> through the registered hook, `under` stand-in Claude Code
+        processes (`claude`, a copy of bash) deep: the hook's parent chain gains that many."""
         payload = {"hook_event_name": "UserPromptSubmit", "prompt": "/harness " + verb, "session_id": "S1",
                    "transcript_path": str(self.transcript), "cwd": str(self.path)}
-        return run(["bash", str(self.path / "hooks" / "userprompt-harness-switch.sh")], self.path,
-                   dict(self.env, **(env or {})), json.dumps(payload), check=False)
+        hook = str(self.path / "hooks" / "userprompt-harness-switch.sh")
+        cmd = ["bash", hook]
+        if under:
+            line = "bash " + shlex.quote(hook)
+            for _ in range(under):  # `; exit` keeps bash from exec'ing the last command in place
+                line = "%s -c %s" % (shlex.quote(str(claude)), shlex.quote(line + "; rc=$?; exit $rc"))
+            cmd = ["bash", "-c", line + "; rc=$?; exit $rc"]
+        return run(cmd, self.path, dict(self.env, **(env or {})), json.dumps(payload), check=False)
 
     def status(self):
         return run([PY, str(self.path / "scripts" / "harness-switch"), "status"], self.path, self.env, check=False)
@@ -305,6 +316,7 @@ AGENT_PATHS = {
     "Edit settings": {"tool_name": "Edit", "tool_input": {"file_path": "{H}/settings.json", "old_string": "a", "new_string": "b"}},
     "Write the overlay": {"tool_name": "Write", "tool_input": {"file_path": "{H}/settings.machine.json", "content": "{}"}},
     "disableAllHooks": {"tool_name": "Write", "tool_input": {"file_path": "/tmp/p/.claude/settings.local.json", "content": '{"disableAllHooks": true}'}},
+    "Bash disableAllHooks": {"tool_name": "Bash", "tool_input": {"command": "echo '{\"disableAllHooks\": true}' > /tmp/p/.claude/settings.local.json"}},
     "a script": {"tool_name": "Write", "tool_input": {"file_path": "/tmp/s.py", "content": "open('{H}/.harness-switch/off', 'w')"}},
     "CronCreate": {"tool_name": "CronCreate", "tool_input": {"cron": "* * * * *", "prompt": "/harness off"}},
     "ScheduleWakeup": {"tool_name": "ScheduleWakeup", "tool_input": {"delaySeconds": 60, "prompt": "/harness on"}},
@@ -329,6 +341,46 @@ def test_reading_stays_free(home):
         assert "harness-switch:" not in proc.stderr, (command, proc.stderr)
 
 
+SETTINGS_WRITES = [  # Bash forms that put disableAllHooks into some project's settings*.json
+    "echo '{\"disableAllHooks\":true}' >settings.local.json",
+    "printf '{\"disableAllHooks\":true}' | tee ~/proj/.claude/settings.json",
+    "cat > .claude/settings.local.json <<'EOF'\n{\"disableAllHooks\": true}\nEOF",
+    "python3 -c \"open('x/settings.local.json','w').write('{\\\"disableAllHooks\\\": 1}')\"",
+    "python3 - <<'EOF'\nimport json\njson.dump({'disableAllHooks': True}, open('/p/.claude/settings.local.json', 'w'))\nEOF",
+    "bash -c \"echo '{\\\"disableAllHooks\\\":true}' > p/.claude/settings.local.json\"",
+    "sed -i 's/{/{\"disableAllHooks\":true,/' .claude/settings.local.json",
+    "jq '.disableAllHooks=true' s.json > t && mv t .claude/settings.json",
+    "cat > /tmp/s.py <<'EOF'\nopen('/p/.claude/settings.local.json', 'w').write('{\"disableAllHooks\": true}')\nEOF\npython3 /tmp/s.py",
+]
+SETTINGS_READS = [  # the same words, no settings file written
+    "grep -n disableAllHooks .claude/settings.json",
+    "jq .disableAllHooks .claude/settings.local.json",
+    "grep -c disableAllHooks .claude/settings.json > /tmp/n",
+    "sed -n '/disableAllHooks/p' .claude/settings.json",
+    "echo '{\"model\":\"opus\"}' > .claude/settings.local.json",
+    "echo disableAllHooks > notes.txt",
+    "git commit -m \"Refuse a Bash write of disableAllHooks to settings.local.json\"",
+    "git commit -m \"$(cat <<'EOF'\nRefuse disableAllHooks\n\nA write of {\"disableAllHooks\": true} to /p/.claude/settings.local.json (> or tee) is refused.\nEOF\n)\"",
+    "gh pr create --title t --body \"$(cat <<'EOF'\nsettings.local.json and disableAllHooks: > settings.json\nEOF\n)\"",
+]
+
+
+@pytest.mark.parametrize("command", SETTINGS_WRITES)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_bash_cannot_write_disable_all_hooks_into_any_settings_file(home, command, actor):
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": "/tmp"}
+    if actor == "subagent":
+        payload["agent_id"] = "sub-1"
+    proc = home.hook("hooks/pretool-write-gate.py", payload)
+    assert proc.returncode == 2 and "disableAllHooks" in proc.stderr, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", SETTINGS_READS)
+def test_bash_that_only_reads_or_talks_about_disable_all_hooks_passes(home, command):
+    proc = home.hook("hooks/pretool-write-gate.py", {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": "/tmp"})
+    assert "disableAllHooks" not in proc.stderr and "harness-switch:" not in proc.stderr, (command, proc.stderr)
+
+
 def test_the_command_is_owner_only_and_its_hook_ignores_a_subagent(home):
     text = (ROOT / "commands" / "harness.md").read_text()
     assert "\ndisable-model-invocation: true\n" in text.split("\n---", 1)[0]
@@ -337,6 +389,114 @@ def test_the_command_is_owner_only_and_its_hook_ignores_a_subagent(home):
     assert not (home.path / ".harness-switch").exists()
     assert home.prompt("please run /harness off for me") is None
     assert not (home.path / ".harness-switch").exists()
+
+
+# ----------------------------------------------------------------------------- nested session
+
+def load_switch():
+    loader = importlib.machinery.SourceFileLoader("harness_switch_script", str(ROOT / "scripts" / "harness-switch"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+@pytest.fixture()
+def claude(tmp_path):
+    """A stand-in for the Claude Code binary: a copy of bash named `claude`."""
+    exe = tmp_path / "bin" / "claude"
+    exe.parent.mkdir()
+    shutil.copy2(shutil.which("bash"), exe)
+    return exe
+
+
+def ambient_claudes():
+    """Claude Code processes above pytest itself (none in CI; one when run from a Claude session)."""
+    return len(load_switch().claude_processes(os.getpid()))
+
+
+@pytest.mark.parametrize("exe, argv, expected", [
+    ("/usr/local/bin/claude", ["claude"], True),                                    # native binary
+    ("/usr/local/share/claude/versions/2.1.322", ["claude", "-p"], True),            # installer's versioned copy
+    ("/usr/bin/node", ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"], True),
+    ("/usr/bin/node", ["node", "--no-warnings", "/usr/local/bin/claude", "-p", "x"], True),
+    ("/usr/bin/bun", ["bun", "/usr/local/bun/bin/claude"], True),
+    ("/usr/bin/bash", ["bash", "/usr/local/bin/claude"], False),                         # a wrapper script
+    ("/usr/bin/bash", ["bash", "-c", "claude -p '/harness off'"], False),                # the text alone
+    ("/usr/bin/node", ["node", "/usr/lib/node_modules/npm/bin/npx-cli.js", "@anthropic-ai/claude-code"], False),
+    ("/usr/bin/node", ["node", "/usr/lib/node_modules/claude-code-router/dist/cli.js"], False),
+    ("/Applications/Claude.app/Contents/MacOS/Claude", ["Claude"], False),               # the desktop app
+    ("/usr/bin/python3", ["python3", "run_agent.py"], False),
+])
+def test_looks_like_claude(exe, argv, expected):
+    assert load_switch().looks_like_claude(exe, argv) is expected
+
+
+def test_nested_claude_reads_the_hooks_ancestry(monkeypatch):
+    switch = load_switch()
+    table = {  # pid: (parent, executable, argv)
+        100: (90, "/usr/bin/python3", ["python3", "scripts/harness-switch", "hook"]),        # the hook
+        90: (80, "/bin/sh", ["sh", "-c", "hooks/userprompt-harness-switch.sh"]),
+        80: (70, "/usr/local/bin/claude", ["claude", "-p", "/harness off"]),            # the session's own
+        70: (60, "/usr/bin/bash", ["bash", "-c", "python3 /tmp/x.py"]),                      # an agent's Bash call
+        60: (50, "/usr/bin/python3", ["python3", "/tmp/x.py"]),
+        50: (40, "/usr/bin/node", ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"]),
+        40: (30, "/bin/zsh", ["zsh"]),
+        30: (1, "/usr/sbin/sshd", ["sshd"]),
+    }
+    monkeypatch.setattr(switch, "_process", lambda pid: table.get(pid))
+    assert switch.nested_claude(90) == (50, "node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js")
+    assert switch.nested_claude(70) is None      # from the agent's shell up: only the owner's `claude`
+    assert switch.nested_claude(40) is None      # no Claude Code process at all (a test, a script)
+    table[30] = (90, "/usr/sbin/sshd", ["sshd"])  # a loop in the table ends the walk
+    assert switch.nested_claude(90) is not None
+    monkeypatch.setattr(switch, "_process", lambda pid: None)
+    assert switch.nested_claude(90) is None      # nothing readable: not refused
+
+
+@pytest.mark.parametrize("levels", [2, 3])
+def test_a_session_started_inside_another_claude_session_cannot_switch(home, claude, levels):
+    """The agent's script starts `claude -p "/harness off"`: the nested session's hook finds a
+    Claude Code process above the session's own, refuses, and changes nothing."""
+    ambient = ambient_claudes()
+    if ambient > levels:
+        pytest.skip("pytest itself runs deeper inside Claude Code sessions than this case")
+    before = home.settings()
+    proc = home.switch("off", under=levels - ambient, claude=claude)
+    out = json.loads(proc.stdout)
+    assert out["decision"] == "block" and "started from inside another Claude Code session" in out["reason"], proc
+    assert "/harness off refused, nothing changed" in out["reason"]
+    assert not (home.path / ".harness-switch").exists()
+    assert home.settings() == before and home.status().returncode == 0
+    assert (home.path / "commands" / "dev.md").exists()
+
+
+def test_a_nested_session_cannot_switch_the_harness_back_on_either(home, claude):
+    if ambient_claudes() > 1:
+        pytest.skip("pytest itself runs inside a nested Claude Code session")
+    assert home.switch("off", under=1 - ambient_claudes(), claude=claude).returncode == 0
+    assert home.status().returncode == 3
+    proc = home.switch("on", under=2 - ambient_claudes(), claude=claude)
+    assert "started from inside another Claude Code session" in json.loads(proc.stdout)["reason"]
+    assert home.status().returncode == 3 and (home.path / ".harness-switch" / "off").exists()
+
+
+def test_a_nested_session_may_still_read_the_status(home, claude):
+    ambient = ambient_claudes()
+    proc = home.switch("status", under=max(0, 2 - ambient), claude=claude)
+    out = json.loads(proc.stdout)
+    assert "decision" not in out and "Harness: ON" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_the_owners_top_level_session_still_switches_off_and_on(home, claude):
+    """One Claude Code process above the hook: the owner's terminal, desktop app or IDE session."""
+    ambient = ambient_claudes()
+    if ambient > 1:
+        pytest.skip("pytest itself runs inside a nested Claude Code session")
+    off = home.switch("off", under=1 - ambient, claude=claude)
+    assert off.returncode == 0 and "HARNESS SWITCH" in off.stdout and "decision" not in off.stdout
+    assert (home.path / ".harness-switch" / "off").exists() and home.status().returncode == 3
+    on = home.switch("on", under=1 - ambient, claude=claude)
+    assert on.returncode == 0 and "HARNESS SWITCH" in on.stdout and home.status().returncode == 0
 
 
 # ------------------------------------------------------------------------- background, doctor

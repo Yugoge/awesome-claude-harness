@@ -254,7 +254,24 @@ from. `/harness on` switches it back on, and `/harness status` reports it. Only 
 prompt switches: a UserPromptSubmit hook (`hooks/userprompt-harness-switch.sh`) runs
 `scripts/harness-switch`. An agent's call is refused while the harness is on, whatever path it
 takes: `Skill`, `Bash`, a write of the switch's state or of the home's settings, a script, a
-scheduled prompt (`hooks/pretool-harness-switch-guard.py`).
+scheduled prompt, a `disableAllHooks` written into any project's settings file
+(`hooks/pretool-harness-switch-guard.py`).
+
+A session an agent's script starts is not the owner's. `scripts/harness-switch` walks the hook's
+process ancestry, and when a Claude Code process runs above the session's own (a `claude -p
+"/harness off"` a Bash call launched, or an interactive `claude` under `script` or `tmux`), it
+refuses `off` and `on`, says so, and changes nothing; `/harness status` still answers. The
+environment cannot tell the two sessions apart: Claude Code sets `CLAUDECODE` and
+`CLAUDE_CODE_CHILD_SESSION` in a top-level session's hooks too. The owner's terminal, desktop app
+or IDE session has one Claude Code process in its ancestry and switches as before.
+
+**Known limits.** The agent guard covers the tools the harness names. An MCP tool that schedules a
+prompt (a remote `send_later` or trigger tool, for example) is not covered: the prompt it fires
+reaches UserPromptSubmit like a typed one, and the hook cannot tell them apart
+(`hooks/userprompt-restart-authorize.py` documents the same limit). The nested-session check names
+a Claude Code process by its executable (`claude`, the installer's `claude/versions/` copy, or
+node/bun running the npm package's `claude`): a copy of the binary under another name is not
+recognized.
 
 **What off does.**
 

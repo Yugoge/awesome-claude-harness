@@ -4,7 +4,9 @@
     hook      the UserPromptSubmit path (hooks/userprompt-harness-switch.sh): reads the
               payload on stdin and acts on a typed `/harness off|on|status`. It is the only
               path that switches: the owner's typed prompt is the one event an agent cannot
-              produce (commands/harness.md says what else refuses an agent).
+              produce (commands/harness.md says what else refuses an agent). A session that
+              was started from inside another Claude Code session (a `claude` an agent's
+              script launched) is not the owner's: off and on are refused there (nested_claude).
     status    print the switch's state (read-only). Exit 0 on, 3 off, 4 partial.
 
 The harness home H is the directory above scripts/ (symlinks resolved): a git checkout of the
@@ -623,6 +625,77 @@ def status_lines(ctx):
     return lines, (EXIT_PARTIAL if problems else EXIT_OFF if mode == "off" else EXIT_ON)
 
 
+# ----------------------------------------------------------------------- nested sessions
+
+_RUNTIMES = re.compile(r"(?:node(?:js)?[\d.]*|bun|deno)\Z")
+
+
+def looks_like_claude(exe, argv):
+    """True when a process (its executable path and argument list) is a Claude Code session: the
+    native binary `claude`, the installer's versioned copy (.../claude/versions/<version>), or
+    node/bun running the npm package's `claude` script. A shell script named claude is not."""
+    exe = exe or ""
+    if os.path.basename(exe) == "claude" or "/claude/versions/" in exe:
+        return True
+    if _RUNTIMES.match(os.path.basename(exe)):
+        script = next((a for a in argv[1:] if not a.startswith("-")), "")
+        return os.path.basename(script) == "claude" or "/@anthropic-ai/claude-code/" in script
+    return False
+
+
+def _process(pid):
+    """(parent pid, executable path, argument list) of a process, else None. /proc where there
+    is one; `ps` elsewhere (macOS)."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            ppid = int(fh.read().rsplit(b")", 1)[1].split()[1])
+        try:
+            exe = os.readlink("/proc/%d/exe" % pid)
+        except OSError:  # another user's process: the name is all there is
+            with open("/proc/%d/comm" % pid, encoding="utf-8", errors="replace") as fh:
+                exe = fh.read().strip()
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            argv = [a.decode("utf-8", "replace") for a in fh.read().split(b"\0") if a]
+        return ppid, exe, argv
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-o", "comm=", "-p", str(pid)], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=5).stdout.decode()
+        ppid, _, exe = out.strip().partition(" ")
+        args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=5).stdout.decode()
+        return int(ppid), exe.strip(), args.split()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def claude_processes(pid):
+    """The Claude Code processes from `pid` up through its ancestors, nearest first, as
+    (pid, command)."""
+    found, seen = [], set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        proc = _process(pid)
+        if proc is None:
+            break
+        if looks_like_claude(proc[1], proc[2]):
+            found.append((pid, " ".join(proc[2]) or proc[1]))
+        pid = proc[0]
+    return found
+
+
+def nested_claude(pid=None):
+    """(pid, command) of a Claude Code process above the session's own, when this hook (its parent
+    is `pid`) runs in a session that was started from inside another Claude Code session (an
+    agent's script that launched `claude`), else None. The hook's ancestry holds the session's own
+    `claude` and, for a nested one, the `claude` above it. The environment cannot tell the two:
+    Claude Code sets CLAUDECODE and CLAUDE_CODE_CHILD_SESSION in every session's hooks, a top-level
+    one included."""
+    found = claude_processes(os.getppid() if pid is None else pid)
+    return found[1] if len(found) > 1 else None
+
+
 # ------------------------------------------------------------------------------ entry points
 
 def parse_prompt(prompt):
@@ -664,6 +737,13 @@ def cmd_hook():
              "harness: usage: /harness off | on | status")
         return 0
     notes = []
+    outer = nested_claude() if verb != "status" else None
+    if outer is not None:
+        emit(None, block="harness: /harness %s refused, nothing changed. This session was started from inside "
+                         "another Claude Code session (process %d, %s, runs above it), so it is not the owner's: "
+                         "only a session the owner started in their own terminal, desktop app or IDE switches "
+                         "the harness. Type it there." % (verb, outer[0], outer[1][:120]))
+        return 0
     if verb != "status":
         try:
             notes = switch(verb, ctx)
