@@ -8,7 +8,8 @@ D18 kept mv, cp and chmod given a run-time word allowed inside a layer on the co
 layer form exits no lower than the top-level form at every hook.
 
 The hooks run are the real ones, one subprocess each: every PreToolUse hook settings.json registers
-for Bash, in a scratch HOME whose ~/.claude is this tree (its tests left out), so the harness home
+for Bash (a merged gate as each of its refusing rules for Bash, run alone: the gate runs each in its
+own try and refuses when one does, so a layer no rule decides lower is none the gate does), in a scratch HOME whose ~/.claude is this tree (its tests left out), so the harness home
 the guards resolve is the scratch one, with a scratch state dir and product repository, for the
 main agent and for a dev subagent. Each writing program is aimed at protected targets in the
 spellings the guards know (TARGETS): a file under .git/hooks/ (the product repository's and the
@@ -43,6 +44,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from tests.replay import sites  # noqa: E402
 
 PRIVILEGE = "pretool-git-privilege-guard.py"
 SAFETY = "pretool-bash-safety.sh"
@@ -176,7 +179,11 @@ def sandbox(tmp_path_factory):
     for entry in settings["hooks"]["PreToolUse"]:
         matcher = entry.get("matcher")
         if matcher in (None, "", "*") or re.fullmatch(matcher, "Bash"):
-            hooks += [re.search(r"/hooks/([^/\"]+)\"?\s*$", h["command"]).group(1) for h in entry["hooks"]]
+            for h in entry["hooks"]:
+                name = re.search(r"/hooks/([^/\"]+)\"?\s*$", h["command"]).group(1)
+                rules = [r.file[len("hooks/"):] for r in sites.gate_rules(str(ROOT), "hooks/" + name)
+                         if r.relays and (r.tools is None or "Bash" in r.tools)]
+                hooks += rules or [name]
     return {"env": env, "repo": str(repo), "state": str(state), "hooks_dir": config / "hooks",
             "hooks": hooks, "config": str(config), "token": token.stdout.strip()}
 

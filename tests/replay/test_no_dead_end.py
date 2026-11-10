@@ -46,6 +46,7 @@ CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
 CASES["qa-report"] = suite.Scenario("dead end: qa-report", "_deadend", (("case", "qa-report"),), ("dev",), 100)
+CASES["qa-declared"] = suite.Scenario("dead end: qa-declared", "_deadend", (("case", "qa-declared"),), ("dev",), 100)
 CASES["spec-foreground"] = suite.Scenario("dead end: spec-foreground", "_deadend", (("case", "spec-foreground"),),
                                           ("spec",), 110)
 # Its 20-minute window, waited for before Step 19's TIME CHECK, and the closeout (drivers/_deadend.py).
@@ -125,7 +126,7 @@ class Catalog:
         self.e = sites.Enumerator(tree)
         dropped = set()
         for parent, kids in self.e.children.items():
-            event = next((ev for ev, _ in self.e.regs.get(parent, [])), "Stop")
+            event = self.e.event(parent)
             for k in kids:
                 if not sites.relayed(tree, parent, k, event, os.path.join(work, os.path.basename(k))):
                     dropped.add(k)
@@ -229,7 +230,7 @@ def test_every_blocking_site_is_enumerated_and_classified(catalog):
             print(f"  {s.id} {s.func} [{', '.join(sorted({r[0] for r in s.regs}))[:120]}]: {catalog.cls[s.id][1]}")
     assert catalog.sites, "the enumerator found no blocking site"
     every = catalog.e.sites()
-    missed = [x for hook in catalog.e.regs for x in sites.unaccounted(catalog.e, hook, every)]
+    missed = [x for hook in catalog.e.entries() for x in sites.unaccounted(catalog.e, hook, every)]
     assert not missed, "exit-2 calls in registered hooks that the enumeration does not account for:\n  " + \
         "\n  ".join(missed)
     unreachable = [(s.id, catalog.cls[s.id][1]) for s in catalog.sites if catalog.of(s) == "U"]

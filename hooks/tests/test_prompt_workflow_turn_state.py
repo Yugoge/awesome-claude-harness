@@ -310,10 +310,12 @@ def test_ask_user_question_round_trip_keeps_the_flag(sess):
     assert sess.flag().exists()
     hooks = {Path(argv[1]).name for event in ("PreToolUse", "PostToolUse")
              for argv in _registered_hooks(event, "AskUserQuestion")}
-    # Non-vacuity: the hooks that read the flag, and those registered for every tool, are in.
+    # Non-vacuity: the hooks that read the flag, and those registered for every tool, are in (the write
+    # gate runs tool-policy on every tool; pretool-subagent-enforce.py, which returns early for any
+    # tool but Agent, is a rule of the Agent dispatch gate since P12).
     assert {"pretool-orchestrator-gate.py", "pretool-do-block-subagents.py",
-            "pretool-block-background-tasks.py", "pretool-subagent-enforce.py",
-            "pretool-tool-policy.py", "posttool-allowlist-consume.py"} <= hooks, hooks
+            "pretool-block-background-tasks.py", "pretool-write-gate.py",
+            "posttool-allowlist-consume.py"} <= hooks, hooks
 
     def flag_kept(event, hook, proc):
         assert proc.returncode == 0, (event, hook, proc.returncode, proc.stderr)

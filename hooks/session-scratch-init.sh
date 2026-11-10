@@ -18,7 +18,10 @@
 # fail a session over scratch bookkeeping.
 
 set -u
-exec >&2   # SessionStart hooks must not pollute stdout (harness JSON channel)
+# Its own messages go to the hook's stdout (fd 3), which a SessionStart hook adds to the
+# model's context (code.claude.com/docs/en/hooks); what the commands it runs print goes to
+# stderr, which reaches no one.
+exec 3>&1 >&2
 
 ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
 SID="${CLAUDE_CODE_SESSION_ID:-}"
@@ -33,7 +36,7 @@ if [ -z "$SID" ]; then
     2>/dev/null || true)
 fi
 if [ -z "$SID" ]; then
-  echo "session-scratch-init: no session id available — skipping"
+  echo "session-scratch-init: no session id available — skipping" >&3
   exit 0
 fi
 
@@ -41,17 +44,17 @@ fi
 # carry a path separator or traversal sequence.
 case "$SID" in
   */*|*..*)
-    echo "session-scratch-init: unsafe session id '$SID' — skipping"
+    echo "session-scratch-init: unsafe session id '$SID' — skipping" >&3
     exit 0
     ;;
 esac
 
-mkdir -p "$ROOT" 2>/dev/null || { echo "session-scratch-init: cannot create root $ROOT"; exit 0; }
+mkdir -p "$ROOT" 2>/dev/null || { echo "session-scratch-init: cannot create root $ROOT" >&3; exit 0; }
 chmod 1777 "$ROOT" 2>/dev/null || true
 
 SESSION_DIR="$ROOT/$SID"
 if ! mkdir -p "$SESSION_DIR" 2>/dev/null; then
-  echo "session-scratch-init: cannot create $SESSION_DIR"
+  echo "session-scratch-init: cannot create $SESSION_DIR" >&3
   exit 0
 fi
 
@@ -81,9 +84,9 @@ with open(sys.argv[6], 'w') as fh:
     json.dump(data, fh)
 " "$SID" "$PID" "$PID_START" "$BOOT_ID" "$CREATED_AT" "$TMP_OWNER" 2>/dev/null; then
   mv -f "$TMP_OWNER" "$OWNER_FILE" 2>/dev/null \
-    || echo "session-scratch-init: failed to install .owner for $SID"
+    || echo "session-scratch-init: failed to install .owner for $SID" >&3
 else
-  echo "session-scratch-init: failed to write .owner for $SID"
+  echo "session-scratch-init: failed to write .owner for $SID" >&3
   rm -f "$TMP_OWNER" 2>/dev/null || true
 fi
 

@@ -4,8 +4,8 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 114
-- **Subdirectories**: 6
+- **Total files**: 109
+- **Subdirectories**: 7
 - **Naming convention**: kebab
 
 ## Files
@@ -15,7 +15,7 @@ Organization and usage documentation for `scripts/`.
 - `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
 - `blast-radius-tool.py` - Two phases:
 - `bootstrap` - bootstrap file
-- `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
+- `break-overnight-lock.py` - The time-lock is released by the human-typed /stop record itself
 - `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 - `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
 - `capability-doctor-strict.py` - Two properties this file exists to guarantee:
@@ -32,6 +32,7 @@ Organization and usage documentation for `scripts/`.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
+- `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 - `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -48,7 +49,7 @@ Organization and usage documentation for `scripts/`.
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 - `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 - `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
-- `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
+- `generate-hero-status.py` - Description: One source of truth emits FIVE marker-delimited canonical regions and re-derives
 - `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 - `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 - `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -76,6 +77,7 @@ Organization and usage documentation for `scripts/`.
 - `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
+- `readme_facts.py` - Description: One module, one function per fact, one source per function. No number is typed here:
 - `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 - `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
@@ -91,6 +93,7 @@ Organization and usage documentation for `scripts/`.
 - `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 - `session-index.py` - Subcommands (all take --git-root):
 - `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
+- `size-ratchet.py` - Usage:
 - `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
 - `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the
 - `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
@@ -115,6 +118,7 @@ Organization and usage documentation for `scripts/`.
 - `modern-git-slot/`
 - `overnight-git/`
 - `spec-verify/`
+- `steps/`
 - `todo/`
 <!-- /AUTO:readme-stats -->
 

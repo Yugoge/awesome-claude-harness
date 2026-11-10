@@ -5,7 +5,8 @@ PostToolUse Hook: Output checklist progress after every TodoWrite call.
 Fires after every TodoWrite call:
 1. Reads the command from the transcript's active span (lib.todo_canonical.checklist)
 2. Counts the steps of the list it was given (the list's own length)
-3. Prints current checklist progress to stdout (injected into Claude's context)
+3. Gives the agent the checklist progress as additionalContext (PostToolUse's
+   channel to the model; plain stdout at exit 0 reaches only the transcript view)
 
 It writes nothing: the CLI records every TodoWrite in the transcript and in its
 own todo file, and every reader of the checklist reads the transcript (P1b E7).
@@ -54,7 +55,9 @@ def main():
         # the session started with stays valid when the canonical list changes (P1c row 17).
         blocking_count = len(todos)
 
-        print(format_checklist('/' + cmd_name, todos, blocking_count))
+        print(json.dumps({'hookSpecificOutput': {
+            'hookEventName': 'PostToolUse',
+            'additionalContext': format_checklist('/' + cmd_name, todos, blocking_count)}}))
 
     except Exception:
         pass
