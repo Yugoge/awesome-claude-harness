@@ -437,6 +437,14 @@ def _cycle_records(root: Path, dev_dir: Path, units: list[str]) -> list[str]:
     return [_rel(path, root) for path in paths if path.is_file()]
 
 
+def _round_paths(dev_dir: Path, task_id: str, root: Path) -> list[str]:
+    """The task's owner questions and answers (D28, D32): its round files, its BA panel's reports and round file,
+    the answer files and producer answers the AskUserQuestion hook wrote. They commit with the task (R4)."""
+    globs = (f"requirement-round-{task_id}-r*.json", f"ba-panel-{task_id}-*", f"requirement-answers-{task_id}-r*.json",
+             f"producer-answer-{task_id}-*.json")
+    return sorted({_rel(p, root) for g in globs for p in dev_dir.glob(g) if p.is_file()})
+
+
 def _find_undeclared_lane_artifacts(
     validator: ChainValidator, workers: list[str], aggregate: ModuleType | None
 ) -> None:
@@ -1227,7 +1235,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 completion, task_id, parents["completion"], completion_refs
             )
         result["artifact_paths"] = artifact_paths
-        result["commit_whitelist_artifacts"] = artifact_paths
+        result["commit_whitelist_artifacts"] = artifact_paths + _round_paths(dev_dir, task_id, root)
         result["qa_inputs"] = [
             {"task_id": lane["task_id"], "qa_report": lane["qa_report"]}
             for lane in result["lanes"]
@@ -1432,7 +1440,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             _rel(parents["qa_report"], root),
         ]
         result["artifact_paths"] = completion_refs + [result["completion"]]
-        result["commit_whitelist_artifacts"] = list(result["artifact_paths"])
+        result["commit_whitelist_artifacts"] = list(result["artifact_paths"]) + _round_paths(dev_dir, task_id, root)
         result["qa_inputs"] = [
             {"task_id": task_id, "qa_report": _rel(parents["qa_report"], root)}
         ]

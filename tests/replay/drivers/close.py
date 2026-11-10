@@ -512,7 +512,8 @@ class DevProducer:
         with self.on(session, devs) as o, self.lane(task_id):
             extra = [f"Close routing finding: {note}"] if note else []
             if role == "ba" and hasattr(cyc, "dispatch_ba"):
-                return cyc.dispatch_ba(f"Step {self.step_of('ba')}", label)
+                # BA's artifacts are its analysis template's (P13-1: Step 4c; Step 4 before the requirement round)
+                return cyc.dispatch_ba(getattr(cyc, "ba_heading", None) or f"Step {self.step_of('ba')}", label)
             fields = self.template(role)
             add = extra + list(getattr(cyc, "graph_lines", []))
             if any(l.strip().startswith("Context file:") for l in fields["prompt"].split("\n")):
