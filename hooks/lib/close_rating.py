@@ -42,8 +42,10 @@ def _landed(span, task_id: str) -> int:
 
 
 def rating_required(span, task_id: str) -> bool:
-    """A /close span (--auto too) holding a landed close-QA result for the task. No CLI-written
-    fact marks a session that cannot offer AskUserQuestion, so headless is not read (P5 decides)."""
+    """A /close span (--auto too) holding a landed close-QA result for the task. Neither the Stop payload
+    nor the transcript lists the session's tools, so a session that offers no AskUserQuestion is asked too:
+    its call comes back as the CLI's own `No such tool available` error (before any hook), which
+    rating_asked counts as asked, as it counts a denial (close.md Step 4)."""
     return _landed(span, task_id) > 0
 
 

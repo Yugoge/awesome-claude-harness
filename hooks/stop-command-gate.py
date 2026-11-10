@@ -23,7 +23,10 @@ payload on stdin and decides, in order:
       loaded its text is not asked of it; a cycle whose loaded text names or
       writes its artifacts otherwise than this tree's is asked as that text
       does, COMPATIBILITY below); an exception is the gap
-      `gate instrument failure: <type>: <message>`, never an allow;
+      `gate instrument failure: <type>: <message>`, never an allow but one:
+      a /close that stalled at Step 0 as close.md says (close_stalled) while
+      the predicate's own reading fails too ends its turn (D25: no agent
+      action in the span clears an instrument both read);
   (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
       else the block text on stderr, exit 2.
 
@@ -444,6 +447,46 @@ def p_close(span, root, payload) -> list[str]:
     return gaps
 
 
+# close.md Step 0: a disposition call that exits non-zero runs once more; failing again, the run ends with one
+# OPERATION_STALLED: line and nothing else follows.
+STALL_CALL = ("resolve-dev-artifact-chain.py", "--disposition")
+STALL_LINE = re.compile(r"^OPERATION_STALLED: \S", re.M)
+
+
+def close_stalled(span) -> bool:
+    """A /close span that stalled at Step 0 as close.md says: its last two disposition calls (Bash
+    naming STALL_CALL) came back as errors, and a main-agent text after the last one holds an
+    OPERATION_STALLED: line. decision ends such a turn only when its own reading of the cycle fails
+    as well; a gate that reads the cycle holds the Stop, and the call runs again."""
+    if span.command != "close":
+        return False
+    calls = [use for use in span.uses("Bash", newest_first=True)
+             if all(word in str(use.input.get("command") or "") for word in STALL_CALL)][:2]
+    if len(calls) < 2 or any(use.ok or use.result_at is None for use in calls):
+        return False
+    try:  # the lines after the last call's own result (a path read on this rare path only)
+        tail = Path(span.transcript_path).read_bytes()[calls[0].result_at:].split(b"\n")[1:]
+    except OSError:
+        return False
+    for record in map(_json, tail):
+        message = record.get("message")
+        if record.get("type") != "assistant" or record.get("isSidechain") or not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if any(isinstance(b, dict) and b.get("type") == "text" and STALL_LINE.search(b.get("text") or "")
+               for b in (content if isinstance(content, list) else ())):
+            return True
+    return False
+
+
+def _json(raw: bytes) -> dict:
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
 def _bulk_block(span):
     """The status block of the span's last ok commit-bulk dispatch (its
     obligation's response_block, changelog-status.v1, checked at the
@@ -839,12 +882,16 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    gaps = []
-    for part in (lambda: todo_gaps(span), lambda: PREDICATES[span.command](span, root, payload)):  # (6)
+    gaps, unread = [], False
+    for predicate, part in ((False, lambda: todo_gaps(span)),
+                            (True, lambda: PREDICATES[span.command](span, root, payload))):  # (6)
         try:
             gaps += part()
         except Exception as exc:
+            unread = unread or predicate
             gaps.append(f"gate instrument failure: {type(exc).__name__}: {exc}")
+    if unread and close_stalled(span):  # the predicate cannot read the cycle the run stalled on
+        return 0, "", terminal
     if not gaps:  # (7)
         return 0, "", terminal
     text = _block_text(span.command, gaps)
