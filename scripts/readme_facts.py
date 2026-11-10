@@ -950,7 +950,9 @@ _EXCEPTION_NAME = re.compile(r"(?i)exception|exempt|waiv|suppress|allowlist|whit
 #   * its job is not made conditional away or non-blocking: no continue-on-error, and an `if` only when
 #     it is the baseline job's own `if` (a job a draft pull request skips is skipped with the baseline
 #     job), `always()`, `!cancelled()`, `success()`, or `needs.<job>.result == 'success'` of a job that
-#     itself passes these rules;
+#     itself passes these rules; the D30 visibility gate (tests/test_ci_visibility_gate.py), which holds
+#     on every pull request of the public repository, counts as no condition in the shapes that test
+#     pins: the whole `if`, one `&&` term in parentheses, or ANDed in front of the baseline job's draft skip;
 #   * a matrix that splits the tests over shards (an env value `${{ matrix.K }}/N`) lists the shards 1..N;
 #   * a step that ignores the test is not the only step that runs the directory: it counts only for
 #     what it does not ignore (it is listed under `ignored_by`).
@@ -968,6 +970,8 @@ _SELECTS = frozenset({"--lf", "--last-failed", "--sw", "--stepwise", "--sw-skip"
                       "--last-failed-no-failures", "--lfnf"})
 _CONFIG = frozenset({"--override-ini", "--config-file"})
 _DRAFT_SKIP = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+_VISIBILITY_GATE = "github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false'"
+_GATED_DRAFT_SKIP = f"({_VISIBILITY_GATE}) && ({_DRAFT_SKIP})"
 _OPERATOR = re.compile(r"[;&|]+")
 _EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.S)
 
@@ -1137,14 +1141,17 @@ def _job_problems(doc: dict, job_id: str, reference_if: str, seen: tuple = ()) -
     needs = job.get("needs")
     needs = [needs] if isinstance(needs, str) else list(needs or [])
     expr = _expression(job["if"]) if "if" in job else None
+    if expr in (_VISIBILITY_GATE, f"({_VISIBILITY_GATE})"):  # the D30 gate alone: as if there were no `if`
+        expr = None
     recurse = list(needs)
-    # the baseline job's own `if` is the reference only when it is the draft skip (or there is none): a baseline
-    # job that is skipped on some other condition makes every job that shares that condition conditional too
-    if expr is not None and not (expr == reference_if and reference_if in ("", _DRAFT_SKIP)):
+    # the baseline job's own `if` is the reference only when it is the draft skip, alone or behind the D30 gate (or
+    # there is none): a baseline job that is skipped on some other condition makes every job that shares that
+    # condition conditional too
+    if expr is not None and not (expr == reference_if and reference_if in ("", _DRAFT_SKIP, _GATED_DRAFT_SKIP)):
         recurse = []
         for conjunct in [c.strip() for c in expr.split("&&")]:
             m = re.fullmatch(r"needs\.([\w-]+)\.result == 'success'", conjunct)
-            if conjunct in ("always()", "!cancelled()", "success()"):
+            if conjunct in ("always()", "!cancelled()", "success()", f"({_VISIBILITY_GATE})"):
                 continue
             if m and m.group(1) in needs:
                 recurse.append(m.group(1))

@@ -991,6 +991,12 @@ def test_ci_enforces_fails_closed_on_a_source_that_does_not_parse(tmp_path):
 WORKFLOW = ".github/workflows/baseline.yml"
 REPLAY_THREE = {"compliant_replays_clean", "no_site_without_class", "faults_returned_and_repaired"}
 FOUR = REPLAY_THREE | {"artifact_check_clean"}
+# the D30 visibility gate every job carries (tests/test_ci_visibility_gate.py), ANDed with the draft skip
+GATE = "(github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false')"
+DRAFT_SKIP = "(github.event_name != 'pull_request' || !github.event.pull_request.draft)"
+GATED_DRAFT_SKIP = f"{GATE} && {DRAFT_SKIP}"
+GATED_IF = f"if: ${{{{ {GATED_DRAFT_SKIP} }}}}"
+ARTIFACT_IF = f"if: ${{{{ !cancelled() && needs.artifact-graph-plan.result == 'success' && {GATE} }}}}"
 
 
 def must_replace(text: str, old: str, new: str) -> str:
@@ -1118,11 +1124,10 @@ MUTATIONS = [
         "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n        if: github.event_name == 'push'\n"),
      REPLAY_THREE, "the step has an `if`"),
     ("replay job conditional", lambda t: replace_last(
-        t, "if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-        "if: ${{ github.event_name == 'push' }}"), REPLAY_THREE, "is conditional"),
+        t, GATED_IF, f"if: ${{{{ {GATE} && (github.event_name == 'push') }}}}"), REPLAY_THREE, "is conditional"),
     ("artifact job conditional", lambda t: must_replace(
-        t, "if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}",
-        "if: ${{ github.ref == 'refs/heads/master' }}"), {"artifact_check_clean"}, "is conditional"),
+        t, ARTIFACT_IF, f"if: ${{{{ github.ref == 'refs/heads/master' && {GATE} }}}}"), {"artifact_check_clean"},
+     "is conditional"),
     ("artifact job gated on a job it does not need", lambda t: must_replace(
         t, "needs.artifact-graph-plan.result == 'success'", "needs.baseline.result == 'success'"),
      {"artifact_check_clean"}, "is conditional"),
@@ -1203,8 +1208,7 @@ HARMLESS = [
     ("a pipe with pipefail", lambda t: must_replace(
         t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: bash\n").replace(
         "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s", "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s | tee check.log")),
-    ("a job with no if", lambda t: must_replace(
-        t, "    if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}\n", "")),
+    ("a job with no if", lambda t: must_replace(t, f"    {ARTIFACT_IF}\n", "")),
     ("an always() job", lambda t: must_replace(
         t, "!cancelled() && needs.artifact-graph-plan.result == 'success'", "always()")),
 ]
@@ -1224,15 +1228,60 @@ def test_a_baseline_job_skipped_on_another_condition_is_no_reference(tmp_path):
     """Every job shares the draft-skip `if`, so a change that gives them all another condition keeps them equal to
     one another; the baseline job's own `if` is the reference only while it is the draft skip."""
     got = run_workflow_variant(tmp_path, "alike", lambda t: t.replace(
-        "if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-        "if: ${{ github.event_name == 'push' }}"))
+        GATED_IF, f"if: ${{{{ {GATE} && (github.event_name == 'push') }}}}"))
     for name, verdict in got.items():
         assert verdict["holds"] is False and "is conditional" in " ".join(verdict["workflow"]["missing"]), name
     always = run_workflow_variant(tmp_path, "never", lambda t: must_replace(
-        t, "    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}\n    runs-on: ubuntu-latest\n    strategy:",
-        "    if: ${{ false }}\n    runs-on: ubuntu-latest\n    strategy:"))
+        t, f"    {GATED_IF}\n    # Supported OS:", f"    if: ${{{{ {GATE} && false }}}}\n    # Supported OS:"))
     assert always["unit_suite_on_every_version"]["holds"] is False
     assert "is conditional" in " ".join(always["unit_suite_on_every_version"]["missing"])
+
+
+def test_the_visibility_gate_anded_with_the_draft_skip_is_no_condition(tmp_path):
+    """D30 ANDs every job's `if` with the visibility gate (tests/test_ci_visibility_gate.py), which holds on every pull
+    request of the public repository, so in the shapes that test pins it skips nothing there: in front of the baseline
+    job's draft skip it leaves that `if` the reference, and alone, or as one `&&` term in parentheses, it is no
+    condition."""
+    import yaml
+    jobs = yaml.safe_load(tracked_text(WORKFLOW))["jobs"]
+    assert jobs["baseline"]["if"] == f"${{{{ {GATED_DRAFT_SKIP} }}}}"
+    assert jobs["replay-suite"]["if"] == jobs["artifact-graph-plan"]["if"] == jobs["baseline"]["if"]
+    assert f"if: {jobs['artifact-graph']['if']}" == ARTIFACT_IF
+    got = rf.ci_enforces(_ci_repo(tmp_path))
+    for name, verdict in got.items():
+        assert verdict["holds"] is (name != "no_site_without_class"), (name, verdict["missing"])
+        assert verdict["workflow"]["holds"] is True and verdict["workflow"]["rejected"] == [], (name, verdict["workflow"])
+    # the gate as the artifact job's whole `if`: the jobs it needs are read as for a job with no `if`, the shards too,
+    # whose `if` is the gate alone
+    alone = run_workflow_variant(tmp_path, "alone", lambda t: must_replace(t, ARTIFACT_IF, f"if: ${{{{ {GATE[1:-1]} }}}}"))
+    assert alone["artifact_check_clean"]["holds"] is True, alone["artifact_check_clean"]["missing"]
+
+
+# (name, mutation, the predicates that turn false): the gate in any shape but those is a condition like another
+GATE_REFUSED = [
+    ("the gate joined with ||", lambda t: replace_last(t, GATED_IF, f"if: ${{{{ {GATE} || {DRAFT_SKIP} }}}}"),
+     REPLAY_THREE),
+    ("every gate joined with ||", lambda t: t.replace(GATED_IF, f"if: ${{{{ {GATE} || {DRAFT_SKIP} }}}}"),
+     FOUR | {"unit_suite_on_every_version"}),
+    ("a job without the gate", lambda t: replace_last(t, GATED_IF, f"if: ${{{{ {DRAFT_SKIP[1:-1]} }}}}"), REPLAY_THREE),
+    ("the baseline job's gate without its draft skip", lambda t: must_replace(
+        t, f"    {GATED_IF}\n    # Supported OS:", f"    if: ${{{{ {GATE[1:-1]} }}}}\n    # Supported OS:"), FOUR),
+    ("the gate ANDed with another condition", lambda t: replace_last(
+        t, GATED_IF, f"if: ${{{{ {GATE} && (github.event_name != 'pull_request') }}}}"), REPLAY_THREE),
+    ("a gate that counts a payload with no repository as public", lambda t: replace_last(
+        t, GATED_IF, GATED_IF.replace("toJSON(github.event.repository.private) == 'false'",
+                                      "github.event.repository.private == false")), REPLAY_THREE),
+]
+
+
+@pytest.mark.parametrize("name,mutate,false_for", GATE_REFUSED, ids=[g[0] for g in GATE_REFUSED])
+def test_the_visibility_gate_in_another_shape_is_a_condition(tmp_path, name, mutate, false_for):
+    got = run_workflow_variant(tmp_path, "gate", mutate)
+    assert_ci_verdicts(got, false_for - {"unit_suite_on_every_version"}, "is conditional")
+    unit = got["unit_suite_on_every_version"]
+    assert unit["holds"] is ("unit_suite_on_every_version" not in false_for), (name, unit["missing"])
+    if not unit["holds"]:
+        assert "is conditional" in " ".join(unit["missing"]), unit["missing"]
 
 
 UNIT_STEP = "python3 -m pytest hooks/tests tests -q -n auto --dist loadfile"
