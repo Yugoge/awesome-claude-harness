@@ -101,7 +101,9 @@ found. Act on its JSON answer:
   `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
   to complete the `/do` work, never `/do`'s own steps; its dev-report, which G2 verifies at dev's
   stop, concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it), and
-  the `/commit` orchestrator writes no report.
+  the `/commit` orchestrator writes no report. That dev-report lists, beside the files dev wrote,
+  each file the do-report lists (dev names each in one of its Bash commands so G2 counts it);
+  nobody rewrites the do-report, whose producer's `/do` has ended.
 - `null` in a commit-QA round, and a commit-QA finding that cites no artifact: the path becomes
   that round's own report, `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA dispatch runs again
   (Step 6) and names a path, routed as above.
