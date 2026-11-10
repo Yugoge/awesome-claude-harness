@@ -508,6 +508,19 @@ class Span:
         return [(None if found.group(1) == "detached" else found.group(1)[len("refs/heads/"):], found.group(2))
                 for found in self._opener_context(OPENER_HEAD_LINE_RE)]
 
+    def opener_remotes(self) -> dict | None:
+        """{remote: (URL digest, the branch HEAD was on or "-", that branch's tracking ref's commit or
+        None, the branch's upstream ref there or None)} of the remote lines the UserPromptSubmit hook
+        printed for a /push opener (OPENER_REMOTE_LINE_RE); a remote printed twice unlike is left out (a
+        line another hook echoes can only take that remote out of what releases the Stop); None for an
+        opener with none (typed before the hook printed them, or a hook that prints none)."""
+        found = {}
+        for match in self._opener_context(OPENER_REMOTE_LINE_RE):
+            record = (match.group(2), match.group(3), None if match.group(4) == "none" else match.group(4),
+                      match.group(5))
+            found[match.group(1)] = record if found.get(match.group(1), record) == record else ()
+        return {name: record for name, record in found.items() if record} if found else None
+
     def _opener_context(self, regex):
         """The matches of ``regex`` in the opener's hook context: the context
         records the CLI writes after the typed prompt and before the turn's
@@ -573,6 +586,12 @@ MINTED_LINE_RE = re.compile(
 # The HEAD line it prints for a /push opener (prompt-workflow.py print_push_head).
 OPENER_HEAD_LINE_RE = re.compile(r"^\[/push\] HEAD at the opener: (refs/heads/\S+|detached) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$",
                                  re.M)
+
+
+# Its remote lines for that opener (P5-61; prompt-workflow.py print_push_head is to print them): an opener
+# without them has the /push Stop read the remotes from the repository.
+OPENER_REMOTE_LINE_RE = re.compile(r"^\[/push\] remote at the opener: (\S+) ([0-9a-f]{16}) (\S+) "
+                                   r"([0-9a-f]{40}(?:[0-9a-f]{24})?|none)(?: upstream (refs/\S+))?$", re.M)
 
 
 def _obligation():  # imported when first asked: a reader that needs none loads none of it

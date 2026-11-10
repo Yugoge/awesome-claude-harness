@@ -18,8 +18,8 @@ The whitelists below preserve the legitimate paths:
   - /merge's own wrapper hooks/merge.sh, whose subprocess runs git merge
     where no hook sees it
   - reset to HEAD (non-destructive)
-  - human-driven commits: the human exits the agent context and runs
-    git commit at their own shell; this hook does not see those calls.
+  - human-driven commits: a human types /commit (or /allow git commit
+    to grant one call); the grant it writes is what lets the commit pass.
 
 Forbidden agent operations:
   - git commit -m '<msg>' whose message does NOT match
@@ -1190,8 +1190,8 @@ def _block_default_deny_commit(msg):
         'Commit message excerpt: %r\n' % msg[:200]
         + 'Allowed pattern: ^auto-bulk: end-of-cycle commit for <branch>\n'
         'For closed dev tasks, use /commit <task-id>.\n'
-        'For human-driven commits, exit the agent context and run '
-        'git commit directly.\n'
+        'For human-driven commits, a human types /commit (or '
+        '/allow git commit for one call).\n'
         'Main agent may bypass with /allow <pattern> before the git commit command.\n'
         'Spec: spec-20260424-233926 section 5.2.4 (R4.3); '
         'ba-spec-20260425-redev2.md AC-A13.\n'

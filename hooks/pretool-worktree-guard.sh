@@ -1,6 +1,8 @@
 #!/bin/bash
 # PreToolUse hook: Detect stale agent worktrees before ANY tool call
-# Fires on all tools. Uses 60s cache to avoid git overhead on every call.
+# Fires on all tools. A 60s cache skips the git checks while nothing is stale,
+# and keeps the alert from repeating: it prints when the stale set changes, and
+# again once the cache is older than CACHE_TTL, not on every tool call.
 # Advisory: always exit 0. While an agent worktree is behind the main branch it
 # prints PreToolUse JSON: additionalContext carries the lesson to Claude,
 # systemMessage tells the user.
@@ -23,15 +25,19 @@ trap 'exit 0' EXIT
 CACHE_FILE="$(harness_state_dir)/worktree-guard-cache"
 CACHE_TTL=60
 
-# Check cache: skip expensive git ops if checked recently
+# The cache holds "0", or "<stale count> <digest of the stale set>" from the
+# last alert. Within CACHE_TTL, "0" skips the git checks; a count is re-checked
+# (stale worktrees may have been cleaned up, or new ones appeared), and the
+# alert stays silent only while the set is the one the cache holds.
+CACHED=""
 if [ -f "$CACHE_FILE" ]; then
   CACHE_AGE=$(( $(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0) ))
-  if [ "$CACHE_AGE" -lt "$CACHE_TTL" ]; then
+  # A negative age (mtime in the future) is not fresh: it must not mute the alert.
+  if [ "$CACHE_AGE" -ge 0 ] && [ "$CACHE_AGE" -lt "$CACHE_TTL" ]; then
     CACHED=$(cat "$CACHE_FILE" 2>/dev/null || true)
     if [ "$CACHED" = "0" ]; then
       exit 0
     fi
-    # Otherwise re-check: stale worktrees may have been cleaned up
   fi
 fi
 
@@ -91,8 +97,20 @@ while IFS= read -r line; do
   esac
 done < <(git worktree list --porcelain 2>/dev/null; echo)
 
+# The digest covers every line the alert lists for the set (path, commits
+# behind, HEAD, branch, flags), so a set that would read differently alerts.
+CACHE_LINE="$STALE_COUNT"
+if [ "$STALE_COUNT" -gt 0 ]; then
+  # No digest (cksum failed) means no silence: the alert prints every call.
+  DIGEST=$(printf '%s\n%s' "$MAIN_BRANCH" "$WARNINGS" | cksum 2>/dev/null | tr ' ' '-') || DIGEST=""
+  CACHE_LINE="$STALE_COUNT $DIGEST"
+  # Same set, alerted within CACHE_TTL: stay silent and leave the cache's mtime
+  # alone, so the alert comes back when the cache expires.
+  [ -n "$DIGEST" ] && [ "$CACHED" = "$CACHE_LINE" ] && exit 0
+fi
+
 # Update cache (best effort: an unwritable state dir must not hide the warning)
-{ echo "$STALE_COUNT" > "$CACHE_FILE"; } 2>/dev/null || true
+{ echo "$CACHE_LINE" > "$CACHE_FILE"; } 2>/dev/null || true
 
 # A JSON string body: escape \ " and the usual whitespace, drop other control
 # characters.
