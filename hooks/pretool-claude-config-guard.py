@@ -26,8 +26,11 @@ Allow-list mechanism: The sentinel file `.claude/.hook-refactor-allow` at
 `$CLAUDE_PROJECT_DIR` (or cwd fallback). When present, this hook exits 0
 and lets the underlying tool run. The user creates this file by hand
 when they want to refactor hooks/commands; deleting it re-engages the
-guard. Without it, one write passes: /dev-command's dev writing the project
-command file the cycle develops (_dev_command_product_file).
+guard. Without it, two writes pass: /dev-command's dev writing the project
+command file the cycle develops (_dev_command_product_file), and the cleaner
+of an active /clean writing what that /clean's owner approved for it under
+commands/ (_clean_approved_edit, _clean_approved_bash; hooks/pretool-tool-policy.py
+holds the rule and refuses every other caller's write of those paths).
 
 Exit codes:
   0: Allow tool use
@@ -97,14 +100,72 @@ def _matches_any(command: str, patterns: list) -> bool:
     return any(re.search(p, command) for p in patterns)
 
 
+# The harness home and the CLI's config dir named through a variable. The patterns above read raw
+# text, so `"${CLAUDE_HOME:-$HOME/.claude}/commands/x.md"` (the spelling the prompts use) or
+# `$CLAUDE_HOME/hooks/x.py` names no `.claude/<dir>/` and went through, where `~/.claude/...` is
+# refused. Either variable may hold a protected root in the shell that runs the command (an
+# assignment earlier in the same command, a profile), whatever the hook's own environment says,
+# so each spelling of them counts as the home (fails closed), as an unknown prefix before a
+# written-out `.claude/hooks/` is refused today.
+_HOME = '~/.claude'
+_HOME_VARS = ('CLAUDE_HOME', 'CLAUDE_CONFIG_DIR')
+_BARE_HOME_VAR = re.compile(r'\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)(?![A-Za-z0-9_])')
+_BRACE = re.compile(r'\$\{|\}')
+_PARAMETER = re.compile(r'([A-Za-z_][A-Za-z0-9_]*|[0-9]+)(:?[-=?+])?(.*)\Z', re.S)
+
+
+def _resolve_parameter(body: str) -> str:
+    """The text a `${body}` expansion (its inner expansions resolved) may stand for, as far as it is
+    known without running it: a home variable is the home (its `+` forms: the word used when it is
+    set); another variable's `-`, `=` and `+` forms are their word (the branch readable here)."""
+    found = _PARAMETER.match(body)
+    if not found:
+        return '${' + body + '}'
+    name, op, word = found.groups()
+    if name in _HOME_VARS:
+        return word if op and op.endswith('+') else _HOME
+    if op and op[-1] in '-=+':
+        return word
+    return '${' + body + '}'
+
+
+def _expand_parameters(text: str) -> str:
+    """``text`` with each balanced `${...}` replaced by _resolve_parameter, innermost first, in one
+    pass without recursion (a deep nesting cannot raise and so fail open); an unclosed one stays."""
+    stack, i = [[]], 0
+    for mark in _BRACE.finditer(text):
+        stack[-1].append(text[i:mark.start()])
+        i = mark.end()
+        if mark.group() == '${':
+            stack.append([])
+        elif len(stack) > 1:
+            body = ''.join(stack.pop())
+            stack[-1].append(_resolve_parameter(body))
+        else:
+            stack[-1].append('}')
+    stack[-1].append(text[i:])
+    while len(stack) > 1:
+        body = ''.join(stack.pop())
+        stack[-1].append('${' + body)
+    return ''.join(stack[0])
+
+
+def _home_spelled_out(command: str) -> str:
+    """``command`` with the home variables written as ~/.claude and its quotes removed, so a
+    home spelling reaches the patterns as `~/.claude/<dir>/` (`"$HOME/.claude"/commands/` too)."""
+    text = _BARE_HOME_VAR.sub(lambda _m: _HOME, _expand_parameters(command))
+    return text.replace('"', '').replace("'", '')
+
+
 def _classify_bash_target(command: str) -> str:
-    """Return 'hooks', 'commands', or '' for a Bash command."""
+    """Return 'hooks', 'commands', or '' for a Bash command, as written or with the home spelled out."""
     if not command:
         return ''
-    if _matches_any(command, _HOOK_PATTERNS):
-        return 'hooks'
-    if _matches_any(command, _CMD_PATTERNS):
-        return 'commands'
+    for text in dict.fromkeys((command, _home_spelled_out(command))):
+        if _matches_any(text, _HOOK_PATTERNS):
+            return 'hooks'
+        if _matches_any(text, _CMD_PATTERNS):
+            return 'commands'
     return ''
 
 
@@ -173,20 +234,83 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
         return False
 
 
+def _clean_grant(data: dict) -> tuple:
+    """(paths written, paths removed) the caller may write as the producer of what a
+    human-typed /clean's owner approved (P9-4): the cleaner's approved moves, renames and
+    fix_style edits of the active /clean span, read by hooks/pretool-tool-policy.py's one rule
+    (clean_grant), which also refuses every other caller's write of them. A /clean run in the
+    harness home approves moves and edits under commands/ (and agents/); nothing else is
+    exempted here. Anything unread is empty (blocked)."""
+    try:
+        if not data.get('agent_id'):
+            return frozenset(), frozenset()
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, here)
+        spec = importlib.util.spec_from_file_location('_tool_policy_clean', os.path.join(here, 'pretool-tool-policy.py'))
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        project = os.path.abspath(str(_project_dir()))
+        return policy.clean_grant(data, project)
+    except Exception:
+        return frozenset(), frozenset()
+
+
+def _forms(path: str) -> set:
+    path = os.path.join(str(_project_dir()), os.path.expanduser(path))
+    forms = {os.path.normpath(path)}
+    try:
+        forms.add(os.path.realpath(path))
+    except (OSError, ValueError):
+        pass
+    return forms
+
+
+def _clean_approved_edit(file_path: str, data: dict) -> bool:
+    """Whether file_path is a file /clean's owner approved for this caller to edit (above)."""
+    written, _removed = _clean_grant(data)
+    return bool(file_path) and bool(_forms(file_path) & written)
+
+
+def _clean_approved_bash(command: str, data: dict) -> bool:
+    """Whether every `.claude/commands/` the guard reads in ``command`` is spelled by a path
+    /clean's owner approved for this caller (a move's source or destination, a fixed file):
+    with each of those paths, as written absolute, real or below the home's spellings, taken
+    out of the command and of its home-spelled-out text, neither names a protected directory."""
+    written, removed = _clean_grant(data)
+    paths = written | removed
+    if not paths:
+        return False
+    home = os.path.realpath(os.path.expanduser(os.environ.get('CLAUDE_HOME') or '~/.claude'))
+    spellings = set()
+    for path in paths:
+        spellings.add(path)
+        rel = os.path.relpath(path, home)
+        if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+            spellings.update(f'{root}/{rel}' for root in (_HOME, '$HOME/.claude', '${HOME}/.claude'))
+    for text in dict.fromkeys((command, _home_spelled_out(command))):
+        for spelling in sorted(spellings, key=len, reverse=True):
+            text = text.replace(spelling, ' ')
+        if _matches_any(text, _HOOK_PATTERNS) or _matches_any(text, _CMD_PATTERNS):
+            return False
+    return True
+
+
 def _evaluate_write_edit(tool_name: str, tool_input: dict, data: dict) -> None:
     """Apply guard for Write/Edit/MultiEdit/NotebookEdit tools."""
     file_path = tool_input.get('file_path', '') or ''
     if _is_hooks_path(file_path):
         _block_path(tool_name, file_path, 'hooks')
-    if _is_commands_path(file_path) and not _dev_command_product_file(file_path, data):
+    if (_is_commands_path(file_path) and not _dev_command_product_file(file_path, data)
+            and not _clean_approved_edit(file_path, data)):
         _block_path(tool_name, file_path, 'commands')
 
 
-def _evaluate_bash(tool_input: dict) -> None:
+def _evaluate_bash(tool_input: dict, data: dict) -> None:
     """Apply guard for Bash tool."""
     command = tool_input.get('command', '') or ''
     kind = _classify_bash_target(command)
-    if kind:
+    if kind and not (kind == 'commands' and _clean_approved_bash(command, data)):
         _block_bash(command, kind)
 
 
@@ -195,7 +319,7 @@ def _evaluate(tool_name: str, tool_input: dict, data: dict) -> None:
     if tool_name in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
         _evaluate_write_edit(tool_name, tool_input, data)
     elif tool_name == 'Bash':
-        _evaluate_bash(tool_input)
+        _evaluate_bash(tool_input, data)
 
 
 def main() -> None:

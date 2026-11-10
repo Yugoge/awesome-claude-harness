@@ -47,6 +47,7 @@ offers a stop.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -78,9 +79,14 @@ def _script(rel: str):
     return _SCRIPTS[rel]
 
 
+# Ancestry as the commits record it: no replace object or graft file an agent writes re-parents one (P5-61).
+_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull}
+
+
 def _git(root, *args: str) -> str | None:
     """git's stripped stdout in ``root``; None when it fails."""
-    done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=20)
+    done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=20,
+                          env={**os.environ, **_GIT_ENV})
     return done.stdout.strip() if done.returncode == 0 else None
 
 
@@ -324,15 +330,28 @@ def _typed(span) -> list[tuple[str, str]]:
             for k, arg in enumerate(args) if not arg.startswith("-") and args[k - 1:k] != ["--reason"]]
 
 
-def _targets(span, root, action: str) -> list[str] | None:
-    """The typed tasks (_typed), else the families the span's dispatches named;
-    None: no task. --auto: the parents dev-lifecycle's --auto target function
-    lists at the opener's cut-off (a fresh scan) and the families the span
-    walked, which it stops listing once done; [] had none."""
+def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
+    """(targets, gaps) of a /close or a /commit, one rule for both (P5 review
+    M, P5-4): the typed tasks (_typed), else the families the span's dispatches
+    named; None: no task. A typed task that names no task or chain file
+    (_resolves; close.md asks for one) yields to the families the span
+    dispatched, the task the turn worked on the owner's answer, which no
+    predicate reads (D23); with none dispatched, the gaps name it. --auto: the
+    parents dev-lifecycle's --auto target function lists at the opener's
+    cut-off (a fresh scan) and the families the span walked, which it stops
+    listing once done; [] had none."""
     if "--auto" in shlex.split(span.args):
         lifecycle = _script("scripts/dev-lifecycle.py")
-        return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families())
-    return [task for _arg, task in _typed(span)] or sorted(span.session_families()) or None
+        return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families()), []
+    typed = _typed(span)
+    held = [arg for arg, task in typed if not _resolves(root, arg, task)]
+    if not held:
+        return [task for _arg, task in typed] or sorted(span.session_families()) or None, []
+    families = span.session_families()
+    if not families:
+        return None, [f"{action}: {arg} names no task or chain file, and no dispatch of this /{action} names a task"
+                      for arg in held]
+    return sorted({task for arg, task in typed if arg not in held} | families), []
 
 
 def _resolves(root, arg: str, task: str) -> bool:
@@ -407,17 +426,12 @@ def p_close(span, root, payload) -> list[str]:
     _cycle_names), and the close-rating question asked
     (D9b: asked, not answered) where it is required and the span's loaded text
     asks it (a /close the session took up before the question was added to
-    close.md never asks it: _loaded_lacks). A typed task that names no
-    task or chain file (_resolves; close.md asks for one) yields to the families
-    the span dispatched, the task the turn closed on the owner's answer, which
-    no predicate reads (D23); with none dispatched, its gap names it."""
-    typed = [] if "--auto" in shlex.split(span.args) else _typed(span)
-    held = [arg for arg, task in typed if not _resolves(root, arg, task)]
-    families = span.session_families() if held else set()
-    if held and not families:
-        return [f"close: {arg} names no task or chain file, and no dispatch of this /close names a task"
-                for arg in held]
-    targets = sorted({t for a, t in typed if a not in held} | families) if held else _targets(span, root, "close")
+    close.md never asks it: _loaded_lacks). Targets: _targets (a typed task
+    that names no task or chain file yields to the families the span
+    dispatched)."""
+    targets, unresolved = _targets(span, root, "close")
+    if unresolved:
+        return unresolved
     if targets is None:
         return ["close: no target task resolved"]
     close_rating = importlib.import_module("lib.close_rating")  # P4's
@@ -450,7 +464,9 @@ def _bulk_block(span):
 
 def p_commit(span, root, payload) -> list[str]:
     """/commit: --stage commit per target (a Task-id commit reachable from
-    HEAD in each plan repository; under its cycle's own name, _cycle_names);
+    HEAD in each plan repository; under its cycle's own name, _cycle_names),
+    the targets /close takes (_targets: a typed task that names no task or
+    chain file yields to the families the span dispatched, P5-4);
     --bulk: the bulk status block reports a
     landing; --dry-run: nothing beyond the todo half. Modes only if typed."""
     args = span.args.split()
@@ -462,7 +478,9 @@ def p_commit(span, root, payload) -> list[str]:
             return ["commit --bulk: no changelog-analyst status block in this /commit"]
         return [f"commit --bulk: changelog-analyst reports {block.get('commit_status')!r}: "
                 f"{block.get('failure_code')} {block.get('failure_reason') or ''}".rstrip()] if "failure_code" in block else []
-    targets = _targets(span, root, "commit")
+    targets, unresolved = _targets(span, root, "commit")
+    if unresolved:
+        return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
     names = _cycle_names(span)
@@ -489,7 +507,7 @@ def _value_at(entries, when: float) -> str | None:
 
 def _ancestor(root, older: str, newer: str) -> bool:
     return subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", older, newer],
-                          capture_output=True, timeout=20).returncode == 0
+                          capture_output=True, timeout=20, env={**os.environ, **_GIT_ENV}).returncode == 0
 
 
 def _since(span) -> float:
@@ -522,6 +540,18 @@ def _bare_pick(root, since: float) -> str | None:
     return branch or _git(root, "symbolic-ref", "--short", "-q", "HEAD")
 
 
+def _session_worktree(root, payload):
+    """The worktree the session works in: its cwd when that is a worktree of the project's repository
+    (/dev-overnight --worktree's Step 1 cds into the linked one, where /merge's Step 0 picks and merge.sh
+    merges; the project dir stays the main checkout), else the project dir."""
+    def common(path):
+        found = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        return os.path.realpath(found) if found else None
+    top = _git(payload["cwd"], "rev-parse", "--show-toplevel") if payload.get("cwd") else None
+    shared = common(top) if top else None
+    return top if shared and shared == common(root) else root
+
+
 def p_merge(span, root, payload) -> list[str]:
     """/merge [--no-commit] [<ref>] [INFERRED; A6]. Source: the typed ref, else
     the newest merge-analyst grant this session wrote here since the opener
@@ -531,8 +561,12 @@ def p_merge(span, root, payload) -> list[str]:
     MERGE_HEAD (--no-commit, while present) is a value of the source; else a merge
     entry in DEFAULT_BRANCH's reflog after the opener has one as its merged parent
     (a fast-forward: as its new value), or the source's value at the opener is in
-    DEFAULT_BRANCH ("Already up to date"); no source: no merge entry after it."""
+    DEFAULT_BRANCH ("Already up to date"), or this session's newest merge-analyst grant since the opener is
+    `blocked` for the source at its tip now (Step 3 refuses; R14 leaves the risks to the owner, and a
+    grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
+    session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup."""
     _repository(root)
+    root = _session_worktree(root, payload)
     args = span.args.split()
     refs = [a for a in args if not a.startswith("-")]
     since = _since(span)
@@ -554,6 +588,9 @@ def p_merge(span, root, payload) -> list[str]:
              else m.startswith(f"merge {ref}:") for sha, m in landed) or (
             _ancestor(root, at, f"refs/heads/{default}") if at else not landed):
         gaps = []
+    elif at and (grant.get("verdict"), grant.get("branch"), grant.get("source_tip")) == (
+            "blocked", ref, _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")):
+        gaps = []  # Step 3: "merge-analyst blocked the merge"; the risks are the owner's to resolve (R14)
     else:
         gaps = [f"merge: no merge of {ref} into refs/heads/{default} after the /merge opener" if at else
                 f"merge: refs/heads/{default} took a merge after the opener; no merge-analyst grant of this "
@@ -582,19 +619,26 @@ def p_push(span, root, payload) -> list[str]:
     to judge and takes none away); detached there: HEAD's branch now, no commit.
     An opener with none (typed before the hook printed it, D25) takes git's
     record: the branch HEAD was on at the opener (HEAD's reflog), else HEAD's
-    branch now. At BRANCH's tip,
-    refs/remotes/<remote>/<BRANCH> (the typed remote, else any: a typed name
-    that is no remote of the repository, which push.sh refuses, yields to the
-    remote the push on the owner's answer took) took it, or the branch's value
-    at that time, after the opener; or it is at or behind the typed remote's
-    ref (none typed: BRANCH's upstream; none for such a name); or push.md refuses the
+    branch now. A remote "took" a commit after the opener when its branch
+    BRANCH holds it now, as the remote itself lists it (git ls-remote at the
+    URL the opener's remote line records, outside the repository's settings),
+    and did not by that line's record of its tracking ref (P5-61: no local
+    refs/remotes value, reflog entry, upstream setting, replace object or graft
+    an agent writes or redirects counts; an opener without remote lines takes
+    the URL, tracking ref and upstream from the repository). BRANCH's tip is
+    published when a remote (the typed one, else any the opener recorded: a
+    typed name that is no remote of the repository, which push.sh refuses,
+    yields to the remote the push on the owner's answer took) took it or a value
+    the branch had from the opener on; or it is at or behind the typed remote's
+    branch (none typed: BRANCH's upstream at the opener; none for such a name);
+    or push.md refuses the
     push: HEAD detached at the opener and now (Step 2), no push-gate token names
     an ancestor of it (push.sh's exit 3: its READ side over the path of the
     token's one writer), or this session's newest push-analyst grant here since
     the opener is blocked for BRANCH at it (Step 5: execute-push.py refuses it
     and leaves it unspent). The opener's commit, where the tip does not hold it,
-    is judged the same way, published where that ref holds it now or took a
-    value holding it after the opener. The token and the grant are protected
+    is published where that branch holds it or a remote took it. The token and
+    the grant are protected
     for every caller but their producers (pretool-tool-policy.py), and a detach,
     reset or rewrite after the opener is no refusal: no agent's act makes one true."""
     _repository(root)
@@ -603,30 +647,67 @@ def p_push(span, root, payload) -> list[str]:
     heads = span.opener_heads()
     opened = [(b, c) for b, c in heads if b] or [((None if heads else _opener_branch(root, since)) or now, None)]
     return [gap for branch, commit in dict.fromkeys(opened) if branch  # none: Step 2, "HEAD is detached"
-            for gap in _push_gaps(root, payload, typed, since, now, branch, commit)]
+            for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes())]
 
 
-def _push_gaps(root, payload, typed, since, now, branch, opened) -> list[str]:
-    """p_push's gaps for BRANCH at its tip and at the opener's commit (``opened``, None: none recorded)."""
+def _remote_tip(top: str, url: str, ref: str) -> tuple:
+    """(the commit the remote at ``url`` names ``ref`` by now, None: none; why it could not be read, '')
+    as the remote lists it: git ls-remote run outside the repository, so no setting of it (a URL
+    rewrite, an upload-pack or ssh command) answers; a local path is taken from the repository's top."""
+    if "://" not in url and not re.match(r"[^/]+:", url):
+        url = os.path.join(top, url)
+    try:
+        done = subprocess.run(["git", "ls-remote", "--", url, ref], cwd="/", capture_output=True, text=True,
+                              timeout=20, env={**os.environ, **_GIT_ENV})
+    except subprocess.TimeoutExpired:
+        return None, "git ls-remote timed out"
+    if done.returncode:
+        return None, "git ls-remote: " + ((done.stderr.strip().splitlines() or ["failed"])[-1])
+    return next((line.split("\t")[0] for line in done.stdout.splitlines() if line.endswith("\t" + ref)), None), ""
+
+
+def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list[str]:
+    """p_push's gaps for BRANCH at its tip and at the opener's commit (``opened``, None: none recorded);
+    ``pinned``: the opener's remote lines (None: none printed)."""
     head = _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}^{{commit}}")
     if not head:
         return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
                 "is published since the opener"]
     local, remotes = _reflog(root, f"refs/heads/{branch}"), (_git(root, "remote") or "").split()
     unknown = typed if typed and typed not in remotes else None
-    took = [(sha, t) for remote in ([typed] if typed and not unknown else remotes)
-            for sha, t, _m in _reflog(root, f"refs/remotes/{remote}/{branch}") if t >= since]
-    ref = None if unknown else (f"refs/remotes/{typed}/{branch}" if typed else _git(
-        root, "rev-parse", "--symbolic-full-name", "--verify", "-q", f"{branch}@{{upstream}}"))
-    holds = {sha for sha, _t in took} | {_git(root, "rev-parse", "--verify", "-q", ref) or "" if ref else ""}
-    top, gaps = _git(root, "rev-parse", "--show-toplevel") or str(root), []
+    considered = [r for r in ([typed] if typed and not unknown else remotes) if pinned is None or r in pinned]
+    if typed or pinned is not None:
+        up = (typed, f"refs/heads/{branch}") if typed else next(
+            ((r, record[3]) for r, record in pinned.items() if record[1] == branch and record[3]), None)
+    else:
+        up = tuple((_git(root, "for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)",
+                         f"refs/heads/{branch}") or "").split())
+    up = up if up and len(up) == 2 and up[0] in remotes and (pinned is None or up[0] in pinned) else None
+    top, gaps, tips, errors = _git(root, "rev-parse", "--show-toplevel") or str(root), [], {}, {}
+
+    def tip(remote, ref):
+        if (remote, ref) not in tips:
+            url = _git(root, "remote", "get-url", remote) or ""
+            if pinned is not None and hashlib.sha256(url.encode()).hexdigest()[:16] != pinned[remote][0]:
+                tips[(remote, ref)], errors[remote] = None, "its URL is not the one it had at the /push opener"
+            else:
+                tips[(remote, ref)], why = _remote_tip(top, url, ref)
+                if tips[(remote, ref)] and _git(root, "cat-file", "-e", f"{tips[(remote, ref)]}^{{commit}}") is None:
+                    why = f"its {ref} is at {tips[(remote, ref)]}, which this repository lacks: fetch {remote}"
+                errors.update({remote: why} if why else {})
+        return tips[(remote, ref)]
+
+    def took(commit, remote):
+        held = tip(remote, f"refs/heads/{branch}")
+        at = (pinned[remote][2] if pinned[remote][1] == branch else None) if pinned is not None else _value_at(
+            _reflog(root, f"refs/remotes/{remote}/{branch}"), since)
+        return bool(held) and _ancestor(root, commit, held) and not (at and _ancestor(root, commit, at))
+
+    values = {head, _value_at(local, since)} | {sha for sha, t, _m in local if t >= since}
     for commit in [head] + ([opened] if opened and not _ancestor(root, opened, head) else []):
-        if commit == head:
-            published = any(sha in (head, _value_at(local, t)) for sha, t in took) or bool(ref) and _ancestor(
-                root, head, ref)
-        else:
-            published = any(sha and _ancestor(root, commit, sha) for sha in holds)
-        if published:
+        if (up and tip(*up) and _ancestor(root, commit, tip(*up))) or any(
+                took(value, remote) for remote in considered for value in (values if commit == head else {commit})
+                if value):
             continue
         token = _script("scripts/write-push-gate-token.py").token_path(top, branch, "")  # <repo dir>/<session>/<name>
         for path in [token.parent.parent / token.name, *token.parent.parent.glob(f"*/{token.name}")]:
@@ -641,10 +722,12 @@ def _push_gaps(root, payload, typed, since, now, branch, opened) -> list[str]:
         grant = importlib.import_module("lib.merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
         if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, commit):
             continue  # Step 5: "push BLOCKED by push-analyst"
+        ref = up and f"refs/remotes/{up[0]}/{up[1].removeprefix('refs/heads/')}"
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
             "" if commit == head else f"; {branch} is at {head}, which does not hold it: put {branch} back at it")
         gaps.append(f"push: {branch} at {commit} is not published on {ref or 'a remote'} since the /push opener"
                     + (f"; the typed name {unknown} is no remote of this repository" if unknown else "")
+                    + "".join(f"; {remote}: {why}" for remote, why in errors.items())
                     + (fix and fix + ", then push it"))
     return gaps
 
