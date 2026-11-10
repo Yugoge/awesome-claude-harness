@@ -400,6 +400,14 @@ def _qa_declared(rp) -> None:
     DevCycle(rp, "plain", "STANDARD").run()
 
 
+def _ask_first(rp) -> None:
+    """P13-1 R5: BA analysis dispatched before round 1 is asked is refused (ASK_FIRST); the main agent's
+    AskUserQuestion of the round clears it, and its next dispatch passes (drivers/dev.py round-unasked)."""
+    from .dev import DevCycle
+
+    DevCycle(rp, "round-unasked", "STANDARD").run()
+
+
 def _qa_report(rp) -> None:
     from .. import faults
     from .dev import DevCycle
@@ -497,6 +505,8 @@ def run(rp) -> None:
         return _qa_report(rp)
     if case == "qa-declared":
         return _qa_declared(rp)
+    if case == "ask-first":
+        return _ask_first(rp)
     if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",

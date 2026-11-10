@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Measure whether all six required first-screen elements fit above the fold.
 
-Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
-  two required viewports in both colour schemes, and reports, per combination, which of
-  the six required elements are fully visible without scrolling plus the hero's rendered
-  glyph height.
+Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
+  working tree in headless Chromium at the two required viewports in both colour schemes,
+  and reports, per combination, which of the six required elements are fully visible
+  without scrolling plus the hero's rendered glyph height. The six elements were the old
+  README's first screen; only the glyph height and its drift from the model are consumed
+  (by scripts/generate-hero-status.py), the rest is reported as before.
 
-Usage: measure-hero-fold.py [--readme <path>]
+Usage: measure-hero-fold.py [--doc <path>]   (--readme <path> is the same option)
 
 Exit codes: 0 = all six elements fit in all four combinations, 2 = at least one does not
 
@@ -21,7 +23,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -117,9 +118,9 @@ def asset_line_font_px(svg_text: str) -> float | None:
     return sizes.pop() if len(sizes) == 1 else None
 
 
-def hero_img_width(readme_text: str) -> int | None:
-    """The width the README asks the browser to render the hero at."""
-    for m in re.finditer(r"<img\b[^>]*>", readme_text):
+def hero_img_width(page_text: str) -> int | None:
+    """The width the page that holds the hero asks the browser to render it at."""
+    for m in re.finditer(r"<img\b[^>]*>", page_text):
         if "guard-hero" in m.group(0):
             w = re.search(r'\bwidth="(\d+)"', m.group(0))
             return int(w.group(1)) if w else None
@@ -134,7 +135,7 @@ def predict_glyph_px(viewport_w: int, img_width: int | None, logical_w: float) -
     the CSS above: the prose column caps at COLUMN_MAX_PX, loses COLUMN_PAD_PX on each side,
     and `img { max-width:100% }` shrinks the hero to whatever is left.
 
-    This is the model the README's published glyph figure is derived from, because a status
+    This is the model the status page's published glyph figure is derived from, because a status
     row must be regenerable in any environment while this measurement needs a browser. So
     main() asserts the model against the live browser measurement on EVERY run and FAILS on
     disagreement: a published number able to drift away from the measurement that gates it
@@ -146,20 +147,21 @@ def predict_glyph_px(viewport_w: int, img_width: int | None, logical_w: float) -
     return round(FONT_PX * max(0, min(img_width, content)) / logical_w, 2)
 
 
-def md_to_html(md: str) -> str:
-    """First screen only: everything above the first horizontal rule."""
+def md_to_html(md: str, base: Path = REPO_ROOT) -> str:
+    """First screen only: everything above the first horizontal rule. A relative asset src is
+    resolved from `base`, the directory of the document."""
     first_screen = md.split("\n---\n", 1)[0]
     try:
         import markdown  # type: ignore
         body = markdown.markdown(first_screen, extensions=["fenced_code", "tables"])
     except Exception:
         body = _mini_markdown(first_screen)
-    # The preview lives outside the repo, so repo-relative asset srcs must be rewritten
+    # The preview lives outside the repo, so document-relative asset srcs must be rewritten
     # to absolute file: paths. Without this the hero silently fails to load and the page
     # is measured with an alt-text box in place of a ~500px-tall image -- which makes an
     # over-the-fold layout look far closer to fitting than it is.
     body = re.sub(r'src="(?!https?:|file:|/)([^"]+)"',
-                  lambda m: f'src="{(REPO_ROOT / m.group(1)).as_uri()}"', body)
+                  lambda m: f'src="{(base / m.group(1)).resolve().as_uri()}"', body)
     return f"<!doctype html><meta charset=utf-8><style>{CSS}</style><main>{body}</main>"
 
 
@@ -213,11 +215,13 @@ PROBE = """(() => {
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--readme", default=str(REPO_ROOT / "README.md"))
+    ap.add_argument("--doc", "--readme", dest="doc", default=str(REPO_ROOT / "docs" / "status.md"),
+                    help="the document that holds the hero (default: docs/status.md)")
     a = ap.parse_args()
 
-    readme_text = Path(a.readme).read_text(encoding="utf-8")
-    html = md_to_html(readme_text)
+    doc = Path(a.doc).resolve()
+    readme_text = doc.read_text(encoding="utf-8")
+    html = md_to_html(readme_text, doc.parent)
     # UNIQUE per run. A fixed filename is a silent cross-lane hazard: under concurrent
     # mutation two measurements running at once overwrite each other's preview and each
     # then measures the other's page, reporting confident numbers about the wrong document.
@@ -238,7 +242,7 @@ def main() -> int:
     # The ruler the published figure is scaled by must match the asset it describes. Reported
     # into model_drift as well as into failures: a figure computed with the wrong font-size HAS
     # drifted from the measurement that gates it, and model_drift is the one result here that
-    # the status ratchet consumes — so a wrong ruler turns the README's own gate red instead of
+    # the status ratchet consumes — so a wrong ruler turns the status page's own gate red instead of
     # sitting in a list nothing reads. It stays separate from the glyph floor's verdict, which
     # is deliberately un-gated and disclosed on the page instead.
     line_fs = asset_line_font_px(svg)
@@ -277,7 +281,7 @@ def main() -> int:
             if glyph_px < GLYPH_FLOOR_PX:
                 failures.append(f"{w}x{h}/{scheme}: hero glyph height {glyph_px}px "
                                 f"< {GLYPH_FLOOR_PX}px")
-            # The README publishes this figure from predict_glyph_px(), which needs no
+            # The status page publishes this figure from predict_glyph_px(), which needs no
             # browser and so can be regenerated anywhere. Binding the two together here is
             # what makes the published number a MEASURED number rather than a modelled one.
             # Reported in its OWN list as well as in failures: drift is the one result here

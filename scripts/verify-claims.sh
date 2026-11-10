@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Description: Self-verifying headline-claims gate. Runs ALL THREE hero-provenance audits in
-#   --strict mode so any source-verification downgrade is a hard failure, the README
-#   region check and the capture-provenance check, the adversarial-corpus check, and the
+#   --strict mode so any source-verification downgrade is a hard failure, the region check of
+#   README.md and docs/status.md and the capture-provenance check, the adversarial-corpus check, and the
 #   enforcement-evidence gates (docs/ENFORCEMENT-LEDGER.md against the tracked settings.json
 #   and the guard sources).
 # What it does NOT measure: the hero's rendered glyph sizes. Without the Python playwright package
-#   and a Chromium (a default checkout and the baseline CI job install neither) the figures the
-#   README publishes are model predictions, not measurements. The region check then prints a NOTE
+#   and a Chromium (a default checkout and the baseline CI job install neither) the figures
+#   docs/status.md publishes are model predictions, not measurements. The region check then prints a NOTE
 #   and its last line says the glyph model was not measured; the step still passes. A run is only
 #   known to have measured them when that line says "glyph model asserted".
 # Usage: bash scripts/verify-claims.sh
@@ -53,19 +53,21 @@ run_audit .github/assets/hook-trace.json .github/assets/hook-hero.svg
 run_audit .github/assets/guard-hero.json .github/assets/guard-hero.svg
 
 # ---------------------------------------------------------------------------
-# 3b. README canonical-region ratchet + hero capture provenance.
-#     These two gates protect the README's generated regions and the hero capture chain.
-#     scripts/generate-hero-status.py --check re-derives the five canonical regions and
-#     byte-compares each with the README: "Measured proof" (the proof table) and "Commands"
-#     (the commands table), both counted from the repository by scripts/readme_facts.py, and
-#     the claim rows (limits, disclosure, status) under "Status and known limits". It also
-#     asserts that every region sits inside its H2 section and the claim regions in order, that
-#     no number is typed by hand in the prose outside the regions, and that the hero's published
-#     glyph figure still equals what the browser measures (scripts/measure-hero-fold.py; that
-#     step needs the Python playwright package and a headless browser, and where there is none it
-#     reports itself UNVERIFIED without failing: the published glyph figures are then model
-#     predictions, not measurements, and the check's last line says so). A count region whose
-#     facts cannot be derived fails the check and names the input.
+# 3b. Canonical-region ratchet of README.md and docs/status.md + hero capture provenance.
+#     These two gates protect the generated regions of the two documents and the hero capture chain.
+#     scripts/generate-hero-status.py --check re-derives the six canonical regions and
+#     byte-compares each with its document. README.md holds "The command surface" and "The cast of
+#     agents" (the commands and agents tables, from the frontmatter of commands/*.md and
+#     agents/*.md). docs/status.md holds "Measured proof" (the proof table, counted from the
+#     repository by scripts/readme_facts.py), the hero recording and the claim rows (limits,
+#     disclosure, status) under "Status and known limits". It also asserts that every region sits
+#     in its own document and inside its H2 section and the claim regions in order, that no number
+#     is typed by hand in the prose of either document outside the regions, that README.md names
+#     no internal name, and that the hero's published glyph figure still equals what the browser
+#     measures (scripts/measure-hero-fold.py; that step needs the Python playwright package and a
+#     headless browser, and where there is none it reports itself UNVERIFIED without failing: the
+#     published glyph figures are then model predictions, not measurements, and the check's last
+#     line says so). A count region whose facts cannot be derived fails the check and names the input.
 #     Landed HERE because this file is the aggregate gate and the lane that authored those
 #     gates may not edit it — an enforcement mechanism nobody invokes is advisory, whatever
 #     its own tests say. Neither call is suffixed `|| true` and neither is redirected away
@@ -74,13 +76,13 @@ run_audit .github/assets/guard-hero.json .github/assets/guard-hero.svg
 #     verify-hero-provenance.py is deliberately invoked WITHOUT --skip-rerun, so the committed
 #     manifest and SVG are re-derived from the committed capture on every run. That rerun
 #     regenerates into a temporary directory and writes nothing into .github/assets/ (verified
-#     this cycle by reading check_rerun); the README-mutating tamper table is reached only
-#     under --tamper, which is not passed here.
+#     this cycle by reading check_rerun); the tamper table, which mutates a scratch copy of
+#     docs/status.md, is reached only under --tamper, which is not passed here.
 # ---------------------------------------------------------------------------
 if python3 scripts/generate-hero-status.py --check; then
-  pass "hero-status: README regions, positions and numbers match the generator's derivation (--check)"
+  pass "hero-status: README.md and docs/status.md regions, positions, numbers and names match the generator's derivation (--check)"
 else
-  fail "hero-status: scripts/generate-hero-status.py --check reports a README region has drifted, moved, or a number is typed by hand"
+  fail "hero-status: scripts/generate-hero-status.py --check reports a region of README.md or docs/status.md has drifted, moved, or a number or an internal name is typed by hand"
 fi
 
 if python3 scripts/verify-hero-provenance.py; then

@@ -189,16 +189,23 @@ grep -o 'pretool-git-privilege-guard.py' ~/.claude/settings.json | head -1
 **Q: Why didn't my work get committed automatically?**
 
 A: By design — nothing commits on HEAD on its own, and nothing pushes unless `GIT_AUTO_PUSH=1`.
-Run `/close` then `/commit`, then `/push` (each is grant-gated), or commit/push from your own
-shell as a human.
+You type the command in the Claude Code session: `/commit` commits (it first runs `/close`'s
+steps for a task that is not closed yet) and `/push` pushes, each under its own single-use grant.
+`/allow git commit` or `/allow git push` grants one matching call instead. These commands are
+human-only: the model cannot invoke them.
 
 **Q: A commit or push is being blocked.**
 
-A: That is the git kernel working as designed. An agent's commit lands through `/close` then
-`/commit`, a push through `/push`. `/do` consent does not cover `git commit`, `git push`, a git
-operation the guard refuses without `/do` that can move the protected branch (a merge, hard reset
-or ref write onto it) or whose landing branch it cannot tell, or a git command the guard cannot
-classify; a merge into it lands through `/merge`. `/allow <command>` grants one matching call.
+A: That is the git kernel working as designed. `hooks/pretool-git-privilege-guard.py` refuses a
+`git commit` or `git push` from the Bash tool, for the main agent and every subagent, unless a
+grant covers it: an agent's commit lands through `/commit`, a push through `/push`. `/do` consent
+does not cover `git commit`, `git push`, a git operation the guard refuses without `/do` that can
+move the protected branch (a merge, hard reset or ref write onto it) or whose landing branch it
+cannot tell, or a git command the guard cannot classify; a merge into it lands through `/merge`.
+`/allow <command>` grants one matching call (300 s). Refused even with a grant: a force, delete
+or ref-rewrite push (`--force`, `-f`, `--force-with-lease`, `--delete`, `--mirror`, a `+` or `:`
+refspec; `/allow git push --force` is itself refused by the settings deny), and a commit that skips
+the commit hooks (`--no-verify`, `-n`, a `core.hooksPath` override).
 
 **Q: How do I temporarily disable the harness?**
 
@@ -218,6 +225,6 @@ You can now start using Claude Code. To be explicit about the git model:
    initial commit) at session start in a directory that has none.
 2. It does **NOT** commit after each response — you run `/commit` (grant-gated).
 3. It pushes nothing unless `GIT_AUTO_PUSH` is exactly `1` — you run `/push` (grant-gated).
-   As a human you can also commit/push from your own shell, or grant one call with `/allow`.
+   Instead of `/commit` or `/push`, `/allow git commit` or `/allow git push` grants one call.
 
 See [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6 for the full grant kernel.

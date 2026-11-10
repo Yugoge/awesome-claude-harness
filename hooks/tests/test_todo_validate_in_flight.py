@@ -41,6 +41,11 @@ def _at(steps, n):
             for i, s in enumerate(steps)]
 
 
+def _i(steps, label):
+    """The position of the step labelled ``label`` (``Step 9``, ``Step 4c``) in ``steps``."""
+    return next(i for i, s in enumerate(steps) if s["content"].startswith(f"{label}:"))
+
+
 def _done(steps, n):
     """The TodoWrite that completes step n and starts the next one."""
     out = _at(steps, n + 1) if n + 1 < len(steps) else _at(steps, n)
@@ -180,10 +185,11 @@ def test_the_in_flight_dev_step_9_refusal_is_origin_masters(s):
     """origin/master's /dev Step 9 dispatches graphify only when its sentinel is there; completing
     the step without that call is refused with origin/master's text, which the base kit shows."""
     s.command("dev", "fix the bug", OLD_TEXT.format(command="dev", args="fix the bug"))
-    s.walk(8, calls=(3, 6))  # Step 4 (BA) and Step 7 (QA) dispatch theirs
-    pre = s.todo(_done(s.steps, 8))
+    nine = _i(s.steps, "Step 9")
+    s.walk(nine, calls=tuple(_i(s.steps, label) for label in ("Step 4", "Step 4c", "Step 7")))  # BA, BA, QA
+    pre = s.todo(_done(s.steps, nine))
     assert pre.returncode == 2
-    assert pre.stderr == ('\nBLOCKED: Cannot complete Step 8 ("Step 9: Graphify enrichment: dispatch graphify '
+    assert pre.stderr == (f'\nBLOCKED: Cannot complete Step {nine} ("Step 9: Graphify enrichment: dispatch graphify '
                           'subagent (advisory)").\nThis step requires a subagent call (graphify) that has not been '
                           'made.\nCall the Agent tool first, then mark completed.\n\n')
 
@@ -192,24 +198,31 @@ def test_an_in_flight_call_counts_for_one_step_of_its_window_only(s):
     """In flight, a call counts for one step: QA's call for Step 7 does not complete Step 13 too, and a
     BA call made more than two steps before Step 4 does not count for it."""
     s.command("dev", "fix the bug", OLD_TEXT.format(command="dev", args="fix the bug"))
+    i = {label: _i(s.steps, label) for label in ("Step 4", "Step 4c", "Step 5", "Step 7", "Step 8", "Step 9",
+                                                   "Step 10", "Step 13")}
     s.walk(0)
     s.agent("ba")  # Step 1 in progress: Step 4 lies outside the window 1..3
     for n in range(3):
         assert s.todo(_done(s.steps, n)).returncode == 0
-    assert s.todo(_done(s.steps, 3)).returncode == 2  # Step 4 (BA)
+    assert s.todo(_done(s.steps, i["Step 4"])).returncode == 2  # Step 4 (BA)
     s.agent("ba")
-    assert s.todo(_done(s.steps, 3)).returncode == 0
-    for n in range(4, 6):
+    assert s.todo(_done(s.steps, i["Step 4"])).returncode == 0
+    for n in range(i["Step 4"] + 1, i["Step 4c"]):  # Steps 4a and 4b: no subagent of their own
+        assert s.todo(_done(s.steps, n)).returncode == 0
+    assert s.todo(_done(s.steps, i["Step 4c"])).returncode == 2  # Step 4c (BA): Step 4's call is spent
+    s.agent("ba")
+    assert s.todo(_done(s.steps, i["Step 4c"])).returncode == 0
+    for n in range(i["Step 5"], i["Step 7"]):
         assert s.todo(_done(s.steps, n)).returncode == 0
     s.agent("qa")  # Step 7 in progress
-    assert s.todo(_done(s.steps, 6)).returncode == 0
-    s.todo(_done(s.steps, 7))
+    assert s.todo(_done(s.steps, i["Step 7"])).returncode == 0
+    s.todo(_done(s.steps, i["Step 8"]))
     s.agent("graphify")
-    assert s.todo(_done(s.steps, 8)).returncode == 0
+    assert s.todo(_done(s.steps, i["Step 9"])).returncode == 0
     s.agent("dev")
-    for n in range(9, 12):
+    for n in range(i["Step 10"], i["Step 13"]):
         assert s.todo(_done(s.steps, n)).returncode == 0, n
-    pre = s.todo(_done(s.steps, 12))  # Step 13 (QA): Step 7's call is spent
-    assert pre.returncode == 2 and 'Cannot complete Step 12 ("Step 13: Delegate to QA subagent")' in pre.stderr
+    pre = s.todo(_done(s.steps, i["Step 13"]))  # Step 13 (QA): Step 7's call is spent
+    assert pre.returncode == 2 and f'Cannot complete Step {i["Step 13"]} ("Step 13: Delegate to QA subagent")' in pre.stderr
     s.agent("qa")
-    assert s.todo(_done(s.steps, 12)).returncode == 0
+    assert s.todo(_done(s.steps, i["Step 13"])).returncode == 0

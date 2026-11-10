@@ -219,7 +219,7 @@ def test_shipped_settings_route_ask_user_question_to_the_guard():
     """The CLI's matcher rule (hookrun.select, as runhook.py) sends a PreToolUse
     AskUserQuestion payload to the guard: since P12 the write gate, which runs the guard as its
     overnight-boundary rule for that tool."""
-    settings = json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8"))
+    settings = _expanded(json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8")))
     hooks = [h["hook"] for h in hookrun.select(settings, "PreToolUse", {"tool_name": "AskUserQuestion"})]
     assert "hooks/pretool-write-gate.py" in hooks
     sys.path.insert(0, str(REPO_ROOT / "hooks"))
@@ -229,3 +229,13 @@ def test_shipped_settings_route_ask_user_question_to_the_guard():
         sys.path.pop(0)
     rules = [r.path for r in write_gate.RULES if r.applies("AskUserQuestion")]
     assert "pretool-overnight-hook-guard.py" in rules, rules
+
+
+def _expanded(settings: dict) -> dict:
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    import importlib.util
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("_launch_settings", root / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(settings, str(root))

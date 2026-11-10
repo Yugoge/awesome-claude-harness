@@ -153,7 +153,7 @@ def test_gated_and_control_command_tuples():
         "close", "commit", "merge", "push",
     )
     assert stop_contract.CONTROL_COMMANDS == (
-        "allow", "restart", "checkpoint", "tickets",
+        "allow", "restart", "checkpoint", "tickets", "rating",
     )
     assert not set(stop_contract.GATED_COMMANDS) & set(stop_contract.CONTROL_COMMANDS)
 
@@ -268,6 +268,9 @@ def test_span_opener_harness_commands_outside_control():
     assert stop_contract.span_opener(_typed(_command_text("dev", "x")), commands) == ("dev", "x")
     assert stop_contract.span_opener(_typed("/stop now"), commands) == ("stop", "now")
     assert stop_contract.span_opener(_typed(_command_text("allow", "git push")), commands) is None
+    for control in ("tickets", "rating"):  # the read-only views open no span, typed either way
+        assert stop_contract.span_opener(_typed(_command_text(control, "")), commands) is None
+        assert stop_contract.span_opener(_typed(f"/{control}"), commands) is None
     assert stop_contract.span_opener(_typed(_command_text("model", "opus")), commands) is None
     assert stop_contract.span_opener(_typed("plain prompt"), commands) is None
     assert stop_contract.span_opener(_skill_expansion(_command_text("dev", "x")), commands) is None
@@ -298,6 +301,29 @@ def test_active_command_allow_and_builtin_do_not_replace(tmp_path):
         _typed("/model sonnet", 6),
     ])
     assert stop_contract.active_command(transcript) == "dev"
+
+
+def test_active_command_read_only_views_do_not_replace(tmp_path):
+    # /rating is a CONTROL command as /tickets is: typed after any gated command, once or twice, it leaves
+    # that command active, so the Stop gate and the score sweep still read its span.
+    for view in ("tickets", "rating"):
+        for opener in ("dev", "close", "dev-overnight"):
+            once = _write(tmp_path / f"{view}-{opener}-once.jsonl", _queue_operations() + [
+                _typed(_command_text(opener, "x"), 1),
+                _command_body(2),
+                _typed(_command_text(view, ""), 3),
+                _command_body(4),
+            ])
+            twice = _write(tmp_path / f"{view}-{opener}-twice.jsonl", _queue_operations() + [
+                _typed(_command_text(opener, "x"), 1),
+                _command_body(2),
+                _typed(_command_text(view, ""), 3),
+                _command_body(4),
+                _assistant([{"type": "text", "text": "Shown."}], 5),
+                _typed(f"/{view}", 6),
+            ])
+            assert stop_contract.active_command(once) == opener, (view, opener)
+            assert stop_contract.active_command(twice) == opener, (view, opener)
 
 
 def test_active_command_typed_stop_replaces(tmp_path):
@@ -336,5 +362,12 @@ def test_active_command_none_without_command_or_file(tmp_path):
         _assistant([{"type": "text", "text": "Looking."}], 6),
     ])
     assert stop_contract.active_command(plain) is None
+    for view in ("tickets", "rating"):  # a read-only view alone, with no earlier command, opens nothing
+        alone = _write(tmp_path / f"{view}.jsonl", _queue_operations() + [
+            _typed(_command_text(view, ""), 1),
+            _command_body(2),
+            _typed(f"/{view}", 3),
+        ])
+        assert stop_contract.active_command(alone) is None, view
     empty = _write(tmp_path / "empty.jsonl", [])
     assert stop_contract.active_command(empty) is None

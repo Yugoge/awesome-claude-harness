@@ -19,9 +19,10 @@ hooks that read the contract on the same return.
 This hook writes no workflow bookmark. Whether a step's subagent ran is decided
 once: by the transcript in a Claude session (pretool-todo-validate.py's Gate 4)
 and by the Codex transcript's subagent evidence in the Codex plan path
-(pretool-workflow-gate.py, which records it in its own Codex plan record). Whether
-the dispatch produced its artifact is decided by posttool-overnight-file-check.py
-at the same PostToolUse and by the producer's own stop (G2), not here.
+(pretool-workflow-gate.py, native_subagent_evidence_for_transition, which records
+it in its own Codex plan record). Whether the dispatch produced its artifact is
+decided by posttool-overnight-file-check.py at the same PostToolUse (G3) and by
+the producer's own stop (G2), not here.
 
 Its outcome (the contract written, kept, or not written and why) reaches the agent
 as additionalContext.
@@ -51,15 +52,12 @@ from lib import overnight
 # ---------------------------------------------------------------------------
 
 def _parse_stdin() -> tuple:
-    """Parse PostToolUse stdin JSON. Returns (data, session_id, prompt)."""
+    """Parse PostToolUse stdin JSON. Returns (data, session_id)."""
     try:
         data = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
-    sid = data.get('session_id', 'default')
-    ti = data.get('tool_input', {}) or {}
-    prompt = ti.get('prompt', '') if isinstance(ti, dict) else ''
-    return data, sid, prompt
+    return data, data.get('session_id', 'default')
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +159,12 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
           f'{len(calls)} required call(s): {path}')
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def _main() -> None:
-    stdin_data, session_id, _prompt = _parse_stdin()
+    stdin_data, session_id = _parse_stdin()
     _write_cycle_contract(stdin_data, session_id)
     sys.exit(0)
 

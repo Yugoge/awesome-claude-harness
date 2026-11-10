@@ -443,24 +443,28 @@ def test_a_completed_do_report_concludes_beside_dev_s_report(tmp_path):
 
 
 @pytest.mark.parametrize("stage", ["dev", "close"])
-def test_q7_the_do_report_lists_exactly_the_files_of_dev_s_report(tmp_path, stage):
+def test_q7_dev_s_report_lists_the_do_report_s_files(tmp_path, stage):
     """P5 R8's step at P3's merge (A3.c on the route without a transcript, a /close or /commit
-    span): where dev's report concludes the /do task, the do-report's files_modified and
-    files_created equal that report's (do_report_gaps); a difference is one gap naming dev's
-    files. No schema is asked of the do-report there: it is not completed by the route's own
-    condition."""
+    span), as P5-62 corrects it: where dev's report concludes the /do task, its files_modified and
+    files_created hold each file the do-report lists (do_report_gaps), and may hold more (what dev
+    wrote completing the /do); a file it lacks is one gap naming dev's report, which dev repairs,
+    and the files. No schema is asked of the do-report there: it is not completed by the route's
+    own condition, and its producer's /do has ended (D8)."""
     tree = Tree(tmp_path / "proj")
     tree.write(f"do-report-{TASK}.json", do_report("blocked"))
     tree.write(f"dev-report-{TASK}.json", dev_report(TASK, files=("scripts/one.py", "scripts/two.py")))
     if stage == "close":
         tree.write(f"close-report-{TASK}.md", "# Close\n\nCLOSE: YES — codex disabled by user\n")
-    disposition, gaps = outcome(tree.root, stage)
-    assert disposition == "incomplete"
-    assert pairs(gaps) == [(tree.rel(f"do-report-{TASK}.json"), "FILES_NOT_DEV_REPORT")]
-    assert json.dumps(["scripts/one.py", "scripts/two.py"]) in gaps[0]["message"]
+    assert outcome(tree.root, stage) == ("chain_pass", [])
     tree.write(f"do-report-{TASK}.json", do_report("blocked", do={
         "status": "blocked", "summary": "s", "files_modified": ["scripts/two.py"],
-        "files_created": ["scripts/one.py"]}))
+        "files_created": ["scripts/one.py", "scripts/three.py"]}))
+    disposition, gaps = outcome(tree.root, stage)
+    assert disposition == "incomplete"
+    assert pairs(gaps) == [(tree.rel(f"dev-report-{TASK}.json"), "FILES_NOT_DEV_REPORT")]
+    assert gaps[0]["message"].endswith(json.dumps(["scripts/three.py"]))
+    tree.write(f"dev-report-{TASK}.json", dev_report(
+        TASK, files=("scripts/one.py", "scripts/two.py", "scripts/three.py")))
     assert outcome(tree.root, stage) == ("chain_pass", [])
 
 

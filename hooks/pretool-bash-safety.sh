@@ -62,7 +62,26 @@ COMMIT_GRANT_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-grant
 # awk on most Linux), `node(js)?`. NEVER remove a token to narrow a layer: an
 # interpreter writes with no redirection at all, so dropping one opens a hole
 # the redirection branch cannot see.
-ARTIFACT_WRITE_VERB_RE='(\btee([^A-Za-z_]|$)|\bcp(io)?([^A-Za-z_]|$)|\bmv([^A-Za-z_]|$)|\bln([^A-Za-z_]|$)|\btouch([^A-Za-z_]|$)|\bsed\s+-i|\bi?python([^A-Za-z_]|$)|\binstall([^A-Za-z_]|$)|\bdd\s|\btruncate([^A-Za-z_]|$)|\bshred([^A-Za-z_]|$)|\brsync([^A-Za-z_]|$)|\b[gmn]?awk([^A-Za-z_]|$)|\bperl([^A-Za-z_]|$)|\bnode(js)?([^A-Za-z_]|$)|\bruby([^A-Za-z_]|$))'
+#
+# The RIGHT bound runs to the end of the shell word, and a `/` before that end
+# means "not a verb" (T1-1). The old bound `([^A-Za-z_]|$)` looked at one
+# character only, so a DIRECTORY named like a verb read as a launch of it:
+# `rerun-node20-files/`, `python3-x/`, a home directory whose name is that of an interpreter. Under such a state
+# root the namespace path itself carried the "verb", and `NS=<ns>; ls -l "$NS"`
+# was refused by branch 3 (a verb, then a `$` expansion) on both layers, for the
+# main agent and a subagent alike. A word whose last path segment is the verb
+# is what a shell runs; a segment followed by `/` is a directory on the way to
+# something else. The bound is: an optional run that starts with a non-letter
+# (`3`, `3.12`, `20`, `-dbg`) and holds only characters that can never split a
+# word (letters, digits, `.`, `-`, `_`, `+`, `@`, `%`, `~`, `:`, `=`, `#`, `^`),
+# then any other character or the end, never `/`. Every character outside that
+# run ENDS the word, which is the conservative reading: whitespace and the
+# operators, but also `$`, a backquote and `,`, because an expansion
+# (`tee${IFS}<ns>`, `cp$(echo)/src <ns>`) or a brace list (`{tee,<ns>}`) can
+# split there, and a quote or a glob character, which merely refuses more. So
+# `python3-dbg`, `perl5.36`, `"/usr/bin/python3"` and `<dir>/bin/python3`
+# under an interpreter-named directory are still verbs.
+ARTIFACT_WRITE_VERB_RE='(\btee([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bcp(io)?([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bmv([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bln([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\btouch([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bsed\s+-i|\bi?python([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\binstall([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bdd\s|\btruncate([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bshred([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\brsync([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\b[gmn]?awk([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bperl([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bnode(js)?([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)|\bruby([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$))'
 # A shell NAME=VALUE capture, used as a PREFIX to a namespace regex: it matches
 # the point where a command binds the protected namespace into a variable.
 ARTIFACT_NS_CAPTURE_RE="(^|[[:space:];|&(])[A-Za-z_][A-Za-z0-9_]*=['\"]?"
@@ -1065,9 +1084,11 @@ fi
 #       (`python3 -c 'print(open("<namespace>").read())'`) -- indistinguishable
 #       from a write without parsing the interpreter's own program, so it is
 #       refused on purpose; use `ls`/`cat`/`jq`/`grep`, which are not verbs;
-#   (c) the state root itself contains a verb token as a path component, which
-#       places it before every namespace occurrence. The pre-binding predicate
-#       refused these too, so none of the three is a regression.
+#   (c) a word whose LAST path segment is a verb token, ahead of the namespace
+#       (`ls /srv/node "$NS"`), reads as that verb. A verb-named DIRECTORY in
+#       the state root no longer does (T1-1): the verb's right bound refuses a
+#       `/` before the end of its word. The pre-binding predicate refused all
+#       three too, so none of them is a regression.
 #
 # The interpreters (`python|awk|perl|node|ruby`) are in the second branch
 # deliberately: an interpreter writes a grant with no redirection at all, so

@@ -1,6 +1,8 @@
 ---
 description: Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations become directly allowed). The next prompt clears it.
 disable-model-invocation: true
+summary: "Let the main agent do one task itself for this turn, past the orchestrator gate; it does not cover commits or pushes."
+group: Control
 ---
 
 `/do <task>` is typed by the owner (`disable-model-invocation: true`): `hooks/prompt-workflow.py` sets the consent flag and mints the task id, and this body reaches you with the typed arguments. You, the main agent, do the task directly; the consent ends at the next prompt that is not /do. It does not cover `git commit`, `git push`, a git operation the guard refuses without /do that can move the protected branch or whose landing branch it cannot tell, or a git command the guard cannot classify (`hooks/pretool-git-privilege-guard.py`): a commit lands through /close then /commit, a push through /push, a merge into the protected branch through /merge.

@@ -1,5 +1,7 @@
 """hooks/session-gitignore-propagate.sh (SessionStart): the harness's runtime directories in a
-product repo are listed in the clone's own exclude file, one line each, and nothing else is written.
+product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
+and the overnight state), are listed in the clone's own exclude file, one line each, and nothing
+else is written.
 
 A product repo's tracked .gitignore stays byte-identical, a docs/dev artifact /commit stages and a
 user's own new docs file stay visible, a linked worktree resolves its exclude file through
@@ -13,7 +15,10 @@ import subprocess
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "session-gitignore-propagate.sh"
-RUNTIME = [".claude/dev-registry/", ".claude/dev-start-replays/", ".claude/specs/", ".claude/workflow-locks/"]
+RUNTIME = [".claude/dev-registry/", ".claude/dev-start-replays/", ".claude/overnight-fresh-clones/",
+           ".claude/overnight-git-bin/", ".claude/overnight-git-policy-bin/", ".claude/specs/",
+           ".claude/workflow-locks/", ".claude/worktrees/",
+           ".claude/overnight-state-*.json", ".claude/workflow-*.json"]
 
 
 def _env(home):
@@ -50,7 +55,10 @@ def _toy(tmp_path):
 def _runtime_files(root, sid="s1"):
     paths = [".claude/dev-registry/agent-index.json", ".claude/dev-registry/dev-t1/dev.json",
              f".claude/dev-start-replays/{sid}/d.json", ".claude/specs/t1/cp-state-qa.json",
-             f".claude/workflow-locks/{sid}.lock"]
+             f".claude/workflow-locks/{sid}.lock", f".claude/workflow-{sid}.json",
+             f".claude/overnight-state-{sid}.json", ".claude/overnight-git-bin/git",
+             ".claude/overnight-git-policy-bin/git", ".claude/worktrees/overnight-n1/README.md",
+             ".claude/overnight-fresh-clones/overnight-n1/README.md"]
     for rel in paths:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text("{}\n")
@@ -66,7 +74,9 @@ def test_product_repo_lists_each_runtime_dir_once_and_writes_no_tracked_file(tmp
     env, repo = _toy(tmp_path)
     before = hashlib.sha256((repo / ".gitignore").read_bytes()).hexdigest()
     paths = _runtime_files(repo)
-    for doc in ("docs/dev/dev-report-t1.json", "docs/dev/ticket-t1.md", "docs/notes/mine.md"):
+    # What Claude Code or a user keeps in .claude/ on purpose stays visible beside the patterns.
+    for doc in ("docs/dev/dev-report-t1.json", "docs/dev/ticket-t1.md", "docs/notes/mine.md",
+                ".claude/settings.json", ".claude/workflow.json", ".claude/commands/workflow-x.json"):
         (repo / doc).parent.mkdir(parents=True, exist_ok=True)
         (repo / doc).write_text("x\n")
     _hook(env, repo)
@@ -77,8 +87,9 @@ def test_product_repo_lists_each_runtime_dir_once_and_writes_no_tracked_file(tmp
         out = _git(env, repo, "check-ignore", "-v", rel)
         assert out.startswith(".git/info/exclude:"), out
     status = _git(env, repo, "status", "--porcelain", "--untracked-files=all").splitlines()
-    assert sorted(status) == ["?? docs/dev/dev-report-t1.json", "?? docs/dev/ticket-t1.md",
-                              "?? docs/notes/mine.md"]
+    assert sorted(status) == ["?? .claude/commands/workflow-x.json", "?? .claude/settings.json",
+                              "?? .claude/workflow.json", "?? docs/dev/dev-report-t1.json",
+                              "?? docs/dev/ticket-t1.md", "?? docs/notes/mine.md"]
     _git(env, repo, "add", "docs/dev/dev-report-t1.json", "docs/dev/ticket-t1.md")  # no ignored path
 
 

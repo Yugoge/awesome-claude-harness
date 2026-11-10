@@ -639,8 +639,12 @@ if [[ -x "$SELFTEST_SCRIPT" ]]; then
 fi
 
 # --- dev-registry sentinel dir for child-actor classification (round-3 §2) ---
-DEV_REGISTRY_DIR="$MAIN_ROOT/.claude/dev-registry/$SESSION_ID"
-mkdir -p "$DEV_REGISTRY_DIR" 2>/dev/null || true
+# The directory the session id names: obligation.registry_dir_named, the one
+# rule, through its CLI in hooks/prompt-workflow.py. A session id that names
+# none (not one path component) leaves it empty; overnight-init.sh refuses it.
+DEV_REGISTRY_DIR="$(python3 -B "$SCRIPT_DIR_ABS/../hooks/prompt-workflow.py" registry-dir \
+    --project-dir "$MAIN_ROOT" --name "$SESSION_ID" 2>/dev/null)" || DEV_REGISTRY_DIR=""
+[[ -z "$DEV_REGISTRY_DIR" ]] || mkdir -p "$DEV_REGISTRY_DIR" 2>/dev/null || true
 
 # --- isolation_active_until == end_time (liveness key, M9/M10) ---------------
 ISOLATION_ACTIVE_UNTIL="$END_TIME"

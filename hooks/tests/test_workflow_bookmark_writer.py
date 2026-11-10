@@ -6,7 +6,9 @@ The Codex plan path of pretool-workflow-gate.py keeps its plan state in its own
 record (the Codex todos file, keyed to the command start) and only reads the
 bookmark; posttool-subagent-track.py writes neither. The writer replaces the file whole (a new file renamed over it), so a
 handle opened on the old bookmark keeps reading the old bytes; four of the five
-writes used to rewrite the file in place.
+writes used to rewrite the file in place. P10 R6 deleted the fifth,
+posttool-subagent-track.py's: only a Codex plan's bookmark reached it, and that
+path records its own subagent steps.
 
 Every site test fails on the code before the one writer: either the writer is
 missing, the site does not call it, or the site rewrites the file in place.

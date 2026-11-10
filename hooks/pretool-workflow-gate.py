@@ -627,6 +627,186 @@ def _structured_completed_paths(output) -> set[str]:
     return completed
 
 
+class _ConflictingEvidence(Exception):
+    """Two records of one step window disagree on a spawn's or a child's identity.
+
+    Raised by ``_CodexStepWindow`` and caught only by ``completed_codex_subagents``,
+    which then returns no evidence at all."""
+
+
+def _transcript_events(path: Path) -> list[tuple[int, dict]] | None:
+    """Every JSON-object line of the transcript with its 1-based line number, or None
+    when the file cannot be read or any line is not JSON (a blank line included)."""
+    events = []
+    try:
+        for line_no, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+            event = json.loads(line)
+            if isinstance(event, dict):
+                events.append((line_no, event))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return events
+
+
+def _child_identity(record: dict) -> tuple:
+    return (record['call_id'], record['agent_thread_id'], record['agent_path'], record['task_name'])
+
+
+def _is_window_start(payload: dict, call_id, spawn, started_after_ms: int) -> bool:
+    """A ``started`` activity that opens the child a spawn of this window asked for."""
+    agent_path = payload.get('agent_path')
+    agent_thread_id = payload.get('agent_thread_id')
+    occurred_ms = payload.get('occurred_at_ms')
+    return (
+        payload.get('kind') == 'started'
+        and isinstance(call_id, str)
+        and isinstance(spawn, dict)
+        and isinstance(agent_path, str)
+        and agent_path.rsplit('/', 1)[-1] == spawn['task_name']
+        and isinstance(agent_thread_id, str)
+        and bool(agent_thread_id.strip())
+        and type(occurred_ms) is int
+        and occurred_ms >= started_after_ms
+        and occurred_ms >= spawn['spawned_at_ms']
+    )
+
+
+class _CodexStepWindow:
+    """The spawn, start, terminal and structured-status records of one step window,
+    accumulated one transcript event at a time (``completed_codex_subagents``)."""
+
+    def __init__(self, started_after_ms: int, completed_before_ms: int | None) -> None:
+        self.started_after_ms = started_after_ms
+        self.completed_before_ms = completed_before_ms
+        self.spawns: dict[str, dict] = {}
+        self.started_by_path: dict[str, dict] = {}
+        self.identity_by_call: dict[str, tuple] = {}
+        self.identity_by_thread: dict[str, tuple] = {}
+        self.completed_by_identity: dict[tuple, dict] = {}
+        self.list_agent_calls: set[str] = set()
+        self.structured_success_by_path: dict[str, tuple[int, int]] = {}
+
+    def observe(self, line_no: int, event: dict) -> None:
+        payload = event.get('payload')
+        if not isinstance(payload, dict):
+            return
+        event_ms = _event_epoch_ms(event)
+        event_type, payload_type = event.get('type'), payload.get('type')
+        if event_type == 'response_item' and payload_type == 'function_call':
+            self._function_call(line_no, payload, event_ms)
+        elif event_type == 'response_item' and payload_type == 'function_call_output':
+            self._list_agents_output(line_no, payload, event_ms)
+        elif event_type == 'event_msg' and payload_type == 'sub_agent_activity':
+            self._activity(line_no, payload)
+        elif event_type == 'response_item' and payload_type == 'agent_message':
+            self._agent_message(line_no, payload, event_ms)
+
+    def _function_call(self, line_no: int, payload: dict, event_ms: int | None) -> None:
+        if payload.get('namespace') != 'collaboration':
+            return
+        name = payload.get('name')
+        if name == 'list_agents':
+            call_id = payload.get('call_id')
+            if isinstance(call_id, str) and call_id:
+                self.list_agent_calls.add(call_id)
+        elif name == 'spawn_agent':
+            self._spawn(line_no, payload, event_ms)
+
+    def _spawn(self, line_no: int, payload: dict, event_ms: int | None) -> None:
+        call_id = payload.get('call_id')
+        task_name = _spawn_task_name(payload)
+        if not (
+            isinstance(call_id, str)
+            and call_id
+            and task_name is not None
+            and event_ms is not None
+            and event_ms >= self.started_after_ms
+        ):
+            return
+        existing = self.spawns.get(call_id)
+        if existing is None:
+            self.spawns[call_id] = {'spawned_at_ms': event_ms, 'task_name': task_name, 'spawn_line': line_no}
+        elif existing['task_name'] != task_name:
+            raise _ConflictingEvidence
+
+    def _list_agents_output(self, line_no: int, payload: dict, event_ms: int | None) -> None:
+        if payload.get('call_id') not in self.list_agent_calls or event_ms is None:
+            return
+        if self.completed_before_ms is not None and event_ms >= self.completed_before_ms:
+            return
+        for agent_path in _structured_completed_paths(payload.get('output')):
+            prior = self.structured_success_by_path.get(agent_path)
+            if prior is None or (event_ms, line_no) >= prior:
+                self.structured_success_by_path[agent_path] = (event_ms, line_no)
+
+    def _activity(self, line_no: int, payload: dict) -> None:
+        call_id = payload.get('event_id')
+        spawn = self.spawns.get(call_id)
+        if not _is_window_start(payload, call_id, spawn, self.started_after_ms):
+            return
+        record = {
+            'call_id': call_id,
+            'agent_path': payload['agent_path'],
+            'agent_thread_id': payload['agent_thread_id'],
+            'task_name': spawn['task_name'],
+            'spawned_at_ms': spawn['spawned_at_ms'],
+            'started_at_ms': payload['occurred_at_ms'],
+            'spawn_line': spawn['spawn_line'],
+            'started_line': line_no,
+        }
+        identity = _child_identity(record)
+        first_start = self.started_by_path.get(record['agent_path'])
+        if (
+            self.identity_by_call.get(call_id, identity) != identity
+            or self.identity_by_thread.get(record['agent_thread_id'], identity) != identity
+            or (first_start is not None and _child_identity(first_start) != identity)
+        ):
+            raise _ConflictingEvidence
+        self.identity_by_call[call_id] = identity
+        self.identity_by_thread[record['agent_thread_id']] = identity
+        self.started_by_path.setdefault(record['agent_path'], record)
+
+    def _agent_message(self, line_no: int, payload: dict, event_ms: int | None) -> None:
+        author = payload.get('author')
+        final_text = _final_agent_text(payload)
+        if not isinstance(author, str) or author not in self.started_by_path or final_text is None:
+            return
+        started = self.started_by_path[author]
+        if event_ms is None or event_ms < started['started_at_ms']:
+            return
+        terminal = {
+            **started,
+            'terminal_at_ms': event_ms,
+            'terminal_line': line_no,
+            '_operational_outcome': _terminal_operational_outcome(final_text),
+        }
+        identity = _child_identity(started)
+        existing = self.completed_by_identity.get(identity)
+        if existing is None or event_ms >= existing['terminal_at_ms']:
+            self.completed_by_identity[identity] = terminal
+
+    def completed(self, binding: dict | None) -> list[dict]:
+        """The terminals with no operational outcome that a later structured
+        ``completed`` status confirms, in the order their children first closed."""
+        completed = []
+        for record in self.completed_by_identity.values():
+            if record.pop('_operational_outcome', None) is not None:
+                continue
+            success = self.structured_success_by_path.get(record['agent_path'])
+            if success is None:
+                continue
+            completion_ms, completion_line = success
+            if completion_ms < record['terminal_at_ms'] or completion_line < record['terminal_line']:
+                continue
+            record['completion_observed_at_ms'] = completion_ms
+            record['completion_observed_line'] = completion_line
+            record['completion_status'] = 'completed'
+            if binding is not None:
+                record.update(binding)
+            completed.append(record)
+        return completed
+
+
 def completed_codex_subagents(
     data: dict,
     session_id: str,
@@ -636,174 +816,25 @@ def completed_codex_subagents(
     completed_before_line: int | None = None,
     binding: dict | None = None,
 ) -> list[dict]:
-    """Return closed spawn/start/terminal/status records for one step window."""
+    """Return closed spawn/start/terminal/status records for one step window.
+
+    The whole transcript must parse; events are read up to ``completed_before_line``.
+    Two records that disagree on one child's identity void the window: no records."""
     path = _transcript_path(data, session_id)
     if path is None:
         return []
-    events = []
-    try:
-        for line_no, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
-            event = json.loads(line)
-            if isinstance(event, dict):
-                events.append((line_no, event))
-    except (OSError, json.JSONDecodeError):
+    events = _transcript_events(path)
+    if events is None:
         return []
-
-    spawns: dict[str, dict] = {}
-    started_by_path: dict[str, dict] = {}
-    identity_by_call: dict[str, tuple] = {}
-    identity_by_thread: dict[str, tuple] = {}
-    completed_by_identity: dict[tuple, dict] = {}
-    list_agent_calls: set[str] = set()
-    structured_success_by_path: dict[str, tuple[int, int]] = {}
-    for line_no, event in events:
-        if completed_before_line is not None and line_no >= completed_before_line:
-            break
-        payload = event.get('payload')
-        if not isinstance(payload, dict):
-            continue
-        event_ms = _event_epoch_ms(event)
-        if event.get('type') == 'response_item' and payload.get('type') == 'function_call':
-            if payload.get('namespace') == 'collaboration' and payload.get('name') == 'list_agents':
-                call_id = payload.get('call_id')
-                if isinstance(call_id, str) and call_id:
-                    list_agent_calls.add(call_id)
-                continue
-            if payload.get('namespace') == 'collaboration' and payload.get('name') == 'spawn_agent':
-                call_id = payload.get('call_id')
-                task_name = _spawn_task_name(payload)
-                if (
-                    isinstance(call_id, str)
-                    and call_id
-                    and task_name is not None
-                    and event_ms is not None
-                    and event_ms >= started_after_ms
-                ):
-                    spawn = {
-                        'spawned_at_ms': event_ms,
-                        'task_name': task_name,
-                        'spawn_line': line_no,
-                    }
-                    existing = spawns.get(call_id)
-                    if existing is not None and existing['task_name'] != task_name:
-                        return []
-                    if existing is None:
-                        spawns[call_id] = spawn
-            continue
-        if event.get('type') == 'response_item' and payload.get('type') == 'function_call_output':
-            call_id = payload.get('call_id')
-            if call_id not in list_agent_calls or event_ms is None:
-                continue
-            if completed_before_ms is not None and event_ms >= completed_before_ms:
-                continue
-            for agent_path in _structured_completed_paths(payload.get('output')):
-                prior = structured_success_by_path.get(agent_path)
-                if prior is None or (event_ms, line_no) >= prior:
-                    structured_success_by_path[agent_path] = (event_ms, line_no)
-            continue
-        if event.get('type') == 'event_msg' and payload.get('type') == 'sub_agent_activity':
-            call_id = payload.get('event_id')
-            agent_path = payload.get('agent_path')
-            agent_thread_id = payload.get('agent_thread_id')
-            occurred_ms = payload.get('occurred_at_ms')
-            spawn = spawns.get(call_id)
-            if (
-                payload.get('kind') == 'started'
-                and isinstance(call_id, str)
-                and isinstance(spawn, dict)
-                and isinstance(agent_path, str)
-                and agent_path.rsplit('/', 1)[-1] == spawn['task_name']
-                and isinstance(agent_thread_id, str)
-                and bool(agent_thread_id.strip())
-                and type(occurred_ms) is int
-                and occurred_ms >= started_after_ms
-                and occurred_ms >= spawn['spawned_at_ms']
-            ):
-                identity = (
-                    call_id,
-                    agent_thread_id,
-                    agent_path,
-                    spawn['task_name'],
-                )
-                if (
-                    call_id in identity_by_call
-                    and identity_by_call[call_id] != identity
-                ):
-                    return []
-                if (
-                    agent_thread_id in identity_by_thread
-                    and identity_by_thread[agent_thread_id] != identity
-                ):
-                    return []
-                if (
-                    agent_path in started_by_path
-                    and (
-                        started_by_path[agent_path]['call_id'],
-                        started_by_path[agent_path]['agent_thread_id'],
-                        started_by_path[agent_path]['agent_path'],
-                        started_by_path[agent_path]['task_name'],
-                    ) != identity
-                ):
-                    return []
-                record = {
-                    'call_id': call_id,
-                    'agent_path': agent_path,
-                    'agent_thread_id': agent_thread_id,
-                    'task_name': spawn['task_name'],
-                    'spawned_at_ms': spawn['spawned_at_ms'],
-                    'started_at_ms': occurred_ms,
-                    'spawn_line': spawn['spawn_line'],
-                    'started_line': line_no,
-                }
-                identity_by_call[call_id] = identity
-                identity_by_thread[agent_thread_id] = identity
-                started_by_path.setdefault(agent_path, record)
-            continue
-        if event.get('type') != 'response_item' or payload.get('type') != 'agent_message':
-            continue
-        author = payload.get('author')
-        final_text = _final_agent_text(payload)
-        if (
-            not isinstance(author, str)
-            or author not in started_by_path
-            or final_text is None
-        ):
-            continue
-        started = started_by_path[author]
-        if event_ms is None or event_ms < started['started_at_ms']:
-            continue
-        identity = (
-            started['call_id'],
-            started['agent_thread_id'],
-            started['agent_path'],
-            started['task_name'],
-        )
-        terminal = {
-            **started,
-            'terminal_at_ms': event_ms,
-            'terminal_line': line_no,
-            '_operational_outcome': _terminal_operational_outcome(final_text),
-        }
-        existing = completed_by_identity.get(identity)
-        if existing is None or event_ms >= existing['terminal_at_ms']:
-            completed_by_identity[identity] = terminal
-    completed = []
-    for record in completed_by_identity.values():
-        if record.pop('_operational_outcome', None) is not None:
-            continue
-        success = structured_success_by_path.get(record['agent_path'])
-        if success is None:
-            continue
-        completion_ms, completion_line = success
-        if completion_ms < record['terminal_at_ms'] or completion_line < record['terminal_line']:
-            continue
-        record['completion_observed_at_ms'] = completion_ms
-        record['completion_observed_line'] = completion_line
-        record['completion_status'] = 'completed'
-        if binding is not None:
-            record.update(binding)
-        completed.append(record)
-    return completed
+    window = _CodexStepWindow(started_after_ms, completed_before_ms)
+    try:
+        for line_no, event in events:
+            if completed_before_line is not None and line_no >= completed_before_line:
+                break
+            window.observe(line_no, event)
+    except _ConflictingEvidence:
+        return []
+    return window.completed(binding)
 
 
 def native_subagent_evidence_for_transition(

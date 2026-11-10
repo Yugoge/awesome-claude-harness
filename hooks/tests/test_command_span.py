@@ -279,6 +279,38 @@ def test_allow_keeps_span_and_plain_prompt_continues(tmp_path):
     assert (span.command, span.args, span.start_line) == ("dev", "fix the bug", start)
 
 
+def test_rating_keeps_the_span_as_tickets_does(tmp_path):
+    # /rating and /tickets are read-only views, CONTROL commands: typed after a gated command, once or twice,
+    # the opener, its args and its start line stay the span's, and the calls after it stay in the span.
+    for view in ("tickets", "rating"):
+        for opener in ("dev", "close", "dev-overnight"):
+            tx = _Transcript()
+            tx.queue_operations()
+            start = tx.command(opener, "build it")
+            tx.tool("Bash", {"command": "git status"})
+            tx.command(view, "")
+            tx.tool("Bash", {"command": "ls"})
+            tx.typed(f"/{view}")
+            tx.tool("Bash", {"command": "pwd"})
+            span = command_span.active_span(tx.write(tmp_path / f"{view}-{opener}.jsonl"))
+            assert (span.command, span.args, span.start_line) == (opener, "build it", start), (view, opener)
+            assert [c.input["command"] for c in span.calls("Bash")] == ["git status", "ls", "pwd"], (view, opener)
+            assert command_span.active_command(tmp_path / f"{view}-{opener}.jsonl") == opener, (view, opener)
+
+
+def test_rating_alone_opens_no_span_as_tickets_does(tmp_path):
+    for view in ("tickets", "rating"):
+        tx = _Transcript()
+        tx.queue_operations()
+        tx.command(view, "")
+        tx.tool("Bash", {"command": "ls"})
+        tx.typed(f"/{view}")
+        path = tx.write(tmp_path / f"{view}.jsonl")
+        assert command_span.active_span(path) is None, view
+        assert command_span.active_command(path) is None, view
+        assert command_span.openers(path) == [], view
+
+
 def test_typed_stop_replaces_and_builtin_model_does_not(tmp_path):
     tx = _Transcript()
     tx.queue_operations()
@@ -523,3 +555,66 @@ def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path)
     assert (span.minted_id(), span.opener_heads()) == ("20261019-120000", [])
     tx.command("push")
     assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_heads() == []
+
+
+def _plain_stdout_context(tx, stdout, event="UserPromptSubmit"):
+    """The record CLI 2.1.322 writes for a hook's plain stdout (seen live: a /do whose Stop never
+    found the minted id): a hook_success attachment whose content is that stdout."""
+    return tx.add(tx._envelope("attachment", attachment={
+        "type": "hook_success", "hookName": event, "hookEvent": event, "content": stdout.rstrip("\n"),
+        "stdout": stdout, "stderr": "", "exitCode": 0, "command": "command hook"}))
+
+
+def test_the_openers_context_is_read_in_the_cli_2_1_322_record_forms(tmp_path):
+    """CLI 2.1.322 records prompt-workflow.py's plain stdout as hook_success, and a JSON
+    additionalContext as hook_additional_context with a list of strings; both are the opener's
+    context. A hook_success of another event, or after the turn's first assistant record, is not."""
+    sha = "c" * 40
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("do", "fix it")
+    _plain_stdout_context(tx, "[/do] Consent granted.\n[/do] task-id minted: 20261110-143015 — resolve via ...\n")
+    span = command_span.active_span(tx.write(tmp_path / "do.jsonl"))
+    assert span.minted_id() == "20261110-143015"
+
+    tx.command("do", "again")
+    _plain_stdout_context(tx, "[/do] task-id minted: 20261110-150000\n", event="SessionStart")
+    tx.add(tx._envelope("attachment", attachment={
+        "type": "hook_additional_context", "content": ["[/do] task-id minted: 20261110-150001"],
+        "hookName": "UserPromptSubmit", "hookEvent": "UserPromptSubmit"}))
+    assert command_span.active_span(tx.write(tmp_path / "list.jsonl")).minted_id() == "20261110-150001"
+
+    tx.command("push", "origin")
+    _plain_stdout_context(tx, f"[/push] HEAD at the opener: refs/heads/main {sha}\n")
+    tx.tool("Bash", {"command": "true"}, result="ok")
+    _plain_stdout_context(tx, f"[/push] HEAD at the opener: detached {sha}\n")
+    span = command_span.active_span(tx.write(tmp_path / "push.jsonl"))
+    assert (span.opener_heads(), span.minted_id()) == ([("main", sha)], None)
+
+
+def test_opener_remotes_read_the_remote_lines_of_an_opener_with_a_head_line(tmp_path):
+    """P5-61, Span.opener_remotes(): {remote: (URL digest, branch, tracking commit or None, upstream ref or
+    None)} of each remote line the UserPromptSubmit hook printed for the /push opener, from the opener's
+    hook context only (not an agent's echo); a remote two lines record unlike is left out; an opener with
+    no remote line has none (None)."""
+    sha, digest = "a" * 40, "0123456789abcdef"
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("push")
+    _context(tx, f"[/push] HEAD at the opener: refs/heads/topic {sha}\n"
+                 f"[/push] remote at the opener: origin {digest} topic {sha} upstream refs/heads/topic\n"
+                 f"[/push] remote at the opener: fork {digest} topic none\n"
+                 f"[/push] remote at the opener: mirror {digest} topic none\n"
+                 f"[/push] remote at the opener: short {digest[:8]} topic none\n")
+    _context(tx, f"[/push] remote at the opener: mirror {'f' * 16} topic none\n")
+    tx.tool("Bash", {"command": "true"}, result=f"[/push] remote at the opener: self {digest} topic {sha}")
+    span = command_span.active_span(tx.write(tmp_path / "push.jsonl"))
+    assert span.opener_remotes() == {"origin": (digest, "topic", sha, "refs/heads/topic"),
+                                     "fork": (digest, "topic", None, None)}
+    tx.command("push")
+    _context(tx, f"[/push] HEAD at the opener: detached {sha}\n")
+    assert command_span.active_span(tx.write(tmp_path / "none.jsonl")).opener_remotes() is None
+    tx.command("push")
+    _context(tx, f"[/push] remote at the opener: origin {digest} - none\n")
+    assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_remotes() == {
+        "origin": (digest, "-", None, None)}

@@ -23,6 +23,7 @@
     "ba-qa-report.v1": "ba-qa-report.v1.json",
     "triage-report.v1": "triage-report.v1.json",
     "retro-report.v1": "retro-report.v1.json",
-    "specialist-report.v1": "specialist-report.v1.json"
+    "specialist-report.v1": "specialist-report.v1.json",
+    "requirement-round.v1": "requirement-round.v1.json"
   }
 }

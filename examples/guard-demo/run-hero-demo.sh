@@ -61,12 +61,16 @@ PUSH_CMD='git push hero-remote main'
 # env -i gives the hook a clean environment: no CLAUDE_SESSION_ID, no CLAUDE_TASK_ID and
 # no CLAUDE_PUSH_COMMAND_ACTIVE from the invoking session can leak into the capture.
 # session_id is set to the reserved token so no foreign identifier can ever be recorded.
+# CLAUDE_STATE_DIR is the one variable carried through: the verifier writes the grant
+# under the hook state root (hooks/lib/harness_state_dir.py), so the hooks must resolve
+# the same root. It is passed verbatim, and the hooks' resolver applies its own rule
+# (absolute -> that path; relative -> the default, as the verifier resolves it too).
 pretool_push() {
   printf '{"tool_name":"Bash","tool_input":{"command":%s},"session_id":"%s"}' \
     "$("$PYTHON_BIN" -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$PUSH_CMD")" \
     "$TASK_ID" \
     | env -i PATH="$PYDIR:/usr/bin:/bin" LANG=C HOME="$FIXTURE/home" \
-        CLAUDE_TASK_ID="$TASK_ID" \
+        CLAUDE_TASK_ID="$TASK_ID" ${CLAUDE_STATE_DIR:+CLAUDE_STATE_DIR="$CLAUDE_STATE_DIR"} \
         "$PYTHON_BIN" "$REPO_ROOT/hooks/pretool-git-privilege-guard.py"
   return $?
 }
@@ -76,7 +80,7 @@ posttool_consume() {
     "$("$PYTHON_BIN" -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$PUSH_CMD")" \
     "$TASK_ID" \
     | env -i PATH="$PYDIR:/usr/bin:/bin" LANG=C HOME="$FIXTURE/home" \
-        CLAUDE_TASK_ID="$TASK_ID" \
+        CLAUDE_TASK_ID="$TASK_ID" ${CLAUDE_STATE_DIR:+CLAUDE_STATE_DIR="$CLAUDE_STATE_DIR"} \
         "$PYTHON_BIN" "$REPO_ROOT/hooks/posttool-allowlist-consume.py"
   return $?
 }

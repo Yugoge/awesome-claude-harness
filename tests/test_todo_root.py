@@ -14,9 +14,11 @@ text's Read paths use, PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>; in
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -111,6 +113,55 @@ def test_push_prints_heads_branch_and_commit_after_the_roots(product, tmp_path):
         assert out == roots + f"[/push] HEAD at the opener: {ref} {head}\n", out
         assert [m.groups() for m in span.OPENER_HEAD_LINE_RE.finditer(out)] == [(ref, head)]
     assert _prompt(product, tmp_path, "/merge").stdout == roots
+
+
+# Copied from group 1's 56638b4 (hooks/lib/command_span.py OPENER_REMOTE_LINE_RE, PR #24), the reader of
+# these lines in the /push Stop; command_span on this branch does not have it yet.
+OPENER_REMOTE_LINE_RE = re.compile(r"^\[/push\] remote at the opener: (\S+) ([0-9a-f]{16}) (\S+) "
+                                   r"([0-9a-f]{40}(?:[0-9a-f]{24})?|none)(?: upstream (refs/\S+))?$", re.M)
+
+
+def test_push_prints_each_remotes_url_digest_tracking_ref_and_upstream_after_the_head_line(product, tmp_path):
+    """P5-61: after its HEAD line, the /push opener prints one line per remote, the record the /push Stop
+    dates and places each remote by: the digest of the URL git resolves for it (a credential in the URL,
+    an insteadOf applied), the branch HEAD is on (`-` detached), that branch's tracking ref's commit
+    (`none`) and its upstream ref where it is that remote's. No URL text is printed."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "GIT_"))}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CEILING_DIRECTORIES=str(tmp_path),
+               GIT_CONFIG_NOSYSTEM="1", HOME=str(tmp_path / "home"))
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(product), *args], capture_output=True, text=True, env=env,
+                              check=True).stdout.strip()
+    git("init", "-q", "-b", "topic")
+    git("add", "-A")
+    git("commit", "-q", "-m", "c")
+    head = git("rev-parse", "HEAD")
+    secret, written = "s3cretTOKEN", "https://bot:s3cretTOKEN@git.example.invalid/o/r.git"
+    git("remote", "add", "origin", written)
+    git("remote", "add", "fork", "gh:me/fork.git")
+    git("config", "url.https://mirror.example.invalid/.insteadOf", "gh:")
+    git("update-ref", "refs/remotes/origin/topic", head)
+    git("config", "branch.topic.remote", "origin")
+    git("config", "branch.topic.merge", "refs/heads/topic")
+    origin, fork = git("remote", "get-url", "origin"), git("remote", "get-url", "fork")
+    assert fork == "https://mirror.example.invalid/me/fork.git"  # the URL the Stop digests: insteadOf applied
+    digest = {name: hashlib.sha256(url.encode()).hexdigest()[:16] for name, url in (("origin", origin), ("fork", fork))}
+    roots = f"PROJECT_ROOT={product}\nHARNESS_ROOT={ROOT}\n"
+    cases = {"refs/heads/topic": [f"origin {digest['origin']} topic {head} upstream refs/heads/topic",
+                                  f"fork {digest['fork']} topic none"],
+             "detached": [f"origin {digest['origin']} - none", f"fork {digest['fork']} - none"]}
+    for ref, remotes in cases.items():
+        if ref == "detached":
+            git("checkout", "-q", "--detach")
+        out = _prompt(product, tmp_path, "/push").stdout
+        lines = [f"[/push] remote at the opener: {line}" for line in sorted(remotes, key=lambda r: r.split()[0])]
+        assert out == roots + f"[/push] HEAD at the opener: {ref} {head}\n" + "".join(f"{line}\n" for line in lines), out
+        assert all(OPENER_REMOTE_LINE_RE.fullmatch(line) for line in lines)
+        assert [m.group(0) for m in OPENER_REMOTE_LINE_RE.finditer(out)] == lines
+        for text in (secret, "bot:", written, origin, fork, "example.invalid", "gh:"):
+            assert text not in out, text
 
 
 @pytest.mark.parametrize("command, printed", [("commit", True), ("merge", True), ("status", False)])

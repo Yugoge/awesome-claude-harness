@@ -9,7 +9,8 @@ or a subagent inside a dispatch):
 * a tool call is the T1 order: assistant tool_use appended, PreToolUse, the
   call performed only if not blocked, then the tool_result and PostToolUse
   (PostToolUseFailure and an error tool_result when the call fails; a failing
-  call never raises);
+  call never raises; a dialog the owner turns down, Rejected, is an error
+  tool_result with no PostToolUse and no PostToolUseFailure);
 * a dispatch is the Agent tool_use, PreToolUse, the subagent transcript
   (projects/<slug>/<sid>/subagents/agent-<id>.jsonl, first record the prompt,
   agent-<id>.meta.json beside it), the subagent's own calls through the same
@@ -49,7 +50,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from . import cmdtext, hookrun, norm
+from . import cmdtext, hookrun, launchdiff, norm
 
 MODEL = "claude-opus-5-5"
 CLI_VERSION = "2.1.295"
@@ -58,6 +59,12 @@ BASH_TIMEOUT_S = 120
 
 class ToolError(Exception):
     """A tool call that fails the way the CLI's tool would (recorded as an error tool_result)."""
+
+
+class Rejected(ToolError):
+    """A permission dialog the owner turns down in the terminal (Skip, Esc, decline): the tool_result is an error,
+    the user row carries toolDenialKind "user-rejected", and neither a PostToolUse nor a PostToolUseFailure hook
+    runs (read from the CLI bundle, 2.1.319). It is no failed call here: the owner chose it."""
 
 
 @dataclass
@@ -97,6 +104,14 @@ def rule_files(hook: str) -> list:
             rules = sites.gate_rules(tree, hook)
         _RULES[key] = [r.file for r in rules if r.relays]
     return _RULES[key]
+
+
+def _inv_hooks(rec: dict) -> list:
+    out = []
+    for h in rec.get("launched", rec["hooks"]):
+        out.append(h)
+        out.extend(h.get("rules") or [])
+    return out
 
 
 class Event:
@@ -214,11 +229,15 @@ class Replay:
         self._inv = open(os.path.join(layout.out, "invocations.jsonl"), "w")
         self._seq = 0
         self.blocks, self.deviations, self.hook_errors, self.failed_calls = [], [], [], []
+        self.launch_differential = False  # inner.py turns it on for an untraced run (launchdiff.py)
+        self.launch_diffs: list = []
+        self.launch_events = 0
         self.n_events = self.n_runs = 0
         self.event_names: set[str] = set()
         self.step_label = ""
         self._actors: list[str] = []
         _CURRENT[:] = [self]  # rule_files reads the merged gates of this replay's tree
+        hookrun.MARKS_DIR[:] = [layout.markers]  # a launcher marks the hook it runs (trace.py)
 
     # ------------------------------------------------------------ environment
     def _env(self, extra: dict) -> dict:
@@ -323,11 +342,22 @@ class Replay:
         # the transcripts as this event's hooks see them (the replay only appends to them after it)
         sizes = {os.path.join(d, f): os.path.getsize(os.path.join(d, f)) for d, _s, fs in os.walk(session.tdir)
                  for f in fs if f.endswith(".jsonl")}
+        old_paths = self._old_paths(event, payload)
         rec = hookrun.run_event(self.settings, event, payload, self.env, self.layout.project, self.parallel)
+        for launched in rec.get("launched", []):
+            if launched["hook"] in old_paths:
+                for d in launchdiff.compare(self, event, launched, old_paths[launched["hook"]]):
+                    self.launch_diffs.append(dict(d, step=label, event=event))
+        inv_hooks = _inv_hooks(rec)
+        rec["launched"] = [{k: v for k, v in r.items() if k != "rules"} for r in rec.get("launched", [])]
         self._inv.write(json.dumps({"seq": self.n_events + 1, "event": event, "label": label,
                                     "payload": dict(payload, hook_event_name=event), "transcripts": sizes,
+                                    # the processes started, and each hook a launcher ran with the
+                                    # command it had alone: E1's differential re-runs a hook by the
+                                    # origin the trace names (a launcher's hook, by its mark)
                                     "hooks": [{k: h[k] for k in ("hook", "command", "matcher", "timeout", "rc",
-                                                                 "verdict", "how")} for h in rec["hooks"]]})
+                                                                 "verdict", "how")}
+                                              for h in inv_hooks]})
                         + "\n")
         self._inv.flush()
         rec.update(label=label, session=session.sid, tool=payload.get("tool_name"),
@@ -343,6 +373,21 @@ class Replay:
         self._log.write(json.dumps(rec) + "\n")
         self._log.flush()
         return Event(rec)
+
+    def _old_paths(self, event: str, payload: dict) -> dict:
+        """P12-L7's differential (launchdiff.py): before the event, each launcher's hooks run as their
+        own processes in an overlay of the state the event meets; {launcher: their results}."""
+        if not self.launch_differential:
+            return {}
+        out = {}
+        full = dict(payload, hook_event_name=event)
+        for h in hookrun.select(self.settings, event, full):
+            hooks = launchdiff.old_path(self.layout.harness, h, event, full) \
+                if launchdiff.launcher_rules(self.layout.harness, h["hook"]) is not None else None
+            if hooks:
+                self.launch_events += 1
+                out[h["hook"]] = launchdiff.run_old(self.layout, hooks, json.dumps(full), self.env, self.layout.project)
+        return out
 
     def norm_text(self, text: str) -> str:
         return norm.refusal_text(text, self.roots, self.ids, self.window)
@@ -397,6 +442,16 @@ class Replay:
         self.window.end = time.time()
         out = self.layout.out
         summ = self.summary(wall_s)
+        if self.launch_diffs:
+            with open(os.path.join(out, "launch-differential.json"), "w") as fh:
+                json.dump(self.launch_diffs, fh, indent=1)
+            first = self.launch_diffs[0]
+            driver_error = (driver_error + "\n" if driver_error else "") + (
+                f"launch differential: {len(self.launch_diffs)} difference(s) between the launchers and their hooks "
+                f"run as their own processes; the first at {first['step']!r} ({first['event']}): {first['what']}: "
+                f"old {first['old'][-300:]!r}, new {first['new'][-300:]!r} (launch-differential.json)")
+        summ["launch_differential"] = {"on": self.launch_differential, "events": self.launch_events,
+                                       "differences": len(self.launch_diffs)}
         summ["driver_error"] = driver_error
         with open(os.path.join(out, "blocks.json"), "w") as fh:
             json.dump({"blocks": self.blocks, "deviations": self.deviations, "hook_errors": self.hook_errors,
@@ -612,6 +667,11 @@ class Actor:
             with self.rp.acting(self.role):
                 call.response = perform() or {}
             call.ok = True
+        except Rejected as e:  # the owner said no: an error result, no hook, not a failed call
+            call.error = str(e)
+            self._result(tid, call.error, error=True, denial="user-rejected")
+            self.rp.after(step, call)
+            return call
         except Exception as e:  # a failing call is an error tool_result; the replay goes on
             call.error = str(e) or type(e).__name__
             self.rp.failed_calls.append({"step": label, "tool": name, "error": self.rp.norm_text(call.error)[:600]})
@@ -629,13 +689,15 @@ class Actor:
         self.rp.after(step, call)
         return call
 
-    def _result(self, tid: str, content, error: bool = False, resp=None) -> None:
+    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None) -> None:
         block = {"type": "tool_result", "tool_use_id": tid, "content": content}
         if error:
             block["is_error"] = True
         rec = {"type": "user", "message": {"role": "user", "content": [block]}}
         if resp is not None:
             rec["toolUseResult"] = resp
+        if denial:
+            rec["toolDenialKind"] = denial
         self.s.append(rec, self.aid)
 
     def bash(self, command: str, description: str = "", label: str | None = None, deviation=None,

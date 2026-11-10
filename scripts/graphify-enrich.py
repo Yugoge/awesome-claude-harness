@@ -129,6 +129,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _registry_dir(task_id: str) -> Path:
+    """The registry directory --task-id names (a registry name: /dev's
+    DEV_SESSION_ID, or /dev-overnight's ``<session>-pipeline-<n>``) by the one
+    rule, hooks/lib/obligation.registry_dir_named; ValueError for an id that
+    names none (not one plain path component)."""
+    harness = str(_SCRIPT_DIR.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    from hooks.lib.obligation import registry_dir_named
+
+    directory = registry_dir_named(_PROJECT_DIR, task_id)
+    if directory is None:
+        raise ValueError(f"--task-id {task_id!r} names no registry directory")
+    return directory
+
+
 def _resolve_blast_radius_map_path(task_id: str, context_file: str | None = None,
                                    explicit_path: str | None = None) -> Path:
     """Resolve the blast-radius-map path. Priority:
@@ -159,7 +175,7 @@ def _resolve_blast_radius_map_path(task_id: str, context_file: str | None = None
                 brp = cdata.get("blast_radius_map_path")
                 if isinstance(brp, str) and brp.strip():
                     return _abs(brp.strip())
-    return _PROJECT_DIR / ".claude" / "dev-registry" / task_id / "blast-radius-map.json"
+    return _registry_dir(task_id) / "blast-radius-map.json"
 
 
 def _load_blast_radius_map(task_id: str, context_file: str | None = None,
@@ -469,7 +485,11 @@ def main() -> int:
     args = parser.parse_args()
 
     task_id = args.task_id
-    output_dir = _PROJECT_DIR / ".claude" / "dev-registry" / task_id / "graphify"
+    try:
+        registry_dir = _registry_dir(task_id)
+    except ValueError as exc:
+        parser.error(str(exc))
+    output_dir = registry_dir / "graphify"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     run_manifest: dict = {
@@ -533,7 +553,7 @@ def main() -> int:
 
     run_manifest["subgraph_extraction"]["attempted"] = True
     run_manifest["subgraph_extraction"]["blast_radius_map_path"] = str(
-        _PROJECT_DIR / ".claude" / "dev-registry" / task_id / "blast-radius-map.json"
+        registry_dir / "blast-radius-map.json"
     )
     run_manifest["subgraph_extraction"]["resolved_node_ids"] = resolved_node_ids
     run_manifest["subgraph_extraction"]["unresolved_paths"] = unresolved_paths

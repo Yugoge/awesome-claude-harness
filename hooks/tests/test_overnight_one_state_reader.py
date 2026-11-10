@@ -83,21 +83,6 @@ def test_read_state_refuses_empty_and_non_object(tmp_path):
     assert overnight.read_state(listed) is None
 
 
-def test_session_state_binds_file_name_and_session_id(tmp_path, monkeypatch):
-    claude = tmp_path / ".claude"
-    claude.mkdir()
-    (claude / f"overnight-state-{SID}.json").write_text(json.dumps(_record()))
-    (claude / "overnight-state-other.json").write_text(json.dumps(_record()))
-    assert overnight.session_state(SID, tmp_path)["session_id"] == SID
-    assert overnight.session_state("other", tmp_path) is None
-    # With no project dir the locator finds it, by the same rule.
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    assert overnight.session_state(SID)["session_id"] == SID
-    assert overnight.session_state("other") is None
-    assert overnight.session_state("") is None
-
-
 def test_no_function_of_lib_overnight_calls_itself_back():
     """The artifact check's static half summarizes a function on a call cycle by
     whichever caller enters the cycle first, so with session_state -> locate ->

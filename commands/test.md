@@ -1,6 +1,8 @@
 ---
 description: Test validation workflow with edge case detection, systematic validation, and quality enforcement
 disable-model-invocation: true
+summary: "Check the project's tests against edge cases found in its git history, then run them and report."
+group: Quality
 ---
 
 # Test Command Orchestrator

@@ -1414,6 +1414,20 @@ INERT_ARGV_CONSUMERS = {
 }
 
 SHELLS = {"bash", "sh", "dash", "zsh", "ksh", "ksh93", "mksh", "ash", "rbash", "bash5"}
+# The shells whose grammar has the `[[ ... ]]` conditional compound command.
+# sh, dash and ash have none: there `[[` is an ordinary command name, so a
+# `&&` or `||` after it IS a command boundary and is read as one.
+COND_SHELLS = {"bash", "zsh", "ksh", "ksh93", "mksh", "rbash", "bash5"}
+# The unquoted reserved words that may precede `[[` while it is still the first
+# word of a command (`if [[`, `! [[`, `while ! [[`, `{ [[` ...). Any other word,
+# an assignment or a redirection before it makes `[[` an argument or a command
+# name, and then nothing inside it is a conditional expression.
+COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
+                                "until", "do", "{"))
+# Builtins that can stop `[[` from being read as the reserved word on a later
+# line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
+# command, and zsh's `disable -r` switches the reserved word off.
+COND_DISABLING_BUILTINS = frozenset(("alias", "disable"))
 # A shell's script operand in the quoted CLAUDE_HOME channel (P2 R6), each component plain: a named file.
 CLAUDE_HOME_FILE = re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+"')
 
@@ -2082,6 +2096,12 @@ class Analyzer:
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
         self._head, self.direct = None, False
+        # Whether the code being walked is read by a shell that has `[[ ]]`
+        # (see walk). Set per analyze_code call; a call that does not say so
+        # gets False, the old reading. Any alias text in the command, or a run
+        # of a COND_DISABLING_BUILTINS builtin, switches it off for the rest.
+        self._cond = False
+        self._cond_disabled = "alias" in raw.lower()
 
     def note_removal_position(self, shape, text):
         """Record EVERY parse-derived position a removal NAME was placed in.
@@ -2513,13 +2533,13 @@ class Analyzer:
         for kind, s, off in w.segs:
             if kind == "sub":
                 self.note("substitution", off)
-                self.analyze_code(s, Env(env.hashed, env.aliases))
+                self.analyze_code(s, Env(env.hashed, env.aliases), cond=self._cond)
             elif kind == "arith":
                 self.note("substitution", off)
                 self.scan_expansions(s, env)
             elif kind == "procsub":
                 self.note("procsub", off)
-                self.analyze_code(s, Env(env.hashed, env.aliases))
+                self.analyze_code(s, Env(env.hashed, env.aliases), cond=self._cond)
             elif kind == "param":
                 body = s.text
                 if body.startswith("!") or (
@@ -2556,7 +2576,7 @@ class Analyzer:
                     return
                 for kind, s, off in segs:
                     self.note("substitution", off)
-                    self.analyze_code(s, Env(env.hashed, env.aliases))
+                    self.analyze_code(s, Env(env.hashed, env.aliases), cond=self._cond)
                 continue
             if c == "$" and i + 1 < n and t[i + 1] in "({[":
                 segs = []
@@ -2568,7 +2588,8 @@ class Analyzer:
                 for kind, s, off in segs:
                     if kind == "sub":
                         self.note("substitution", off)
-                        self.analyze_code(s, Env(env.hashed, env.aliases))
+                        self.analyze_code(s, Env(env.hashed, env.aliases),
+                                          cond=self._cond)
                     elif kind == "arith":
                         self.note("substitution", off)
                         self.scan_expansions(s, env)
@@ -2585,8 +2606,19 @@ class Analyzer:
 
     # -- command-level walk --------------------------------------------------
 
-    def analyze_code(self, src, env):
+    def analyze_code(self, src, env, cond=False):
+        """Walk ``src`` as shell code.
+
+        ``cond`` says the shell reading this code has the `[[ ]]` conditional
+        (COND_SHELLS). Only a caller that knows the shell says so: the command
+        itself, its substitutions, `eval` and alias bodies (the same shell), and
+        a COND_SHELLS -c or stdin program. Every other caller (ssh, at, git
+        aliases, exec option values ...) hands the code to a shell this file
+        cannot name, so it keeps the default False and the old reading.
+        """
         self.depth += 1
+        outer = self._cond
+        self._cond = cond
         try:
             if self.depth > MAX_DEPTH:
                 self.structural("recursion_limit")
@@ -2598,19 +2630,61 @@ class Analyzer:
                 return
             self.walk(toks, env)
         finally:
+            self._cond = outer
             self.depth -= 1
+
+    def _opens_conditional(self, cur, tok):
+        """True when word ``tok`` is the reserved word `[[` of a new command.
+
+        `[[` is reserved only unquoted and only as a command's first word, after
+        nothing but the reserved words of COND_OPENER_PREFIX: `"[[" a || b`,
+        `A=1 [[ a || b ]]` and `>f [[ a || b ]]` run a command named `[[`, and
+        their `||` is a real boundary. The test is on the raw text, so every
+        quoted or escaped spelling stays an ordinary word.
+        """
+        if not self._cond or self._cond_disabled or tok[1].raw.text != "[[":
+            return False
+        return all(t[0] == "W" and t[1].raw.text in COND_OPENER_PREFIX for t in cur)
 
     def walk(self, toks, env):
         cur = []
         piped = False
         next_piped = False
+        # Inside `[[ ... ]]` (cond_depth is not None) the shell reads a
+        # conditional expression, not commands: `&&`, `||`, `!`, `(` and `)` are
+        # its operators and a line break between its terms is blank, so none of
+        # them ends the command, and every operand is a word of the one `[[`
+        # command, never a command head. Its expansions are still visited by
+        # flush like any other word's, so `[[ -n $(cmd) ]]` is analysed as code.
+        # Anything else (`;`, `&`, `|`, `;;`, a `)` that closes no `(` of the
+        # conditional, as in a case pattern `[[)`) cannot occur inside a
+        # conditional; there the walk falls back to the old reading and treats
+        # it as a boundary. The conditional ends at the first word whose value
+        # is `]]`, however quoted: ending it early only splits more.
+        cond_depth = None
         for tok in toks:
             if tok[0] == "OP":
                 op = tok[1]
+                if cond_depth is not None:
+                    if op in ("&&", "||", "\n"):
+                        continue
+                    if op == "(":
+                        cond_depth += 1
+                        continue
+                    if op == ")" and cond_depth > 0:
+                        cond_depth -= 1
+                        continue
+                    cond_depth = None
                 self.flush(cur, env, piped)
                 cur = []
                 piped = next_piped = (op in ("|", "|&"))
                 continue
+            if tok[0] == "W":
+                if cond_depth is None:
+                    if self._opens_conditional(cur, tok):
+                        cond_depth = 0
+                elif tok[1].literal() == "]]":
+                    cond_depth = None
             cur.append(tok)
         self.flush(cur, env, piped)
 
@@ -2774,12 +2848,14 @@ class Analyzer:
         if name in env.aliases:
             body = env.aliases[name]
             parts = [body] + [a.raw for a in args]
-            self.analyze_code(src_concat(parts), Env(env.hashed, {}))
+            self.analyze_code(src_concat(parts), Env(env.hashed, {}), cond=self._cond)
             return
         if name in env.hashed:
             name = env.hashed[name]
         base = basename(name)
         self.direct, self._head = head is self._head and self.depth == 1, None
+        if base in COND_DISABLING_BUILTINS:
+            self._cond_disabled = True
         if base in ("cd", "pushd", "set", "printf") or base in _SHELL_STATE_BUILTINS:
             self._shell_state(base, args)
 
@@ -3181,7 +3257,7 @@ class Analyzer:
                 self.scoped("dynamic_eval_argument", a.raw.text[:60])
                 return
             parts.append(a.content())
-        self.analyze_code(src_concat(parts), Env(env.hashed, env.aliases))
+        self.analyze_code(src_concat(parts), Env(env.hashed, env.aliases), cond=self._cond)
 
     def _h_source(self, name, args, redirs, env, piped):
         # The sourced file's contents are not in the command text. Nothing about
@@ -3630,7 +3706,8 @@ class Analyzer:
             if code_word.literal() is None:
                 self.scoped("dynamic_shell_code", code_word.raw.text[:60])
                 return
-            self.analyze_code(code_word.content(), Env(env.hashed, env.aliases))
+            self.analyze_code(code_word.content(), Env(env.hashed, env.aliases),
+                              cond=basename(name) in COND_SHELLS)
             return
         operands = args[i:]
         if operands and not read_stdin:
@@ -3659,7 +3736,8 @@ class Analyzer:
             return
         body = self._stdin_code(redirs)
         if body is not None:
-            self.analyze_code(body, Env(env.hashed, env.aliases))
+            self.analyze_code(body, Env(env.hashed, env.aliases),
+                              cond=basename(name) in COND_SHELLS)
             return
         self.scoped("shell_code_source_unknown", name)
 
@@ -3689,8 +3767,12 @@ class Analyzer:
                 if lit in flags and idx + 1 < len(args):
                     code = args[idx + 1]
                     break
-                if lit is not None and any(
-                        lit.startswith(f) and len(lit) > len(f) for f in flags
+                # The attached form reads the word's STATIC PREFIX: `-c"..$HOME.."`
+                # has no literal, yet the flag it starts with is fixed text.
+                head = lit if lit is not None else _static_prefix(a)
+                if any(
+                        head.startswith(f) and (len(head) > len(f) or lit is None)
+                        for f in flags
                         if f.startswith("-") and len(f) == 2):
                     code = a
                     break
@@ -3711,7 +3793,7 @@ class Analyzer:
             self.add(PROVEN_INERT, "interpreter_script_file", base)
             return
         if code.literal() is None:
-            self.scoped("dynamic_interpreter_code", code.raw.text[:60])
+            self._dynamic_interpreter_code(base, code)
             return
         text = code.literal()
         mark = len(self.boundaries)
@@ -3722,6 +3804,35 @@ class Analyzer:
                or b["reason"].startswith("interpreter_code_without_removal_token")
                for b in self.boundaries[mark:]) and self.boundaries[mark:]:
             self.cover(code)
+
+    def _dynamic_interpreter_code(self, base, code):
+        """An inline program whose word holds an expansion (P2-6).
+
+        The scoped check alone refused only when the raw command carried an
+        rm/unlink/shred/srm word, so `python3 -c "shutil.rmtree('$HOME/x')"`
+        was judged inert while its literal-path form was refused. The fixed
+        text is now classified by the SAME classifier as the literal form, with
+        each expansion replaced by a neutral placeholder: a refusal it finds is
+        kept with the literal form's reason. An expansion that can change the
+        program itself, not only a value inside one of its string literals,
+        fails closed. Otherwise the old scoped check runs unchanged, so no
+        earlier refusal weakens and no inert verdict changes its reason.
+        """
+        text, why = _program_with_placeholders(code, base, self.raw)
+        mark = len(self.boundaries)
+        saved = (list(self._pending_shapes), list(self.removal_shapes),
+                 self.removal_shape)
+        self._classify_inline_code(base, text)
+        if any(b["verdict"] != PROVEN_INERT for b in self.boundaries[mark:]):
+            return
+        del self.boundaries[mark:]
+        self._pending_shapes, self.removal_shapes, self.removal_shape = (
+            saved[0], saved[1], saved[2])
+        if why:
+            self.structural("interpreter_expansion_changes_program",
+                            "%s:%s" % (base, why))
+            return
+        self.scoped("dynamic_interpreter_code", code.raw.text[:60])
 
     def _classify_inline_code(self, base, text):
         # DYNAMIC ATTRIBUTE ACCESS FIRST. `getattr(os,"remove")(p)`,
@@ -3991,6 +4102,156 @@ _IDENT_TAIL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)$")
 _QUOTE_OP_RE = re.compile(r"(%?q[qwrx]?)$")
 
 
+# A placeholder for one expansion inside an inline program. A space keeps the
+# characters on either side from joining into a name the scans would miss.
+_PLACEHOLDER = " "
+_MARK = "\x00"
+_PLAIN_PARAM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]|[*#?$!0-]")
+_PLAIN_VALUE_RE = r"[A-Za-z0-9_./:%+,~-]*"
+
+
+def _expansion_quoting(raw):
+    """Shell double-quote state at each `$`/backtick expansion of a word, in order."""
+    out = []
+    t = raw
+    n = len(t)
+    i = 0
+    dq = False
+    while i < n:
+        c = t[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" and not dq:
+            j = t.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if c == '"':
+            dq = not dq
+            i += 1
+            continue
+        if c == "$" and i + 1 < n:
+            nxt = t[i + 1]
+            if nxt == "'" and not dq:
+                j = _find_ansi_end(t, i + 2)
+                i = n if j < 0 else j + 1
+                continue
+            if nxt in "({[":
+                out.append(dq)
+                end = _match_pair(t, i + 1, nxt, {"(": ")", "{": "}", "[": "]"}[nxt])
+                i = n if end < 0 else end
+                continue
+            if nxt.isalnum() or nxt in "_@*#?-$!":
+                out.append(dq)
+                i += 2
+                if nxt.isalpha() or nxt == "_":
+                    while i < n and (t[i].isalnum() or t[i] == "_"):
+                        i += 1
+                continue
+            i += 1
+            continue
+        if c == "`":
+            out.append(dq)
+            j = i + 1
+            while j < n and t[j] != "`":
+                j += 2 if t[j] == "\\" else 1
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def _marks_inside_string_literals(text):
+    """True when every _MARK sits inside a program string literal.
+
+    A literal here is '...', "..." or `...`, with backslash escapes. A mark
+    after an unclosed `{` in the same literal is code (f-strings, `${}`,
+    `#{}`), and a mark in a backtick literal is treated as code too.
+    """
+    quote = None
+    brace = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if quote is None:
+            if c == _MARK:
+                return False
+            if c in "'\"`":
+                quote, brace = c, 0
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c == _MARK:
+            if quote == "`" or brace > 0:
+                return False
+        elif c == "{":
+            brace += 1
+        elif c == "}" and brace:
+            brace -= 1
+        elif c == quote:
+            quote = None
+        i += 1
+    return quote is None
+
+
+def _variable_set_unplainly(name, raw):
+    """True when the command binds ``name`` to anything but one plain value."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return False
+    esc = re.escape(name)
+    for m in re.finditer(r"(?:^|[^A-Za-z0-9_])%s\+?=" % esc, raw):
+        if not re.match(_PLAIN_VALUE_RE + r"(?:[\s;&|)]|$)", raw[m.end():]):
+            return True
+    binders = (r"(?:^|[\s;&|(])(?:read|mapfile|readarray|for|select|getopts"
+               r"|printf\s+-v|declare|typeset|local|export|readonly|let)"
+               r"\b[^;&|\n]*?(?:^|[^A-Za-z0-9_$])%s(?![A-Za-z0-9_=])" % esc)
+    return re.search(binders, raw) is not None
+
+
+def _program_with_placeholders(word, base, raw):
+    """(program text with each expansion as a placeholder, fail-closed reason).
+
+    The reason is empty when every expansion only supplies a value inside one
+    of the program's string literals; otherwise it names the first expansion
+    that could change the program itself.
+    """
+    quoting = _expansion_quoting(word.raw.text)
+    k = 0
+    why = ""
+    chars = []
+    for kind, s, _ in word.segs:
+        if kind == "lit":
+            chars.append(s.text)
+            continue
+        if kind == "ansi":
+            chars.append(ansi_decode(s.text))
+            continue
+        chars.append(_MARK)
+        if kind not in ("param", "sub", "arith"):
+            why = why or "unquoted_" + kind
+            continue
+        quoted = quoting[k] if k < len(quoting) else False
+        k += 1
+        if not quoted:
+            why = why or "unquoted_expansion"
+        elif kind == "sub":
+            why = why or "command_substitution"
+        elif kind == "param":
+            if not _PLAIN_PARAM_RE.fullmatch(s.text):
+                why = why or "parameter_operator"
+            elif _variable_set_unplainly(s.text, raw or ""):
+                why = why or "variable_set_in_command"
+    if len(quoting) != k:
+        why = why or "expansion_count_mismatch"
+    text = "".join(chars)
+    if not why and not _marks_inside_string_literals(text):
+        why = "expansion_outside_string_literal"
+    return text.replace(_MARK, _PLACEHOLDER), why
+
+
 def _enclosing_call(text, pos):
     """Name of the call that receives the string literal containing ``pos``.
 
@@ -4072,7 +4333,7 @@ def analyze(raw):
         result["census"]["obligations"] = len(cen["obligations"])
         return result
 
-    az.analyze_code(Src.from_raw(raw), Env())
+    az.analyze_code(Src.from_raw(raw), Env(), cond=True)
 
     undischarged = [ob for ob in cen["obligations"]
                     if (ob["kind"], ob["offset"]) not in az.discharged]

@@ -73,8 +73,12 @@ fi
   || _die "session id contains unsafe characters: $SESSION_ID"
 
 PROJECT_ROOT="$(cd "$PROJECT_DIR" && pwd -P)"
-REGISTRY_DIR="$PROJECT_ROOT/.claude/dev-registry/$SESSION_ID"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+# The directory the session id names: obligation.registry_dir_named, the one
+# rule, through its CLI in hooks/prompt-workflow.py (-B: --verify-only writes nothing).
+REGISTRY_DIR="$(python3 -B "$SCRIPT_DIR/../hooks/prompt-workflow.py" registry-dir \
+  --project-dir "$PROJECT_ROOT" --name "$SESSION_ID")" \
+  || _die "no registry directory for session id $SESSION_ID"
 
 CODEX_REQUIRED=false
 if [[ -n "$STATE_FILE" ]]; then

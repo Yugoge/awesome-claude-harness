@@ -276,7 +276,14 @@ def _layer_branches(var):
 # into fragments like `$)` and `tee([^A-Za-z_]`. This parser previously assumed
 # the FLAT, UNANCHORED token shape and is upgraded here, not relaxed -- the
 # polarity assertions it feeds are unchanged.
-BOUNDARY_SUFFIX = "([^A-Za-z_]|$)"
+#
+# T1-1 widened the right bound from one character to the rest of the shell
+# word, refusing a `/` before its end, so a DIRECTORY named like a verb
+# (`node20`, `python3-x`, a home directory named node) is no longer read as a launch.
+# OLD_BOUNDARY_SUFFIX is the bound before that change; the T1-1 tests below
+# restore it on a throwaway copy as their positive control.
+BOUNDARY_SUFFIX = "([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)"
+OLD_BOUNDARY_SUFFIX = "([^A-Za-z_]|$)"
 _OPTIONAL_GROUP = re.compile(r"(?:\([A-Za-z0-9]+\)|\[[^]]+\]|[A-Za-z0-9])\?")
 
 
@@ -1167,6 +1174,172 @@ def test_symptom_c_read_only_claim_stays_qualified():
     assert "does not HAND the namespace" in region, (
         f"{HOOK}:{lineno}: the qualification on 'permitted' is gone."
     )
+
+
+# ── T1-1: a directory named like an interpreter is not an interpreter launch ─
+# Measured on the base: with the state root under a directory named
+# `rerun-node20-files`, `python3-x`, or a home directory named node, a pure read
+# through a captured variable (`NS=<ns>; ls -l "$NS"`) was refused on BOTH
+# layers, for the main agent and a subagent: the namespace path itself carried
+# `node`/`python` as a path segment, the verb's old one-character right bound
+# accepted the `/` after it, and branch 3 (a verb, then a `$` expansion) fired.
+# The same read under `rerun-n20-files` was permitted. Each read below carries
+# a positive control: the old right bound, restored on a throwaway copy,
+# refuses it again, so the permit is the fix and not a probe that never hits.
+INTERPRETER_NAMED_ROOTS = [
+    ("node20-dir", ("rerun-node20-files", "state")),
+    ("python3-x-dir", ("python3-x", "state")),
+    ("node-home", ("home", "node", ".claude", "state")),
+]
+PAYLOAD_KINDS = [
+    ("main-agent", {}),
+    ("subagent", {"agent_id": "a0b1c2d3", "agent_type": "general-purpose"}),
+]
+
+T1_1_READS = [
+    ("variable-captured-then-listed", 'NS={p}; ls -l "$NS"'),
+    ("variable-captured-then-listed-quiet", 'NS={p}; ls -l "$NS" 2>/dev/null'),
+    ("variable-captured-then-read-piped-to-python",
+     "NS={p}; cat \"$NS\" | python3 -c 'import sys; print(len(sys.stdin.read()))'"),
+]
+
+# Writes under the same interpreter-named roots: every one stays refused by the
+# layer under test. Several are interpreter launches; one launches the
+# interpreter FROM the interpreter-named state root (`<root>/bin/python3`), so
+# the word's last path segment is the verb and an earlier segment is a
+# directory named like one; three split the verb's word through an expansion
+# or a brace list, which the right bound must read as the end of the word.
+T1_1_WRITES = [
+    ("capture-then-redirect", 'NS={p}; echo x > "$NS"'),
+    ("redirect", "echo x > {p}"),
+    ("python-program-writes", "python3 -c 'open(\"{p}\",\"w\")'"),
+    ("python-env-prefix-writes",
+     "NS={p} python3 -c 'import os; open(os.environ[\"NS\"],\"w\")'"),
+    ("perl-writes-through-variable",
+     "NS={p}; perl -e 'open F, \">\", $ARGV[0]' \"$NS\""),
+    ("ruby-writes", "ruby -e 'File.write(ARGV[0], \"\")' {p}"),
+    ("node20-writes",
+     "node20 -e 'require(\"fs\").writeFileSync(process.argv[1], \"\")' {p}"),
+    ("python-from-interpreter-named-dir", "{d}/bin/python3 -c 'open(\"{p}\",\"w\")'"),
+    ("python-debug-binary", "python3-dbg -c 'open(\"{p}\",\"w\")'"),
+    ("tee", "printf x | tee {p}"),
+    ("capture-then-copy", 'NS={p}; cp /etc/hostname "$NS"'),
+    ("tee-split-by-ifs", "printf x | tee${{IFS}}{p}"),
+    ("tee-split-by-brace-list", "printf x | {{tee,{p}}}"),
+    ("copy-split-by-ifs", "cp${{IFS}}/etc/hostname${{IFS}}{p}"),
+]
+
+
+@pytest.fixture(
+    scope="module",
+    params=INTERPRETER_NAMED_ROOTS,
+    ids=[n for n, _ in INTERPRETER_NAMED_ROOTS],
+)
+def interpreter_named_root(request, tmp_path_factory):
+    """(state_root, home) with an interpreter-named directory in the state root."""
+    name, parts = request.param
+    base = tmp_path_factory.mktemp("t1-1-" + name)
+    root = os.path.join(str(base), *parts)
+    os.makedirs(root)
+    resolved = harness_state_dir(root)
+    assert resolved == root, (
+        f"the production state-dir library did not honour CLAUDE_STATE_DIR: "
+        f"asked for {root}, got {resolved}"
+    )
+    home = (
+        os.path.join(str(base), "home", "node")
+        if name == "node-home"
+        else os.path.join(str(base), "home")
+    )
+    os.makedirs(home, exist_ok=True)
+    return resolved, home
+
+
+def _run_payload(hook, command, state_root, home, extra):
+    """Drive a hook copy with a main-agent or subagent payload and a scratch HOME."""
+    env = os.environ.copy()
+    env["CLAUDE_STATE_DIR"] = state_root
+    env["HOME"] = home
+    payload = {"tool_name": "Bash", "tool_input": {"command": command},
+               "session_id": "t1-1-session"}
+    payload.update(extra)
+    proc = subprocess.run(
+        ["bash", hook], input=json.dumps(payload), env=env,
+        text=True, capture_output=True,
+    )
+    return proc.returncode, proc.stderr
+
+
+def _old_right_bound_mutant(tmp_path):
+    """A throwaway hook copy whose verbs carry the pre-T1-1 right bound."""
+    shared = "%s='(%s)'" % (VERB_VAR, VERB_ALT)
+    assert shared in HOOK_SRC and BOUNDARY_SUFFIX in VERB_ALT, (
+        "could not locate the shared verb definition or its right bound; "
+        f"parsed {VERB_ALT!r} at line {VERB_ALT_LINENO}"
+    )
+    src = HOOK_SRC.replace(
+        shared,
+        "%s='(%s)'" % (VERB_VAR, VERB_ALT.replace(BOUNDARY_SUFFIX, OLD_BOUNDARY_SUFFIX)),
+        1,
+    )
+    assert src != HOOK_SRC, "old-right-bound mutation was a no-op"
+    return _write_mutant(tmp_path, "old-right-bound-hook.sh", src)
+
+
+@pytest.mark.parametrize("layer", LAYERS, ids=LAYER_IDS)
+@pytest.mark.parametrize("kind,extra", PAYLOAD_KINDS, ids=[k for k, _ in PAYLOAD_KINDS])
+@pytest.mark.parametrize("shape,tmpl", T1_1_READS, ids=[s for s, _ in T1_1_READS])
+def test_read_under_interpreter_named_directory_is_permitted(
+    layer, kind, extra, shape, tmpl, interpreter_named_root, tmp_path
+):
+    state, home = interpreter_named_root
+    cmd = tmpl.format(p=layer.path(state))
+    rc, err = _run_payload(HOOK, cmd, state, home, extra)
+    assert layer.label not in refusal_labels(err), (
+        f"{layer.name} layer (hook line {layer.lineno}) refused a {kind} READ "
+        f"because a directory in the state root is named like an interpreter: "
+        f"{cmd}\nstderr:\n{err}"
+    )
+    assert rc == ALLOW, (
+        f"{kind} read probe was refused by another layer: {cmd}\n"
+        f"labels={sorted(refusal_labels(err))} rc={rc}\n{err}"
+    )
+    # Positive control: the old right bound refuses the same read, so the
+    # permit above is the fix and not a probe that can never hit.
+    mrc, merr = _run_payload(_old_right_bound_mutant(tmp_path), cmd, state, home, extra)
+    assert layer.label in refusal_labels(merr), (
+        f"{layer.name}: the pre-T1-1 right bound did NOT refuse {cmd}, so "
+        f"this permit proves nothing. rc={mrc}\n{merr}"
+    )
+
+
+@pytest.mark.parametrize("layer", LAYERS, ids=LAYER_IDS)
+@pytest.mark.parametrize("kind,extra", PAYLOAD_KINDS, ids=[k for k, _ in PAYLOAD_KINDS])
+@pytest.mark.parametrize("shape,tmpl", T1_1_WRITES, ids=[s for s, _ in T1_1_WRITES])
+def test_write_under_interpreter_named_directory_is_refused(
+    layer, kind, extra, shape, tmpl, interpreter_named_root
+):
+    state, home = interpreter_named_root
+    cmd = tmpl.format(p=layer.path(state), d=state)
+    rc, err = _run_payload(HOOK, cmd, state, home, extra)
+    labels = refusal_labels(err)
+    assert layer.label in labels, (
+        f"{layer.name} layer (hook line {layer.lineno}) did NOT refuse a {kind} "
+        f"write into its namespace under an interpreter-named directory: {cmd}\n"
+        f"rc={rc} labels={sorted(labels)}\n{err}"
+    )
+    assert rc == BLOCK
+
+
+def test_last_path_segment_verb_is_still_a_verb_and_directory_is_not():
+    """The right bound, measured directly with the hook's own grep and alternation."""
+    verb = "(%s)" % VERB_ALT
+    for word in ("/usr/bin/python3 -c", "\"/usr/bin/python3\" -c", "python3-dbg -c",
+                 "perl5.36 -e", "node20 -e", "tee${IFS}x", "{tee,x}", "nodejs"):
+        assert _hook_grep(verb, word), f"{word!r} is a launch and must match a verb"
+    for word in ("/tmp/rerun-node20-files/x", "/tmp/python3-x/x", "/".join(("", "home", "node", "x")),
+                 "/tmp/perl5/x", "/opt/tee/x", "nodes", "untouched"):
+        assert not _hook_grep(verb, word), f"{word!r} is no launch and must not match"
 
 
 # ── AC8 / hygiene: the hook still parses and still permits benign work ──────

@@ -67,9 +67,17 @@ Grant binding (D8), beside it and for every caller alike: only <name> writes
 under <state dir>/agentic-commit/<name>/, <name> a listed role (the push- and
 merge-analyst grants); a removal is no write (_check_grant_writes).
 
+/clean's approved actions (P9-4; D8), beside it and for every caller alike:
+while a human-typed /clean's span is active, what its owner approved (the
+request's docs/clean/user-approvals-<id>.json: a move's or rename's
+destination, a fix_style file) is written by that span's cleaner only, and the
+project's root README.md and ARCHITECTURE.md by its rule-inspector only
+(_check_clean_writes; hooks/pretool-claude-config-guard.py reads clean_grant).
+
 In-flight compatibility (train 2, A17; D15), kept until no session predates
 train 2's landing: the commit message file 2acc29b's changelog-analyst text
-writes, /tmp/commit-msg-<name>.txt, is that analyst's own by the Write tool
+writes, /tmp/commit-msg-<name>.txt, and its recovery route's
+/tmp/recovery-commit-<name>.txt, are that analyst's own by the Write tool
 (its role's denials only) and no other caller's (_check_inflight_msg_writes);
 the test-writer entry 2acc29b's /dev text has its test-writer create in its
 own cycle's registry is that test-writer's own by the Write tool, its dispatch
@@ -94,6 +102,9 @@ Bash policy bypass fix (T2.1):
     extract every shell write target (heredoc-stripped). Each extracted
     path is authorized as if it were a Write target. The bash command
     itself is also authorized for tool-list membership (target=None).
+  - The text of each shell -c string the command runs is read the same way,
+    as the command run plainly (T2-16, _bash_texts), here and in the
+    protected stage.
   - This closes the heredoc/redirect bypass where a subagent could
     write to a protected path via 'cat > FILE << EOF' or similar.
 
@@ -114,6 +125,7 @@ ends with the status and output it decided without the interpreter's teardown
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -186,8 +198,93 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
         return [tool_input.get("file_path")]
     if tool_name == "Bash":
         command = tool_input.get("command") or ""
-        return [None] + extract_bash_write_paths(command)
+        found = [t for text in _bash_texts(command) for t in extract_bash_write_paths(text)]
+        return [None] + list(dict.fromkeys(found))
     return [None]
+
+
+# -- shell -c layers (T2-16) ---------------------------------------------------
+# The write-target readers blank quoted text, so a write inside a shell's -c
+# string named no target: `bash -c "cp x <protected>"` exited 0 where the same
+# cp run plainly exits 2. Each layer's text is read here as its command run
+# plainly is. The layers are lib/git_command_classifier's (the walker the
+# privilege guard, bash-safety and the branch hook read them with): its texts,
+# where a value the outer shell computes reads as a run-time placeholder (an
+# unresolvable target, judged as the plain command's `$X` is), and the same
+# walk over the command with its `$` hidden, which keeps an outer expansion as
+# written. A double-quoted string found there written as its value, after the
+# shell's option word, is read in its place, on a line of its own, as the
+# command run plainly would hold it, so `$HOME` and a `T=<path>;` assignment
+# before the shell (TC-47) reach its words as they reach the plain command's; a
+# single-quoted one, which the outer shell neither expands nor passes its
+# variables to, and any other string are read alone.
+def _bash_texts(command) -> tuple:
+    """``command``, then the text of every shell -c layer it runs (above), each
+    read for write targets as a command is. The walk adds texts and never
+    removes the command: on a failure the texts it found still count. A
+    command that is no string is read as before: it names no target."""
+    return _layer_texts(command) if isinstance(command, str) else (command,)
+
+
+@functools.lru_cache(maxsize=4)  # read by the role rows' and the protected stage's targets alike
+def _layer_texts(command: str) -> tuple:
+    texts = [command]
+    if "sh" not in command:  # every shell's name holds "sh" (the walk's own hint)
+        return tuple(texts)
+    try:
+        from lib import git_command_classifier as walker
+
+        texts += list(walker.iter_shell_texts(command))[1:]
+        # `$` hidden as a private-use character the command does not hold: no shell syntax, so the walk reads it as text
+        hidden = next(chr(c) for c in range(0xE000, 0xF900) if chr(c) not in command)
+        _shell_layers(walker, command.replace("$", hidden), hidden, 0, texts, set())
+    except Exception:  # never let the walk cost the command its own reading
+        pass
+    return tuple(dict.fromkeys(texts))
+
+
+def _shown(walker, text: str, hidden: str) -> str:
+    return text.replace(hidden, "$").replace(walker._RUNTIME, walker._RUNTIME_PLACEHOLDER)
+
+
+def _operand_at(text: str, value: str, cursor: int) -> int:
+    """Offset of ``value`` as a double-quoted shell operand in ``text`` from
+    ``cursor`` (after an option word: `-c`, `-lc`, `--`), else -1."""
+    if '"' in value:  # an escaped quote: the operand is not written as its value
+        return -1
+    at = text.find('"%s"' % value, cursor)
+    while at >= 0 and (text[:at].split() or [""])[-1][:1] not in ("-", "+"):
+        at = text.find('"%s"' % value, at + 1)
+    return at
+
+
+def _shell_layers(walker, text: str, hidden: str, depth: int, texts: list, seen: set) -> None:
+    """Append to ``texts`` the layers ``text`` (its `$` hidden) runs, to the
+    walker's own depth limit: ``text`` with each double-quoted -c string read
+    in its place, every other string alone; text the walker cannot lex is
+    read as it reads it, what follows the shell's -c with the quotes dropped."""
+    if depth >= walker._MAX_SHELL_DEPTH:
+        return
+    spliced, cursor = text, 0
+    for kind, value, _fed, _built in walker._shell_c_strings(text):
+        if kind == "unlexable":
+            for m in walker._SHELL_C_SHAPE_RE.finditer(value):
+                rest = re.sub(r"['\"]", "", re.sub(r"\A\S*", "", value[m.end():]))
+                texts.append(_shown(walker, rest, hidden))
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        at = _operand_at(spliced, value, cursor)
+        if at < 0:
+            texts.append(_shown(walker, value, hidden))
+            _shell_layers(walker, value, hidden, depth + 1, texts, seen)
+            continue
+        spliced = "%s\n%s\n%s" % (spliced[:at], value, spliced[at + len(value) + 2:])
+        cursor = at + len(value) + 2
+    if spliced != text:
+        texts.append(_shown(walker, spliced, hidden))
+        _shell_layers(walker, spliced, hidden, depth + 1, texts, seen)
 
 
 _RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
@@ -665,17 +762,21 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
 # keeps that changelog-analyst text: its Phase 8 has the Write tool write the
 # file of its `git commit -F` at /tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt
 # (2acc29b agents/changelog-analyst.md:1099; :71 and :557 name the same file),
-# where the text since names one under the role's scratch directory. That
-# analyst's role used to go unresolved, so no role row applied; resolved from
-# the CLI's agent_type (P6), its row refuses the write and the in-flight
-# /commit ends failed. So that one name, directly in /tmp and resolving to
-# itself, written by the Write tool, is the changelog-analyst's own: its role's
-# denials apply to it, not its allow prefixes or the raw-temp rule, as to a
+# where the text since names one under the role's scratch directory. Its
+# nothing_to_commit_precommitted recovery route (Recovery step 3, :1887) writes
+# the file of its `git commit --allow-empty -F` at
+# /tmp/recovery-commit-<TASK_ID>-<short-rand>.txt; the text since names the
+# scratch-directory one there too (T2-11). That analyst's role used to go
+# unresolved, so no role row applied; resolved from the CLI's agent_type (P6),
+# its row refuses the write and the in-flight /commit ends failed. So those two
+# names, directly in /tmp and resolving to themselves, written by the Write
+# tool, are the changelog-analyst's own: its role's
+# denials apply to them, not its allow prefixes or the raw-temp rule, as to a
 # path its dispatch declares. No other caller, the main agent included, writes
-# a file of that name, by any write tool or Bash write target (D8). A subagent
+# a file of either name, by any write tool or Bash write target (D8). A subagent
 # whose role does not resolve is left as before (agent_resolver LOW-10).
 _INFLIGHT_MSG_ROLE = "changelog-analyst"
-_INFLIGHT_MSG_NAME = re.compile(r"commit-msg-[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
+_INFLIGHT_MSG_NAME = re.compile(r"(?:commit-msg|recovery-commit)-[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
 
 
 def _inflight_msg_named(path: str) -> bool:
@@ -686,7 +787,8 @@ def _inflight_msg_named(path: str) -> bool:
 def _inflight_msg_file(target: str, own: bool) -> bool:
     """Whether ``target`` names the in-flight analyst's message file: as
     written or as it resolves, or (``own``, the analyst's Write) written
-    /tmp/commit-msg-<name>.txt and resolving to that same file."""
+    /tmp/commit-msg-<name>.txt or /tmp/recovery-commit-<name>.txt and
+    resolving to that same file."""
     written = os.path.normpath(target)
     try:
         real = str(_resolved(target))
@@ -974,8 +1076,250 @@ def _declared_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
+# -- /clean's approved actions (P9-4) -----------------------------------------
+# What /clean's owner approves is written by the producer /clean dispatches for
+# it, and by no other caller (D8). No obligation declares these paths (Step 16's
+# declares the execution report only, and no command template's shape covers a
+# script's fix_style edit), so they are derived here, only while a human-typed
+# /clean's span is the active one:
+#  - the cleaner: a subagent whose own dispatch is a cleaner dispatch of that
+#    span (its obligation of role cleaner and pipeline clean names
+#    docs/clean/cleanup-execution-<id>.json), made after an AskUserQuestion of
+#    the span came back answered, writes the destination of each approved move
+#    or rename and the file of each approved fix_style (or fix) of that
+#    request's approvals: docs/clean/user-approvals-<id>.json as the main
+#    agent's last Write of it (Step 13) before that dispatch left it in the
+#    session transcript, the record of what the owner approved, read as the
+#    dispatch records are and never from the file on disk, which nothing
+#    validates;
+#  - the rule-inspector: a subagent whose own dispatch is a rule-inspector
+#    dispatch of that span writes the project's root README.md and
+#    ARCHITECTURE.md (Step 4, every run);
+#  - any other caller's write of such a path, the main agent's included,
+#    exits 2 naming the path and its producer.
+# The producer's write of one skips its role's allow prefixes and its source
+# and test denials: the owner approved that write. Its tool lists, the shared
+# protected prefixes (_shared_protected_path_prefixes) and the scratch rule
+# still apply. No approval covers a path outside the project, the request's
+# docs/clean/ files, a .git directory, or the harness home's hooks/,
+# policies/, schemas/, scripts/ or settings.json. A refused or unread record,
+# or approvals that cannot be read, hold nothing and grant nothing: the role
+# rows decide, as before. The cost is a directory check for any write, and the
+# active span's calls where the project has a docs/clean/ directory.
+_CLEAN_EXECUTION_RE = re.compile(r"docs/clean/cleanup-execution-([A-Za-z0-9][A-Za-z0-9._-]*)\.json\Z")
+_CLEAN_APPROVALS_RE = re.compile(r"user-approvals-([A-Za-z0-9][A-Za-z0-9._-]*)\.json")
+_CLEAN_ROOT_DOCS = ("README.md", "ARCHITECTURE.md")
+_CLEAN_MOVES = frozenset({"move", "rename"})
+_CLEAN_EDITS = frozenset({"fix_style", "fix"})
+_CLEAN_HOME_SURFACE = ("hooks", "policies", "schemas", "scripts", "settings.json")
+_CLEAN_LINE_RE = re.compile(r":\d+(?:-\d+)?\Z")
+
+
+def _clean_forms(path: str, base: str) -> set:
+    path = os.path.expanduser(path)
+    if not os.path.isabs(path):
+        path = os.path.join(base, path)
+    forms = {os.path.normpath(path)}
+    try:
+        forms.add(os.path.realpath(path))
+    except (OSError, ValueError):
+        pass
+    return forms
+
+
+def _clean_grantable(path: str, project: str, home) -> bool:
+    """Whether an approval may name absolute normalised ``path`` (above)."""
+    rel = _below(path, project)
+    if not rel or rel == "." or ".git" in rel.split(os.sep):
+        return False
+    if rel == os.path.join("docs", "clean") or rel.startswith(os.path.join("docs", "clean") + os.sep):
+        return False
+    inside = _below(path, home) if home else None
+    return not (inside and inside.split(os.sep)[0] in _CLEAN_HOME_SURFACE)
+
+
+def _clean_approved(doc, project: str, home) -> tuple:
+    """(paths written, paths removed) by the approved actions of /clean approvals
+    document ``doc``, absolute and normalised (each in its written and real form)."""
+    try:
+        actions = (doc.get("user_approvals") or {}).get("approved_actions") or []
+    except AttributeError:
+        return frozenset(), frozenset()
+    written, removed = set(), set()
+    for action in actions if isinstance(actions, list) else []:
+        if not isinstance(action, dict) or action.get("approved") is not True:
+            continue
+        kind, source = action.get("action"), action.get("file") or action.get("location")
+        if kind in _CLEAN_MOVES:
+            target = action.get("destination")
+        elif kind in _CLEAN_EDITS:
+            target = _CLEAN_LINE_RE.sub("", action.get("location") or "") or action.get("file")
+            source = None
+        else:
+            continue
+        pairs = [(target, written)] + ([(source, removed)] if kind in _CLEAN_MOVES else [])
+        for value, into in pairs:
+            if not isinstance(value, str) or not value or "\x00" in value:
+                continue
+            forms = _clean_forms(value, project)
+            if all(_clean_grantable(f, project, home) for f in forms):
+                into.update(forms)
+    return frozenset(written), frozenset(removed)
+
+
+def _clean_holds(data: dict, project: str) -> list:
+    """[(role, call id, prompt, paths written, paths removed)] of each producer
+    dispatch of the active span when a human-typed /clean opened it, else []."""
+    from lib import claude_home, command_span, obligation
+
+    transcript = _session_transcript(data)
+    span = command_span.active_span(transcript) if transcript else None
+    if span is None or span.command != "clean":
+        return []
+    home = claude_home.resolve()
+    home = os.path.normpath(str(home)) if home else None
+    root = (frozenset(f for name in _CLEAN_ROOT_DOCS for f in _clean_forms(name, project)), frozenset())
+    holds, answered, approvals, read = [], False, {}, {}
+    for use in span.uses("Agent", "Task", "AskUserQuestion", "Write"):
+        if use.name == "AskUserQuestion":
+            answered = answered or use.ok
+            continue
+        if use.name == "Write":  # the approvals as the main agent's last ok Write of them left them
+            path, text = use.input.get("file_path"), use.input.get("content")
+            found = _CLEAN_APPROVALS_RE.fullmatch(os.path.basename(path)) if isinstance(path, str) else None
+            if found and use.ok and isinstance(text, str) and _clean_forms(path, project) & _clean_forms(
+                    os.path.join("docs", "clean", os.path.basename(path)), project):
+                read.pop(found.group(1), None)
+                try:
+                    approvals[found.group(1)] = json.loads(text)
+                except ValueError:
+                    approvals.pop(found.group(1), None)
+            continue
+        if use.result_at is not None and not use.ok:  # refused, or it failed: no subagent wrote for it
+            continue
+        kind, prompt = use.input.get("subagent_type"), use.input.get("prompt")
+        if kind == "rule-inspector":
+            holds.append(("rule-inspector", use.id, prompt) + root)
+        elif kind == "cleaner" and answered and isinstance(prompt, str):
+            parsed = obligation.parse_obligation(prompt)
+            doc = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+            if doc.get("role") != "cleaner" or doc.get("pipeline") != "clean":
+                continue
+            for artifact in doc.get("artifacts") or []:
+                found = _CLEAN_EXECUTION_RE.match(str((artifact or {}).get("path") or ""))
+                if found and found.group(1) in approvals:
+                    if found.group(1) not in read:
+                        read[found.group(1)] = _clean_approved(approvals[found.group(1)], project, home)
+                    holds.append(("cleaner", use.id, prompt) + read[found.group(1)])
+    return holds
+
+
+def _clean_dispatch(data: dict):
+    """(the call id the calling subagent's CLI meta names, its first record's
+    prompt); (None, None) when either cannot be read. clean_grant holds the
+    call to that prompt."""
+    from lib import declared_paths, obligation
+
+    transcript = _session_transcript(data)
+    agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id")) if transcript else (None, None)
+    if agent_transcript is None:
+        return None, None
+    try:
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+    except (OSError, ValueError, AttributeError):
+        return None, None
+    return (named if isinstance(named, str) and named else None), obligation.read_first_record_prompt(agent_transcript)
+
+
+def _clean_may_hold(writes: list, data: dict, project: str) -> bool:
+    """Whether a /clean's producer can hold one of ``writes``: the project has run
+    a /clean (a docs/clean/ directory, under which its reports and approvals
+    lie), so a project without one pays nothing for the transcript's reading."""
+    return os.path.isdir(os.path.join(project, "docs", "clean"))
+
+
+def clean_grant(data: dict, project: str | None = None, holds: list | None = None) -> tuple:
+    """(paths written, paths removed) the calling subagent may write as /clean's
+    producer of them (above); empty for every other caller. Also read by
+    hooks/pretool-claude-config-guard.py for a harness-home /clean."""
+    try:
+        from lib.agent_resolver import resolve_agent_type as resolve
+
+        role = resolve(data)
+        if not role or not data.get("agent_id"):
+            return frozenset(), frozenset()
+        project = project or os.path.abspath(str(_project_root()))
+        call, prompt = _clean_dispatch(data)
+        if call is None:
+            return frozenset(), frozenset()
+        written, removed = set(), set()
+        for held_role, held_call, held_prompt, paths, gone in (_clean_holds(data, project) if holds is None else holds):
+            if held_role == role and held_call == call and prompt is not None and held_prompt == prompt:
+                written |= paths
+                removed |= gone
+        return frozenset(written), frozenset(removed)
+    except Exception:
+        return frozenset(), frozenset()
+
+
+def _check_clean_writes(role, tool_name: str, targets: list, data: dict) -> set:
+    """Apply /clean's approved actions (above): exit 2 on another caller's write
+    of a path a /clean producer holds. Returns the targets the caller holds."""
+    writes = _write_targets(tool_name, targets)
+    if not writes:
+        return set()
+    try:
+        project = os.path.abspath(str(_project_root()))
+        if not _clean_may_hold(writes, data, project):
+            return set()
+        holds = _clean_holds(data, project)
+    except Exception:  # an unread record holds nothing: the role rows decide
+        return set()
+    if not holds:
+        return set()
+    base = data.get("cwd") or project
+    mine = set()
+    if data.get("agent_id") and role:
+        try:
+            written, _removed = clean_grant(data, project, holds)
+        except Exception:
+            written = frozenset()
+        mine = {t for t in writes if _clean_forms(t, base) & written}
+    for target in writes:
+        if target in mine:
+            continue
+        holders = sorted({h[0] for h in holds if _clean_forms(target, base) & h[3]})
+        if holders:
+            _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                        f"write target {target} is what this /clean's owner approved for its "
+                        f"{' and '.join(holders)}; only that {' or '.join(holders)} writes it (D8)")
+            sys.exit(2)
+    return mine
+
+
+def _approved_write_allowed(role: str, tool: str, target):
+    """The role's denials on its write of a path /clean's owner approved for it:
+    its tool lists and the shared protected prefixes, never its allow prefixes
+    or its source and test denials."""
+    from lib import policy_registry
+
+    policy = policy_registry.load_policy()
+    if policy is None:
+        return is_allowed(role, tool, target)
+    role_pol = policy_registry.get_role_policy(role)
+    if role_pol.get("_unknown_role"):
+        return is_allowed(role, tool, target)
+    tool_check = policy_registry._check_tool_lists(role_pol, tool)
+    if tool_check is not None:
+        return tool_check
+    if policy_registry._path_in_prefixes(target, policy.get("_shared_protected_path_prefixes") or []):
+        return (False, f"write target {target} matches _shared_protected_path_prefixes")
+    return (True, "ok")
+
+
 def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset(),
-                   message_file: set = frozenset()) -> None:
+                   message_file: set = frozenset(), approved: set = frozenset()) -> None:
     """Iterate targets, exit 2 on first deny. For Bash, treat each
     extracted write target (idx > 0) as a Write authorization request.
 
@@ -986,13 +1330,18 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     declared: the prefix layer applies only its denials to it. A target in
     ``message_file`` is the in-flight analyst's message file or the in-flight
     test-writer's own registry entry (compatibility, _check_inflight_msg_writes,
-    _check_inflight_entry_writes): only its role's denials apply to it.
+    _check_inflight_entry_writes): only its role's denials apply to it. A
+    target in ``approved`` is one /clean's owner approved for the caller
+    (_check_clean_writes): its tool lists and the shared protected prefixes
+    apply to it.
     """
     for idx, target in enumerate(targets):
         check_tool = tool_name
         if tool_name == "Bash" and idx > 0:
             check_tool = "Write"
-        if check_tool in WRITE_TOOLS and (target in own or target in message_file):
+        if check_tool in WRITE_TOOLS and target in approved and target not in own:
+            allowed, reason = _approved_write_allowed(role, check_tool, target)
+        elif check_tool in WRITE_TOOLS and (target in own or target in message_file):
             allowed, reason = _declared_write_allowed(role, check_tool, target)
         else:
             allowed, reason = is_allowed(role, check_tool, target)
@@ -1064,6 +1413,12 @@ def _protected(path: str, removed: bool, home, config: str, state: str) -> str |
     rel, name = (_below(path, home) if home else None), os.path.basename(path)
     if rel and any(rel == p or rel.startswith(p + "/") for p in _HOME_PROTECTED):
         return f"the harness home's {rel}"
+    from lib.requirement_round import HOOK_OWNED  # R6: hook-owned, refused to every agent
+
+    if HOOK_OWNED.search(path.replace(os.sep, "/")):
+        return "an owner's answer, which only the PostToolUse AskUserQuestion hook writes"
+    if _below(path, os.path.join(os.path.dirname(config), "logs")) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
+        return "the score log or its lock, which only hooks write"
     if _below(path, config) and kept(name):
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
@@ -1126,10 +1481,11 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
 
     found = [(t, False) for t in _write_targets(tool_name, targets)]
     if tool_name == "Bash" and isinstance(tool_input, dict):
-        try:  # on a failure the frozen extractor's targets still count, and the rules below still run
-            found += extract_bash_touched_paths(tool_input.get("command") or "")
-        except Exception:
-            pass
+        for text in _bash_texts(tool_input.get("command") or ""):  # the command, then each -c layer it runs
+            try:  # on a failure the frozen extractor's targets still count, and the rules below still run
+                found += extract_bash_touched_paths(text)
+            except Exception:
+                pass
     if not found:
         return
     base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
@@ -1217,6 +1573,7 @@ def main() -> None:
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
+    approved = _check_clean_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)
     message_file = _check_inflight_msg_writes(role, tool_name, targets, data)  # compatibility (A17)
     message_file |= _check_inflight_entry_writes(role, tool_name, targets, data)  # compatibility (A17)
@@ -1227,7 +1584,7 @@ def main() -> None:
         # the main agent and an unlisted (built-in or plugin) role have no role
         # rows: the checks above are all that applies to them.
         sys.exit(0)
-    _check_targets(role, tool_name, targets, data, own, message_file)
+    _check_targets(role, tool_name, targets, data, own, message_file, approved)
     sys.exit(0)
 
 

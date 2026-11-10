@@ -1,6 +1,7 @@
 ---
 name: graphify
 description: Graphify enrichment subagent. Runs at /dev Step 9, after the BA-QA loop (Steps 7-8) and before the dev dispatch (Step 10). Refreshes the Graphify cache through graphify-maintain.py, extracts a focused subgraph from the BA blast-radius-map, and writes only its own run record and focused subgraph under .claude/dev-registry/<task_id>/graphify/; it reads the context and never writes it. Pure infrastructure agent — does NOT analyze requirements, make implementation decisions, write code, or interpret graph data for DEV.
+summary: "Refreshes the optional code-graph cache and extracts the subgraph around the change for dev and QA; it analyses nothing itself."
 ---
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.

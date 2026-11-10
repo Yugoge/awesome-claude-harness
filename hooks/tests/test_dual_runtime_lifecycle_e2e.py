@@ -131,6 +131,17 @@ def _authoritative_paths(runtime: str, root: Path, home: Path, sid: str) -> list
     ]
 
 
+def _launched(command: str, tool_name: str | None) -> list[str]:
+    """The hook files a launcher registration (hooks/lib/hook_launch.py) runs for this tool."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_launch_settings", SOURCE_ROOT / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    hook = mod.launcher_of(command, str(SOURCE_ROOT))
+    rules = mod.rules(str(SOURCE_ROOT), hook) if hook else []
+    return [path for path, tools, _ in rules if tools is None or tool_name is None or tool_name in tools]
+
+
 def _owner_command(runtime: str, event: str) -> str:
     return {
         "UserPromptSubmit": "prompt-workflow.py",
@@ -255,7 +266,8 @@ def execute_configured_chain(fixture: dict, event: str, payload: dict) -> dict:
             )
         )
         aggregate_block = aggregate_block or blocked
-        owner = owner_fragment in handler["command"]
+        owner = owner_fragment in handler["command"] or any(  # a launcher running the owner in its process
+            owner_fragment == path for path in _launched(handler["command"], tool_name))
         owner_credits += int(owner)
         records.append({
             **handler,

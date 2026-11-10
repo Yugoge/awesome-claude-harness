@@ -224,7 +224,7 @@ def _registered_hooks(event: str, tool_name: str) -> list:
     """argv for every hook settings.json registers for `event` whose matcher applies to
     `tool_name`, in registration order. A command of an unknown form fails the test, so no
     registered hook is skipped."""
-    settings = json.loads(SETTINGS.read_text())
+    settings = _expanded(json.loads(SETTINGS.read_text()))
     out = []
     for group in settings["hooks"].get(event, []):
         if not _matcher_applies(group.get("matcher"), tool_name):
@@ -498,3 +498,13 @@ def test_ba_write_of_a_producer_question_artifact(tmp_path, name, expected_rc):
             "role": "ba", "tool": "Write", "target": str(target),
             "deny_reason": f"write target {target} not in allowed_write_path_prefixes"}
     assert not _POLICY_PROJECT.parent.exists(), "the policy check must not create the project"
+
+
+def _expanded(settings: dict) -> dict:
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    import importlib.util
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("_launch_settings", root / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(settings, str(root))

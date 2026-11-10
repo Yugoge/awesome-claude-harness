@@ -1,6 +1,7 @@
 ---
 name: merge-analyst
 description: "Pre-merge analyst subagent. Inspects branch divergence, diff stat, conflict markers, and overnight-state consistency; writes a nonce-keyed merge-analyst grant (60s expiry) to <state dir>/agentic-commit/merge-analyst/. Dispatched exclusively by /merge."
+summary: "Checks divergence, conflicts and overnight state before a merge and writes a short-lived merge grant; dispatched only by /merge."
 ---
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
@@ -26,7 +27,7 @@ CURRENT_SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}" |
 CURRENT_DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}" || echo "MISSING")
 ```
 
-Each case writes the Phase 8 grant with `verdict=blocked` and that risk, then stops:
+/merge refused a MISSING tip and a self-merge before dispatch, so each case means a tip moved since. Each writes the Phase 8 grant with `verdict=blocked`, that risk and the tips read here (the only ones `hooks/lib/merge_grant.py` keeps), then stops; a MISSING tip names no commit a grant can carry, so that case prints its risk and stops with none (Error handling):
 
 - "MISSING" tip: risks=["Ref `<ref>` does not resolve to a commit object"]
 - Equal tips: risks=["Self-merge: `<RESOLVED_REF>` and `<DEFAULT_BRANCH>` are the same commit — nothing to merge"]
@@ -108,9 +109,9 @@ Write the JSON (Write tool):
   "analysis_summary": "<1-3 sentence summary>",
   "repo_root": "<REPO_ROOT>",
   "branch": "<RESOLVED_REF>",
-  "source_tip": "<SOURCE_TIP>",
+  "source_tip": "<CURRENT_SOURCE_TIP>",
   "default_branch": "<DEFAULT_BRANCH>",
-  "default_tip": "<DEFAULT_TIP>",
+  "default_tip": "<CURRENT_DEFAULT_TIP>",
   "session_id": "<SESSION_ID>",
   "nonce": "<REQUEST_ID>",
   "expires_at": "<ISO-8601 UTC>"

@@ -277,11 +277,67 @@ def match_sentinel_grant_for_tool(session_id: str, tool_name: str) -> dict | Non
     return None
 
 
-def _bash_subcommands(command: str) -> list[str]:
-    """Split a compound bash command on && || ; | into stripped sub-tokens."""
+def _legacy_subcommands(command: str) -> list[str]:
+    """Split on every && || ; | and newline, quoted or not (the conservative view)."""
     s = command.replace("||", "\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
-    parts = [p.strip() for p in s.split("\n") if p.strip()]
-    return parts or [command]
+    return [p.strip() for p in s.split("\n") if p.strip()]
+
+
+def _bash_subcommands(command: str) -> list[str]:
+    """Split a compound bash command on && || ; | and newline into stripped sub-commands.
+
+    A separator inside a quoted word is text, as the shell reads it: `git commit -m
+    "fix(x): a; b"` is one command. The quoting is read only where it is purely lexical:
+    '...' and $'...' hold anything, "..." holds anything but an expansion that runs code,
+    and a backslash before a quote keeps that quote from opening one. Whatever else could
+    make this scan disagree with the shell -- a here-document, `$(`, a backquote, a process
+    substitution, a quote left open -- is split on every separator as before, so a command
+    with any of them can only get more sub-commands than the shell runs, never fewer. A
+    separator outside quotes, a backslash-escaped one and one in a comment split as before.
+    `&` alone is no separator, as before.
+    """
+    n, i, start = len(command), 0, 0
+    parts: list[str] = []
+    while i < n:
+        ch = command[i]
+        if ch == "\\":
+            nxt = command[i + 1:i + 2]
+            i += 2 if nxt and nxt not in ";|&\n" else 1
+        elif ch in "'\"" or (ch == "$" and command[i + 1:i + 2] == "'"):
+            ansi = ch == "$"
+            i += 1 if ansi else 0
+            quote, i = command[i], i + 1
+            while i < n and command[i] != quote:
+                if command[i] == "\\" and (ansi or quote == '"'):
+                    i += 1
+                elif quote == '"' and (command[i] == "`" or command.startswith("$(", i)):
+                    return _legacy_subcommands(command) or [command]
+                i += 1
+            if i >= n:
+                return _legacy_subcommands(command) or [command]
+            i += 1
+        elif ch == "`" or command.startswith(("$(", "<(", ">(", "<<"), i):
+            return _legacy_subcommands(command) or [command]
+        elif ch == "#" and (i == 0 or command[i - 1] in " \t\n;&|()<>"):
+            # A comment: no quote in it opens one. Its separators still split, as before.
+            while i < n and command[i] != "\n":
+                if command[i] in ";|":
+                    parts.append(command[start:i])
+                    start = i + 1
+                elif command.startswith("&&", i):
+                    parts.append(command[start:i])
+                    start, i = i + 2, i + 1
+                i += 1
+        elif ch in ";|\n":
+            parts.append(command[start:i])
+            start, i = i + 1, i + 1
+        elif command.startswith("&&", i):
+            parts.append(command[start:i])
+            start, i = i + 2, i + 2
+        else:
+            i += 1
+    parts.append(command[start:])
+    return [p.strip() for p in parts if p.strip()] or [command]
 
 
 # git global options that may be skipped when locating the subcommand for grant

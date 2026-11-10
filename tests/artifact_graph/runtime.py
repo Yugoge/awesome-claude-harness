@@ -130,6 +130,11 @@ def replay(tree: str, job: Job, template: str | None = None) -> Job:
         argv.append("--rebuild")
     if job.variant:
         argv += ["--arg", f"variant={job.variant}"]
+    # The attribution journal's auto-seal runs at a hook's first call and then once per interval
+    # (scripts/seal-attribution-journal.py, 600 s by default): whether a replay seals a second time,
+    # and so shows the seal's write of the journal it copies, would hang on how fast its hooks ran.
+    # A short interval makes every replay longer than it seal again, whatever the hooks cost.
+    argv += ["--env", "ATTRIBUTION_SEAL_INTERVAL_SECONDS=30"]
     p = subprocess.run(argv, cwd=REPO, env=_env(), capture_output=True, text=True)
     job.wall_s = round(time.monotonic() - t0, 2)
     job.rc = p.returncode

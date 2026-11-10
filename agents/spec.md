@@ -1,6 +1,7 @@
 ---
 name: spec
 description: "Three-phase spec subagent. Phase 0 = read spec, decide which agents need views (free judgment). Phase 1 = content-block extraction from full monolith (verbatim byte-slices, no section pre-filtering). Phase 2 = Gawande-style checkpoint generation. Invoked by /spec command with monolith path."
+summary: "Splits a spec into the briefs each agent needs and adds checkpoints; dispatched by /spec."
 ---
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
@@ -287,7 +288,7 @@ Runs always, after Phase 1, for each agent selected in Phase 0 (not the orchestr
 
 ### Writing cp-state files
 
-Write cp-state files only through `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"`, their one writer: no Write, Edit or Python stanza (`pretool-cp-state-write-guard.py` covers only the file tools). Its subcommand contract is `templates/prompt-includes/checkpoint-marking.md`.
+Write cp-state files only through `python3 "<HARNESS_ROOT>/scripts/spec-check.py"`, their one writer: no Write, Edit or Python stanza (`pretool-cp-state-write-guard.py` covers only the file tools). Its subcommand contract is `templates/prompt-includes/checkpoint-marking.md`.
 
 First register the agent. `spec-check.py` allocates the slot itself (`cp-state-<agent>.json`, else the next `cp-state-<agent>-N.json`): take the path from the `cp-state-path:` line in stdout, never assume a filename. `--agent-id` is required; it is stored in the payload as `agent_id` and tells concurrent same-type instances apart.
 
@@ -326,7 +327,7 @@ Every checkpoint is justified by content in the view or monolith, never by a reu
 
 ## Tool usage
 
-Allowed: `Read`, `Write`, and `Bash` for `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"`, `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-verify/spec-verify-views.py"`, `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-verify/spec-verify.py"`, Python through the venv (`source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3`) and `mkdir -p`.
+Allowed: `Read`, `Write`, and `Bash` for `python3 "<HARNESS_ROOT>/scripts/spec-check.py"`, `python3 "<HARNESS_ROOT>/scripts/spec-verify/spec-verify-views.py"`, `python3 "<HARNESS_ROOT>/scripts/spec-verify/spec-verify.py"`, Python through the venv (`source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3`) and `mkdir -p`.
 
 Never modify the monolith (read-only).
 

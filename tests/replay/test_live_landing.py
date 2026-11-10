@@ -73,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from tests.replay import hookrun, landing, sites, suite
+from tests.replay import hookrun, landing, launchdiff, sites, suite
 
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
@@ -395,16 +395,21 @@ AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "
 # (test_your_settings_differs_only_where_a_replay_runs_it).
 EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
              A.name: {STOP, TODO} | BASH | WRITE | AGENT, B.name: {STOP, TODO} | BASH | WRITE | AGENT}
-# The registrations that change where no scenario here reaches after the landing: P4's close-rating hook
-# (PostToolUse AskUserQuestion; none asks with AskUserQuestion after it), and two of P12's removals: the
-# base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no event's list
-# changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an exit-0
-# stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
-# one fails test_again_with_your_settings's `hooklist` part. (P2's overnight guard, under either matcher,
-# is a rule of P12's write gate: its old registration's removal is among those the scenarios reach.)
-ELSEWHERE = {("PostToolUse", "AskUserQuestion"): ([], ["hooks/posttool-close-rating.py"]),
+# The registrations that change where EXERCISES names none: P4's close-rating hook (PostToolUse; P13-2
+# widened its matcher to AskUserQuestion|Agent, so the one registration observes every Agent dispatch and every
+# question the owner is asked; REACHED names the scenarios whose events after the landing do reach it: a
+# dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), and two of P12's
+# removals: the base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no
+# event's list changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an
+# exit-0 stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
+# one the REACHED entry of its scenario does not name fails test_again_with_your_settings's `hooklist` part.
+# (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
+# is among those the scenarios reach.)
+RATING = ("PostToolUse", "AskUserQuestion|Agent")
+ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
+REACHED = {PRE.name: {RATING}, A.name: {RATING}, B.name: {RATING}}
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that
@@ -426,8 +431,10 @@ WAITS = (
 
 
 def _head_settings() -> dict:
+    """This tree's settings.json, each launcher read as the hooks it runs (hooks/lib/launch_settings.py):
+    a launcher runs each hook as its own registration ran it, so the registrations compared are the hooks'."""
     with open(os.path.join(suite.REPO, "settings.json")) as fh:
-        return json.load(fh)
+        return sites.expand_launchers(suite.REPO, json.load(fh))
 
 
 def _registrations(settings: dict) -> dict:
@@ -441,10 +448,16 @@ def _registrations(settings: dict) -> dict:
 
 
 def _differing(name: str) -> dict:
-    """(event, matcher) -> (the base's hooks, this tree's) of each registration that differs."""
+    """(event, matcher) -> (the base's hooks, this tree's) of each registration that differs. The CLI
+    starts an event's hooks together, so the same hooks (command and timeout) in another order are the
+    same registration: a launcher (hooks/lib/hook_launch.py) runs its hooks before the shell hooks
+    registered beside them."""
     base, head = _registrations(_base_settings(name)), _registrations(_head_settings())
+
+    def same(a, b):
+        return sorted(a or [], key=repr) == sorted(b or [], key=repr)
     return {k: ([hookrun.hook_name(c) for c, _ in base.get(k, [])], [hookrun.hook_name(c) for c, _ in head.get(k, [])])
-            for k in set(base) | set(head) if base.get(k) != head.get(k)}
+            for k in set(base) | set(head) if not same(base.get(k), head.get(k))}
 
 
 def _gaps(text: str) -> list[tuple[str, str | None]]:
@@ -486,7 +499,8 @@ def _hooklist(name: str, r: suite.Result) -> tuple[list, set, int]:
     for inv in suite._jsonl(os.path.join(r.run_dir, "invocations.jsonl")):
         if inv["seq"] <= land:
             continue
-        ran = [h["command"] for h in inv["hooks"]]
+        # a launcher's own entry stands for the hooks listed after it (replay.py _inv_hooks)
+        ran = [h["command"] for h in inv["hooks"] if launchdiff.launcher_rules(suite.REPO, h["hook"]) is None]
         want = [h["command"] for h in hookrun.select(head, inv["event"], inv["payload"])]
         if ran != want:
             bad.append({"step": inv["label"], "event": inv["event"], "ran": [hookrun.hook_name(c) for c in ran],
@@ -613,7 +627,7 @@ def test_again_with_your_settings(live, case, part):
             assert land.get("hooklist") == "landed", land
             bad, hit, _n = _hooklist(live.name, r)
             assert not bad, f"{scn.name}: events after the landing that did not run this tree's hook list: {bad}"
-            assert hit == EXERCISES[scn.name], (scn.name, sorted(map(str, hit)), _differing(live.name))
+            assert hit == EXERCISES[scn.name] | REACHED.get(scn.name, set()), (scn.name, sorted(map(str, hit)), _differing(live.name))
         elif part == "a11":
             listed = "\n".join(_yours_lines(live.name, scn, r, base))
             new = [b for b, how, _ in _classified(r, base) if how == "NEW"]

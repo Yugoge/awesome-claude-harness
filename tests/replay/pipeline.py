@@ -240,7 +240,7 @@ class Orchestrator:
         return next((i for i, t in enumerate(self.todos) if t.get("status") == "in_progress"), None)
 
     def step_name(self, i: int) -> str:
-        m = re.match(r"(Step \d+)", self.todos[i]["content"])
+        m = re.match(r"(Step \d+[a-z]?)", self.todos[i]["content"])  # Step 4, Step 4a
         return m.group(1) if m else self.todos[i]["content"]
 
     def advance(self, label: str | None = None):
@@ -396,7 +396,7 @@ class Orchestrator:
             self.instantiate(fields.get("prompt", ""), task_id))
 
     def dispatch(self, fields: dict, act: agents.Act, label: str, task_id: str, subagent_type=None,
-                 extra_rules=(), extra_line_rules=(), actor=None, lane=None, lane_set=None):
+                 extra_rules=(), extra_line_rules=(), actor=None, lane=None, lane_set=None, on_stop_block=None):
         prompt = self.render(fields, task_id, extra_rules, extra_line_rules, lane, lane_set)
         atype = subagent_type or fields.get("subagent_type") or self.tree.obligation_role(prompt)
         if not atype:
@@ -404,14 +404,16 @@ class Orchestrator:
         description = self.bind(fields.get("description", "") or atype, extra_rules)
         player = agents.Player(self.tree, prompt, act, role=atype)
         d = (actor or self.s.main).dispatch(atype, prompt, description=description, body=player.body,
-                                            result=player.final, label=label, deviation=self.devs.at(label))
+                                            result=player.final, label=label, deviation=self.devs.at(label),
+                                            **({"on_stop_block": on_stop_block} if on_stop_block else {}))
         d.player = player
         self.dispatches.append(d)
         return d
 
     # ------------------------------------------------------------ owner questions
-    def ask(self, rel_path: str, label: str):
-        """Relay a producer question artifact with ONE AskUserQuestion; returns (question doc, answer label).
+    def ask(self, rel_path: str, label: str, source: str | None = None):
+        """Relay a producer question artifact with ONE AskUserQuestion, with ``metadata.source`` when the text
+        names one (D28: the hook writes the producer answer); returns (question doc, answer label).
 
         The driver argument `ask` (P5 A20's rerun without AskUserQuestion) says what the owner's side does:
         `answered` (default) the dialog's recommended option; `skip` the dialog closed with no answer
@@ -431,6 +433,8 @@ class Orchestrator:
                     "description": o.get("description", "")} for o in q.get("options", [])]
         tin = {"questions": [{"question": need, "header": (q.get("role") or "producer")[:12],
                               "options": options, "multiSelect": False}]}
+        if source:
+            tin["metadata"] = {"source": source}
         ans = ""
         if form != "none":
             def perform():

@@ -63,6 +63,7 @@ import json
 import os
 import re
 import subprocess
+import urllib.parse
 
 from . import norm
 
@@ -87,6 +88,9 @@ _PSEUDO = ("/dev/null", "/dev/tty", "/dev/pts/", "/dev/fd/", "/dev/std", "/proc/
 _LOCK_RE = re.compile(r"\.(?:lock|lck)$")
 _INDEX_RE = re.compile(r"(?<![A-Za-z])index(?![A-Za-z])")  # git's index: `index`, GIT_INDEX_FILE's `x-index.N`
 _FORKS = ("clone", "clone3", "fork", "vfork")
+
+
+LAUNCH_MARK = "launch."  # hooks/lib/hook_launch.py MARK_ENV's marker names: launch.<hook file, quoted>
 
 
 def available() -> tuple[bool, str]:
@@ -274,7 +278,8 @@ class _CodeNames:
 # ---------------------------------------------------------------- parse
 
 class _Proc:
-    __slots__ = ("pid", "comp", "actor", "step", "cwd", "owner", "root", "event", "origin", "exe", "fork_at")
+    __slots__ = ("pid", "comp", "actor", "step", "cwd", "owner", "root", "event", "origin", "exe", "fork_at",
+                 "launcher")
 
     def __init__(self, pid, owner, comp=None, actor="", step="", cwd=None, root=False, event="", origin=None,
                  exe=""):
@@ -285,6 +290,7 @@ class _Proc:
         # call ran); exe: the program it executes.
         self.event, self.origin, self.exe = event, origin, exe
         self.fork_at = -1  # which lifetime of its pid this process is (pids are reused)
+        self.launcher = None  # a launcher's own (component, origin) while it runs a hook (LAUNCH_MARK)
 
     def child(self, pid: int) -> "_Proc":
         # A process the driver spawns starts its own tree; deeper ones stay in their parent's.
@@ -504,7 +510,17 @@ class _Reducer:
             if not full:
                 return
             if full.startswith(self.mark_dir + "/"):
-                kind, value = self.markers.get(int(os.path.basename(full).split(".")[0]), ("", ""))
+                base = os.path.basename(full)
+                if base.startswith(LAUNCH_MARK):
+                    # a launcher (hooks/lib/hook_launch.py) runs a hook in its own process: what the
+                    # process does until the next mark is that hook's (its component and origin),
+                    # as when it was a process of its own ("-": the launcher's own code again)
+                    value = urllib.parse.unquote(base[len(LAUNCH_MARK):])
+                    if p.launcher is None:
+                        p.launcher = (p.comp, p.origin)
+                    p.comp, p.origin = p.launcher if value == "-" else (value, value)
+                    return
+                kind, value = self.markers.get(int(base.split(".")[0]), ("", ""))
                 if kind == "actor":
                     p.actor = value
                 elif kind == "step":

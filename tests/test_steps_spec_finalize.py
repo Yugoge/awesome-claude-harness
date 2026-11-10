@@ -309,6 +309,6 @@ def test_bash_safety_accepts_every_script_call_the_command_makes(tmp_path):
 def test_both_dispatch_templates_name_their_subagent_type_before_the_prompt():
     templates = [body for lang, body in fences(COMMAND.read_text(encoding="utf-8")) if "Use Agent tool with:" in body]
     types = [re.search(r'^\s*-\s*subagent_type:\s*"([\w-]+)"', body, re.M).group(1) for body in templates]
-    assert types == ["spec", "qa"]
+    assert types == ["ba", "qa", "spec", "qa"]  # Step 3a's panel BA and panel QA (P13-1), Step 6's spec and split QA
     assert all(body.index("subagent_type") < body.index("- prompt:") for body in templates)
     assert all(body.count("run_in_background: false") == 1 for body in templates)

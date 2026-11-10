@@ -1,6 +1,8 @@
 ---
 description: End this session's /dev-overnight before its end time. Typed by the human only — the typed /stop itself releases the time-lock; agents cannot self-stop.
 disable-model-invocation: true
+summary: "End the overnight run before its end time, or any command the Stop gate holds; only the owner can type it."
+group: Control
 ---
 
 # /stop — Overnight Lock Release

@@ -23,14 +23,21 @@ entry covers a channel-spelled line that takes arguments. A command text's line 
 allowed therefore names the harness home through the root the harness command prints, `<HARNESS_ROOT>` (R1's
 `HARNESS_ROOT=` line, the hook's own install: CLAUDE_HOME or not, any repository), which the session writes as
 the literal path; the channel stays where the old spelling asked as well. `cli_allows` models that decision
-and the last case holds every command text to it. An agent's Bash keeps the channel (R6): no printed root
-reaches a subagent, so the agent lines the CLI allowed in the old spelling ask now and stay outside that case.
+and the last case holds every command text to it. A subagent gets the same root as its start context
+(prompt-workflow.py at SubagentStart, P2-3), so the agent texts and the prompt includes they read are held to
+it line by line too; ASKS_SINCE_P2 are the agent lines 2.1.319 measured asking on the channel, now written
+through the root. The start-function fallback, which runs once a compaction dropped the command start's root,
+reads it from the session's start context, which prompt-workflow.py writes at SessionStart (P2-4);
+START_FALLBACK_LINES are its two lines.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 CHANNEL = "${CLAUDE_HOME:-$HOME/.claude}"
@@ -125,7 +132,8 @@ def old_rules(rules: list[str]) -> list[str]:
 
 # ------------------------------------------------------------------ the texts' Bash commands
 def _texts() -> list[Path]:
-    return sorted([*REPO.glob("commands/*.md"), *REPO.glob("agents/*.md"), *REPO.glob("skills/*/SKILL.md")])
+    return sorted([*REPO.glob("commands/*.md"), *REPO.glob("agents/*.md"), *REPO.glob("skills/*/SKILL.md"),
+                   *REPO.glob("templates/prompt-includes/*.md")])
 
 
 def shell_commands(md: str):
@@ -372,26 +380,162 @@ def test_each_kept_old_spelling_covers_a_line_only_it_covers():
         assert needed, f"{entry} covers no old spelling a running session holds"
 
 
-# The start-function fallback runs exactly when the hook output, and with it the HARNESS_ROOT= line,
-# is gone (a compaction removed it or the hook printed none), so no printed root can fill it: it keeps
-# the channel and asks rather than fail (P1c's dev_command ctx=compact and ctx=noid replays).
-NO_PRINTED_ROOT = ('python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start',)
+# ------------------------------------------------------------------ agent and prompt-include texts
+# The agent lines that ran unasked in origin/master's spelling and ask under 2.1.319 on the channel: PR #10
+# c6717051862's 13 lines (P2-3; dev.md:1087's and qa.md:1936's spec-check line is checkpoint-marking.md's now),
+# re-measured through 2.1.319 headless from a product repository with the root its SubagentStart context
+# carries (channel: asks; `<HARNESS_ROOT>` filled and `~/.claude`: run). Each is written with the harness home
+# as {H}. Which spelling origin/master ran is history the texts no longer hold, so `old_spellings`' both-forms
+# model misses these `python3` and `bash` lines; the cases take them from this measurement. P12 (3a968cf) deleted
+# five of the 13 from the texts, so they are no longer held here: dev.md's script-reuse recon block
+# (`ls -la "{H}/scripts/"`, `cat "{H}/scripts/orchestrator.sh"`, `cat "{H}/scripts/check-file-references.sh"`,
+# now the prose "after checking `scripts/` (project) and the harness scripts") and test-executor.md's
+# troubleshooting list (`ls "{H}/venv/bin/activate"`, `python3 -m venv "{H}/venv"`, now a pointer to
+# tests/instructions/execution-guide.md, which is no agent or command text).
+ASKS_SINCE_P2 = [
+    ("agents/changelog-analyst.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                                    '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'),
+    ("agents/cleaner.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                          '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'),
+    ("agents/pm.md", 'bash "{H}/scripts/overnight-status.sh"'),
+    ("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  --output /dev/stdout  '
+                     '--task-id <task_id>'),
+    ("agents/spec.md", 'python3 "{H}/scripts/spec-check.py"'),
+    ("agents/spec.md", 'python3 "{H}/scripts/spec-verify/spec-verify-views.py"'),
+    ("agents/spec.md", 'python3 "{H}/scripts/spec-verify/spec-verify.py"'),
+    ("templates/prompt-includes/checkpoint-marking.md", 'python3 "{H}/scripts/spec-check.py"'),
+]
 
 
-def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now():
+def _key(file: str, line: str) -> tuple[str, str]:
+    """A line's file and text with the harness home as {H} in either spelling and no leading `python3` (an
+    older include named spec-check.py without its interpreter), so a case keeps its key through a respelling."""
+    text = line.replace(CHANNEL + "/", "{H}/").replace(ROOT, "{H}/")
+    return file, re.sub(r"^python3 ", "", text)
+
+
+MEASURED = {_key(*entry) for entry in ASKS_SINCE_P2}
+assert len(MEASURED) == len(ASKS_SINCE_P2)
+
+
+def agent_lines() -> list[tuple[str, str]]:
+    """(file:line, logical line) of each agent and prompt-include line naming the harness home."""
+    return list(dict.fromkeys((where, line) for where, line, _ in rewritten_commands()
+                              if where.startswith(("agents/", "templates/prompt-includes/"))))
+
+
+# Measured lines still on the channel because a replay player that is not this group's cannot fill
+# `<HARNESS_ROOT>` yet, each with that player (group 3's). Respell the line and remove its entry here when that
+# player binds `<HARNESS_ROOT>` (PR #29).
+# - tests/replay/agents.py plays agents/qa.md's Phase 6 block without the root its start context carries, so the
+#   respelled line would fail every replay that reaches QA.
+# - tests/replay/drivers/commit.py (`token`, Phase 10) and drivers/clean.py (`token`, "5. Git Operations") run the
+#   token writer's block with only <GIT_ROOT>, <BRANCH> and <COMMIT_SHA> filled, as the subagent's Bash: respelled
+#   (cba0424), python3 opened `<HARNESS_ROOT>/scripts/write-push-gate-token.py` under the project and exited 2, so
+#   no push-gate token was written and /commit's terminal (drivers/commit.py `clean`) failed in every replay that
+#   commits (run 42758819736, shards 4-6: /push, F4c, F8c, F8r, D31 (3)); /clean's token went unwritten silently.
+REPLAY_PENDING = {
+    _key("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  '
+                         '--output /dev/stdout  --task-id <task_id>'): "tests/replay/agents.py",
+    _key("agents/changelog-analyst.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                                        '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'): "tests/replay/drivers/commit.py",
+    _key("agents/cleaner.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
+                              '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'): "tests/replay/drivers/clean.py",
+}
+
+
+def _agent_cases():
+    seen: dict[str, int] = {}
+    for where, line in agent_lines():
+        seen[where] = seen.get(where, 0) + 1
+        marks = ()
+        player = REPLAY_PENDING.get(_key(where.rsplit(":", 1)[0], line))
+        if player:
+            marks = pytest.mark.xfail(strict=True, reason=f"P2-3, group 3: {player} binds <HARNESS_ROOT>; then "
+                                                          "respell this line and remove its REPLAY_PENDING entry")
+        yield pytest.param(where, line, id=f"{where}#{seen[where]}", marks=marks)
+
+
+@functools.lru_cache(maxsize=None)
+def _rule_lists() -> tuple[list[str], list[str]]:
+    rules = bash_rules(_allow())
+    return rules, old_rules(rules)
+
+
+@pytest.mark.parametrize("where, line", list(_agent_cases()))
+def test_no_agent_line_the_cli_allowed_before_asks_now(where, line):
+    """An agent or prompt-include line the CLI allowed in its old spelling (ASKS_SINCE_P2, else both forms by
+    `old_spellings`) is allowed now: it names the harness home through the root its start context carries."""
+    rules, before = _rule_lists()
+    was = (_key(where.rsplit(":", 1)[0], line) in MEASURED
+           or all(cli_allows(before, old) for old in old_spellings(line)))
+    assert not was or cli_allows(rules, line), f"{where}: {line}"
+
+
+def test_each_measured_agent_line_is_in_the_texts():
+    keys = {_key(where.rsplit(":", 1)[0], line) for where, line in agent_lines()}
+    assert not [entry for entry in ASKS_SINCE_P2 if _key(*entry) not in keys]
+
+
+@pytest.mark.xfail(strict=True, reason="P2-3, integration: settings.json registers prompt-workflow.py at "
+                                       "SubagentStart, then remove this marker")
+def test_a_subagent_starts_with_the_printed_root():
+    """The agent lines' `<HARNESS_ROOT>` reaches a subagent only through prompt-workflow.py's SubagentStart answer
+    (hooks/tests/test_prompt_workflow_subagent_roots.py), registered for every agent type."""
+    groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SubagentStart", [])
+    assert any(group.get("matcher", "") in ("", "*")
+               and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
+               for group in groups)
+
+
+# ------------------------------------------------------------------ command texts
+# The start-function fallback (dev.md and dev-command.md Step 1) runs when the command start's output is gone:
+# a compaction removed it, or the hook printed none. On the channel 2.1.319 asks ("A variable in braces in this
+# command can't be checked before it runs"; P2-4, headless against a mock API: the `~/.claude` spelling runs
+# unasked but misses a CLAUDE_HOME install, the literal root runs it unasked). prompt-workflow.py answers
+# SessionStart with the root lines too, and the CLI runs SessionStart again at a compaction, so the root is in
+# the main agent's context there (hooks/tests/test_prompt_workflow_session_roots.py), and the line names the
+# harness home as `<HARNESS_ROOT>`. A `~/.claude` spelling has no `{H}` key, so test_each_l1_line_is_in_the_texts
+# fails on it; the channel fails its case below.
+START_FALLBACK_LINES = [
+    ("commands/dev.md", 'python3 "{H}/hooks/prompt-workflow.py" start <<\'CMDEOF\''),
+    ("commands/dev-command.md", 'python3 "{H}/hooks/prompt-workflow.py" start <<\'CMDEOF\''),
+]
+FALLBACK_KEYS = {_key(*entry) for entry in START_FALLBACK_LINES}
+
+
+def _command_cases():
+    seen: dict[str, int] = {}
+    for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()
+                                     if where.startswith("commands/")):
+        seen[where] = seen.get(where, 0) + 1
+        yield pytest.param(where, line, id=f"{where}#{seen[where]}")
+
+
+@pytest.mark.parametrize("where, line", list(_command_cases()))
+def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now(where, line):
     """Each command text's harness line the CLI allowed in its old spelling under the old list, both as written and
     with the script run directly (whichever the old text ran), is allowed by the CLI now: a `${...}` channel on it
-    would ask. Agent texts are outside: their Bash keeps the channel, as no printed root reaches a subagent; so is
-    the start-function fallback (NO_PRINTED_ROOT)."""
-    rules = bash_rules(_allow())
-    before = old_rules(rules)
-    asks = []
-    for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()):
-        if not where.startswith("commands/") or line.startswith(NO_PRINTED_ROOT):
-            continue
-        if all(cli_allows(before, old) for old in old_spellings(line)) and not cli_allows(rules, line):
-            asks.append(f"{where}: {line}")
-    assert not asks, "\n".join(asks)
+    would ask. Agent and prompt-include texts have their own case (test_no_agent_line_the_cli_allowed_before_asks_now)."""
+    rules, before = _rule_lists()
+    was = all(cli_allows(before, old) for old in old_spellings(line))
+    assert not was or cli_allows(rules, line), f"{where}: {line}"
+
+
+def test_each_l1_line_is_in_the_texts():
+    keys = {_key(where.rsplit(":", 1)[0], line) for where, line, _ in rewritten_commands()}
+    assert FALLBACK_KEYS <= keys and len(FALLBACK_KEYS) == len(START_FALLBACK_LINES)
+
+
+@pytest.mark.xfail(strict=True, reason="P2-4, integration: settings.json registers prompt-workflow.py at "
+                                       "SessionStart, then remove this marker")
+def test_a_session_starts_and_compacts_with_the_printed_root():
+    """The fallback's `<HARNESS_ROOT>` is in the main agent's context after a compaction only through
+    prompt-workflow.py's SessionStart answer, registered for every source (startup, resume, clear, compact)."""
+    groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SessionStart", [])
+    assert any(group.get("matcher", "") in ("", "*")
+               and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
+               for group in groups)
 
 
 def test_the_cli_decision_model():

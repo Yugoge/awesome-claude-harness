@@ -82,8 +82,8 @@ failed check, when:
   refused until `git rm --cached -- <path>` untracks it (the file stays on disk);
 - a line the staged change adds, or the path of a file it adds or changes, contains a literal
   from the private-literal list (`scripts/check-public-core.sh --private-literals`);
-- the sentinel-lint or `hooks/pre-commit-check.sh` step fails, or a script a check needs is
-  missing (fail closed).
+- the `hooks/pre-commit-check.sh` step fails, or a script a check needs is missing (fail
+  closed).
 
 A pre-commit hook that was already there is kept as `pre-commit.local` and runs after these
 checks. Init installs the hook only into this repository's own hooks directory (step 5 of [init](installation.md#full-install-clone--init)).
@@ -93,8 +93,9 @@ engines the pre-commit hook uses on their temporary index before anything is wri
 rule over what the snapshot adds over `HEAD` (when the list is not empty) and, in the harness
 home, `render-settings check --staged` when the snapshot's `settings.json` differs from `HEAD`.
 In the harness home a snapshot is also refused at staging when the registered clean filter
-refuses `settings.json` (see [the filter](installation.md#settings-one-tracked-source-a-machine-overlay-a-git-filter)). A refused snapshot writes nothing and is
-logged without the offending values. It never blocks a Stop (with or without
+refuses `settings.json` (see [the filter](installation.md#settings-one-tracked-source-a-machine-overlay-a-git-filter)). A refused snapshot writes no ref, no tree and no commit (the blobs its staging already stored,
+for a refused literal the refused file's own, stay unreferenced in the local object store until
+`git gc` prunes them) and is logged without the offending values. It never blocks a Stop (with or without
 `stop_hook_active`): the Stop hook's later phases still run and the session shows one line
 naming the refusing rule and `logs/checkpoint.log`, never a value. A broken filter install (the
 filter still `required` but its clean command gone, or `scripts/install/render-settings`
@@ -213,7 +214,7 @@ The refusal message points the agent at the right path (`/push`), and the guard'
 | Actor | Edit/Write | git commit | git push | git reset --hard | /do bypass | Break-glass path |
 |---|---|---|---|---|---|---|
 | Human (shell) | ✓ | ✓ | ✓ | ✓ | N/A | N/A |
-| Main Agent | once per tool per turn; unlimited under /do | no commit grant of its own (the /commit grant is spent only by the changelog-analyst that /commit dispatches); a matching /allow | /push grant (branch+head+remote-bound) | via /do (unless it can move the protected branch) or matching /allow | ✓ | /do, for one turn: lifts the orchestrator-gate limits and releases the rules listed above; not commit, push, the commit guard or protected files |
+| Main Agent | once per tool per turn; unlimited under /do | no commit grant of its own (the /commit grant is spent only by the changelog-analyst that /commit dispatches); a matching /allow | /push grant (branch+head+remote-bound) or matching /allow (never a force, delete or ref-rewrite push) | via /do (unless it can move the protected branch) or matching /allow | ✓ | /do, for one turn: lifts the orchestrator-gate limits and releases the rules listed above; not commit, push, the commit guard or protected files |
 | Subagent | role-restricted | /commit grant, only for the changelog-analyst that /commit dispatched | /push grant | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
 
 Commit grant = time-boxed ISO expiry, single-use (spent by the privilege guard, which unlinks it as it authorizes the commit). Push grant = branch+head+remote-bound, no expiry, wrapper-managed lifecycle (push.sh unlinks on success; left in place on failure for retry). /allow sentinel = structured match (op+target+args_contain) or a regex entry, time-boxed (epoch-seconds expiry), single-use (consumed once the call it matched has ended), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.

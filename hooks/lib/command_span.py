@@ -447,6 +447,21 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def last_text(self) -> str:
+        """The text of the main session's last assistant record in the span that holds text ('' when none):
+        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return ""
+        last = ""
+        for begin, end in lines.offsets((b'"text"',), floor):
+            record = _decode(lines.data[begin:end])
+            texts = [b.get("text") for b in _blocks(record) if b.get("type") == "text" and isinstance(b.get("text"), str)]
+            if texts and record.get("type") == "assistant":
+                last = "\n".join(texts)
+        return last
+
     def result_text(self, ident: str) -> str:
         """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
         call's is the agent's own reply, its record's toolUseResult content without the agentId trailer."""
@@ -465,6 +480,22 @@ class Span:
                         b.get("text") or "" for b in (content if isinstance(content, list) else ())
                         if isinstance(b, dict) and b.get("type") == "text")
         return ""
+
+    def result_time(self, ident: str) -> float | None:
+        """The time the CLI recorded for call ``ident``'s tool_result (seconds since the epoch, to the
+        millisecond); None while none came back or its record carries none."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return None
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if any(b.get("type") == "tool_result" and b.get("tool_use_id") == ident for b in _blocks(record)):
+                try:
+                    return datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    return None
+        return None
 
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
@@ -508,6 +539,19 @@ class Span:
         return [(None if found.group(1) == "detached" else found.group(1)[len("refs/heads/"):], found.group(2))
                 for found in self._opener_context(OPENER_HEAD_LINE_RE)]
 
+    def opener_remotes(self) -> dict | None:
+        """{remote: (URL digest, the branch HEAD was on or "-", that branch's tracking ref's commit or
+        None, the branch's upstream ref there or None)} of the remote lines the UserPromptSubmit hook
+        printed for a /push opener (OPENER_REMOTE_LINE_RE); a remote printed twice unlike is left out (a
+        line another hook echoes can only take that remote out of what releases the Stop); None for an
+        opener with none (typed before the hook printed them, or a hook that prints none)."""
+        found = {}
+        for match in self._opener_context(OPENER_REMOTE_LINE_RE):
+            record = (match.group(2), match.group(3), None if match.group(4) == "none" else match.group(4),
+                      match.group(5))
+            found[match.group(1)] = record if found.get(match.group(1), record) == record else ()
+        return {name: record for name, record in found.items() if record} if found else None
+
     def _opener_context(self, regex):
         """The matches of ``regex`` in the opener's hook context: the context
         records the CLI writes after the typed prompt and before the turn's
@@ -521,12 +565,9 @@ class Span:
             raw = data[pos:end]
             if b'"type":"assistant"' in raw or b'"type": "assistant"' in raw:
                 return
-            attachment = (_decode(raw) or {}).get("attachment") if b"hook_additional_context" in raw else None
-            if isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
-                content = attachment.get("content")
-                if isinstance(content, list):
-                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
-                yield from regex.finditer(content) if isinstance(content, str) else ()
+            attachment = (_decode(raw) or {}).get("attachment") if b'"hook_' in raw else None
+            content = _prompt_hook_text(attachment)
+            yield from regex.finditer(content) if content is not None else ()
             pos = end + 1
 
     def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
@@ -567,12 +608,42 @@ class Span:
         return None
 
 
+def _prompt_hook_text(attachment) -> str | None:
+    """The text of a context record the CLI writes for a UserPromptSubmit hook's output, else None.
+    CLI 2.1.322 writes a hook's plain stdout (what prompt-workflow.py prints) as a hook_success
+    record whose content is that stdout, and a JSON additionalContext as hook_additional_context
+    whose content is a list of strings; older CLIs wrote the plain stdout as hook_additional_context.
+    A hook_success of any other event is not the prompt's context."""
+    if not isinstance(attachment, dict):
+        return None
+    kind = attachment.get("type")
+    if kind == "hook_success":
+        if attachment.get("hookEvent", attachment.get("hookName")) != "UserPromptSubmit":
+            return None
+        content = attachment.get("content")
+        content = attachment.get("stdout") if not isinstance(content, str) or not content else content
+    elif kind == "hook_additional_context":
+        content = attachment.get("content")
+    else:
+        return None
+    if isinstance(content, list):
+        content = "\n".join(b if isinstance(b, str) else b.get("text", "") for b in content
+                            if isinstance(b, (str, dict)))
+    return content if isinstance(content, str) else None
+
+
 # The task-id lines the UserPromptSubmit hook prints for a /do and a /dev-family opener.
 MINTED_LINE_RE = re.compile(
     r"^(?:\[/do\] task-id minted|DEV_SESSION_ID pre-initialized by hook): ([A-Za-z0-9._-]+)", re.M)
 # The HEAD line it prints for a /push opener (prompt-workflow.py print_push_head).
 OPENER_HEAD_LINE_RE = re.compile(r"^\[/push\] HEAD at the opener: (refs/heads/\S+|detached) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$",
                                  re.M)
+
+
+# Its remote lines for that opener (P5-61; prompt-workflow.py print_push_head is to print them): an opener
+# without them has the /push Stop read the remotes from the repository.
+OPENER_REMOTE_LINE_RE = re.compile(r"^\[/push\] remote at the opener: (\S+) ([0-9a-f]{16}) (\S+) "
+                                   r"([0-9a-f]{40}(?:[0-9a-f]{24})?|none)(?: upstream (refs/\S+))?$", re.M)
 
 
 def _obligation():  # imported when first asked: a reader that needs none loads none of it

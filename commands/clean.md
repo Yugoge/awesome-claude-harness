@@ -2,6 +2,8 @@
 description: Aggressive project cleanup - normalize docs structure, discard tracked byproducts (old docs, one-time scripts and tests) with a recoverable git rm. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 argument-hint: "[--codex]"
 disable-model-invocation: true
+summary: "Clean up the project: inspectors find misplaced docs, byproducts and style violations, and the cleaner applies the approved fixes."
+group: Quality
 ---
 
 # Clean Command Orchestrator

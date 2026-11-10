@@ -155,10 +155,10 @@ def test_a_first_list_with_an_item_completed_is_refused_before_it_runs(s):
 
 
 def test_a_short_first_list_is_refused_with_no_bookmark(s):
-    """A18: a 5-of-17 list is refused by pretool-todo-validate.py, which reads no bookmark."""
+    """A18: a 5-of-20 list is refused by pretool-todo-validate.py, which reads no bookmark."""
     s.command("/dev fix the bug")
     pre, _ = s.todo(_frontier(0)[:5])
-    assert pre.returncode == 2 and "Todo count mismatch: canonical has 17, submitted has 5" in pre.stderr
+    assert pre.returncode == 2 and "Todo count mismatch: canonical has 20, submitted has 5" in pre.stderr
     assert s.gate().returncode == 2
     assert list((s.project / ".claude").iterdir()) == []
 

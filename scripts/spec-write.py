@@ -120,6 +120,19 @@ def _append(text, section, block):
     return "\n".join(lines[:insert] + [""] + block_lines + tail + lines[end:])
 
 
+def _answers_block(text, answers):
+    """Section 5's copy of an owner's answer file (D28): its bytes verbatim in a fence longer than any backtick
+    run they hold, under the next ### 5.N heading; None when ``answers`` is not a requirement answer file."""
+    found = re.search(r"requirement-answers-.+-r([1-9][0-9]*)\.json$", str(answers))
+    if not found:
+        return None
+    raw = Path(answers).read_bytes().decode("utf-8")
+    fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", raw)), default=0))
+    n = 1 + max((int(m) for m in re.findall(r"^### 5\.(\d+)", text, flags=re.M)), default=0)
+    return (f"### 5.{n}: Requirement round r{found.group(1)}\n\nThe owner's answers, copied verbatim from "
+            f"{Path(answers).name}:\n\n{fence}json\n{raw.rstrip(chr(10))}\n{fence}\n")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="The one writer of a spec monolith.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -128,6 +141,8 @@ def main(argv=None):
     append = sub.add_parser("append", help="append stdin to a section of an existing spec")
     append.add_argument("--spec", required=True)
     append.add_argument("--section", required=True, help="N for '## Section N', N.M for '### N.M'")
+    append.add_argument("--answers", help="a docs/dev/requirement-answers-<task>-r<n>.json to copy verbatim into "
+                        "Section 5 (with --section 5; nothing is read from stdin)")
     args = ap.parse_args(argv)
 
     path = _spec_file(args.spec)
@@ -138,8 +153,12 @@ def main(argv=None):
     if args.cmd == "append" and not re.fullmatch(r"\d+(?:\.\d+)?", args.section):
         sys.stderr.write(f"spec-write: refused: --section {args.section!r} is not N or N.M\n")
         return 2
-    block = sys.stdin.read()
-    if not block.strip():
+    answers = getattr(args, "answers", None)
+    if answers and (args.section != "5" or not re.search(r"requirement-answers-.+-r[1-9][0-9]*\.json$", answers)):
+        sys.stderr.write("spec-write: refused: --answers takes a requirement-answers-<task>-r<n>.json, with --section 5\n")
+        return 2
+    block = "" if answers else sys.stdin.read()
+    if not answers and not block.strip():
         sys.stderr.write("spec-write: refused: nothing on stdin; nothing was written\n")
         return 1
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,6 +173,11 @@ def main(argv=None):
                 old = path.read_text(encoding="utf-8")
             except OSError as exc:
                 sys.stderr.write(f"spec-write: refused: cannot read {path}: {exc}\n")
+                return 1
+            try:
+                block = _answers_block(old, answers) if answers else block
+            except (OSError, UnicodeDecodeError) as exc:
+                sys.stderr.write(f"spec-write: refused: cannot read {answers}: {exc}\n")
                 return 1
             new = _append(old, args.section, block)
             if new is None:

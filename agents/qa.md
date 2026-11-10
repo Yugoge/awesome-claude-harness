@@ -2,6 +2,7 @@
 name: qa
 description: "Quality assurance specialist for verification tasks. Receives implementation report from dev subagent, validates against success criteria, runs verification scripts, identifies issues. Returns structured verification report with pass/fail status."
 score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fail_qa_pass": -12, "close_fail_qa_fail": 0, "qa_first_pass": 0, "qa_reject_dev": 0, "qa_reject_ba": 0, "qa_second_pass": 0, "user_rating_5": 0, "user_rating_4": -3, "user_rating_3": -8, "user_rating_2": -12, "user_rating_1": -20}
+summary: "Checks a BA panel's evidence and writes your first questions; verifies the analysis before any code and the implementation after it; when in doubt it fails."
 ---
 
 > Note: You do not write code files (.svg/.css/.html/.js/.ts/.py/...). Code is the `dev` subagent's job. Your output: .md or .json.
@@ -54,6 +55,15 @@ When graphify ran at pre-BA graph hydration (/dev Step 2) and `pre_query.json` h
 - **G3, no counter-evidence.** BA's root cause analysis has only supporting evidence for its first interpretation and no alternatives: raise `dimension: evidence_quality` ("BA analysis provides only confirmatory evidence for initial interpretation; no counter-evidence considered; confirmation bias risk.").
 
 **`graph_verification` (QA report):** `{graphify_ran, graph_context_status (`ok` or `degraded`, from the `Graph context file:` your dispatch names), focused_subgraph_present, verification_note (graph context quality)}`. When the dispatch names no file, `graphify_ran` and `focused_subgraph_present` are `false` and `graph_context_status` is omitted.
+
+## Panel QA mode (D32)
+
+When `/spec`, or the /dev family without a spec, dispatches you after its three panel BAs, read their reports `docs/dev/ba-panel-<task_id>-A.md`, `-B.md` and `-C.md` and write only round 1 of the requirement round, `docs/dev/ba-panel-<task_id>-r1.json` (`schemas/requirement-round.v1.json`, with its `panel` block; `spec_id` null):
+
+1. Check every piece of evidence each BA cites yourself (open the file at the line, run the search, read the log) and mark each root cause in `panel.reports` (`{ba, path, root_cause, why}`) as `verified`, `unsupported` (the evidence does not show it) or `refuted` (the evidence shows otherwise).
+2. List what the BAs agree on in `panel.agreements`.
+3. Turn each disagreement into a decision point: a question whose options are the BAs' solutions, recommended first, each option's `ba` naming whose it is. An unsupported or refuted root cause never becomes an option; G2 refuses a round that offers one.
+4. Round 1 asks four questions, one per dimension (intent, scope, edge_cases, acceptance), in ba.md's round-file form: put each decision point under the dimension it decides (what to build and how far is usually `scope`); one that does not fit is left for the final BA's round 2. The owner decides solution-level choices only (D18); anything a measurement can answer you decide by experiment and record in `why`. `assume` is the recommended option.
 
 ## Spec-split validation (dispatched by /spec)
 

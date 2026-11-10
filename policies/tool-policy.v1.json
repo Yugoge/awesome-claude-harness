@@ -10,7 +10,7 @@
     "/.claude/scripts/",
     "/.claude/settings.json"
   ],
-  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style): '*/docs/dev/overnight/' matches that directory under any worktree. A prefix starting with '/' is anchored at the project root. The shared protected list is the SOLE catch-all for /.claude/ — DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree paths remain writable. Allow prefixes name directories (ending in '/') or wildcards (ending in '*'), and the /dev/null, /dev/stderr and /dev/stdout devices, never the file of an artifact: hooks/pretool-tool-policy.py derives an artifact's write permission from the session's dispatch records (P1b E3). A path a dispatch's obligation declares (with the producer question it names and what the template it was dispatched from declares in the current command files) is written by that dispatch only, whatever these rows allow, and the role's deny prefixes still apply to it; an undeclared path keeps these rows. Deny prefixes grant nothing and all stay. cp-state files have one writer, scripts/spec-check.py (pretool-cp-state-write-guard.py). The managed scratch namespace '*/.claude/scratch/' is granted to every role; raw /tmp and /var/tmp are denied for every role, including one holding '*', except that role's own exact temp entries ('*/tmp/claude-scratch/<role>/', '*/var/tmp/codex-outputs/', '<state dir>/agentic-commit/<role>/'). A JSON prefix cannot express actor identity, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; these rows are the declaration, not the sole enforcement. policy_version 8 (P1b): every allow prefix that named an artifact's file went, with user.allowed_path_prefixes, which nothing read.",
+  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style): '*/docs/dev/overnight/' matches that directory under any worktree. A prefix starting with '/' is anchored at the project root. The shared protected list is the SOLE catch-all for /.claude/ \u2014 DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree paths remain writable. Allow prefixes name directories (ending in '/') or wildcards (ending in '*'), and the /dev/null, /dev/stderr and /dev/stdout devices, never the file of an artifact: hooks/pretool-tool-policy.py derives an artifact's write permission from the session's dispatch records (P1b E3). A path a dispatch's obligation declares (with the producer question it names and what the template it was dispatched from declares in the current command files) is written by that dispatch only, whatever these rows allow, and the role's deny prefixes still apply to it; an undeclared path keeps these rows. Deny prefixes grant nothing and all stay. cp-state files have one writer, scripts/spec-check.py (pretool-cp-state-write-guard.py). The managed scratch namespace '*/.claude/scratch/' is granted to every role; raw /tmp and /var/tmp are denied for every role, including one holding '*', except that role's own exact temp entries ('*/tmp/claude-scratch/<role>/', '*/var/tmp/codex-outputs/', '<state dir>/agentic-commit/<role>/'). A JSON prefix cannot express actor identity, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; these rows are the declaration, not the sole enforcement. policy_version 8 (P1b): every allow prefix that named an artifact's file went, with user.allowed_path_prefixes, which nothing read. /clean's approved actions (P9-4): while a human-typed /clean's span is active, what its owner approved (the main agent's Write of docs/clean/user-approvals-<id>.json recorded in the session transcript: a move's or rename's destination, a fix_style file) is written by that span's cleaner only, and the project's root README.md and ARCHITECTURE.md by its rule-inspector only; that write skips the role's allow prefixes and its source and test denials, never _shared_protected_path_prefixes, and no other caller, the main agent included, writes those paths in that span (hooks/pretool-tool-policy.py, _check_clean_writes).",
   "roles": {
     "user": {
       "allowed_tools": [
@@ -318,7 +318,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "cleaner: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
+      "rationale": "cleaner: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; while a human-typed /clean's span is active, its cleaner (dispatched after the owner's answer) also writes what that request's approvals approve: each move's or rename's destination and each fix_style file (pretool-tool-policy.py derives it from the main agent's Write of docs/clean/user-approvals-<id>.json recorded in the session transcript; no other caller writes those paths); no other source/protected/test edits."
     },
     "cleanliness-inspector": {
       "allowed_tools": [
@@ -458,7 +458,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "rule-inspector: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
+      "rationale": "rule-inspector: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; dispatched in a human-typed /clean's active span, it also writes the project's root README.md and ARCHITECTURE.md (/clean Step 4; no other caller writes them in that span); no other source/protected/test edits."
     },
     "style-inspector": {
       "allowed_tools": [
@@ -528,7 +528,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "test-writer (spec-20260518-225715 §5.2): generates pytest skeleton tests from BA-produced acceptance-criteria JSON under tests/generated/ and writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record); explicitly forbidden from src/app/lib and all protected /.claude/ subdirs. Read access is broad (analyses AC JSON, spec files, existing tests for archive/idempotency keying)."
+      "rationale": "test-writer (spec-20260518-225715 \u00a75.2): generates pytest skeleton tests from BA-produced acceptance-criteria JSON under tests/generated/ and writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record); explicitly forbidden from src/app/lib and all protected /.claude/ subdirs. Read access is broad (analyses AC JSON, spec files, existing tests for archive/idempotency keying)."
     },
     "test-executor": {
       "allowed_tools": [
@@ -738,7 +738,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "pull-analyst: post-pull advisory analysis only; reads new-commits range and semantic risk indicators (dependency manifests, schema files, API surface, CI/CD); Write tool excluded to enforce advisory-only contract — pull-analyst writes no grant and blocks nothing; no write access to protected infra"
+      "rationale": "pull-analyst: post-pull advisory analysis only; reads new-commits range and semantic risk indicators (dependency manifests, schema files, API surface, CI/CD); Write tool excluded to enforce advisory-only contract \u2014 pull-analyst writes no grant and blocks nothing; no write access to protected infra"
     },
     "graphify": {
       "allowed_tools": [

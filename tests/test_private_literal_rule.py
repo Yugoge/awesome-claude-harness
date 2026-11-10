@@ -33,8 +33,7 @@ CHECKER = "scripts/check-public-core.sh"
 HOOK = "hooks/git-hooks/pre-commit"
 RENDER = "scripts/install/render-settings"
 PRE_COMMIT_CHECK = "hooks/pre-commit-check.sh"
-SENTINEL_LINT = "hooks/sentinel-lint.sh"
-COPIED = (CHECKER, HOOK, PRE_COMMIT_CHECK, SENTINEL_LINT, "hooks/lib/claude_home.sh",
+COPIED = (CHECKER, HOOK, PRE_COMMIT_CHECK, "hooks/lib/claude_home.sh",
           "scripts/lib/release_membership.py")
 LIST = "private-literals.txt"
 # Split so this source never carries the listed literal whole.
@@ -135,7 +134,7 @@ def env(tmp_path: Path) -> dict:
     dirs = {name: tmp_path / name for name in ("home", "claude-config", "xdg-config")}
     for d in dirs.values():
         d.mkdir()
-    dropped = {"CLAUDE_HOME", "CLAUDE_PROJECT_DIR", "SENTINEL_LINT_ROOT", "SENTINEL_LINT_VERBOSE"}
+    dropped = {"CLAUDE_HOME", "CLAUDE_PROJECT_DIR"}
     e = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in dropped}
     e.update(HOME=str(dirs["home"]), CLAUDE_CONFIG_DIR=str(dirs["claude-config"]),
              XDG_CONFIG_HOME=str(dirs["xdg-config"]), GIT_CONFIG_NOSYSTEM="1",
@@ -446,19 +445,6 @@ def test_hook_refuses_when_the_staged_settings_check_fails(hooked, env):
 def test_hook_refuses_when_pre_commit_check_is_missing(hooked, env):
     (hooked / PRE_COMMIT_CHECK).unlink()
     _assert_refused(hooked, env, "untracked-file check: hooks/pre-commit-check.sh is missing")
-
-
-def test_hook_refuses_when_sentinel_lint_is_needed_but_missing(hooked, env):
-    (hooked / SENTINEL_LINT).unlink()
-    _write(hooked / "docs/clean.md", "nothing private\n")
-    assert _commit(hooked, env, "docs/clean.md").returncode == 0, "not needed: no orchestrator file staged"
-    _write(hooked / "commands/dev.md", "# dev\n")
-    _assert_refused(hooked, env, "sentinel lint: hooks/sentinel-lint.sh is missing", "commands/dev.md")
-
-
-def test_hook_refuses_when_sentinel_lint_fails(hooked, env):
-    _write(hooked / "commands/dev.md", "# dev, without the registry anchor\n")
-    _assert_refused(hooked, env, "sentinel lint: hooks/sentinel-lint.sh failed", "commands/dev.md")
 
 
 def test_hook_chains_to_pre_commit_local(hooked, env, tmp_path):

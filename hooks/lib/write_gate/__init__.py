@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 HOOKS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # A rule module this package holds is named by import, not by a path string: the gate loads it
@@ -119,62 +119,86 @@ def _decision(out: dict) -> tuple[str | None, str]:
     return (decision if decision in ("deny", "defer", "ask", "allow") else None), str(reason)
 
 
+@dataclass
+class _Tally:
+    """What the rules said so far, sorted by what it does to the gate's answer."""
+    refusals: list = field(default_factory=list)
+    asks: list = field(default_factory=list)
+    defers: list = field(default_factory=list)
+    allows: list = field(default_factory=list)
+    contexts: list = field(default_factory=list)
+    user_errors: list = field(default_factory=list)
+    updated: dict | None = None  # the first rule's updatedInput wins
+
+
+def _tally_error(tally: _Tally, rule, error) -> None:
+    """A rule that raised past its handlers or overran: refused if it fails closed, else noted."""
+    note = f"write gate: rule {rule.name} {error}"
+    if rule.fail == "closed":
+        tally.refusals.append(f"{note}; this rule fails closed, so the call is refused. Retry it; "
+                              f"if it repeats, report the rule and this message.\n")
+    else:
+        tally.user_errors.append(f"{note}; this rule fails open, so it did not decide this call.\n")
+
+
+def _tally_output(tally: _Tally, out: dict, decision: str | None, reason: str) -> None:
+    """A rule's exit-0 JSON that does not deny: its decision, updated input and context."""
+    bucket = {"ask": tally.asks, "defer": tally.defers, "allow": tally.allows}.get(decision)
+    if bucket is not None:
+        bucket.append(reason)
+    hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
+    if isinstance(hso.get("updatedInput"), dict) and tally.updated is None:
+        tally.updated = hso["updatedInput"]
+    if hso.get("additionalContext"):
+        tally.contexts.append(str(hso["additionalContext"]))
+
+
+def _tally_run(tally: _Tally, rule, run) -> None:
+    """One rule's run into the tally. Exit 2 or a deny refuses; another non-zero exit is a
+    non-blocking error (its stderr, if any); exit 0 with JSON may decide, update or add context."""
+    if run.error:
+        _tally_error(tally, rule, run.error)
+        return
+    if run.code not in (0, 2):
+        if run.stderr:
+            tally.user_errors.append(run.stderr)
+        return
+    out = _json(run.stdout)
+    decision, reason = _decision(out) if out else (None, "")
+    if run.code == 2 or decision == "deny":
+        tally.refusals.append(reason or run.stderr)
+    elif out:
+        _tally_output(tally, out, decision, reason)
+
+
+def _spec(tally: _Tally) -> dict:
+    """The hookSpecificOutput fields the tally carries: defer > ask > allow, then input and context."""
+    spec: dict = {}
+    if tally.defers or tally.asks:
+        spec["permissionDecision"] = "defer" if tally.defers else "ask"
+        spec["permissionDecisionReason"] = "\n".join(r for r in (tally.defers or tally.asks) if r)
+    elif tally.allows:
+        spec["permissionDecision"] = "allow"
+        spec["permissionDecisionReason"] = "\n".join(r for r in tally.allows if r)
+    if tally.updated is not None:
+        spec["updatedInput"] = tally.updated
+    if tally.contexts:
+        spec["additionalContext"] = "\n".join(tally.contexts)
+    return spec
+
+
 def combine(results) -> Answer:
     """``results``: (Rule, RuleRun) pairs in rule order -> the gate's one answer."""
-    refusals, asks, defers, allows, contexts, user_errors = [], [], [], [], [], []
-    updated = None
+    tally = _Tally()
     for rule, run in results:
-        if run.error:
-            note = f"write gate: rule {rule.name} {run.error}"
-            if rule.fail == "closed":
-                refusals.append(f"{note}; this rule fails closed, so the call is refused. Retry it; "
-                                f"if it repeats, report the rule and this message.\n")
-            else:
-                user_errors.append(f"{note}; this rule fails open, so it did not decide this call.\n")
-            continue
-        out = _json(run.stdout) if run.code in (0, 2) else None
-        decision, reason = _decision(out) if out else (None, "")
-        if run.code == 2:
-            refusals.append(reason or run.stderr)
-            continue
-        if run.code != 0:
-            if run.stderr:
-                user_errors.append(run.stderr)
-            continue
-        if not out:
-            continue
-        hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
-        if decision == "deny":
-            refusals.append(reason or run.stderr)
-            continue
-        if decision == "ask":
-            asks.append(reason)
-        elif decision == "defer":
-            defers.append(reason)
-        elif decision == "allow":
-            allows.append(reason)
-        if isinstance(hso.get("updatedInput"), dict) and updated is None:
-            updated = hso["updatedInput"]
-        if hso.get("additionalContext"):
-            contexts.append(str(hso["additionalContext"]))
-
-    if refusals:
-        text = "".join(r if r.endswith("\n") else r + "\n" for r in refusals if r)
+        _tally_run(tally, rule, run)
+    if tally.refusals:
+        text = "".join(r if r.endswith("\n") else r + "\n" for r in tally.refusals if r)
         return Answer(2, "", text)
-    spec: dict = {}
-    if defers or asks:
-        spec["permissionDecision"] = "defer" if defers else "ask"
-        spec["permissionDecisionReason"] = "\n".join(r for r in (defers or asks) if r)
-    elif allows:
-        spec["permissionDecision"] = "allow"
-        spec["permissionDecisionReason"] = "\n".join(r for r in allows if r)
-    if updated is not None:
-        spec["updatedInput"] = updated
-    if contexts:
-        spec["additionalContext"] = "\n".join(contexts)
+    spec = _spec(tally)
     if spec:
         return Answer(0, json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", **spec}}),
-                      "".join(user_errors))
-    if user_errors:
-        return Answer(1, "", "".join(user_errors))
+                      "".join(tally.user_errors))
+    if tally.user_errors:
+        return Answer(1, "", "".join(tally.user_errors))
     return Answer(0)

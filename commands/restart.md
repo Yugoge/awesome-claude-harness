@@ -1,6 +1,8 @@
 ---
 description: Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID; when none is recoverable, continue the invoking session's own main agent.
 disable-model-invocation: true
+summary: "Resume every subagent a usage limit interrupted, by its original agent id; with none to resume, continue the main agent."
+group: Control
 ---
 
 # /restart — Recover All Quota-Interrupted Work

@@ -106,12 +106,11 @@ def test_repository_workflows_fixed_by_this_change_are_in_sync() -> None:
         assert CHECKER.diff_steps(command, md_steps, py_steps) == []
 
 
-def test_close_checklist_is_steps_0_to_3b_under_every_prompt(monkeypatch) -> None:
-    """P4 R11: close.md's five "### Step N" headings, whatever /close was given; the
-    rating step is "Step 3b", a label no command's dispatch template sits under."""
+def test_close_checklist_is_steps_0_to_4_under_every_prompt(monkeypatch) -> None:
+    """P4 R11: close.md's five "### Step N" headings, whatever /close was given."""
     todo_script = REPO_ROOT / "scripts" / "todo" / "close.py"
     md_steps = CHECKER.extract_md_steps(REPO_ROOT / "commands" / "close.md")
-    assert md_steps == [f"Step {n}" for n in range(4)] + ["Step 3b"]
+    assert md_steps == [f"Step {n}" for n in range(5)]
     for prompt in ("", "--auto", "--force", "/close --codex 20260101-000000", "/close --late-repair 20260101-000000"):
         monkeypatch.setenv("CLAUDE_TODO_PROMPT", prompt)
         assert CHECKER.extract_py_steps(todo_script) == md_steps, prompt

@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "requirement-round.v1",
+  "title": "Requirement round v1",
+  "description": "One round of owner questions (D28, D29): docs/dev/requirement-round-<task_id>-r<n>.json written by ba, or round 1 of a BA panel, docs/dev/ba-panel-<task_id>-r1.json, written by panel QA from the three BA reports (D32). The main agent asks it with one AskUserQuestion whose questions are the file's with id, dimension, assume, spec_ref and each option's ba removed, metadata.source requirement-round:<task_id>:r<n>; the PostToolUse AskUserQuestion hook writes the answers to docs/dev/requirement-answers-<task_id>-r<n>.json. Rounds have no cap. The subagentstop artifact-contract hook checks what JSON Schema cannot: task_id, the round order, the spec_id names an existing spec, four questions one per dimension in a round 1 without one, no question already answered, no code token, assume among the labels, and no option from a BA whose root cause panel QA did not verify.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "round", "spec_id", "questions"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "round": {"type": "integer", "minimum": 1},
+    "spec_id": {"type": ["string", "null"], "description": "The spec the task starts from (docs/dev/specs/spec-<spec_id>.md), or null; /spec itself writes null."},
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "dimension", "header", "question", "multiSelect", "options", "assume", "spec_ref"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^q[1-9][0-9]*$"},
+          "dimension": {"type": "string", "enum": ["intent", "scope", "edge_cases", "acceptance"]},
+          "header": {"type": "string", "minLength": 1, "maxLength": 12},
+          "question": {"type": "string", "minLength": 1},
+          "multiSelect": {"type": "boolean"},
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["label", "description"],
+              "properties": {
+                "label": {"type": "string", "minLength": 1},
+                "description": {"type": "string"},
+                "ba": {"type": "string", "enum": ["A", "B", "C"]}
+              }
+            }
+          },
+          "assume": {"type": "string", "minLength": 1},
+          "spec_ref": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "panel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reports", "agreements"],
+      "properties": {
+        "reports": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ba", "path", "root_cause", "why"],
+            "properties": {
+              "ba": {"type": "string", "enum": ["A", "B", "C"]},
+              "path": {"type": "string", "minLength": 1},
+              "root_cause": {"type": "string", "enum": ["verified", "unsupported", "refuted"]},
+              "why": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "agreements": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
+}

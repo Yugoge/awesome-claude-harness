@@ -39,7 +39,9 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
      (OBLIGATION GATE ADVISORY) and exits 0; block mode prints the
      three-element stderr message and exits 2.
      A valid block in block mode is then held to dispatch order (R17,
-     _order_findings): ORDER_EXIT decides the exit of a finding.
+     _order_findings): ORDER_EXIT decides the exit of a finding. Inside a
+     /spec, /dev, /redev or /dev-command span it is also held to the owner's
+     questions (R5, requirement_round.ask_first): ASK_FIRST, exit 2.
   4. Any exception raised anywhere in step 2/3 (malformed/empty stdin,
      unreadable dev-registry path, any unexpected internal failure) is caught
      by the single wrapping try/except and the hook exits 0 -- it never
@@ -71,7 +73,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import command_span, schema_registry, stop_contract  # noqa: E402
+from lib import command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
 from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
@@ -252,6 +254,14 @@ def _evaluate(data: dict, mode: str) -> None:
             findings = _order_findings(data, obligation, prompt, known) if mode == "block" else []
             if findings:
                 _emit_order(session_id, subagent_type, findings)
+            # R5 (D28): inside a /spec or /dev-family span, ask the owner before the next dispatch.
+            refusal = requirement_round.ask_first(
+                command_span.active_span(data.get("transcript_path")),
+                os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd(),
+                obligation, data.get("tool_use_id")) if mode == "block" else None
+            if refusal:
+                sys.stderr.write("\nOBLIGATION GATE ASK_FIRST (pretool-obligation-gate, R5):\n" + refusal + "\n")
+                sys.exit(2)
             return
     elif isinstance(parsed, NoBlock):  # reached only where a block is required
         reason = "missing_block"

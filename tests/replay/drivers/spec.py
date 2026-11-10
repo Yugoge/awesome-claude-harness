@@ -95,8 +95,9 @@ import os
 import re
 import shlex
 
-from .. import cmdtext
+from .. import agents, cmdtext, hookrun
 from ..pipeline import DROP_NEXT, Deviations, Orchestrator, utc_now
+from . import _round
 
 PIPELINE = "spec"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -771,6 +772,7 @@ class SpecRun:
         self.agent = SpecAgent(self)
         self.qa_round = 0
         self.issues: list = []
+        self.angle = None
 
     # ------------------------------------------------------------ binding rules
     def _rules(self):
@@ -787,6 +789,7 @@ class SpecRun:
             (r"^JSON array of issues", lambda m: json.dumps(self.issues)),
             (r"^N$", lambda m: str(self.qa_round)),
             (r"^populated from Explore findings", "populated from Explore findings"),
+            (r"^angle$", lambda m: self.angle or ""),
         ]
 
     def _line_rules(self):
@@ -825,9 +828,53 @@ class SpecRun:
         # Step 1: no --codex token; non-empty requirement -> Step 3. Step 2: not triggered.
         self.to(3)
         self.step3()
-        o.advance()  # Step 3 done, Step 4 in progress
+        if re.search(r"^#+\s+Step 3a\b", o.text, re.M):  # a text that asks the round (an earlier one does not)
+            self.to("3a")
+            self.step3a()
+        o.advance()  # Step 3 (or 3a) done, Step 4 in progress
+        if self.variant == "text-question":  # R7: a turn ending with a question in text is a Stop gap (A8)
+            ev = self.s.stop("Spec written. Shall I add more requirements?", label="Stop with a question in text")
+            text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
+            if "the turn ends with a question in text" not in text:
+                raise AssertionError(f"a question in text met no gap in /spec: {text[:300]}")
+            _round.fact(self.rp, "text question", {"blocked": True})
         self.end_turn(f"Spec written to {self.path}. Tell me more requirements whenever you are ready.",
                       "Stop turn 1")
+
+    def step3a(self) -> None:
+        """Step 3a (D28, D29, D32): three independent panel BAs, panel QA writing round 1, one AskUserQuestion
+        with its questions verbatim and its source, and the writer's verbatim copy of the answers into Section 5."""
+        o, sid = self.o, self.ts
+        self.spec_id = self.spec_id or sid
+        for angle in _round.ANGLES:
+            self.angle = angle
+            act = agents.Act(notes=_round.panel_notes(angle), status="ready", summary=f"panel {angle}",
+                             terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"})
+            o.dispatch(o.template("Step 3a", index=0), act, f"Step 3a Agent(ba) panel {angle}", sid,
+                       subagent_type="ba")
+        self.angle = None
+        doc = _round.with_paths(_round.round1(sid, panel=_round.panel()), sid)
+        o.dispatch(o.template("Step 3a", index=1), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
+                   "Step 3a Agent(qa) panel QA", sid, subagent_type="qa")
+        rel = f"docs/dev/ba-panel-{sid}-r1.json"
+        if self.variant == "round":  # Finalize before round 1 is asked is refused (A6)
+            d = o.dispatch(o_template(o, "Step 6", 0), agents.Act(summary="early finalize"),
+                           "Step 6 Agent(spec) before round 1 is asked", sid, subagent_type="spec")
+            text = "\n".join(hookrun.refusal(b) for b in (d.pre.blocks if d.pre else []))
+            if not d.blocked or "ASK_FIRST" not in text:
+                raise AssertionError(f"Finalize before round 1 was asked was not refused: {text[:300]}")
+            _round.fact(self.rp, "refused: Finalize before round 1 is asked", {"text": text.splitlines()[:2]})
+        call, _tin = _round.ask(o, rel, f"requirement-round:{sid}:r1", "Step 3a AskUserQuestion r1")
+        ans = f"docs/dev/requirement-answers-{sid}-r1.json"
+        if not os.path.isfile(os.path.join(self.project, ans)):
+            raise AssertionError("/spec's round 1 was asked and the hook wrote no answer file")
+        block = next(b.text for b in cmdtext.blocks(o.text, "Step 3a") if "--answers" in b.text)
+        o.run_text(block, "Step 3a Bash spec-write append --answers", "Copy the owner's answers into Section 5",
+                   extra_rules=[(r"^n$", "1")])
+        raw = agents.peek(self.rp, "main", os.path.join(self.project, ans)).rstrip("\n")
+        if raw not in self.spec_text():
+            raise AssertionError("Section 5 does not hold the answer file's bytes verbatim")
+        _round.fact(self.rp, "spec round r1", {"answer_file": ans, "section_5_verbatim": True, "ok": call.ok})
 
     def step3(self) -> None:
         o, s, rp = self.o, self.s, self.rp
@@ -1040,6 +1087,8 @@ class SpecRun:
         else:
             result = json.dumps({"verdict": "pass", "issues": [], "summary": "views cover the monolith; "
                                  "each view holds what its agent needs"})
+        if "SPLIT QA: pass" in prompt:  # the reply's last line the dispatch's obligation declares (response_line)
+            result += f"\n\nSPLIT QA: {'fail' if fail else 'pass'}"
         label = f"Step 6 Agent(qa) split QA round {self.qa_round}"
         self.s.dispatch(fields.get("subagent_type") or "qa", prompt, description=o.bind(fields.get("description", "")),
                         body=body, result=result, label=label, deviation=o.devs.at(label))
@@ -1249,7 +1298,7 @@ VARIANTS = ("plain", "omission", "bad-split", "split-qa-fail", "update")
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS:
+    if variant not in VARIANTS + ("round", "text-question"):
         raise ValueError(f"unknown variant {variant!r}")
     size = rp.args.get("req", "large")
     if size not in ("large", "small"):

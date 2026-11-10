@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preloaded TodoList for /close: commands/close.md's "### Step 0" to "### Step 3b",
+"""Preloaded TodoList for /close: commands/close.md's "### Step 0" to "### Step 4",
 the same five steps under every prompt (--auto walks each step over its parents;
 --force is accepted and ignored).
 
@@ -16,7 +16,7 @@ _STEPS = [
     ("1", "Dispatch three inspectors in parallel", "Dispatching three inspectors in parallel", None),
     ("2", "Delegate close debate to QA subagent", "Delegating close debate to QA subagent", {"subagent_call": {"agent": "qa", "subagent_type": "qa"}}),
     ("3", "Echo the verdict and name the next step", "Echoing the verdict and naming the next step", None),
-    ("3b", "Ask the user to rate each landed cycle", "Asking the user to rate each landed cycle", None),
+    ("4", "Ask the user to rate each landed cycle", "Asking the user to rate each landed cycle", None),
 ]
 
 _LATE_REPAIR_STEP_0 = {"artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<task>.effective.json"}]}

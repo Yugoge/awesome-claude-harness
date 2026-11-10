@@ -6,19 +6,23 @@ Phase A (slash command detected):
   - Runs the harness's scripts/todo/<command>.py to get the step list
   - Starts the bookmark .claude/workflow-{session_id}.json: the command, its
     arguments and the workflow instance. The Codex plan path of
-    pretool-workflow-gate.py and posttool-subagent-track.py update it; every
-    write goes through lib.todo_canonical.write_bookmark, its one writer
+    pretool-workflow-gate.py updates it; every write goes through
+    lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
   - For every harness command (stop_contract.harness_commands), first prints
     PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>, the roots its text's Read paths
-    start from; at /push, then the branch and commit HEAD is at (print_push_head)
+    start from; at /push, then the branch and commit HEAD is at and a line per remote (print_push_head)
 
 Phase B (subsequent prompts, no slash command):
   - While the session's overnight window is open (lib/overnight.window_open):
     inject continuation, led by the PROJECT_ROOT and HARNESS_ROOT lines
   - Reads the checklist from the transcript (lib.todo_canonical.checklist)
   - Injects current progress + exact next TodoWrite call template
+
+SubagentStart and SessionStart (start_roots): the same two root lines as start
+context, since no UserPromptSubmit output reaches a subagent (P2-3), and a
+compaction drops the command start's (SessionStart runs again on it, P2-4).
 
 State: workflow-{sid}.json + overnight-state-{sid}.json. The checklist itself is
 the CLI's: every TodoWrite is in the transcript, which its readers read (P1b E7).
@@ -1246,16 +1250,17 @@ def _dev_clock() -> datetime:
 
 def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
     """Atomically reserve a pure-timestamp task family without a global lock."""
+    from lib.obligation import registry_dir_for  # the one rule its readers name the directory by
     prefix = 'dev-command' if cmd_name == 'dev-command' else 'dev'
-    parent = project_dir / '.claude' / 'dev-registry'
-    parent.mkdir(parents=True, exist_ok=True)
     base = _dev_clock().replace(microsecond=0)
+    parent = registry_dir_for(project_dir, f"{prefix}-{base.strftime('%Y%m%d-%H%M%S')}").parent
+    parent.mkdir(parents=True, exist_ok=True)
     for offset in range(86400):
         task_id = f"{prefix}-{(base + timedelta(seconds=offset)).strftime('%Y%m%d-%H%M%S')}"
         requirement = project_dir / 'docs' / 'dev' / f'user-requirement-{task_id}.md'
         if requirement.exists():
             continue
-        directory = parent / task_id
+        directory = registry_dir_for(project_dir, task_id)
         try:
             directory.mkdir()
         except FileExistsError:
@@ -1281,6 +1286,87 @@ def _write_new_file(path: Path, payload: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+def _enforce_flag(flag: str) -> tuple | None:
+    """An enforcement flag's file in the registry and the line that reports
+    it (callers and transcripts grep for the line); None for no such flag.
+    hooks/subagentstop-codex-enforce.py reads codex-enforce.json."""
+    if flag == 'codex':
+        return 'codex-enforce.json', 'Codex enforcement active'
+    return None
+
+
+_KNOWN_ENFORCE_FLAGS = ('codex',)
+_REGISTRY_NAME_SHAPE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
+
+
+def _write_enforce_flags(argv: list) -> int:
+    """scripts/write-enforce-flag.sh's work: write each --flag's sentinel into
+    the registry --session-id names (obligation.registry_dir_named, under
+    CLAUDE_PROJECT_DIR). Every argument and flag is checked before anything
+    is written, so a bad one leaves no half-armed registry. Exit 1 on any
+    failure; the caller must abort."""
+    from lib.obligation import registry_dir_named
+
+    def fail(message: str) -> int:
+        print(f'ERROR: {message}', file=sys.stderr)
+        return 1
+
+    source_cmd, session_id, flags = '', '', []
+    rest = list(argv)
+    while rest:
+        option = rest.pop(0)
+        if option not in ('--source-command', '--session-id', '--flag') or not rest:
+            print(f'Unknown arg: {option}', file=sys.stderr)
+            return 1
+        value = rest.pop(0)
+        if option == '--source-command':
+            source_cmd = value
+        elif option == '--session-id':
+            session_id = value
+        else:
+            flags.append(value)
+    if not source_cmd:
+        return fail('--source-command required')
+    if not session_id:
+        return fail('--session-id required')
+    if not flags:
+        return fail('at least one --flag required')
+    # The value becomes a path component (write-qa-mode.sh's shape check).
+    if not _REGISTRY_NAME_SHAPE.fullmatch(session_id):
+        return fail(f'--session-id contains unsafe characters: {session_id}')
+    for flag in flags:
+        if _enforce_flag(flag) is None:
+            return fail(f"unknown --flag '{flag}' (expected: {', '.join(_KNOWN_ENFORCE_FLAGS)})")
+    project_dir = os.environ.get('CLAUDE_PROJECT_DIR')
+    if not project_dir:
+        return fail('CLAUDE_PROJECT_DIR not set')
+    registry_dir = registry_dir_named(project_dir, session_id)
+    if registry_dir is None:
+        return fail(f'no registry directory for --session-id {session_id}')
+    try:
+        registry_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return fail(f'Failed to create registry dir {registry_dir} — aborting. ({exc})')
+    created_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for flag in flags:
+        filename, label = _enforce_flag(flag)
+        target = registry_dir / filename
+        # A symlinked target redirects the write out of the registry entirely;
+        # the sentinel would then read as "enforcement active" while living elsewhere.
+        if target.is_symlink():
+            return fail(f'refusing to write through a symlink: {target}')
+        sentinel = {'schema_version': 1, 'enabled': True, 'source_command': source_cmd,
+                    'dev_session_id': session_id,
+                    'claude_session_id': os.environ.get('CLAUDE_SESSION_ID') or 'unknown',
+                    'created_at': created_at}
+        try:
+            target.write_text(json.dumps(sentinel, indent=2) + '\n', encoding='utf-8')
+        except OSError as exc:
+            return fail(f'Failed to write {filename} at {target} — aborting. ({exc})')
+        print(f'{label}: {target}')
+    return 0
 
 
 def _arm_registry(cmd_name: str, name: str, requirement: bytes,
@@ -1624,6 +1710,31 @@ def print_push_head() -> None:
     if commit:
         ref = git('symbolic-ref', '-q', 'HEAD')
         print(f"[/push] HEAD at the opener: {ref if ref.startswith('refs/heads/') else 'detached'} {commit}")
+        try:
+            print(''.join(_opener_remote_lines(git, ref)), end='')
+        except Exception:  # fail-soft: no remote line is no worse than before P5-61, never a broken opener
+            pass
+
+
+def _opener_remote_lines(git, ref: str) -> list:
+    """P5-61: per remote, `[/push] remote at the opener: <name> <URL's sha256, 16 hex> <branch or -> <its
+    refs/remotes/<name>/<branch> commit or none>[ upstream <the branch's upstream ref there>]`, the
+    record the /push Stop dates and places each remote by (command_span's OPENER_REMOTE_LINE_RE), so a
+    remote's URL, an insteadOf, an added remote or a tracking ref written after the opener changes
+    nothing it reads. The URL is digested, never printed: it can carry a credential. A remote whose URL
+    git cannot give is left out (the Stop then counts no push to it)."""
+    branch = ref[len('refs/heads/'):] if ref.startswith('refs/heads/') else ''
+    up = git('for-each-ref', '--format=%(upstream:remotename) %(upstream:remoteref)', ref).split() if branch else []
+    lines = []
+    for name in git('remote').split():
+        url = git('remote', 'get-url', name)  # insteadOf applied, as the Stop reads it
+        if not url:
+            continue
+        tracking = git('rev-parse', '--verify', '-q', f'refs/remotes/{name}/{branch}^{{commit}}') if branch else ''
+        upstream = f" upstream {up[1]}" if len(up) == 2 and up[0] == name else ''
+        lines.append(f"[/push] remote at the opener: {name} {hashlib.sha256(url.encode()).hexdigest()[:16]} "
+                     f"{branch or '-'} {tracking or 'none'}{upstream}\n")
+    return lines
 
 
 def root_lines(state) -> str:
@@ -1632,6 +1743,20 @@ def root_lines(state) -> str:
     install), the roots a command text's Read paths start from."""
     project = state.get('worktree_path') if isinstance(state, dict) else None
     return f'PROJECT_ROOT={project or PROJECT_DIR}\nHARNESS_ROOT={Path(__file__).resolve().parent.parent}'
+
+
+def start_roots(data: dict) -> str:
+    """A SubagentStart or SessionStart answer: root_lines as additionalContext, so a text's
+    `<HARNESS_ROOT>` is written as the literal path the Bash allow entries match (Claude Code
+    asks for any `${...}` line), the start-function fallback's after a compaction included.
+    With the session's overnight record, its worktree_path is PROJECT_ROOT, as at /dev-overnight."""
+    try:
+        import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+        state = overnight.locate(data.get('session_id'), data)[1]
+    except Exception:
+        state = None
+    return json.dumps({'hookSpecificOutput': {'hookEventName': data['hook_event_name'],
+                                              'additionalContext': root_lines(state)}})
 
 
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
@@ -1688,6 +1813,9 @@ def main():
         # must come from the payload: the session-id-keyed store scan can miss
         # the account's live transcript store (see _resolve_transcript_path).
         CURRENT_TRANSCRIPT_PATH = str(data.get('transcript_path') or '')
+        if data.get('hook_event_name') in ('SubagentStart', 'SessionStart'):
+            print(start_roots(data))
+            sys.exit(0)
         user_input = data.get('prompt', '')
         # An ABSENT identity is not an identity. Resolving it to a literal made
         # one fallback both MINT a record under that literal and later SERVE it,
@@ -1754,6 +1882,14 @@ def cli(argv: list) -> int:
       registry through _arm_registry.
     registry-dir TASK_ID: the name of the task's registry directory
       (obligation.registry_dir_for), for command text that needs it.
+    registry-dir --project-dir D --name NAME: the path of the registry
+      directory a registry name names (obligation.registry_dir_named), for the
+      scripts handed the name: overnight-init.sh and create-overnight-state.sh.
+    write-enforce-flags --source-command C --session-id NAME --flag F [...]:
+      scripts/write-enforce-flag.sh's work (_write_enforce_flags): the flag
+      files, written here at the path registry_dir_named gives, which the
+      artifact check reads (it cannot follow a path a shell script takes from
+      this file's printed output).
     """
     if argv[:1] == ['start']:
         sid = os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or ''
@@ -1782,10 +1918,12 @@ def cli(argv: list) -> int:
         parser.add_argument('--project-dir', required=True)
         parser.add_argument('--flag', action='append', default=[])
         args = parser.parse_args(argv[1:])
+        from lib.obligation import registry_dir_named
         project_dir = Path(args.project_dir)
-        registry_dir = project_dir / '.claude' / 'dev-registry' / args.name
-        if Path(args.name).name != args.name or args.name in ('.', '..') or registry_dir.is_symlink():
-            print(f'arm-registry: refusing to write the registry at {registry_dir}', file=sys.stderr)
+        registry_dir = registry_dir_named(project_dir, args.name)
+        if registry_dir is None or registry_dir.is_symlink():
+            print(f'arm-registry: refusing to write the registry {registry_dir or repr(args.name)}',
+                  file=sys.stderr)
             return 1
         registry_dir.mkdir(parents=True, exist_ok=True)
         # A relaunch in the same session arms the same registry again: the
@@ -1800,6 +1938,8 @@ def cli(argv: list) -> int:
             print(f'arm-registry: {error}', file=sys.stderr)
             return 1
         return 0
+    if argv[:1] == ['write-enforce-flags']:
+        return _write_enforce_flags(argv[1:])
     if argv[:1] == ['registry-dir'] and len(argv) == 2:
         from lib.obligation import registry_dir_for
         directory = registry_dir_for(PROJECT_DIR, argv[1])
@@ -1808,7 +1948,17 @@ def cli(argv: list) -> int:
             return 2
         print(directory.name)
         return 0
-    print('usage: prompt-workflow.py start | arm-registry ... | registry-dir TASK_ID', file=sys.stderr)
+    if argv[:1] == ['registry-dir'] and argv[1:2] == ['--project-dir'] and argv[3:4] == ['--name'] \
+            and len(argv) == 5:
+        from lib.obligation import registry_dir_named
+        directory = registry_dir_named(argv[2], argv[4])
+        if directory is None:
+            print(f'registry-dir: {argv[4]!r} is not a registry name', file=sys.stderr)
+            return 2
+        print(directory)
+        return 0
+    print('usage: prompt-workflow.py start | arm-registry ... | registry-dir TASK_ID'
+          ' | registry-dir --project-dir D --name NAME | write-enforce-flags ...', file=sys.stderr)
     return 2
 
 

@@ -2,6 +2,8 @@
 description: Update an existing spec, continue unfinished development, or write a temp session note.
 argument-hint: "[--update --spec <path> | --continue | --temp] [--spec <path>] [what the next session should focus on]"
 disable-model-invocation: true
+summary: "Turn unfinished work into a continuation spec for a fresh session, enrich an existing spec, or write a short session note."
+group: Spec
 ---
 
 # /spec-update — Continuation Spec Update

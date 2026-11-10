@@ -44,7 +44,9 @@ NON_DEV_ROLES = ("user", "ui-specialist", "ba", "qa", "pm", "architect", "produc
 
 
 def _settings() -> dict:
-    return json.loads((ROOT / "settings.json").read_text())
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    from lib import launch_settings
+    return launch_settings.expand(json.loads((ROOT / "settings.json").read_text()), str(ROOT))
 
 
 def _old_registrations(dest: Path):
