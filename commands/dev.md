@@ -56,10 +56,10 @@ Its stdout JSON carries `artifact_id` (`SPEC_ID` below), `views_available`, `man
 
 **The cycle is hook-prepared.** The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) printed what it did above: it minted the ids, created `.claude/dev-registry/<DEV_SESSION_ID>/`, and wrote `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim requirement. Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above (lines `DEV_SESSION_ID pre-initialized by hook: …` and `Task id: …`) and use them in every dispatch prompt.
 
-**When those lines are not in your context** (a compaction removed the hook output, or the hook printed none), run the hook's own start function with this command's text exactly as typed and read the same lines from what it prints:
+**When those lines are not in your context** (a compaction removed the hook output, or the hook printed none), run the hook's own start function with this command's text exactly as typed and read the same lines from what it prints. Write `<HARNESS_ROOT>` as the literal path of the `HARNESS_ROOT=` line in your context: `prompt-workflow.py` prints it at the session's start and again after every compaction (`SessionStart`), so it survives the loss of the command's own output:
 
 ```bash
-python3 ~/.claude/hooks/prompt-workflow.py start <<'CMDEOF'
+python3 "<HARNESS_ROOT>/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev or /redev, then $ARGUMENTS>
 CMDEOF
 ```

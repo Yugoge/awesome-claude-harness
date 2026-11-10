@@ -25,9 +25,10 @@ allowed therefore names the harness home through the root the harness command pr
 the literal path; the channel stays where the old spelling asked as well. `cli_allows` models that decision
 and the last case holds every command text to it. A subagent gets the same root as its start context
 (prompt-workflow.py at SubagentStart, P2-3), so the agent texts and the prompt includes they read are held to
-it line by line too; ASKS_SINCE_P2 are the agent lines still on the channel that 2.1.319 measured asking.
-The start-function fallback, which runs once a compaction dropped the command start's root, reads it from the
-session's start context, which prompt-workflow.py writes at SessionStart (P2-4); L1_TO_RESPELL are its two lines.
+it line by line too; ASKS_SINCE_P2 are the agent lines 2.1.319 measured asking on the channel, now written
+through the root. The start-function fallback, which runs once a compaction dropped the command start's root,
+reads it from the session's start context, which prompt-workflow.py writes at SessionStart (P2-4);
+START_FALLBACK_LINES are its two lines.
 """
 from __future__ import annotations
 
@@ -385,40 +386,36 @@ def test_each_kept_old_spelling_covers_a_line_only_it_covers():
 # re-measured through 2.1.319 headless from a product repository with the root its SubagentStart context
 # carries (channel: asks; `<HARNESS_ROOT>` filled and `~/.claude`: run). Each is written with the harness home
 # as {H}. Which spelling origin/master ran is history the texts no longer hold, so `old_spellings`' both-forms
-# model misses these `python3` and `bash` lines; the cases take them from this measurement.
+# model misses these `python3` and `bash` lines; the cases take them from this measurement. P12 (3a968cf) deleted
+# five of the 13 from the texts, so they are no longer held here: dev.md's script-reuse recon block
+# (`ls -la "{H}/scripts/"`, `cat "{H}/scripts/orchestrator.sh"`, `cat "{H}/scripts/check-file-references.sh"`,
+# now the prose "after checking `scripts/` (project) and the harness scripts") and test-executor.md's
+# troubleshooting list (`ls "{H}/venv/bin/activate"`, `python3 -m venv "{H}/venv"`, now a pointer to
+# tests/instructions/execution-guide.md, which is no agent or command text).
 ASKS_SINCE_P2 = [
     ("agents/changelog-analyst.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
                                     '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'),
     ("agents/cleaner.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
                           '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'),
-    ("agents/dev.md", 'ls -la "{H}/scripts/"'),
-    ("agents/dev.md", 'cat "{H}/scripts/orchestrator.sh"'),
-    ("agents/dev.md", 'cat "{H}/scripts/check-file-references.sh"'),
     ("agents/pm.md", 'bash "{H}/scripts/overnight-status.sh"'),
     ("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  --output /dev/stdout  '
                      '--task-id <task_id>'),
     ("agents/spec.md", 'python3 "{H}/scripts/spec-check.py"'),
     ("agents/spec.md", 'python3 "{H}/scripts/spec-verify/spec-verify-views.py"'),
     ("agents/spec.md", 'python3 "{H}/scripts/spec-verify/spec-verify.py"'),
-    ("agents/test-executor.md", 'ls "{H}/venv/bin/activate"'),
-    ("agents/test-executor.md", 'python3 -m venv "{H}/venv"'),
     ("templates/prompt-includes/checkpoint-marking.md", 'python3 "{H}/scripts/spec-check.py"'),
 ]
-# The lines lane L3 has still to respell: each case is a strict xfail until L3 writes its harness home as
-# `<HARNESS_ROOT>`; when one XPASSes, delete its entry here (ASKS_SINCE_P2 keeps holding the line).
-L3_TO_RESPELL = list(ASKS_SINCE_P2)
-L3_PENDING = "P2-3, lane L3: write this line's harness home as <HARNESS_ROOT>, then remove this marker"
 
 
 def _key(file: str, line: str) -> tuple[str, str]:
-    """A line's file and text with the harness home as {H} in either spelling and no leading `python3` (the
-    include names spec-check.py without its interpreter), so a case keeps its key through L3's respelling."""
+    """A line's file and text with the harness home as {H} in either spelling and no leading `python3` (an
+    older include named spec-check.py without its interpreter), so a case keeps its key through a respelling."""
     text = line.replace(CHANNEL + "/", "{H}/").replace(ROOT, "{H}/")
     return file, re.sub(r"^python3 ", "", text)
 
 
 MEASURED = {_key(*entry) for entry in ASKS_SINCE_P2}
-PENDING = {_key(*entry) for entry in L3_TO_RESPELL}
+assert len(MEASURED) == len(ASKS_SINCE_P2)
 
 
 def agent_lines() -> list[tuple[str, str]]:
@@ -427,13 +424,24 @@ def agent_lines() -> list[tuple[str, str]]:
                               if where.startswith(("agents/", "templates/prompt-includes/"))))
 
 
+# Measured lines still on the channel because a replay player that is not this group's cannot fill
+# `<HARNESS_ROOT>` yet: tests/replay/agents.py (group 3) plays agents/qa.md's Phase 6 block without the root its
+# start context carries, so the respelled line would fail every replay that reaches QA. Respell the line and
+# remove its entry here when that player binds `<HARNESS_ROOT>` (PR #29).
+REPLAY_PENDING = {_key("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  '
+                                        '--output /dev/stdout  --task-id <task_id>')}
+
+
 def _agent_cases():
     seen: dict[str, int] = {}
     for where, line in agent_lines():
         seen[where] = seen.get(where, 0) + 1
-        pending = _key(where.rsplit(":", 1)[0], line) in PENDING
-        yield pytest.param(where, line, id=f"{where}#{seen[where]}",
-                           marks=[pytest.mark.xfail(strict=True, reason=L3_PENDING)] if pending else [])
+        marks = ()
+        if _key(where.rsplit(":", 1)[0], line) in REPLAY_PENDING:
+            marks = pytest.mark.xfail(strict=True, reason="P2-3, group 3: tests/replay/agents.py binds "
+                                                          "<HARNESS_ROOT>; then respell this line and remove "
+                                                          "its REPLAY_PENDING entry")
+        yield pytest.param(where, line, id=f"{where}#{seen[where]}", marks=marks)
 
 
 @functools.lru_cache(maxsize=None)
@@ -455,7 +463,6 @@ def test_no_agent_line_the_cli_allowed_before_asks_now(where, line):
 def test_each_measured_agent_line_is_in_the_texts():
     keys = {_key(where.rsplit(":", 1)[0], line) for where, line in agent_lines()}
     assert not [entry for entry in ASKS_SINCE_P2 if _key(*entry) not in keys]
-    assert set(L3_TO_RESPELL) <= set(ASKS_SINCE_P2)
 
 
 @pytest.mark.xfail(strict=True, reason="P2-3, integration: settings.json registers prompt-workflow.py at "
@@ -471,19 +478,18 @@ def test_a_subagent_starts_with_the_printed_root():
 
 # ------------------------------------------------------------------ command texts
 # The start-function fallback (dev.md and dev-command.md Step 1) runs when the command start's output is gone:
-# a compaction removed it, or the hook printed none. Its line kept the channel, so 2.1.319 asks ("A variable in
-# braces in this command can't be checked before it runs"; P2-4, headless against a mock API: the `~/.claude`
-# spelling runs unasked but misses a CLAUDE_HOME install, the literal root runs it unasked). prompt-workflow.py
-# answers SessionStart with the root lines too, and the CLI runs SessionStart again at a compaction, so the
-# root is in the main agent's context there (hooks/tests/test_prompt_workflow_session_roots.py). Each case is a
-# strict xfail until lane L1 writes the line's harness home as `<HARNESS_ROOT>`; when one XPASSes, delete its
-# entry here.
-L1_TO_RESPELL = [
+# a compaction removed it, or the hook printed none. On the channel 2.1.319 asks ("A variable in braces in this
+# command can't be checked before it runs"; P2-4, headless against a mock API: the `~/.claude` spelling runs
+# unasked but misses a CLAUDE_HOME install, the literal root runs it unasked). prompt-workflow.py answers
+# SessionStart with the root lines too, and the CLI runs SessionStart again at a compaction, so the root is in
+# the main agent's context there (hooks/tests/test_prompt_workflow_session_roots.py), and the line names the
+# harness home as `<HARNESS_ROOT>`. A `~/.claude` spelling has no `{H}` key, so test_each_l1_line_is_in_the_texts
+# fails on it; the channel fails its case below.
+START_FALLBACK_LINES = [
     ("commands/dev.md", 'python3 "{H}/hooks/prompt-workflow.py" start <<\'CMDEOF\''),
     ("commands/dev-command.md", 'python3 "{H}/hooks/prompt-workflow.py" start <<\'CMDEOF\''),
 ]
-L1_PENDING = "P2-4, lane L1: write this line's harness home as <HARNESS_ROOT>, then remove this marker"
-L1_KEYS = {_key(*entry) for entry in L1_TO_RESPELL}
+FALLBACK_KEYS = {_key(*entry) for entry in START_FALLBACK_LINES}
 
 
 def _command_cases():
@@ -491,9 +497,7 @@ def _command_cases():
     for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()
                                      if where.startswith("commands/")):
         seen[where] = seen.get(where, 0) + 1
-        pending = _key(where.rsplit(":", 1)[0], line) in L1_KEYS
-        yield pytest.param(where, line, id=f"{where}#{seen[where]}",
-                           marks=[pytest.mark.xfail(strict=True, reason=L1_PENDING)] if pending else [])
+        yield pytest.param(where, line, id=f"{where}#{seen[where]}")
 
 
 @pytest.mark.parametrize("where, line", list(_command_cases()))
@@ -508,7 +512,7 @@ def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now(where, line):
 
 def test_each_l1_line_is_in_the_texts():
     keys = {_key(where.rsplit(":", 1)[0], line) for where, line, _ in rewritten_commands()}
-    assert L1_KEYS <= keys and len(L1_KEYS) == len(L1_TO_RESPELL)
+    assert FALLBACK_KEYS <= keys and len(FALLBACK_KEYS) == len(START_FALLBACK_LINES)
 
 
 @pytest.mark.xfail(strict=True, reason="P2-4, integration: settings.json registers prompt-workflow.py at "
