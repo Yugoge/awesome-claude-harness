@@ -2,6 +2,8 @@
 description: /redev is /dev when saving context — it re-enters the harness in the same conversation without repeating /dev's text and is /dev in every other respect (same arguments, steps, gates and artifacts; a fresh task id each invocation; no earlier cycle continued). Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 argument-hint: "[--codex] [--spec <path>] [<requirement>]"
 disable-model-invocation: true
+summary: "Start a fresh /dev cycle in the same conversation without repeating the text of /dev, to save context."
+group: Develop
 ---
 
 `/redev` is `/dev` when saving context: it re-enters the harness in this conversation without repeating the prompt. Run the `/dev` workflow for the requirement in `$ARGUMENTS`; its one difference is that it does not re-emit `/dev`'s text, which this conversation already holds. In every other respect it is `/dev`: same arguments, steps, gates, artifacts and checklist (`scripts/todo/redev.py` delegates to `scripts/todo/dev.py`), and the same rule that every requested outcome is delivered in this cycle, with no sequential phases or deferred parts.

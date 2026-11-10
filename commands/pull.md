@@ -1,6 +1,8 @@
 ---
 description: "Pull Command"
 disable-model-invocation: true
+summary: "Pull with rebase, stashing and restoring local changes and stopping on conflicts, then summarize the risk of what arrived."
+group: Ship
 ---
 
 # Pull Command

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every number and table row the README shows, derived from this repository's files.
+"""Every number and table row README.md and docs/status.md show, derived from this repository's files.
 
 Description: One module, one function per fact, one source per function. No number is typed here:
   each is counted or read from a committed file, or produced by the suite's own enumerator. A fact
@@ -20,7 +20,8 @@ Facts (function -> what it returns):
   count_tests               test functions and test files, hooks/tests and tests, counted statically
   hook_registrations        hook entries per event in the tracked settings.json; registered files
   enforcement_strength      the ledger's registered-hook rows by behavior and by proof layer
-  command_rows              the commands table: name, argument hint, human-only flag, one-line summary
+  command_rows              the commands table: name, argument hint, human-only flag, group, module, summary
+  agent_rows                the cast of agents: name and summary
   ci_enforces               five predicates over the test sources and the CI workflow, each with the assertion's file:line
 
 WHAT "READ" MEANS HERE. File contents come from the working tree, so an edit shows at once. Which
@@ -800,102 +801,67 @@ def enforcement_strength(root=None) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
-# 8. the commands table
+# 8. the commands table and the cast of agents
 # ---------------------------------------------------------------------------------------------
 
-COMMAND_SUMMARY_MAX = 100
-_NOT_COMMANDS = {"README", "INDEX"}
+SUMMARY_MAX = 160
+COMMAND_GROUPS = ("Spec", "Develop", "Ship", "Quality", "Control")
+_NOT_ROSTER = {"README", "INDEX"}
 _FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
-_PLACEHOLDER = re.compile(r"\S+\s+Command")
-_ABBREVIATIONS = {"e.g", "i.e", "etc", "vs", "cf", "approx", "incl"}
+# Names the front page does not show: an optional module's own name, a tool the harness borrowed a
+# word from, a model id. A summary that holds one makes its table uncomputable.
+INTERNAL_NAME = re.compile(r"(?i)\b(?:paseo|unfuddle)\b|\bgpt-\w|\bclaude-(?:opus|sonnet|haiku|fable)\b|\b(?:codex|o\d)-mini\b")
 
 
-def _first_sentence(text: str) -> str:
-    """Text up to the first sentence end: ., ! or ? (then optional closing quotes/brackets) followed by
-    white space or the end, outside `inline code`, not after an abbreviation such as e.g."""
-    text = " ".join(text.split())
-    in_code = False
-    for i, ch in enumerate(text):
-        if ch == "`":
-            in_code = not in_code
-        elif ch in ".!?" and not in_code:
-            j = i + 1
-            while j < len(text) and text[j] in "\"')]*":
-                j += 1
-            if j < len(text) and not text[j].isspace():
-                continue
-            word = text[:i].rsplit(" ", 1)[-1].lower().lstrip("(\"'")
-            if word in _ABBREVIATIONS:
-                continue
-            return text[:j]
-    return text
+def _roster(root: Path, directory: str) -> list[str]:
+    """The tracked <directory>/*.md files, README and INDEX left out, by path."""
+    return sorted(p for p in _tracked(root, directory)
+                  if p.count("/") == 1 and p.endswith(".md") and Path(p).stem.upper() not in _NOT_ROSTER)
 
 
-def _cut(text: str, limit: int) -> str:
-    """`text` if it has at most `limit` characters; else its longest prefix of whole words that leaves room for
-    a closing ellipsis, with the ellipsis, so the result has at most `limit` characters. A cut never leaves
-    an inline-code span open."""
-    if len(text) <= limit:
-        return text
-    head = text[: limit - 1]
-    if not text[limit - 1].isspace():  # the cut fell inside a word: drop the part of it
-        head = head.rsplit(" ", 1)[0] if " " in head else head
-    if head.count("`") % 2:
-        head = head[: head.rindex("`")]
-    return head.rstrip(" ,;:-–—(") + "…"
+def _front(root: Path, rel: str) -> dict:
+    match = _FRONTMATTER.match(_read(root, rel))
+    if not match:
+        raise FactError(f"{rel}: no YAML frontmatter")
+    front = _yaml(match.group(1), f"the frontmatter of {rel}")
+    if not isinstance(front, dict):
+        raise FactError(f"{rel}: the frontmatter is not a mapping")
+    return front
 
 
-def _body_first_sentence(body: str, rel: str) -> str:
-    """The first sentence of the body's first paragraph: the first run of lines that are neither blank,
-    a heading (#), a fence (```), a rule, nor a quote or comment opener."""
-    lines, para, fenced = body.splitlines(), [], False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
-        if not stripped or stripped.startswith(("#", ">", "<!--")) or re.fullmatch(r"[-*_=]{3,}", stripped):
-            if para:
-                break
-            continue
-        para.append(stripped)
-    if not para:
-        raise FactError(f"{rel}: no body text to take a summary from")
-    return _first_sentence(" ".join(para))
+def _summary(front: dict, rel: str) -> str:
+    """The frontmatter `summary`, verbatim: one line of at most SUMMARY_MAX characters, no internal name.
+    It is never cut: one that breaks a rule is an error naming the file."""
+    summary = front.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise FactError(f"{rel}: the frontmatter has no summary")
+    if "\n" in summary.strip() or summary != summary.strip():
+        raise FactError(f"{rel}: the summary must be one line with no surrounding space")
+    if len(summary) > SUMMARY_MAX:
+        raise FactError(f"{rel}: the summary has {len(summary)} characters, more than {SUMMARY_MAX}; shorten it")
+    name = INTERNAL_NAME.search(summary)
+    if name:
+        raise FactError(f"{rel}: the summary names {name.group(0)!r}, an internal name the front page does not show")
+    return summary
 
 
-def command_rows(root=None, max_len: int = COMMAND_SUMMARY_MAX) -> list[dict]:
+def command_rows(root=None) -> list[dict]:
     """The commands table, one row per file in commands/ (README and INDEX files left out), by name.
 
     Each row: name (the file name without .md, no slash), argument_hint (frontmatter `argument-hint`, a
     YAML list rebuilt as "[a, b]", else None), human_only (frontmatter `disable-model-invocation` is
-    true; an agent may call the command when the key is absent or false), summary, summary_source.
-
-    summary: the first sentence of the frontmatter description (see _first_sentence), without a final
-    full stop, cut on a word boundary so that it has at most `max_len` characters, the last being an
-    ellipsis when it was cut. A description is a placeholder when it is exactly one word followed by
-    the word Command (a YAML-quoted "Pull Command": `^\\S+\\s+Command$`); the summary is then taken the same
-    way from the body: the first sentence of its first paragraph after the frontmatter, headings
-    and fenced code skipped. summary_source is "description" or "body". Rows are sorted by name; there is
-    no grouping and no category. The summary is the text as written: a pipe or an angle bracket in it
-    is for the caller to escape when it renders a table.
+    true; an agent may call the command when the key is absent or false), summary (frontmatter
+    `summary`, verbatim; see _summary), group (frontmatter `group`, one of COMMAND_GROUPS) and module
+    (frontmatter `module`: the optional module the command belongs to, else None). The text is as
+    written: a pipe or an angle bracket in it is for the caller to escape when it renders a table.
     """
     root = _root(root)
-    names = sorted(p for p in _tracked(root, "commands")
-                   if p.count("/") == 1 and p.endswith(".md") and Path(p).stem.upper() not in _NOT_COMMANDS)
+    names = _roster(root, "commands")
     if not names:
         raise FactError(f"no command file (commands/*.md) in the git index of {root}")
     rows = []
     for rel in names:
-        text = _read(root, rel)
-        match = _FRONTMATTER.match(text)
-        if not match:
-            raise FactError(f"{rel}: no YAML frontmatter")
-        front = _yaml(match.group(1), f"the frontmatter of {rel}")
-        if not isinstance(front, dict):
-            raise FactError(f"{rel}: the frontmatter is not a mapping")
+        front = _front(root, rel)
         description = front.get("description")
         if not isinstance(description, str) or not description.strip():
             raise FactError(f"{rel}: the frontmatter has no description")
@@ -907,13 +873,32 @@ def command_rows(root=None, max_len: int = COMMAND_SUMMARY_MAX) -> list[dict]:
             hint = "[" + ", ".join(str(x) for x in hint) + "]"
         elif hint is not None and not isinstance(hint, str):
             raise FactError(f"{rel}: argument-hint is {hint!r}, not text")
-        if _PLACEHOLDER.fullmatch(description.strip()):
-            sentence, source = _body_first_sentence(text[match.end():], rel), "body"
-        else:
-            sentence, source = _first_sentence(description), "description"
-        sentence = sentence[:-1] if sentence.endswith(".") and not sentence.endswith("..") else sentence
+        group = front.get("group")
+        if group not in COMMAND_GROUPS:
+            raise FactError(f"{rel}: the group is {group!r}, not one of {', '.join(COMMAND_GROUPS)}")
+        module = front.get("module")
+        if module is not None and (not isinstance(module, str) or not module.strip()):
+            raise FactError(f"{rel}: the module is {module!r}, not a name")
         rows.append({"name": Path(rel).stem, "argument_hint": hint or None, "human_only": human is True,
-                     "summary": _cut(sentence, max_len), "summary_source": source})
+                     "summary": _summary(front, rel), "group": group, "module": module})
+    return sorted(rows, key=lambda r: r["name"])
+
+
+def agent_rows(root=None) -> list[dict]:
+    """The cast of agents, one row per file in agents/ (README and INDEX files left out), by name.
+
+    Each row: name (frontmatter `name`, which must be the file name without .md) and summary
+    (frontmatter `summary`, verbatim; see _summary)."""
+    root = _root(root)
+    names = _roster(root, "agents")
+    if not names:
+        raise FactError(f"no agent file (agents/*.md) in the git index of {root}")
+    rows = []
+    for rel in names:
+        front = _front(root, rel)
+        if front.get("name") != Path(rel).stem:
+            raise FactError(f"{rel}: the frontmatter name is {front.get('name')!r}, not {Path(rel).stem!r}")
+        rows.append({"name": Path(rel).stem, "summary": _summary(front, rel)})
     return sorted(rows, key=lambda r: r["name"])
 
 
@@ -1649,6 +1634,7 @@ FACTS = {
     "hook_registrations": hook_registrations,
     "enforcement_strength": enforcement_strength,
     "command_rows": command_rows,
+    "agent_rows": agent_rows,
     "ci_enforces": ci_enforces,
 }
 
@@ -1671,7 +1657,7 @@ def all_facts(root=None, only=None) -> tuple[dict, dict]:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Print the README's facts as JSON.")
+    ap = argparse.ArgumentParser(description="Print the facts README.md and docs/status.md show, as JSON.")
     ap.add_argument("--root", default=None, help="the top of the git work tree to read (default: this repository)")
     ap.add_argument("--fact", action="append", metavar="NAME", help="only this fact (repeatable)")
     ap.add_argument("--timings", action="store_true", help="add the seconds each fact took")

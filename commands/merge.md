@@ -1,6 +1,8 @@
 ---
 description: Merge any resolvable commit-ish into the default branch with a real merge that keeps the full history. Bare /merge infers the source (overnight state, then the current branch in the main checkout); /merge <ref> names it. A linked (registered_worktree) worktree is removed afterward with its merged branch and overnight-state file; in the main checkout (in_place) the tree must be clean first and the branch stays.
 disable-model-invocation: true
+summary: "Merge a branch or commit into the default branch with a real merge that keeps the full history, after a pre-merge analysis."
+group: Ship
 ---
 
 # /merge - Merge

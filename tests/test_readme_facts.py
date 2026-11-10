@@ -648,15 +648,23 @@ def test_enforcement_strength_missing_inputs_are_named(tmp_path):
             rf.enforcement_strength(make_repo(tmp_path / gone.replace("/", "_"), left))
 
 
-# ================================================================ 8. the commands table
+# ================================================================ 8. the commands table and the cast of agents
 
 def command_files() -> list[Path]:
     return sorted(p for p in (REPO / "commands").glob("*.md") if p.stem.upper() not in ("README", "INDEX"))
 
 
+def agent_files() -> list[Path]:
+    return sorted(p for p in (REPO / "agents").glob("*.md") if p.stem.upper() not in ("README", "INDEX"))
+
+
 def front_value(path: Path, key: str):
     m = re.search(rf"(?m)^{re.escape(key)}:[ \t]*(.*)$", path.read_text(encoding="utf-8").split("\n---", 1)[0])
     return m.group(1).strip() if m else None
+
+
+def unquoted(value: str) -> str:
+    return json.loads(value) if value.startswith('"') else value
 
 
 def test_command_rows_equal_a_recount(real):
@@ -668,69 +676,45 @@ def test_command_rows_equal_a_recount(real):
         assert row["human_only"] == (front_value(path, "disable-model-invocation") == "true")
         hint = front_value(path, "argument-hint")
         assert row["argument_hint"] == (hint.strip('"') if hint else None), path.name
-        assert 0 < len(row["summary"]) <= rf.COMMAND_SUMMARY_MAX and "\n" not in row["summary"]
-        description = front_value(path, "description").strip('"')
-        placeholder = re.fullmatch(r"\S+ Command", description) is not None
-        assert row["summary_source"] == ("body" if placeholder else "description"), path.name
-        if not placeholder:  # the summary is the description's beginning, whole words, ending at a sentence or a cut
-            stem = row["summary"].rstrip("…").rstrip()
-            assert description.startswith(stem), (path.name, stem)
-            assert row["summary"].endswith("…") or description[len(stem):].lstrip()[:1] in ("", ".", " ") or True
+        assert row["summary"] == unquoted(front_value(path, "summary")), path.name  # verbatim, never cut
+        assert 0 < len(row["summary"]) <= rf.SUMMARY_MAX and "\n" not in row["summary"]
+        assert not rf.INTERNAL_NAME.search(row["summary"]), path.name
+        assert row["group"] == front_value(path, "group") and row["group"] in rf.COMMAND_GROUPS
+        assert row["module"] == front_value(path, "module")
     assert any(r["human_only"] for r in rows) and any(not r["human_only"] for r in rows)
     assert not [r for r in rows if r["name"].upper() in ("README", "INDEX")]
+    assert {r["group"] for r in rows} == set(rf.COMMAND_GROUPS)  # every group holds a command
+    assert [r["name"] for r in rows if r["module"]] == ["paseo-daemon"]
 
 
-def test_command_rows_take_the_body_for_placeholder_descriptions(real):
-    placeholders = {r["name"]: r for r in real.facts["command_rows"] if r["summary_source"] == "body"}
-    assert placeholders, "no placeholder description in commands/ any more"
-    for name, row in placeholders.items():
-        body = (REPO / "commands" / f"{name}.md").read_text(encoding="utf-8")
-        assert row["summary"].rstrip("…").rstrip().split()[0] in body
-        assert "Command" not in row["summary"].split()[-1:]  # not the heading's "Pull Command"
-
-
-def test_the_commands_table_has_no_grouping(real):
+def test_the_rows_carry_exactly_their_fields(real):
     for row in real.facts["command_rows"]:
-        assert set(row) == {"name", "argument_hint", "human_only", "summary", "summary_source"}
+        assert set(row) == {"name", "argument_hint", "human_only", "summary", "group", "module"}
+    for row in real.facts["agent_rows"]:
+        assert set(row) == {"name", "summary"}
 
 
-@pytest.mark.parametrize("text,sentence", [
-    ("Close the cycle (infers the id). Step 0 resolves it.", "Close the cycle (infers the id)."),
-    ("Use `a.b. c` literally. Then stop.", "Use `a.b. c` literally."),
-    ("Merge, e.g. a branch. Then stop.", "Merge, e.g. a branch."),
-    ("See commands/dev-overnight.md's table. Next.", "See commands/dev-overnight.md's table."),
-    ("Is it done? Yes.", "Is it done?"),
-    ("No terminator at all", "No terminator at all"),
-    ("Version 1.5 ships. Later.", "Version 1.5 ships."),
-    ("  spaced\n   over   lines.  Second.", "spaced over lines."),
-])
-def test_first_sentence(text, sentence):
-    assert rf._first_sentence(text) == sentence
-
-
-@pytest.mark.parametrize("text,limit,cut", [
-    ("short enough", 40, "short enough"),
-    ("exactly ten", 11, "exactly ten"),
-    ("one two three four five", 14, "one two three…"),
-    ("one two three four five", 15, "one two three…"),   # 14 chars of head end inside "four": drop it
-    ("one two three four five", 19, "one two three four…"),
-    ("a `code span here` and more words", 14, "a…"),        # never leave a code span open
-    ("averyveryverylongword rest", 10, "averyvery…"),     # one word longer than the limit: hard cut
-])
-def test_cut_keeps_whole_words_and_the_limit(text, limit, cut):
-    assert rf._cut(text, limit) == cut
-    assert len(rf._cut(text, limit)) <= limit
+def test_agent_rows_equal_a_recount(real):
+    rows = real.facts["agent_rows"]
+    files = agent_files()
+    assert [r["name"] for r in rows] == sorted(p.stem for p in files)
+    for row, path in zip(rows, sorted(files, key=lambda p: p.stem)):
+        assert front_value(path, "name") == row["name"]
+        assert row["summary"] == unquoted(front_value(path, "summary")), path.name
+        assert 0 < len(row["summary"]) <= rf.SUMMARY_MAX and not rf.INTERNAL_NAME.search(row["summary"])
 
 
 def _commands_repo(tmp_path, **extra):
     files = {
         "commands/README.md": "---\ndescription: not a command\n---\n",
         "commands/INDEX.md": "---\ndescription: not a command\n---\n",
-        "commands/beta.md": "---\ndescription: \"Beta Command\"\ndisable-model-invocation: true\n---\n\n# Beta Command\n\n"
-                            "Do the beta thing carefully. Then more.\n",
+        "commands/beta.md": "---\ndescription: \"Beta Command\"\ndisable-model-invocation: true\nsummary: Do the beta thing.\n"
+                            "group: Ship\nmodule: extra\n---\n\n# Beta Command\n\nDo the beta thing carefully. Then more.\n",
         "commands/alpha.md": "---\ndescription: Alpha does a thing for the owner. And more detail follows here.\n"
-                             "argument-hint: \"[--x] <y>\"\ndisable-model-invocation: true\n---\n\n# Alpha\n",
-        "commands/gamma.md": "---\ndescription: Gamma may be called by an agent\nargument-hint: [a or b]\n---\n\ntext\n",
+                             "argument-hint: \"[--x] <y>\"\ndisable-model-invocation: true\n"
+                             "summary: \"Alpha does a thing for the owner, and this whole sentence is kept.\"\ngroup: Spec\n---\n\n# Alpha\n",
+        "commands/gamma.md": "---\ndescription: Gamma may be called by an agent\nargument-hint: [a or b]\n"
+                             "summary: Gamma may be called by an agent.\ngroup: Control\n---\n\ntext\n",
     }
     files.update(extra)
     return make_repo(tmp_path, files)
@@ -741,29 +725,43 @@ def test_command_rows_follow_the_command_files(tmp_path):
     rows = rf.command_rows(root)
     assert rows == [
         {"name": "alpha", "argument_hint": "[--x] <y>", "human_only": True,
-         "summary": "Alpha does a thing for the owner", "summary_source": "description"},
+         "summary": "Alpha does a thing for the owner, and this whole sentence is kept.", "group": "Spec", "module": None},
         {"name": "beta", "argument_hint": None, "human_only": True,
-         "summary": "Do the beta thing carefully", "summary_source": "body"},
+         "summary": "Do the beta thing.", "group": "Ship", "module": "extra"},
         {"name": "gamma", "argument_hint": "[a or b]", "human_only": False,
-         "summary": "Gamma may be called by an agent", "summary_source": "description"},
+         "summary": "Gamma may be called by an agent.", "group": "Control", "module": None},
     ]
     edit(root, "commands/gamma.md", "description: Gamma", "disable-model-invocation: true\ndescription: Gamma")
     assert [r["human_only"] for r in rf.command_rows(root)] == [True, True, True]
-    edit(root, "commands/alpha.md", "Alpha does a thing for the owner.", "Alpha is rewritten. ")
-    assert rf.command_rows(root)[0]["summary"] == "Alpha is rewritten"
-    assert [r["summary"] for r in rf.command_rows(root, max_len=12)][0] == "Alpha is…"
+    edit(root, "commands/alpha.md", "Alpha does a thing for the owner, and this whole sentence is kept.", "Alpha is rewritten.")
+    assert rf.command_rows(root)[0]["summary"] == "Alpha is rewritten."
+    edit(root, "commands/alpha.md", "group: Spec", "group: Quality")
+    assert rf.command_rows(root)[0]["group"] == "Quality"
     git(root, "mv", "commands/gamma.md", "commands/aaa.md")
     assert [r["name"] for r in rf.command_rows(root)] == ["aaa", "alpha", "beta"]
 
 
+LONG = "x" * (rf.SUMMARY_MAX + 1)
+
+
 @pytest.mark.parametrize("name,content,message", [
     ("nofront", "just text\n", r"nofront\.md: no YAML frontmatter"),
-    ("nodesc", "---\ndisable-model-invocation: true\n---\nx\n", r"nodesc\.md: .*no description"),
-    ("badflag", "---\ndescription: d\ndisable-model-invocation: maybe\n---\nx\n", r"badflag\.md: .*maybe"),
+    ("nodesc", "---\ndisable-model-invocation: true\nsummary: s\ngroup: Ship\n---\nx\n", r"nodesc\.md: .*no description"),
+    ("badflag", "---\ndescription: d\ndisable-model-invocation: maybe\nsummary: s\ngroup: Ship\n---\nx\n", r"badflag\.md: .*maybe"),
     ("badyaml", "---\ndescription: [unclosed\n---\nx\n", r"badyaml\.md"),
-    ("emptybody", "---\ndescription: \"Empty Command\"\n---\n\n# Empty\n", r"emptybody\.md: no body text"),
+    ("nosummary", "---\ndescription: d\ngroup: Ship\n---\nx\n", r"nosummary\.md: the frontmatter has no summary"),
+    ("emptysummary", "---\ndescription: d\nsummary: \"  \"\ngroup: Ship\n---\nx\n", r"emptysummary\.md: .*no summary"),
+    ("longsummary", f"---\ndescription: d\nsummary: {LONG}\ngroup: Ship\n---\nx\n",
+     rf"longsummary\.md: the summary has {rf.SUMMARY_MAX + 1} characters, more than {rf.SUMMARY_MAX}; shorten it"),
+    ("twolines", "---\ndescription: d\nsummary: \"one\\ntwo\"\ngroup: Ship\n---\nx\n", r"twolines\.md: the summary must be one line"),
+    ("internal", "---\ndescription: d\nsummary: Drive the Paseo daemon.\ngroup: Ship\n---\nx\n",
+     r"internal\.md: the summary names 'Paseo', an internal name"),
+    ("modelid", "---\ndescription: d\nsummary: Ask gpt-5.6-sol.\ngroup: Ship\n---\nx\n", r"modelid\.md: the summary names 'gpt-5'"),
+    ("nogroup", "---\ndescription: d\nsummary: s\n---\nx\n", r"nogroup\.md: the group is None, not one of Spec, Develop"),
+    ("badgroup", "---\ndescription: d\nsummary: s\ngroup: Misc\n---\nx\n", r"badgroup\.md: the group is 'Misc'"),
+    ("badmodule", "---\ndescription: d\nsummary: s\ngroup: Ship\nmodule: [a]\n---\nx\n", r"badmodule\.md: the module is"),
 ])
-def test_command_rows_refuse_what_they_cannot_summarise(tmp_path, name, content, message):
+def test_command_rows_refuse_what_they_cannot_show_whole(tmp_path, name, content, message):
     root = _commands_repo(tmp_path, **{f"commands/{name}.md": content})
     with pytest.raises(rf.FactError, match=message):
         rf.command_rows(root)
@@ -772,6 +770,53 @@ def test_command_rows_refuse_what_they_cannot_summarise(tmp_path, name, content,
 def test_command_rows_without_a_commands_directory_is_an_error(tmp_path):
     with pytest.raises(rf.FactError, match=r"commands/\*\.md"):
         rf.command_rows(make_repo(tmp_path, {"README.md": "x"}))
+
+
+def _agents_repo(tmp_path, **extra):
+    files = {
+        "agents/README.md": "---\nname: README\n---\n",
+        "agents/INDEX.md": "x\n",
+        "agents/zeta.md": "---\nname: zeta\ndescription: z\nsummary: \"Zeta checks things: carefully.\"\ntools: Read\n---\nbody\n",
+        "agents/alpha.md": "---\nname: alpha\ndescription: >-\n  folded\n  text\nsummary: Alpha builds.\n---\nbody\n",
+    }
+    files.update(extra)
+    return make_repo(tmp_path, files)
+
+
+def test_agent_rows_follow_the_agent_files(tmp_path):
+    root = _agents_repo(tmp_path)
+    assert rf.agent_rows(root) == [{"name": "alpha", "summary": "Alpha builds."},
+                                   {"name": "zeta", "summary": "Zeta checks things: carefully."}]
+    edit(root, "agents/zeta.md", "Zeta checks things: carefully.", "Zeta is rewritten.")
+    assert rf.agent_rows(root)[1]["summary"] == "Zeta is rewritten."
+
+
+@pytest.mark.parametrize("name,content,message", [
+    ("nosummary", "---\nname: nosummary\ndescription: d\n---\n", r"nosummary\.md: the frontmatter has no summary"),
+    ("wrongname", "---\nname: other\nsummary: s\n---\n", r"wrongname\.md: the frontmatter name is 'other', not 'wrongname'"),
+    ("long", f"---\nname: long\nsummary: {LONG}\n---\n", r"long\.md: the summary has"),
+    ("internal", "---\nname: internal\nsummary: Tracks Unfuddle tickets.\n---\n", r"internal\.md: the summary names 'Unfuddle'"),
+    ("nofront", "no frontmatter\n", r"nofront\.md: no YAML frontmatter"),
+])
+def test_agent_rows_refuse_what_they_cannot_show_whole(tmp_path, name, content, message):
+    root = _agents_repo(tmp_path, **{f"agents/{name}.md": content})
+    with pytest.raises(rf.FactError, match=message):
+        rf.agent_rows(root)
+
+
+def test_agent_rows_without_an_agents_directory_is_an_error(tmp_path):
+    with pytest.raises(rf.FactError, match=r"agents/\*\.md"):
+        rf.agent_rows(make_repo(tmp_path, {"README.md": "x"}))
+
+
+@pytest.mark.parametrize("text,found", [
+    ("drive the paseo daemon", "paseo"), ("an Unfuddle-style table", "Unfuddle"), ("ask gpt-5.6-sol", "gpt-5"),
+    ("run claude-opus-5-5", "claude-opus"), ("use codex-mini", "codex-mini"), ("try o4-mini", "o4-mini"),
+    ("OpenAI Codex reviews it", None), ("claude-codex-settings", None), ("/codex --review", None), ("Claude Code", None),
+])
+def test_the_internal_names(text, found):
+    m = rf.INTERNAL_NAME.search(text)
+    assert (m.group(0) if m else None) == found
 
 
 # ================================================================ 9. what CI enforces
