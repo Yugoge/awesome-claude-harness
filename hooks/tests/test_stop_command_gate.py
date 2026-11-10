@@ -539,6 +539,21 @@ def test_a4_the_do_stop_decides_on_the_do_report_itself(env, monkeypatch, conten
     assert code == 2 and f"docs/dev/do-report-{DO_ID}.json" in text and needle in text, text
 
 
+def test_a4_a_do_whose_minted_line_cli_2_1_322_records_as_hook_success_can_end(env):
+    """Seen live on CLI 2.1.322: prompt-workflow.py's plain stdout is recorded as a hook_success
+    attachment, not hook_additional_context, and the /do Stop said the opener had no hook-minted
+    task id although the line was there. The complete report now lets the Stop pass."""
+    env.tx.command("do", "rename the helper")
+    stdout = f"[/do] Consent granted.\n[/do] task-id minted: {DO_ID} — resolve via ...\n"
+    env.tx.add({"type": "attachment", "attachment": {
+        "type": "hook_success", "hookName": "UserPromptSubmit", "hookEvent": "UserPromptSubmit",
+        "content": stdout.rstrip("\n"), "stdout": stdout, "stderr": "", "exitCode": 0}})
+    env.tx.todos(canonical("do", "rename the helper"), len(canonical("do", "rename the helper")))
+    write_files(env, ["src/a.py"])
+    do_report(env, modified=["src/a.py"])
+    assert run(env) == (0, "")
+
+
 def test_a4_the_gate_creates_and_deletes_no_file(env):
     do_span(env)
     before = sorted(p for p in env.tmp.rglob("*"))
