@@ -51,6 +51,8 @@ Autonomous coding agents hurt in places the field has already documented. Each p
 
 Needs `python3`, `git` and `jq`, and Claude Code to use it. Codex is optional: only `--codex` and `/codex` use it, and they need the OpenAI Codex CLI.
 
+### Full install: clone + init
+
 ```bash
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude   # needs an empty ~/.claude
 ~/.claude/scripts/bootstrap                                # init: asks once per optional module; ends with the preflight
@@ -59,7 +61,9 @@ python3 ~/.claude/scripts/capture-hero-run.py --check-only # sandboxed demo: a p
 
 The demo writes nothing into the checkout and prints where its captured log went. Then, in Claude Code, type `/dev <your requirement>`.
 
-Guardrails only, without the agents and commands, from a checkout:
+### Guardrails only: the installer core profile
+
+Without the agents and commands, from a checkout:
 
 ```bash
 scripts/install/install --profile core   # guardrails in an isolated directory; hook registrations merged additively
