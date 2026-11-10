@@ -28,9 +28,12 @@ unaccounted() cross-checks the walk against a plain token scan of each registere
 (and of each refusing rule file).
 Each Site keeps its file, line, function, the source of the conditions guarding it (enclosing tests,
 early returns), the string constants of its message, and the registrations (event, matcher) of the
-hooks that reach it. classify() derives one class per site from that code and those registrations
-(X6 (ii)), with the rule that fired; unreachable() proves a site no path runs. match() maps a block a
-replay recorded to the sites whose message pieces its text holds (X6 (iv)).
+hooks that reach it: a registration whose event the hook's own file answers first (a function testing
+the payload's hook_event_name and leaving, answered_first) reaches only what runs before that answer
+and what that code calls (Enumerator.at_event). classify() derives one class per site from that
+code and those registrations (X6 (ii)), with the rule that fired; unreachable() proves a site no path
+runs. match() maps a block a replay recorded to the sites whose message pieces its text holds
+(X6 (iv)).
 """
 from __future__ import annotations
 
@@ -613,6 +616,63 @@ def unreachable_after_exit(mod: PyModule) -> dict[int, int]:
     return out
 
 
+def _leaves(st) -> bool:
+    """The statement never completes normally: an exit, a raise or a return."""
+    return isinstance(st, (ast.Return, ast.Raise)) or isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) \
+        and (_call_name(st.value.func) in EXIT_FUNCS or _call_name(st.value.func) in {(None, n) for n in EXIT_NAMES})
+
+
+def _event_test(test, payload: set[str]) -> set[str]:
+    """The events an `if` test names when it compares the payload's hook_event_name with literals:
+    `<p>.get("hook_event_name") in (...)` / `== "..."`, or `<p>["hook_event_name"]`; set() otherwise."""
+    if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], (ast.In, ast.Eq))):
+        return set()
+    left = test.left
+    if isinstance(left, ast.Call) and isinstance(left.func, ast.Attribute) and left.func.attr == "get" \
+            and left.args and isinstance(left.args[0], ast.Constant):
+        base, key = left.func.value, left.args[0].value
+    elif isinstance(left, ast.Subscript) and isinstance(left.slice, ast.Constant):
+        base, key = left.value, left.slice.value
+    else:
+        return set()
+    if key != "hook_event_name" or not (isinstance(base, ast.Name) and base.id in payload):
+        return set()
+    comp = test.comparators[0]
+    vals = [comp] if isinstance(test.ops[0], ast.Eq) else \
+        comp.elts if isinstance(comp, (ast.Tuple, ast.List, ast.Set)) else []
+    if not vals or not all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in vals):
+        return set()
+    return {v.value for v in vals}
+
+
+def answered_first(mod: PyModule) -> dict[str, dict[str, set[int]]]:
+    """{event: {function: the lines of it no path runs at that event}} for each hook event a function
+    answers and leaves on: an `if` testing the payload's hook_event_name (_event_test; the payload is a
+    name the function assigns from json.load / json.loads) with no else, whose block ends in an exit,
+    raise or return. At those events that `if` never completes, so no statement after it in its block
+    runs; what the function calls only from there is left to Enumerator.at_event."""
+    out: dict[str, dict[str, set[int]]] = {}
+    for name, func in mod.funcs.items():
+        payload = {t.id for n in ast.walk(func) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                   and _call_name(n.value.func) in {("json", "load"), ("json", "loads")}
+                   for t in n.targets if isinstance(t, ast.Name)}
+        if not payload:
+            continue
+        for node in ast.walk(func):
+            for attr in ("body", "orelse", "finalbody"):
+                block = getattr(node, attr, None)
+                if not isinstance(block, list):
+                    continue
+                for i, st in enumerate(block):
+                    if not (isinstance(st, ast.If) and not st.orelse and st.body and _leaves(st.body[-1])
+                            and mod.enclosing_func(st) is func):
+                        continue
+                    lines = {n.lineno for later in block[i + 1:] for n in ast.walk(later) if hasattr(n, "lineno")}
+                    for ev in _event_test(st.test, payload):
+                        out.setdefault(ev, {}).setdefault(name, set()).update(lines)
+    return out
+
+
 # ------------------------------------------------------------------ shell
 
 _SH_FUNC = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{?\s*(.*)$")
@@ -808,6 +868,7 @@ class Enumerator:
         #                                            refusing rules: the union of their declared tools}
         self.rules: dict[str, list[GateRule]] = {}   # hook -> the refusing rules of its gate table
         self.via: dict[str, dict[str, list[str]]] = {}  # hook -> {file reached only through rules: their files}
+        self._at: dict[str, dict] = {}  # hook -> at_event(hook)
         for hook in self.regs:
             self.roles[hook] = self._closure(hook)
 
@@ -921,9 +982,39 @@ class Enumerator:
         then what they call or name, across imports; a method call on an object the walk cannot type
         reaches every function of that name in the imported modules (conservative)."""
         roles = self.roles[hook]
-        out: set[tuple[str, str]] = set()
         todo = [(f, n) for f, r in roles.items() if r != "import" and f in self.py for n in self.py[f].funcs]
-        todo += [(f, "<module>") for f, r in roles.items() if f in self.py]
+        return self._calls(hook, todo + [(f, "<module>") for f, r in roles.items() if f in self.py])
+
+    def at_event(self, hook: str) -> dict[str, tuple[set[tuple[str, str]], dict[tuple[str, str], set[int]]]]:
+        """{event: ((file, function)s the hook's process can call at it, {(file, function): the lines it
+        skips there})} for each event the hook's own file answers first (answered_first): from its
+        top-level code, its functions only as that code calls them, the lines after the answer aside;
+        a child or rule process's functions all, as reachable() has them. {} for a hook answering none."""
+        if hook not in self._at:
+            mod, roles = self.module(hook), self.roles[hook]
+            first = answered_first(mod) if isinstance(mod, PyModule) else {}
+            todo = [(f, n) for f, r in roles.items() if r in ("child", "rule") and f in self.py
+                    for n in self.py[f].funcs]
+            todo += [(f, "<module>") for f in roles if f in self.py]
+            self._at[hook] = {}
+            for ev, skipped in first.items():
+                skip = {(hook, name): lines for name, lines in skipped.items()}
+                self._at[hook][ev] = (self._calls(hook, list(todo), skip), skip)
+        return self._at[hook]
+
+    def _runs_at(self, hook: str, s: Site, event: str) -> bool:
+        """Whether the site can run when the hook is called for `event` (at_event)."""
+        if event not in self.at_event(hook) or not s.file.endswith(".py"):
+            return True
+        reach, skip = self.at_event(hook)[event]
+        return (s.file, s.func) in reach and s.line not in skip.get((s.file, s.func), ())
+
+    def _calls(self, hook: str, todo: list, skip: dict | None = None) -> set[tuple[str, str]]:
+        """(file, function) the scopes in `todo` call or name, transitively, across the hook's files; the
+        lines `skip` names in a scope are not walked."""
+        roles = self.roles[hook]
+        skip = skip or {}
+        out: set[tuple[str, str]] = set()
         by_name: dict[str, list[tuple[str, str]]] = {}
         for f in roles:
             if f in self.py:
@@ -941,8 +1032,9 @@ class Enumerator:
             if scope is None:
                 continue
             as_main = roles.get(key[0]) != "import"
+            gone = skip.get(key, ())
             for n in _walk_scope(scope):
-                if key[1] == "<module>" and not _guard(mod, n, as_main, [hook]):
+                if key[1] == "<module>" and not _guard(mod, n, as_main, [hook]) or getattr(n, "lineno", 0) in gone:
                     continue
                 if isinstance(n, (ast.Name, ast.Attribute)) and not isinstance(getattr(n, "ctx", None), ast.Store):
                     tgt = self._resolve(mod, n)
@@ -1117,7 +1209,7 @@ class Enumerator:
             out.append(s)
         out += self._sh_sites([f for f in roles if f.endswith(".sh")])
         for s in out:
-            s.regs = self._regs(hook, s.file)
+            s.regs = [r for r in self._regs(hook, s.file) if self._runs_at(hook, s, r[1])]
             s.role = roles.get(s.file)
             s.rules = sorted(self.via[hook].get(s.file, []))
         return [s for s in out if s.regs]
