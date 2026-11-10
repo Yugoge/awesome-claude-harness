@@ -419,7 +419,7 @@ def test_AC_L1_10_settings_json_registration_additive_only():
     since P12 the group is the dispatch gate (hooks/pretool-dispatch-gate.py), which runs it as one
     refuse rule, beside the hooks that shared the group with it."""
     settings_path = Path(REPO_ROOT) / "settings.json"
-    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    data = _expanded(json.loads(settings_path.read_text(encoding="utf-8")))
     agent_groups = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Agent"]
     assert len(agent_groups) == 1
     commands = [h["command"] for h in agent_groups[0]["hooks"]]
@@ -1080,6 +1080,16 @@ def test_R17_a_refused_redispatch_has_not_returned(tmp_path):
     result = _order_run(home, project, steps, _stage("dev"))
     assert result.returncode == ORDER_EXIT
     assert "dispatch toolu_baqa2 (line" in result.stderr and "not returned" in result.stderr, result.stderr
+
+
+def _expanded(settings: dict) -> dict:
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    import importlib.util
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("_launch_settings", root / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(settings, str(root))
 
 
 # --------------------------------------------------------------------------

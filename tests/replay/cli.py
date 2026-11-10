@@ -77,7 +77,9 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
     label, spath = sandbox.settings_file(sb, mode, settings)
     host_home = os.path.realpath(os.environ.get("HOME", "/"))
     cfg = {"layout": lay.to_json(), "driver": driver, "settings_path": spath, "settings_label": label,
-           "env": env, "traced": traced, "parallel_hooks": parallel, "driver_args": driver_args or {}}
+           "env": env, "traced": traced, "parallel_hooks": parallel, "driver_args": driver_args or {},
+           # P12-L7's launch differential (launchdiff.py): every untraced replay, unless turned off
+           "launch_differential": not traced and os.environ.get("REPLAY_LAUNCH_DIFFERENTIAL", "1") != "0"}
     if mode == "scratch" and not traced:
         cfg["scan_outside"] = [d for d in ["/tmp", "/var/tmp", "/dev/shm", host_home] if os.path.isdir(d)]
         cfg["scan_skip"] = [os.path.abspath(out_dir)]

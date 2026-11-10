@@ -73,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from tests.replay import hookrun, landing, sites, suite
+from tests.replay import hookrun, landing, launchdiff, sites, suite
 
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
@@ -431,8 +431,10 @@ WAITS = (
 
 
 def _head_settings() -> dict:
+    """This tree's settings.json, each launcher read as the hooks it runs (hooks/lib/launch_settings.py):
+    a launcher runs each hook as its own registration ran it, so the registrations compared are the hooks'."""
     with open(os.path.join(suite.REPO, "settings.json")) as fh:
-        return json.load(fh)
+        return sites.expand_launchers(suite.REPO, json.load(fh))
 
 
 def _registrations(settings: dict) -> dict:
@@ -446,10 +448,16 @@ def _registrations(settings: dict) -> dict:
 
 
 def _differing(name: str) -> dict:
-    """(event, matcher) -> (the base's hooks, this tree's) of each registration that differs."""
+    """(event, matcher) -> (the base's hooks, this tree's) of each registration that differs. The CLI
+    starts an event's hooks together, so the same hooks (command and timeout) in another order are the
+    same registration: a launcher (hooks/lib/hook_launch.py) runs its hooks before the shell hooks
+    registered beside them."""
     base, head = _registrations(_base_settings(name)), _registrations(_head_settings())
+
+    def same(a, b):
+        return sorted(a or [], key=repr) == sorted(b or [], key=repr)
     return {k: ([hookrun.hook_name(c) for c, _ in base.get(k, [])], [hookrun.hook_name(c) for c, _ in head.get(k, [])])
-            for k in set(base) | set(head) if base.get(k) != head.get(k)}
+            for k in set(base) | set(head) if not same(base.get(k), head.get(k))}
 
 
 def _gaps(text: str) -> list[tuple[str, str | None]]:
@@ -491,7 +499,8 @@ def _hooklist(name: str, r: suite.Result) -> tuple[list, set, int]:
     for inv in suite._jsonl(os.path.join(r.run_dir, "invocations.jsonl")):
         if inv["seq"] <= land:
             continue
-        ran = [h["command"] for h in inv["hooks"]]
+        # a launcher's own entry stands for the hooks listed after it (replay.py _inv_hooks)
+        ran = [h["command"] for h in inv["hooks"] if launchdiff.launcher_rules(suite.REPO, h["hook"]) is None]
         want = [h["command"] for h in hookrun.select(head, inv["event"], inv["payload"])]
         if ran != want:
             bad.append({"step": inv["label"], "event": inv["event"], "ran": [hookrun.hook_name(c) for c in ran],

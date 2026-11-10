@@ -97,12 +97,27 @@ class GateRule:
 
 # ------------------------------------------------------------------ registration
 
+def expand_launchers(tree: str, settings: dict) -> dict:
+    """`settings` with each launcher (hooks/lib/hook_launch.py) read as the hooks it runs, as the
+    tree's hooks/lib/launch_settings.py expands it: a launcher runs each of its hooks as that hook
+    ran alone, and the replay's records name the hook, so its sites are the hook's own."""
+    path = os.path.join(tree, "hooks", "lib", "launch_settings.py")
+    if not os.path.isfile(path):
+        return settings
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_launch_settings", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(settings, os.path.abspath(tree))
+
+
 def registered(tree: str, settings: dict | None = None) -> dict[str, list[tuple[str, str]]]:
     """{hook file (repository-relative): [(event, matcher), ...]} from settings.json's hooks entries
-    (or those of `settings`, a hook list read elsewhere)."""
+    (or those of `settings`, a hook list read elsewhere), each launcher expanded into its hooks."""
     if settings is None:
         with open(os.path.join(tree, "settings.json")) as fh:
             settings = json.load(fh)
+    settings = expand_launchers(tree, settings)
     out: dict[str, list] = {}
     for event, groups in (settings.get("hooks") or {}).items():
         for g in groups:

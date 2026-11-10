@@ -312,9 +312,23 @@ def read_json(path):
 # ---------------------------------------------------------------------------
 # Shared derivations.
 # ---------------------------------------------------------------------------
+def expand_launchers(data, root):
+    """`data` with each launcher registration replaced by the hooks it runs; unchanged when the tree
+    has no hooks/lib/launch_settings.py."""
+    path = os.path.join(root, "hooks", "lib", "launch_settings.py")
+    if not isinstance(data, dict) or not os.path.isfile(path):
+        return data
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_launch_settings", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(data, root)
+
+
 def settings_triples(settings_path):
-    """Flatten settings.json to the (event_class, matcher, hook) triple set."""
-    data = read_json(settings_path)
+    """Flatten settings.json to the (event_class, matcher, hook) triple set, each launcher
+    (hooks/lib/hook_launch.py) read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    data = expand_launchers(read_json(settings_path), os.path.dirname(os.path.abspath(settings_path)))
     hooks = data.get("hooks")
     if not isinstance(hooks, dict) or not hooks:
         raise Fail(f"{settings_path}: 'hooks' missing or not a non-empty object")
