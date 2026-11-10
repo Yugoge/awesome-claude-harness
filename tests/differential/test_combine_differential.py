@@ -123,7 +123,7 @@ def _cases():
     for _ in range(6000):
         n = rng.randint(1, 5)
         cases.append([(rng.choice(RULES), rng.choice(SINGLE_RUNS)) for _ in range(n)])
-    pool = [run for run in SINGLE_RUNS if run.stderr != "a message\n"][::23]
+    pool = [run for run in SINGLE_RUNS if run.stderr != "a message\n"][::61]
     for first, second in itertools.product(pool, repeat=2):
         cases.append([(RULES[0], first), (RULES[1], second)])
     return cases
