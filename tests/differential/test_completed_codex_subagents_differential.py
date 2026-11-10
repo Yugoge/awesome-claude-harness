@@ -138,10 +138,16 @@ def _noise(rng, ms):
 def _scenario(rng: random.Random) -> list:
     """Coherent children (spawn, start, final, status), then up to two mutations."""
     events, ms = [], BASE_MS + rng.choice([0, 500, 1000])
-    children = rng.choice([1, 1, 2, 3])  # distinct identities; the mutations make them collide
-    for call_id, task, thread in zip(rng.sample(CALL_IDS, children), rng.sample(TASKS, children),
-                                     rng.sample(THREADS, children)):
-        path = rng.choice(PREFIXES[:2]) + task
+    children = rng.choice([1, 1, 2, 3])  # distinct identities, unless a collision is drawn
+    calls, tasks, threads = rng.sample(CALL_IDS, children), rng.sample(TASKS, children), rng.sample(THREADS, children)
+    prefixes = [rng.choice(PREFIXES[:2]) for _ in range(children)]
+    if children > 1 and rng.random() < 0.2:  # two children share a thread, or a task and its path
+        if rng.random() < 0.5:
+            threads[1] = threads[0]
+        else:
+            tasks[1], prefixes[1] = tasks[0], prefixes[0]
+    for call_id, task, thread, prefix in zip(calls, tasks, threads, prefixes):
+        path = prefix + task
         list_id = rng.choice(LIST_IDS)
         ms += rng.choice([100, 500, 1000])
         events.append(_spawn(rng, ms, call_id, task, noisy=False))
@@ -155,6 +161,13 @@ def _scenario(rng: random.Random) -> list:
         events.append(_list_output(rng, ms + rng.choice([0, 0, 100, -3000]), list_id,
                                    [path] if rng.random() < 0.85 else [path, "/root/other"],
                                    status="completed" if rng.random() < 0.95 else "running", noisy=False))
+    if rng.random() < 0.1:  # the first child starts again under another thread or path
+        start = copy.deepcopy(next(e for e in events if e["payload"]["type"] == "sub_agent_activity"))
+        if rng.random() < 0.5:
+            start["payload"]["agent_thread_id"] = "thread-restarted"
+        else:
+            start["payload"]["agent_path"] = "/elsewhere/" + start["payload"]["agent_path"].rsplit("/", 1)[-1]
+        events.insert(rng.randrange(len(events) + 1), start)
     for _ in range(rng.choice([0, 1, 1, 2])):
         _mutate(rng, events)
     return events
