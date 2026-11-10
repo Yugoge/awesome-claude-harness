@@ -30,7 +30,8 @@ event of A21's pipeline (each Stop under the pre-update hook list and under this
 PreToolUse TodoWrite, compliant and a 2-step skip, in the /dev cycle; a PreToolUse Read in each
 session) gives every hook the verdict, exit code and output it gives with no bookmark; no hook
 errs or prints a traceback; pretool-tool-policy.py and pretool-todo-validate.py accept the
-compliant TodoWrite and the skip stays refused by pretool-todo-validate.py (a stale last_todos
+compliant TodoWrite (each read from the hook that reports it under the list that runs the event: under
+this tree's, tool-policy is a rule of the write gate since P12, sites.reporter) and the skip stays refused by pretool-todo-validate.py (a stale last_todos
 neither blocks the compliant list nor admits the skip); A21's Stop outcomes hold as stated.
 """
 from __future__ import annotations
@@ -41,8 +42,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from tests.replay import hookrun
-from tests.replay.test_live_arming import (DO_ID, SID, SPANS, World, _blocked, _healthy, current_settings,
+from tests.replay import hookrun, sites
+from tests.replay.test_live_arming import (DO_ID, REPO, SID, SPANS, World, _blocked, _healthy, current_settings,
                                            pre_update_settings)
 
 SHAPES = ("none", "pre-P5", "pre-P1b, in step", "pre-P1b, sequence lock", "pre-P1b, count lock", "torn")
@@ -245,7 +246,10 @@ def test_a21_with_old_bookmarks_the_outcome_is_a21s(runs, shape):
             held = [h["hook"] for h in read["hooks"] if h["verdict"] == "block"]
             assert held == (["hooks/pretool-workflow-gate.py"] if name in ("do", "window") else []), \
                 (name, which, held, [h["stderr"][-300:] for h in read["hooks"] if h["verdict"] == "block"])
-        ok = {h["hook"]: h for h in events[f"TodoWrite dev compliant ({which})"]["hooks"] if h["hook"] in NAMED}
-        assert sorted(ok) == sorted(NAMED) and all(h["verdict"] == "ok" for h in ok.values()), ok
+        # the hooks that report NAMED's verdicts under the list `which` runs
+        named = [sites.reporter(str(REPO), h, pre_update_settings() if which == "pre-update" else current_settings())
+                 for h in NAMED]
+        ok = {h["hook"]: h for h in events[f"TodoWrite dev compliant ({which})"]["hooks"] if h["hook"] in named}
+        assert sorted(ok) == sorted(named) and all(h["verdict"] == "ok" for h in ok.values()), ok
         skip = {h["hook"]: h for h in events[f"TodoWrite dev 2-step skip ({which})"]["hooks"]}
         assert skip["hooks/pretool-todo-validate.py"]["verdict"] == "block", skip["hooks/pretool-todo-validate.py"]
