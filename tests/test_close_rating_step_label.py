@@ -17,7 +17,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CLOSE_MD = REPO / "commands" / "close.md"
@@ -46,8 +45,6 @@ def _gate():
     return module
 
 
-@pytest.mark.xfail(strict=True, reason="P4-3, lane L2: close.md:347's heading goes back to \"### Step 4\" "
-                                       "together with scripts/todo/close.py:19 and the gate's comments")
 def test_the_rating_step_is_step_4_in_close_md_close_py_and_the_gate():
     text = CLOSE_MD.read_text(encoding="utf-8")
     heading = f"### Step 4: {RATING}"

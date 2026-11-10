@@ -1,5 +1,5 @@
 """The owner's close rating (D9, D9a, D9b): the writer posttool-close-rating.py calls and the predicates P5's
-Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required asked, never
+Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required asked, never
 answered: nothing here blocks. Rows share the score scripts' log, lock and writer; they skip rows without ``agent``."""
 from __future__ import annotations
 

@@ -52,7 +52,7 @@ hooks/
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-│   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required as...
+│   ├── `close_rating.py` - Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required as...
 │   ├── `closeout.py` - CLI:
 │   ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 │   ├── `commit_journal.py` - WHY THIS EXISTS

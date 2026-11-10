@@ -39,7 +39,7 @@ dot-claude/
 │   ├── `allow.md` - Single-use break-glass for one operation a declared grant-aware safety hook refused; it never overrides a settings DENY. Forms — /allow <command...> (literal, regex only when it holds true regex metacharacters), /allow --tool <literal> (always literal), or /allow re:<anchored-regex>. Bare /allow is the owner-authorized match-all selector, still single-use; every explicit selector is refused when no narrow command is derivable. A literal selector matches a positional prefix of the argument tokens, and trailing tokens become a comment the grant notice echoes. TTL 300s, consumed on any terminal result.
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, discard tracked byproducts (old docs, one-time scripts and tests) with a recoverable git rm. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
-│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the disposition and completes an unfinished cycle; QA judges and returns CLOSE YES; Step 3b asks the user to rate the cycle. --codex adds a Codex review to QA's judgment (default is QA alone); --auto closes every close_pending parent; --force is accepted and ignored.
+│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the disposition and completes an unfinished cycle; QA judges and returns CLOSE YES; Step 4 asks the user to rate the cycle. --codex adds a Codex review to QA's judgment (default is QA alone); --auto closes every close_pending parent; --force is accepted and ignored.
 │   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 │   ├── `commit.md` - Commit session changes via changelog-analyst subagent
 │   ├── `dev-command.md` - /dev for developing a slash command, a subagent or another .claude file; the /dev workflow with the differences in this file (its own 16 steps, a singular cycle)
@@ -132,7 +132,7 @@ dot-claude/
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-│   │   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required as...
+│   │   ├── `close_rating.py` - Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required as...
 │   │   ├── `closeout.py` - CLI:
 │   │   ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 │   │   ├── `commit_journal.py` - WHY THIS EXISTS

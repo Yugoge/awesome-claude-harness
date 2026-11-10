@@ -105,7 +105,7 @@ def disposition(root, task: str, stage: str) -> list[str]:
 
 
 # ---------------------------------------------------------------- the text the span loaded (D15)
-# The source of the /close Step 3b question (lib/close_rating.py SOURCE_RE), as a text that asks it names it.
+# The source of the /close Step 4 question (lib/close_rating.py SOURCE_RE), as a text that asks it names it.
 RATING_SOURCE = "close-rating:"
 _STEP_LABEL_RE = re.compile(r"Step ([0-9A-Za-z]+):")
 
@@ -141,8 +141,8 @@ def _loaded_lacks(span):
 
 
 def _step_heading(todo) -> str | None:
-    """The pattern of the heading line of a todo step's section (`### Step 3b: ...` for
-    "Step 3b: ..."), None for a step its content labels otherwise."""
+    """The pattern of the heading line of a todo step's section (`### Step 4: ...` for
+    "Step 4: ..."), None for a step its content labels otherwise."""
     found = _STEP_LABEL_RE.match(str(todo.get("content") or ""))
     return rf"^#+[ \t]+Step[ \t]+{re.escape(found.group(1))}(?![0-9A-Za-z]).*$" if found else None
 

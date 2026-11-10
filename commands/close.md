@@ -1,12 +1,12 @@
 ---
-description: Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the disposition and completes an unfinished cycle; QA judges and returns CLOSE YES; Step 3b asks the user to rate the cycle. --codex adds a Codex review to QA's judgment (default is QA alone); --auto closes every close_pending parent; --force is accepted and ignored.
+description: Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the disposition and completes an unfinished cycle; QA judges and returns CLOSE YES; Step 4 asks the user to rate the cycle. --codex adds a Codex review to QA's judgment (default is QA alone); --auto closes every close_pending parent; --force is accepted and ignored.
 argument-hint: "[--codex | --auto | --late-repair] [<task-id>|<path>]"
 disable-model-invocation: true
 ---
 
 # /close
 
-Five TodoSteps (`scripts/todo/close.py`): Step 0 resolves the disposition and completes an unfinished cycle; Step 1 dispatches three inspectors; Step 2 delegates the close judgment to QA; Step 3 echoes the verdict and names the next step; Step 3b asks the user to rate each landed cycle. Argument parsing and task-id resolution are part of this body, not TodoSteps.
+Five TodoSteps (`scripts/todo/close.py`): Step 0 resolves the disposition and completes an unfinished cycle; Step 1 dispatches three inspectors; Step 2 delegates the close judgment to QA; Step 3 echoes the verdict and names the next step; Step 4 asks the user to rate each landed cycle. Argument parsing and task-id resolution are part of this body, not TodoSteps.
 
 `/close` dispatches, routes and echoes. It does not call Codex and does not decide the verdict: QA does, inside its own invocation.
 
@@ -196,7 +196,7 @@ TRANSCRIPT. Write the full judgment to `docs/dev/close-report-<TASK_ID>.md` (the
 - `## Disclosures` (whenever routing completed a repair this cycle): one line per line of the dispatch's `Completed repairs` input, in the format `path: problem | 归因: role(lane) | 修复: fix evidence` (the labels stay in Chinese; no code prefix). The `<n>` of `CLOSE: YES - with disclosures: <n> items` equals the number of these lines. Omit the section when no repair was completed.
 The LAST non-empty line of the file is exactly this attempt's verdict line (Return value), with no `Verdict:` or other label before it: `hooks/lib/close-verdict.py` reads that line and requires it to start with `CLOSE: `, and `/commit`'s admission check depends on it. A round-open section is appended like any other.
 
-OVERWRITE POLICY. If `docs/dev/close-report-<TASK_ID>.md` already holds a `CLOSE:` line (an earlier attempt), never overwrite it: keep its bytes and append a fresh section dated by ISO timestamp, whose last non-empty line is exactly this attempt's own verdict line. Write the new section's full text to a temp file and append it with absolute paths rooted at `<PROJECT_ROOT>`, so the append can never reach another project's `docs/dev`: `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/close-report-append.py" --report-path "<PROJECT_ROOT>/docs/dev/close-report-<task-id>.md" --section-file "<absolute-temp-section-path>" --task-id "<task-id>"`. The helper appends atomically, reads back and verifies, and never changes an existing byte. On exit 0 its stdout is one JSON line `{"status":"ok","report_path":...,"verdict_line":...}`: check `status == "ok"` and use `verdict_line` (not the raw JSON) as your Return value. On a non-zero exit its stdout is the sentinel line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` (or `CLOSE_REPORT_APPEND_CRITICAL: ...`): return that exact line. Any other stdout shape is a verification failure: fail closed, never guess a verdict. A failure is never a reason to take the earlier attempt's verdict as this attempt's: the sentinel is this attempt's not-landed signal, and `/close` runs no Step 3 or Step 3b for it. A defective section text is a finding on the report, and this QA dispatch runs again (Routes).
+OVERWRITE POLICY. If `docs/dev/close-report-<TASK_ID>.md` already holds a `CLOSE:` line (an earlier attempt), never overwrite it: keep its bytes and append a fresh section dated by ISO timestamp, whose last non-empty line is exactly this attempt's own verdict line. Write the new section's full text to a temp file and append it with absolute paths rooted at `<PROJECT_ROOT>`, so the append can never reach another project's `docs/dev`: `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/close-report-append.py" --report-path "<PROJECT_ROOT>/docs/dev/close-report-<task-id>.md" --section-file "<absolute-temp-section-path>" --task-id "<task-id>"`. The helper appends atomically, reads back and verifies, and never changes an existing byte. On exit 0 its stdout is one JSON line `{"status":"ok","report_path":...,"verdict_line":...}`: check `status == "ok"` and use `verdict_line` (not the raw JSON) as your Return value. On a non-zero exit its stdout is the sentinel line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` (or `CLOSE_REPORT_APPEND_CRITICAL: ...`): return that exact line. Any other stdout shape is a verification failure: fail closed, never guess a verdict. A failure is never a reason to take the earlier attempt's verdict as this attempt's: the sentinel is this attempt's not-landed signal, and `/close` runs no Step 3 or Step 4 for it. A defective section text is a finding on the report, and this QA dispatch runs again (Routes).
 
 RETURN VALUE. Your response ends with the verdict line your branch names (`CLOSE: YES - with disclosures: <n> items` replaces it once every finding the cycle routed was fixed and re-judged clean), or with `CLOSE_FINDINGS: <n> items` (NON-LANDING), or with the append sentinel above. Your obligation's `terminal_line_regex` declares the legal set; every reader classifies the last non-empty line through `hooks/lib/close-verdict.py`: a landed form reads `yes`, the round-open line `no`, anything else `unknown` (fail closed).
 ```
@@ -206,15 +206,15 @@ RETURN VALUE. Your response ends with the verdict line your branch names (`CLOSE
 Echo the final line QA returned in the orchestrator's text message. QA wrote the close-report in Step 2; make sure `docs/dev/close-report-<task-id>.md` exists.
 
 - **Round-open** (`CLOSE_FINDINGS: <n> items`, or a `CLOSE_REPORT_APPEND_` line): route each finding (Routes), run Step 0's call again, then a fresh close-QA round (Step 2). A cause in the environment that persists (no space left, a read-only filesystem) is one owner question naming it (header `Append`), whose options are the remedies for that cause, each followed by the next round. Nothing below runs for a round-open echo.
-- **Landed** (`CLOSE: YES*`, any suffix): the Session Summary, the next step, then Step 3b.
+- **Landed** (`CLOSE: YES*`, any suffix): the Session Summary, the next step, then Step 4.
 
-The close-report FILE ends with exactly the verdict line (Step 2); the message holds the `CLOSE:` echo and, landed only, the Session Summary and the next step. Step 3b's question is a tool call, in no output channel of the close-report.
+The close-report FILE ends with exactly the verdict line (Step 2); the message holds the `CLOSE:` echo and, landed only, the Session Summary and the next step. Step 4's question is a tool call, in no output channel of the close-report.
 
 **Session Summary** (landed only, before the rating question): a `## Session Summary` section in your text output, chronological, within 20 lines including the heading, six buckets, each bullet one sentence (a verbatim user quote counts as the sentence): **Accomplished**; **Not accomplished** (gaps, deferred items, out-of-scope decisions); **User needs satisfied**; **User needs not satisfied**; **Bugs encountered** (omit or "none"); **Improvement opportunities** (technical debt, UX gaps, the close report's follow-up list). Sources: the canonical report and every lane report `ARTIFACT_CHAIN.report_paths` / `qa_inputs` name (the do-report for `/do`), `docs/dev/user-requirement-<SESSION_ID>.md` (primary for the user-needs buckets) and `docs/dev/close-report-<task-id>.md`. Assume no parent QA-report in fan-out mode, and improvise no outcome the artifacts do not hold.
 
 **Next step**: `/commit <task-id> -m "<real session summary>"`.
 
-### Step 3b: Ask the user to rate each landed cycle
+### Step 4: Ask the user to rate each landed cycle
 
 After a landed `CLOSE: YES*` (any suffix), its Session Summary and its next step, make one AskUserQuestion call:
 
@@ -235,11 +235,11 @@ After a landed `CLOSE: YES*` (any suffix), its Session Summary and its next step
 }
 ```
 
-The dialog adds its own Skip control and free-text box; no other option is added. The question is asked, not answered: Skip, no answer or a denial is a complete Step 3b. The orchestrator does nothing with the answer — no parse, no echo, no score, log or script call; the PostToolUse hook that sees the call records it. One question per landed cycle (under `--auto`, one per landed parent, each with its own source). A round-open or `OPERATION_STALLED:` run asks nothing.
+The dialog adds its own Skip control and free-text box; no other option is added. The question is asked, not answered: Skip, no answer or a denial is a complete Step 4. The orchestrator does nothing with the answer — no parse, no echo, no score, log or script call; the PostToolUse hook that sees the call records it. One question per landed cycle (under `--auto`, one per landed parent, each with its own source). A round-open or `OPERATION_STALLED:` run asks nothing.
 
 ## `--auto` mode: close every close_pending parent
 
-`--auto` closes every `close_pending` PARENT through the same unmodified Step 0 to Step 3b an explicit `/close <task-id>` runs. It is distinct from the human-only `--bulk` of `commands/commit.md`: it walks every parent THROUGH the close gate, never around it.
+`--auto` closes every `close_pending` PARENT through the same unmodified Step 0 to Step 4 an explicit `/close <task-id>` runs. It is distinct from the human-only `--bulk` of `commands/commit.md`: it walks every parent THROUGH the close gate, never around it.
 
 1. **Discover** the parents once, at the start (a parent discovered later is not added to the running batch):
 
@@ -249,7 +249,7 @@ The dialog adds its own Skip control and free-text box; no other option is added
 
    Each stdout line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here. A task with a gap no dispatch record or todo step owes is not listed (`/close <task-id>` takes it): its `<task-id>: skipped: <reason>` line is on stderr.
 
-2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 binds `TASK_ID` to the parent as Task-id resolution binds a timestamp argument (a `/do` parent's `DO_REPORT` included) and makes its own disposition call; Step 2 runs each parent's close judgment until it lands; Step 3b asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
+2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 binds `TASK_ID` to the parent as Task-id resolution binds a timestamp argument (a `/do` parent's `DO_REPORT` included) and makes its own disposition call; Step 2 runs each parent's close judgment until it lands; Step 4 asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
 
 3. **An owner decision** a parent meets — a hook rejection (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) or a genuine choice — is one owner question naming the parent and the decision (header `Authorize` for a hook rejection: the rejected operation, the exact command the human may authorize, and declining it under Hook Discipline #4). The parent then goes on to its landed verdict; no parent is recorded and passed over.
 

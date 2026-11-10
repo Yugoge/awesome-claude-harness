@@ -2148,7 +2148,7 @@ def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loa
     master's text, this tree's hooks, which hand it this tree's five-step list) and whose close QA
     landed. Its text words Steps 1 and 2 as this tree's does, Step 0 and Step 3 otherwise, has no Step
     3b and asks no rating question: following its three TodoSteps it completes Steps 0-2 of this list
-    (one completion per step of its text), or 0-3, and neither Step 3, Step 3b nor the rating is asked
+    (one completion per step of its text), or 0-3, and neither Step 3, Step 4 nor the rating is asked
     of it. The same span on this tree's own close.md, or with no recorded text, is held exactly as
     before: every open step and the rating question."""
     chain_on_disk(real.project, close="CLOSE: YES")
@@ -2157,7 +2157,7 @@ def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loa
     assert body is None or ("### Step 1: Agent dispatch" in body and "### Step 2: Delegate close debate" in body)
     real.tx.command("close", FAMILY, body=body)
     steps = canonical("close", FAMILY)
-    assert [s["content"].split(":")[0] for s in steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 3b"]
+    assert [s["content"].split(":")[0] for s in steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 4"]
     real.tx.todos(steps, done)
     real.tx.dispatch(FAMILY, role="qa", pipeline="close", result="Judged.\nCLOSE: YES")
     got, text = run(real)
@@ -2172,7 +2172,7 @@ def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loa
 @pytest.mark.parametrize("done", [1, 2])
 def test_d15_real_an_in_flight_close_keeps_every_step_its_text_has(real, done):
     """Master's close.md words Steps 1 and 2 as this tree's does: each of them left open still holds
-    the in-flight /close, and only they are named (Steps 3 and 3b, which its text words otherwise or
+    the in-flight /close, and only they are named (Steps 3 and 4, which its text words otherwise or
     not at all, are not asked)."""
     chain_on_disk(real.project, close="CLOSE: YES")
     real.tx.command("close", FAMILY, body=loaded_text("close", FAMILY, MASTER))
