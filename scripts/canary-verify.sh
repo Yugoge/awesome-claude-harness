@@ -8,7 +8,7 @@
 #   - Advisory:    stderr message but exit 0 (stdout-polluting prerequisite hooks
 #                  such as session-info.sh / session-git-init.sh — declared
 #                  Won't Have for this cycle; documented in spec §5.5)
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../hooks/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../hooks/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -uo pipefail
 

@@ -13,7 +13,7 @@
 # only the human could end that state. The other half of its old advice,
 # `git branch -D`, is an agent-forbidden ref deletion (pretool-bash-safety.sh,
 # pretool-git-privilege-guard.py), so branch deletion is now left to the user.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -euo pipefail
 # Exit 2 is Claude Code's block code. Every way out of this hook, an unexpected

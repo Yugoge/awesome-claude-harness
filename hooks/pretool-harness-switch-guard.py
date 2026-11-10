@@ -43,7 +43,6 @@ GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "c
                  "grep", "rev-parse", "stash"}
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
-SEGMENT = re.compile(r"\|\||&&|[;|&\n]")
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 
 
@@ -83,11 +82,33 @@ def _in_harness_checkout(path: str) -> bool:
         d = parent
 
 
-def _words(segment: str) -> list:
-    try:
-        return shlex.split(segment, comments=False)
-    except ValueError:
-        return segment.split()
+def _segments(command: str, depth: int = 0) -> list:
+    """The simple commands of `command` as word lists, quotes respected; a word that is itself a
+    command (bash -c "...", sh -c, eval) is read as its own commands too."""
+    out = []
+    for line in command.splitlines() or [""]:
+        try:
+            lex = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+            lex.whitespace_split = True
+            tokens = list(lex)
+        except ValueError:
+            tokens = line.split()
+        current = []
+        for token in tokens:
+            if token and set(token) <= set(";&|"):
+                if current:
+                    out.append(current)
+                current = []
+            else:
+                current.append(token)
+        if current:
+            out.append(current)
+    if depth < 3:
+        for words in list(out):
+            for word in words:
+                if any(c in word for c in " ;|&\n"):
+                    out.extend(_segments(word, depth + 1))
+    return out
 
 
 def _read_only(words: list) -> bool:
@@ -106,11 +127,8 @@ def check_bash(command: str, cwd: str) -> int:
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
     settings = _settings_files()
-    for segment in SEGMENT.split(command):
-        words = _words(segment)
-        if not words:
-            continue
-        writes = bool(WRITES.search(segment)) or not _read_only(words)
+    for words in _segments(command):
+        writes = bool(WRITES.search(" ".join(words))) or not _read_only(words)
         for word in words:
             token = word.split("=", 1)[-1]
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):

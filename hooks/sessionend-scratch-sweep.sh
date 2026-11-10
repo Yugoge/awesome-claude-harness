@@ -17,7 +17,7 @@
 #
 # Never touches a sibling session's files — only ever resolves and acts on
 # paths named by its own sid. Non-blocking: best-effort, exits 0 unconditionally.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
 # Silent: the CLI discards what a SessionEnd hook prints (code.claude.com/docs/en/hooks,

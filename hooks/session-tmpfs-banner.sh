@@ -8,7 +8,7 @@
 #
 # Non-blocking: exits 0 unconditionally regardless of df failures.
 # `df` is invoked via PATH lookup (bare `df`) per project convention.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
 

@@ -11,7 +11,7 @@
 #
 # Input example:
 #   {"session_id":"abc-...","cwd":"/some/home",...}
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 # Do NOT use `set -e` here: the hook must never fail Claude Code startup.
 

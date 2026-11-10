@@ -3,7 +3,7 @@
 # A SessionStart hook's plain-text stdout is added to the model's context
 # (code.claude.com/docs/en/hooks, "SessionStart"); only a JSON object on stdout is parsed as
 # control. Stderr on exit 0 reaches no one, which is where this banner used to go.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 echo "Session info:"
 echo "  Dir: $(pwd)"
