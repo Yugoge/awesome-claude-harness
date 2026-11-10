@@ -82,12 +82,23 @@ WATCHDOG_HOOKS = {
 }
 
 
+def _expanded(settings):
+    """`settings` with each launcher (hooks/lib/hook_launch.py) read as the hooks it runs
+    (hooks/lib/launch_settings.py): a launcher runs the watchdog as its own registration did."""
+    launch = _load("_launch_settings", ROOT / "hooks" / "lib" / "launch_settings.py")
+    return launch.expand(settings, str(ROOT))
+
+
 def _watchdog_groups(settings, event):
     script = WATCHDOG_HOOKS[event]
     return [
-        group for group in settings["hooks"][event]
+        group for group in _expanded(settings)["hooks"][event]
         if any(script in hook.get("command", "") for hook in group.get("hooks", []))
     ]
+
+
+def _alternatives(groups):
+    return sorted(alt for group in groups for alt in group.get("matcher", "").split("|"))
 
 
 def _git(*args):
@@ -145,10 +156,11 @@ def test_paseo_module_render_adds_the_paseo_alternative(tmp_path):
     rendered = _smudge(tmp_path, {"modules": {"paseo": True}})
     assert {"mcp__playwright__*", "mcp__paseo__*"} <= set(rendered["permissions"]["allow"])
     for event in WATCHDOG_HOOKS:
+        # The clean form's watchdog is a rule of its event's launcher; the module adds its alias as
+        # a group of its own. Each alias runs the watchdog exactly once, and no other tool does.
         groups = _watchdog_groups(rendered, event)
-        assert len(groups) == 1, (event, groups)
-        assert groups[0].get("matcher") == f"{PLAYWRIGHT_MATCHER}|{PASEO_MATCHER}"
-        assert len(groups[0]["hooks"]) == 1
+        assert _alternatives(groups) == sorted([PLAYWRIGHT_MATCHER, PASEO_MATCHER]), (event, groups)
+        assert all(len(group["hooks"]) == 1 for group in groups), (event, groups)
 
 
 def test_render_without_the_paseo_module_keeps_the_clean_matchers(tmp_path):
