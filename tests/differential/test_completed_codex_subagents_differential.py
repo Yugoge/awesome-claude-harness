@@ -42,7 +42,7 @@ LEGACY = _load("completed_codex_subagents_legacy", Path(__file__).with_name("com
 CALL_IDS = ["call-a", "call-b", "call-c"]
 LIST_IDS = ["list-1", "list-2"]
 TASKS = ["qa_lane", "dev_lane", "baqa_x"]
-PREFIXES = ["/root/", "/root/sub/", "/other/"]
+PREFIXES = ["/agents/", "/agents/sub/", "/other/"]
 THREADS = ["thread-1", "thread-2", "thread-3"]
 FINAL = "Message Type: FINAL_ANSWER\nPayload:\n"
 BODIES = [
@@ -112,7 +112,7 @@ def _list_output(rng, ms, call_id, paths, status="completed", noisy=True):
     elif roll < 0.85:
         output = rng.choice(["{not json", json.dumps([1]), json.dumps({"agents": "x"}), 5,
                              json.dumps({"agents": [3, {"agent_name": 4, "agent_status": {}},
-                                                    {"agent_name": "/root/qa_lane", "agent_status": "completed"}]})])
+                                                    {"agent_name": "/agents/qa_lane", "agent_status": "completed"}]})])
     return _event(rng, ms, "response_item", {"type": "function_call_output", "call_id": call_id, "output": output},
                   noisy)
 
@@ -127,9 +127,9 @@ def _noise(rng, ms):
         _event(rng, ms, "response_item", {"type": "function_call", "namespace": "collaboration", "name": "send_input",
                                           "call_id": "call-z"}),
         _event(rng, ms, "event_msg", {"type": "sub_agent_activity", "event_id": "call-a", "kind": "completed",
-                                      "agent_path": "/root/qa_lane", "agent_thread_id": "thread-1",
+                                      "agent_path": "/agents/qa_lane", "agent_thread_id": "thread-1",
                                       "occurred_at_ms": ms}),
-        _event(rng, ms, "session_event", {"type": "agent_message", "author": "/root/qa_lane"}),
+        _event(rng, ms, "session_event", {"type": "agent_message", "author": "/agents/qa_lane"}),
         [1, 2, 3],
         "a JSON string line",
     ])
@@ -159,7 +159,7 @@ def _scenario(rng: random.Random) -> list:
         ms += rng.choice([0, 1000, 2000])
         events.append(_list_call(rng, ms, list_id, noisy=False))
         events.append(_list_output(rng, ms + rng.choice([0, 0, 100, -3000]), list_id,
-                                   [path] if rng.random() < 0.85 else [path, "/root/other"],
+                                   [path] if rng.random() < 0.85 else [path, "/agents/other"],
                                    status="completed" if rng.random() < 0.95 else "running", noisy=False))
     if rng.random() < 0.1:  # the first child starts again under another thread or path
         start = copy.deepcopy(next(e for e in events if e["payload"]["type"] == "sub_agent_activity"))
@@ -192,7 +192,7 @@ def _mutate(rng: random.Random, events: list) -> None:
         if kind == 4:
             del payload[key]
         elif kind == 5:
-            payload[key] = rng.choice([None, 0, True, "", " ", [], {}, "call-b", "thread-2", "/root/dev_lane",
+            payload[key] = rng.choice([None, 0, True, "", " ", [], {}, "call-b", "thread-2", "/agents/dev_lane",
                                        BASE_MS + 9000, BASE_MS - 9000, 1.5])
         elif kind == 6:
             events[at]["timestamp"] = rng.choice([_iso(BASE_MS - 5000), _iso(BASE_MS + 20000), None, "bad"])
@@ -225,7 +225,7 @@ def _soup(rng: random.Random) -> list:
             events.append(_list_call(rng, ms, rng.choice(LIST_IDS + ["", None, 9])))
         elif roll == 4:
             cid = rng.choice(LIST_IDS + [call_id])
-            events.append(_list_output(rng, ms, cid, rng.sample(sorted({path, "/root/qa_lane", "/root/sub/dev_lane"}),
+            events.append(_list_output(rng, ms, cid, rng.sample(sorted({path, "/agents/qa_lane", "/agents/sub/dev_lane"}),
                                                                 rng.randrange(0, 3))))
         else:
             events.append(_noise(rng, ms))
