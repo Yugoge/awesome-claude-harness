@@ -47,10 +47,14 @@ import threading
 
 import pytest
 
-from tests.replay import suite
+from tests.replay import sites, suite
 
 OLD = "a7d3a9fec736c0e64b5a822ba5da788d4f178bda"
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
+# The hook that reports G2's refusal under each settings file: G2 itself under the base's list (kept),
+# the merged gate that runs it as a rule under this tree's (landed: hooks/subagentstop-producer-gate.py
+# since P12, sites.reporter).
+G2_REPORTER = {"kept": G2, "landed": sites.reporter(suite.REPO, G2)}
 LAND = "after:/do Stop"
 SETTINGS = ("kept", "landed")
 WRITES = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -137,7 +141,7 @@ def _final(uses: list, suffix: str) -> dict:
     return json.loads(text) if text else {}
 
 
-def _verdict(case: str, r: suite.Result) -> list[str]:
+def _verdict(case: str, r: suite.Result, settings: str) -> list[str]:
     bad = []
     if r.error:
         return [r.error]
@@ -197,10 +201,11 @@ def _verdict(case: str, r: suite.Result) -> list[str]:
     if r.connections:
         bad.append(f"{r.connections} network attempt(s)")
     blocks = [(b["hook"], b["step"]) for b in r.blocks]
-    want = [(G2, "/close Step 0 round 1 Agent(dev) stop")] if case == "g2" else []
+    g2 = G2_REPORTER[settings]
+    want = [(g2, "/close Step 0 round 1 Agent(dev) stop")] if case == "g2" else []
     if blocks != want:
         bad.append(f"blocks {blocks}, expected {want}")
-    if case == "g2" and not any(f.get("key") == "routed dev stop blocked" and G2 in f["value"].get("hooks", [])
+    if case == "g2" and not any(f.get("key") == "routed dev stop blocked" and g2 in f["value"].get("hooks", [])
                                 for f in r.facts):
         bad.append("G2 did not refuse the routed dev's first stop")
     return bad
@@ -211,7 +216,7 @@ def _verdict(case: str, r: suite.Result) -> list[str]:
                                   for c in CASES])
 def test_inflight_blocked_do_report_lands_through_dev(request, tmp_path_factory, case, settings):
     r = _results(request, tmp_path_factory, case)[settings]
-    bad = _verdict(case, r)
+    bad = _verdict(case, r, settings)
     assert not bad, f"{case} ({settings} settings), {r.out}:\n  " + "\n  ".join(bad) + "\n" + r.explain()
 
 
