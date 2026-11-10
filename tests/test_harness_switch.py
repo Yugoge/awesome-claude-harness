@@ -273,6 +273,24 @@ def test_a_cut_switch_is_named_by_status_and_repaired_by_the_next_switch(home, c
     assert home.status().returncode == 0
 
 
+def test_a_hidden_file_with_local_changes_is_named_and_hidden_by_the_next_off(home):
+    dev = home.path / "commands" / "dev.md"
+    original = dev.read_text()
+    dev.write_text(original + "\nlocal edit\n")
+    home.switch("off")
+    assert dev.exists()
+    status = home.status()
+    assert status.returncode == 4 and "commands/dev.md" in status.stdout and "partial off" in status.stdout
+    since = json.loads((home.path / ".harness-switch" / "state.json").read_text())["since"]
+    assert home.hook("hooks/pretool-bash-safety.sh", REFUSED).returncode == 0  # the hooks are off all the same
+    dev.write_text(original)
+    home.switch("off")
+    assert not dev.exists() and home.status().returncode == 3
+    assert json.loads((home.path / ".harness-switch" / "state.json").read_text())["since"] == since
+    before_on = home.switch("on")
+    assert before_on.returncode == 0 and dev.read_text() == original and home.status().returncode == 0
+
+
 # ------------------------------------------------------------------------------- owner only
 
 AGENT_PATHS = {

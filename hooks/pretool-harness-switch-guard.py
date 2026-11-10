@@ -9,7 +9,7 @@ subagent, each other path by which an agent call could switch the harness or fak
                         disable-model-invocation say the same)
   Bash                  running scripts/harness-switch or the switch hook; touching the switch's
                         state <H>/.harness-switch/ other than reading it; typing `/harness on|off`
-                        into a command (a nested Claude Code session); writing the home's
+                        into a Claude Code session the command starts; writing the home's
                         settings files (settings.json, settings.machine.json, settings.local.json)
   Write / Edit / MultiEdit / NotebookEdit
                         a file under <H>/.harness-switch/; the home's settings files; any
@@ -41,6 +41,7 @@ READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "r
              "readlink", "basename", "dirname", "find"}
 GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
                  "grep", "rev-parse", "stash"}
+NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 SEGMENT = re.compile(r"\|\||&&|[;|&\n]")
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
@@ -101,8 +102,9 @@ def _read_only(words: list) -> bool:
 
 
 def check_bash(command: str, cwd: str) -> int:
-    if TYPED.search(command):
-        return refuse("this Bash command types /harness, which would reach the switch as a prompt")
+    if TYPED.search(command) and NESTED.search(command):
+        return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
+                      "the switch as a prompt")
     settings = _settings_files()
     for segment in SEGMENT.split(command):
         words = _words(segment)

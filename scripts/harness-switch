@@ -403,9 +403,11 @@ def run_off(journal, ctx, report):
         write_atomic(MARKER, (journal["started"] + "\n").encode("utf-8"), 0o644)
         journal_step(journal, "marker")
     if "state" not in done:
-        state.update(mode="off", since=journal["started"], last_off_at=journal["started"],
-                     session_id=ctx.get("session_id"), home=HOME)
-        record_history(state, "off", journal["started"])
+        if not (journal.get("repair") and state.get("mode") == "off"):
+            state.update(mode="off", since=journal["started"], last_off_at=journal["started"],
+                         session_id=ctx.get("session_id"))
+            record_history(state, "off", journal["started"])
+        state["home"] = HOME
         write_json(STATE, state)
         journal_step(journal, "state")
     if "settings" not in done:
@@ -433,8 +435,10 @@ def run_on(journal, ctx, report):
         remove(MARKER)
         journal_step(journal, "marker")
     if "state" not in done:
-        state.update(mode="on", since=journal["started"], session_id=ctx.get("session_id"), home=HOME)
-        record_history(state, "on", journal["started"])
+        if not (journal.get("repair") and state.get("mode") == "on"):
+            state.update(mode="on", since=journal["started"], session_id=ctx.get("session_id"))
+            record_history(state, "on", journal["started"])
+        state["home"] = HOME
         state.pop("partial", None)
         write_json(STATE, state)
         journal_step(journal, "state")
@@ -472,7 +476,8 @@ def switch(verb, ctx):
         if mode == verb and not inconsistencies():
             notes.append("the harness was already %s; nothing changed" % verb)
             return notes
-        journal = {"op": verb, "started": now(), "done": [], "session_id": ctx.get("session_id")}
+        journal = {"op": verb, "started": now(), "done": [], "session_id": ctx.get("session_id"),
+                   "repair": mode == verb}  # a repair keeps the switch's time
         write_json(JOURNAL, journal)
         report = []
         RUNNERS[verb](journal, ctx, report)
