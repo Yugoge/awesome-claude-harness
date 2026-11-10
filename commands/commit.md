@@ -338,7 +338,9 @@ review each that is non-empty:
 Judge by intelligent review — NEVER a hardcoded junk list. REJECT the commit if any of:
   1. Transient / non-authored byproducts (runtime/session state, caches, registries,
      scratch/temp outputs, generated indexes, build products) — by what the file IS,
-     regardless of which folder it sits in.
+     regardless of which folder it sits in. The task's own cycle records (its `docs/dev/`
+     reports and requirement document, its `tests/generated/<task>/manifest.json`) are
+     deliverables of the cycle, not byproducts.
   2. Secrets / sensitive content (credentials, keys, tokens, .env material).
   3. Scope contamination — files unrelated to TASK_ID (BULK=false); or, WITHIN ONE proposed
      group, files belonging to two different task-ids / unrelated subsystems (BULK=true).
@@ -403,8 +405,10 @@ real-commit path keeps the grant: Step 7 consumes it.
        prompt) that re-judges the actual changes against HEAD. A further `COMMIT: REJECT` repeats
        this routing; the loop ends on `COMMIT: APPROVE`, with no round cap.
 - `COMMIT: APPROVE`:
-  - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo): the commit
-    ceiling Step 7 must not exceed (TOCTOU guard).
+  - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo), plus, when
+    `BULK=false`, this round's `docs/dev/commit-qa-report-<TASK_ID>.md` in the control root's
+    repository (the review's record, committed with what it approved, never left untracked): the
+    commit ceiling Step 7 must not exceed (TOCTOU guard).
   - With `--dry-run` (`DRYRUN=true`): print the plan and `QA: APPROVE`, unstage the dry-run-staged
     set (as in the REJECT branch), revoke the grant, and end the invocation with the preview
     delivered: the requested end state; no real commit.

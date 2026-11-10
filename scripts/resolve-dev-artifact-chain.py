@@ -422,6 +422,21 @@ def _parent_paths(dev_dir: Path, task_id: str) -> dict[str, Path]:
     }
 
 
+def _cycle_records(root: Path, dev_dir: Path, units: list[str]) -> list[str]:
+    """The cycle's records outside the chain that /commit ships with it, those on disk: the
+    user-requirement document hooks/prompt-workflow.py wrote under the cycle's registry name
+    (``dev-<ts>`` or ``dev-command-<ts>``), and for the parent and each lane the BA-QA report, the
+    test-writer report and the generated tests' manifest. Each has a reader after its producer (/close,
+    a later test-writer run), so it is committed with the cycle, never deleted or excluded (P10 R8
+    rules 2 and 3). None is a chain member, so a missing one is no gap."""
+    parent = units[0]
+    paths = [dev_dir / f"user-requirement-{prefix}{parent}.md" for prefix in ("dev-", "dev-command-", "")]
+    for unit in units:
+        paths += [dev_dir / f"ba-qa-report-{unit}.json", dev_dir / f"test-writer-report-{unit}.json",
+                  root / "tests" / "generated" / unit / "manifest.json"]
+    return [_rel(path, root) for path in paths if path.is_file()]
+
+
 def _find_undeclared_lane_artifacts(
     validator: ChainValidator, workers: list[str], aggregate: ModuleType | None
 ) -> None:
@@ -1422,6 +1437,11 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             {"task_id": task_id, "qa_report": _rel(parents["qa_report"], root)}
         ]
 
+    if result["mode"] in ("singular", "fanout"):
+        units = [task_id] + [lane["task_id"] for lane in result["lanes"]]
+        result["commit_whitelist_artifacts"] = (
+            list(result["commit_whitelist_artifacts"]) + _cycle_records(root, dev_dir, units)
+        )
     result["parallel_workers"] = workers
     result["errors"] = validator.errors
     result["status"] = "fail" if validator.errors else "pass"

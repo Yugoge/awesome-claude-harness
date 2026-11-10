@@ -107,11 +107,13 @@ The candidate set is restricted to a **staging whitelist** consisting of:
 4. Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`: for `mode == "singular"` the
    parent ticket/context/dev/QA/completion set; for `mode == "fanout"` every
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
-   canonical/completion. Do not glob lane suffixes or create pseudo-parent
-   artifacts. Late repair adds one: when `REPOSITORY_PLAN.report_path` is
+   canonical/completion. Either mode adds the cycle's records the resolver finds on disk: the
+   user-requirement document and, for the parent and each lane, the BA-QA report, the
+   test-writer report and `tests/generated/<id>/manifest.json`. Do not glob lane suffixes or
+   create pseudo-parent artifacts. Late repair adds one: when `REPOSITORY_PLAN.report_path` is
    `dev-report-<TASK_ID>.effective.json` (the late-repair effective report, planned from only in the controller's `verified` state), that exact path is
    admitted into this list too: it is not in `commit_whitelist_artifacts` and would otherwise be silently excluded from staging.
-5. Post-chain artifacts for THIS parent `TASK_ID`, anchored under `docs/dev/`: `close-report-<TASK_ID>.md`, `acceptance-criteria-<TASK_ID>.json`, and `*-inspector-report-*<TASK_ID>*`.
+5. Post-chain artifacts for THIS parent `TASK_ID`, anchored under `docs/dev/`: `close-report-<TASK_ID>.md`, `acceptance-criteria-<TASK_ID>.json`, `*-inspector-report-*<TASK_ID>*`, and `commit-qa-report-<TASK_ID>.md`, the commit QA's record of this landing (in `QA_APPROVED_FILES` since `/commit` Step 6), committed with what it approved.
 
 **Sourcing the item-3 declaration — shard union, not canonical.** On a fan-out cycle the canonical dev-report cannot carry `dev.files_required_to_ship`: the aggregate writer emits a fixed set of list keys without it, and the resolver's freshness check compares the whole enclosing `dev` object, so adding the key turns the chain `STALE_CANONICAL`. Reading item 3 from the canonical would hide every fan-out declaration and drop the file as a `foreign_session_candidate`. Derive it with `scripts/lib/candidate_tree.py`: `derive_declaration(<dev-reports dir>, TASK_ID, fields=("files_required_to_ship",))` discovers the aggregate and every per-lane shard and unions the category across the reports that agree on one baseline. Do not reimplement that discovery or widen the canonical's shape.
 
@@ -134,7 +136,7 @@ singular overhead plus only the validated fan-out expansion; the third term is t
 `ABORT: scope violation — staged file count (<N>) exceeds whitelist limit (<limit>). Possible cross-session contamination.`
 and `failure_code: scope_violation`.
 
-**BULK=false and no dev-report:** look for `do-report-<TASK_ID>.json` (same subproject walk, fallback `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) whose top-level `source == "do"`. Then `do.files_modified[]` and `do.files_created[]` replace the dev-report lists as the whitelist, together with the anchored do-path set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-` and `*-inspector-report-*`, each for the same parent `TASK_ID` under `docs/dev/`) and the `+30` overhead; `ARTIFACT_CHAIN` is empty (the chain applies to `/dev`). If neither report exists, **ABORT** and stage nothing: print `ABORT: no dev-report found for task <TASK_ID> — cannot enforce whitelist. Refusing to stage-all.` and return `{"commit_status":"failed","failure_code":"scope_violation","failure_reason":"no dev-report for TASK_ID; cannot determine staging whitelist"}`. Stage-all is never a fallback.
+**BULK=false and no dev-report:** look for `do-report-<TASK_ID>.json` (same subproject walk, fallback `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) whose top-level `source == "do"`. Then `do.files_modified[]` and `do.files_created[]` replace the dev-report lists as the whitelist, together with the anchored do-path set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, `commit-qa-report-` and `*-inspector-report-*`, each for the same parent `TASK_ID` under `docs/dev/`) and the `+30` overhead; `ARTIFACT_CHAIN` is empty (the chain applies to `/dev`). If neither report exists, **ABORT** and stage nothing: print `ABORT: no dev-report found for task <TASK_ID> — cannot enforce whitelist. Refusing to stage-all.` and return `{"commit_status":"failed","failure_code":"scope_violation","failure_reason":"no dev-report for TASK_ID; cannot determine staging whitelist"}`. Stage-all is never a fallback.
 
 **Tree self-containment (BULK=false, every report path).** A candidate must not ride ahead of the tree state it asserts. Once the candidate set and every other exclusion (fail-closed entanglement, foreign-session, gitignore) are known, judge each remaining candidate that asserts on other repository content against the RESULTING tree (HEAD plus the would-be staged set), never the working tree, which every such candidate passes trivially. Exclude it when its assertions deterministically fail there:
 
