@@ -238,6 +238,10 @@ def _tree(*roots: Path, skip: Path | None = None) -> dict:
         for path in sorted(root.rglob("*")):
             if skip is not None and path == skip:
                 continue
+            # git's own store changes under background maintenance (a lock file can vanish mid-walk); no
+            # todos file lives there, and the audit hook below still sees any open of a todos path.
+            if ".git" in path.relative_to(root).parts:
+                continue
             st = path.lstat()  # a directory's mtime moves with the state record's rename: not compared
             snap[str(path)] = ((st.st_mode, st.st_mtime_ns, path.read_bytes()) if path.is_file()
                                else (st.st_mode, None, None))
