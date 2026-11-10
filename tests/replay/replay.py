@@ -49,7 +49,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from . import cmdtext, hookrun, norm
+from . import cmdtext, hookrun, launchdiff, norm
 
 MODEL = "claude-opus-5-5"
 CLI_VERSION = "2.1.295"
@@ -214,6 +214,9 @@ class Replay:
         self._inv = open(os.path.join(layout.out, "invocations.jsonl"), "w")
         self._seq = 0
         self.blocks, self.deviations, self.hook_errors, self.failed_calls = [], [], [], []
+        self.launch_differential = False  # inner.py turns it on for an untraced run (launchdiff.py)
+        self.launch_diffs: list = []
+        self.launch_events = 0
         self.n_events = self.n_runs = 0
         self.event_names: set[str] = set()
         self.step_label = ""
@@ -323,11 +326,18 @@ class Replay:
         # the transcripts as this event's hooks see them (the replay only appends to them after it)
         sizes = {os.path.join(d, f): os.path.getsize(os.path.join(d, f)) for d, _s, fs in os.walk(session.tdir)
                  for f in fs if f.endswith(".jsonl")}
+        old_paths = self._old_paths(event, payload)
         rec = hookrun.run_event(self.settings, event, payload, self.env, self.layout.project, self.parallel)
+        for launched in rec.get("launched", []):
+            if launched["hook"] in old_paths:
+                for d in launchdiff.compare(self, event, launched, old_paths[launched["hook"]]):
+                    self.launch_diffs.append(dict(d, step=label, event=event))
+        rec["launched"] = [{k: v for k, v in r.items() if k != "rules"} for r in rec.get("launched", [])]
         self._inv.write(json.dumps({"seq": self.n_events + 1, "event": event, "label": label,
                                     "payload": dict(payload, hook_event_name=event), "transcripts": sizes,
                                     "hooks": [{k: h[k] for k in ("hook", "command", "matcher", "timeout", "rc",
-                                                                 "verdict", "how")} for h in rec["hooks"]]})
+                                                                 "verdict", "how")}
+                                              for h in rec.get("launched", rec["hooks"])]})
                         + "\n")
         self._inv.flush()
         rec.update(label=label, session=session.sid, tool=payload.get("tool_name"),
@@ -343,6 +353,21 @@ class Replay:
         self._log.write(json.dumps(rec) + "\n")
         self._log.flush()
         return Event(rec)
+
+    def _old_paths(self, event: str, payload: dict) -> dict:
+        """P12-L7's differential (launchdiff.py): before the event, each launcher's hooks run as their
+        own processes in an overlay of the state the event meets; {launcher: their results}."""
+        if not self.launch_differential:
+            return {}
+        out = {}
+        full = dict(payload, hook_event_name=event)
+        for h in hookrun.select(self.settings, event, full):
+            hooks = launchdiff.old_path(self.layout.harness, h, event, full) \
+                if launchdiff.launcher_rules(self.layout.harness, h["hook"]) is not None else None
+            if hooks:
+                self.launch_events += 1
+                out[h["hook"]] = launchdiff.run_old(self.layout, hooks, json.dumps(full), self.env, self.layout.project)
+        return out
 
     def norm_text(self, text: str) -> str:
         return norm.refusal_text(text, self.roots, self.ids, self.window)
@@ -397,6 +422,16 @@ class Replay:
         self.window.end = time.time()
         out = self.layout.out
         summ = self.summary(wall_s)
+        if self.launch_diffs:
+            with open(os.path.join(out, "launch-differential.json"), "w") as fh:
+                json.dump(self.launch_diffs, fh, indent=1)
+            first = self.launch_diffs[0]
+            driver_error = (driver_error + "\n" if driver_error else "") + (
+                f"launch differential: {len(self.launch_diffs)} difference(s) between the launchers and their hooks "
+                f"run as their own processes; the first at {first['step']!r} ({first['event']}): {first['what']}: "
+                f"old {first['old'][-300:]!r}, new {first['new'][-300:]!r} (launch-differential.json)")
+        summ["launch_differential"] = {"on": self.launch_differential, "events": self.launch_events,
+                                       "differences": len(self.launch_diffs)}
         summ["driver_error"] = driver_error
         with open(os.path.join(out, "blocks.json"), "w") as fh:
             json.dump({"blocks": self.blocks, "deviations": self.deviations, "hook_errors": self.hook_errors,

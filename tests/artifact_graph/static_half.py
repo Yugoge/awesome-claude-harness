@@ -453,20 +453,32 @@ def _gate_rule_registrations(root: Path, regs: list) -> list[dict]:
         gate = r.get("component")
         if not gate or not gate.endswith(".py"):
             continue
-        for rule in sites.gate_rules(tree, gate):
+        # A rule file that is itself a merged gate (a launcher running hooks/pretool-write-gate.py,
+        # hooks/lib/hook_launch.py) runs its own rules in the same process, the registered gate's:
+        # they take that gate's registration too, narrowed by both tables' tools, and decide through
+        # it only when every table on the way holds them as refusing rules.
+        todo = [(rule, rule.tools, rule.kind) for rule in sites.gate_rules(tree, gate)]
+        seen = {gate}
+        while todo:
+            rule, tools, kind = todo.pop(0)
             target = rule.file or _call_module(root, rule.call)
-            if not target or target == gate:
+            if not target or target in seen:
                 continue
+            seen.add(target)
             # the enumerator's narrowing of a registration to a rule's declared tools
-            narrowed = [(gate, r["event"], r["matcher"])] if rule.tools is None else sites.Enumerator._regs(
-                SimpleNamespace(tools={gate: {target: rule.tools}}, regs={gate: [(r["event"], r["matcher"] or "")]}),
+            narrowed = [(gate, r["event"], r["matcher"])] if tools is None else sites.Enumerator._regs(
+                SimpleNamespace(tools={gate: {target: tools}}, regs={gate: [(r["event"], r["matcher"] or "")]}),
                 gate, target)
             for _hook, event, matcher in narrowed:
                 rec = {"kind": "declaration", "type": "gate_rule", "event": event, "matcher": matcher,
-                       "component": target, "gate": gate, "rule_kind": rule.kind,
-                       "tools": sorted(rule.tools) if rule.tools is not None else None, "site": r["site"]}
+                       "component": target, "gate": gate, "rule_kind": kind,
+                       "tools": sorted(tools) if tools is not None else None, "site": r["site"]}
                 if rec not in out:
                     out.append(rec)
+            if rule.file:
+                for inner in sites.gate_rules(tree, rule.file):
+                    both = inner.tools if tools is None else tools if inner.tools is None else tools & inner.tools
+                    todo.append((inner, both, inner.kind if kind == "refuse" else kind))
     return out
 
 

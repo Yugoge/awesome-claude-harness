@@ -19,12 +19,21 @@ names the block (refusal_first). An allowing hook's hookSpecificOutput.updatedIn
 the same reason. What the hook receives and returns is the same.
 What a run that did not block hands the model is context(): a driver acting as the
 model reads that, never a hook's raw stdout.
+
+A launcher (hooks/<event>-launch.py, lib/hook_launch.py) runs an event's Python hooks in its
+one process. The replay asks it for each hook's own result (a pipe named by
+hook_launch.RECORD_ENV, offered to every Python hook; only a launcher writes to it), and the
+event's "hooks" are those results, each named by its hook file, as when each hook was its own
+process; "launched" keeps the processes the event really started (the launcher's combined
+answer among them), which is what re-running an event re-runs.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,6 +42,8 @@ DEFAULT_TIMEOUT_S = 60
 TAIL = 4000
 HEAD = 1000  # a refusal's opening characters kept beside the tail; its first line is kept whole
 _HOOK_PATH_RE = re.compile(r"""[^"'\s]*?/((?:hooks|scripts)/[^"'\s]+)""")
+RECORD_ENV = "CLAUDE_HOOK_LAUNCH_RECORD_FD"  # hooks/lib/hook_launch.py's
+LAUNCHED_COMMAND = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/%s"'  # a hook's own registration, before the launchers
 
 
 def matches(matcher, value) -> bool:
@@ -160,21 +171,51 @@ def refusal_first(result: dict) -> str:
     return first_line(result.get("refusal_head") or refusal(result))
 
 
-def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
-    t0 = time.monotonic()
-    try:
-        p = subprocess.run(h["command"], shell=True, input=payload_raw, capture_output=True, text=True,
-                           env=env, cwd=cwd, timeout=h["timeout"], errors="replace")
-        rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout or ""
-        out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
-        rc, err = "timeout", "timeout"
-    except OSError as e:
-        rc, out, err = -1, "", f"launch failed: {e}"
+class _Records:
+    """The pipe a launcher writes its hooks' own results to, read while it runs."""
+
+    def __init__(self):
+        self.r, self.w = os.pipe()
+        os.set_blocking(self.r, False)
+        self.data = bytearray()
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
+
+    def _read(self):
+        import select
+        while True:
+            ready, _, _ = select.select([self.r], [], [], 0.05)
+            if ready:
+                try:
+                    chunk = os.read(self.r, 65536)
+                except BlockingIOError:
+                    continue
+                if chunk:
+                    self.data += chunk
+                    continue
+                return  # every writer closed it
+            if self.done.is_set():
+                return  # the launcher ended; a descendant holding the pipe writes nothing of its own
+
+    def close(self) -> list:
+        os.close(self.w)
+        self.done.set()
+        self.thread.join(5)
+        os.close(self.r)
+        out = []
+        for line in bytes(self.data).decode("utf-8", "replace").splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                pass
+        return out
+
+
+def _record(h: dict, rc, out: str, err: str, ms: int) -> dict:
     verdict, how = interpret(rc, out)
     rec = {"hook": h["hook"], "matcher": h["matcher"], "rc": rc, "verdict": verdict, "how": how,
-           "ms": round((time.monotonic() - t0) * 1000), "stdout": out[-TAIL:], "stderr": err[-TAIL:],
+           "ms": ms, "stdout": out[-TAIL:], "stderr": err[-TAIL:],
            "command": h["command"], "timeout": h["timeout"]}
     if verdict == "block":  # from the uncut output: the kept tail can lack the refusal's first line
         rec["refusal_head"] = refusal_head(refusal({"how": how, "stdout": out, "stderr": err}))
@@ -188,6 +229,41 @@ def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
     return rec
 
 
+def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
+    """One registered command; a launcher's record carries its hooks' own records ("rules")."""
+    t0 = time.monotonic()
+    recs = _Records() if h["hook"].endswith(".py") else None
+    if recs is not None:
+        env = dict(env, **{RECORD_ENV: str(recs.w)})
+    try:
+        p = subprocess.run(h["command"], shell=True, input=payload_raw, capture_output=True, text=True,
+                           env=env, cwd=cwd, timeout=h["timeout"], errors="replace",
+                           pass_fds=(recs.w,) if recs is not None else ())
+        rc, out, err = p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired as e:
+        out = e.stdout or ""
+        out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
+        rc, err = "timeout", "timeout"
+    except OSError as e:
+        rc, out, err = -1, "", f"launch failed: {e}"
+    rec = _record(h, rc, out, err, round((time.monotonic() - t0) * 1000))
+    rules = recs.close() if recs is not None else []
+    if rules:
+        rec["rules"] = [_record({"hook": r["hook"], "matcher": r.get("matcher") or None,
+                                 "command": LAUNCHED_COMMAND % r["hook"], "timeout": r.get("timeout")},
+                                r["rc"], r.get("stdout") or "", r.get("stderr") or "", r.get("ms", 0))
+                        for r in rules]
+    return rec
+
+
+def expanded(launched: list) -> list:
+    """The hooks' own records: a launcher's replaced by those of the hooks it ran."""
+    out = []
+    for rec in launched:
+        out.extend(rec["rules"] if "rules" in rec else [rec])
+    return out
+
+
 def run_event(settings: dict, event: str, payload: dict, env: dict, cwd: str, parallel: bool = False) -> dict:
     """Run the event's hooks; returns {event, hooks: [...], total_ms}."""
     payload = dict(payload, hook_event_name=event)
@@ -199,4 +275,7 @@ def run_event(settings: dict, event: str, payload: dict, env: dict, cwd: str, pa
             results = list(ex.map(lambda h: _run_one(h, raw, env, cwd), hooks))
     else:
         results = [_run_one(h, raw, env, cwd) for h in hooks]
-    return {"event": event, "hooks": results, "total_ms": round((time.monotonic() - t0) * 1000)}
+    # "launched": the processes started; a launcher's own record keeps its hooks' ("rules") until the
+    # caller has read them (Replay.fire logs the event without them: they are its "hooks")
+    return {"event": event, "hooks": expanded(results), "launched": results,
+            "total_ms": round((time.monotonic() - t0) * 1000)}
