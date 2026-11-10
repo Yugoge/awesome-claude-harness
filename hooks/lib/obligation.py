@@ -727,17 +727,18 @@ def _registry_root(project_dir: str | Path) -> Path:
 def registry_dir_named(project_dir: str | Path, name: Any) -> Path | None:
     """The registry directory a registry *name* names, for a script that is
     handed the name (DEV_SESSION_ID, an overnight session id) rather than a
-    task id. A minted name (``dev-<ts>``, ``dev-command-<ts>``) is a task id,
-    so its directory is registry_dir_for's; any other name names a directory
-    of its own: the session id /dev-overnight arms its registry under (no task,
-    so registry_dir_for names none; lib/agent_cycle.py reads it by that name),
-    and a per-pipeline graphify name ``<session>-pipeline-<n>``. None for a
-    name that is not one plain path component."""
+    task id: that name under the registry root. registry_dir_for turns a task
+    id into the name (``dev-<ts>``, ``dev-command-<ts>``); a script handed the
+    name has it already, and every reader finds the directory by it (the
+    command text's ``.claude/dev-registry/<DEV_SESSION_ID>/``,
+    lib/agent_cycle.py by the session id /dev-overnight arms its registry
+    under, a per-pipeline graphify name ``<session>-pipeline-<n>``). Mapping a
+    minted name through registry_dir_for again would name the same directory
+    today, but the artifact check reads the two spellings as two artifacts:
+    the writer at ``dev-<ts>``, its readers at the name. None for a name that
+    is not one plain path component."""
     if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
         return None
-    stamp = task_stamp(name)
-    if stamp is not None and name in (f"dev-{stamp}", f"dev-command-{stamp}"):
-        return registry_dir_for(project_dir, name)
     return _registry_root(project_dir) / name
 
 

@@ -1288,6 +1288,87 @@ def _write_new_file(path: Path, payload: bytes) -> None:
         raise
 
 
+def _enforce_flag(flag: str) -> tuple | None:
+    """An enforcement flag's file in the registry and the line that reports
+    it (callers and transcripts grep for the line); None for no such flag.
+    hooks/subagentstop-codex-enforce.py reads codex-enforce.json."""
+    if flag == 'codex':
+        return 'codex-enforce.json', 'Codex enforcement active'
+    return None
+
+
+_KNOWN_ENFORCE_FLAGS = ('codex',)
+_REGISTRY_NAME_SHAPE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
+
+
+def _write_enforce_flags(argv: list) -> int:
+    """scripts/write-enforce-flag.sh's work: write each --flag's sentinel into
+    the registry --session-id names (obligation.registry_dir_named, under
+    CLAUDE_PROJECT_DIR). Every argument and flag is checked before anything
+    is written, so a bad one leaves no half-armed registry. Exit 1 on any
+    failure; the caller must abort."""
+    from lib.obligation import registry_dir_named
+
+    def fail(message: str) -> int:
+        print(f'ERROR: {message}', file=sys.stderr)
+        return 1
+
+    source_cmd, session_id, flags = '', '', []
+    rest = list(argv)
+    while rest:
+        option = rest.pop(0)
+        if option not in ('--source-command', '--session-id', '--flag') or not rest:
+            print(f'Unknown arg: {option}', file=sys.stderr)
+            return 1
+        value = rest.pop(0)
+        if option == '--source-command':
+            source_cmd = value
+        elif option == '--session-id':
+            session_id = value
+        else:
+            flags.append(value)
+    if not source_cmd:
+        return fail('--source-command required')
+    if not session_id:
+        return fail('--session-id required')
+    if not flags:
+        return fail('at least one --flag required')
+    # The value becomes a path component (write-qa-mode.sh's shape check).
+    if not _REGISTRY_NAME_SHAPE.fullmatch(session_id):
+        return fail(f'--session-id contains unsafe characters: {session_id}')
+    for flag in flags:
+        if _enforce_flag(flag) is None:
+            return fail(f"unknown --flag '{flag}' (expected: {', '.join(_KNOWN_ENFORCE_FLAGS)})")
+    project_dir = os.environ.get('CLAUDE_PROJECT_DIR')
+    if not project_dir:
+        return fail('CLAUDE_PROJECT_DIR not set')
+    registry_dir = registry_dir_named(project_dir, session_id)
+    if registry_dir is None:
+        return fail(f'no registry directory for --session-id {session_id}')
+    try:
+        registry_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return fail(f'Failed to create registry dir {registry_dir} — aborting. ({exc})')
+    created_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for flag in flags:
+        filename, label = _enforce_flag(flag)
+        target = registry_dir / filename
+        # A symlinked target redirects the write out of the registry entirely;
+        # the sentinel would then read as "enforcement active" while living elsewhere.
+        if target.is_symlink():
+            return fail(f'refusing to write through a symlink: {target}')
+        sentinel = {'schema_version': 1, 'enabled': True, 'source_command': source_cmd,
+                    'dev_session_id': session_id,
+                    'claude_session_id': os.environ.get('CLAUDE_SESSION_ID') or 'unknown',
+                    'created_at': created_at}
+        try:
+            target.write_text(json.dumps(sentinel, indent=2) + '\n', encoding='utf-8')
+        except OSError as exc:
+            return fail(f'Failed to write {filename} at {target} — aborting. ({exc})')
+        print(f'{label}: {target}')
+    return 0
+
+
 def _arm_registry(cmd_name: str, name: str, requirement: bytes,
                   claude_session_id: str, project_dir: Path, flags: list, write) -> str:
     """Arm a cycle's registry: the user-requirement document and the
@@ -1778,8 +1859,12 @@ def cli(argv: list) -> int:
       (obligation.registry_dir_for), for command text that needs it.
     registry-dir --project-dir D --name NAME: the path of the registry
       directory a registry name names (obligation.registry_dir_named), for the
-      scripts handed the name: write-enforce-flag.sh, overnight-init.sh and
-      create-overnight-state.sh.
+      scripts handed the name: overnight-init.sh and create-overnight-state.sh.
+    write-enforce-flags --source-command C --session-id NAME --flag F [...]:
+      scripts/write-enforce-flag.sh's work (_write_enforce_flags): the flag
+      files, written here at the path registry_dir_named gives, which the
+      artifact check reads (it cannot follow a path a shell script takes from
+      this file's printed output).
     """
     if argv[:1] == ['start']:
         sid = os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or ''
@@ -1828,6 +1913,8 @@ def cli(argv: list) -> int:
             print(f'arm-registry: {error}', file=sys.stderr)
             return 1
         return 0
+    if argv[:1] == ['write-enforce-flags']:
+        return _write_enforce_flags(argv[1:])
     if argv[:1] == ['registry-dir'] and len(argv) == 2:
         from lib.obligation import registry_dir_for
         directory = registry_dir_for(PROJECT_DIR, argv[1])
@@ -1846,7 +1933,7 @@ def cli(argv: list) -> int:
         print(directory)
         return 0
     print('usage: prompt-workflow.py start | arm-registry ... | registry-dir TASK_ID'
-          ' | registry-dir --project-dir D --name NAME', file=sys.stderr)
+          ' | registry-dir --project-dir D --name NAME | write-enforce-flags ...', file=sys.stderr)
     return 2
 
 

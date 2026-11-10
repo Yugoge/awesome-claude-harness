@@ -1,7 +1,8 @@
 """P9 A23 (D24), task identity: every script that builds a cycle's registry
 directory takes it from the one rule (hooks/lib/obligation.py,
 registry_dir_for, and registry_dir_named for the scripts handed a registry
-name instead of a task id).
+name instead of a task id: that name under the registry root, where every
+reader looks for it).
 
 The sites: scripts/write-enforce-flag.sh, scripts/overnight-init.sh,
 scripts/create-overnight-state.sh (through `prompt-workflow.py registry-dir
@@ -14,6 +15,10 @@ agreed with the rule on every name a caller passes; so the pin is a
 mutation: in a copy of the harness whose registry_dir_for names other
 directories (another root, another name for a /dev cycle), every site must
 follow it. On d64fa96 none followed, and the "mutated" cases fail there.
+A script handed a registry name follows the rule's root; the name it is
+handed is the directory's name already (the command text reads
+`.claude/dev-registry/<DEV_SESSION_ID>/`), so a renamed /dev directory
+moves only the producer's reservation, which turns a task id into the name.
 """
 from __future__ import annotations
 
@@ -59,13 +64,13 @@ def harness(request, tmp_path_factory):
     return copy
 
 
-def _expected(harness: Path, project: Path, name: str) -> Path:
-    """Where the rule of ``harness`` puts ``name``'s registry: registry_dir_for
-    for a minted task id; for any other name, the directory of that name under
-    the root registry_dir_for uses."""
+def _expected(harness: Path, project: Path, name: str, task_id: bool = False) -> Path:
+    """Where the rule of ``harness`` puts ``name``'s registry: for a registry
+    name, the directory of that name under the root registry_dir_for uses;
+    with ``task_id``, registry_dir_for's directory for the minted task id."""
     code = ("import sys; sys.path.insert(0, sys.argv[1]); from hooks.lib.obligation import registry_dir_for; "
             "print(registry_dir_for(sys.argv[2], sys.argv[3]))")
-    minted = re.fullmatch(r"dev-(?:command-)?\d{8}-\d{6}", name) is not None
+    minted = task_id and re.fullmatch(r"dev-(?:command-)?\d{8}-\d{6}", name) is not None
     probe = name if minted else MINTED[0]
     out = Path(subprocess.run([sys.executable, "-I", "-B", "-c", code, str(harness), str(project), probe],
                               capture_output=True, text=True, check=True).stdout.strip())
@@ -186,7 +191,7 @@ def test_the_producer_reserves_the_rules_directory(harness, layout, command):
     prefix = "DEV_SESSION_ID pre-initialized by hook:"
     names = [line[len(prefix):].strip() for line in run.stdout.splitlines() if line.startswith(prefix)]
     assert len(names) == 1 and names[0].startswith(f"{command}-"), run.stdout
-    expected = _expected(harness, project, names[0])
+    expected = _expected(harness, project, names[0], task_id=True)
     stamp = names[0][len(command) + 1:]
     made = [p.resolve() for p in (project / ".claude").glob(f"*/*{stamp}") if p.is_dir()]
     assert made == [expected]
