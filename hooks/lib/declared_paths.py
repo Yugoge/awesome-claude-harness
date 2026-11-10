@@ -26,7 +26,7 @@ from pathlib import Path
 
 # The hook imports this as lib.declared_paths, so these are the lib.* modules
 # its own code and the tests patch.
-from . import command_span, dispatch_template, obligation, stop_contract
+from . import command_span, dispatch_template, obligation, requirement_round, stop_contract
 
 _HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
@@ -471,6 +471,7 @@ def _obligation_may_declare(prompt: str, targets) -> bool:
         role, task_id = doc.get("role"), doc.get("task_id")
         if isinstance(role, str) and isinstance(task_id, str) and task_id:
             paths.append(_QUESTION_PATH.format(task_id=task_id, role=role))
+            paths += requirement_round.ba_round_paths(task_id) if role == "ba" else []
         ends = None  # every part of every target form
         for path in paths:
             last = _last_part(path)
@@ -537,6 +538,8 @@ def _declarations(record, calls: list, targets=None) -> list:
                 question_roles = _question_roles()
             if role in question_roles and isinstance(task_id, str) and task_id:
                 paths.append(_QUESTION_PATH.format(task_id=task_id, role=role))
+            if role == "ba" and isinstance(task_id, str) and task_id:  # D29: BA's next round, in place of its artifacts
+                paths += requirement_round.ba_round_paths(task_id)
             found.append((paths, role, task_id))
         else:
             if not templates:

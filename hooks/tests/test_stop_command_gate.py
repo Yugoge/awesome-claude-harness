@@ -279,11 +279,112 @@ def test_a2_no_record_but_the_humans_own_command_ends_the_block(env, after):
     assert run(env, **extra)[0] == 2
 
 
+@pytest.mark.parametrize("view", ["tickets", "rating"])
+def test_a2_a_typed_read_only_view_after_an_unfinished_dev_leaves_it_gated(env, view):
+    # /rating is a CONTROL command as /tickets is: typed (once or twice) it opens or replaces no span.
+    steps = dev_span(env, done=1)
+    env.tx.command(view)
+    env.tx.say("Shown.")
+    env.tx.command(view)
+    code, text = run(env)
+    assert code == 2
+    assert text.startswith("COMMAND_GATE /dev: not complete\n")
+    assert f"- todo: not completed: {steps[1]['content']}" in text
+
+
+@pytest.mark.parametrize("view", ["tickets", "rating"])
+def test_a2_a_read_only_view_alone_is_not_gated(env, view):
+    env.tx.command(view)
+    assert run(env) == (0, "")
+    env.tx.command(view)
+    assert run(env) == (0, "")
+
+
 @pytest.mark.parametrize("command", ["stop", "spec"])
 def test_a2_the_humans_stop_or_spec_opens_an_ungated_span(env, command):
     dev_span(env, done=1)
     env.tx.command(command)
     assert run(env) == (0, "")
+
+
+# A2's Esc case (P5-23). Esc interrupts the turn and runs no Stop hook (D4c); the next Stop the gate
+# sees follows the human's next prompt. Record shapes, as the CLI wrote them:
+# - The interrupt: a user record holding one text block "[Request interrupted by user]", with no
+#   origin, turnOrigin or isMeta. Measured on CLI 2.1.319 (a session transcript of the harness host,
+#   2026-11-09; that record was a subagent's, isSidechain true, so the main session's is written with
+#   isSidechain false); the replay kit writes the same record (tests/replay/drivers/overnight.py).
+# - Esc during a tool call: the call's error tool_result, then "[Request interrupted by user for tool
+#   use]". Not captured on that host; written from the CLI's interrupt texts.
+# - The typed plain prompt: an enqueue and a dequeue queue-operation, then a user record with string
+#   content, origin {"kind": "human"}, promptSource "sdk", turnOrigin "human" and turnPosition.
+#   Measured on the same host, CLI 2.1.319 (the main session's typed prompts).
+# - A typed command: the same human fields on txbuild's slash-command records (tools/proto/txbuild.py).
+# The gate reads none of the interrupt's text or fields (D4c): it is a prompt with no command in it,
+# so like any plain prompt it continues the span.
+CLI_FIELDS = {"userType": "external", "entrypoint": "cli", "isSidechain": False, "version": "2.1.319",
+              "gitBranch": "main"}
+REJECTED = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file "
+            "edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to "
+            "tell you how to proceed.")
+
+
+def interrupted_turn(env, during: str):
+    """The agent's turn after a blocked Stop, cut by Esc: no Stop runs."""
+    if during == "reply":
+        env.tx.say("Continuing with step 2: reading the failing build log")
+        text = "[Request interrupted by user]"
+    else:
+        env.tx.tool("Bash", {"command": "make build", "description": "Build"}, ok=False, result=REJECTED)
+        text = "[Request interrupted by user for tool use]"
+    env.tx.add({"type": "user", **CLI_FIELDS, "cwd": str(env.project), "promptId": "prompt-esc",
+                "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+
+
+def human_typed(env, text: str, index: int, command: str | None = None):
+    """A prompt the human typed (a plain one, or with ``command`` that slash command), as the CLI records it."""
+    env.tx.add({"type": "queue-operation", "operation": "enqueue", "content": text})
+    env.tx.add({"type": "queue-operation", "operation": "dequeue"})
+    content = text if command is None else (f"<command-message>{command} is running…</command-message>\n"
+                                            f"<command-name>/{command}</command-name>\n<command-args></command-args>")
+    env.tx.add({"type": "user", **CLI_FIELDS, "cwd": str(env.project), "permissionMode": "default",
+                "promptId": f"prompt-{index}", "origin": {"kind": "human"}, "promptSource": "sdk",
+                "turnOrigin": "human", "turnPosition": {"promptIndex": index, "turnIndex": index},
+                "message": {"role": "user", "content": content}})
+    if command is not None:
+        env.tx.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": [
+            {"type": "text", "text": f"body of {command}"}]}})
+
+
+@pytest.mark.parametrize("during", ["reply", "tool_call"])
+@pytest.mark.parametrize("after,code", [("plain", 2), ("stop", 0), ("spec", 0), ("plain_then_complete", 0)])
+def test_a2_esc_then_the_humans_next_prompt(env, monkeypatch, during, after, code):
+    """/dev at 1 of 17, no QA dispatch, blocked; Esc; then the human types: a plain prompt continues the
+    span (the same block), /stop or /spec opens an ungated one, and the completed span then holds."""
+    steps = dev_span(env, done=1)
+    qa = f"docs/dev/qa-report-{FAMILY}.json"
+    env.fake.answers[(FAMILY, "dev")] = [gap(qa, "MISSING_ARTIFACT", "absent")]
+    monkeypatch.setattr(chain_obligation, "declaring_dispatch", lambda task, path, root, roots=None: {
+        "source": "todo_step", "step": "Step 9: QA validation", "command": "dev"})
+    first, before = run(env)
+    assert first == 2 and before.startswith("COMMAND_GATE /dev: not complete\n")
+    interrupted_turn(env, during)
+    if after in ("stop", "spec"):
+        human_typed(env, f"/{after}", 2, command=after)
+    else:
+        human_typed(env, "keep going, but check the build log first", 2)
+    if after == "plain_then_complete":
+        env.tx.todos(steps, len(steps))
+        env.tx.dispatch(FAMILY, role="qa")
+        env.fake.answers[(FAMILY, "dev")] = []  # the QA report landed: P3's chain_pass
+    got, text = run(env)
+    assert got == code
+    if code == 2:
+        assert text == before  # the span's own gaps, as at the Stop before the Esc
+        assert f"- todo: not completed: {steps[1]['content']}" in text
+        assert f"GAP artifact={qa} problem=MISSING_ARTIFACT: absent lane=- step=\"Step 9: QA validation\"" in text
+    else:
+        assert text == ""
+    assert command_span.active_span(env.tx.path).command == ("dev" if after.startswith("plain") else after)
 
 
 def test_a2_all_ticked_without_a_dispatch_is_no_pipeline_dispatched(env):
@@ -681,21 +782,62 @@ def branches(repo, *names):
     git(repo, "checkout", "-q", "master")
 
 
-def write_grant(env, repo, branch):
+def write_grant(env, repo, branch, verdict="approved", session=SID):
     """The merge-analyst's grant for ``branch``, as agents/merge-analyst.md Phase 8 writes it, at
     git's clock: one hooks/lib/merge_grant.py's check passes, as at the PostToolUse of that Write."""
     merge_grant, top = importlib.import_module("lib.merge_grant"), os.path.realpath(repo)
     request = f"{int(GIT_CLOCK[0]):032x}"
-    path = Path(merge_grant.grant_root(), hashlib.sha256(top.encode()).hexdigest()[:16], SID, f"{request}.json")
+    path = Path(merge_grant.grant_root(), hashlib.sha256(top.encode()).hexdigest()[:16], session, f"{request}.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     expires = (datetime.now(timezone.utc) + timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     path.write_text(json.dumps({
-        "verdict": "approved", "risks": [], "analysis_summary": "clean", "repo_root": top, "branch": branch,
+        "verdict": verdict, "risks": ["conflict markers in the diff"] if verdict == "blocked" else [],
+        "analysis_summary": "clean", "repo_root": top, "branch": branch,
         "source_tip": git(repo, "rev-parse", branch), "default_branch": "master",
-        "default_tip": git(repo, "rev-parse", "master"), "session_id": SID, "nonce": request, "expires_at": expires}))
+        "default_tip": git(repo, "rev-parse", "master"), "session_id": session, "nonce": request,
+        "expires_at": expires}))
     assert merge_grant.fault(str(path)) == ""
     GIT_CLOCK[0] += 1
     os.utime(path, (GIT_CLOCK[0], GIT_CLOCK[0]))
+
+
+@pytest.mark.parametrize("typed", [True, False])
+def test_mg1_a_blocked_merge_analyst_grant_for_the_sources_tip_releases_the_stop(env, repo, typed):
+    """/merge Step 3 refuses "merge-analyst blocked the merge" and R14 leaves the risks to the owner: the
+    agent cannot merge anyway, so the missing merge is no gap while this session's newest grant is
+    blocked for the source at its tip now. Narrow as p_push's: every other grant holds."""
+    branches(repo, "feature")
+    git(repo, "checkout", "-q", "feature")  # a bare /merge picks the branch HEAD is on
+    opener_now(env, "merge", "feature" if typed else "")
+    git(repo, "checkout", "-q", "master")
+    assert run(env)[0] == 2  # no grant yet
+    write_grant(env, repo, "feature", "blocked")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("what", ["other-tip", "other-branch", "older-grant", "other-session", "approved",
+                                  "approved-after-blocked"])
+def test_mg1_every_other_grant_still_holds_the_missing_merge(env, repo, what):
+    branches(repo, "feature", "other")
+    if what == "older-grant":
+        write_grant(env, repo, "feature", "blocked")  # an earlier /merge's, written before the opener
+    opener_now(env, "merge", "feature")
+    if what == "other-tip":
+        write_grant(env, repo, "feature", "blocked")
+        git(repo, "checkout", "-q", "feature")
+        commit(repo, "g.txt")  # the branch moves on: the grant names the tip before this commit
+        git(repo, "checkout", "-q", "master")
+    elif what == "other-branch":
+        write_grant(env, repo, "other", "blocked")
+    elif what == "other-session":
+        write_grant(env, repo, "feature", "blocked", session="another-session")
+    elif what == "approved":
+        write_grant(env, repo, "feature", "approved")
+    elif what == "approved-after-blocked":
+        write_grant(env, repo, "feature", "blocked")
+        write_grant(env, repo, "feature", "approved")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, (code, text)
 
 
 @pytest.mark.parametrize("typed", [True, False])
@@ -790,6 +932,112 @@ def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(en
     assert code == 2 and "no merge of feature into refs/heads/master" in text
     git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")  # the merge made again
     assert run(env) == (0, "")
+
+
+@pytest.fixture(params=["main", "worktree"])
+def linked(env, monkeypatch, request):
+    """/dev-overnight --worktree's shape: the main checkout (a repository with a local bare origin)
+    and the linked worktree the session's cwd is in (Step 1 cds into it), on Step 0's pick, the
+    overnight-state record's worktree_branch, which merge.sh's cleanup removes. The session's project
+    dir is the main checkout (the CLI's) or the worktree itself. The main checkout is on a working
+    branch: merge.sh checks the default branch out in the linked worktree, which git refuses while
+    another worktree has it. Branch ``other`` is no pick."""
+    GIT_CLOCK[0] = T0.timestamp() - 600
+    origin, main, tree = env.tmp / "origin.git", env.project, env.tmp / "overnight-x"
+    git(env.tmp, "init", "-q", "--bare", "-b", "master", str(origin))
+    git(main, "init", "-q", "-b", "master")
+    git(main, "config", "core.logAllRefUpdates", "true")
+    git(main, "remote", "add", "origin", str(origin))
+    commit(main, "base.txt")
+    git(main, "push", "-q", "-u", "origin", "master")
+    git(main, "remote", "set-head", "origin", "master")
+    branches(main, "other")
+    git(main, "checkout", "-q", "-b", "work")
+    git(main, "worktree", "add", "-q", "-b", "overnight-x", str(tree), "master")
+    commit(tree, "x.txt")
+    project = main if request.param == "main" else tree
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    (project / ".claude").mkdir(exist_ok=True)
+    (project / ".claude" / f"overnight-state-{SID}.json").write_text(json.dumps({"worktree_branch": "overnight-x"}))
+    env.payload["cwd"] = str(tree)
+    return tree
+
+
+def merge_sh(tree, *args):
+    """/merge Step 5 in the linked worktree: hooks/merge.sh itself, at git's clock."""
+    GIT_CLOCK[0] += 1
+    environment = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+                   "GIT_AUTHOR_DATE": f"@{int(GIT_CLOCK[0])} +0000",
+                   "GIT_COMMITTER_DATE": f"@{int(GIT_CLOCK[0])} +0000"}
+    done = subprocess.run(["bash", str(HOOKS / "merge.sh"), *args], cwd=str(tree), capture_output=True, text=True,
+                          env=environment, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout
+
+
+@pytest.mark.parametrize("grant", [False, True])
+@pytest.mark.parametrize("diverged", [False, True])
+def test_a6_bare_merge_from_a_linked_worktree_holds_once_steps_pick_merged_also_after_cleanup(
+        env, linked, diverged, grant):
+    """Bare /merge in the linked worktree: unmerged 2; merged by merge.sh (a fast-forward, or a merge
+    commit when the default branch moved) and cleaned up (branch, its reflog and the overnight-state
+    record gone) 0; with or without the merge-analyst's grant of Step 2, which names the pick too."""
+    if diverged:
+        git(env.project, "checkout", "-q", "master")
+        commit(env.project, "m.txt")
+        git(env.project, "checkout", "-q", "work")
+    pick = git(linked, "rev-parse", "HEAD")
+    opener_now(env, "merge")
+    code, text = run(env)
+    assert code == 2 and "no merge of overnight-x" in text  # unmerged
+    if grant:
+        write_grant(env, linked, "overnight-x")
+    merge_sh(linked, "overnight-x")
+    assert git(linked, "rev-parse", "--verify", "-q", "refs/heads/overnight-x", check=False) == ""
+    assert not list(Path(os.environ["CLAUDE_PROJECT_DIR"], ".claude").glob("overnight-state-*.json"))
+    assert run(env) == (0, "")
+    assert pick in git(linked, "rev-list", "--parents", "-n", "1", "master").split()
+
+
+def test_a6_bare_merge_from_a_linked_worktree_of_another_branch_than_steps_pick_blocks(env, linked):
+    """Step 0's pick is the branch the worktree's HEAD was on at the opener: git's own record of it
+    is the worktree's HEAD reflog (its value at the opener and the checkout entry that left it)."""
+    opener_now(env, "merge")
+    merge_sh(linked, "other")
+    code, text = run(env)
+    assert code == 2 and "no merge of overnight-x into refs/heads/master" in text
+    assert "checkout: moving from overnight-x to master" in git(linked, "reflog", "show", "--format=%gs", "HEAD")
+    merge_sh(linked, "overnight-x")  # the pick merged too: the gap closes
+    assert run(env) == (0, "")
+
+
+def test_a6_bare_merge_no_commit_from_a_linked_worktree_needs_merge_head_at_steps_pick(env, linked):
+    opener_now(env, "merge", "--no-commit")
+    merge_sh(linked, "--no-commit", "other")
+    code, text = run(env)
+    assert code == 2 and "MERGE_HEAD is" in text
+    git(linked, "merge", "--abort")
+    merge_sh(linked, "--no-commit", "overnight-x")
+    assert run(env) == (0, "")
+
+
+def test_a6_a_cwd_in_another_repository_does_not_stand_in_for_the_project(env, repo):
+    """Only a worktree of the project's own repository is read in its place: a cwd in a clone of it,
+    where Step 0's pick merged, leaves the project's unmerged pick the gap."""
+    branches(repo, "feature")
+    git(repo, "checkout", "-q", "feature")
+    elsewhere = env.tmp / "elsewhere"
+    git(env.tmp, "clone", "-q", "-b", "feature", str(repo), str(elsewhere))
+    git(elsewhere, "branch", "-q", "master", "origin/master")
+    env.payload["cwd"] = str(elsewhere)
+    opener_now(env, "merge")
+    git(elsewhere, "checkout", "-q", "master")
+    git(elsewhere, "merge", "-q", "--no-ff", "--no-edit", "feature")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text
+    env.payload["cwd"] = str(repo / "docs")  # the project's own checkout, from a subdirectory
+    assert run(env)[0] == 2
 
 
 def write_token(repo):
@@ -1063,6 +1311,142 @@ def test_a6_push_holds_on_the_push_analysts_blocked_verdict_for_head(env, remote
     assert run(env) == (0, "")
 
 
+def _forge_file(repo, rel, text, mode="w"):
+    path = Path(repo, ".git", rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open(mode) as handle:
+        handle.write(text)
+
+
+def _forge_reflog(repo, _bare=None):
+    """An `update by push` entry appended to the tracking ref's reflog file, dated now on git's clock."""
+    GIT_CLOCK[0] += 1
+    old, new = git(repo, "rev-parse", "refs/remotes/origin/topic"), git(repo, "rev-parse", "HEAD")
+    _forge_file(repo, "logs/refs/remotes/origin/topic", f"{old} {new} t <t@example.invalid> {int(GIT_CLOCK[0])} +0000"
+                                                         "\tupdate by push\n", "a")
+
+
+def _forge_packed(repo, _bare=None):
+    """The tracking ref moved into packed-refs, there naming HEAD (no loose ref, no reflog entry)."""
+    Path(repo, ".git", "refs", "remotes", "origin", "topic").unlink()
+    _forge_file(repo, "packed-refs", f"{git(repo, 'rev-parse', 'HEAD')} refs/remotes/origin/topic\n", "a")
+
+
+# P5-61: the ways an agent writes or redirects what the /push Stop took as published, none of them a push.
+# Each value: the forging steps (git argument lists, or a callable on the repository), and the steps that
+# undo a redirect of origin itself (or a graft, which corrupts the push too) before the real push (none: the
+# push to the bare origin is enough).
+FORGES = {
+    "fetch-local-refspec": ([["fetch", "-q", ".", "HEAD:refs/remotes/origin/topic"]], []),
+    "update-ref": ([["update-ref", "refs/remotes/origin/topic", "HEAD"]], []),
+    "pull-refspec": ([["pull", "-q", "--ff-only", ".", "topic:refs/remotes/origin/topic"]], []),
+    "fetch-c-refspec": ([["-c", "remote.self.url=.", "-c", "remote.self.fetch=+refs/heads/*:refs/remotes/origin/*",
+                          "fetch", "-q", "self"]], []),
+    "config-refspec": ([["config", "remote.self.url", "."],
+                        ["config", "remote.self.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+                        ["fetch", "-q", "self"]], []),
+    "config-url": ([["config", "remote.origin.url", "."], ["fetch", "-q", "origin"]],
+                   [lambda repo, bare: git(repo, "config", "remote.origin.url", bare)]),
+    "config-insteadof": ([lambda repo, bare: git(repo, "config", f"url.{repo}.insteadOf", bare), ["fetch", "-q", "origin"]],
+                         [lambda repo, bare: git(repo, "config", "--unset", f"url.{repo}.insteadOf")]),
+    "upstream-local": ([["config", "branch.topic.remote", "."]], []),
+    "remote-add-self": ([["remote", "add", "self", "."], ["fetch", "-q", "self"]], []),
+    "symbolic-ref": ([["symbolic-ref", "refs/remotes/origin/topic", "refs/heads/topic"]], []),
+    "ref-file": ([lambda repo, bare: _forge_file(repo, "refs/remotes/origin/topic", git(repo, "rev-parse", "HEAD") + "\n")],
+                 []),
+    "packed-refs": ([_forge_packed], []),
+    "reflog-file": ([_forge_reflog], []),
+    "replace-graft": ([["replace", "--graft", "refs/remotes/origin/topic", "HEAD"]], []),
+    "grafts-file": ([lambda repo, bare: _forge_file(repo, "info/grafts", "{} {}\n".format(
+        git(repo, "rev-parse", "refs/remotes/origin/topic"), git(repo, "rev-parse", "HEAD")))],
+                    [lambda repo, bare: Path(repo, ".git", "info", "grafts").unlink()]),  # it re-parents the push too
+}
+
+
+def remote_lines(env, repo):
+    """The opener's remote lines (command_span.OPENER_REMOTE_LINE_RE) for the repository as it is now, added
+    to the opener's hook context: one per remote, its URL's digest, the branch, its tracking ref's commit
+    there and the branch's upstream ref where it is that remote's. P5-61's record of each remote at the
+    opener; its printer is the /push opener's UserPromptSubmit hook (not in this change)."""
+    branch = git(repo, "branch", "--show-current")
+    up = git(repo, "for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)", f"refs/heads/{branch}").split()
+    text = "".join(
+        f"[/push] remote at the opener: {name} {hashlib.sha256(git(repo, 'remote', 'get-url', name).encode()).hexdigest()[:16]} "
+        f"{branch} {git(repo, 'rev-parse', '--verify', '-q', f'refs/remotes/{name}/{branch}', check=False) or 'none'}"
+        + (f" upstream {up[1]}" if len(up) == 2 and up[0] == name else "") + "\n"
+        for name in git(repo, "remote").split())
+    env.tx.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit",
+                                                     "content": text}})
+
+
+def _steps(repo, bare, steps):
+    for step in steps:
+        step(repo, bare) if callable(step) else git(repo, *step)
+
+
+# The routes that redirect the remote itself (its URL, or a remote added): only the opener's remote lines
+# date and place the remote; the others hold on the remote's own branch with or without those lines.
+REDIRECTS = {"config-refspec", "config-url", "config-insteadof", "remote-add-self"}
+
+
+@pytest.mark.parametrize("route,lines", [(r, lines) for r in FORGES for lines in (True, False)
+                                         if lines or r not in REDIRECTS])
+def test_p5_61_a_forged_or_redirected_remote_record_releases_no_push_stop_until_the_push(env, remotes, route, lines):
+    """P5-61: the /push Stop took a locally written refs/remotes/<remote>/<branch> (its value or a reflog
+    entry of it), the branch's upstream from the repository's config, and git's ancestry through replace
+    objects and grafts as published. Every route here writes or redirects one of them after the /push
+    opener without a push: the Stop holds, naming the unpublished commit, until a push to the bare
+    origin lands (with a redirect of origin itself undone first)."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env)
+    if lines:
+        remote_lines(env, remotes)
+    forge, undo = FORGES[route]
+    bare = str(env.tmp / "origin.git")
+    _steps(remotes, bare, forge)
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, (route, text)
+    _steps(remotes, bare, undo)
+    git(remotes, "push", "-q", "origin", "topic")
+    assert run(env) == (0, ""), route
+
+
+def test_p5_61_an_upstream_moved_to_a_remote_that_had_head_before_the_opener_releases_nothing(env, remotes):
+    """P5-61, A6's "tracking fork: unpushed 2 even if origin had HEAD before the opener": after the opener
+    the agent sets the branch's upstream to origin, which held HEAD before it. The upstream the opener
+    recorded (fork) stays the one judged, until the push to it."""
+    git(remotes, "push", "-q", "fork", "topic")
+    git(remotes, "branch", "-q", "--set-upstream-to", "fork/topic")
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    git(remotes, "push", "-q", "origin", "topic")
+    push_opener(env)
+    remote_lines(env, remotes)
+    git(remotes, "branch", "-q", "--set-upstream-to", "origin/topic")
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published on refs/remotes/fork/topic" in text, text
+    git(remotes, "push", "-q", "fork", "topic")
+    assert run(env) == (0, "")
+
+
+def test_p5_61_a_remote_branch_ahead_at_a_commit_not_fetched_names_the_fetch(env, remotes):
+    """P5-61: the remote's own branch is read, so where it moved past HEAD (another clone pushed) to a commit
+    this repository lacks, HEAD's ancestry cannot be told: the gap names the fetch, after which HEAD,
+    behind the upstream, is published (A6: "behind it ... 0")."""
+    write_token(remotes)
+    other = env.tmp / "other"
+    git(env.tmp, "clone", "-q", "-b", "topic", str(env.tmp / "origin.git"), str(other))
+    ahead = commit(other, "o1.txt")
+    git(other, "push", "-q", "origin", "topic")
+    push_opener(env)
+    code, text = run(env)
+    assert code == 2 and (f"; origin: its refs/heads/topic is at {ahead}, which this repository lacks: fetch origin"
+                          in text), text
+    git(remotes, "fetch", "-q", "origin")
+    assert run(env) == (0, "")
+
+
 @pytest.mark.parametrize("command", ["merge", "push"])
 def test_a6_git_predicates_outside_a_repository_are_instrument_failures(env, command):
     env.tx.command(command)
@@ -1073,6 +1457,7 @@ def test_a6_git_predicates_outside_a_repository_are_instrument_failures(env, com
 def test_a6_commit_modes_only_if_typed(env):
     """Fake disposition (P3): --stage commit's Task-id check is P3's; on the real one:
     test_a6_real_commit_needs_p3s_task_id_commit_reachable_from_head."""
+    task_file(env)  # a typed id names a task (P5-4)
     env.tx.command("commit", FAMILY)
     env.fake.answers[(FAMILY, "commit")] = [gap(".", "MISSING_TASK_TRAILER", "no commit carries Task-id")]
     assert run(env)[0] == 2
@@ -1300,6 +1685,78 @@ def test_m_a_typed_close_task_naming_a_task_stays_the_target(env, monkeypatch, a
     code, text = run(env)
     assert code == 2 and f"close-report-{FAMILY}.md" in text, text
     assert {c[1] for c in env.fake.calls} == ({FAMILY, OTHER} if TYPO in args else {FAMILY})
+
+
+# P5-4 (finding M's /commit half): /commit takes its typed target through the rule /close takes since
+# 4ca4260 (the gate's _targets): a typed id that names no task yields to the families the span dispatched.
+def trailer_gap(task):
+    return [gap(".", "MISSING_TASK_TRAILER", f"no commit reachable from HEAD carries Task-id: {task}")]
+
+
+@pytest.mark.parametrize("args", [TYPO, f"docs/dev/ticket-{TYPO}.md", FAMILY[:-1], f"--codex {TYPO}"])
+def test_p5_4_a_typed_commit_task_naming_no_task_yields_to_the_task_the_span_committed(env, args):
+    """Fake disposition (P3): every task it is asked about lacks its Task-id commit until the case
+    lands one. Before P5-4 the /commit Stop held on the typed id whatever the span committed, a hold
+    no agent action clears (D25). Now it holds naming the typed value until a dispatch of the span
+    names a task (the owner's answer is no fact, D23); then the families the span dispatched are the
+    targets, held until their Task-id commit exists, and the typed id never is."""
+    task_file(env)
+    typed = args.split()[-1]
+    task = TYPO if "/" in typed else typed
+    env.fake.answers[(task, "commit")] = trailer_gap(task)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.tx.command("commit", args)
+    code, text = run(env)
+    assert code == 2 and text.splitlines()[1:2] == [
+        f"- commit: {typed} names no task or chain file, and no dispatch of this /commit names a task"], text
+    env.tx.ask(FAMILY)
+    assert run(env)[0] == 2 and env.fake.calls == []
+    env.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    code, text = run(env)
+    assert code == 2 and f"Task-id: {FAMILY}" in text and "names no task" not in text, text
+    env.fake.answers[(FAMILY, "commit")] = []  # the landing commit
+    assert run(env) == (0, "")
+    assert {c[1:3] for c in env.fake.calls} == {(FAMILY, "commit")}
+
+
+@pytest.mark.parametrize("args,held", [(FAMILY, f"ticket-{FAMILY}.md"),
+                                      (f"dev-{FAMILY}", f"dev-report-{FAMILY}-l1.json"),
+                                      (f"docs/dev/ticket-{FAMILY}.md", f"ticket-{FAMILY}.md"),
+                                      (f"{FAMILY} {TYPO}", f"ticket-{FAMILY}.md")])
+def test_p5_4_a_typed_commit_task_naming_a_task_stays_the_target(env, args, held):
+    """A typed /commit task that names a task or chain file stays the target, whatever the span
+    dispatched, held until its Task-id commit exists and then released; beside one that names
+    none, the families the span dispatched join it (as /close's, 4ca4260)."""
+    task_file(env, held)
+    env.tx.command("commit", args)
+    env.tx.ask(OTHER)
+    env.tx.dispatch(OTHER, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    code, text = run(env)
+    assert code == 2 and f"Task-id: {FAMILY}" in text and "names no task" not in text, text
+    assert {c[1] for c in env.fake.calls} == ({FAMILY, OTHER} if TYPO in args else {FAMILY})
+    env.fake.answers.clear()
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("mode", ["--dry-run", "--auto", "--bulk"])
+def test_p5_4_commit_modes_keep_their_verdicts_beside_a_mistyped_id(env, monkeypatch, mode):
+    """--dry-run asks nothing of the chain; --auto takes dev-lifecycle's target function's parents,
+    never a typed word; --bulk reads its status block: a mistyped id typed beside them changes none."""
+    lifecycle = types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY])
+    monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.fake.answers[(TYPO, "commit")] = trailer_gap(TYPO)
+    env.tx.command("commit", f"{mode} {TYPO}")
+    code, text = run(env)
+    if mode == "--dry-run":
+        assert (code, text) == (0, "") and env.fake.calls == []
+    elif mode == "--bulk":
+        assert code == 2 and "no changelog-analyst status block" in text and env.fake.calls == []
+    else:
+        assert code == 2 and f"Task-id: {FAMILY}" in text and TYPO not in text, text
+        env.fake.answers.clear()
+        assert run(env) == (0, "") and {c[1] for c in env.fake.calls} == {FAMILY}
 
 
 # ---------------------------------------------------------------- A11: modes
@@ -1646,6 +2103,27 @@ def test_a6_real_commit_needs_p3s_task_id_commit_reachable_from_head(real, repo)
     assert run(real) == (0, "")
 
 
+def test_p5_4_real_a_mistyped_commit_is_released_by_the_landing_of_the_task_the_span_committed(real, repo):
+    """test_p5_4_a_typed_commit_task_naming_no_task_yields_to_the_task_the_span_committed on P3's real
+    --stage commit: before P5-4 the mistyped id stayed the target, and P3 held it (no chain, no
+    Task-id commit) after the corrected task landed."""
+    chain_on_disk(repo, close="CLOSE: YES")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "cycle artifacts")
+    real.tx.command("commit", TYPO)
+    code, text = run(real)
+    assert code == 2 and text.splitlines()[1] == (
+        f"- commit: {TYPO} names no task or chain file, and no dispatch of this /commit names a task"), text
+    real.tx.ask(FAMILY)
+    real.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    code, text = run(real)
+    assert code == 2 and "problem=MISSING_TASK_TRAILER" in text and TYPO not in text, text
+    (repo / "scripts" / "one.py").write_text("landed = True\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", f"land the change\n\nTask-id: {FAMILY}")
+    assert run(real) == (0, "")
+
+
 @pytest.mark.parametrize("qa_line,asked,code", [
     ("CLOSE: YES", False, 2), ("CLOSE: YES", True, 0), ("CLOSE: NO", False, 0)],
     ids=["landed-not-asked", "landed-asked", "not-landed"])
@@ -1916,3 +2394,43 @@ def test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_
     assert not (real.project / "docs" / "dev" / f"qa-report-{FAMILY}.json").exists()
     chain_on_disk(wt)
     assert gate.decision(real.payload) == (0, "", "completed_by_deadline")
+
+
+# ---------------------------------------------------------------- P13-1 R7: a question asked in text (A8)
+QUESTION_GAP = "the turn ends with a question in text; ask it with AskUserQuestion, or end without it."
+
+
+@pytest.mark.parametrize("ending", ["Shall I go on?", "要继续吗？", "Done.\n\nAnything else?  \n"])
+def test_r7_a_dev_turn_ending_with_a_question_in_text_is_a_gap(env, ending):
+    steps = dev_span(env, done=0)
+    env.tx.todos(steps, len(steps))
+    assert run(env) == (0, "")
+    env.tx.say(ending)
+    code, text = run(env)
+    assert code == 2 and f"- dev: {QUESTION_GAP}\n" in text
+    assert run(env, last_assistant_message="Done.") == (0, "")  # the CLI's own last text, where it sends it
+    assert run(env, last_assistant_message=ending)[0] == 2
+
+
+def test_r7_spec_is_checked_for_the_text_question_only(env):
+    env.tx.command("spec", "a new report", body="the spec text: its requirement-round is asked")
+    env.tx.say("Which report did you mean?")
+    assert run(env) == (2, f"COMMAND_GATE /spec: not complete\n- spec: {QUESTION_GAP}\nFinish the gaps above. "
+                           "Ask with AskUserQuestion only for a real decision the user must make.\n")
+    env.tx.say("The spec is written.")
+    assert run(env) == (0, "")
+    assert "spec" not in command_span.GATED_COMMANDS
+
+
+def test_r7_the_same_text_in_a_close_span_is_no_gap(env):
+    env.tx.command("close", "")
+    env.tx.say("Shall I go on?")
+    assert QUESTION_GAP not in run(env)[1]
+
+
+def test_r7_a_session_whose_text_asks_no_round_is_not_held_to_it(env):
+    """Live landing: a /spec session that loaded an earlier text (no round) ending a turn with a question meets no
+    R7 gap; it follows the text it loaded."""
+    env.tx.command("spec", "a new report", body="an earlier spec text")
+    env.tx.say("Which report did you mean?")
+    assert run(env) == (0, "")

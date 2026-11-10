@@ -32,7 +32,7 @@ RULES = (
     Rule('restart-sendmessage', 'posttool-restart-sendmessage.py', ('SendMessage',)),
     Rule('runcode-watchdog', 'posttool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
     Rule('codex-skill-ledger', 'posttool-codex-skill-ledger.py', ('Skill',)),
-    Rule('close-rating', 'posttool-close-rating.py', ('AskUserQuestion',)),
+    Rule('close-rating', 'posttool-close-rating.py', ('AskUserQuestion', 'Agent')),
 )
 
 if __name__ == "__main__":

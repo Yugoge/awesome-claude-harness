@@ -345,8 +345,10 @@ def _human_events_after(r, label: str) -> list:
     actor that is none of the agents, the driver (the replay's own records) and the fault."""
     events = r.hook_events()
     first = next(i for i, ev in enumerate(events) if ev.get("label") == label)
+    # The requirement round's ask (P13-1: /dev Step 4b, /spec Step 3a) is every cycle's own step, not a repair.
     found = [f"{ev['event']} at {ev['label']!r}" for ev in events[first:]
-             if ev["event"] == "UserPromptSubmit" or ev.get("tool") == "AskUserQuestion"]
+             if ev["event"] == "UserPromptSubmit" or ev.get("tool") == "AskUserQuestion"
+             and not str(ev.get("label", "")).startswith(("Step 4b AskUserQuestion", "Step 3a AskUserQuestion"))]
     with open(os.path.join(r.run_dir, "markers.jsonl")) as fh:
         marks = [json.loads(line) for line in fh]
     start = next(m["seq"] for m in marks if m["kind"] == "step" and m["value"] == label)

@@ -1,7 +1,7 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-09T16:40:58Z*
+*Last updated: 2026-11-10T08:16:38Z*
 **Total entries**: 159
 **Convention**: kebab
 
@@ -20,6 +20,7 @@ tests/
 ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
 ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
+├── `test_allow_grant_quoted_separators.py` - FR-2: a `;`, `&&`, `||`, `|` or newline inside a quoted commit message is text to the `/allow` grant matcher; a real second command still is not
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
 ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
@@ -41,7 +42,7 @@ tests/
 ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 ├── `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
 ├── `test_cli_role_own_cycle.py` - their cycle from the agent's own dispatch obligation
-├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
+├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (thro...
 ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS

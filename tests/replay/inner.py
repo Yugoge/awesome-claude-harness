@@ -7,7 +7,8 @@ hooks.jsonl (every hook run), invocations.jsonl (each hook event's payload and
 registered commands, for E1's differential, differential.py), blocks.json (blocks, deviations, hook errors,
 failed calls, respellings), summary.json (the per-run row), env.json and
 bash-env.json (the environment every hook and every Bash call got), ids.json and markers.jsonl (what trace.parse needs), start-manifest.txt when traced, and, for an
-untraced run in mode scratch, outside-writes.txt from an mtime scan.
+untraced run in mode scratch, outside-writes.txt from an mtime scan. With the driver argument resweep=1
+it also keeps the score log (score-log.jsonl) and records the score observer's second sweep (scorelog.py).
 """
 from __future__ import annotations
 
@@ -67,6 +68,9 @@ def main(argv=None) -> int:
     except Exception:
         err = traceback.format_exc()
     rp.mark("run", "end")
+    if rp.args.get("resweep") and not err:  # P13-2 B2: the score observer once more on the final transcript
+        from . import scorelog
+        scorelog.resweep(rp)
     rp.finish(time.time() - t0, err)
     if cfg.get("scan_outside"):
         lines = scan_outside(cfg["scan_outside"], [lay.sb] + cfg.get("scan_skip", []), t0 - 1)

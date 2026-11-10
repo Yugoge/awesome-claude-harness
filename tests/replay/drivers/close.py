@@ -85,8 +85,20 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|afk|decline|free[,...]   Step 3b's answer, per landed task in order (default label:
-                          the dialog's first option)
+  rating=label|4|skip|decline|afk|free|dismissed[,...]   Step 3b's answer, per landed task in order (default label:
+                          the dialog's first option). label (the first option) and 4 ("4 - Minor gaps") are answers;
+                          free is a typed reply (the response field); afk is the dialog's timeout (afkTimeoutMs in
+                          the response). skip (terminal Skip, "Chat about this") and decline (Esc, decline) are the
+                          owner turning the dialog down: as the CLI does (read from its bundle, 2.1.319), the
+                          tool_result is an error, the user row carries toolDenialKind "user-rejected", and no
+                          PostToolUse and no PostToolUseFailure hook runs (replay.Rejected). dismissed is an
+                          app-side dismissal, UNCONFIRMED: the bundle has a client capability that marks a question
+                          unanswered (annotations[question].unanswered "skipped"), but which path the app takes
+                          when its user presses Skip is not settled by reading; played as the tool running with
+                          that annotation, so the hook runs and writes no rating row
+  again=A[,B,...]         (not --auto) after Step 3b's question the same question for the same task is asked once
+                          more for each answer listed, in order (a /close typed twice on one task): what the
+                          score log's rating dedup and each answer's hook run are seen on, in one replay
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
 
@@ -106,7 +118,7 @@ import shlex
 
 from .. import agents, cmdtext, roles, schemagen
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
-from ..replay import Deviation
+from ..replay import Deviation, Rejected
 from . import _codex
 
 PIPELINE = "close"
@@ -512,7 +524,8 @@ class DevProducer:
         with self.on(session, devs) as o, self.lane(task_id):
             extra = [f"Close routing finding: {note}"] if note else []
             if role == "ba" and hasattr(cyc, "dispatch_ba"):
-                return cyc.dispatch_ba(f"Step {self.step_of('ba')}", label)
+                # BA's artifacts are its analysis template's (P13-1: Step 4c; Step 4 before the requirement round)
+                return cyc.dispatch_ba(getattr(cyc, "ba_heading", None) or f"Step {self.step_of('ba')}", label)
             fields = self.template(role)
             add = extra + list(getattr(cyc, "graph_lines", []))
             if any(l.strip().startswith("Context file:") for l in fields["prompt"].split("\n")):
@@ -583,7 +596,7 @@ PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "f
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
 # The rating answers the owner may give (Step 3b's question), as the dialog returns them.
-RATINGS = ("label", "4", "skip", "afk", "decline", "free")
+RATINGS = ("label", "4", "skip", "decline", "afk", "free", "dismissed")
 
 
 class CloseRun:
@@ -612,6 +625,7 @@ class CloseRun:
         self.stalled = ""
         self.ratings = [r.strip() for r in str(rp.args.get("rating", "label")).split(",") if r.strip()] or ["label"]
         self.asked: list = []          # (task id, answer) of each rating question
+        self.again = [a.strip() for a in str(rp.args.get("again", "")).split(",") if a.strip()]
         # `--codex`: QA runs the text's Codex review against the stub of `codex` = (rules, script); its landed
         # form is branch 1's, not the codex-disabled one
         self.codex = _codex.CloseCodex(self, codex[0], codex[1], lambda k, v: fact(rp, k, v)) if codex else None
@@ -1273,30 +1287,10 @@ class CloseRun:
         self.outcome = last
         if not self.landed:
             return
-        ever = False
         for item in (self.chain.get("qa_inputs") or []) if not self.do_report else []:
             rel = item if isinstance(item, str) else (item.get("path") or item.get("qa_report") or "")
             if rel and os.path.isfile(os.path.join(o.project, rel)):
                 self.read(rel, self.label(f"Step 3 Read {rel}"))
-        # The scoring helper runs where the text names it; a close.md without the
-        # scoring section (moved to P4, design.md section 6.1) runs none.
-        try:
-            decide = o.block("Step 3", anchor="close-scoring-decide.py").strip()
-        except cmdtext.TextNotFound:
-            decide = ""
-        if decide:
-            c = self.run_text(decide, self.label("Step 3 Bash close-scoring-decide"), "Which close_success event",
-                              rules=[(r"^true\|false$", "true" if ever else "false")])
-            try:
-                events = json.loads((c.response.get("stdout") or "").strip().splitlines()[-1]).get("events") or [] if c.ok else []
-            except (ValueError, IndexError):
-                events = []
-            example = o.block("Step 3", anchor="score-update.sh --agent dev")
-            ex_event = re.search(r"--event (\w+)", example).group(1)
-            for ev in events:
-                for k, line in enumerate(l for l in example.split("\n") if l.strip()):
-                    self.run_text(line.replace(ex_event, ev), self.label(f"Step 3 Bash score-update {ev} {k + 1}"),
-                                  "Mascot score update")
         o.s.say("## Session Summary\n- Accomplished: toy.add validates its arguments.\n- Not accomplished: none.\n"
                 "- User needs satisfied: non-numbers raise TypeError naming the argument.\n"
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")
@@ -1307,31 +1301,38 @@ class CloseRun:
         block = next(b.text for b in cmdtext.blocks(self.o.section("Step 3b")) if '"questions"' in b.text)
         return json.loads(block.replace("<task-id>", self.tid))
 
-    def step4(self, answer: str = "label") -> None:
-        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
-        orchestrator does nothing with the answer."""
+    def step4(self, answer: str = "label", nth: int = 1) -> None:
+        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says (the
+        module doc, rating=); the orchestrator does nothing with the answer. `nth` is 2 or more for the same
+        question asked again (again=)."""
+        from .. import scorelog
         tin = self.rating_input()
         q = tin["questions"][0]
         labels = [opt["label"] for opt in q["options"]]
 
         def perform():
             if answer == "decline":
-                raise RuntimeError("User declined to answer questions")
-            base = {"questions": tin["questions"]}
+                raise Rejected("User declined to answer questions")
             if answer == "skip":
-                return dict(base, answers={})
+                raise Rejected("The user doesn't want to proceed with this tool use. The tool use was rejected.")
+            base = {"questions": tin["questions"]}
+            if answer == "dismissed":  # unconfirmed (see the module doc, rating=)
+                return dict(base, answers={}, annotations={q["question"]: {"unanswered": "skipped"}})
             if answer == "afk":
                 return dict(base, answers={}, afkTimeoutMs=60000)
             if answer == "free":
                 return dict(base, answers={q["question"]: "it mostly worked"}, response="it mostly worked")
             pick = next((l for l in labels if l.startswith(answer + " ")), labels[0])
             return dict(base, answers={q["question"]: pick})
-        lab = self.label("Step 3b AskUserQuestion")
+        lab = self.label("Step 3b AskUserQuestion") + (f" again {nth}" if nth > 1 else "")
         c = self.o.s.tool("AskUserQuestion", tin, perform=perform, label=lab, deviation=self.devs.at(lab))
         self.asked.append((self.tid, answer))
+        with self.rp.acting("driver"):
+            held = [row for row in scorelog.rows(self.rp) if row.get("kind") == "rating"]
         fact(self.rp, "close Step 3b", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                         "multiSelect": q.get("multiSelect"), "source": (tin.get("metadata") or {}).get("source"),
-                                        "answer": answer, "ok": c.ok, "blocked": c.blocked})
+                                        "answer": answer, "nth": nth, "label": lab, "ok": c.ok, "blocked": c.blocked,
+                                        "hook_ran": c.post is not None, "rating_rows": held})
 
     # ------------------------------------------------------------ one close, Steps 0-4
     def body(self) -> str:
@@ -1351,6 +1352,8 @@ class CloseRun:
         o.advance(label=self.label("TodoWrite Step 3 done, Step 3b in_progress"))
         if self.landed:
             self.step4(self.ratings[0])
+            for nth, answer in enumerate(self.again, 2):
+                self.step4(answer, nth)
         o.advance(label=self.label("TodoWrite Step 3b done"))
         return last
 

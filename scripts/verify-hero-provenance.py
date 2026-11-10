@@ -255,19 +255,19 @@ def check_manifest_bijection() -> None:
 def check_tamper_table() -> None:
     """AC10: every mutation must produce a NEW failure naming the offending row.
 
-    The mutations go into a scratch copy of README.md that the ratchet is
-    pointed at (--readme): README.md has one writer, generate-hero-status.py
+    The claim rows live in docs/status.md. The mutations go into a scratch copy of it that the
+    ratchet is pointed at (--status): docs/status.md has one writer, generate-hero-status.py
     --write, and this check never writes it."""
-    original = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    original = (REPO_ROOT / "docs" / "status.md").read_text(encoding="utf-8")
     with tempfile.TemporaryDirectory() as td:
-        readme = Path(td) / "README.md"
-        readme.write_text(original, encoding="utf-8")
-        _tamper_table(readme, original)
+        status = Path(td) / "status.md"
+        status.write_text(original, encoding="utf-8")
+        _tamper_table(status, original)
 
 
-def _tamper_table(readme: Path, original: str) -> None:
+def _tamper_table(status: Path, original: str) -> None:
     gen = [sys.executable, str(REPO_ROOT / "scripts/generate-hero-status.py"), "--check",
-           "--readme", str(readme)]
+           "--status", str(status)]
 
     baseline = subprocess.run(gen, capture_output=True, text=True, cwd=str(REPO_ROOT))
     if baseline.returncode != 0:
@@ -310,14 +310,14 @@ def _tamper_table(readme: Path, original: str) -> None:
              if l.startswith("**Known limits") else l for l in t.splitlines()) + "\n"),
     ]
     for label, row_id, mutate in mutations:
-        readme.write_text(mutate(original), encoding="utf-8")
+        status.write_text(mutate(original), encoding="utf-8")
         r = subprocess.run(gen, capture_output=True, text=True, cwd=str(REPO_ROOT))
         if r.returncode == 0:
             fail(f"tamper {label}: ratchet did NOT fail")
         elif row_id not in r.stderr:
             fail(f"tamper {label}: failure does not name row {row_id!r}: "
                  f"{r.stderr.strip()[:200]}")
-    readme.write_text(original, encoding="utf-8")
+    status.write_text(original, encoding="utf-8")
 
     restored = subprocess.run(gen, capture_output=True, text=True, cwd=str(REPO_ROOT))
     if restored.returncode != 0:

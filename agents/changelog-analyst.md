@@ -1,6 +1,7 @@
 ---
 name: changelog-analyst
 description: "Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit."
+summary: "Stages a task's files, writes the conventional commit message and the push-gate token; dispatched only by /commit."
 ---
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
