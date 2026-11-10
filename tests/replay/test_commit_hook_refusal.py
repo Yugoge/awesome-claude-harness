@@ -54,10 +54,13 @@ def test_a5_hook_refusal_under_commit_is_one_authorize_question(replays):
     assert owner["hook"] == "pretool-bash-safety.sh" and "&& scripts/bootstrap`" in owner["authorize"], owner
     assert any(k.endswith(".clean") for k in r.fact("owner remedy")["keys"]), r.explain()
 
-    # The orchestrator gate ran on each question and allowed it.
-    gate = [[h["verdict"] for h in ev["hooks"] if h["hook"] == "hooks/pretool-orchestrator-gate.py"]
+    # The orchestrator gate ran on each of the three /commit questions and allowed it (the /dev before it
+    # asks its own requirement round since P13-1, Step 4b: allowed too, and not one of the three).
+    gate = [(ev.get("label", "").startswith("/commit "),
+             [h["verdict"] for h in ev["hooks"] if h["hook"] == "hooks/pretool-orchestrator-gate.py"])
             for ev in r.hook_events() if ev.get("event") == "PreToolUse" and ev.get("tool") == "AskUserQuestion"]
-    assert gate == [["ok"]] * 3, gate
+    assert [v for mine, v in gate if mine] == [["ok"]] * 3, gate
+    assert all(v == ["ok"] for _, v in gate), gate
 
     # After the owner's answer, Steps 5-7 again: the commit lands with its trailer and push-gate token.
     done = r.fact("commit")

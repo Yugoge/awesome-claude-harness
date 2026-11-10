@@ -81,11 +81,24 @@ def test_sentence_template_role_is_its_obligation_not_its_first_action(dev):
     assert set(found) == {"dev", "test-writer"}
 
 
+def _worked_example(o: Orchestrator) -> dict:
+    """The one template that carries the literal worked-example block (role "ba"): Step 4's BA
+    template before P13-1, Step 4c's BA analysis template since (which also names subagent_type)."""
+    found = [t for h in ("Step 4", "Step 4c") for t in _templates(o, h)
+             if "Obligation block (worked example):" in t.get("prompt", "")]
+    assert len(found) == 1, "dev.md has one worked-example obligation block"
+    return found[0]
+
+
 def test_literal_block_template_role_is_its_obligation_not_its_first_action(dev):
-    """Step 4's BA template carries a literal worked-example block (role "ba")."""
-    ba = next(t for t in _templates(dev, "Step 4") if not t.get("subagent_type"))
-    assert dev.template_role(ba, "20260101-000000") == "ba"
-    assert dev.template_role(_renamed(ba, "qa"), "20260101-000000") == "ba"
+    """The BA template that carries the literal worked-example block (role "ba"): its block names
+    the role, whatever the FIRST ACTION sentinel names; read without its subagent_type, the role
+    is still the block's."""
+    ba = _worked_example(dev)
+    for t in (ba, _renamed(ba, "qa")):
+        assert dev.template_role(t, "20260101-000000") == "ba"
+        assert dev.template_role(dict(t, subagent_type=None), "20260101-000000") == "ba"
+        assert dev.tree.obligation_role(dev.instantiate(t["prompt"], "20260101-000000")) == "ba"
 
 
 def test_rendered_prompt_role_is_its_obligation_block(dev):
@@ -131,9 +144,18 @@ def test_an_old_trees_obligation_module_loads(tmp_path):
     path = tree / "hooks" / "lib" / "obligation.py"
     assert "@dataclass" in path.read_text(encoding="utf-8"), "the old tree's module is the dataclass one"
     # The failure the loader avoids: the same file run unregistered does not load.
+    # Its fallback import (`from subagent_restart import ...`, hooks/lib on sys.path) is given the
+    # tree's own lib, so the failure seen is the dataclass one whatever ran before in this process.
     spec = importlib.util.spec_from_file_location("p64_unregistered_obligation", path)
-    with pytest.raises(AttributeError):
-        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    before = set(sys.modules)
+    sys.path.insert(0, str(path.parent))
+    try:
+        with pytest.raises(AttributeError):
+            spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    finally:
+        sys.path.remove(str(path.parent))
+        for name in set(sys.modules) - before:  # the old tree's modules stay out of later tests
+            del sys.modules[name]
     assert "p64_unregistered_obligation" not in sys.modules
 
     t = agents.Tree(_RP(tmp_path, harness=tree))

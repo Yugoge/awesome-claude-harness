@@ -105,9 +105,11 @@ def _payloads(r, event: str, tool: str) -> list[dict]:
 def test_a20_rerun_without_askuserquestion_completes_with_the_assumption_recorded(form, key, replays):
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
-    asked = _payloads(r, "PreToolUse", "AskUserQuestion")
+    # Step 5's relay (P13-1's requirement round asks round 1 before it, Step 4b, answered)
+    asked = [a for a in _payloads(r, "PreToolUse", "AskUserQuestion") if str(a.get("label", "")).startswith("Step 5")]
     assert len(asked) == (0 if form == "none" else 1), [a["label"] for a in asked]
-    after = {ev.get("event") for ev in r.hook_events() if ev.get("tool") == "AskUserQuestion"}
+    after = {ev.get("event") for ev in r.hook_events()
+             if ev.get("tool") == "AskUserQuestion" and str(ev.get("label", "")).startswith("Step 5")}
     assert after == ({"PostToolUseFailure", "PreToolUse"} if form == "decline" else
                      {"PostToolUse", "PreToolUse"} if form == "skip" else set()), after
     q = QUESTION_DOC
@@ -141,5 +143,7 @@ def test_a20_rerun_without_askuserquestion_close_rating_holds_no_stop(replays):
     the close rating never blocks)."""
     r = replays.get(_key(CLOSE, (("rating", "none"),)))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
-    assert not [ev for ev in r.hook_events() if ev.get("tool") == "AskUserQuestion"], r.explain()
+    # /close's own events (its labels are "/close ..."; the /dev before it asks its Step 4b round, P13-1)
+    assert not [ev for ev in r.hook_events() if ev.get("tool") == "AskUserQuestion"
+                and str(ev.get("label", "")).startswith("/close ")], r.explain()
     assert not r.blocks and not r.hook_errors and r.reached(), r.explain()

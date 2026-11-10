@@ -418,10 +418,12 @@ class Orchestrator:
         The driver argument `ask` (P5 A20's rerun without AskUserQuestion) says what the owner's side does:
         `answered` (default) the dialog's recommended option; `skip` the dialog closed with no answer
         (answers {}); `decline` the call refused (an error tool_result, as a declined dialog or a
-        headless session's permission refusal); `none` the surface offers no AskUserQuestion, so the main
-        agent makes no call. In every form but `answered` the main agent takes the question's own
-        `default` as an assumption, says so, and records it in `assumptions` (the caller carries it into
-        the producer's re-dispatch); nothing is asked again."""
+        headless session's permission refusal); `none` the surface offers no AskUserQuestion: the main
+        agent makes no call, unless the command's text says the call is made all the same (dev.md
+        Step 5 since #27), where the CLI answers it with `No such tool available` before any hook runs
+        (as close.py's rating=none). In every form but `answered` the main agent takes the question's
+        own `default` as an assumption, says so, and records it in `assumptions` (the caller carries it
+        into the producer's re-dispatch); nothing is asked again."""
         path = os.path.join(self.project, rel_path)
         self.s.read(path, label=f"{label} Read question", deviation=self.devs.at(f"{label} Read question"))
         q = json.loads(agents.peek(self.rp, "main", path))
@@ -436,7 +438,14 @@ class Orchestrator:
         if source:
             tin["metadata"] = {"source": source}
         ans = ""
-        if form != "none":
+        if form == "none" and "the call is made all the same" in self.text:
+            from .replay import MODEL
+            tid = self.rp.new_tool_id()
+            self.s.append({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
+                {"type": "tool_use", "id": tid, "name": "AskUserQuestion", "input": tin}]}})
+            err = "No such tool available: AskUserQuestion"
+            self.s.main._result(tid, f"<tool_use_error>Error: {err}</tool_use_error>", error=True, resp=f"Error: {err}")
+        elif form != "none":
             def perform():
                 if form == "decline":
                     raise RuntimeError("User declined to answer questions")

@@ -931,12 +931,25 @@ class DevCycle:
         """Step 12's "If dev wrote its question artifact": relay it as in Step 5 (ONE AskUserQuestion) and
         re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at), each round until
         the dev writes its report."""
-        sc = self.sc
+        import hashlib
+        sc, o = self.sc, self.o
+        sec = o.section("Step 12")
+        # Since #27 the text names the relay's metadata.source and the hook's answer file, and the
+        # re-dispatch's `Previous answers:` is that file (or none); before, the answers as JSON.
+        m = re.search(r"`metadata\.source` `([^`]+)`", sec)
+        source = o.bind(m.group(1)) if m else None
+        by_file = "Previous answers: <the producer answer file" in sec
         while self.dev_question:
-            q, answer = self.o.ask(self.dev_question, self.L(f"{label} AskUserQuestion"))
+            q, answer = o.ask(self.dev_question, self.L(f"{label} AskUserQuestion"), source=source)
             self.dev_answers.append({"question": q.get("need"), "answer": answer})
             n = len(self.dev_answers)
-            add = [f"Clarification round: {n}", f"Previous answers: {json.dumps(self.dev_answers)}"]
+            prev = json.dumps(self.dev_answers)
+            if by_file:
+                raw = agents.peek(self.rp, "main", os.path.join(o.project, self.dev_question)).encode()
+                rel = f"docs/dev/producer-answer-{self.tid}-dev-{hashlib.sha256(raw).hexdigest()[:8]}.json"
+                prev = rel if os.path.isfile(os.path.join(o.project, rel)) else "none"
+                _round.fact(self.rp, f"{label} AskUserQuestion", {"producer_answer": None if prev == "none" else rel})
+            add = [f"Clarification round: {n}", f"Previous answers: {prev}"]
             d = self.dispatch_dev(self.L(f"{label} Agent(dev) clarification round {n}"), sc.final, sc.old,
                                   add_lines=add)
             self.dev_question = d.player.question_written

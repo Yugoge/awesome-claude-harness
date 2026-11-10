@@ -90,7 +90,9 @@ def test_dev_question_pauses_and_the_same_role_resumes(replays, key):
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     evs = r.hook_events()
-    asked = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("tool") == "AskUserQuestion"]
+    # every question but P13-1's requirement round (Step 4b, asked before BA's analysis since #38)
+    asked = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("tool") == "AskUserQuestion"
+             and not str(ev.get("label", "")).startswith("Step 4b ")]
     assert asked == ["Step 12 AskUserQuestion"], asked
     dev_writes = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("agent_type") == "dev"
                   and ev.get("tool") in ("Write", "Edit")]
