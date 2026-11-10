@@ -69,7 +69,7 @@ import re
 
 import pytest
 
-from tests.replay import recovery, routing, suite
+from tests.replay import recovery, routing, sites, suite
 
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 L1_DEV = "agent:dev Write docs/dev/dev-report-*-l1.json"
@@ -318,11 +318,13 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
 # ---------------------------------------------------------------- F12, F12w: a grant claimed by the wrong role
 _COMMIT_SCN = next(s for s in suite.COMPLIANT if s.name == "/commit")
 _QA_CALL = "agent:qa Bash diff *"  # the pre-commit QA's first call: Step 5's commit grant is live
+# Each claim's refusing hook file, by the hook that reports it: the file itself, or the merged gate that runs
+# it as a rule (tool-policy: hooks/pretool-write-gate.py since P12, sites.reporter).
 CLAIMS = {
     "F12": (f"claim@{_QA_CALL}=Bash:git -C {{project}} commit -m 'a commit the reviewer claims'",
-            "hooks/pretool-git-privilege-guard.py", r"caller's role is 'qa'[^\n]*'changelog-analyst'"),
+            sites.reporter(suite.REPO, "hooks/pretool-git-privilege-guard.py"), r"caller's role is 'qa'[^\n]*'changelog-analyst'"),
     "F12w": (f"claim@{_QA_CALL}=Write:{{state}}/agentic-commit/push-analyst/claimed/{{task}}.json",
-             "hooks/pretool-tool-policy.py", r'"role":"qa"[^\n]*push-analyst grant directory; only the push-analyst'),
+             sites.reporter(suite.REPO, "hooks/pretool-tool-policy.py"), r'"role":"qa"[^\n]*push-analyst grant directory; only the push-analyst'),
 }
 
 
