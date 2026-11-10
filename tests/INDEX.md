@@ -144,6 +144,7 @@ tests/
 ├── `test_close_command_text.py` - commands/close.md as P4 decided it: one disposition call, in-turn questions, the native rating.
 ├── `test_close_rating_step_label.py` - P4-3: /close's rating step is "Step 4" (P4 R4, R7, R11, A3), not the "Step 3b" 376a9ae gave it.
 ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
+├── `test_close_report_append_lock_cleanup.py` - the append leaves no `.append-lock` file in the product repo (P10-36), mutual exclusion kept
 ├── `test_close_route_select_compat.py` - It answers the two calls origin/master's /close Step 0 makes (commands/close.md:296 on a7d3a9f, :...
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 ├── `test_commit_multi_repo_plan.py` - Python script
