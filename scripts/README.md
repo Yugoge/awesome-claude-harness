@@ -88,8 +88,6 @@ Organization and usage documentation for `scripts/`.
 - `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 - `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 - `scan-project.sh` - Description: Scan project structure and detect project type
-- `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
-- `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
 - `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 - `session-index.py` - Subcommands (all take --git-root):
 - `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.

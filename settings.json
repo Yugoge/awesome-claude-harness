@@ -54,8 +54,6 @@
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-git-env.sh\":*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-git-selftest.sh\":*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/scan-project.sh\":*)",
-      "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh\":*)",
-      "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/score-update.sh\":*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/write-qa-mode.sh\":*)",
       "Bash(/tmp/*-venv/bin/python*)",
       "Bash(awk:*)",
@@ -687,6 +685,16 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-producer-gate.py\""
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstart-score-inject.py\""
           }
         ]
       }

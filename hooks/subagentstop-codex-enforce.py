@@ -24,6 +24,10 @@ Activation logic:
      activates codex on it. No role list here says which agents are bound.
      A dispatch whose own obligation names pipeline close or commit is not
      bound by the flag. Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
+  7. A QA of a /dev-family cycle whose record is low (lib/score_view.py, D32) is
+     bound whatever the flag and the line: steps 4 and 6 hold it with no
+     `codex-enforce.json` and no line, and the ledger entry of any codex call,
+     failed or not, lets it stop.
 
 Exit codes:
   0: Allow stop (pass-through).
@@ -37,7 +41,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle, dispatch_template
+from lib import agent_cycle, dispatch_template, score_view
 from lib.agent_resolver import resolve_agent_type
 
 CODEX_REQUIRED_LINE = re.compile(r"^\s*codex_required:\s*true\s*$", re.M)
@@ -84,7 +88,9 @@ def main() -> None:
     # Code's record of the agent.
     resolution, own = agent_cycle.own_resolution(data, project_dir)
     registry = agent_cycle.registry_dir(data, own, project_dir)
-    if registry is None or not _read_json(registry / "codex-enforce.json").get("enabled"):
+    # A /dev-family QA whose record is low debates Codex whether or not --codex armed the cycle (D32)
+    forced = registry is not None and score_view.codex_forced(data, own)
+    if registry is None or not (forced or _read_json(registry / "codex-enforce.json").get("enabled")):
         # No cycle, or no (or a disabled) enforcement flag in it
         sys.exit(0)
     dev_session_id = registry.name
@@ -100,7 +106,7 @@ def main() -> None:
     # codex flag /dev --codex armed for /dev's own; the role is bound as G2 binds it.
     if own.get("pipeline") in ("close", "commit") and (not agent_type or own.get("role") == agent_type):
         sys.exit(0)
-    if (not CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
+    if (not forced and not CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
             and not _template_asks(resolution, agent_type, data.get("agent_transcript_path"))):
         sys.exit(0)
 

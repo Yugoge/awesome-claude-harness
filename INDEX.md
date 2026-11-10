@@ -162,6 +162,7 @@ dot-claude/
 │   │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   │   ├── `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
 │   │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
+│   │   ├── `score_view.py` - What a score shows at a dispatch and what a low one costs (D29, D32): the readers of the score log that hooks call. They read the log and the
 │   │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 │   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
@@ -285,6 +286,7 @@ dot-claude/
 │   │   ├── `test_role_from_cli.py` - The role is the payload's agent_type when it carries an agent_id, else the agentType of
 │   │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   │   ├── `test_runtime_guard.py` - Two layers:
+│   │   ├── `test_score_view.py` - P13-3 (D29, D32): what a score shows at a dispatch and what a low one costs.
 │   │   ├── `test_scratch_lifecycle.py` - Covers:
 │   │   ├── `test_session_gitignore_propagate.py` - product repo are listed in the clone's own exclude file, one line each, and nothing else is writt...
 │   │   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
@@ -424,6 +426,7 @@ dot-claude/
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 │   ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+│   ├── `subagentstart-score-inject.py` - SubagentStart: shows the starting subagent its own record (D29, D32): score, rank and trend, its newest good event and newest miss as facts,
 │   ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 │   ├── `subagentstop-codex-enforce.py` - Activation logic:
 │   ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
@@ -491,7 +494,6 @@ dot-claude/
 │   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   │   ├── `score_log.py` - Re-export of hooks/lib/score_log.py (the same file name, so it is loaded by path) for score-update.sh and score-inject.sh.
 │   │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 │   │   ├── `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
 │   │   └── `soundness_gate.py` - HUNK-level failure attribution
@@ -611,8 +613,6 @@ dot-claude/
 │   ├── `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 │   ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 │   ├── `scan-project.sh` - Description: Scan project structure and detect project type
-│   ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
-│   ├── `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
 │   ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 │   ├── `session-index.py` - Subcommands (all take --git-root):
 │   ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
@@ -745,10 +745,6 @@ dot-claude/
 │   │   ├── `test_typed_corrections.py` - Each replay types the command with an argument that names nothing: /close of a ticket path of ano...
 │   │   ├── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
 │   │   └── `wake.py` - Modeled CLI behaviour and its sources (none of it measured on a harness host):
-│   ├── score-inject-contract/
-│   │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
-│   ├── score-lifecycle-contract/
-│   │   └── `test-lifecycle-cas.sh` - Description: Verify CAS and append-only invariants for scripts/score-update.sh and
 │   ├── scripts/
 │   │   ├── `validate-checklist-completeness.py` - Validator: validate-checklist-completeness
 │   │   ├── `validate-chinese-content.py` - Validator: validate-chinese-content

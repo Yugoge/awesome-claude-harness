@@ -63,6 +63,7 @@ lib/
 ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 ├── `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
 ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
+├── `score_view.py` - What a score shows at a dispatch and what a low one costs (D29, D32): the readers of the score log that hooks call. They read the log and the
 ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or

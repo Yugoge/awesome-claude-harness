@@ -1,15 +1,10 @@
 """The score log's one module (hooks/lib/score_log.py): its reader, its one writer, the score function and the
-two renderers (owner summary, /rating view); and the reader's two callers.
-
-scripts/score-update.sh and scripts/score-inject.sh both call read_lines (through the scripts/lib/score_log.py
-re-export) in place of a parse of their own and keep their own exit code for a refused log: 2 and 1.
-The callers run from a scratch copy whose venv/bin/activate is empty, so the
-test needs no installed venv and runs the python3 on PATH."""
+renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hooks: the observer
+writes, the SubagentStart injector, the Stop gate and the Codex gate read (tests/test_score_view.py)."""
 
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -76,77 +71,6 @@ def test_an_unreadable_log_is_refused(tmp_path: Path, kind: str) -> None:
         score_log.read_lines(path)
 
 
-@pytest.fixture()
-def scratch_scripts(tmp_path: Path) -> Path:
-    root = tmp_path / "home"
-    (root / "scripts" / "lib").mkdir(parents=True)
-    (root / "venv" / "bin").mkdir(parents=True)
-    (root / "venv" / "bin" / "activate").write_text("", encoding="utf-8")
-    for name in ("score-update.sh", "score-inject.sh"):
-        shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
-    shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
-    # score-update.sh's agents are the roster: hooks/lib/roster.py over agents/; the re-export loads the one
-    # module, hooks/lib/score_log.py, whose append writes its rows.
-    (root / "hooks" / "lib").mkdir(parents=True)
-    for name in ("roster.py", "score_log.py"):
-        shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
-    shutil.copytree(REPO_ROOT / "agents", root / "agents")
-    return root
-
-
-@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
-@pytest.mark.parametrize(
-    ("script", "arguments", "refused_exit"),
-    [
-        ("score-inject.sh", ["--agent", "dev"], 1),
-        ("score-update.sh", ["--agent", "dev", "--event", "qa_first_pass"], 2),
-    ],
-)
-def test_each_caller_keeps_its_exit_code_and_its_use_of_the_lines(
-    tmp_path: Path, scratch_scripts: Path, script: str, arguments: list, refused_exit: int
-) -> None:
-    def run(text: str) -> subprocess.CompletedProcess:
-        path = _log(tmp_path, text)
-        return subprocess.run(
-            ["bash", str(scratch_scripts / "scripts" / script), *arguments, "--lifecycle-file", path],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-
-    refused = run(MALFORMED)
-    assert refused.returncode == refused_exit, refused.stderr
-    assert "malformed JSONL at line 2" in refused.stderr and "INJECTION_PROOF" not in refused.stdout
-
-    accepted = run(LINE % 1 + "\n" + '{"ts": "partial')
-    assert accepted.returncode == 0, accepted.stderr
-    if script == "score-inject.sh":
-        assert "Recent events: close_success_qa_pass(+2)" in accepted.stdout
-    else:
-        assert accepted.stdout.strip() == "dev:qa_first_pass:52->52 (delta=0, unclamped=52)"
-
-
-@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
-def test_score_update_agents_are_the_roster(tmp_path: Path, scratch_scripts: Path) -> None:
-    # P1b row 18: an agent is scored because agents/<agent>.md declares it, so
-    # the script keeps no list: graphify scores, an undeclared name is refused
-    # until its agent file exists.
-    log = tmp_path / "lifecycle.jsonl"
-
-    def run(agent: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["bash", str(scratch_scripts / "scripts" / "score-update.sh"), "--agent", agent,
-             "--event", "qa_first_pass", "--lifecycle-file", str(log)],
-            capture_output=True, text=True, timeout=60,
-        )
-
-    assert run("graphify").returncode == 0
-    refused = run("wizard")
-    assert refused.returncode == 1 and "unknown agent 'wizard'" in refused.stderr
-    (scratch_scripts / "agents" / "wizard.md").write_text("---\nname: wizard\n---\n", encoding="utf-8")
-    assert run("wizard").returncode == 0
-
-
 # --------------------------------------------------------------------------
 # The one module: rows, the score function, tiers, trend, the two views, the one writer
 # --------------------------------------------------------------------------
@@ -176,18 +100,6 @@ def _score(rows, identity="dev", project=PROJECT, as_of=END) -> int:
 
 def _log_rows(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def test_the_scripts_name_re_exports_the_one_module(tmp_path: Path) -> None:
-    spec = importlib.util.spec_from_file_location("score_log_scripts_name", REPO_ROOT / "scripts" / "lib" / "score_log.py")
-    shim = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(shim)
-    for name in ("read_lines", "ScoreLogError", "append", "locked", "score", "tier", "trend", "project_key"):
-        assert callable(getattr(shim, name)), name
-    good = _log(tmp_path, LINE % 1 + "\n" + LINE % 2 + '\n{"ts": "partial')
-    assert shim.read_lines(good) == score_log.read_lines(good) != []
-    with pytest.raises(shim.ScoreLogError, match="line 2 .*not final line"):
-        shim.read_lines(_log(tmp_path, MALFORMED))
 
 
 def test_rows_without_kind_are_read_and_never_scored(tmp_path: Path) -> None:
@@ -331,24 +243,6 @@ def test_failing_tasks_keep_falling_below_zero_and_a_long_good_run_stops_at_100(
     assert score_log.tier(failing[-1]) == "Disgraced"
     good = run(score_log.points_for("qa_first_pass", "dev") + score_log.RATING_POINTS[5])
     assert good[9] == 100 and good[-1] == 100 and max(good) == 100
-
-
-@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
-def test_the_fold_equals_the_running_new_score_of_score_update(tmp_path: Path, scratch_scripts: Path) -> None:
-    log = tmp_path / "lifecycle.jsonl"
-    deltas = [40, 40, 40, -60, -60, -60, 30, -5]  # caps at 100 twice, passes below 0, no floor
-    for delta in deltas:
-        run = subprocess.run(
-            ["bash", str(scratch_scripts / "scripts" / "score-update.sh"), "--agent", "dev", "--delta", str(delta),
-             "--reason", "fold check", "--lifecycle-file", str(log)], capture_output=True, text=True, timeout=60)
-        assert run.returncode == 0, run.stderr
-    legacy = _log_rows(log)
-    events = [_event(row["delta"], ts=row["ts"], task=f"2026110{n + 1}-100000", key=f"k{n}") for n, row in enumerate(legacy)]
-    assert [row["new_score"] for row in legacy] == [90, 100, 100, 40, -20, -80, -50, -55]
-    assert [_score(events[: n + 1]) for n in range(len(events))] == [row["new_score"] for row in legacy]
-    assert _score(events, as_of=_ts(0)) == 50 and len({row["ts"] for row in legacy}) < len(legacy)  # ties kept file order
-    assert score_log.read_lines(str(log))  # the script's rows still read; none of them is scored
-    assert _score(legacy) == 50
 
 
 def test_append_writes_one_line_and_the_first_row_per_key_wins(tmp_path: Path) -> None:

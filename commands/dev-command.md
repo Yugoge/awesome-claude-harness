@@ -19,16 +19,16 @@ This file keeps its own 16 steps, Step 4 with its 4a-4c (`scripts/todo/dev-comma
 | 4 The Requirement Round | 4 | obligation |
 | 4a Panel QA Writes Round 1 | 4a | obligation |
 | 4b Ask Each Round | 4b | no |
-| 4c BA Analysis | 4c | obligation; no score header |
+| 4c BA Analysis | 4c | obligation |
 | 5 BA Clarification Loop | 5 | obligation |
 | 6 Validate BA Output | 6 | no |
 | 7 QA Validates BA Conclusions | 7 | obligation |
 | 8 BA-QA Iteration Loop | 8 | obligation |
 | 9 Graphify enrichment | 9 | where the graph line goes |
-| 10 Delegate to Dev Subagent | 10 | what it writes; no test-writer, header or baseline |
+| 10 Delegate to Dev Subagent | 10 | what it writes; no test-writer or baseline |
 | 11 Validate Dev Implementation | 12 | no |
-| 12 Delegate to QA Subagent | 13 | obligation; no score header |
-| 13 Process QA Results | 14 | no score updates |
+| 12 Delegate to QA Subagent | 13 | obligation |
+| 13 Process QA Results | 14 | no |
 | 14 Update Settings.json Permissions | 15 | no |
 | 15 Iteration Loop | 16 | this file's numbers |
 | 16 Generate Completion Report | 17 | one lane; its identity |
@@ -89,7 +89,7 @@ As `/dev` Step 4b.
 
 ### Step 4c: BA Analysis (the final BA context)
 
-As `/dev` Step 4c, with this command's differences: no test-writer, so BA owes no acceptance-criteria JSON; the singular dispatch (leave out the lane-adapter line); no `BA_SCORE_HEADER` (Steps 1-4 then use at most four Bash calls before this dispatch). In place of `/dev`'s worked example the obligation is:
+As `/dev` Step 4c, with this command's differences: no test-writer, so BA owes no acceptance-criteria JSON; the singular dispatch (leave out the lane-adapter line); In place of `/dev`'s worked example the obligation is:
 
 ```
   Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}].
@@ -128,7 +128,7 @@ As `/dev` Step 9; its `Graph context file:` line, when graphify's run record say
 
 ### Step 10: Delegate to Dev Subagent
 
-As `/dev` Step 10's dev dispatch, without its test-writer gate and dispatch, its `DEV_SCORE_HEADER` line, its `baseline_head_sha` and `baseline_dirty_snapshot` capture and lines, and its `Generated tests` line. Dev writes the file the requirement names (a project command under `<project>/.claude/commands/`, an agent under `.claude/agents/`, ...) and creates a script only for an operation that repeats (about five runs or more), a multi-step workflow, an integration or a performance-critical path; a one-time operation is the agent's own work. `hooks/pretool-claude-config-guard.py` lets this command's dev write the project command file (its dispatch carries its obligation block); any other write under `.claude/hooks/` or `.claude/commands/` needs the owner's `.claude/.hook-refactor-allow`. The obligation is:
+As `/dev` Step 10's dev dispatch, without its test-writer gate and dispatch, its `baseline_head_sha` and `baseline_dirty_snapshot` capture and lines, and its `Generated tests` line. Dev writes the file the requirement names (a project command under `<project>/.claude/commands/`, an agent under `.claude/agents/`, ...) and creates a script only for an operation that repeats (about five runs or more), a multi-step workflow, an integration or a performance-critical path; a one-time operation is the agent's own work. `hooks/pretool-claude-config-guard.py` lets this command's dev write the project command file (its dispatch carries its obligation block); any other write under `.claude/hooks/` or `.claude/commands/` needs the owner's `.claude/.hook-refactor-allow`. The obligation is:
 
 ```
   Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}].
@@ -143,7 +143,7 @@ As `/dev` Step 12; when dev completed, go to Step 12.
 
 ### Step 12: Delegate to QA Subagent
 
-As `/dev` Step 13, without its `QA_SCORE_HEADER` line and its `Per-task active test manifest` line. The obligation is:
+As `/dev` Step 13, without its `Per-task active test manifest` line. The obligation is:
 
 ```
   Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch (see /dev Step 4), artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}].
@@ -154,7 +154,7 @@ As `/dev` Step 13, without its `QA_SCORE_HEADER` line and its `Per-task active t
 
 ### Step 13: Process QA Results
 
-As `/dev` Step 14 without its score-update events: `qa.status == "pass"` goes to Step 14; `warning` or `fail` goes to Step 15.
+As `/dev` Step 14, its extra independent QA round included: `qa.status == "pass"` goes to Step 14; `warning` or `fail` goes to Step 15.
 
 ### Step 14: Update Settings.json Permissions
 

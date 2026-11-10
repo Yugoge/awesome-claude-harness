@@ -138,6 +138,8 @@ class Dispatch(Call):
     agent_id: str = ""
     agent_type: str = ""
     stop: Event | None = None
+    start: Event | None = None  # its SubagentStart event, and the text its hooks handed the agent
+    context: str = ""
     actor: "Actor | None" = None
     # A session cut while the subagent ran (faults.py `cut`, `limit`): its Agent call never comes
     # back; the recovery resumes the same agent, whose response ends with `final_line`.
@@ -712,6 +714,17 @@ class Actor:
         meta = os.path.join(os.path.dirname(self.s.agent_tpath(aid)), f"agent-{aid}.meta.json")
         with open(meta, "w") as fh:
             json.dump({"agentType": atype, "description": agent_in["description"], "toolUseId": tid}, fh)
+        # The CLI runs the SubagentStart hooks before the agent's first turn and puts what they print (additionalContext)
+        # in the agent's context (P13-3, C1); a start text that asks for a Codex debate (D32) is followed by the agent
+        d.start = self.s.fire("SubagentStart", f"{label} start", {"agent_id": aid, "agent_type": atype})
+        self.rp.settle(d.start, f"{label} start", step["deviation"])
+        d.context = "\n".join(c for h in d.start.hooks if (c := hookrun.context("SubagentStart", h)))
+        if d.context:
+            self.s.append({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": d.context,
+                                                                "hookName": "SubagentStart"}}, aid)
+        if "Codex debate" in d.context:
+            sub.tool("Skill", {"skill": "codex", "args": "Review the draft once and completely."},
+                     perform=lambda: {"success": True, "commandName": "codex"}, label=f"{label} Skill(codex)")
 
         def rest(on_stop_block=on_stop_block, stop_rounds=stop_rounds):
             if step["body"]:

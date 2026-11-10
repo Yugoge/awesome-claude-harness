@@ -114,8 +114,6 @@ and none of its files is tracked**; the tree is excluded from the default run vi
 
 | Contract | Script | Verifies | How to run |
 |---|---|---|---|
-| `score-inject-contract/` | `test-inject-branches.sh` | `scripts/score-inject.sh` emits the `INJECTION_PROOF` block + correct `sha256[:8]` for populated/missing/malformed JSONL branches | `bash tests/score-inject-contract/test-inject-branches.sh` |
-| `score-lifecycle-contract/` | `test-lifecycle-cas.sh` | CAS + append-only invariants of `score-update.sh` / `score-inject.sh` over a temp lifecycle JSONL | `bash tests/score-lifecycle-contract/test-lifecycle-cas.sh` |
 
 ---
 

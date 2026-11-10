@@ -28,7 +28,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 **Fan out.** The requirement round (Steps 4-4b) runs once for the cycle; Steps 4c, 7, 10 and 13 (BA, QA validates BA, dev, QA) dispatch exactly one subagent per lane in one parallel batch, bound to `lane.text` / `requirement_id` and writing lane-suffixed artifacts (the Step 10 test-writer runs per applicable lane only), then wait at a stage barrier. Steps 6 and 12 (validation) run for every lane; Steps 8 and 16 (iteration) retry only the affected or failed lanes. Clarification and retry outcomes are lane-local: a clarifying or failing lane never blocks or re-runs its siblings, and with N > 1 there is no whole-cycle singular dispatch. Step 11 is ONE parent-level join after the barrier, not a per-lane dispatch. Every lane's artifacts carry its lane suffix under ONE parent `DEV_SESSION_ID`, and the cycle emits ONE parent completion report, never a new cycle or session per lane; the parent passes only when every lane's QA passes. Steps 14 and 15 share Bash calls across lanes:
 
-- **Steps 14 and 15 (Score updates, Permissions)** — each step is ONE Bash call for every lane that reaches it, its lanes' commands one per line, so a failed command does not stop the next: Step 14's score-update calls of every lane, then Step 15's permission merge of every passing lane. A call per lane and command (3N+1 in a row through Step 17's completion check) would exceed the Bash budget and lose Step 15 and the completion check.
+- **Step 15 (Permissions)** — ONE Bash call for every lane that reaches it, its lanes' commands one per line, so a failed command does not stop the next: the permission merge of every passing lane. A call per lane (N+1 in a row through Step 17's completion check) would exceed the Bash budget and lose the completion check.
 
 **Lane-execution adapter (it takes precedence over the singular Step templates when N > 1).** Every placeholder (`<requirement>`, `<timestamp>`, session id), path, dispatch, wait, validation and result branch in Steps 4-16 is evaluated per lane. Each lane's dispatch prompt carries three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (reference baseline)` — and the lane text overrides the parent document and any "context / BA-spec is absolute truth" clause for execution: the lane implements, verifies and edits only its own outcome without re-detecting multiplicity, and reports (never absorbs) a slice that contradicts the parent requirement, is coupled to a sibling or is a recurring-failure patch (handlers below; the charter's baseline check in `agents/<role>.md`). Every Step's result branch gains a `multi_issue_fanout_requested` and a `coupled_issues_merge_requested` route, which also apply at N == 1; otherwise N == 1 runs the Steps as written.
 
@@ -38,7 +38,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 ## Implementation
 
-**Bash budget.** The orchestrator gate (`hooks/pretool-orchestrator-gate.py`) refuses a sixth Bash call since the last Agent dispatch or human prompt. Steps 1-4 use at most five before BA's dispatch: the start-function fallback (only when the hook output is gone), the spec resolver (only with a spec), Step 2's call, Step 3's one `git log`, Step 4's score header.
+**Bash budget.** The orchestrator gate (`hooks/pretool-orchestrator-gate.py`) refuses a sixth Bash call since the last Agent dispatch or human prompt. Steps 1-4 use at most four before BA's dispatch: the start-function fallback (only when the hook output is gone), the spec resolver (only with a spec), Step 2's call, Step 3's one `git log`.
 
 ### Step 1: Parse Development Requirement
 
@@ -131,8 +131,6 @@ Before dispatching dev (Step 6), verify in the BA JSON context: `evidence.measur
 **Contract D novelty** has two dimensions. Two attempts are equivalent (non-novel) iff `this_attempt_layer == prior_attempt_layer` AND `jaccard(tokens_of(target_location_i), tokens_of(target_location_j)) >= 0.5`; novelty needs a different layer OR `jaccard < 0.5`, which blocks the "different words, same wrong file" loophole. When the check rejects the attempt, BA writes `docs/dev/producer-question-<timestamp>-ba.json` (options: the candidate layers; default: BA's recommendation) instead of its report; relay it as in Step 5 and re-dispatch BA with the chosen layer (L1 cosmetic, L2 structural, L3 data, L4 logic, L5 infrastructure, shallow to deep; `agents/ba.md` "Layer differentiation guide"). When dev reports back, its implementation layer must match BA's spec layer: dev changing L1 when the spec called for L3 is a failed implementation.
 
 ### Step 4: The Requirement Round (D28, D29, D32)
-
-Run `bash "<HARNESS_ROOT>/scripts/score-inject.sh" --agent ba` once per stage and capture stdout as `BA_SCORE_HEADER`; it goes after the role declaration and before the task instructions.
 
 **Obligation blocks.** Every dispatch carries an `<obligation v="1">` block the orchestrator instantiates from the dispatch's own values (`task_id`, `lane`, `lane_set`, `role`, `pipeline`, `profile`, `dispatched_at` as ISO-8601 UTC ending in Z captured right before the Agent call, `artifacts[]`), never hand-invented; every `kind: "json"` entry names its `schema` (`schemas/registry.json`; grammar in `docs/reference/close-commit-zero-failure-mechanism-20260928.md` §1.2). Step 4c's template shows the worked example; the others declare theirs in one `embed ... here with` sentence.
 
@@ -271,8 +269,6 @@ Use Task tool with:
   Round files: <the cycle's round files, comma-separated>
   Answer files: <the cycle's answer files, comma-separated, or none>
 
-  <BA_SCORE_HEADER prepended here>
-
   Requirement: '<requirement from Step 1>'
   Clarification round: 0
   Previous answers: null
@@ -389,6 +385,8 @@ Use Agent tool with:
 
 Verdict `pass`: BA's conclusions are validated, go to Step 9. Verdict `fail`: go to Step 8.
 
+**Extra independent QA round (D32).** While the opener's hook line names `ba` after `Low record:`, each lane's BA-validation QA runs twice: after the first pass, dispatch this QA once more for the lane (this template, a fresh `dispatched_at`, file paths only, nothing of the first round in the prompt) before Step 9; a fail of either goes to Step 8, and after BA returns both rounds run again. The Stop gate holds the second round.
+
 ### Step 8: BA-QA Iteration Loop (if QA rejects BA)
 
 A BA-QA `fail` loops back to BA until QA's verdict is `pass`; pass is the only exit, and every BA invocation is followed by QA validation. Announce `BA-QA iteration <N>: QA found <count> objections in BA analysis. Re-invoking BA to address objections.`
@@ -478,7 +476,7 @@ Use Task tool with:
 
 After the test-writer subagent completes, verify on disk that both `tests/generated/<task_id>/manifest.json` and `docs/dev/test-writer-report-<task_id>.json` exist; if either is missing, dispatch the test-writer again (this template, a fresh dispatched_at) until both do; never go on to dev after a silently skipped test-writer.
 
-Before the dev dispatch, once per stage, run `bash "<HARNESS_ROOT>/scripts/score-inject.sh" --agent dev` and capture stdout as `DEV_SCORE_HEADER`, then capture the baseline dev's report is measured against (`agents/dev.md` gives its point-in-time semantics); both values go into the dev dispatch, `baseline_head_sha` as the empty string (never omitted) in a repository with no commits yet:
+Before the dev dispatch, once per stage, capture the baseline dev's report is measured against (`agents/dev.md` gives its point-in-time semantics); the value goes into the dev dispatch, `baseline_head_sha` as the empty string (never omitted) in a repository with no commits yet:
 
 ```bash
 baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" rev-parse HEAD 2>/dev/null || echo "")
@@ -503,8 +501,6 @@ Use Task tool with:
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
-
-  <DEV_SCORE_HEADER prepended here>
 
   Context file: docs/dev/context-<timestamp>.json
   BA spec file: docs/dev/ticket-<timestamp>.md
@@ -537,7 +533,7 @@ If dev wrote its question artifact (`docs/dev/producer-question-<timestamp>-dev.
 
 ### Step 13: Delegate to QA Subagent
 
-Run `bash "<HARNESS_ROOT>/scripts/score-inject.sh" --agent qa` once per stage and capture stdout as `QA_SCORE_HEADER`. Dispatch QA with file paths only:
+Dispatch QA with file paths only:
 
 ```
 Use Task tool with:
@@ -555,8 +551,6 @@ Use Task tool with:
   codex_required: true
 
   You are the QA subagent. Follow agents/qa.md instructions precisely.
-
-  <QA_SCORE_HEADER prepended here>
 
   Context file: docs/dev/context-<timestamp>.json
   Dev report file: docs/dev/dev-report-<timestamp>.json
@@ -577,14 +571,7 @@ Read QA report: `docs/dev/qa-report-<timestamp>.json`
 - `qa.status == "pass"`: go to Step 15.
 - `qa.status` is `warning` or `fail`: go to Step 16.
 
-After the verdict, apply the score-update events for the outcome and iteration count (a failed call does not abort the cycle) and include the deltas in the completion report.
-
-- First-round PASS (iteration 0 and `qa.status=pass`): `bash "<HARNESS_ROOT>/scripts/score-update.sh" --agent dev --event qa_first_pass --note "<task_id>"` and `--agent ba --event qa_first_pass`.
-- Second-or-later-round PASS (iteration >= 1 and `qa.status=pass`): `--agent dev --event qa_second_pass --note "<task_id>"`.
-- FAIL (`qa.status=fail`): read `qa.failures[].primary_cause` to attribute the rejection:
-  - any failure with `primary_cause = "dev_implementation"`: `score-update.sh --agent dev --event qa_reject_dev --note "<task_id>"`;
-  - any failure with `primary_cause = "ba_spec"`: `score-update.sh --agent ba --event qa_reject_ba --note "<task_id>"` and `--agent dev --event qa_reject_ba`;
-  - `qa_oversight` or `environment`: no score update (manual review).
+**Extra independent QA round (D32).** The opener's hook line ends with `Low record: ...` when a role's record is low. While it names `dev`, each lane's QA runs twice: after the first pass, dispatch this step's QA once more for the lane, with Step 13's template, a fresh `dispatched_at` and file paths only, so that nothing of the first round (its report, findings or verdict) is in the prompt; Step 15 follows the second pass. A fail of either goes to Step 16, and after the lane's dev returns both rounds run again. While it names `qa`, QA's own round holds a Codex debate whether or not `--codex` was given: its start-of-dispatch text says so and the dispatch is unchanged. The Stop gate keeps the command open until the second round has run (`owes one more independent`).
 
 ### Step 15: Update Settings.json Permissions
 

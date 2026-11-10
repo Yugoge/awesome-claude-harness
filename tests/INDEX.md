@@ -110,10 +110,6 @@ tests/
 │   ├── `test_typed_corrections.py` - Each replay types the command with an argument that names nothing: /close of a ticket path of ano...
 │   ├── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
 │   └── `wake.py` - Modeled CLI behaviour and its sources (none of it measured on a harness host):
-├── score-inject-contract/
-│   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
-├── score-lifecycle-contract/
-│   └── `test-lifecycle-cas.sh` - Description: Verify CAS and append-only invariants for scripts/score-update.sh and
 ├── scripts/
 │   ├── `validate-checklist-completeness.py` - Validator: validate-checklist-completeness
 │   ├── `validate-chinese-content.py` - Validator: validate-chinese-content
