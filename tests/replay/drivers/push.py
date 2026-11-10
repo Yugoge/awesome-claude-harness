@@ -7,17 +7,21 @@ writes the push-gate token where the tree's text puts it. Then the main agent ty
 `--arg remote=<name>` types `/push <name>`, `--arg auto=1` adds `--auto`) and does what each step of
 the tree's "Agentic dispatch protocol" says, read at run time:
 
-* Step 0: the step's block (the fork-prefer-origin remote); a typed remote overrides it, as the
-  block's own comment says.
+* Step 0: where the step has a block (the base text: the fork-prefer-origin remote), that block, a typed
+  remote overriding it as the block's own comment says; where it has none (the working tree: Step 2's call
+  resolves the remote), no call.
 * Step 1: where the text has the orchestrator validate the token itself (the base), the scan it
   describes: the repo hash and branch by Step 2's own lines, the `find` the Session commit
   prerequisite's READ side gives over the token directory Step 1 names, each candidate Read and its
   `commit_sha` tested with the `git merge-base --is-ancestor` the step names; no candidate passing
   ends the turn with the step's instruction to run /commit first. Where the text says the step
   reads nothing (push.sh is the token's one decider), no call.
-* Step 2: the step's block, its variables kept; a detached HEAD (BRANCH is HEAD) or an empty
-  SESSION_ID is a refusal, asked as the text's Refusals rule says (merge.ask_refusal; the owner picks
-  the recommended action; "re-run the snapshot now" re-runs the block once).
+* Step 2: the step's call, its values kept: the snapshot script's form for the typed arguments (`# Bare
+  /push:` or `# /push <remote>:`), its `KEY=value` lines read as the values the later steps copy, or, on a
+  text that spells the snapshot as a shell block, that block with its variables kept; a detached HEAD
+  (BRANCH is HEAD) or an empty SESSION_ID is a refusal, asked as the text's Refusals rule says
+  (merge.ask_refusal; the owner picks the recommended action; "re-run the snapshot now" re-runs the call
+  once).
 * Step 3: the dispatch the step names (`Dispatch the `<role>` subagent`) with the step's context block
   as its prompt, placeholders bound to Step 2's values and the obligation, where the block has one,
   instantiated (dispatched_at the current UTC time).
@@ -33,7 +37,7 @@ the tree's "Agentic dispatch protocol" says, read at run time:
   the dispatch carries one).
 * Step 4: nothing: the text forbids the orchestrator to read, validate or unlink the grant.
 * Step 5: the form of the step's block the typed arguments select (`# Without --auto:` or `# With
-  --auto`), its variables bound: execute-push.py validates and spends the grant, writes the chain-B
+  --auto`), its placeholders (or variables) bound: execute-push.py validates and spends the grant, writes the chain-B
   sentinel and execs hooks/push.sh, which decides the push-gate token, pushes to the toy's local bare
   origin and deletes the token. The outcome (the origin's branch against HEAD, the token, grant and
   sentinel left) is recorded in facts.json; a refusal the step names (a blocked verdict, exit 3) asked
@@ -92,9 +96,9 @@ tree) needs none and gets none. P1b's own row 12 owns these lines (execute-push.
 analyst's grant path move under harness_state_dir(), like push.sh:106, :212); no later phase's row
 does.
 
-Respellings (row 7): none of the /push text's harness-script calls needs one (Step 5's `python3
-~/.claude/scripts/execute-push.py` already names the harness copy). Step 2's session-id line already
-falls back to CLAUDE_CODE_SESSION_ID, the variable the CLI's Bash exports.
+Respellings (row 7): none of the /push text's harness-script calls needs one (Step 2's and Step 5's
+`python3 "<HARNESS_ROOT>/scripts/..."` name the harness copy through the printed root). The snapshot script
+falls back to CLAUDE_CODE_SESSION_ID, the variable the CLI's Bash exports, as the base text's Step 2 line did.
 
 Deviations: none (DEVIATIONS stays empty). A block pauses the agent that met it (Subagent Hook
 Discipline): the main agent ends its turn reporting the hook and its text; a paused push-analyst writes
@@ -219,7 +223,9 @@ class PushRun:
 
     # ------------------------------------------------------------ text and values
     def _rules(self):
-        return [(r"^([A-Z][A-Z_]*)$", lambda m: self.o.values.get(m.group(1), m.group(0)))]
+        # the printed roots (PROJECT_ROOT, HARNESS_ROOT) are the Orchestrator's own rules, not run values
+        return [(r"^(?!(?:PROJECT|HARNESS)_ROOT$)([A-Z][A-Z_]*)$",
+                 lambda m: self.o.values.get(m.group(1), m.group(0)))]
 
     def label(self, text: str) -> str:
         return f"{self.tag} {text}"
@@ -280,6 +286,8 @@ class PushRun:
 
     # ------------------------------------------------------------ Step 0
     def step0(self) -> None:
+        if not cmdtext.blocks(self.step("Step 0"), None, "bash"):
+            return  # the text resolves the remote in Step 2's call
         block = cmdtext.block(self.step("Step 0"), lang="bash")
         self.captured(block, self.label("Step 0 Bash resolve remote"), "Step 0: resolve the push remote",
                       ("RESOLVED_REMOTE",))
@@ -333,10 +341,38 @@ class PushRun:
         return bool(ok)
 
     # ------------------------------------------------------------ Step 2
-    def step2(self) -> bool:
+    def snapshot_form(self, block: str) -> str:
+        """The snapshot call of a block that gives one form per comment: the one whose comment names `<remote>`
+        for a typed remote, the other for a bare /push."""
+        parts, cur = {}, None
+        for line in block.split("\n"):
+            m = re.match(r"^#\s*(.*)$", line)
+            if m:
+                cur = "<remote>" in m.group(1)
+                parts[cur] = []
+            elif cur is not None:
+                parts[cur].append(line)
+        want = bool(self.typed_remote)
+        if want not in parts:
+            raise cmdtext.TextNotFound(f"Step 2's block has no form for {'a typed remote' if want else 'a bare /push'}")
+        return "\n".join(parts[want]).strip("\n") + "\n"
+
+    def snapshot(self, label: str) -> None:
+        """Step 2's call. The snapshot script prints `KEY=value` lines: the main agent copies them into the
+        later steps' placeholders (the run's values). A text that spells the snapshot as a shell block runs
+        that block, its variables kept."""
         block = cmdtext.block(self.step("Step 2"), lang="bash")
-        names = tuple(dict.fromkeys(_ASSIGN_RE.findall(block)))
-        self.captured(block, self.label("Step 2 Bash snapshot"), "Step 2: pre-push snapshot", names)
+        if "push-snapshot" not in block:
+            names = tuple(dict.fromkeys(_ASSIGN_RE.findall(block)))
+            self.captured(block, label, "Step 2: pre-push snapshot", names)
+            return
+        cmd = self.o.bind(self.snapshot_form(block), [(r"^remote$", self.typed_remote)])
+        c = self.check(self.o.run(cmd, "Step 2: pre-push snapshot", label))
+        self.o.values.update(re.findall(r"^([A-Z][A-Z_]*)=(.*)$", (c.response.get("stdout") or ""), re.M))
+        self.own_remote = self.own_remote or self.o.values.get("DEFAULT_REMOTE", "")
+
+    def step2(self) -> bool:
+        self.snapshot(self.label("Step 2 Bash snapshot"))
         self.rp.rand(self.o.values.get("REQUEST_ID"))
         if self.o.values.get("BRANCH") == "HEAD":
             self.refuse("Step 2", "If `BRANCH` is `HEAD`")
@@ -344,7 +380,8 @@ class PushRun:
             return False
         if not self.o.values.get("SESSION_ID"):
             if self.refuse("Step 2", "If `SESSION_ID` is"):
-                self.captured(block, self.label("Step 2 Bash snapshot again"), "Step 2: pre-push snapshot", names)
+                self.snapshot(self.label("Step 2 Bash snapshot again"))
+                self.rp.rand(self.o.values.get("REQUEST_ID"))
             if not self.o.values.get("SESSION_ID"):
                 self.end("/push: still no session id after your answer; nothing pushed.")
                 return False
@@ -436,6 +473,7 @@ class PushRun:
         if remote:  # the owner's answer: Steps 2-5 again for that remote
             nxt = PushRun(self.rp, self.o.s, args=self.args, state_mode=self.state_mode, tag="/push answered")
             nxt.before, nxt.own_remote, nxt.o.values = self.before, remote, dict(v, RESOLVED_REMOTE=remote)
+            nxt.typed_remote = remote  # Step 2's call, run again for the remote the owner chose
             return nxt.dispatch_and_push() if nxt.step2() else nxt.outcome
         if rc == 3:
             self.refuse("Step 5", "exit 3, no push-gate token", out[-800:])

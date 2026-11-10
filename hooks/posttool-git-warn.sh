@@ -1,29 +1,44 @@
 #!/bin/bash
-# posttool-git-warn.sh - Warn about untracked files after commit
-# Part of Claude Code git tracking solution
-# Location: ~/.claude/hooks/posttool-git-warn.sh
+# posttool-git-warn.sh - PostToolUse (Bash): after a git commit, tell the model which files it left untracked.
+#
+# On when GIT_WARN_UNTRACKED=1 (settings.json sets it). A matcher matches the tool's name,
+# which is "Bash" for every shell call, so the hook is registered on Bash and finds the
+# commit in the command it is given on stdin (the CLI passes hook input on stdin only).
+# PostToolUse runs only after the command succeeded. The warning goes to the model as
+# PostToolUse additionalContext; plain stdout would reach no one.
 
-# Only run if warnings enabled
 if [ "$GIT_WARN_UNTRACKED" != "1" ]; then
   exit 0
 fi
 
-# Check for untracked files (respecting .gitignore)
-UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null)
+INPUT=$(cat 2>/dev/null || true)
+case "$INPUT" in
+  *commit*) ;;
+  *) exit 0 ;;   # no git commit in this call: nothing to check
+esac
 
-if [ -n "$UNTRACKED" ]; then
-  # Count untracked files (more robust method)
-  COUNT=$(echo "$UNTRACKED" | grep -c '^' || echo "1")
-
-  echo ""
-  echo "⚠️  Warning: $COUNT untracked file(s) detected after commit:"
-  echo "$UNTRACKED" | sed 's/^/   - /'
-  echo ""
-  echo "💡 Suggestions:"
-  echo "   • Run /push to stage and push all files"
-  echo "   • Run: git add . && git commit --amend --no-edit"
-  echo "   • Review files and add to .gitignore if needed"
-  echo ""
-fi
+printf '%s' "$INPUT" | python3 -c '
+import json, re, subprocess, sys
+try:
+    data = json.load(sys.stdin)
+    command = (data.get("tool_input") or {}).get("command") or ""
+except Exception:
+    sys.exit(0)
+if data.get("tool_name") != "Bash" or not re.search(r"(?:^|[\s;&|()`])git(?:\s+-C\s+\S+)?\s+commit(?![\w-])", command):
+    sys.exit(0)
+try:
+    out = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
+                         capture_output=True, text=True, timeout=10).stdout
+except Exception:
+    sys.exit(0)
+files = [line for line in out.splitlines() if line]
+if not files:
+    sys.exit(0)
+shown = files[:20] + ([f"... and {len(files) - 20} more"] if len(files) > 20 else [])
+text = "\n".join([f"Warning: {len(files)} untracked file(s) after this commit:"]
+                 + [f"  - {f}" for f in shown]
+                 + ["Commit them with /commit if they belong to the change, or add them to .gitignore."])
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}))
+' 2>/dev/null
 
 exit 0

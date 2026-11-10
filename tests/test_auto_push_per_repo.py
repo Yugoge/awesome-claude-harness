@@ -24,13 +24,16 @@ unset and repository true (push), the key unset (the global switch decides), a r
 git cannot read as a boolean (no push), and a harness.autoPush in the global git config only (not
 read: the global switch stays GIT_AUTO_PUSH). /checkpoint's closing message follows the same
 switch. Init (scripts/bootstrap) and the landing (scripts/install/land) set false in a harness
-home that lacks the key and keep a value already set.
+home that lacks the key and keep a value already set. The landing also replaces a post-commit hook
+that is a byte-for-byte copy of an earlier version of the template (installed by hand, so it never
+read the switch), once per template write, and leaves edited and tracked hooks alone.
 
 Every case has its own scratch HOME and global git config (no system config) and its own
 repositories; every origin is a local bare repository, so nothing reaches a network or a real home.
 """
 
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,7 +50,7 @@ from tests.test_git_auto_push_opt_in import (AUTO_PUSH_LIB, BRANCH, CHECKPOINT_C
                                              _new_repo, _origin_refs, _run,
                                              _run_session_git_init, _scratch_env)
 from tests.test_landing import env  # noqa: F401  (the landing tests' scratch-home fixture)
-from tests.test_landing import assert_landed, git, land, landing_log, make_home
+from tests.test_landing import REPO, assert_landed, git, land, landing_log, make_home
 
 
 @dataclass(frozen=True)
@@ -316,3 +319,137 @@ def test_a_landed_home_gets_false_at_its_next_turn_end_only_when_the_key_is_abse
     assert _home_key(env, home) == (preset or "false")
     assert ("harness.autoPush set" in landing_log(home)[len(log):]) == (preset is None)
     assert_landed(env, home)
+
+
+# --------------------------------------------------------------------------- installed hook copies
+
+TEMPLATE = "hooks/git-hooks/post-commit-auto-push"
+# Earlier versions of the template, as git blob ids: copies of them were installed by hand (`cp`),
+# and none reads harness.autoPush.
+OLD_COPIES = {"07e3b9d": "pre-P0 legacy, pushes unless GIT_AUTO_PUSH is 0",
+              "f0e813d": "P0 opt-in, with a log", "9f4198b": "P1b opt-in, no log"}
+
+
+def _blob(oid: str) -> bytes:
+    return subprocess.run(["git", "-C", str(REPO), "cat-file", "blob", oid], capture_output=True,
+                          check=True).stdout
+
+
+def _ship_history(env, home):
+    """Commits (plumbing: no hook, no filter) that give the home's template each old version in
+    turn and then its current content again, the history a real home has; the tree, index and
+    working copy end as they were."""
+    parent = git(env, home, "rev-parse", "HEAD").stdout.strip()
+    current = git(env, home, "rev-parse", f"HEAD:{TEMPLATE}").stdout.strip()
+    for version in [*OLD_COPIES, None]:
+        oid = current if version is None else subprocess.run(
+            ["git", "-C", str(home), "hash-object", "-w", "--no-filters", "--stdin"],
+            input=_blob(version), env=env, capture_output=True, check=True).stdout.decode().strip()
+        index = dict(env, GIT_INDEX_FILE=str(home / ".git" / "ship-index"))
+        git(index, home, "read-tree", parent)
+        git(index, home, "update-index", "--cacheinfo", f"100755,{oid},{TEMPLATE}")
+        tree = git(index, home, "write-tree").stdout.strip()
+        (home / ".git" / "ship-index").unlink()
+        parent = git(env, home, "commit-tree", tree, "-p", parent, "-m", f"template {version}").stdout.strip()
+    git(env, home, "update-ref", "HEAD", parent)
+
+
+def _a_pull_rewrites_the_template(home):
+    template = home / TEMPLATE
+    template.write_bytes(template.read_bytes())  # git checkout writes it: a newer mtime
+
+
+def _product(env, tmp_path, name, hook_bytes):
+    """A product repository under the scratch HOME, harness.autoPush false, a local bare origin,
+    and hook_bytes as its .git/hooks/post-commit. Returns (repo, origin, hook)."""
+    repo = Path(env["HOME"]) / "projects" / name
+    origin = tmp_path / f"{name}-origin.git"
+    git(env, tmp_path, "init", "-q", "--bare", str(origin))
+    git(env, tmp_path, "init", "-q", "-b", "master", str(repo))
+    (repo / "a.txt").write_text("plain words\n")
+    git(env, repo, "add", "a.txt")
+    git(env, repo, "commit", "-q", "-m", "one")
+    git(env, repo, "remote", "add", "origin", str(origin))
+    git(env, repo, "config", "--local", KEY, "false")
+    hook = repo / ".git" / "hooks" / "post-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_bytes(hook_bytes)
+    hook.chmod(0o755)
+    return repo, origin, hook
+
+
+def _commit_pushes_a_backup(env, repo, origin, pushes):
+    """One commit with GIT_AUTO_PUSH "1" and the reader reachable: does a backup ref reach origin?"""
+    e = dict(env, GIT_AUTO_PUSH="1", CLAUDE_HOME=str(REPO))
+    stamp = f"{time.monotonic()}\n"
+    (repo / "b.txt").write_text(stamp)
+    git(e, repo, "add", "b.txt")
+    git(e, repo, "commit", "-q", "-m", "plain commit under test")
+    head = git(e, repo, "rev-parse", "HEAD").stdout.strip()
+    ref = f"refs/backups/claude/master/{head[:12]}"
+    deadline = time.monotonic() + (POSITIVE_TIMEOUT if pushes else NEGATIVE_SETTLE)
+    while time.monotonic() < deadline:
+        got = git(env, origin.parent, "--git-dir", str(origin), "rev-parse", "--verify", "-q", ref,
+                  check=False).stdout.strip()
+        if got:
+            return True
+        time.sleep(POLL_INTERVAL)
+    return False
+
+
+@pytest.mark.parametrize("state", ("upgraded", "landed"))
+@pytest.mark.parametrize("version", list(OLD_COPIES))
+def test_a_landing_replaces_an_installed_copy_of_an_earlier_hook(tmp_path, env, state, version):
+    """A product repository whose post-commit hook is a byte-for-byte copy of an earlier
+    template follows harness.autoPush after the landing: the first landing of an upgraded home,
+    or, on the owner's already-landed home, the turn end after a pull changed the template."""
+    home, _rev = make_home(tmp_path, env)
+    _ship_history(env, home)
+    if state == "landed":
+        land(env, home)
+        _a_pull_rewrites_the_template(home)
+    repo, origin, hook = _product(env, tmp_path, "app", _blob(version))
+    land(env, home)
+    assert hook.read_bytes() == (home / TEMPLATE).read_bytes(), OLD_COPIES[version]
+    assert hook.stat().st_mode & 0o777 == 0o755
+    assert "post-commit-refreshed=1" in landing_log(home)
+    assert not _commit_pushes_a_backup(env, repo, origin, pushes=False), "harness.autoPush false"
+    git(env, repo, "config", "--local", KEY, "true")
+    assert _commit_pushes_a_backup(env, repo, origin, pushes=True), "harness.autoPush true"
+
+
+def test_a_copy_with_edits_and_a_tracked_hook_stay_as_they_are(tmp_path, env):
+    home, _rev = make_home(tmp_path, env)
+    _ship_history(env, home)
+    edited = _blob("9f4198b") + b"# my own line\n"
+    _repo, _origin, hook = _product(env, tmp_path, "edited", edited)
+    shared, _, _ = _product(env, tmp_path, "shared", b"#!/bin/bash\nexit 0\n")
+    (shared / ".githooks").mkdir()
+    (shared / ".githooks" / "post-commit").write_bytes(_blob("9f4198b"))
+    git(env, shared, "add", ".githooks/post-commit")
+    git(env, shared, "commit", "-q", "-m", "a shared hook the repository tracks")
+    git(env, shared, "config", "--local", "core.hooksPath", ".githooks")
+    land(env, home)
+    assert hook.read_bytes() == edited
+    assert (shared / ".githooks" / "post-commit").read_bytes() == _blob("9f4198b")
+    assert git(env, shared, "status", "--porcelain").stdout == ""
+
+
+def test_a_landed_home_scans_once_per_template_change(tmp_path, env):
+    """The scan of the repositories under $HOME runs once after a pull changed the template, not
+    at every turn end: a copy installed after that scan waits for the next template change."""
+    home, _rev = make_home(tmp_path, env)
+    _ship_history(env, home)
+    land(env, home)
+    _a_pull_rewrites_the_template(home)
+    first, _, first_hook = _product(env, tmp_path, "first", _blob("f0e813d"))
+    land(env, home)
+    assert first_hook.read_bytes() == (home / TEMPLATE).read_bytes()
+    log = landing_log(home)
+    _later, _, later_hook = _product(env, tmp_path, "later", _blob("f0e813d"))
+    assert land(env, home) == ""
+    assert landing_log(home) == log, "no scan at a turn end with the template unchanged"
+    assert later_hook.read_bytes() == _blob("f0e813d")
+    _a_pull_rewrites_the_template(home)
+    land(env, home)
+    assert later_hook.read_bytes() == (home / TEMPLATE).read_bytes()

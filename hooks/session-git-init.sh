@@ -12,32 +12,33 @@ set -e
 # Opt-in gate: truthy-only semantics — {1,true,TRUE,yes,YES} → enabled; everything else → skip
 case "${CLAUDE_SESSION_GIT_INIT:-}" in
   1|true|TRUE|yes|YES) ;;
-  *) echo "session-git-init: CLAUDE_SESSION_GIT_INIT not set to truthy value — skipping" >&2; exit 0 ;;
+  *) exit 0 ;;  # off (the default): silent, since a SessionStart hook's stdout enters the context
 esac
 
-# Redirect all subsequent stdout to stderr (session hooks must not pollute stdout)
-exec >&2
+# Its own messages go to the hook's stdout (fd 3), which a SessionStart hook adds to the model's
+# context (code.claude.com/docs/en/hooks); what the commands it runs print goes to stderr.
+exec 3>&1 >&2
 
-# Color output
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# No colour codes: the messages are read by the model, not a terminal.
+GREEN=''
+YELLOW=''
+BLUE=''
+RED=''
+NC=
 
 # Configurable Co-Authorship (Claude attribution only — no third-party watermark in default)
 CO_AUTHOR=${CLAUDE_CO_AUTHOR:-"Co-Authored-By: Claude <noreply@anthropic.com>"}
 
 # Check if already a git repository
 if git rev-parse --git-dir > /dev/null 2>&1; then
-  echo -e "${GREEN}✅ Git repository already exists.${NC}"
+  echo -e "${GREEN}✅ Git repository already exists.${NC}" >&3
   exit 0
 fi
 
 # Get current directory name as repository name
 REPO_NAME=$(basename "$PWD")
 
-echo -e "${BLUE}🚀 No Git repository found. Initializing...${NC}"
+echo -e "${BLUE}🚀 No Git repository found. Initializing...${NC}" >&3
 
 # Initialize git
 git init > /dev/null 2>&1
@@ -46,7 +47,7 @@ git init > /dev/null 2>&1
 # .gitignore, scripts/update-gitignore.sh.
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ "$(bash "$HARNESS_DIR/scripts/update-gitignore.sh" "$PWD" --init)" = "created" ]; then
-  echo -e "${GREEN}✅ Created .gitignore${NC}"
+  echo -e "${GREEN}✅ Created .gitignore${NC}" >&3
 fi
 
 # Initial commit — ONLY on repos with zero commits (blame hygiene guard)
@@ -56,7 +57,7 @@ fi
 # This guard closes the HEAD-pollution leak identified by the 2026-04-16
 # SaaS-grade blame audit (qa-final-blame-audit-20260416-063500.json).
 if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-  echo -e "${GREEN}✅ Git repository already has history; skipping Initial commit${NC}"
+  echo -e "${GREEN}✅ Git repository already has history; skipping Initial commit${NC}" >&3
   exit 0
 fi
 
@@ -65,7 +66,7 @@ if git add . && git commit -m "chore: initialize repository with default .gitign
 🤖 Generated with [Claude Code](https://claude.ai/code)
 
 ${CO_AUTHOR}" > /dev/null 2>&1; then
-  echo -e "${GREEN}✅ Git repository initialized with initial commit${NC}"
+  echo -e "${GREEN}✅ Git repository initialized with initial commit${NC}" >&3
 else
   # Cleanup staged content — use git rm -r --cached . (not git reset HEAD, which fails on
   # unborn HEAD before the first commit)
@@ -75,16 +76,16 @@ fi
 
 # Check if GitHub CLI is installed
 if ! command -v gh &> /dev/null; then
-  echo -e "${YELLOW}⚠️  GitHub CLI (gh) not found.${NC}"
-  echo -e "${YELLOW}   Install it to auto-create remote repositories:${NC}"
-  echo -e "${YELLOW}   https://cli.github.com/${NC}"
+  echo -e "${YELLOW}⚠️  GitHub CLI (gh) not found.${NC}" >&3
+  echo -e "${YELLOW}   Install it to auto-create remote repositories:${NC}" >&3
+  echo -e "${YELLOW}   https://cli.github.com/${NC}" >&3
   exit 0
 fi
 
 # Check if authenticated with GitHub CLI
 if ! gh auth status > /dev/null 2>&1; then
-  echo -e "${YELLOW}⚠️  GitHub CLI not authenticated.${NC}"
-  echo -e "${YELLOW}   Run: gh auth login${NC}"
+  echo -e "${YELLOW}⚠️  GitHub CLI not authenticated.${NC}" >&3
+  echo -e "${YELLOW}   Run: gh auth login${NC}" >&3
   exit 0
 fi
 
@@ -108,30 +109,30 @@ MANUAL_CMD="gh repo create \"$REPO_NAME\" ${CREATE_ARGS[*]}"
 case "$AUTO_CREATE" in
   1|true|TRUE|yes|YES) ;;
   ask)
-    echo -e "${BLUE}❓ Create GitHub repository '$REPO_NAME'? (set CLAUDE_AUTO_CREATE_REPO env var to automate)${NC}"
-    echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}"
-    [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
+    echo -e "${BLUE}❓ Create GitHub repository '$REPO_NAME'? (set CLAUDE_AUTO_CREATE_REPO env var to automate)${NC}" >&3
+    echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}" >&3
+    [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}" >&3
     exit 0 ;;
   0|false|FALSE|no|NO)
-    echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}"
+    echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}" >&3
     exit 0 ;;
   *)
-    echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}"
+    echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}" >&3
     exit 0 ;;
 esac
 
 # Auto-create GitHub repository
-echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}"
+echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}" >&3
 
 # Create private repository (pushed only when harness_auto_push added --push)
 if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
   USERNAME=$(gh api user -q .login)
-  echo -e "${GREEN}✅ Repository created: https://github.com/$USERNAME/$REPO_NAME${NC}"
-  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
+  echo -e "${GREEN}✅ Repository created: https://github.com/$USERNAME/$REPO_NAME${NC}" >&3
+  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}" >&3
 else
-  echo -e "${RED}❌ Failed to create GitHub repository.${NC}"
-  echo -e "${YELLOW}   You can create it manually: $MANUAL_CMD${NC}"
-  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
+  echo -e "${RED}❌ Failed to create GitHub repository.${NC}" >&3
+  echo -e "${YELLOW}   You can create it manually: $MANUAL_CMD${NC}" >&3
+  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}" >&3
   exit 1
 fi
 

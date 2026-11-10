@@ -8,7 +8,7 @@ binds you to mark every atomic checkpoint listed in it. Without a `<SPEC_ID>` (f
 **File you own**: `.claude/specs/<SPEC_ID>/cp-state-<role>.json`, `<role>` being your own agent name.
 
 **cp-state lifecycle.** Every cp-state mutation goes through
-`"${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"` (activate `${CLAUDE_HOME:-$HOME/.claude}/venv`
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"` (activate `${CLAUDE_HOME:-$HOME/.claude}/venv`
 first):
 
 | Subcommand | Purpose |

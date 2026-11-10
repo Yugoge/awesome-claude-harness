@@ -358,3 +358,83 @@ def test_a_child_that_exited_with_no_traced_call_before_its_fork_was_reported_wa
     trace.parse(str(raw), str(out))
     events = [line.split("\t") for line in (out / "relation-events.tsv").read_text().splitlines()]
     assert [e[:2] for e in events if e[4] == "<harness>/logs/l.jsonl"] == [["scripts/s.sh", "scripts/s.sh"]]
+
+
+# ------------------------------------------------------------------ rule (1) on the task-id rule
+
+MINTED, CARRIED = "20260101-000000", "20260102-000000"
+MINTER, LISTER = "hooks/prompt-workflow.py", "hooks/posttool-git-warn.sh"
+
+
+def _id_run(name: str, hooks: list, events=(), manifest=(), payloads=None) -> C.Run:
+    """A replay of hook events only: `hooks` lists, per event in order, (event name, [(hook, stdout)]);
+    `payloads` maps an event's seq to its payload."""
+    r = _run(list(events), manifest, name)
+    r.hooks = [{"event": ev, "t": float(n), "hooks": [{"hook": hk, "stdout": out} for hk, out in rows]}
+               for n, (ev, rows) in enumerate(hooks, 1)]
+    r.invocations = {n: {"seq": n, "event": ev, "payload": (payloads or {}).get(n, {"hook_event_name": ev})}
+                     for n, (ev, _rows) in enumerate(hooks, 1)}
+    r.ids = {"ids": {r.label: "task"}}
+    return r
+
+
+def _task_id_writers(runs: list) -> list:
+    ctx = C._Ctx(C.Map("/t"), [], [], [], [], set(), "scripts/chain.py", runs, "/t")
+    ctx._task_id_rule()
+    a = ctx.m.artifacts.get("rule:task-id")
+    return a.producers() if a else []
+
+
+def _listing(tid: str) -> str:
+    """What the git-warn hook prints after a commit: the untracked files, one of them the cycle's."""
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
+                       f"Warning: 1 untracked file(s) after this commit:\n  - docs/dev/dev-report-{tid}.json"}})
+
+
+def _dev_run() -> C.Run:
+    """The /dev run: the prompt hook prints an id nothing held before it (the minter)."""
+    return _id_run(MINTED, [("UserPromptSubmit", [(MINTER, f"TASK_ID: {MINTED}")])])
+
+
+def test_an_id_the_run_started_with_is_not_minted_by_the_hook_that_lists_it():
+    """A /commit replay that starts from a cycle's files: the dev report carrying the id is in the
+    start manifest, and a PostToolUse hook lists it after the commit. The id was held before that
+    hook ran, so the hook mints nothing and the rule keeps one producer, the /dev run's minter."""
+    commit = _id_run(CARRIED, [("UserPromptSubmit", [(MINTER, "")]), ("PreToolUse", []),
+                               ("PostToolUse", [(LISTER, _listing(CARRIED))])],
+                     manifest=[f"/sbx/proj/docs/dev/dev-report-{CARRIED}.json"])
+    assert _task_id_writers([_dev_run(), commit]) == [MINTER]
+
+
+def test_an_id_an_earlier_step_wrote_is_not_minted_by_the_hook_that_lists_it():
+    """The cycle's files written by a step of the run (the driver, at event 1) before the commit's
+    PostToolUse (event 3): the id was in a file before that hook ran."""
+    commit = _id_run(CARRIED, [("SessionStart", []), ("PreToolUse", []),
+                               ("PostToolUse", [(LISTER, _listing(CARRIED))])],
+                     events=[("driver", "driver", "create", "<project>/docs/dev/dev-report-<task>.json",
+                              f"/sbx/proj/docs/dev/dev-report-{CARRIED}.json", "driver", 1)])
+    assert _task_id_writers([_dev_run(), commit]) == [MINTER]
+
+
+def test_an_id_an_earlier_event_handed_the_hooks_is_not_minted_by_a_later_hook():
+    """The id typed in an earlier prompt (`/close <id>`): a later hook that prints it mints nothing."""
+    close = _id_run(CARRIED, [("UserPromptSubmit", [(MINTER, "")]),
+                              ("PostToolUse", [(LISTER, _listing(CARRIED))])],
+                    payloads={1: {"hook_event_name": "UserPromptSubmit", "prompt": f"/close {CARRIED}"}})
+    assert _task_id_writers([_dev_run(), close]) == [MINTER]
+
+
+def test_a_hook_that_prints_an_id_it_introduced_is_a_minter():
+    """The counter-case: a PostToolUse hook prints an id nothing in the run held before it (not in the
+    start tree, in no earlier step's file, in no earlier payload), and writes it to a file in its own
+    event: it introduced the id, so it is a second producer and rule (1) reports it."""
+    second = _id_run(CARRIED, [("UserPromptSubmit", [(MINTER, "")]), ("PreToolUse", []),
+                               ("PostToolUse", [(LISTER, f"TASK_ID: {CARRIED}")])],
+                     events=[(LISTER, "main", "create", "<project>/docs/dev/dev-report-<task>.json",
+                              f"/sbx/proj/docs/dev/dev-report-{CARRIED}.json", LISTER, 3)],
+                     manifest=["/sbx/proj/docs/dev/dev-report-20251231-000000.json"])
+    assert _task_id_writers([_dev_run(), second]) == sorted([MINTER, LISTER])
+    ctx = C._Ctx(C.Map("/t"), [], [], [], [], set(), "scripts/chain.py", [_dev_run(), second], "/t")
+    ctx._task_id_rule()
+    assert [v.message for v in C.violations(ctx.m) if v.artifact == "rule:task-id" and v.rule == "1-producers"] \
+        == ["2 producers"]

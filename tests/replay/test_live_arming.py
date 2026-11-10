@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.replay import hookrun
+from tests.replay import hookrun, sites
 
 REPO = Path(__file__).resolve().parents[2]
 SID = {name: f"a21{k:05d}-2222-3333-4444-555555555555" for k, name in
@@ -270,7 +270,8 @@ def test_a21_the_open_window_blocks_under_both_hook_lists(world, which):
 def test_a21_the_tool_hooks_accept_the_old_transcript(world, which):
     """pretool-tool-policy.py and pretool-todo-validate.py on the in-flight /dev cycle's transcript:
     its next TodoWrite (Step 4 completed after its BA dispatch came back, the next step in progress)
-    is accepted, no traceback."""
+    is accepted, no traceback. Each is found as the hook the list registers to run it (tool-policy is
+    a rule of the write gate in this tree's list: sites.reporter)."""
     settings = pre_update_settings() if which == "pre-update" else current_settings()
     steps = world.canonical("dev")
     todos = [{"content": s["content"], "activeForm": s.get("activeForm", s["content"]),
@@ -279,6 +280,8 @@ def test_a21_the_tool_hooks_accept_the_old_transcript(world, which):
     payload = dict(world.payload("dev"), tool_name="TodoWrite", tool_input={"todos": todos},
                    tool_use_id="toolu_a21_next")
     event = hookrun.run_event(settings, "PreToolUse", payload, world.env(settings), str(world.project))
-    mine = [h for h in event["hooks"] if h["hook"] in ("hooks/pretool-tool-policy.py", "hooks/pretool-todo-validate.py")]
+    wanted = [sites.reporter(str(REPO), rule, settings) for rule in
+              ("hooks/pretool-tool-policy.py", "hooks/pretool-todo-validate.py")]
+    mine = [h for h in event["hooks"] if h["hook"] in wanted]
     assert len(mine) == 2, [h["hook"] for h in event["hooks"]]
     assert all(h["verdict"] == "ok" and "Traceback" not in h["stderr"] for h in mine), mine

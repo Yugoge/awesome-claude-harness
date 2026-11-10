@@ -1,4 +1,5 @@
-"""hooks/notification-idle-overnight.py, retired to an exit-0 stub (P1b): settings.json still registers it."""
+"""hooks/notification-idle-overnight.py, retired to an exit-0 stub (P1b): settings.json no longer registers it
+(P12), and the file stays for a session that loaded an older hook list (D15)."""
 import json
 import subprocess
 import sys
@@ -8,13 +9,13 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "notification-idle-overnight.py"
 
 
-def test_the_registered_stub_writes_nothing_and_exits_0(tmp_path):
+def test_the_stub_writes_nothing_and_exits_0(tmp_path):
     """One `# STUB:` line; an idle_prompt Notification of a live overnight session, and malformed stdin:
     exit 0, no output, no logs/overnight-idle.jsonl (nothing under the harness home or HOME is written)."""
     assert sum(line.startswith("# STUB:") for line in HOOK.read_text().splitlines()) == 1
     settings = json.loads((ROOT / "settings.json").read_text())
-    assert any("notification-idle-overnight.py" in h["command"]
-               for g in settings["hooks"]["Notification"] for h in g["hooks"])
+    assert not any("notification-idle-overnight.py" in h["command"]
+                   for g in settings["hooks"].get("Notification", []) for h in g["hooks"])
     home = tmp_path / "home"
     (home / ".claude" / "logs").mkdir(parents=True)
     env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "CLAUDE_HOME": str(home / ".claude"),

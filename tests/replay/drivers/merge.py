@@ -11,12 +11,13 @@ time:
   first entry of `git worktree list` against `git rev-parse --show-toplevel`), one Bash call; the
   source from the first tier that resolves: the typed argument, an overnight-state record in the
   conversation (none in this session), or, in place, the tier's own `git branch --show-current`.
-* Step 1: the step's block, `<the-resolved-merge-source>` bound, its variables kept; the refusals the
-  step lists (an empty SESSION_ID, a MISSING tip, a self-merge) asked as the text's Refusals rule says
-  (ask_refusal: ONE AskUserQuestion, the action the refusal names recommended; the owner picks it).
+* Step 1: the step's script call, `<resolved-ref>` bound; the KEY=value lines it prints kept (the keys
+  the step names, all of them printed); the refusals the step lists (an empty SESSION_ID, a MISSING tip,
+  a self-merge) asked as the text's Refusals rule says (ask_refusal: ONE AskUserQuestion, the action the
+  refusal names recommended; the owner picks it).
 * Step 2: the dispatch the step names (`Dispatch the `<role>` subagent`) with the step's context block
-  as its prompt, placeholders bound to Step 1's values and the obligation, where the block has one,
-  instantiated (dispatched_at the current UTC time).
+  as its prompt, the lines Step 1 printed in the place the block gives them and the obligation, where
+  the block has one, instantiated (dispatched_at the current UTC time).
 * The merge-analyst, played from its agent file (agents.Player with the work below): each Workflow
   phase's blocks in order, the shell variables the prompt passes bound: the two live tips and their
   checks; the divergence and diff-stat reads; the conflict-marker checks and the MERGE_HEAD probe; the
@@ -29,10 +30,10 @@ time:
 * Step 3: the grant Read at the path the step gives (its state dir as the step's parenthesis says,
   taken from the path the analyst's closing line names when that is the same path); where the text
   validates the grant itself (the base), its field list checked and the grant consumed with the step's
-  `rm -f` block, and an expired grant sent back to Step 2 with a fresh REQUEST_ID (Step 1's own line);
+  `rm -f` block, and an expired grant sent back to Step 2 after Step 1 again (a fresh REQUEST_ID);
   then the verdict acted on.
-* Step 4: the tip re-read block; tips that moved since the grant are a refusal; answered with its
-  action, a fresh REQUEST_ID and Step 2 again.
+* Step 4: the tip re-read call (its KEY=value lines kept); tips that moved since the grant are a
+  refusal; answered with its action, Step 1 again (fresh tips, a fresh REQUEST_ID) and Step 2 again.
 * Step 5: the wrapper call the step gives, `<resolved-ref>` bound; its outcome recorded (the merge
   commit and its parents, the toy's branch and tips) in facts.json; a conflict is a refusal, and its
   action answered (the owner resolves and commits in their terminal), the turn goes on from Step 1 with
@@ -50,14 +51,14 @@ Driver arguments (cli.py --arg K=V):
                      variant and settings recorded; given, a declared deviation passes only a block in
                      that list (drivers/dev.py KeptOnly); without it every declared deviation passes
 
-Session id. Step 1 binds `SESSION_ID="${CLAUDE_CODE_SESSION_ID}"`, the session variable the CLI's
-Bash exports (prompts/P1c.md X4's sub-measure, `env | cut -d= -f1 | grep -E '^CLAUDE'`: no
-CLAUDE_SESSION_ID), so the text runs as written.
+Session id. Step 1's script reads `CLAUDE_CODE_SESSION_ID`, the session variable the CLI's Bash exports
+(prompts/P1c.md X4's sub-measure, `env | cut -d= -f1 | grep -E '^CLAUDE'`: no CLAUDE_SESSION_ID), so the
+text runs as written.
 
-Respellings (row 7): none of the /merge text's harness-script calls needs one (Step 1's
-`bash ~/.claude/scripts/derive-default-branch.sh` and Step 5's `bash ~/.claude/hooks/merge.sh` already
-name the harness copy); the analyst's text names no harness script on the base, and its working-tree
-state-dir helper is already `~/.claude/hooks/lib/harness_state_dir.sh`.
+Respellings (row 7): none of the /merge text's harness-script calls needs one (Steps 1 and 4 call
+`python3 <HARNESS_ROOT>/scripts/steps/merge-snapshot.py` and Step 5 `bash <HARNESS_ROOT>/hooks/merge.sh`,
+which the session writes as the harness copy's path); the analyst's text names no harness script on the
+base, and its working-tree state-dir helper is already `~/.claude/hooks/lib/harness_state_dir.sh`.
 
 Deviations: none (DEVIATIONS stays empty). A block pauses the agent that met it (Subagent Hook Discipline): the main agent ends its turn reporting the
 hook and its text; a paused merge-analyst writes no grant, so Step 3 aborts.
@@ -187,11 +188,12 @@ class MergeRun:
         self.outcome = ""
         self.round = 0
         self.printed = ""
+        self.snapshots = 0
+        self.snapshot_lines: list = []
 
     # ------------------------------------------------------------ text and values
     def _rules(self):
-        return [(r"^the-resolved-merge-source$", lambda m: self.o.values["RESOLVED_REF"]),
-                (r"^resolved-ref$", lambda m: self.o.values["RESOLVED_REF"]),
+        return [(r"^resolved-ref$", lambda m: self.o.values["RESOLVED_REF"]),
                 (r"^(?!HARNESS_ROOT$)([A-Z][A-Z_]*)$", lambda m: self.o.values.get(m.group(1), m.group(0)))]
 
     def label(self, text: str) -> str:
@@ -239,6 +241,16 @@ class MergeRun:
         o.values.update(parse_declare(out))
         return call
 
+    def key_values(self, text: str, label: str, desc: str):
+        """One Bash call of a script that prints KEY=value lines: the lines kept in the orchestrator's
+        values, and returned in the order they were printed."""
+        o = self.o
+        call = self.check(o.run(o.bind(text), desc, label))
+        out = (call.response.get("stdout") or "") if call.ok else (call.error or "")
+        lines = [(m.group(1), m.group(2)) for m in re.finditer(r"^([A-Z][A-Z_]*)=(.*)$", out, re.M)]
+        o.values.update(dict(lines))
+        return lines
+
     def check(self, call):
         """A call a hook refused that no declared deviation passed: pause (the turn ends)."""
         if call.blocked:
@@ -248,7 +260,7 @@ class MergeRun:
     # ------------------------------------------------------------ Step 0
     def step0(self) -> str:
         o = self.o
-        para = cmdtext.inline_codes(o.text, "Step 0", "actual read-only check")
+        para = cmdtext.inline_codes(o.text, "Step 0", "first entry of")
         gits = [" ".join(c.split()) for c in para if c.split()[:1] == ["git"]]
         if len(gits) < 2:
             raise cmdtext.TextNotFound("Step 0 names no read-only git for the worktree-shape judgment")
@@ -264,7 +276,7 @@ class MergeRun:
         # tier 2: an overnight-state record in the conversation's context: this session has none.
         if not in_place:
             return ""
-        tier3 = [" ".join(c.split()) for c in cmdtext.inline_codes(o.text, "Step 0", "IS_IN_PLACE` is true")
+        tier3 = [" ".join(c.split()) for c in cmdtext.inline_codes(o.text, "Step 0", "show-current")
                  if c.startswith("git ")]
         if not tier3:
             raise cmdtext.TextNotFound("Step 0's tier 3 names no git call")
@@ -272,24 +284,32 @@ class MergeRun:
         return (c.response.get("stdout") or "").strip() if c.ok else ""
 
     # ------------------------------------------------------------ Step 1
-    def step1(self, ref: str) -> bool:
+    def snapshot(self, ref: str) -> None:
+        """Step 1's script call: the lines it prints are the keys the step names, in the order it gives them
+        (all printed), kept in the values and as the dispatch context."""
         o = self.o
         o.values["RESOLVED_REF"] = ref
-        block = o.block("Step 1", lang="bash")
-        names = ("RESOLVED_REF", "SOURCE_TIP", "DEFAULT_BRANCH", "DEFAULT_TIP", "REPO_ROOT", "REPO_HASH",
-                 "REQUEST_ID", "SESSION_ID")
-        self.captured(block, self.label("Step 1 Bash snapshot"), "Step 1: pre-merge snapshot", names)
+        self.snapshots += 1
+        label = self.label("Step 1 Bash snapshot" + (f" again {self.snapshots - 1}" if self.snapshots > 1 else ""))
+        lines = self.key_values(o.block("Step 1", lang="bash"), label, "Step 1: pre-merge snapshot")
+        named = [c for c in cmdtext.inline_codes(o.text, "Step 1", "KEY=value") if re.fullmatch(r"[A-Z]+(?:_[A-Z]+)+", c)]
+        if not named or [k for k, _ in lines] != named:
+            raise cmdtext.TextNotFound(f"Step 1 names the keys {named}; its script printed {[k for k, _ in lines]}")
+        self.snapshot_lines = [f"{k}={v}" for k, v in lines]
         self.rp.rand(o.values.get("REQUEST_ID"))
-        v = o.values
+
+    def step1(self, ref: str) -> bool:
+        self.snapshot(ref)
+        v = self.o.values
         if not v.get("SESSION_ID"):
-            return self.refuse("Step 1", "If `SESSION_ID` is empty") and self.step1(ref)
+            return self.refuse("Step 1", "`SESSION_ID` is empty") and self.step1(ref)
         missing = [k for k in ("SOURCE_TIP", "DEFAULT_TIP") if v.get(k, "MISSING") == "MISSING"]
         if missing:
-            self.refuse("Step 1", "If either tip is", f"{', '.join(missing)} not found "
+            self.refuse("Step 1", "`SOURCE_TIP` or `DEFAULT_TIP` is `MISSING`", f"{', '.join(missing)} not found "
                         f"({v.get('RESOLVED_REF')} / {v.get('DEFAULT_BRANCH')} does not resolve to a commit)")
             return self.stop_unanswered()
         if v["SOURCE_TIP"] == v["DEFAULT_TIP"]:
-            self.refuse("Step 1", "If `SOURCE_TIP` equals")
+            self.refuse("Step 1", "`SOURCE_TIP` equals `DEFAULT_TIP`")
             return self.stop_unanswered()
         return True
 
@@ -299,20 +319,14 @@ class MergeRun:
             self.say_stop("/merge: waiting on your answer's action; nothing merged.")
         return False
 
-    def fresh_request_id(self, k: int) -> None:
-        """Step 1's REQUEST_ID line again (the base text's "return to Step 2 with a fresh REQUEST_ID")."""
-        line = next(l for l in self.o.block("Step 1", lang="bash").split("\n") if l.startswith("REQUEST_ID="))
-        self.captured(line, self.label(f"Step 1 Bash fresh REQUEST_ID {k}"), "A fresh REQUEST_ID", ("REQUEST_ID",))
-        self.rp.rand(self.o.values.get("REQUEST_ID"))
-
     # ------------------------------------------------------------ Step 2 and the analyst
     def prompt(self) -> str:
         o = self.o
         sec = o.section("Step 2")
-        fence = next(b.text for b in cmdtext.blocks(sec) if "REQUEST_ID=" in b.text)
+        fence = next(b.text for b in cmdtext.blocks(sec) if "<obligation" in b.text)
         prompt = o.instantiate(fence, None)
         left: list = []
-        prompt = o.bind(prompt, unbound=left)
+        prompt = o.bind(prompt, [(r"^the eight lines Step 1 printed$", "\n".join(self.snapshot_lines))], left)
         if left:
             raise cmdtext.TextNotFound(f"Step 2 prompt: unbound placeholders {sorted(set(left))}")
         return prompt.rstrip("\n")
@@ -410,11 +424,11 @@ class MergeRun:
     # ------------------------------------------------------------ Steps 4 and 5
     def step4(self) -> bool:
         o = self.o
-        self.captured(o.block("Step 4", lang="bash"), self.label("Step 4 Bash revalidate tips"),
-                      "Step 4: re-read the branch tips", ("CURRENT_SOURCE_TIP", "CURRENT_DEFAULT_TIP"))
+        self.key_values(o.block("Step 4", lang="bash"), self.label("Step 4 Bash revalidate tips"),
+                        "Step 4: re-read the branch tips")
         v, g = o.values, self.grant or {}
         if v.get("CURRENT_SOURCE_TIP") != g.get("source_tip") or v.get("CURRENT_DEFAULT_TIP") != g.get("default_tip"):
-            return None if self.refuse("Step 4", "If either tip differs") else False
+            return None if self.refuse("Step 4", "differs from the grant's") else False
         return True
 
     def step5(self):
@@ -457,15 +471,17 @@ class MergeRun:
                     break
                 if verdict == "expired":
                     o.s.say("The merge-analyst grant expired before it was read; a fresh analysis is running.")
-                self.fresh_request_id(k + 1)
+                if not self.step1(ref):  # re-run the analysis: Step 1 again, then Step 2
+                    return self.outcome
             else:
                 self.say_stop("/merge: the merge-analyst grant expired on every round; nothing merged")
                 return self.outcome
             if verdict != "approved":
                 return self.outcome
             ok = self.step4()
-            if ok is None:  # "re-run the analysis now": Step 1's REQUEST_ID line, then Step 2
-                self.fresh_request_id(self.round)
+            if ok is None:  # "re-run the analysis now": Step 1 again, then Step 2
+                if not self.step1(ref):
+                    return self.outcome
                 from_step1 = False
                 continue
             if not ok:

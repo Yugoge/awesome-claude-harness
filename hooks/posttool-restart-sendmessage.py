@@ -26,7 +26,12 @@ def main() -> int:
         view = restart.mark_dispatched(str(session_id or ""), str(agent_id or ""))
     except restart.RestartError:
         return 0
-    print(f"RESTART DISPATCH RECORDED: {agent_id}; incomplete={len(view['incomplete_agent_ids'])}")
+    # The orchestrator's next step depends on what is still incomplete (CLAUDE.md lesson 16):
+    # PostToolUse additionalContext reaches it, plain stdout does not.
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": f"RESTART DISPATCH RECORDED: {agent_id}; "
+                             f"incomplete={len(view['incomplete_agent_ids'])}"}}))
     return 0
 
 

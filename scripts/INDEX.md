@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 166
+*Last updated: 2026-11-10T02:57:38Z*
+**Total entries**: 163
 **Convention**: kebab
 
 ## Tree
@@ -28,7 +28,7 @@ scripts/
 │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   ├── `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
+│   ├── `score_log.py` - Re-export of hooks/lib/score_log.py (the same file name, so it is loaded by path) for score-update.sh and score-inject.sh.
 │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 │   ├── `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
 │   └── `soundness_gate.py` - HUNK-level failure attribution
@@ -41,11 +41,24 @@ scripts/
 │   ├── `spec-verify.py` - Every non-blank, non-separator line from the monolith must appear
 │   ├── `spec_verify_gated.py` - Three sibling checks that share the T5 ``is_strict_guide_mode`` gate and
 │   ├── `spec_verify_mandate.py` - Activated only when the monolith declares ``guide_version: 1`` (or higher)
-│   ├── `spec_verify_parsers.py` - Authoritative grammar: /root/docs/dev/specs/MONOLITH-WRITING-GUIDE.md R6.6
+│   ├── `spec_verify_parsers.py` - Grammar: the regexes below, for the `## Role: <agent>` headings and `consumers:`
 │   └── `spec_verify_summary.py` - Lives alongside `spec_verify_parsers.py` as a sibling sidecar because
+├── steps/
+│   ├── `clean-merge-approvals.py` - python3 scripts/steps/clean-merge-approvals.py <request_id> <checkpoint_commit>
+│   ├── `codex-run.py` - codex-run.py review                    [--model M]
+│   ├── `commit-plan.py` - commit-plan.py --task-id <TASK_ID>
+│   ├── `merge-snapshot.py` - merge-snapshot.py snapshot <ref>
+│   ├── `paseo-bootstrap.py` - paseo-bootstrap.py start    --holder ID [--root DIR] [--ttl-seconds N] [--accounts A,B]
+│   ├── `pull-run.py` - pull-run.py run
+│   ├── `push-snapshot.py` - python3 scripts/steps/push-snapshot.py [--remote <name>]
+│   ├── `spec-capture.py` - spec-capture.py design   --spec PATH --turn N --slug TITLE [--from FILE]   (design text on stdin ...
+│   ├── `spec-finalize.py` - spec-finalize.py prepare  --spec PATH [--project-dir DIR]
+│   ├── `test-context.py` - test-context.py validation --request-id ID [--timestamp T] [--project-root DIR]
+│   ├── `test-prepare.py` - test-prepare.py init [--full] [--project-root DIR]
+│   └── `test-validators.py` - test-validators.py check    [--project-root DIR]
 ├── todo/
 │   ├── `clean.py` - Preloaded TodoList for /clean workflow
-│   ├── `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
+│   ├── `close.py` - the same five steps under every prompt (--auto walks each step over its parents;
 │   ├── `deep-search.py` - Python script
 │   ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 │   ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
@@ -63,7 +76,7 @@ scripts/
 ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
 ├── `blast-radius-tool.py` - Two phases:
 ├── `bootstrap` - bootstrap file
-├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
+├── `break-overnight-lock.py` - The time-lock is released by the human-typed /stop record itself
 ├── `build-pipelines-from-triage.py` - Consumes PM triage schema (issues[] keyed by triage_index + pipeline_order[] +
 ├── `canary-verify.sh` - Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
 ├── `capability-doctor-strict.py` - Two properties this file exists to guarantee:
@@ -95,7 +108,7 @@ scripts/
 ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
 ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
-├── `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
+├── `generate-hero-status.py` - Description: One source of truth emits FIVE marker-delimited canonical regions and re-derives
 ├── `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 ├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -124,6 +137,7 @@ scripts/
 ├── `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 ├── `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 ├── `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
+├── `readme_facts.py` - Description: One module, one function per fact, one source per function. No number is typed here:
 ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
@@ -139,6 +153,7 @@ scripts/
 ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 ├── `session-index.py` - Subcommands (all take --git-root):
 ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
+├── `size-ratchet.py` - Usage:
 ├── `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
 ├── `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the
 ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,

@@ -15,13 +15,14 @@ exit 3 then meets too). With the tree's settings ("shipped") and armed:
   put back at the owner's commit where the block says it does not hold it, then Steps 2-5): it publishes
   the branch, the Stop after it passes, and /push reaches its terminal;
 * no block but that Stop's and, where the attack writes, the protected stage's refusal of that call
-  (hooks/pretool-tool-policy.py); no human event after /push was typed; no hook error.
+  (hooks/pretool-tool-policy.py, reported by the hook that runs it: the write gate since P12,
+  sites.reporter); no human event after /push was typed; no hook error.
 """
 from __future__ import annotations
 
 import pytest
 
-from tests.replay import suite
+from tests.replay import sites, suite
 
 ATTACKS = ("detach", "token", "grant", "backdate", "reset")
 SCENARIOS = {a: suite.Scenario(f"/push attack {a}", "push", (("after", "none"), ("token", "owner"), ("attack", a)),
@@ -50,7 +51,8 @@ def test_an_agent_made_refusal_holds_the_push_stop_until_the_push(replays, attac
     assert len(stops) == 2 and not any(h["verdict"] == "block" for h in stops[1]["hooks"]), r.explain()
     refused = {(b["step"], b["hook"]) for b in r.blocks} - {("/push Stop", "hooks/stop-launch.py")}
     call = {"token": "Edit", "grant": "Write"}.get(attack)
-    assert refused == ({(f"/push attack {attack} {call}", "hooks/pretool-tool-policy.py")} if call else set()), r.explain()
+    policy = sites.reporter(suite.REPO, "hooks/pretool-tool-policy.py")
+    assert refused == ({(f"/push attack {attack} {call}", policy)} if call else set()), r.explain()
     assert made["refused"] is (attack in ("token", "grant")), made
     pushed = r.fact("push")
     assert pushed and pushed["pushed"] and pushed["toy"]["head"] == toy["head"], pushed
