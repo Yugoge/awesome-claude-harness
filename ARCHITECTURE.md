@@ -354,7 +354,7 @@ flowchart LR
 ├── settings.machine.example.json  # documented example of the untracked machine overlay settings.machine.json
 ├── .gitattributes           # declares the claude-settings clean/smudge filter for settings.json
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
-├── commands/                # 21 slash-command workflows (+ INDEX.md, README.md)
+├── commands/                # 22 slash-command workflows (+ INDEX.md, README.md)
 ├── hooks/                   # enforcement layer (not every file on disk is wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package

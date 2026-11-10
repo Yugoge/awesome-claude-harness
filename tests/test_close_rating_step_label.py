@@ -64,14 +64,19 @@ def test_the_rating_step_is_step_4_in_close_md_close_py_and_the_gate():
 
 
 def test_at_step_4_no_other_command_s_template_binds_to_the_rating_step(monkeypatch):
-    """The item's question, asked at the label it restores: BA's template sits under /dev's own
-    "Step 4", and with /close's rating step labelled "Step 4" too, _canonical_step(<task>, path,
-    [("close", "")], ["dev"]) still names no owner for BA's ticket, context and acceptance criteria
-    (a label binds only inside the template's own command), while the qa-report still binds to the
-    /close step whose dispatch names qa."""
-    assert any(t["role"] == "ba" and t["step"] == "4" and any(
-        "ticket-" in str((a or {}).get("path")) for a in t["artifacts"] if isinstance(a, dict))
-        for t in obligation.command_templates("dev"))
+    """The item's question, asked at the label it restores: BA's templates sit under /dev's own
+    "Step 4" (the requirement round and the BA panel since P13-1; the final ticket, context and
+    acceptance criteria at Step 4c), and with /close's rating step labelled "Step 4" too,
+    _canonical_step(<task>, path, [("close", "")], ["dev"]) still names no owner for any of their
+    artifacts (a label binds only inside the template's own command), while the qa-report still binds
+    to the /close step whose dispatch names qa."""
+    at_dev_4 = [str(a["path"]).replace("<timestamp>", TASK).replace("<angle>", "scope")
+                for t in obligation.command_templates("dev") if t["role"] == "ba" and t["step"] == "4"
+                for a in t["artifacts"] if isinstance(a, dict) and a.get("path")]
+    assert at_dev_4, "no BA template sits under /dev's Step 4"
+    round_file = next(p for p in at_dev_4 if "requirement-round-" in p)
+    # The same path does bind to /dev's own Step 4 while /dev is the active command.
+    assert obligation._canonical_step(TASK, round_file, [("dev", "")], ["dev"])["step"].startswith("Step 4:")
     real = todo_canonical.run_todo_script
 
     def at_step_4(command, prompt=""):
@@ -82,7 +87,7 @@ def test_at_step_4_no_other_command_s_template_binds_to_the_rating_step(monkeypa
 
     monkeypatch.setattr(todo_canonical, "run_todo_script", at_step_4)
     assert todo_canonical.run_todo_script("close")[-1]["content"] == f"Step 4: {RATING}"
-    for path in BA_PATHS:
+    for path in (*BA_PATHS, *at_dev_4):
         assert obligation._canonical_step(TASK, path, [("close", "")], ["dev"]) is None, path
     answer = obligation._canonical_step(TASK, f"docs/dev/qa-report-{TASK}.json", [("close", "")], ["dev"])
     assert (answer["command"], answer["subagent_call"]["subagent_type"]) == ("close", "qa")

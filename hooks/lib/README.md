@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 52
+- **Total files**: 54
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
@@ -21,7 +21,7 @@
 - `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 - `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 - `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-- `close_rating.py` - Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required as...
+- `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
 - `closeout.py` - CLI:
 - `command_span.py` - rule of which transcript record is a prompt the human typed
 - `commit_journal.py` - WHY THIS EXISTS
@@ -48,6 +48,8 @@
 - `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) holds several rules that were
 - `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 - `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+- `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
+- `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 - `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 - `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 - `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or

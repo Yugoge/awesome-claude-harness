@@ -36,7 +36,7 @@
 - `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 - `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
 - `test_cli_role_own_cycle.py` - their cycle from the agent's own dispatch obligation
-- `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
+- `test_close_rating.py` - hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (thro...
 - `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 - `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 - `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS

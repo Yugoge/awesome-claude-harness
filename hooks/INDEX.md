@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-09T16:40:58Z*
-**Total entries**: 351
+*Last updated: 2026-11-10T08:16:38Z*
+**Total entries**: 353
 **Convention**: kebab
 
 ## Tree
@@ -52,7 +52,7 @@ hooks/
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-│   ├── `close_rating.py` - Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required as...
+│   ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
 │   ├── `closeout.py` - CLI:
 │   ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 │   ├── `commit_journal.py` - WHY THIS EXISTS
@@ -79,6 +79,8 @@ hooks/
 │   ├── `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) holds several rules that were
 │   ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
+│   ├── `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
+│   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
@@ -122,7 +124,7 @@ hooks/
 │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 │   ├── `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
 │   ├── `test_cli_role_own_cycle.py` - their cycle from the agent's own dispatch obligation
-│   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
+│   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (thro...
 │   ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 │   ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS
@@ -263,7 +265,7 @@ hooks/
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-├── `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
+├── `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here
 ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-dispatch-record.py` - The rules run in this order, each as its own hook would run alone

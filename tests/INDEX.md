@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-09T16:40:58Z*
-**Total entries**: 218
+*Last updated: 2026-11-10T08:16:38Z*
+**Total entries**: 222
 **Convention**: kebab
 
 ## Tree
@@ -89,6 +89,7 @@ tests/
 │   ├── `routing.py` - No hook blocks here: the gap is what /close's disposition call (Step 0) or /commit's (Step 3) pri...
 │   ├── `sandbox.py` - One scratch root holds everything a replay touches:
 │   ├── `schemagen.py` - A simulated subagent writes each JSON artifact its obligation declares from the
+│   ├── `scorelog.py` - Driver argument (cli.py --arg K=V; inner.py calls resweep() when it is given, after the driver ra...
 │   ├── `sites.py` - Nothing here lists a site, a hook or a class. Enumerator reads settings.json and follows each
 │   ├── `suite.py` - A scenario names one of P1b's drivers (tests/replay/drivers/) and its arguments. run() replays it
 │   ├── `test_a20.py` - Every compliant scenario runs with the gate blocking: test_pipelines.py's armed settings set
@@ -104,6 +105,7 @@ tests/
 │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
+│   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...
 │   ├── `test_trace_reduce.py` - Each case is a run-to-run difference two replays of one driver showed under load:
 │   ├── `test_typed_corrections.py` - Each replay types the command with an argument that names nothing: /close of a ticket path of ano...
 │   ├── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
@@ -187,6 +189,7 @@ tests/
 ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
+├── `test_rating_view.py` - text, and commands/rating.md only runs that script
 ├── `test_readme_facts.py` - names its input when it is missing
 ├── `test_readme_regions.py` - the prose around them
 ├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
@@ -194,7 +197,8 @@ tests/
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
-├── `test_score_log.py` - scripts/score-update.sh and scripts/score-inject.sh both call read_lines in place
+├── `test_score_events.py` - escaped and close_catch, and the observer
+├── `test_score_log.py` - two renderers (owner summary, /rating view); and the reader's two callers
 ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two

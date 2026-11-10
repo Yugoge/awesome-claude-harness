@@ -261,6 +261,7 @@
       "Skill(paseo-daemon:*)",
       "Skill(pull:*)",
       "Skill(push:*)",
+      "Skill(rating:*)",
       "Skill(redev:*)",
       "Skill(restart:*)",
       "Skill(spec-update:*)",
@@ -637,7 +638,7 @@
         ]
       },
       {
-        "matcher": "AskUserQuestion",
+        "matcher": "AskUserQuestion|Agent",
         "hooks": [
           {
             "type": "command",
