@@ -75,6 +75,7 @@ import re
 
 from .. import agents, cmdtext, roles
 from ..pipeline import DROP, DROP_NEXT, Deviations, Orchestrator, Respelling, utc_now
+from . import _round
 from .dev import with_lines
 
 PIPELINE = "dev-command"
@@ -89,7 +90,8 @@ REQUIREMENT = ("add a project slash command named test (.claude/commands/test.md
 KEYWORD = "test"  # the retry-signal keyword the orchestrator takes from the request
 
 # The step map of commands/dev-command.md: this file's step -> the /dev step it follows.
-DEV_STEP = {**{n: n for n in range(1, 11)}, 11: 12, 12: 13, 13: 14, 14: 15, 15: 16, 16: 17}
+DEV_STEP = {**{n: n for n in range(1, 11)}, 11: 12, 12: 13, 13: 14, 14: 15, 15: 16, 16: 17,
+            "4a": "4a", "4b": "4b", "4c": "4c"}
 # The lines of /dev's templates that commands/dev-command.md says to leave out (no score header, test-writer
 # or baseline here).
 OMITTED = (r"_SCORE_HEADER prepended here", r"^\s*baseline_(?:head_sha|dirty_snapshot):",
@@ -165,6 +167,9 @@ class DevCommandCycle:
         self.tid = self.reg = self.digits = ""
         self.ctx: dict = {}
         self.patterns_read = False
+        self.angle = self.chosen = None
+        self.round_files: list = []
+        self.answer_files: list = []
 
     # ------------------------------------------------------------ binding rules
     def _rules(self):
@@ -179,6 +184,10 @@ class DevCommandCycle:
             (r"one-line semantic summary", "null"),
             (r"^keyword$", KEYWORD),
             (r"^context_json_path$", lambda m: self.context_rel),
+            (r"^angle$", lambda m: self.angle or ""),
+            (r"^A, B or C when you are the chosen panel BA", lambda m: self.chosen or "null"),
+            (r"^the cycle's round files", lambda m: ", ".join(self.round_files) or "none"),
+            (r"^the cycle's answer files", lambda m: ", ".join(self.answer_files) or "none"),
         ]
 
     def _line_rules(self):
@@ -196,8 +205,8 @@ class DevCommandCycle:
         while not self.o.at_step(n):
             self.o.advance()
 
-    def step_role(self, step: int):
-        todo = next(t for t in self.o.todos if re.match(rf"Step {step}\b", t["content"]))
+    def step_role(self, step):
+        todo = next(t for t in self.o.todos if re.match(rf"Step {step}:", t["content"]))
         return (todo.get("subagent_call") or {}).get("subagent_type")
 
     def sect(self, step: int, anchor: str) -> str:
@@ -205,13 +214,13 @@ class DevCommandCycle:
         sec = self.o.section(f"Step {step}")
         return sec if anchor in sec else self.ref.section(f"Step {DEV_STEP[step]}")
 
-    def tpl(self, step: int, anchor: str | None = None) -> dict:
+    def tpl(self, step, anchor: str | None = None, index: int = 0) -> dict:
         """Step <step>'s dispatch template as the file words it: /dev's template of the mapped step, with this
         step's obligation block in place of its own and without the lines the file leaves out."""
         fields = self.ref.template(f"Step {DEV_STEP[step]}", anchor=anchor)
         # only the obligation sentence: the fence's codex lines are /dev's own, already in the template taken above
-        mine = next(l.strip() for b in cmdtext.blocks(self.o.section(f"Step {step}")) for l in b.text.splitlines()
-                    if "embed `<obligation" in l)
+        mine = [l.strip() for b in cmdtext.blocks(self.o.section(f"Step {step}")) for l in b.text.splitlines()
+                if "embed `<obligation" in l][index]
         lines = fields["prompt"].split("\n")
         at = next(i for i, l in enumerate(lines) if l.strip().startswith("Obligation block"))
         end = at
@@ -279,7 +288,7 @@ class DevCommandCycle:
         self.tid = got.get("TASK_ID", self.digits)
         for v in {self.reg, self.tid}:
             self.rp.task(v)
-        req = re.search(r"User requirement document:\s*(\S+)", self.tpl(4)["prompt"]).group(1)
+        req = re.search(r"User requirement document:\s*(\S+)", self.tpl("4c")["prompt"]).group(1)
         o.values.update(DEV_SESSION_ID=self.reg, TASK_ID=self.tid, REQUIREMENT_DOC=o.bind(req))
         if self.ctx:
             self.ctx["task_ids"] = {"DEV_SESSION_ID": self.reg, "TASK_ID": self.tid}
@@ -411,10 +420,42 @@ class DevCommandCycle:
         g = o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label="Step 4 Glob prior tickets",
                      deviation=o.devs.at("Step 4 Glob prior tickets"))
         self.specs = [os.path.relpath(p, o.project) for p in g.response.get("filenames", [])] if g.ok else []
+        self.round()
+        self.to("4c")
+        content = _ba_content(self.tid)
+        mapping = _round.analysis(self.rp, o.project, self.tid, "AC-01")
+        content["context.v1"]["requirement"].update(mapping["requirement"])
+        content["context.v1"]["assumptions"] = mapping["assumptions"]
+        self.chosen = _round.chosen(self.rp, o.project, self.tid) or "A"
         calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": CMD_REL})]
-        act = agents.Act(content=_ba_content(self.tid), status="ready", text_calls=calls, respell=o.respell,
+        act = agents.Act(content=content, status="ready", text_calls=calls, respell=o.respell,
                          summary="a project slash command named test runs the toy package tests")
-        o.dispatch(self.tpl(4), act, "Step 4 Agent(ba)", self.tid, subagent_type=self.step_role(4))
+        o.dispatch(self.tpl("4c"), act, "Step 4c Agent(ba)", self.tid, subagent_type=self.step_role("4c"))
+
+    def round(self) -> None:
+        """/dev Steps 4-4b as this file words them: the BA panel (no spec here), panel QA, the ask (D28, D32)."""
+        o = self.o
+        for angle in _round.ANGLES:
+            self.angle = angle
+            act = agents.Act(notes=_round.panel_notes(angle), status="ready", summary=f"panel {angle}",
+                             terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"})
+            o.dispatch(self.tpl(4, anchor="Mode: panel"), act, f"Step 4 Agent(ba) panel {angle}", self.tid,
+                       subagent_type=self.step_role(4))
+        self.angle = None
+        self.to("4a")
+        doc = _round.with_paths(_round.round1(self.tid, panel=_round.panel()), self.tid)
+        o.dispatch(self.tpl("4a"), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
+                   "Step 4a Agent(qa) panel QA", self.tid, subagent_type=self.step_role("4a"))
+        rel = f"docs/dev/ba-panel-{self.tid}-r1.json"
+        self.round_files.append(rel)
+        self.to("4b")
+        call, _tin = _round.ask(o, rel, f"requirement-round:{self.tid}:r1", "Step 4b AskUserQuestion r1")
+        ans = f"docs/dev/requirement-answers-{self.tid}-r1.json"
+        if not os.path.isfile(os.path.join(o.project, ans)):
+            raise AssertionError("/dev-command's round 1 was asked and the hook wrote no answer file")
+        self.answer_files.append(ans)
+        _round.fact(self.rp, "round r1", {"source": f"requirement-round:{self.tid}:r1", "answer_file": True,
+                                          "ok": call.ok})
 
     def step6(self) -> None:
         self.ba_outputs = self.text_paths(6, "Read BA output files")

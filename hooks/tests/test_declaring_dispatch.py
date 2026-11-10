@@ -188,7 +188,7 @@ def test_another_command_s_step_label_never_names_the_owner(tmp_path):
 def test_a_label_binds_only_in_the_template_s_own_command(tmp_path, monkeypatch):
     """The rule itself, whatever labels the tree's checklists carry today: a /close
     checklist whose main-agent step is labelled "Step 4", BA's label in /dev, owes
-    none of BA's artifacts; /dev's own "Step 4" still owes them."""
+    none of BA's artifacts; /dev's own "Step 4c", where BA's analysis template sits, still owes them."""
     todo = obligation._lib_module("todo_canonical")
     steps = {"close": [{"content": "Step 2: Delegate close debate to QA subagent",
                         "subagent_call": {"agent": "qa", "subagent_type": "qa"}},
@@ -198,7 +198,7 @@ def test_a_label_binds_only_in_the_template_s_own_command(tmp_path, monkeypatch)
     ticket = f"docs/dev/ticket-{TASK}.md"
     assert obligation._canonical_step(TASK, ticket, [("close", "")], ["dev"]) is None
     own = obligation._canonical_step(TASK, ticket, [("dev", "")], ["dev"])
-    assert own["step"].startswith("Step 4:") and own["subagent_call"]["subagent_type"] == "ba"
+    assert own["step"].startswith("Step 4c:") and own["subagent_call"]["subagent_type"] == "ba"
 
 
 def test_a_product_file_goes_to_the_dispatch_whose_tool_calls_wrote_it(tmp_path):

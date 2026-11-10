@@ -324,3 +324,25 @@ def test_h2_a_directory_holding_a_token_or_a_grant_is_denied(tmp_path, command):
     proc = run(tmp_path, "Bash", {"command": command.format(state=state, repo=REPO_HASH)}, CALLERS["dev"])
     assert proc.returncode == 2 and "(D11/D12)" in proc.stderr, proc.stderr
     assert all(os.path.isfile(p) for p, _ in push_inputs(str(state)).values())
+
+
+# P13-1 R6 (D28): the owner's answers and the score log are hook-owned; every agent's write is refused.
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("form", ["Write", "Edit", "echo", "append"])
+@pytest.mark.parametrize("which", ["answers", "producer answer", "score log", "score lock"])
+def test_r6_hook_owned_files_are_refused_to_every_agent(tmp_path, caller, form, which):
+    logs = tmp_path / "home" / ".claude" / "logs"
+    answer = "an owner's answer, which only the PostToolUse AskUserQuestion hook writes"
+    score = "the score log or its lock, which only hooks write"
+    path, what = {"answers": (f"{PRODUCT}/docs/dev/requirement-answers-20261109-120000-r1.json", answer),
+                  "producer answer": (f"{PRODUCT}/docs/dev/producer-answer-20261109-120000-ba-0123abcd.json", answer),
+                  "score log": (str(logs / "lifecycle.jsonl"), score),
+                  "score lock": (str(logs / "lifecycle.jsonl.lock"), score)}[which]
+    tool, tool_input = {**forms(path), "append": ("Bash", {"command": f"echo x >> {path}"})}[form]
+    assert_denied(run(tmp_path, tool, tool_input, CALLERS[caller]), what)
+
+
+def test_r6_the_round_files_and_another_log_stay_writable(tmp_path):
+    for path in (f"{PRODUCT}/docs/dev/requirement-round-20261109-120000-r1.json",
+                 str(tmp_path / "home" / ".claude" / "logs" / "other.jsonl")):
+        assert run(tmp_path, "Write", {"file_path": path, "content": "x"}).returncode == 0

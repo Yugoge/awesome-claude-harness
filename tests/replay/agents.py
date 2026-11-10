@@ -311,6 +311,8 @@ class Act:
                                                   # of one sampled from it
     final_line: str = ""                    # the line the role's agent text says its response ends with
     produced: list = field(default_factory=list)  # path globs of declared artifacts the role's work writes itself
+    instead: dict = field(default_factory=dict)   # path -> JSON doc written in place of the declared artifacts
+                                                  # (BA's next requirement round, D29)
 
 
 class Player:
@@ -360,6 +362,11 @@ class Player:
         extra = self.act.work(sub, b, self) if self.act.work else None
         if self.act.question:
             self._write_question(sub)
+            return
+        for rel, doc in self.act.instead.items():
+            put(sub, os.path.join(self.b.project, rel), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write {rel}")
+            self.question_written = rel
+        if self.act.instead:
             return
         for art in (b.obligation or {}).get("artifacts") or []:
             if art.get("kind") in ("json", "markdown"):

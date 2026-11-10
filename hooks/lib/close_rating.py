@@ -50,10 +50,9 @@ def rating_required(span, task_id: str) -> bool:
 def rating_asked(transcript_path, task_id: str) -> bool:
     """The /close span holds the main agent's close-rating question for the task, asked after its
     latest landed close-QA result, with its tool_result of any content (Skip, AFK, a denial)."""
-    span, canonical = _lib("command_span").active_span(transcript_path), _lib("obligation").canonical_task_id
+    span = _lib("command_span").active_span(transcript_path)
     landed = _landed(span, task_id)
-    return landed > 0 and any(call.line > landed and call.result_line and canonical(source_task(call.input))
-                              == canonical(task_id) for call in span.calls("AskUserQuestion"))
+    return landed > 0 and _lib("requirement_round").asked(span, f"close-rating:{task_id}", after=landed)
 
 
 def append_row(log, row: dict) -> None:

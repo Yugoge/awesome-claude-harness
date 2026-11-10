@@ -447,6 +447,21 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def last_text(self) -> str:
+        """The text of the main session's last assistant record in the span that holds text ('' when none):
+        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return ""
+        last = ""
+        for begin, end in lines.offsets((b'"text"',), floor):
+            record = _decode(lines.data[begin:end])
+            texts = [b.get("text") for b in _blocks(record) if b.get("type") == "text" and isinstance(b.get("text"), str)]
+            if texts and record.get("type") == "assistant":
+                last = "\n".join(texts)
+        return last
+
     def result_text(self, ident: str) -> str:
         """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
         call's is the agent's own reply, its record's toolUseResult content without the agentId trailer."""
@@ -465,6 +480,22 @@ class Span:
                         b.get("text") or "" for b in (content if isinstance(content, list) else ())
                         if isinstance(b, dict) and b.get("type") == "text")
         return ""
+
+    def result_time(self, ident: str) -> float | None:
+        """The time the CLI recorded for call ``ident``'s tool_result (seconds since the epoch, to the
+        millisecond); None while none came back or its record carries none."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return None
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if any(b.get("type") == "tool_result" and b.get("tool_use_id") == ident for b in _blocks(record)):
+                try:
+                    return datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    return None
+        return None
 
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""

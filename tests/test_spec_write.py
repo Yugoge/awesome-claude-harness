@@ -153,3 +153,19 @@ def test_a_refused_append_stops_the_chain_and_keeps_what_came_before(tmp_path):
     text = spec.read_text(encoding="utf-8")
     assert "cycle 2 of section 2" in text
     assert "cycle 2 of section 4" not in text
+
+
+def test_append_answers_copies_the_answer_file_verbatim_under_the_next_5_n(tmp_path):
+    """P13-1 R3: Section 5 holds the owner's answer bytes verbatim; nothing is read from stdin."""
+    spec = _spec(tmp_path)
+    assert _run(["create", "--spec", str(spec)], TEMPLATE).returncode == 0
+    assert _run(["append", "--spec", str(spec), "--section", "5"], "### 5.1: First\n\ntext\n").returncode == 0
+    answers = tmp_path / "docs" / "dev" / "requirement-answers-20261028-101010-r1.json"
+    raw = '{\n  "answers": {"Which?": "the ```fenced``` one"}\n}\n'
+    answers.write_text(raw, encoding="utf-8")
+    result = _run(["append", "--spec", str(spec), "--section", "5", "--answers", str(answers)], "ignored stdin")
+    assert result.returncode == 0, result.stderr
+    text = spec.read_text(encoding="utf-8")
+    assert "### 5.2: Requirement round r1" in text and f"````json\n{raw}````\n" in text and "ignored stdin" not in text
+    for args in (["--section", "4", "--answers", str(answers)], ["--section", "5", "--answers", str(tmp_path / "x.json")]):
+        assert _run(["append", "--spec", str(spec), *args], "").returncode == 2
