@@ -1,6 +1,8 @@
 ---
 description: Single-use break-glass for one operation a declared grant-aware safety hook refused; it never overrides a settings DENY. Forms — /allow <command...> (literal, regex only when it holds true regex metacharacters), /allow --tool <literal> (always literal), or /allow re:<anchored-regex>. Bare /allow is the owner-authorized match-all selector, still single-use; every explicit selector is refused when no narrow command is derivable. A literal selector matches a positional prefix of the argument tokens, and trailing tokens become a comment the grant notice echoes. TTL 300s, consumed on any terminal result.
 disable-model-invocation: true
+summary: "Grant one single-use permission for an operation a grant-aware safety hook refused; it never overrides a settings deny rule."
+group: Control
 ---
 
 (An /allow grant is the owner's single-use permission for one operation a grant-aware safety hook refused, and only the owner types it: `disable-model-invocation: true` and the `Skill(allow:*)` deny in `settings.json` keep the model from invoking it. When the owner types it, `hooks/userprompt-consent-allowlist.sh` writes the grant from the typed arguments, or writes none, and prints its notice, and the CLI delivers this body to the model as for any typed command; the body asks nothing of the model (grant mechanics: `hooks/lib/allowlist.py`). It stays non-empty because a command whose body is empty fails the API call with a 400.)

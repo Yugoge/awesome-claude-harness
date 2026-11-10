@@ -199,9 +199,8 @@ import datetime
 (lifecycle_file, agent, event, note, expected_prev_score_str,
  delta_str, undo_ts, reason) = sys.argv[1:9]
 sys.path.insert(0, sys.argv[9])
-from score_log import ScoreLogError, read_lines
+from score_log import ScoreLogError, append, read_lines  # append: the log's one writer (the caller holds the lock)
 sys.path.insert(0, sys.argv[10])
-from close_rating import append_row  # the log's one writer
 
 # Each role's score delta per event (spec 5.1; Path A rebalance, task
 # 20260524-205206 M1: cycle-total <= +5 across the scored roles, negatives
@@ -364,7 +363,7 @@ entry_obj = {
 
 # Append to lifecycle.jsonl and fsync
 try:
-    append_row(lifecycle_file, entry_obj)
+    append(lifecycle_file, entry_obj)
 except OSError as e:
     sys.stderr.write(f"score-update.sh: failed to append to {lifecycle_file}: {e}\n")
     sys.exit(2)

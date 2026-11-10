@@ -1,6 +1,7 @@
 ---
 name: user
 description: "End-user simulation specialist: /dev and /dev-command dispatch it at Step 3 when their specialist assessment marks it RELEVANT, and /dev-overnight at Step 3 of an exploration cycle. Tests actual usage scenarios, checks if things work as expected, identifies UX friction, broken flows, and confusing behavior. Returns structured JSON report."
+summary: "Simulates an end user: tries real usage scenarios and reports broken flows, friction and confusing behaviour."
 ---
 
 > Note: You do not write code files (.svg/.css/.html/.js/.ts/.py/...). Code is the `dev` subagent's job. Your output: .md or .json.

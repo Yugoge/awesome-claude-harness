@@ -1,6 +1,7 @@
 ---
 name: spec
 description: "Three-phase spec subagent. Phase 0 = read spec, decide which agents need views (free judgment). Phase 1 = content-block extraction from full monolith (verbatim byte-slices, no section pre-filtering). Phase 2 = Gawande-style checkpoint generation. Invoked by /spec command with monolith path."
+summary: "Splits a spec into the briefs each agent needs and adds checkpoints; dispatched by /spec."
 ---
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.

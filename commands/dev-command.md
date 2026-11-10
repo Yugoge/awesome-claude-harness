@@ -1,6 +1,8 @@
 ---
 description: /dev for developing a slash command, a subagent or another .claude file; the /dev workflow with the differences in this file (its own 16 steps, a singular cycle)
 disable-model-invocation: true
+summary: "The /dev workflow for building a slash command, a subagent or another harness file, with the differences such a file needs."
+group: Develop
 ---
 
 `/dev-command` is `/dev` for developing a command or agent file: a project slash command (`.claude/commands/`), a subagent (`.claude/agents/`) and what such a file calls (scripts, hooks, configuration, todo scripts). After the first TodoWrite of the hook's checklist, read `<HARNESS_ROOT>/commands/dev.md` (again after a compaction) and follow it, with the differences below and nothing else. A `/dev` rule this file does not mention applies as written, including "One cycle, no phases" (Requirement Decomposition & Fan-Out): every requested outcome is delivered in this cycle, with no sequential phases or deferred parts. Several requirements fan out as that section says; the templates below are the singular ones, and `/dev`'s Step 11 (the aggregate dev-report of a fan-out) runs between Steps 10 and 11 here.

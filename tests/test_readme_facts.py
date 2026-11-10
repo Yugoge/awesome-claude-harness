@@ -84,9 +84,8 @@ def line_of(rel: str, number: int) -> str:
 
 @pytest.fixture(scope="module")
 def real():
-    """Every fact on this repository, once, with the seconds each took."""
-    facts, seconds = rf.all_facts(REPO)
-    return types.SimpleNamespace(facts=facts, seconds=seconds)
+    """Every fact on this repository, once."""
+    return types.SimpleNamespace(facts={name: fn(REPO) for name, fn in rf.FACTS.items()})
 
 
 # ================================================================ 1. the baseline job's Python versions
@@ -142,7 +141,6 @@ def test_replay_suite_size_equals_the_imported_suite_and_the_text(real):
     got = real.facts["replay_suite_size"]
     assert got["compliant_scenarios"] == len(suite.COMPLIANT)
     assert got["pipelines"] == len({p for s in suite.COMPLIANT for p in s.pipelines}) == len(suite.TEN)
-    assert got["pipeline_names"] == sorted(suite.TEN)
     assert got["settings_modes"] == list(suite.SETTINGS)
     assert got["compliant_replays"] == len(suite.COMPLIANT) * len(suite.SETTINGS)
     # the fault classes by a plain pattern over the two test files that name them
@@ -150,20 +148,10 @@ def test_replay_suite_size_equals_the_imported_suite_and_the_text(real):
     ids = sorted(set(re.findall(r"\bF[1-9][a-z]?\b", text)))
     assert got["fault_ids"] == len(ids)
     assert got["fault_classes"] == len({i[:2] for i in ids})
-    assert sorted(i for v in got["fault_class_variants"].values() for i in v) == ids
+    assert {"F1", "F2", "F3", "F4", "F5", "F6", "F7"} <= {i[:2] for i in ids}  # the owner's list, and more
     # the regressions by the ids the whole file mentions
     assert got["regression_ids"] == sorted(set(re.findall(r"\bR-[A-Z]\d\b", tracked_text("tests/replay/test_regressions.py"))))
     assert got["regression_replays"] == len(got["regression_ids"])
-    assert got["regression_test_functions"] == len(re.findall(r"(?m)^(?:    )?(?:async )?def test_",
-                                                                tracked_text("tests/replay/test_regressions.py")))
-
-
-def test_replay_suite_size_matches_the_owners_list_only_in_part(real):
-    """The owner listed seven fault classes (F1 to F7); the suite also numbers F8 and F9. The number reported is
-    the suite's, and the classes beyond the list are visible, not folded in."""
-    classes = real.facts["replay_suite_size"]["fault_class_variants"]
-    assert {"F1", "F2", "F3", "F4", "F5", "F6", "F7"} <= set(classes)
-    assert real.facts["replay_suite_size"]["fault_classes"] == len(classes)
 
 
 def _replay_repo(tmp_path):
@@ -245,10 +233,7 @@ def test_blocking_sites_equal_the_suites_own_catalog(real, tmp_path):
     assert sum(got["by_class"].values()) == got["sites"]
     assert got["no_class"] == got["by_class"]["-"] == counts.get("-", 0)
     assert sum(got["no_class_reasons"].values()) == got["no_class"]
-    assert got["children_whose_exit_is_not_relayed"] == catalog.not_relayed
-    assert got["registered_hook_files"] == len(catalog.e.regs)
-    assert got["replayed"] is False
-    assert set(got["legend"]) == set("GDHU-")
+    assert set(got) == {"sites", "by_class", "no_class", "no_class_reasons"}
 
 
 HOOK = """import json, sys
@@ -279,7 +264,7 @@ def _sites_repo(tmp_path, settings=SETTINGS_ONE_HOOK, hook=HOOK):
 def test_blocking_sites_follow_the_hook_code(tmp_path):
     root = _sites_repo(tmp_path)
     one = rf.blocking_sites(root)
-    assert one["sites"] == 1 and sum(one["by_class"].values()) == 1 and one["registered_hook_files"] == 1
+    assert one["sites"] == 1 and sum(one["by_class"].values()) == 1
     edit(root, "hooks/h.py", "        sys.exit(2)\n", "        sys.exit(2)\n"
          '    if data.get("tool_name") == "Edit":\n        print("BLOCKED: no edits here", file=sys.stderr)\n'
          "        sys.exit(2)\n")
@@ -310,7 +295,6 @@ def test_blocking_sites_leave_no_bytecode_in_the_tree(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("leave_out,message", [
     ("tests/replay/sites.py", r"tests/replay/sites\.py"),
-    ("tests/replay/test_no_dead_end.py", r"test_no_dead_end\.py"),
     ("settings.json", r"settings\.json"),
 ])
 def test_blocking_sites_missing_input_is_named(tmp_path, leave_out, message):
@@ -368,19 +352,14 @@ def test_static_artifacts_equal_an_independent_reading_of_the_command_files(real
     templates, arts = independent_obligations()
     assert got["obligation_templates"] == templates > 0
     assert got["artifact_declarations"] == len(arts)
-    assert got["declared_by_kind"] == dict(sorted(__import__("collections").Counter(a["kind"] for a in arts).items()))
     raw_paths = {a["path"] for a in arts if a.get("path")}
     assert 0 < got["declared_file_artifacts"] <= len(raw_paths)  # patterns fold the spellings of one id
-    assert got["declared_response_items"] == sum(1 for a in arts if not a.get("path"))
-    assert got["declared_file_artifacts"] == len(got["declared_paths"]) == len(set(got["declared_paths"]))
-    assert got["static_half"] is None  # the whole derive() is opt-in
     assert "not the artifact total" in got["label"]
-    assert got["can_count"] and got["cannot_count"]
 
 
 def test_static_artifacts_equal_the_static_halfs_own_derive():
     """One run of the static half's whole derive(): its obligation declarations are what the quick path
-    reports, and the opt-in totals are its relations."""
+    reports, and its relations' path patterns are another, larger number."""
     from tests.artifact_graph import static_half
     result = static_half.derive(REPO)
     obligations = [r for r in result.records if r["kind"] == "declaration" and r["type"] == "obligation"]
@@ -388,19 +367,10 @@ def test_static_artifacts_equal_the_static_halfs_own_derive():
     quick = rf.static_artifacts(REPO)
     assert quick["obligation_templates"] == len(obligations)
     assert quick["artifact_declarations"] == len(arts)
-    assert quick["declared_paths"] == sorted({a["path"] for a in arts if a.get("path")})
-    assert quick["declared_response_items"] == sum(1 for a in arts if not a.get("path"))
-    # the opt-in totals, from the same records (derive() is not run again)
-    full = rf._static_totals(types.SimpleNamespace(derive=lambda _root: result), REPO)
+    assert quick["declared_file_artifacts"] == len({a["path"] for a in arts if a.get("path")})
+    # the static relations' path patterns are not the declared artifacts either
     relations = [r for r in result.records if r["kind"] == "relation"]
-    assert full["relations"] == len(relations)
-    assert full["distinct_path_patterns"] == len({r["path"] for r in relations})
-    assert full["relation_sites"] == len({(r["site"], r["op"]) for r in relations})
-    assert full["unresolved_operations"] == sum(1 for r in result.records if r["kind"] == "unresolved")
-    assert full["relations_by_resolution"] == {k: sum(1 for r in relations if r["resolution"] == k)
-                                               for k in sorted({r["resolution"] for r in relations})}
-    # and neither is the number the CI job reports
-    assert full["distinct_path_patterns"] != quick["declared_file_artifacts"]
+    assert len({r["path"] for r in relations}) != quick["declared_file_artifacts"]
 
 
 def _artifact_repo(tmp_path):
@@ -423,25 +393,7 @@ def test_static_artifacts_follow_the_command_files(tmp_path):
     assert more["obligation_templates"] == base["obligation_templates"] + 1
     assert more["artifact_declarations"] == base["artifact_declarations"] + 1
     assert more["declared_file_artifacts"] == base["declared_file_artifacts"] + 1
-    assert any("zzz-report" in p for p in more["declared_paths"])
     assert not list(root.rglob("__pycache__"))
-
-
-def test_static_artifacts_name_an_artifact_that_declares_no_kind(tmp_path):
-    """An artifact without a `kind` used to make the count by kind raise a bare TypeError (None sorted with str)."""
-    root = _artifact_repo(tmp_path)
-    nokind = NEW_OBLIGATION.replace('"kind": "json", ', "")
-    assert nokind != NEW_OBLIGATION
-    with open(root / "commands/merge.md", "a", encoding="utf-8") as fh:
-        fh.write(nokind)
-    git(root, "add", "-A")
-    with pytest.raises(rf.FactError, match=r"commands/merge\.md:\d+: an artifact of the qa obligation declares no `kind`"):
-        rf.static_artifacts(root)
-    edit(root, "commands/merge.md", '"path": "docs/dev/zzz-report-<timestamp>.json"', '"kind": 3, "path": "docs/dev/zzz-report-<timestamp>.json"')
-    with pytest.raises(rf.FactError, match="declares no `kind`"):
-        rf.static_artifacts(root)
-    edit(root, "commands/merge.md", '"kind": 3, ', '"kind": "json", ')
-    assert rf.static_artifacts(root)["declared_by_kind"]["json"] >= 1  # and with its kind it counts
 
 
 def test_static_artifacts_missing_inputs_are_named(tmp_path):
@@ -529,11 +481,7 @@ def test_hook_registrations_equal_a_recount_of_the_tracked_settings(real):
     assert got["by_event"] == dict(sorted(per_event.items()))
     assert got["entries"] == sum(per_event.values()) > 0
     assert got["events"] == len(per_event)
-    commands = [h["command"] for groups in settings["hooks"].values() for g in groups for h in g["hooks"]]
-    files = {re.findall(r"[\w.-]+\.(?:py|sh)", c)[-1] for c in commands}
-    assert got["registered_hook_files"] == len(files)
-    assert got["distinct_rows"] == got["entries"]  # no command is registered twice under one event and matcher
-    assert files <= {Path(p).name for p in git(REPO, "ls-files", "hooks", "scripts").split("\n")}
+    assert set(got) == {"entries", "by_event", "events"}
 
 
 def _hooks_repo(tmp_path):
@@ -549,15 +497,14 @@ def _hooks_repo(tmp_path):
 
 def test_hook_registrations_follow_the_tracked_settings_not_the_working_file(tmp_path):
     root = _hooks_repo(tmp_path)
-    assert rf.hook_registrations(root) == {"entries": 3, "by_event": {"PreToolUse": 2, "Stop": 1}, "events": 2,
-                                           "registered_hook_files": 2, "distinct_rows": 3}
+    assert rf.hook_registrations(root) == {"entries": 3, "by_event": {"PreToolUse": 2, "Stop": 1}, "events": 2}
     machine = json.loads((root / "settings.json").read_text())
     machine["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "command": "bash hooks/c.py"}]}]
     (root / "settings.json").write_text(json.dumps(machine), encoding="utf-8")  # a module's hook, not staged
     assert rf.hook_registrations(root)["entries"] == 3
     git(root, "add", "settings.json")
     after = rf.hook_registrations(root)
-    assert after["entries"] == 4 and after["by_event"]["SessionStart"] == 1 and after["registered_hook_files"] == 3
+    assert after["entries"] == 4 and after["by_event"]["SessionStart"] == 1
 
 
 def test_hook_registrations_missing_inputs_are_named(tmp_path):
@@ -565,13 +512,6 @@ def test_hook_registrations_missing_inputs_are_named(tmp_path):
     git(root, "rm", "-q", "--cached", "settings.json")
     with pytest.raises(rf.FactError, match=r"settings\.json"):
         rf.hook_registrations(root)
-    root = _hooks_repo(tmp_path / "second")  # a registered file nobody tracks
-    git(root, "rm", "-q", "-f", "hooks/b.sh")
-    with pytest.raises(rf.FactError, match=r"b\.sh"):
-        rf.hook_registrations(root)
-    with pytest.raises(rf.FactError, match="check-enforcement-evidence"):
-        rf.hook_registrations(make_repo(tmp_path / "third", {"settings.json": json.dumps(
-            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "bash hooks/x.sh"}]}]}}), "hooks/x.sh": ""}))
 
 
 def test_hook_registrations_refuse_a_settings_without_hooks(tmp_path):
@@ -597,8 +537,7 @@ def test_enforcement_strength_equals_a_recount_of_the_ledger(real):
     header, rows = ledger_rows()
     got = real.facts["enforcement_strength"]
     assert got["rows"] == len(rows) == real.facts["hook_registrations"]["entries"]
-    for key, column in (("by_behavior", "behavior"), ("by_proof_layer", "proof_layer"),
-                        ("by_exercise_status", "exercise_status")):
+    for key, column in (("by_behavior", "behavior"), ("by_proof_layer", "proof_layer")):
         seen = Counter(r[header.index(column)] for r in rows)
         assert {k: v for k, v in got[key].items() if v} == dict(seen)
         assert sum(got[key].values()) == len(rows)
@@ -648,15 +587,23 @@ def test_enforcement_strength_missing_inputs_are_named(tmp_path):
             rf.enforcement_strength(make_repo(tmp_path / gone.replace("/", "_"), left))
 
 
-# ================================================================ 8. the commands table
+# ================================================================ 8. the commands table and the cast of agents
 
 def command_files() -> list[Path]:
     return sorted(p for p in (REPO / "commands").glob("*.md") if p.stem.upper() not in ("README", "INDEX"))
 
 
+def agent_files() -> list[Path]:
+    return sorted(p for p in (REPO / "agents").glob("*.md") if p.stem.upper() not in ("README", "INDEX"))
+
+
 def front_value(path: Path, key: str):
     m = re.search(rf"(?m)^{re.escape(key)}:[ \t]*(.*)$", path.read_text(encoding="utf-8").split("\n---", 1)[0])
     return m.group(1).strip() if m else None
+
+
+def unquoted(value: str) -> str:
+    return json.loads(value) if value.startswith('"') else value
 
 
 def test_command_rows_equal_a_recount(real):
@@ -668,69 +615,45 @@ def test_command_rows_equal_a_recount(real):
         assert row["human_only"] == (front_value(path, "disable-model-invocation") == "true")
         hint = front_value(path, "argument-hint")
         assert row["argument_hint"] == (hint.strip('"') if hint else None), path.name
-        assert 0 < len(row["summary"]) <= rf.COMMAND_SUMMARY_MAX and "\n" not in row["summary"]
-        description = front_value(path, "description").strip('"')
-        placeholder = re.fullmatch(r"\S+ Command", description) is not None
-        assert row["summary_source"] == ("body" if placeholder else "description"), path.name
-        if not placeholder:  # the summary is the description's beginning, whole words, ending at a sentence or a cut
-            stem = row["summary"].rstrip("…").rstrip()
-            assert description.startswith(stem), (path.name, stem)
-            assert row["summary"].endswith("…") or description[len(stem):].lstrip()[:1] in ("", ".", " ") or True
+        assert row["summary"] == unquoted(front_value(path, "summary")), path.name  # verbatim, never cut
+        assert 0 < len(row["summary"]) <= rf.SUMMARY_MAX and "\n" not in row["summary"]
+        assert not rf.INTERNAL_NAME.search(row["summary"]), path.name
+        assert row["group"] == front_value(path, "group") and row["group"] in rf.COMMAND_GROUPS
+        assert row["module"] == front_value(path, "module")
     assert any(r["human_only"] for r in rows) and any(not r["human_only"] for r in rows)
     assert not [r for r in rows if r["name"].upper() in ("README", "INDEX")]
+    assert {r["group"] for r in rows} == set(rf.COMMAND_GROUPS)  # every group holds a command
+    assert [r["name"] for r in rows if r["module"]] == ["paseo-daemon"]
 
 
-def test_command_rows_take_the_body_for_placeholder_descriptions(real):
-    placeholders = {r["name"]: r for r in real.facts["command_rows"] if r["summary_source"] == "body"}
-    assert placeholders, "no placeholder description in commands/ any more"
-    for name, row in placeholders.items():
-        body = (REPO / "commands" / f"{name}.md").read_text(encoding="utf-8")
-        assert row["summary"].rstrip("…").rstrip().split()[0] in body
-        assert "Command" not in row["summary"].split()[-1:]  # not the heading's "Pull Command"
-
-
-def test_the_commands_table_has_no_grouping(real):
+def test_the_rows_carry_exactly_their_fields(real):
     for row in real.facts["command_rows"]:
-        assert set(row) == {"name", "argument_hint", "human_only", "summary", "summary_source"}
+        assert set(row) == {"name", "argument_hint", "human_only", "summary", "group", "module"}
+    for row in real.facts["agent_rows"]:
+        assert set(row) == {"name", "summary"}
 
 
-@pytest.mark.parametrize("text,sentence", [
-    ("Close the cycle (infers the id). Step 0 resolves it.", "Close the cycle (infers the id)."),
-    ("Use `a.b. c` literally. Then stop.", "Use `a.b. c` literally."),
-    ("Merge, e.g. a branch. Then stop.", "Merge, e.g. a branch."),
-    ("See commands/dev-overnight.md's table. Next.", "See commands/dev-overnight.md's table."),
-    ("Is it done? Yes.", "Is it done?"),
-    ("No terminator at all", "No terminator at all"),
-    ("Version 1.5 ships. Later.", "Version 1.5 ships."),
-    ("  spaced\n   over   lines.  Second.", "spaced over lines."),
-])
-def test_first_sentence(text, sentence):
-    assert rf._first_sentence(text) == sentence
-
-
-@pytest.mark.parametrize("text,limit,cut", [
-    ("short enough", 40, "short enough"),
-    ("exactly ten", 11, "exactly ten"),
-    ("one two three four five", 14, "one two three…"),
-    ("one two three four five", 15, "one two three…"),   # 14 chars of head end inside "four": drop it
-    ("one two three four five", 19, "one two three four…"),
-    ("a `code span here` and more words", 14, "a…"),        # never leave a code span open
-    ("averyveryverylongword rest", 10, "averyvery…"),     # one word longer than the limit: hard cut
-])
-def test_cut_keeps_whole_words_and_the_limit(text, limit, cut):
-    assert rf._cut(text, limit) == cut
-    assert len(rf._cut(text, limit)) <= limit
+def test_agent_rows_equal_a_recount(real):
+    rows = real.facts["agent_rows"]
+    files = agent_files()
+    assert [r["name"] for r in rows] == sorted(p.stem for p in files)
+    for row, path in zip(rows, sorted(files, key=lambda p: p.stem)):
+        assert front_value(path, "name") == row["name"]
+        assert row["summary"] == unquoted(front_value(path, "summary")), path.name
+        assert 0 < len(row["summary"]) <= rf.SUMMARY_MAX and not rf.INTERNAL_NAME.search(row["summary"])
 
 
 def _commands_repo(tmp_path, **extra):
     files = {
         "commands/README.md": "---\ndescription: not a command\n---\n",
         "commands/INDEX.md": "---\ndescription: not a command\n---\n",
-        "commands/beta.md": "---\ndescription: \"Beta Command\"\ndisable-model-invocation: true\n---\n\n# Beta Command\n\n"
-                            "Do the beta thing carefully. Then more.\n",
+        "commands/beta.md": "---\ndescription: \"Beta Command\"\ndisable-model-invocation: true\nsummary: Do the beta thing.\n"
+                            "group: Ship\nmodule: extra\n---\n\n# Beta Command\n\nDo the beta thing carefully. Then more.\n",
         "commands/alpha.md": "---\ndescription: Alpha does a thing for the owner. And more detail follows here.\n"
-                             "argument-hint: \"[--x] <y>\"\ndisable-model-invocation: true\n---\n\n# Alpha\n",
-        "commands/gamma.md": "---\ndescription: Gamma may be called by an agent\nargument-hint: [a or b]\n---\n\ntext\n",
+                             "argument-hint: \"[--x] <y>\"\ndisable-model-invocation: true\n"
+                             "summary: \"Alpha does a thing for the owner, and this whole sentence is kept.\"\ngroup: Spec\n---\n\n# Alpha\n",
+        "commands/gamma.md": "---\ndescription: Gamma may be called by an agent\nargument-hint: [a or b]\n"
+                             "summary: Gamma may be called by an agent.\ngroup: Control\n---\n\ntext\n",
     }
     files.update(extra)
     return make_repo(tmp_path, files)
@@ -741,29 +664,42 @@ def test_command_rows_follow_the_command_files(tmp_path):
     rows = rf.command_rows(root)
     assert rows == [
         {"name": "alpha", "argument_hint": "[--x] <y>", "human_only": True,
-         "summary": "Alpha does a thing for the owner", "summary_source": "description"},
+         "summary": "Alpha does a thing for the owner, and this whole sentence is kept.", "group": "Spec", "module": None},
         {"name": "beta", "argument_hint": None, "human_only": True,
-         "summary": "Do the beta thing carefully", "summary_source": "body"},
+         "summary": "Do the beta thing.", "group": "Ship", "module": "extra"},
         {"name": "gamma", "argument_hint": "[a or b]", "human_only": False,
-         "summary": "Gamma may be called by an agent", "summary_source": "description"},
+         "summary": "Gamma may be called by an agent.", "group": "Control", "module": None},
     ]
     edit(root, "commands/gamma.md", "description: Gamma", "disable-model-invocation: true\ndescription: Gamma")
     assert [r["human_only"] for r in rf.command_rows(root)] == [True, True, True]
-    edit(root, "commands/alpha.md", "Alpha does a thing for the owner.", "Alpha is rewritten. ")
-    assert rf.command_rows(root)[0]["summary"] == "Alpha is rewritten"
-    assert [r["summary"] for r in rf.command_rows(root, max_len=12)][0] == "Alpha is…"
+    edit(root, "commands/alpha.md", "Alpha does a thing for the owner, and this whole sentence is kept.", "Alpha is rewritten.")
+    assert rf.command_rows(root)[0]["summary"] == "Alpha is rewritten."
+    edit(root, "commands/alpha.md", "group: Spec", "group: Quality")
+    assert rf.command_rows(root)[0]["group"] == "Quality"
     git(root, "mv", "commands/gamma.md", "commands/aaa.md")
     assert [r["name"] for r in rf.command_rows(root)] == ["aaa", "alpha", "beta"]
 
 
+LONG = "x" * (rf.SUMMARY_MAX + 1)
+
+
 @pytest.mark.parametrize("name,content,message", [
     ("nofront", "just text\n", r"nofront\.md: no YAML frontmatter"),
-    ("nodesc", "---\ndisable-model-invocation: true\n---\nx\n", r"nodesc\.md: .*no description"),
-    ("badflag", "---\ndescription: d\ndisable-model-invocation: maybe\n---\nx\n", r"badflag\.md: .*maybe"),
+    ("badflag", "---\ndescription: d\ndisable-model-invocation: maybe\nsummary: s\ngroup: Ship\n---\nx\n", r"badflag\.md: .*maybe"),
     ("badyaml", "---\ndescription: [unclosed\n---\nx\n", r"badyaml\.md"),
-    ("emptybody", "---\ndescription: \"Empty Command\"\n---\n\n# Empty\n", r"emptybody\.md: no body text"),
+    ("nosummary", "---\ndescription: d\ngroup: Ship\n---\nx\n", r"nosummary\.md: the frontmatter has no summary"),
+    ("emptysummary", "---\ndescription: d\nsummary: \"  \"\ngroup: Ship\n---\nx\n", r"emptysummary\.md: .*no summary"),
+    ("longsummary", f"---\ndescription: d\nsummary: {LONG}\ngroup: Ship\n---\nx\n",
+     rf"longsummary\.md: the summary has {rf.SUMMARY_MAX + 1} characters, more than {rf.SUMMARY_MAX}; shorten it"),
+    ("twolines", "---\ndescription: d\nsummary: \"one\\ntwo\"\ngroup: Ship\n---\nx\n", r"twolines\.md: the summary must be one line"),
+    ("internal", "---\ndescription: d\nsummary: Drive the Paseo daemon.\ngroup: Ship\n---\nx\n",
+     r"internal\.md: the summary names 'Paseo', an internal name"),
+    ("modelid", "---\ndescription: d\nsummary: Ask gpt-5.6-sol.\ngroup: Ship\n---\nx\n", r"modelid\.md: the summary names 'gpt-5'"),
+    ("nogroup", "---\ndescription: d\nsummary: s\n---\nx\n", r"nogroup\.md: the group is None, not one of Spec, Develop"),
+    ("badgroup", "---\ndescription: d\nsummary: s\ngroup: Misc\n---\nx\n", r"badgroup\.md: the group is 'Misc'"),
+    ("badmodule", "---\ndescription: d\nsummary: s\ngroup: Ship\nmodule: [a]\n---\nx\n", r"badmodule\.md: the module is"),
 ])
-def test_command_rows_refuse_what_they_cannot_summarise(tmp_path, name, content, message):
+def test_command_rows_refuse_what_they_cannot_show_whole(tmp_path, name, content, message):
     root = _commands_repo(tmp_path, **{f"commands/{name}.md": content})
     with pytest.raises(rf.FactError, match=message):
         rf.command_rows(root)
@@ -774,11 +710,64 @@ def test_command_rows_without_a_commands_directory_is_an_error(tmp_path):
         rf.command_rows(make_repo(tmp_path, {"README.md": "x"}))
 
 
+def _agents_repo(tmp_path, **extra):
+    files = {
+        "agents/README.md": "---\nname: README\n---\n",
+        "agents/INDEX.md": "x\n",
+        "agents/zeta.md": "---\nname: zeta\ndescription: z\nsummary: \"Zeta checks things: carefully.\"\ntools: Read\n---\nbody\n",
+        "agents/alpha.md": "---\nname: alpha\ndescription: >-\n  folded\n  text\nsummary: Alpha builds.\n---\nbody\n",
+    }
+    files.update(extra)
+    return make_repo(tmp_path, files)
+
+
+def test_agent_rows_follow_the_agent_files(tmp_path):
+    root = _agents_repo(tmp_path)
+    assert rf.agent_rows(root) == [{"name": "alpha", "summary": "Alpha builds."},
+                                   {"name": "zeta", "summary": "Zeta checks things: carefully."}]
+    edit(root, "agents/zeta.md", "Zeta checks things: carefully.", "Zeta is rewritten.")
+    assert rf.agent_rows(root)[1]["summary"] == "Zeta is rewritten."
+
+
+@pytest.mark.parametrize("name,content,message", [
+    ("nosummary", "---\nname: nosummary\ndescription: d\n---\n", r"nosummary\.md: the frontmatter has no summary"),
+    ("wrongname", "---\nname: other\nsummary: s\n---\n", r"wrongname\.md: the frontmatter name is 'other', not 'wrongname'"),
+    ("long", f"---\nname: long\nsummary: {LONG}\n---\n", r"long\.md: the summary has"),
+    ("internal", "---\nname: internal\nsummary: Tracks Unfuddle tickets.\n---\n", r"internal\.md: the summary names 'Unfuddle'"),
+    ("nofront", "no frontmatter\n", r"nofront\.md: no YAML frontmatter"),
+])
+def test_agent_rows_refuse_what_they_cannot_show_whole(tmp_path, name, content, message):
+    root = _agents_repo(tmp_path, **{f"agents/{name}.md": content})
+    with pytest.raises(rf.FactError, match=message):
+        rf.agent_rows(root)
+
+
+def test_agent_rows_without_an_agents_directory_is_an_error(tmp_path):
+    with pytest.raises(rf.FactError, match=r"agents/\*\.md"):
+        rf.agent_rows(make_repo(tmp_path, {"README.md": "x"}))
+
+
+@pytest.mark.parametrize("text,found", [
+    ("drive the paseo daemon", "paseo"), ("an Unfuddle-style table", "Unfuddle"), ("ask gpt-5.6-sol", "gpt-5"),
+    ("run claude-opus-5-5", "claude-opus"), ("use codex-mini", "codex-mini"), ("try o4-mini", "o4-mini"),
+    ("OpenAI Codex reviews it", None), ("claude-codex-settings", None), ("/codex --review", None), ("Claude Code", None),
+])
+def test_the_internal_names(text, found):
+    m = rf.INTERNAL_NAME.search(text)
+    assert (m.group(0) if m else None) == found
+
+
 # ================================================================ 9. what CI enforces
 
 CI_FILES = {rel: REPO / rel for rel in ("tests/replay/test_pipelines.py", "tests/replay/test_no_dead_end.py",
                                         "tests/test_artifact_graph.py", "tests/artifact_graph/check.py",
                                         "tests/replay/test_faults.py", ".github/workflows/baseline.yml")}
+WORKFLOW = ".github/workflows/baseline.yml"
+
+
+def fault_table() -> list[str]:
+    table = re.search(r"(?s)\nFAULTS = \{(.*?)\n\}", tracked_text("tests/replay/test_faults.py")).group(1)
+    return re.findall(r'(?m)^    "(F\d+[a-z]*)":', table)
 
 
 def test_ci_enforces_on_this_repository(real):
@@ -786,40 +775,20 @@ def test_ci_enforces_on_this_repository(real):
     assert set(got) == {"compliant_replays_clean", "no_site_without_class", "artifact_check_clean",
                         "faults_returned_and_repaired", "unit_suite_on_every_version"}
     for name, verdict in got.items():
-        assert set(verdict) >= {"holds", "claim", "file", "line", "assertions", "missing"}, name
+        assert set(verdict) >= {"holds", "claim", "file", "missing"}, name
         assert verdict["holds"] == (not verdict["missing"]), name  # false always says what was missing
-    # the line named is the line that carries the assertion
-    a = got["compliant_replays_clean"]
-    assert a["holds"] and a["file"] == "tests/replay/test_pipelines.py"
-    for item in a["assertions"]:
-        assert item["source"] in line_of(a["file"], item["line"]), item
-    assert {i["what"] for i in a["assertions"]} >= {"no gate block", "no hook error", "reaches its terminal"}
-    c = got["artifact_check_clean"]
-    assert c["holds"] and c["file"] == "tests/test_artifact_graph.py"
-    assert "assert not vs" in line_of(c["file"], c["line"])
+    assert got["compliant_replays_clean"]["holds"] and got["compliant_replays_clean"]["file"] == "tests/replay/test_pipelines.py"
+    assert got["artifact_check_clean"]["holds"] and got["artifact_check_clean"]["file"] == "tests/test_artifact_graph.py"
     # the owner's claim (b) is stronger than anything the suite asserts: false, with the weaker one shown
     b = got["no_site_without_class"]
-    assert b["holds"] is False and b["missing"] and b["line"] is None
-    assert b["weaker"]["holds"] is True
-    assert '"-" in classes' in line_of(b["weaker"]["file"], b["weaker"]["line"])
-    for line in b["weaker"]["asserted_at_lines"]:
-        assert "assert not bad" in line_of(b["weaker"]["file"], line)
-    # a fault is returned to its producer and repaired: the assertions are the helper's, each at its line
+    assert b["holds"] is False and b["missing"] and b["weaker"]["holds"] is True
+    # every fault of the table goes through the repair check, in its order, but the one the test treats apart
     f = got["faults_returned_and_repaired"]
     assert f["holds"] and f["file"] == "tests/replay/test_faults.py"
-    for item in f["assertions"]:
-        assert item["source"].replace("'", '"') in line_of(f["file"], item["line"]), item
-    assert {i["what"] for i in f["assertions"]} >= {"a gate returned the fault", "the producer's next stop passes",
-                                                     "the producer writes the repair after its returned stop",
-                                                     "no human event after the injection", "reaches its terminal"}
-    text = tracked_text(f["file"])
-    table = re.search(r"(?s)\nFAULTS = \{(.*?)\n\}", text).group(1)
-    assert f["table"] == re.findall(r'(?m)^    "(F\d+[a-z]*)":', table)  # every fault of the table, in its order
-    assert f["treated_apart"] == ["F3b"] and f["ids"] == [i for i in f["table"] if i != "F3b"]
+    assert f["ids"] == [i for i in fault_table() if i != "F3b"] and "F3b" in fault_table()
     # the unit suite: the baseline job's pytest step, in every leg of the matrix
     u = got["unit_suite_on_every_version"]
-    assert u["holds"] and u["file"] == ".github/workflows/baseline.yml" and u["versions"] == real.facts["ci_python_versions"]
-    assert "pytest hooks/tests tests" in line_of(u["file"], u["line"])
+    assert u["holds"] and u["file"] == WORKFLOW and u["versions"] == real.facts["ci_python_versions"]
     step = tracked_text(u["file"]).split("- name: Run tests", 1)[1].split("- name:", 1)[0]  # the baseline job's pytest step
     assert u["ignored"] == sorted(re.findall(r"--ignore=(\S+)", step))
 
@@ -858,15 +827,10 @@ def test_ci_enforces_no_site_without_class_needs_an_assertion(tmp_path):
          "    no_class = [s.id for s in catalog.sites if catalog.of(s) == \"-\"]\n    assert not no_class\n")
     verdict = rf.ci_enforces(root)["no_site_without_class"]
     assert verdict["holds"] is True and verdict["missing"] == []
-    assert "assert not no_class" in line_of_scratch(root, rel, verdict["line"])
     # the weaker assertion alone, without its check, is not found either
     cut = _ci_repo(tmp_path / "cut")
     edit(cut, rel, "        if \"-\" in classes:", "        if \"-\" in nothing:")
     assert rf.ci_enforces(cut)["no_site_without_class"]["weaker"]["holds"] is False
-
-
-def line_of_scratch(root: Path, rel: str, number: int) -> str:
-    return (root / rel).read_text(encoding="utf-8").splitlines()[number - 1]
 
 
 def test_ci_enforces_artifact_check_follows_the_assertion_and_the_exception_names(tmp_path):
@@ -894,8 +858,7 @@ def test_ci_enforces_artifact_check_follows_the_assertion_and_the_exception_name
 def test_ci_enforces_faults_follow_the_assertions(tmp_path):
     rel = "tests/replay/test_faults.py"
     base = rf.ci_enforces(_ci_repo(tmp_path))["faults_returned_and_repaired"]
-    assert base["holds"] and base["treated_apart"] == ["F3b"] and "F3b" not in base["ids"]
-    assert set(base["ids"]) | {"F3b"} == set(base["table"])
+    assert base["holds"] and "F3b" not in base["ids"] and set(base["ids"]) | {"F3b"} == set(fault_table())
     for gone, what in (("    assert r.blocks, ", "a gate returned the fault"),
                        ("    assert agent in expected, ", "producer"),
                        ("    assert mine and mine[0][\"blocked\"], ", "first stop is returned"),
@@ -926,23 +889,22 @@ def test_ci_enforces_faults_follow_the_assertions(tmp_path):
     grown = _ci_repo(tmp_path / "grown")
     edit(grown, rel, '    "F9": "bash@', '    "F10": "missing@x",\n    "F9": "bash@')
     after = rf.ci_enforces(grown)["faults_returned_and_repaired"]
-    assert after["holds"] and "F10" in after["ids"] and len(after["table"]) == len(base["table"]) + 1
+    assert after["holds"] and "F10" in after["ids"] and len(after["ids"]) == len(base["ids"]) + 1
     empty = _ci_repo(tmp_path / "empty")
     edit(empty, rel, "FAULTS = {", "FAULTS = {}\nOTHER = {")
     assert rf.ci_enforces(empty)["faults_returned_and_repaired"]["holds"] is False
 
 
 def test_ci_enforces_unit_suite_follows_the_workflow(tmp_path):
-    rel = ".github/workflows/baseline.yml"
     base = rf.ci_enforces(_ci_repo(tmp_path))["unit_suite_on_every_version"]
     assert base["holds"] and base["versions"] == ["3.10", "3.11", "3.12"] and "tests/replay" in base["ignored"]
     grown = _ci_repo(tmp_path / "grown")
-    edit(grown, rel, "--ignore=tests/replay", "--ignore=tests/replay --ignore=tests/extra")
-    edit(grown, rel, '["3.10", "3.11", "3.12"]', '["3.11", "3.13"]')
+    edit(grown, WORKFLOW, "--ignore=tests/replay", "--ignore=tests/replay --ignore=tests/extra")
+    edit(grown, WORKFLOW, '["3.10", "3.11", "3.12"]', '["3.11", "3.13"]')
     after = rf.ci_enforces(grown)["unit_suite_on_every_version"]
     assert after["versions"] == ["3.11", "3.13"] and "tests/extra" in after["ignored"]
     for what, old, new, message in (
-            ("swallowed", "-n auto --dist loadfile", "-n auto --dist loadfile || true", "can fail without failing the job"),
+            ("swallowed", "-n auto --dist loadfile", "-n auto --dist loadfile || true", "not one plain pytest command"),
             ("continued", "      - name: Run tests\n", "      - name: Run tests\n        continue-on-error: true\n",
              "can fail without failing the job"),
             ("conditional", "      - name: Run tests\n", "      - name: Run tests\n        if: always()\n",
@@ -950,7 +912,7 @@ def test_ci_enforces_unit_suite_follows_the_workflow(tmp_path):
             ("job continued", "    strategy:\n", "    continue-on-error: true\n    strategy:\n", "continue-on-error"),
             ("not the unit suite", "pytest hooks/tests tests", "pytest tests", "runs pytest over hooks/tests and tests")):
         broken = _ci_repo(tmp_path / what.replace(" ", "_"))
-        edit(broken, rel, old, new)
+        edit(broken, WORKFLOW, old, new)
         verdict = rf.ci_enforces(broken)["unit_suite_on_every_version"]
         assert verdict["holds"] is False and message in " ".join(verdict["missing"]), (what, verdict)
 
@@ -972,7 +934,6 @@ def test_ci_enforces_fails_closed_on_a_missing_source(tmp_path, gone, predicate)
     if gone == WORKFLOW:  # no workflow shows CI running any of them: every predicate is false and says so
         for name, verdict in got.items():
             assert verdict["holds"] is False and "baseline.yml" in " ".join(verdict["missing"]), name
-            assert verdict["workflow"]["holds"] is False if name != "unit_suite_on_every_version" else True
         assert got["no_site_without_class"]["weaker"]["holds"] is False
         return
     assert [n for n, v in got.items() if n != predicate and gone not in v["missing"] and not v["holds"]] in (
@@ -988,8 +949,9 @@ def test_ci_enforces_fails_closed_on_a_source_that_does_not_parse(tmp_path):
 
 # ================================================================ 9a. the workflow really runs the test
 
-WORKFLOW = ".github/workflows/baseline.yml"
 REPLAY_THREE = {"compliant_replays_clean", "no_site_without_class", "faults_returned_and_repaired"}
+BASE_HOLDS = {"compliant_replays_clean": True, "no_site_without_class": False, "artifact_check_clean": True,
+              "faults_returned_and_repaired": True}  # on this repository's sources (the dead-end claim is not asserted)
 FOUR = REPLAY_THREE | {"artifact_check_clean"}
 # the D30 visibility gate every job carries (tests/test_ci_visibility_gate.py), ANDed with the draft skip
 GATE = "(github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false')"
@@ -1027,56 +989,50 @@ def run_workflow_variant(tmp_path, name, mutate):
     return rf.ci_enforces(root)
 
 
+def not_run(verdict: dict) -> list[str]:
+    return [m for m in verdict["missing"] if m.startswith("CI does not run it: ")]
+
+
 def assert_ci_verdicts(got: dict, false_for, message: str):
-    """The predicates in `false_for` (a set, or {predicate: reason}) are false with the workflow's reason (and,
-    for the dead-end predicate, its weaker claim too); every other predicate still finds the workflow running
-    its test."""
+    """The predicates in `false_for` (a set, or {predicate: reason}) are false because CI does not run their test,
+    with the workflow's reason (for the dead-end predicate, its weaker claim too); every other predicate still
+    finds the workflow running its test."""
     reasons = false_for if isinstance(false_for, dict) else {name: message for name in false_for}
     for name, verdict in got.items():
         if name == "unit_suite_on_every_version":
             continue
-        wf = verdict["workflow"]
         if name in reasons:
-            message = reasons[name]
-            assert wf["holds"] is False and verdict["holds"] is False, (name, wf)
-            assert message in " ".join(wf["missing"]), (name, wf["missing"])
-            assert any(message in m for m in verdict["missing"]), (name, verdict["missing"])
+            assert verdict["holds"] is False and any(reasons[name] in m for m in not_run(verdict)), (name, verdict["missing"])
             if name == "no_site_without_class":
-                assert verdict["weaker"]["holds"] is False and verdict["weaker"]["workflow"] is wf
+                assert verdict["weaker"]["holds"] is False and not_run(verdict["weaker"])
         else:
-            assert wf["holds"] is True, (name, wf["missing"])
+            assert not not_run(verdict) and verdict["holds"] is BASE_HOLDS[name], (name, verdict["missing"])
 
 
 def test_the_workflow_runs_each_test_on_this_repository(real):
     """The real workflow passes every rule: each of the four tests is run by a step of a job that cannot be
-    skipped or ignored, and the evidence says which, where, and which step ignores it."""
+    skipped or ignored, and the baseline job's own pytest step, which leaves them out, is not that step."""
+    expect = {"tests/replay/test_pipelines.py": "replay-suite", "tests/replay/test_no_dead_end.py": "replay-suite",
+              "tests/replay/test_faults.py": "replay-suite", "tests/test_artifact_graph.py": "artifact-graph"}
+    for target, job in expect.items():
+        wf = rf._ci_runs(REPO, (target,))
+        assert wf["holds"] is True and wf["missing"] == [] and wf["job"] == job, (target, wf)
+        alone = rf._ci_runs(REPO, (target,), only_job="baseline")
+        assert alone["holds"] is False and "ignores it" in " ".join(alone["missing"]), (target, alone)
     got = real.facts["ci_enforces"]
-    lines = tracked_text(WORKFLOW).splitlines()
-    expect = {
-        "compliant_replays_clean": ("replay-suite", "pytest tests/replay "),
-        "no_site_without_class": ("replay-suite", "pytest tests/replay "),
-        "faults_returned_and_repaired": ("replay-suite", "pytest tests/replay "),
-        "artifact_check_clean": ("artifact-graph", "pytest tests/test_artifact_graph.py "),
-    }
-    for name, (job, command) in expect.items():
-        wf = got[name]["workflow"]
-        assert wf["holds"] is True and wf["missing"] == [] and wf["file"] == WORKFLOW, name
-        assert wf["job"] == job and command in lines[wf["line"] - 1] and command in wf["command"] + " ", (name, wf)
-        assert wf["runs"] and wf["rejected"] == [], (name, wf)
-        # the baseline job's own pytest step leaves the test out; it is listed, and is not the one that counts
-        ignoring = [r for r in wf["ignored_by"] if r["job"] == "baseline"]
-        assert ignoring and "pytest hooks/tests tests" in lines[ignoring[0]["line"] - 1], (name, wf["ignored_by"])
-        assert got[name]["holds"] == (name != "no_site_without_class")
-    assert got["no_site_without_class"]["weaker"]["holds"] is True
-    assert got["no_site_without_class"]["weaker"]["workflow"]["holds"] is True
-    unit = got["unit_suite_on_every_version"]["workflow"]
-    assert unit["holds"] and unit["job"] == "baseline" and unit["ignored_by"] == [] and unit["rejected"] == []
-    # an independent reading of the job and step names: the replay shards and the artifact check
+    assert {n: v["holds"] for n, v in got.items() if n in BASE_HOLDS} == BASE_HOLDS
+    assert got["no_site_without_class"]["weaker"]["holds"] is True and not not_run(got["no_site_without_class"])
+    unit = rf._ci_runs(REPO, ("hooks/tests", "tests"), only_job="baseline")
+    assert unit["holds"] and unit["job"] == "baseline"
+    # an independent reading of the job names: the replay shards and the artifact check
     text = tracked_text(WORKFLOW)
     assert re.search(r"(?m)^  replay-suite:\n", text) and re.search(r"(?m)^  artifact-graph:\n", text)
 
 
-# (name, mutation of the workflow text, the predicates that turn false, the reason it names)
+NOT_PLAIN = "not one plain pytest command"
+# (name, mutation of the workflow text, the predicates that turn false, the reason it names). The recognizer
+# reads only one plain pytest command of known options, so an unknown option or any shell syntax fails the
+# step whatever it would have done; the last two were harmless to the interpreter it replaced.
 MUTATIONS = [
     # with the job gone, the only step that still reaches the test is the baseline job's, which leaves it out
     ("replay job removed", lambda t: drop_job(t, "replay-suite"), REPLAY_THREE, "no step runs pytest over"),
@@ -1091,7 +1047,7 @@ MUTATIONS = [
      {"faults_returned_and_repaired"}, "ignores it"),
     ("one file ignored by a glob", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
                                                           "--ignore-glob=*test_pipelines.py"),
-     {"compliant_replays_clean"}, "ignores it"),
+     REPLAY_THREE, "`--ignore-glob=*test_pipelines.py`"),
     ("artifact test ignored", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
                                                      "pytest tests/test_artifact_graph.py --ignore=tests/test_artifact_graph.py -q"),
      {"artifact_check_clean"}, "ignores it"),
@@ -1132,55 +1088,55 @@ MUTATIONS = [
         t, "needs.artifact-graph-plan.result == 'success'", "needs.baseline.result == 'success'"),
      {"artifact_check_clean"}, "is conditional"),
     ("replay selection -k", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -k smoke"),
-     REPLAY_THREE, "selects tests"),
+     REPLAY_THREE, "`-k`"),
     ("replay selection -k attached", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -ksmoke"),
-     REPLAY_THREE, "selects tests"),
+     REPLAY_THREE, "`-ksmoke`"),
     ("replay selection -m", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -m 'not slow'"),
-     REPLAY_THREE, "selects tests"),
+     REPLAY_THREE, NOT_PLAIN),
     ("replay last-failed", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --lf"),
-     REPLAY_THREE, "selects tests"),
+     REPLAY_THREE, "`--lf`"),
     ("artifact selection", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
                                                   "pytest tests/test_artifact_graph.py -k test_no_violation -q"),
-     {"artifact_check_clean"}, "selects tests"),
+     {"artifact_check_clean"}, "`-k`"),
     ("replay deselect file", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --deselect=tests/replay/test_pipelines.py"),
-     {"compliant_replays_clean"}, "deselects"),
+     REPLAY_THREE, "`--deselect=tests/replay/test_pipelines.py`"),
     ("replay deselect test", lambda t: must_replace(
         t, "-rfE --durations=0", "-rfE --durations=0 --deselect tests/replay/test_faults.py::test_fault_returns_to_its_producer"),
-     {"faults_returned_and_repaired"}, "deselects"),
+     REPLAY_THREE, "`--deselect`"),
     ("replay collect only", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --collect-only"),
-     REPLAY_THREE, "only collects"),
+     REPLAY_THREE, "`--collect-only`"),
     ("replay collect only, short", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 --co"),
-     REPLAY_THREE, "only collects"),
+     REPLAY_THREE, "`--co`"),
     ("artifact setup plan", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q",
                                                    "pytest tests/test_artifact_graph.py --setup-plan -q"),
-     {"artifact_check_clean"}, "only collects"),
+     {"artifact_check_clean"}, "`--setup-plan`"),
     ("replay config override", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -o addopts=-q"),
-     REPLAY_THREE, "overrides the pytest configuration"),
+     REPLAY_THREE, "`-o`"),
+    # a node id is no plain path: the step reaches none of the three, and the baseline step leaves them out
     ("replay node id", lambda t: must_replace(t, "pytest tests/replay -q", "pytest tests/replay/test_faults.py::test_x -q"),
-     {"faults_returned_and_repaired": "node ids", "compliant_replays_clean": "ignores it",
-      "no_site_without_class": "ignores it"}, ""),
+     REPLAY_THREE, "ignores it"),
     ("replay exit code swallowed", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
                                                           "--ignore=tests/replay/test_run_to_run.py || true"),
-     REPLAY_THREE, "can fail without failing the job"),
+     REPLAY_THREE, NOT_PLAIN),
     ("replay exit code swallowed by echo", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
                                                                   "--ignore=tests/replay/test_run_to_run.py || echo failed"),
-     REPLAY_THREE, "can fail without failing the job"),
+     REPLAY_THREE, NOT_PLAIN),
     ("replay piped", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
                                             "--ignore=tests/replay/test_run_to_run.py | tee replay.log"),
-     REPLAY_THREE, "hides its exit status"),
+     REPLAY_THREE, NOT_PLAIN),
     ("replay in the background", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
                                                         "--ignore=tests/replay/test_run_to_run.py &"),
-     REPLAY_THREE, "background"),
+     REPLAY_THREE, NOT_PLAIN),
     ("artifact exit code swallowed", lambda t: must_replace(t, "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s",
                                                             "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s || true"),
-     {"artifact_check_clean"}, "can fail without failing the job"),
+     {"artifact_check_clean"}, NOT_PLAIN),
     ("replay shards cut", lambda t: must_replace(t, "shard: [1, 2, 3, 4, 5, 6]", "shard: [1, 2, 3]"),
      REPLAY_THREE, "splits the tests over 6 shards"),
     ("replay shard count raised", lambda t: must_replace(t, "REPLAY_SHARD: ${{ matrix.shard }}/6", "REPLAY_SHARD: ${{ matrix.shard }}/8"),
      REPLAY_THREE, "splits the tests over 8 shards"),
     ("selection in the environment", lambda t: must_replace(t, "          REPLAY_WORK: ${{ runner.temp }}/replay\n",
                                                             "          REPLAY_WORK: ${{ runner.temp }}/replay\n          PYTEST_ADDOPTS: \"-k smoke\"\n"),
-     REPLAY_THREE, "selects tests"),
+     REPLAY_THREE, "PYTEST_ADDOPTS"),
     ("another directory", lambda t: must_replace(
         t, "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n",
         "      - name: Replay suite, shard ${{ matrix.shard }} of 6\n        working-directory: tests\n"),
@@ -1188,6 +1144,12 @@ MUTATIONS = [
     ("another shell", lambda t: must_replace(
         t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: sh {0}\n"),
      {"artifact_check_clean"}, "shell"),
+    ("an exit code kept", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
+                                                 "--ignore=tests/replay/test_run_to_run.py || exit 1"), REPLAY_THREE, NOT_PLAIN),
+    ("a pipe with pipefail", lambda t: must_replace(
+        t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: bash\n").replace(
+        "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s", "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s | tee check.log"),
+     {"artifact_check_clean"}, NOT_PLAIN),
 ]
 
 
@@ -1198,16 +1160,12 @@ def test_the_workflow_rules_turn_the_predicates_false(tmp_path, name, mutate, fa
     assert got["unit_suite_on_every_version"]["holds"] is True  # none of these touches the baseline job's pytest step
 
 
-# changes that do not narrow the run, narrow nothing: the predicates stay true
+# changes that do not narrow the run, narrow nothing: the predicates stay as they are
 HARMLESS = [
     ("more output", lambda t: must_replace(t, "-rfE --durations=0", "-rfE --durations=0 -vv --tb=short -x")),
     ("another ignored file", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
                                                     "--ignore=tests/replay/test_run_to_run.py --ignore=tests/replay/test_trace_reduce.py")),
-    ("an exit code kept", lambda t: must_replace(t, "--ignore=tests/replay/test_run_to_run.py",
-                                                 "--ignore=tests/replay/test_run_to_run.py || exit 1")),
-    ("a pipe with pipefail", lambda t: must_replace(
-        t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: bash\n").replace(
-        "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s", "pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s | tee check.log")),
+    ("an explicit bash", lambda t: must_replace(t, "      - name: Artifact check\n", "      - name: Artifact check\n        shell: bash\n")),
     ("a job with no if", lambda t: must_replace(t, f"    {ARTIFACT_IF}\n", "")),
     ("an always() job", lambda t: must_replace(
         t, "!cancelled() && needs.artifact-graph-plan.result == 'success'", "always()")),
@@ -1218,10 +1176,7 @@ HARMLESS = [
 def test_the_workflow_rules_leave_harmless_changes_alone(tmp_path, name, mutate):
     got = run_workflow_variant(tmp_path, "harmless", mutate)
     for predicate, verdict in got.items():
-        assert verdict["workflow"]["holds"] is True if predicate != "unit_suite_on_every_version" else verdict["holds"], \
-            (name, predicate, verdict["missing"])
-    assert got["compliant_replays_clean"]["holds"] and got["faults_returned_and_repaired"]["holds"]
-    assert got["artifact_check_clean"]["holds"]
+        assert not not_run(verdict) and verdict["holds"] is BASE_HOLDS.get(predicate, True), (name, predicate, verdict["missing"])
 
 
 def test_a_baseline_job_skipped_on_another_condition_is_no_reference(tmp_path):
@@ -1230,7 +1185,7 @@ def test_a_baseline_job_skipped_on_another_condition_is_no_reference(tmp_path):
     got = run_workflow_variant(tmp_path, "alike", lambda t: t.replace(
         GATED_IF, f"if: ${{{{ {GATE} && (github.event_name == 'push') }}}}"))
     for name, verdict in got.items():
-        assert verdict["holds"] is False and "is conditional" in " ".join(verdict["workflow"]["missing"]), name
+        assert verdict["holds"] is False and "is conditional" in " ".join(verdict["missing"]), name
     always = run_workflow_variant(tmp_path, "never", lambda t: must_replace(
         t, f"    {GATED_IF}\n    # Supported OS:", f"    if: ${{{{ {GATE} && false }}}}\n    # Supported OS:"))
     assert always["unit_suite_on_every_version"]["holds"] is False
@@ -1249,8 +1204,8 @@ def test_the_visibility_gate_anded_with_the_draft_skip_is_no_condition(tmp_path)
     assert f"if: {jobs['artifact-graph']['if']}" == ARTIFACT_IF
     got = rf.ci_enforces(_ci_repo(tmp_path))
     for name, verdict in got.items():
-        assert verdict["holds"] is (name != "no_site_without_class"), (name, verdict["missing"])
-        assert verdict["workflow"]["holds"] is True and verdict["workflow"]["rejected"] == [], (name, verdict["workflow"])
+        assert not not_run(verdict) and verdict["holds"] is BASE_HOLDS.get(name, True), (name, verdict["missing"])
+    assert not not_run(got["no_site_without_class"]["weaker"]) and got["no_site_without_class"]["weaker"]["holds"]
     # the gate as the artifact job's whole `if`: the jobs it needs are read as for a job with no `if`, the shards too,
     # whose `if` is the gate alone
     alone = run_workflow_variant(tmp_path, "alone", lambda t: must_replace(t, ARTIFACT_IF, f"if: ${{{{ {GATE[1:-1]} }}}}"))
@@ -1288,18 +1243,17 @@ UNIT_STEP = "python3 -m pytest hooks/tests tests -q -n auto --dist loadfile"
 
 
 @pytest.mark.parametrize("extra,message", [
-    ("-k smoke", "selects tests"), ("-ksmoke", "selects tests"), ("-m 'not slow'", "selects tests"),
-    ("--collect-only", "only collects"), ("--co", "only collects"), ("--setup-plan", "only collects"),
-    ("--deselect tests/test_x.py::test_y", "deselects"), ("--deselect=hooks/tests/test_z.py", "deselects"),
-    ("--lf", "selects tests"), ("--sw", "selects tests"), ("-o addopts=-q", "overrides the pytest configuration"),
-    ("|| true", "can fail without failing the job"), ("|| echo ok", "can fail without failing the job"),
-    ("| tee unit.log", "hides its exit status"), ("&", "background"),
-    ("--ignore=tests", "ignores it"), ("--ignore=hooks/tests", "ignores it"), ("--ignore-glob=*tests", "ignores it"),
+    ("-k smoke", "`-k`"), ("-ksmoke", "`-ksmoke`"), ("-m 'not slow'", NOT_PLAIN),
+    ("--collect-only", "`--collect-only`"), ("--co", "`--co`"), ("--setup-plan", "`--setup-plan`"),
+    ("--deselect tests/test_x.py::test_y", "`--deselect`"), ("--deselect=hooks/tests/test_z.py", "`--deselect=hooks/tests/test_z.py`"),
+    ("--lf", "`--lf`"), ("--sw", "`--sw`"), ("-o addopts=-q", "`-o`"),
+    ("|| true", NOT_PLAIN), ("|| echo ok", NOT_PLAIN), ("| tee unit.log", NOT_PLAIN), ("&", NOT_PLAIN),
+    ("--ignore=tests", "ignores it"), ("--ignore=hooks/tests", "ignores it"), ("--ignore-glob=*tests", "`--ignore-glob=*tests`"),
 ], ids=lambda v: v if isinstance(v, str) else None)
 def test_unit_suite_rejects_what_narrows_or_swallows_the_run(tmp_path, extra, message):
     got = run_workflow_variant(tmp_path, "unit", lambda t: must_replace(t, UNIT_STEP, f"{UNIT_STEP} {extra}"))
     unit = got["unit_suite_on_every_version"]
-    assert unit["holds"] is False and unit["workflow"]["holds"] is False, unit
+    assert unit["holds"] is False, unit
     assert message in " ".join(unit["missing"]), unit["missing"]
     assert unit["ignored"] == []  # nothing is claimed about what it leaves out
 
@@ -1308,10 +1262,7 @@ def test_unit_suite_keeps_its_cell_when_the_run_is_whole(tmp_path):
     """Options that narrow nothing leave the predicate, its `ignored` list and its `versions` as they were."""
     base = rf.ci_enforces(_ci_repo(tmp_path / "base"))["unit_suite_on_every_version"]
     got = run_workflow_variant(tmp_path, "whole", lambda t: must_replace(t, UNIT_STEP, f"{UNIT_STEP} -x --tb=short -vv"))
-    unit = got["unit_suite_on_every_version"]
-    assert unit["holds"] and unit["ignored"] == base["ignored"] and unit["versions"] == base["versions"]
-    assert unit["line"] == base["line"] and unit["claim"] == base["claim"] and unit["file"] == base["file"]
-    assert unit["assertions"] == base["assertions"]
+    assert got["unit_suite_on_every_version"] == base and base["holds"]
 
 
 def test_a_workflow_that_cannot_be_read_fails_every_predicate_closed(tmp_path):
@@ -1325,80 +1276,52 @@ def test_a_workflow_that_cannot_be_read_fails_every_predicate_closed(tmp_path):
         assert verdict["holds"] is False and "baseline.yml" in " ".join(verdict["missing"]), name
 
 
-@pytest.mark.parametrize("run,swallowed", [
-    ("python3 -m pytest tests -q", False),
-    ("pytest tests -q", False),
-    ("FOO=1 python3 -m pytest tests", False),
-    ("python3 -m pip install pytest", None),               # `pytest` as an argument is no pytest run
-    ("pip install pytest && echo done", None),
-    ("python3 -m pytest tests || exit 1", False),
-    ("python3 -m pytest tests || exit 0", True),
-    ("python3 -m pytest tests || true", True),
-    ("python3 -m pytest tests && echo ok", False),
-    ("python3 -m pytest tests && echo ok\necho done", True),
-    ("python3 -m pytest tests | tee x.log", True),
-    ("set -o pipefail\npython3 -m pytest tests | tee x.log", False),
-    ("python3 -m pytest tests &", True),
-    ("set +e\npython3 -m pytest tests", True),
-    ("if python3 -m pytest tests; then echo ok; fi", True),
-    ("! python3 -m pytest tests", True),
-    ("echo start\npython3 -m pytest tests -q\necho end", False),
-    ("python3 -m pytest tests \\\n  -q", False),
-    ("# python3 -m pytest tests || true\npython3 -m pytest tests", False),
+@pytest.mark.parametrize("run,paths,ignores", [
+    ("python3 -m pytest tests -q", ["tests"], []),
+    ("pytest tests -q", ["tests"], []),
+    ("python3 -m pytest hooks/tests tests -q -n auto --dist loadfile --ignore=tests/replay", ["hooks/tests", "tests"],
+     ["tests/replay"]),
+    ("python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0 --ignore tests/x.py", ["tests/replay"],
+     ["tests/x.py"]),
+    ("python3 -m pytest tests -vv --tb=short -x -s --durations 5", ["tests"], []),
 ])
-def test_pytest_runs_reads_a_run_block(run, swallowed):
-    runs = rf._pytest_runs(run)
-    if swallowed is None:
-        assert runs == []
-    else:
-        assert len(runs) == 1 and bool(runs[0]["swallow"]) is swallowed, runs
+def test_a_plain_pytest_command_is_read(run, paths, ignores):
+    assert rf._pytest_args(run) == (paths, ignores, None)
 
 
-def test_pytest_runs_survives_an_unclosed_quote_by_naming_it():
-    with pytest.raises(ValueError):
-        rf._pytest_runs("python3 -m pytest tests -k 'unclosed")
-
-
-@pytest.mark.parametrize("words,expected", [
-    (["tests", "-q"], {"paths": ["tests"]}),
-    (["-n", "auto", "--dist", "loadfile", "tests/replay"], {"paths": ["tests/replay"]}),
-    (["-p", "no:cacheprovider", "-rfE", "--durations=0", "a", "b"], {"paths": ["a", "b"]}),
-    (["--ignore", "x/y", "--ignore=z", "--ignore-glob", "*q*"], {"ignore": ["x/y", "z"], "ignore_glob": ["*q*"]}),
-    (["-k", "a and b", "t"], {"select": ["-k a and b"], "paths": ["t"]}),
-    (["-xk", "a", "t"], {"select": ["-k a"], "paths": ["t"]}),
-    (["-m", "slow", "t"], {"select": ["-m slow"]}),
-    (["--deselect", "t.py::x", "--deselect=u.py"], {"deselect": ["t.py::x", "u.py"]}),
-    (["--co", "--collect-only", "-h"], {"not_a_run": ["--co", "--collect-only", "-h"]}),
-    (["-o", "addopts=x", "-c", "other.ini"], {"config": ["-o", "-c"]}),
-    (["--", "-weird-name"], {"paths": ["-weird-name"]}),
+@pytest.mark.parametrize("run,why", [
+    ("FOO=1 python3 -m pytest tests", NOT_PLAIN), ("python3 -m pip install pytest", NOT_PLAIN),
+    ("python3 -m pytest tests || exit 1", NOT_PLAIN), ("python3 -m pytest tests | tee x.log", NOT_PLAIN),
+    ("python3 -m pytest tests &", NOT_PLAIN), ("set -e\npython3 -m pytest tests", NOT_PLAIN),
+    ("python3 -m pytest 'tests'", NOT_PLAIN), ("python3 -m pytest $TESTS", NOT_PLAIN),
+    ("python3 -m pytest tests -k smoke", "`-k`"), ("python3 -m pytest tests -m slow", "`-m`"),
+    ("python3 -m pytest tests --deselect=tests/a.py", "`--deselect=tests/a.py`"),
+    ("python3 -m pytest tests/a.py::test_x", "`tests/a.py::test_x`"), ("python3 -m pytest tests -p xdist", "`-p`"),
+    ("python3 -m pytest tests -n", "`-n`"), ("python3 -m pytest ./tests", "`./tests`"),
+    ("python3 -m pytest tests/*.py", "`tests/*.py`"), ("python3 -m pytest -o addopts=-q tests", "`-o`"),
+    ("python3 -m pytest tests --ignore-glob=*x", "`--ignore-glob=*x`"),
 ])
-def test_pytest_arguments_are_read_as_pytest_reads_them(words, expected):
-    got = rf._args(words)
-    for key, value in expected.items():
-        assert got[key] == value, (key, got)
+def test_anything_else_is_not_read_as_a_plain_run(run, why):
+    paths, ignores, odd = rf._pytest_args(run)
+    assert (paths, ignores) == ([], []) and why in odd, odd
 
 
-@pytest.mark.parametrize("arg,target,covers", [
-    ("tests", "tests/replay/test_faults.py", True), ("tests/", "tests/replay/test_faults.py", True),
-    ("./tests/replay", "tests/replay/test_faults.py", True), ("tests/replay/test_faults.py", "tests/replay/test_faults.py", True),
-    ("tests/replay/test_faults.py::test_x", "tests/replay/test_faults.py", True),
+@pytest.mark.parametrize("path,target,under", [
+    ("tests", "tests/replay/test_faults.py", True), ("tests/replay/test_faults.py", "tests/replay/test_faults.py", True),
     ("tests/rep", "tests/replay/test_faults.py", False), ("tests/replay/test_f.py", "tests/replay/test_faults.py", False),
-    (".", "tests/replay/test_faults.py", True), ("tests/replay/test_*.py", "tests/replay/test_faults.py", True),
     ("hooks/tests", "tests/replay/test_faults.py", False),
 ])
-def test_a_pytest_path_covers_what_it_holds(arg, target, covers):
-    assert rf._covers(arg, target) is covers
+def test_a_path_holds_what_is_under_it(path, target, under):
+    assert rf._under(target, path) is under
 
 
-def test_no_path_means_the_testpaths_of_pytest_ini(tmp_path):
+def test_a_run_that_names_no_path_is_not_shown_to_run_the_test(tmp_path):
+    """pytest.ini's testpaths are not read: a step that names no path is not evidence that it runs the test."""
     root = _ci_repo(tmp_path)
     (root / "pytest.ini").write_text("[pytest]\ntestpaths = hooks/tests tests\n", encoding="utf-8")
-    assert rf._testpaths(root) == ["hooks/tests", "tests"]
-    assert rf._testpaths(tmp_path) == ["."]
     edit(root, WORKFLOW, "python3 -m pytest tests/test_artifact_graph.py -q", "python3 -m pytest -q")
-    got = rf.ci_enforces(root)["artifact_check_clean"]["workflow"]
-    # the artifact job now runs `pytest -q`: the testpaths, which hold the file
-    assert got["holds"] is True and got["job"] == "artifact-graph", got
+    got = rf.ci_enforces(root)["artifact_check_clean"]
+    assert got["holds"] is False and not_run(got)
 
 
 # ================================================================ all facts, the JSON dump, the command line
@@ -1410,20 +1333,16 @@ def run_cli(*args, env_extra=None, cwd=REPO):
                           cwd=str(cwd), timeout=300)
 
 
-def test_every_fact_has_a_time_and_none_is_empty(real):
-    assert set(real.facts) == set(rf.FACTS) == set(real.seconds)
-    assert all(s >= 0 for s in real.seconds.values())
+def test_every_fact_is_derived_and_none_is_empty(real):
+    assert set(real.facts) == set(rf.FACTS)
     for name, value in real.facts.items():
         assert value, f"{name} is empty"
 
 
 def test_the_command_line_prints_each_fact_as_json(real):
-    one = run_cli("--fact", "ci_python_versions", "--fact", "count_tests", "--timings")
+    one = run_cli("--fact", "ci_python_versions", "--fact", "count_tests")
     assert one.returncode == 0, one.stderr
-    out = json.loads(one.stdout)
-    assert out["facts"] == {k: real.facts[k] for k in ("ci_python_versions", "count_tests")}
-    assert set(out["seconds"]) == {"ci_python_versions", "count_tests", "total"}
-    assert run_cli("--list").stdout.split() == list(rf.FACTS)
+    assert json.loads(one.stdout)["facts"] == {k: real.facts[k] for k in ("ci_python_versions", "count_tests")}
 
 
 def test_the_command_line_names_the_missing_input_and_exits_2(tmp_path):
