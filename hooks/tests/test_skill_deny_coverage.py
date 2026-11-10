@@ -19,7 +19,7 @@ import os
 import re
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-CONTROL = {"allow", "restart", "checkpoint", "tickets"}
+CONTROL = {"allow", "restart", "checkpoint", "tickets", "rating"}
 _SKILL_CALL = re.compile(r"""Skill\(skill=["']([a-z0-9_-]+)["']""")
 
 
@@ -47,6 +47,21 @@ def test_every_human_only_command_has_its_skill_deny():
     human_only = _stems() - CONTROL - _agent_invoked()
     missing = sorted(s for s in human_only if f"Skill({s}:*)" not in _deny())
     assert not missing, "human-only commands/*.md stems without a Skill(<stem>:*) deny: " + ", ".join(missing)
+
+
+def test_a_human_only_control_command_keeps_its_skill_deny():
+    """CONTROL_COMMANDS exempts a command from the requirement above; a control command whose own front
+    matter says human-only (`disable-model-invocation: true`: allow, restart, checkpoint, rating) keeps its deny
+    all the same, which the exemption would otherwise stop checking."""
+    def human_only(stem: str) -> bool:
+        with open(os.path.join(ROOT, "commands", f"{stem}.md"), encoding="utf-8") as fh:
+            head = re.match(r"---\n(.*?)\n---", fh.read(), re.S)
+        return bool(head and re.search(r"^disable-model-invocation:\s*true\s*$", head.group(1), re.M))
+
+    guarded = sorted(s for s in CONTROL & _stems() if human_only(s))
+    assert "rating" in guarded, guarded
+    missing = [s for s in guarded if f"Skill({s}:*)" not in _deny()]
+    assert not missing, "human-only control commands without a Skill(<stem>:*) deny: " + ", ".join(missing)
 
 
 def test_no_command_the_texts_invoke_through_skill_is_denied():

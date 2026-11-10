@@ -279,6 +279,27 @@ def test_a2_no_record_but_the_humans_own_command_ends_the_block(env, after):
     assert run(env, **extra)[0] == 2
 
 
+@pytest.mark.parametrize("view", ["tickets", "rating"])
+def test_a2_a_typed_read_only_view_after_an_unfinished_dev_leaves_it_gated(env, view):
+    # /rating is a CONTROL command as /tickets is: typed (once or twice) it opens or replaces no span.
+    steps = dev_span(env, done=1)
+    env.tx.command(view)
+    env.tx.say("Shown.")
+    env.tx.command(view)
+    code, text = run(env)
+    assert code == 2
+    assert text.startswith("COMMAND_GATE /dev: not complete\n")
+    assert f"- todo: not completed: {steps[1]['content']}" in text
+
+
+@pytest.mark.parametrize("view", ["tickets", "rating"])
+def test_a2_a_read_only_view_alone_is_not_gated(env, view):
+    env.tx.command(view)
+    assert run(env) == (0, "")
+    env.tx.command(view)
+    assert run(env) == (0, "")
+
+
 @pytest.mark.parametrize("command", ["stop", "spec"])
 def test_a2_the_humans_stop_or_spec_opens_an_ungated_span(env, command):
     dev_span(env, done=1)
