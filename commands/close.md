@@ -2,6 +2,8 @@
 description: Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the disposition and completes an unfinished cycle; QA judges and returns CLOSE YES; Step 4 asks the user to rate the cycle. --codex adds a Codex review to QA's judgment (default is QA alone); --auto closes every close_pending parent; --force is accepted and ignored.
 argument-hint: "[--codex | --auto | --late-repair] [<task-id>|<path>]"
 disable-model-invocation: true
+summary: "Close the cycle: finish what is unfinished, have inspectors and QA judge it, end on `CLOSE: YES` or the findings, then ask you to rate it."
+group: Ship
 ---
 
 # /close

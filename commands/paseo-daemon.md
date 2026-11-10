@@ -2,6 +2,9 @@
 description: paseo multi-session monitoring and three-account dynamic scheduling control plane — bootstrap of a persistent, disk-backed state machine. Human-only.
 argument-hint: "[bootstrap|tick|drain]"
 disable-model-invocation: true
+summary: "Bootstrap and advance the optional module's multi-session monitoring and account scheduling state machine."
+group: Control
+module: paseo
 ---
 
 # /paseo-daemon — paseo multi-session monitoring & three-account dynamic scheduling controller

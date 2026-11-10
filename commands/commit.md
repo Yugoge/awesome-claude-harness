@@ -1,6 +1,8 @@
 ---
 description: Commit session changes via changelog-analyst subagent
 disable-model-invocation: true
+summary: "Commit a task's changes through the changelog analyst, closing an unfinished cycle first and staging only the task's own files."
+group: Ship
 ---
 
 # /commit

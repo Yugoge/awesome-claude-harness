@@ -1,6 +1,8 @@
 ---
 description: Autonomous overnight development loop - continuously explores codebase, finds issues, fixes them, and repeats until end-time
 disable-model-invocation: true
+summary: "Run unattended until an end time: explore, fix each real issue in its own pipeline, decide without the owner, and commit nothing."
+group: Develop
 ---
 
 # Dev-Overnight: Autonomous Continuous Development
