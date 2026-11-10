@@ -20,7 +20,8 @@ tree's text spells each one, read at run time:
   block of the step.
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the commit-qa-report's
-  last line. A `COMMIT: REJECT` (variant reject) revokes the grant with the text's revoke call, routes
+  last line; on `COMMIT: APPROVE`, QA_APPROVED_FILES as the step records it (PLAN_FILES, plus this
+  round's commit-qa-report in the control root's repository where the text adds it). A `COMMIT: REJECT` (variant reject) revokes the grant with the text's revoke call, routes
   its finding (Routes) and runs a fresh round from Step 5.
 * Step 7: changelog-analyst from the step's prompt block, the real commit in the toy project and
   the push-gate token as the tree's agent text writes it; the status block read and handled per
@@ -40,7 +41,8 @@ The changelog-analyst is played from agents/changelog-analyst.md of the tree (ag
 the role work below): Phase 1's plan checks (the three equality reads and the status read), Phase
 2's dev-report resolution (the resolve-dev-report.py call as the text spells it, the report Read,
 the provenance diff), the candidate set the whitelist items name (the report's files, the chain's
-commit_whitelist_artifacts, the anchored post-chain artifacts of the task) intersected with git
+commit_whitelist_artifacts, the anchored post-chain artifacts of the task and, with no chain, the
+anchored do-path set, both name lists read from Phase 2's text) intersected with git
 status and with QA_APPROVED_FILES; in a dry run Phase 4's index save and restore around the
 staging; in a real run the message written with the Write tool at the path the text gives
 (Phase 8 step 1's `MSGFILE=` path, its placeholders bound), then one Bash process holding the Phase 3 lock block
@@ -116,6 +118,7 @@ Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: DEVIATIONS 
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -469,6 +472,21 @@ class CommitRun:
         return d
 
     # ------------------------------------------------------------ the analyst's work
+    def anchored(self) -> tuple:
+        """The anchored names of Phase 2, read from the agent text: item 5's post-chain artifacts of THIS parent
+        (`<TASK_ID>` bound, fnmatch patterns on the basename under docs/dev/), and the anchored do-path set of
+        the no-dev-report case (its name prefixes, each with the parent TASK_ID after it, and its globs, which
+        hold the parent TASK_ID)."""
+        sec = cmdtext.section(self.analyst_text, "Phase 2: File classification")
+        item5 = next((l for l in sec.split("\n") if re.match(r"5\.\s+Post-chain artifacts", l)), None)
+        doset = re.search(r"anchored do-path set \(([^)]*)\)", sec)
+        if item5 is None or doset is None:
+            raise cmdtext.TextNotFound("Phase 2: no item 5 (post-chain artifacts) or no anchored do-path set")
+        post = [t.replace("<TASK_ID>", self.tid) for t in re.findall(r"`([^`]+)`", item5) if "<TASK_ID>" in t]
+        do = re.findall(r"`([^`]+)`", doset.group(1))
+        return (post, [t for t in do if re.fullmatch(r"[a-z][a-z-]*-", t)],
+                [t for t in do if t.startswith("*") and t.endswith("*")])
+
     def candidates(self, sub, repo: dict, report_rel: str | None, status_paths: list) -> list:
         """The whitelist items the agent text names for this repository, intersected with git status."""
         tid, project = self.tid, self.rp.layout.project
@@ -487,16 +505,17 @@ class CommitRun:
                          + " ".join(shlex.quote(d) for d in dirs), "Phase 2: the untracked files",
                          label=f"{sub.role} Bash untracked {repo.get('order', 0)}")
             files.update(l for l in (c.response.get("stdout") or "").split("\n") if l.strip()) if c.ok else None
+        post, do_prefixes, do_globs = self.anchored()
         out = set()
         for p in files:
             b = os.path.basename(p)
             if p in want:
                 out.add(p)
-            elif p.startswith("docs/dev/") and (b in (f"close-report-{tid}.md", f"acceptance-criteria-{tid}.json")
-                                                or ("-inspector-report-" in b and tid in b)):
+            elif p.startswith("docs/dev/") and any(fnmatch.fnmatchcase(b, g) for g in post):  # item 5
                 out.add(p)
-            elif (not self.chain and p.startswith("docs/dev/") and any(b.startswith(f"{k}-{tid}") for k in (
-                    "ticket", "context", "dev-report", "do-report", "qa-report", "completion"))):
+            elif not self.chain and p.startswith("docs/dev/") and (  # the do-path set (no dev-report)
+                    any(b.startswith(k + tid) for k in do_prefixes)
+                    or any(fnmatch.fnmatchcase(b, g) and tid in b for g in do_globs)):
                 out.add(p)
         return sorted(out)
 
@@ -921,6 +940,23 @@ class CommitRun:
         owner_register_filter(self.rp, remedy.group(2), remedy.group(1))
         return True
 
+    def qa_approved(self) -> dict:
+        """Step 6's `COMMIT: APPROVE` record as the text spells it: QA_APPROVED_FILES = PLAN_FILES (per repo),
+        plus, when the text adds it (BULK=false), this round's docs/dev/commit-qa-report-<TASK_ID>.md in the
+        control root's repository: the report the approving read just read."""
+        approved = {r: list(f) for r, f in self.plan_files.items()}
+        sec = re.sub(r"\s+", " ", self.o.section("Step 6"))
+        rec = re.search(r"Record `QA_APPROVED_FILES` = `PLAN_FILES`(.*?)TOCTOU guard", sec)
+        if rec is None:
+            raise cmdtext.TextNotFound("Step 6: no QA_APPROVED_FILES record")
+        if "when `BULK=false`, this round's `docs/dev/commit-qa-report-<TASK_ID>.md`" in rec.group(1):
+            rel = f"docs/dev/commit-qa-report-{self.tid}.md"
+            root = next((r for r in approved if os.path.realpath(r) == os.path.realpath(self.o.project)),
+                        self.o.project)
+            if rel not in approved.setdefault(root, []):
+                approved[root].append(rel)
+        return approved
+
     def landing(self) -> str:
         """Steps 5-7 once; a hook_blocked failure asks, then Steps 5-7 run again."""
         o = self.o
@@ -931,7 +967,7 @@ class CommitRun:
             self.mint()
             if not self.step6():
                 return "nothing to commit"
-            approved = dict(self.plan_files)
+            approved = self.qa_approved()
             self.hook_block = None
             self.dispatch_analyst(False, approved, self.label(f"Step 7 Agent(changelog-analyst) {k}"))
             cs = self.status.get("commit_status", "unknown")

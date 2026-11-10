@@ -5,7 +5,9 @@ record() writes endstate.json beside blocks.json (untraced runs; inner.py): for 
 repository the replay ran in, `git status --porcelain=v1 -uall` (each entry's code and path), the
 ignored paths (`--ignored=matching`), and for each ignored path the rule `git check-ignore -v`
 names (source file, line, pattern); the lines of its `.git/info/exclude` (resolved through `git
-rev-parse --git-path`, as a hook resolves it); and whether its tracked .gitignore is still HEAD's
+rev-parse --git-path`, as a hook resolves it); each tracked file a line of that exclude file matches
+(`git check-ignore --no-index -v` over `git ls-files`: git never hides a tracked file, so a match is a
+pattern that also covers the project's own files, whose untracked siblings it would hide); and whether its tracked .gitignore is still HEAD's
 at the replay's start (the `sb-init` tag sandbox.py puts on the toy's first commit) and in HEAD,
 byte for byte. Its git calls take no lock and run no git hook; they change nothing in the toy.
 """
@@ -55,6 +57,15 @@ def state(rp) -> dict:
         for j in range(0, len(f) - 3, 4):  # source, line, pattern, path
             rules[f[j + 3]] = {"source": f[j], "line": f[j + 1], "pattern": f[j + 2]}
     rec["ignored"] = [{"path": p, **rules.get(p, {})} for p in ignored]
+    tracked = [p for p in _git(rp, "ls-files", "-z").stdout.split("\0") if p]
+    rec["tracked_excluded"] = []
+    if tracked:
+        chk = subprocess.run(["git", "--no-optional-locks", "-C", rp.layout.project, "check-ignore", "--no-index", "-v",
+                              "-z", "--stdin"], input="\0".join(tracked) + "\0", capture_output=True, text=True,
+                             env=rp.bash_env)
+        f = chk.stdout.split("\0")
+        rec["tracked_excluded"] = [{"path": f[j + 3], "pattern": f[j + 2]} for j in range(0, len(f) - 3, 4)
+                                   if f[j].endswith("info/exclude")]
     gp = _git(rp, "rev-parse", "--git-path", "info/exclude").stdout.strip()
     exclude = gp if os.path.isabs(gp) else os.path.join(rp.layout.project, gp)
     try:

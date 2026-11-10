@@ -38,12 +38,18 @@ A product repository left clean after the pipelines (P10's goal and R8, A11's ch
 endstate.json, which every untraced replay writes: tests/replay/endstate.py), over each compliant
 scenario of suite.COMPLIANT in both settings (the replays test_pipelines.py reads): the tracked
 .gitignore is HEAD's at the start, byte for byte; every harness runtime path under .claude/ is
-ignored through `.git/info/exclude`, which holds one line per harness-owned .claude/ directory and
-ignores no docs/ path; in `git status --porcelain`, the only file under .claude/ no actor Wrote is the
-bookmark of a session the replay left open (`.claude/workflow-<session>.json`, which that session's
-SessionEnd sweep removes), a session the replay ended left none, and every entry elsewhere is a cycle
-artifact the pipeline's own tool calls name (input or result: a deliverable /commit can stage), never
-a file only a process behind them left; after /commit and /push nothing of the cycle is left.
+ignored through `.git/info/exclude`, which holds one line per harness-owned .claude/ directory and, of
+file lines, only the two root-anchored per-session record patterns SESSION_RECORDS names (P10-14: the
+workflow bookmark and the overnight state stay at .claude/'s top level, where their readers glob them),
+and ignores no docs/ path; no exclude line matches a tracked file, and the two record patterns hide
+only those top-level records (.claude/settings.json, .claude/workflow.json, .claude/commands/workflow-x.json
+and their kin stay visible); in `git status --porcelain` or, once its pattern hides it, among the
+ignored paths, the only per-session record is one of a session the replay left open
+(`.claude/workflow-<session>.json`, which that session's SessionEnd sweep removes), a session the replay
+ended left none; in `git status --porcelain` the only file under .claude/ no actor Wrote is such a
+bookmark, and every entry elsewhere is a cycle artifact the pipeline's own tool calls name (input or
+result: a deliverable /commit can stage), never a file only a process behind them left; after /commit
+and /push nothing of the cycle is left.
 
 REPLAY_WORK keeps the replays; each test prints its row of the A25 fault table.
 """
@@ -390,6 +396,18 @@ CLEAN_CASES = [pytest.param(scn, s, id=f"{scn.name}-{s}",
                             marks=pytest.mark.replay(suite.replay_key(scn, s), scn.cost))
                for scn in suite.COMPLIANT for s in suite.SETTINGS]
 BOOKMARK = re.compile(r"\.claude/workflow-([0-9a-f-]+)\.json")
+# The only exclude lines that are no `.claude/<dir>/` line: the per-session records the harness keeps directly
+# in .claude/ (P10-14), each named here, never read from the hook that writes them.
+SESSION_RECORDS = (".claude/workflow-*.json", ".claude/overnight-state-*.json")
+RECORD = re.compile(r"\.claude/(?:workflow|overnight-state)-([^/]+)\.json")
+# Paths the record patterns must leave visible (the project's and Claude Code's own .claude/ files, and
+# same-named files anywhere but .claude/'s top level), and the records they must hide.
+VISIBLE = (".claude/settings.json", ".claude/settings.local.json", ".claude/workflow.json",
+           ".claude/overnight-state.json", ".claude/CLAUDE.md", ".claude/commands/workflow-x.json",
+           ".claude/agents/overnight-state-x.json", ".claude/specs-x/workflow-x.json", "workflow-x.json",
+           "overnight-state-x.json", "docs/dev/workflow-x.json", "sub/.claude/workflow-x.json",
+           "sub/.claude/overnight-state-x.json")
+HIDDEN = (".claude/workflow-0b7e-4c1d.json", ".claude/overnight-state-0b7e-4c1d.json")
 COMMITTING = ("commit", "push")  # the scenario's own command ends with the cycle committed
 
 
@@ -403,6 +421,31 @@ def _sessions(r) -> tuple:
         elif ev["event"] == "SessionEnd":
             ended.add(sid)
     return started, ended
+
+
+def _record_lines_hide(lines: list, tmp: str) -> tuple:
+    """(VISIBLE paths the exclude lines `lines` hide, HIDDEN paths they leave visible, tracked paths they
+    hide) in a scratch repository whose `.git/info/exclude` holds exactly `lines`, the probe paths present
+    as files: VISIBLE and HIDDEN untracked, one record-named file tracked."""
+    repo = os.path.join(tmp, "probe")
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "init", "-q", repo], check=True, env=env)
+    tracked = ".claude/workflow-tracked.json"
+    for rel in VISIBLE + HIDDEN + (tracked,):
+        os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+        with open(os.path.join(repo, rel), "w") as fh:
+            fh.write("{}\n")
+    git_ = lambda *a: subprocess.run(["git", "-C", repo, "-c", "core.excludesFile=/dev/null", *a],  # noqa: E731
+                                     capture_output=True, text=True, check=True, env=env).stdout
+    git_("add", "--", tracked)
+    git_("-c", "user.name=probe", "-c", "user.email=probe@example.invalid", "commit", "-q", "-m", "probe")
+    with open(os.path.join(repo, ".git", "info", "exclude"), "w") as fh:
+        fh.write("".join(ln + "\n" for ln in lines))
+    with open(os.path.join(repo, tracked), "a") as fh:
+        fh.write("\n")
+    shown = {ln[3:] for ln in git_("status", "--porcelain=v1", "-uall").split("\n") if ln.strip()}
+    return (sorted(p for p in VISIBLE if p not in shown), sorted(p for p in HIDDEN if p in shown),
+            [] if tracked in shown else [tracked])
 
 
 def _calls(r) -> tuple:
@@ -424,7 +467,7 @@ def _calls(r) -> tuple:
 
 
 @pytest.mark.parametrize("scn,settings", CLEAN_CASES)
-def test_the_product_repository_is_left_clean(replays, scn, settings):
+def test_the_product_repository_is_left_clean(replays, scn, settings, tmp_path):
     r = replays.get(suite.replay_key(scn, settings))
     assert not r.error and not r.summary.get("driver_error"), r.explain()
     es = endstate.load(r.run_dir)
@@ -433,14 +476,26 @@ def test_the_product_repository_is_left_clean(replays, scn, settings):
     assert gi["worktree"] == gi["start"] == gi["head"] and gi["start"], f"the tracked .gitignore changed: {gi}"
     exclude = es["exclude"]
     assert len(exclude) == len(set(exclude)), f"an exclude line twice: {exclude}"
-    assert all(re.fullmatch(r"\.claude/[^/]+/", ln) for ln in exclude), f"an exclude line that is no harness-owned " \
-        f".claude/ directory: {exclude}"
+    assert all(re.fullmatch(r"\.claude/[^/]+/", ln) or ln in SESSION_RECORDS for ln in exclude), \
+        f"an exclude line that is no harness-owned .claude/ directory and no per-session record pattern: {exclude}"
+    assert not es.get("tracked_excluded", ["endstate.json records no tracked_excluded"]), \
+        f"an exclude line matches a tracked file of the project: {es.get('tracked_excluded')}"
+    records = [ln for ln in exclude if ln in SESSION_RECORDS]
+    if records:
+        shown, kept, tracked_hidden = _record_lines_hide(records, str(tmp_path))
+        assert not shown and not kept and not tracked_hidden, \
+            f"the record patterns {records} hide {shown + tracked_hidden} or leave {kept} visible"
+    started, ended = _sessions(r)
+    hidden = 0
     for ig in es["ignored"]:
         if ig["path"].startswith(".claude/"):
             assert ig.get("source", "").endswith("info/exclude") and ig.get("pattern") in exclude, \
                 f"{ig['path']} is not ignored through .git/info/exclude: {ig}"
+        if ig.get("pattern") in SESSION_RECORDS:  # a hidden record is still one of a session left open
+            m = RECORD.fullmatch(ig["path"])
+            assert m and m.group(1) in started - ended, f"{ig['path']}: the record of a session that ended was left"
+            hidden += 1
         assert not ig["path"].startswith("docs/"), f"a docs artifact is ignored: {ig}"
-    started, ended = _sessions(r)
     paths, named = _calls(r)
     left = []
     for e in es["status"]:
@@ -461,4 +516,5 @@ def test_the_product_repository_is_left_clean(replays, scn, settings):
     _row(fault="-", producer=f"{scn.name} ({settings})", **{
         "blocked at": "-", "cleared by": "-",
         "result": f".gitignore unchanged; {len(exclude)} exclude lines; {len(es['ignored'])} ignored; "
-                  f"{len(left)} deliverables, {len(es['status']) - len(left)} open-session bookmark(s) in status"})
+                  f"{len(left)} deliverables, {len(es['status']) - len(left)} open-session bookmark(s) in status, "
+                  f"{hidden} open-session record(s) excluded"})
