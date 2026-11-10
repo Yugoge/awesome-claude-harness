@@ -30,7 +30,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-from hooks.lib import obligation, score_events, score_log  # noqa: E402
+from hooks.lib import obligation, requirement_round, score_events, score_log  # noqa: E402
 
 TASK = "20261109-120000"
 REPORT = f"docs/dev/dev-report-{TASK}.json"  # dev's own report, and ba's ticket: the files a close finding cites
@@ -832,6 +832,19 @@ def test_a_re_dispatch_after_a_clarification_is_no_gap(cycle, monkeypatch):
     cycle.dispatch("ba", artifacts=[{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}])
     cycle.observe(monkeypatch)
     assert not gaps(cycle)
+
+
+@pytest.mark.parametrize("round_file, gap", [
+    (requirement_round.ROUND.format(task=TASK, n=2), False),  # the final BA asked for another round writes it instead of its artifacts (D29)
+    (requirement_round.ROUND.format(task=TASK, n=4), False),  # no cap on the rounds
+    (requirement_round.ROUND.format(task="20261109-130000", n=2), True),  # another task's round is not this task's write
+    (None, True)])  # it wrote nothing at all
+def test_a_requirement_round_of_the_task_is_a_write_of_the_dispatch_that_asked_it(cycle, monkeypatch, round_file, gap):
+    ticket = [{"kind": "markdown", "path": TICKET, "identity_anchor": TASK}]
+    cycle.dispatch("ba", wrote=[round_file] if round_file else [], declared=False, artifacts=ticket)
+    again = cycle.dispatch("ba", artifacts=ticket)
+    cycle.observe(monkeypatch)
+    assert [(r["role"], r["key"]) for r in gaps(cycle)] == ([("ba", f"rerun_gap:{again}")] if gap else [])
 
 
 def test_a_dispatch_that_declares_no_file_is_no_gap(cycle, monkeypatch):

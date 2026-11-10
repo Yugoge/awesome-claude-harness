@@ -7,9 +7,9 @@ from contextlib import suppress
 from datetime import datetime, timezone
 
 try:  # as hooks.lib.score_events, or from hooks/lib on the path
-    from . import command_span, obligation, score_log
+    from . import command_span, obligation, requirement_round, score_log
 except ImportError:
-    import command_span, obligation, score_log  # noqa: E401
+    import command_span, obligation, requirement_round, score_log  # noqa: E401
 
 
 def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict: the result's time, a one-line why without task id, ref (default: d's report)
@@ -131,14 +131,14 @@ def close_catch(ctx):  # a finding's producer wrote the cited file in a later di
                 yield _event(ctx, land, "close_catch", "close-qa", "a close finding was fixed by its producer, then a round landed", f"close_catch:{land['task']}:{path}", path)
 
 
-def rerun_gap(ctx):  # a dispatch whose previous one in its group (task, lane, identity, declared paths) never touched them, nor wrote a producer question
+def rerun_gap(ctx):  # a dispatch whose previous one in its group (task, lane, identity, declared paths) never touched them, nor wrote a producer question or a requirement round
     last = {}
     for d in ctx["ds"]:
         paths = frozenset(a["path"] for a in d["ob"]["artifacts"] if a.get("path"))
         key = d["task"], d["lane"], d["who"], paths
         before, last[key] = last.get(key), d
         seen = " ".join(str(v) for b in _walk(before) for v in (b.get("input") or {}).values()) if before and paths and os.path.isfile(before["sub"]) else None
-        if seen is not None and not any(p in seen for p in paths | {f"docs/dev/producer-question-{before['ob']['task_id']}-{before['ob']['role']}.json"}):
+        if seen is not None and not any(p in seen for p in paths | {f"docs/dev/producer-question-{before['ob']['task_id']}-{before['ob']['role']}.json", requirement_round.ROUND.partition("{n}")[0].format(task=before["task"])}):
             yield _event(ctx, d, "rerun_gap", d["who"], "dispatched again after its previous dispatch left a declared artifact unwritten", f"rerun_gap:{d['id']}")  # touched = a tool call names the path
 
 

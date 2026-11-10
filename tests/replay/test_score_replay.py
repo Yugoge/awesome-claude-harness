@@ -370,7 +370,9 @@ def test_the_rating_dialog_is_one_question(replays, name):
         assert [o["label"] for o in question["options"]] == ["5 - Fully met", "4 - Minor gaps", "3 - Major gaps", "1-2 - Not met"]
         assert task_of(r) in question["question"], question
     assert {q["input"]["metadata"]["source"] for q in asked} == {f"close-rating:{task_of(r)}"}
-    assert len(asks(r)) == len(asked), f"the replay asked a question besides the rating: {asks(r)}"
+    rounds = [q for q in asks(r) if str(q["input"].get("metadata", {}).get("source", "")).startswith("requirement-round:")]
+    assert len(rounds) == 1, f"the replayed /dev asks its requirement round once: {rounds}"  # P13-1: asked before the rating dialog
+    assert len(asks(r)) == len(asked) + len(rounds), f"the replay asked a question besides the rating and the requirement round: {asks(r)}"
 
 
 @replay("qa-fail-close")
