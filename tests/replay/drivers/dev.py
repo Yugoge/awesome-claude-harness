@@ -60,6 +60,10 @@ Driver arguments (cli.py --arg K=V):
                        names (the score log then holds a qa_fail row and no qa_catch row)
   resweep=1            after the run, the score observer hook runs once more on the final transcript and the
                        score log is kept (tests/replay/scorelog.py; any driver)
+  score=<role>:<rank>[,...]  (any driver; inner.py seeds it) the score log starts with the rows that put each role in its rank
+                       (disgraced, apprentice, journeyman, skilled, senior, master; restored: a low record brought back to 30); a low
+                       dev or BA (the opener's `Low record:` line) gets the extra independent QA round, tests/replay/test_score_dispatch.py
+  extra=skip           (with a low dev) the cycle ends before the extra independent QA round: the Stop gate refuses it, the QA runs, the Stop passes
   lanes=N              fan-out lane count (2 or 3)
   lane_id=text|task    fan-out lane id base: `text` (default) the placeholder the adapter line
                        names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b, `<TASK_ID>-<lane-suffix>` on
@@ -955,6 +959,9 @@ class DevCycle:
         self.step13(self.L("Step 16 (Step 13 again)"), "pass")
         status = self.step14(self.L("Step 16 (Step 14 again)"))
         assert status == "pass", status
+        if self.extra_round(14, "dev", "Step 16"):  # D32: both rounds run again after the lane's dev returned
+            self.step13(self.L("Step 16 (Step 13 again, the extra independent round)"), "pass")
+            assert self.step14(self.L("Step 16 (Step 14 again)")) == "pass"
         self.step15(self.L("Step 15"))
 
     def files_generated(self, lines: list) -> list:
@@ -1008,6 +1015,18 @@ class DevCycle:
         blocks"): the cycle is not reported complete."""
         return (f"/{self.o.typed} {self.tid}: QA passed, but the completion postcondition "
                 "(resolve-dev-artifact-chain.py) did not pass, so the cycle is not complete.")
+
+    def repair_extra(self) -> None:
+        """extra=skip: a Stop before the extra independent QA round is refused with the gap that names it (D32), the QA runs once more, and the
+        cycle's own Stop then passes."""
+        o = self.o
+        ev = o.s.stop(f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}", label="Stop before the extra round")
+        text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
+        if "owes one more independent final_verification QA dispatch" not in text:
+            raise AssertionError(f"a cycle without the extra round met no gap: {text[:300]}")
+        _round.fact(self.rp, "extra round skipped", {"blocked": True})
+        self.step13("Step 13 again, the extra independent round")
+        self.step14("Step 14 (again)")
 
     def stop(self) -> None:
         o = self.o
@@ -1077,7 +1096,9 @@ class DevCycle:
         self.to(13); self.step13(verdict="fail" if self.variant == "qa-fail" else "pass")
         self.to(14)
         status = self.step14()
-        if status == "pass" and self.extra_round(14, "dev", "Step 14"):  # D32: a low dev's work is judged twice
+        if status == "pass" and self.rp.args.get("extra") == "skip" and "dev" in self.low_roles():
+            self.skipped_extra = True  # the cycle ends without the extra round: the Stop gate holds it (repair_extra)
+        elif status == "pass" and self.extra_round(14, "dev", "Step 14"):  # D32: a low dev's work is judged twice
             self.step13("Step 14 (Step 13 again, the extra independent round)")
             status = self.step14("Step 14 (again)")
         self.to(15)
@@ -1088,6 +1109,8 @@ class DevCycle:
             self.step16()
         self.to(17); self.step17()
         o.advance()
+        if getattr(self, "skipped_extra", False):
+            self.repair_extra()
         self.stop()
 
 

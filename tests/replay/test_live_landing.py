@@ -398,7 +398,8 @@ EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | 
 # The registrations that change where EXERCISES names none: P4's close-rating hook (PostToolUse; P13-2
 # widened its matcher to AskUserQuestion|Agent, so the one registration observes every Agent dispatch and every
 # question the owner is asked; REACHED names the scenarios whose events after the landing do reach it: a
-# dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), and two of P12's
+# dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), P13-3's SubagentStart
+# score injector (every dispatch starts an agent), and two of P12's
 # removals: the base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no
 # event's list changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an
 # exit-0 stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
@@ -406,10 +407,12 @@ EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | 
 # (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
 # is among those the scenarios reach.)
 RATING = ("PostToolUse", "AskUserQuestion|Agent")
+START = ("SubagentStart", None)  # P13-3's score injector, registered on every agent start
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
+             START: ([], ["hooks/subagentstart-score-inject.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
-REACHED = {PRE.name: {RATING}, A.name: {RATING}, B.name: {RATING}}
+REACHED = {PRE.name: {RATING, START}, A.name: {RATING, START}, B.name: {RATING, START}}  # P13-3: a dispatch starts an agent
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that

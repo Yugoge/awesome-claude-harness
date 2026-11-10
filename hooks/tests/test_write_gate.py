@@ -413,7 +413,7 @@ def test_the_fallback_answers_as_the_gate(lab, monkeypatch):
 
 def test_l4s_whole_registration_change():
     """The registration change of L4 and L5 together, as settings.json makes it
-    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52."""
+    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52 (53 with P13-3's SubagentStart hook)."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -426,8 +426,8 @@ def test_l4s_whole_registration_change():
         exec(compile((HOOKS / gate).read_text(), str(HOOKS / gate), "exec"), ns)
         calls = [(r.name, r.kind) for r in ns["RULES"] if r.call == w.DEV_LOOP]
         assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
-    assert len(regs) == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
-        - len(w.DISPATCH) + len(w.GATES) == 52
+    assert len(regs) - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+        - len(w.DISPATCH) + len(w.GATES) == 52  # and P13-3's one SubagentStart registration, the 53rd
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
         assert (ROOT / path).is_file(), command
