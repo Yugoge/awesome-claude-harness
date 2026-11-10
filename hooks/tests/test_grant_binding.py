@@ -378,7 +378,9 @@ def test_this_trees_recovery_route_writes_its_message_file_under_its_prefixes(tm
     name: its role row lets it through, with no compatibility rule."""
     text = (ROOT / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
     step = text[text.index("**Recovery step 3"):text.index("**Recovery step 4")]
-    names = re.findall(r"MSGFILE=(\S+?)`", step)
+    # The name is given either as a `MSGFILE=<path>` assignment (the text before P12's slimming) or inline in the
+    # recovery commit's `-F "<path>"` argument (the slimmed text); both spellings must satisfy the same rule.
+    names = re.findall(r"MSGFILE=(\S+?)`", step) + re.findall(r'commit\s+--allow-empty\s+-F\s+"([^"$]+)"', step)
     assert names and not any(re.search(r"/tmp/recovery-commit-", n) for n in names), names
     for name in names:
         path = name.replace("<unique>", "20260101-000000-r0001x")
