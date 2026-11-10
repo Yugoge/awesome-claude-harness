@@ -69,7 +69,9 @@ def _run(rule, raw):
         return _Result(rule, 1, "", f"{rule.path}: could not start: {exc}\n", time.monotonic() - t0)
 
 
-def _minimal(results):
+def minimal(results):
+    """Exit status, stdout and stderr of `results` without lib/hook_launch.combine: a refusal from any
+    hook refuses; else the first answer printed is passed on."""
     refusals = []
     for r in results:
         if r.code == 2:
@@ -102,7 +104,7 @@ def run(event, rules, raw, record_fd=None) -> int:
         from lib.hook_launch import combine
         code, out, err = combine(event, results)
     except Exception:
-        code, out, err = _minimal(results)
+        code, out, err = minimal(results)
     if record_fd is not None:
         lines = "".join(json.dumps({"hook": "hooks/" + r.rule.path, "matcher": r.rule.matcher,
                                     "timeout": r.rule.timeout, "rc": r.code, "stdout": r.stdout,

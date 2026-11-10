@@ -293,19 +293,29 @@ def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env
         path = os.path.realpath(mutation["path"])
         inside = any(path.startswith(r.rstrip("/") + "/") for r in roots)
         how, content = (mutation["how"] if inside else "outside"), mutation.get("content_file", "")
+    # a launcher (hooks/lib/hook_launch.py) reports each hook it runs: the unit's decision is the
+    # launcher's, and "rules" each of its hooks' own, so a change is measured of the hook it is
+    recs = hookrun._Records() if unit["kind"] == "hook" else None
+    env_list = [f"{k}={v}" for k, v in sorted(env.items())]
+    if recs is not None:
+        env_list.append(f"{hookrun.RECORD_ENV}={recs.w}")
     argv = (["unshare", "--mount", "--propagation", "private", "--pid", "--fork", "--mount-proc",
              "bash", "-c", OVERLAY, "overlay", *roots, "--", *cut, "--", how, path, content,
-             "env", "-i", *[f"{k}={v}" for k, v in sorted(env.items())], "bash", "-c", unit["command"]])
+             "env", "-i", *env_list, "bash", "-c", unit["command"]])
     t0 = time.monotonic()
     try:
         p = subprocess.run(argv, input=payload, capture_output=True, text=True, cwd=lay["project"],
                            timeout=max(5, int(unit.get("timeout") or hookrun.DEFAULT_TIMEOUT_S)) + 5,
-                           errors="replace")
+                           errors="replace", pass_fds=(recs.w,) if recs is not None else ())
         rc, out, err = p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         rc, out, err = "timeout", "", "timeout"
-    return {"decision": _decision(unit["kind"], rc, out), "ms": round((time.monotonic() - t0) * 1000),
-            "stderr": (err or "")[-300:]}
+    res = {"decision": _decision(unit["kind"], rc, out), "ms": round((time.monotonic() - t0) * 1000),
+           "stderr": (err or "")[-300:]}
+    rules = recs.close() if recs is not None else []
+    if rules:
+        res["rules"] = {r["hook"]: _decision("hook", r["rc"], r.get("stdout") or "") for r in rules}
+    return res
 
 
 def _inner(units_path: str) -> int:
@@ -387,12 +397,16 @@ def _inner(units_path: str) -> int:
         if m is None:
             rec["intact"] = r["decision"]
             rec["intact_ms"] = r["ms"]
+            if "rules" in r:
+                rec["intact_rules"] = r["rules"]
             if r["decision"][0] not in (0, 2) and u["kind"] == "hook":
                 rec["intact_stderr"] = r["stderr"]
         else:
             rec["runs"].append({"pattern": pattern, "raw": m["path"], "how": m["how"], "schema": m.get("schema", ""),
                                 "decision": r["decision"], "ms": r["ms"],
                                 "readers": sorted({x["comp"] for x in u["reads"] if x["raw"] == m["path"]})})
+            if "rules" in r:
+                rec["runs"][-1]["rules"] = r["rules"]
     out = []
     for ui in sorted(results):
         rec = results[ui]
@@ -400,6 +414,10 @@ def _inner(units_path: str) -> int:
         rec["reproduced"] = rec.get("original") is None or intact == rec.get("original")
         for r in rec["runs"]:
             r["changed"] = r["decision"] != intact
+            if "rules" in r and "intact_rules" in rec:  # which of a launcher's hooks changed
+                r["rules_changed"] = sorted(h for h in set(r["rules"]) | set(rec["intact_rules"])
+                                            if r["rules"].get(h) != rec["intact_rules"].get(h))
+                del r["rules"]
         rec["runs"].sort(key=lambda r: (r["pattern"], r["raw"], r["how"]))
         out.append(rec)
     res = {"units": out, "runs": len(jobs) + len(again), "inner_wall_s": round(time.monotonic() - t0, 2)}

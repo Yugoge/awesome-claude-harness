@@ -635,6 +635,14 @@ class _Ctx:
         return sorted({r["component"] for r in self.regs if r.get("type") == "gate_rule" and r.get("gate") == gate
                        and (not deciding or _decides(r))})
 
+    def _changed_rules(self, rules: list[str], changed: list[str]) -> list[str]:
+        """The rule files of `rules` a launcher's changed hooks stand for: a changed hook itself, or a
+        rule of the merged gate a changed hook is (its own table, read as the replays read it)."""
+        from tests.replay import sites
+        changed = {os.path.normpath(c) for c in changed}
+        inner = {r.file for c in changed for r in sites.gate_rules(str(self.tree), c) if r.file}
+        return [f for f in rules if f in changed or f in inner]
+
     def _gate_deciders(self, gate: str, key: str) -> list[str]:
         """The refusing rule files of a gate whose own code decides on `key` (static deciding reads):
         the deciders a change of the gate's decision on it stands for."""
@@ -1029,7 +1037,11 @@ class _Ctx:
                         elif rules:
                             # a merged gate's decision is its refusing rules': each rule file that
                             # decides on the artifact, with its own deciding reads (rule (4)), at the
-                            # gate's position as that file (its own artifact only if it wrote it)
+                            # gate's position as that file (its own artifact only if it wrote it).
+                            # A launcher reports which of its hooks changed ("rules_changed"): only
+                            # those, and the rules of a gate among them, decided this change.
+                            if "rules_changed" in r:
+                                rules = self._changed_rules(rules, r["rules_changed"]) or rules
                             deciders = [(f, self._position(a, u["event"], u.get("tool"), u.get("agent_type"), f,
                                                            u["kind"]), f"{where} in {who}") for f in rules]
                         else:

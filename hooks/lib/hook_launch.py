@@ -232,12 +232,19 @@ class Dispatch:
         self.finished = False
         self.real = (os.dup(1), os.dup(2))
 
-    def run(self) -> tuple[int, str, str]:
-        from lib.rule_runner import run_rule
+    def run(self) -> None:
+        """Run every selected hook, in order; their results are in ``self.results``. Where the
+        runner cannot load or fails around a hook, that hook runs as its own process."""
+        try:
+            from lib.rule_runner import run_rule
+        except Exception:
+            run_rule = None
         for rule in self.rules:
             if self.finished:
                 break
             try:
+                if run_rule is None:
+                    raise RuntimeError("lib/rule_runner.py did not load")
                 rr = run_rule(rule.file, self.raw, rule.timeout, fresh_modules=True,
                               on_stuck=lambda rule=rule: self.emergency(rule))
                 res = Result(rule, TIMEOUT if rr.overrun else rr.code, rr.stdout, rr.stderr, rr.seconds)
@@ -247,7 +254,6 @@ class Dispatch:
                 if self.finished:
                     break
                 self.results.append(res)
-        return combine(self.event, self.results)
 
     def emergency(self, stuck: Rule) -> None:  # pragma: no cover - needs a hook that ignores its timeout
         """From the watchdog: `stuck` ran past its timeout and did not stop. Answer for the event
@@ -305,11 +311,16 @@ def main(event: str, rules, raw: bytes | None = None) -> int:
     fd = record_fd()
     try:
         d = Dispatch(event, rules, raw, fd)
-        code, out, err = d.run()
-        d.record()
-    except Exception:
-        from lib import hook_launch_fallback as dispatch_fallback
-        return dispatch_fallback.run(event, rules, raw, fd)
+    except Exception:  # before any hook ran: every hook as its own process
+        from lib import hook_launch_fallback
+        return hook_launch_fallback.run(event, rules, raw, fd)
+    d.run()  # a hook's runner fault already falls back to that hook's own process
+    try:
+        code, out, err = combine(event, d.results)
+    except Exception:  # the hooks ran once; never again (their side effects would repeat)
+        from lib import hook_launch_fallback
+        code, out, err = hook_launch_fallback.minimal(d.results)
+    d.record()
     _write(1, out)
     _write(2, err)
     return code

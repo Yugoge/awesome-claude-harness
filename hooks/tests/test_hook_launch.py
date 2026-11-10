@@ -290,6 +290,41 @@ def test_a_launcher_whose_library_cannot_load_still_refuses(tmp_path):
     assert code == 2 and "refused without the library" in err
 
 
+def test_a_runner_that_cannot_load_runs_the_hooks_as_their_own_processes(tmp_path):
+    refuse = _hook(tmp_path, "refuse", "sys.stderr.write('refused without the runner\\n'); sys.exit(2)\n")
+    count = _hook(tmp_path, "count", f"open({str(tmp_path / 'ran')!r}, 'a').write('x')\n")
+    launcher = _launcher(tmp_path, "PreToolUse", [("count", count, None, 5), ("refuse", refuse, None, 5)])
+    probe = tmp_path / "probe3.py"
+    probe.write_text(textwrap.dedent(f"""
+        import sys, runpy
+        sys.path.insert(0, {str(HOOKS)!r})
+        sys.modules['lib.rule_runner'] = None
+        runpy.run_path({launcher!r}, run_name="__main__")
+        """))
+    code, out, err = _run(str(probe), {"tool_name": "Bash"})
+    assert code == 2 and "refused without the runner" in err
+    assert (tmp_path / "ran").read_text() == "x"  # each hook ran once
+
+
+def test_a_combine_fault_never_runs_a_hook_twice(tmp_path):
+    refuse = _hook(tmp_path, "refuse", "sys.stderr.write('refused once\\n'); sys.exit(2)\n")
+    count = _hook(tmp_path, "count", f"open({str(tmp_path / 'ran')!r}, 'a').write('x')\n")
+    launcher = _launcher(tmp_path, "PreToolUse", [("count", count, None, 5), ("refuse", refuse, None, 5)])
+    probe = tmp_path / "probe4.py"
+    probe.write_text(textwrap.dedent(f"""
+        import sys, runpy
+        sys.path.insert(0, {str(HOOKS)!r})
+        import lib.hook_launch
+        def broken(*a, **k):
+            raise ValueError("combine broke")
+        lib.hook_launch.combine = broken
+        runpy.run_path({launcher!r}, run_name="__main__")
+        """))
+    code, out, err = _run(str(probe), {"tool_name": "Bash"})
+    assert code == 2 and "refused once" in err
+    assert (tmp_path / "ran").read_text() == "x"
+
+
 def test_the_record_channel_is_out_of_the_hooks_environment(tmp_path):
     show = _hook(tmp_path, "show", f"print(os.environ.get({hook_launch.RECORD_ENV!r}, 'absent'))\n")
     launcher = _launcher(tmp_path, "UserPromptSubmit", [("show", show, None, 5)])

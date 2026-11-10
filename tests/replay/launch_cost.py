@@ -99,7 +99,7 @@ def _run_hooks(settings, event, payload, env, cwd) -> tuple[list, float, float]:
 
 
 _CLONE = re.compile(r"^(\d+)\s+(clone3?|fork|vfork)\((.*)\)\s+=\s+(\d+)")
-_EXEC = re.compile(r'^(\d+)\s+execve\("([^"]+)".*\)\s+=\s+0')
+_EXEC = re.compile(r'^(\d+)\s+execve\("([^"]+)".*\)\s+=\s+0$')
 
 
 def _count(cfg: dict, call: str) -> tuple[int, int]:
@@ -109,19 +109,28 @@ def _count(cfg: dict, call: str) -> tuple[int, int]:
         with open(spec, "w") as fh:
             json.dump(dict(cfg, only=call), fh)
         log = os.path.join(tmp, "strace.txt")
-        subprocess.run(["strace", "-f", "-qq", "-o", log, "-e", "trace=clone,clone3,fork,vfork,execve",
+        subprocess.run(["strace", "-f", "-qq", "-s", "4096", "-o", log, "-e", "trace=clone,clone3,fork,vfork,execve",
                         sys.executable, "-m", f"{__package__}.launch_cost", "--once", spec], check=True)
         procs, pythons, root = 0, 0, None
+        pending: dict = {}  # pid -> a call strace split in two ("<unfinished ...>", "<... resumed>")
         with open(log, errors="replace") as fh:
             for line in fh:
+                line = line.rstrip("\n")
+                pid, _, rest = line.partition(" ")
                 if root is None:
-                    root = line.split()[0]
+                    root = pid
+                if rest.endswith("<unfinished ...>"):
+                    pending[pid] = line[:-len("<unfinished ...>")].rstrip()
+                    continue
+                m = re.match(r"\s*<\.\.\. \w+ resumed>(.*)$", rest)
+                if m:
+                    line = pending.pop(pid, line) + m.group(1)
                 m = _CLONE.match(line)
                 if m and "CLONE_THREAD" not in m.group(3):
                     procs += 1
                 m = _EXEC.match(line)
                 if m and m.group(1) != root and re.match(r"python3?(\.\d+)?$", os.path.basename(m.group(2))):
-                    pythons += 1
+                    pythons += 1  # an interpreter started (the measuring process itself left out)
         return procs, pythons
 
 
