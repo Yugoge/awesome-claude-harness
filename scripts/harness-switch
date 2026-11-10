@@ -1,0 +1,650 @@
+#!/usr/bin/env python3
+"""harness-switch: the owner's switch for one harness home, /harness off | on | status.
+
+    hook      the UserPromptSubmit path (hooks/userprompt-harness-switch.sh): reads the
+              payload on stdin and acts on a typed `/harness off|on|status`. It is the only
+              path that switches: the owner's typed prompt is the one event an agent cannot
+              produce (commands/harness.md says what else refuses an agent).
+    status    print the switch's state (read-only). Exit 0 on, 3 off, 4 partial.
+
+The harness home H is the directory above scripts/ (symlinks resolved): a git checkout of the
+harness that is also the Claude Code configuration directory (~/.claude, or the directory
+CLAUDE_CONFIG_DIR names), as the full install makes it. One account config dir per account
+means one clone per account: a switch covers exactly the home it is typed in.
+
+/harness off, in this order, each step recorded in <H>/.harness-switch/journal.json first:
+  save      settings.json's bytes (settings.on.json) and the sparse-checkout config
+  marker    <H>/.harness-switch/off: from here no harness hook runs, in this session too, and no
+            background job of the harness acts (hooks/lib/harness_switch.{py,sh}). One file
+            decides, so the hooks are all on or all off.
+  state     state.json: mode, since, the switching session, last_off_at
+  settings  settings.json in its off form (scripts/install/render-settings "the harness
+            switch"): no harness hook, env var or permission rule from the next session on
+  hide      a sparse checkout leaves CLAUDE.md, commands/ (but commands/harness.md), agents/
+            and skills/ out of the working tree, so the next session loads none of them; git
+            keeps them in the index, so a pull while off works and lands them hidden
+/harness on reverses it: show, settings (the saved bytes when nothing changed; else the new
+machine form with the owner's changes made while off), marker, state, cleanup.
+
+A switch cut halfway leaves its journal: status names the step it reached, and the next
+/harness off or on first finishes the cut switch, then does what was asked. Two switches never
+run at once (an exclusive lock, released with its process). Stdlib only.
+"""
+import copy
+import datetime
+import fcntl
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+HOME = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+SW = os.path.join(HOME, ".harness-switch")
+MARKER = os.path.join(SW, "off")
+STATE = os.path.join(SW, "state.json")
+JOURNAL = os.path.join(SW, "journal.json")
+SAVED = os.path.join(SW, "settings.on.json")    # settings.json as it was before off
+WRITTEN = os.path.join(SW, "settings.off.json")  # the off form off wrote
+SPARSE_SAVED = os.path.join(SW, "sparse.json")
+LOCK = os.path.join(SW, "lock")
+SETTINGS = os.path.join(HOME, "settings.json")
+OVERLAY = os.path.join(HOME, "settings.machine.json")
+
+HIDDEN = ("CLAUDE.md", "commands", "agents", "skills")  # what the next session would load
+KEPT_COMMAND = "commands/harness.md"
+SPARSE_HEADER = "# harness-switch: /harness off hides the harness's prompts; /harness on removes this"
+SPARSE_PATTERNS = ("/*", "!/CLAUDE.md", "!/commands/*", "/" + KEPT_COMMAND, "!/agents/", "!/skills/")
+WAKE_TAG = "[awesome-claude-harness/overnight-wake-v1]"  # hooks/lib/overnight.py WAKE_PROMPT
+OFF_STEPS = ("save", "marker", "state", "settings", "hide")
+ON_STEPS = ("show", "settings", "marker", "state", "cleanup")
+EXIT_ON, EXIT_OFF, EXIT_PARTIAL = 0, 3, 4
+
+_COMMAND = re.compile(r"\s*(?:<command-message>.*?</command-message>\s*)?<command-name>/?harness"
+                      r"</command-name>(?:\s*<command-args>(.*?)</command-args>)?\s*\Z", re.S)
+_TYPED = re.compile(r"\s*/harness(?:\s+(.*?))?\s*\Z", re.S)
+
+
+class SwitchError(Exception):
+    """A step could not complete; the journal keeps where it stopped."""
+
+
+# ----------------------------------------------------------------------------------- files
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def read_bytes(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def read_json(path):
+    data = read_bytes(path)
+    if data is None:
+        return None
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def write_atomic(path, data, mode=0o600):
+    """Write `data` (bytes) to `path` by rename, keeping an existing file's mode."""
+    try:
+        mode = os.stat(path).st_mode & 0o7777
+    except FileNotFoundError:
+        pass
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def write_json(path, obj):
+    write_atomic(path, (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
+def remove(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest() if data is not None else None
+
+
+def git(*args, check=False):
+    proc = subprocess.run(["git", "-C", HOME, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          stdin=subprocess.DEVNULL)
+    out = proc.stdout.decode("utf-8", "replace").strip()
+    if check and proc.returncode != 0:
+        raise SwitchError("git %s: %s" % (" ".join(args), proc.stderr.decode("utf-8", "replace").strip()))
+    return proc.returncode, out, proc.stderr.decode("utf-8", "replace").strip()
+
+
+def git_out(*args):
+    rc, out, _ = git(*args)
+    return out if rc == 0 else None
+
+
+def is_checkout():
+    top = git_out("rev-parse", "--show-toplevel")
+    return bool(top) and os.path.realpath(top) == HOME
+
+
+def render_settings():
+    """scripts/install/render-settings as a module: the one definition of the off form."""
+    path = os.path.join(HOME, "scripts", "install", "render-settings")
+    loader = importlib.machinery.SourceFileLoader("_harness_switch_render_settings", path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+# ------------------------------------------------------------------------------- settings
+
+def clean_form(rs):
+    data = rs.clean_source(HOME)
+    base = rs.parse(data) if data is not None else None
+    if base is None:
+        raise SwitchError("the clean form of settings.json (the index, else HEAD) is not a JSON object")
+    return base
+
+
+def settings_blob():
+    return git_out("rev-parse", ":settings.json")
+
+
+def settings_off(state):
+    """Write the off form of the working settings.json; record what was written."""
+    rs = render_settings()
+    data = read_bytes(SETTINGS)
+    working = rs.parse(data) if data is not None else None
+    if working is None:
+        raise SwitchError("settings.json is missing or not a JSON object; fix it, then /harness off again")
+    out = rs.canon(rs.off_form(working, clean_form(rs)))
+    if out != data:
+        rs._write_atomic(SETTINGS, out)
+    write_atomic(WRITTEN, out)
+    if is_checkout():
+        rs.refresh_index(HOME)
+    state.update(settings_blob=settings_blob(), overlay_sha=sha(read_bytes(OVERLAY)))
+
+
+def _diff(a, b, path=()):
+    """Operations that turn object a into object b: ('set', path, value), ('del', path) and,
+    for lists, ('list', path, removed, added)."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        ops = [("del", path + (k,)) for k in a if k not in b]
+        for k in b:
+            if k not in a:
+                ops.append(("set", path + (k,), b[k]))
+            elif a[k] != b[k]:
+                ops.extend(_diff(a[k], b[k], path + (k,)))
+        return ops
+    if isinstance(a, list) and isinstance(b, list):
+        return [("list", path, [x for x in a if x not in b], [x for x in b if x not in a])]
+    return [("set", path, b)]
+
+
+def _apply(ops, obj):
+    for op in ops:
+        path = op[1]
+        parent = obj
+        for key in path[:-1]:
+            if not isinstance(parent.get(key), dict):
+                parent[key] = {}
+            parent = parent[key]
+        if not path:
+            continue
+        last = path[-1]
+        if op[0] == "set":
+            parent[last] = copy.deepcopy(op[2])
+        elif op[0] == "del":
+            parent.pop(last, None)
+        else:
+            lst = parent.get(last)
+            if not isinstance(lst, list):
+                lst = parent[last] = []
+            lst[:] = [x for x in lst if x not in op[2]]
+            lst.extend(copy.deepcopy(x) for x in op[3] if x not in lst)
+    return obj
+
+
+def settings_on(state):
+    """Restore settings.json: the saved bytes when nothing changed while off; the saved form with
+    the owner's changes when only the owner changed it; the machine form of the new clean form,
+    with the owner's changes, after a pull or an overlay change."""
+    rs = render_settings()
+    current = read_bytes(SETTINGS)
+    saved, written = read_bytes(SAVED), read_bytes(WRITTEN)
+    working = rs.parse(current) if current is not None else None
+    same_source = (saved is not None and written is not None
+                   and state.get("settings_blob") == settings_blob()
+                   and state.get("overlay_sha") == sha(read_bytes(OVERLAY)))
+    if same_source and current == written:
+        out = saved
+    elif same_source and working is not None and rs.parse(saved) is not None:
+        out = rs.canon(_apply(_diff(rs.parse(written), working), rs.parse(saved)))
+    else:
+        if working is None:
+            working = rs.parse(written) if written is not None else {}
+        layers = rs.layers_of(rs.load_overlay(HOME))
+        target = rs.on_form(working, clean_form(rs), layers)
+        before = rs.parse(saved) if saved is not None else None
+        for key in rs.CLI_OWNED:  # git rewrites the whole file on a pull: the CLI's keys come back
+            if before and key in before and key not in working:
+                target[key] = before[key]
+        out = rs.canon(target)
+    if out != current:
+        rs._write_atomic(SETTINGS, out)
+    if is_checkout():
+        rs.refresh_index(HOME)
+
+
+# --------------------------------------------------------------------------------- sparse
+
+def sparse_file():
+    rel = git_out("rev-parse", "--git-path", "info/sparse-checkout")
+    return os.path.join(HOME, rel) if rel else None
+
+
+def config_scope():
+    """Where this checkout's sparse settings live: the worktree's config once git uses one (as
+    `git sparse-checkout` turns on), else the repository's."""
+    return "--worktree" if git_out("config", "--bool", "--get", "extensions.worktreeConfig") == "true" \
+        else "--local"
+
+
+def sparse_config():
+    return {key: git_out("config", config_scope(), "--get", key)
+            for key in ("core.sparseCheckout", "core.sparseCheckoutCone")}
+
+
+def set_config(key, value):
+    if value is None:
+        git("config", config_scope(), "--unset", key)
+    else:
+        git("config", config_scope(), key, value, check=True)
+
+
+def sparse_save():
+    path = sparse_file()
+    data = read_bytes(path) if path else None
+    write_json(SPARSE_SAVED, {"config": sparse_config(),
+                              "file": data.decode("utf-8", "replace") if data is not None else None})
+
+
+def ours(path):
+    data = read_bytes(path) if path else None
+    return data is not None and data.decode("utf-8", "replace").startswith(SPARSE_HEADER)
+
+
+def visible_hidden():
+    """Tracked files of the hidden paths still in the working tree (git keeps a file with local
+    changes when its sparse pattern goes)."""
+    rc, out, _ = git("ls-files", "-t", "--", *HIDDEN)
+    if rc != 0:
+        return []
+    found = []
+    for line in out.splitlines():
+        tag, _, rel = line.partition(" ")
+        if rel and rel != KEPT_COMMAND and os.path.lexists(os.path.join(HOME, rel)):
+            found.append(rel)
+    return found
+
+
+def hide(report):
+    if not is_checkout():
+        report.append("not hidden: %s is not a git checkout, so CLAUDE.md, commands, agents and skills "
+                      "stay" % HOME)
+        return
+    saved = read_json(SPARSE_SAVED) or {}
+    path = sparse_file()
+    if (saved.get("config") or {}).get("core.sparseCheckout") == "true" and not ours(path):
+        report.append("not hidden: the home already uses a sparse checkout of its own, which the switch "
+                      "leaves as it is")
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_atomic(path, ("\n".join((SPARSE_HEADER,) + SPARSE_PATTERNS) + "\n").encode("utf-8"), 0o644)
+    set_config("core.sparseCheckoutCone", "false")
+    set_config("core.sparseCheckout", "true")
+    rc, _, err = git("sparse-checkout", "reapply")
+    if rc != 0:
+        report.append("not hidden: git sparse-checkout reapply failed (%s); git 2.27 or later is needed"
+                      % (err.splitlines() or ["no message"])[-1])
+        return
+    kept = visible_hidden()
+    if kept:
+        report.append("still visible (local changes, which git keeps): " + ", ".join(kept[:8])
+                      + (" and %d more" % (len(kept) - 8) if len(kept) > 8 else "")
+                      + "; commit or move them, then /harness off again")
+
+
+def show():
+    if not is_checkout():
+        return
+    saved = read_json(SPARSE_SAVED)
+    path = sparse_file()
+    if saved is None:  # nothing was saved: undo only what is ours
+        if not ours(path):
+            return
+        saved = {"config": {"core.sparseCheckout": None, "core.sparseCheckoutCone": None}, "file": None}
+    config = saved.get("config") or {}
+    if config.get("core.sparseCheckout") == "true" and not ours(path):
+        return  # the owner's own sparse checkout, never touched
+    if sparse_config().get("core.sparseCheckout") == "true":  # every hidden file back, as HEAD has it
+        write_atomic(path, b"/*\n", 0o644)
+        git("sparse-checkout", "reapply", check=True)
+    if saved.get("file") is None:
+        remove(path)
+    else:
+        write_atomic(path, saved["file"].encode("utf-8"), 0o644)
+    for key, value in config.items():
+        set_config(key, value)
+    if config.get("core.sparseCheckout") == "true":
+        git("sparse-checkout", "reapply")
+
+
+# ------------------------------------------------------------------------------- switching
+
+def record_history(state, mode, when):
+    """The last switches (time, mode): which mode a session started under decides its restart."""
+    history = [h for h in state.get("history") or [] if isinstance(h, list) and len(h) == 2]
+    state["history"] = (history + [[when, mode]])[-20:]
+
+
+def mode_at(state, when):
+    """The mode the switch was in at `when` (an ISO time), "on" before any switch."""
+    mode = "on"
+    for stamp, value in state.get("history") or []:
+        if isinstance(stamp, str) and stamp <= when:
+            mode = value
+    return mode
+
+
+def journal_step(journal, step):
+    journal.setdefault("done", []).append(step)
+    write_json(JOURNAL, journal)
+    if os.environ.get("HARNESS_SWITCH_STOP_AFTER") == "%s:%s" % (journal.get("op"), step):
+        os._exit(9)  # tests: a switch killed right after this step (tests/test_harness_switch.py)
+
+
+def run_off(journal, ctx, report):
+    state = read_json(STATE) or {}
+    done = journal.setdefault("done", [])
+    if "save" not in done:
+        data = read_bytes(SETTINGS)
+        if data is None:
+            raise SwitchError("settings.json is missing")
+        if settings_form() != "off":  # an off form (a repeated off) is never the form to restore
+            write_atomic(SAVED, data)
+        if is_checkout() and not ours(sparse_file()):  # nor is the switch's own sparse checkout
+            sparse_save()
+        journal_step(journal, "save")
+    if "marker" not in done:
+        os.makedirs(SW, exist_ok=True)
+        write_atomic(MARKER, (journal["started"] + "\n").encode("utf-8"), 0o644)
+        journal_step(journal, "marker")
+    if "state" not in done:
+        state.update(mode="off", since=journal["started"], last_off_at=journal["started"],
+                     session_id=ctx.get("session_id"), home=HOME)
+        record_history(state, "off", journal["started"])
+        write_json(STATE, state)
+        journal_step(journal, "state")
+    if "settings" not in done:
+        settings_off(state)
+        write_json(STATE, state)
+        journal_step(journal, "settings")
+    if "hide" not in done:
+        hide(report)
+        state["partial"] = list(report)
+        write_json(STATE, state)
+        journal_step(journal, "hide")
+    remove(JOURNAL)
+
+
+def run_on(journal, ctx, report):
+    state = read_json(STATE) or {}
+    done = journal.setdefault("done", [])
+    if "show" not in done:
+        show()
+        journal_step(journal, "show")
+    if "settings" not in done:
+        settings_on(state)
+        journal_step(journal, "settings")
+    if "marker" not in done:
+        remove(MARKER)
+        journal_step(journal, "marker")
+    if "state" not in done:
+        state.update(mode="on", since=journal["started"], session_id=ctx.get("session_id"), home=HOME)
+        record_history(state, "on", journal["started"])
+        state.pop("partial", None)
+        write_json(STATE, state)
+        journal_step(journal, "state")
+    for path in (SAVED, WRITTEN, SPARSE_SAVED):
+        remove(path)
+    remove(JOURNAL)
+
+
+RUNNERS = {"off": run_off, "on": run_on}
+
+
+def switch(verb, ctx):
+    """Do `verb` ("off" or "on"), first finishing a switch a cut left; returns notes."""
+    os.makedirs(SW, mode=0o700, exist_ok=True)
+    notes = []
+    lock = open(LOCK, "a")
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.monotonic() > deadline:
+                raise SwitchError("another /harness switch of this home is still running")
+            time.sleep(0.2)
+    try:
+        journal = read_json(JOURNAL)
+        if journal and journal.get("op") in RUNNERS:
+            notes.append("finished the /harness %s that was cut after step %s" % (
+                journal["op"], (journal.get("done") or ["(none)"])[-1]))
+            report = []
+            RUNNERS[journal["op"]](journal, ctx, report)
+            notes.extend(report)
+        mode = current_mode()
+        if mode == verb and not inconsistencies():
+            notes.append("the harness was already %s; nothing changed" % verb)
+            return notes
+        journal = {"op": verb, "started": now(), "done": [], "session_id": ctx.get("session_id")}
+        write_json(JOURNAL, journal)
+        report = []
+        RUNNERS[verb](journal, ctx, report)
+        return notes + report
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
+# --------------------------------------------------------------------------------- status
+
+def current_mode():
+    return "off" if os.path.exists(MARKER) else "on"
+
+
+def settings_form():
+    """'off' when the working settings.json carries no harness entry, else 'on' (None: unreadable)."""
+    try:
+        rs = render_settings()
+        working = rs.parse(read_bytes(SETTINGS) or b"")
+        if working is None:
+            return None
+        return "off" if rs.off_form(working, clean_form(rs)) == working else "on"
+    except Exception:
+        return None
+
+
+def hidden_state():
+    if not is_checkout():
+        return None
+    return "off" if ours(sparse_file()) and sparse_config().get("core.sparseCheckout") == "true" else "on"
+
+
+def inconsistencies():
+    """What disagrees with the marker, the one switch of the hooks (empty when consistent)."""
+    mode, out = current_mode(), []
+    journal = read_json(JOURNAL)
+    if journal:
+        out.append("a /harness %s was cut after step %s (steps: %s); the next /harness off or on "
+                   "finishes it first" % (journal.get("op"), (journal.get("done") or ["(none)"])[-1],
+                                         ", ".join(OFF_STEPS if journal.get("op") == "off" else ON_STEPS)))
+    state = read_json(STATE) or {}
+    if state.get("mode") and state["mode"] != mode:
+        out.append("the record says %s, the marker says %s" % (state["mode"], mode))
+    form = settings_form()
+    if form is not None and form != mode:
+        out.append("settings.json is in its %s form while the hooks are %s" % (form, mode))
+    hidden = hidden_state()
+    if hidden is not None and hidden != mode and not (mode == "off" and state.get("partial")):
+        out.append("CLAUDE.md, commands, agents and skills are %s while the hooks are %s"
+                   % ("hidden" if hidden == "off" else "visible", mode))
+    if mode == "off":
+        out.extend("partial off: " + p for p in state.get("partial") or [])
+    return out
+
+
+def session_started(transcript_path):
+    """The time the session's first transcript record names, else None."""
+    try:
+        with open(transcript_path, encoding="utf-8") as fh:
+            for _, line in zip(range(50), fh):
+                stamp = json.loads(line).get("timestamp")
+                if stamp:
+                    return stamp.replace("+00:00", "Z")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def config_dir():
+    return os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+
+
+def status_lines(ctx):
+    mode, state = current_mode(), read_json(STATE) or {}
+    problems = inconsistencies()
+    label = "PARTIAL" if problems else mode.upper()
+    since = state.get("since") or "(no switch recorded)"
+    lines = ["Harness: %s%s (switched %s)" % (label, " (hooks " + mode + ")" if problems else "", since),
+             "Home: %s, a %s" % (HOME, "git checkout" if is_checkout() else "directory that is not a git checkout")]
+    cfg = config_dir()
+    lines.append("Config dir: " + ("the same directory (this account's)" if cfg == HOME else
+                                   "%s, not this home: that account is not switched by this home" % cfg))
+    started = session_started(ctx.get("transcript_path") or "")
+    if started is None and ctx.get("session_id") and ctx.get("session_id") == state.get("session_id"):
+        started = "0"  # the switching session started before its own switch
+    loaded = mode_at(state, started) if started else None
+    if loaded is not None and loaded != mode:
+        restart = ("yes: this session started while the harness was %s and keeps the settings, CLAUDE.md, "
+                   "commands and agents it loaded then; its hooks follow the switch at once" % loaded)
+    elif loaded is not None:
+        restart = "no: this session loaded the harness %s" % mode
+    elif state.get("since"):
+        restart = ("for every session started before %s, which keeps what it loaded (its hooks follow "
+                   "the switch at once)" % since)
+    else:
+        restart = "no"
+    lines.append("Restart needed: " + restart)
+    if mode == "off":
+        lines.append("In force: no harness hook runs; checkpoint snapshots, the git-fswatch sync, the "
+                     "landing, automatic pushes and the keystone are inert; /dev-overnight runs started "
+                     "before the switch are over")
+        lines.append("Next session: settings.json without harness hooks, env vars or permission rules; "
+                     "no harness CLAUDE.md, commands (but /harness), agents or skills")
+    lines.append("Kept: MCP servers, plugins, login and credentials, session history, the owner's own "
+                 "settings (cleanupPeriodDays and deniedMcpServers too)")
+    lines.extend("Partial: " + p for p in problems)
+    return lines, (EXIT_PARTIAL if problems else EXIT_OFF if mode == "off" else EXIT_ON)
+
+
+# ------------------------------------------------------------------------------ entry points
+
+def parse_prompt(prompt):
+    """The /harness arguments of a typed prompt (a string), else None."""
+    m = _COMMAND.match(prompt) or _TYPED.match(prompt)
+    return None if m is None else (m.group(1) or "").strip()
+
+
+def emit(context, shown=None, block=None):
+    if block is not None:
+        out = {"decision": "block", "reason": block}
+    else:
+        out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": context}}
+        if shown:
+            out["systemMessage"] = shown
+    sys.stdout.write(json.dumps(out) + "\n")
+
+
+def cmd_hook():
+    try:
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
+    except ValueError:
+        return 0
+    if not isinstance(payload, dict) or payload.get("agent_id"):
+        return 0  # not a prompt the owner typed in the main session
+    prompt = payload.get("prompt") if isinstance(payload.get("prompt"), str) else ""
+    if WAKE_TAG in prompt and current_mode() == "off":
+        emit(None, block="The harness is off (/harness off): this /dev-overnight wake runs nothing. "
+                         "Delete its CronCreate job with CronDelete, or type /harness on.")
+        return 0
+    args = parse_prompt(prompt)
+    if args is None:
+        return 0
+    ctx = {"session_id": payload.get("session_id"), "transcript_path": payload.get("transcript_path")}
+    verb = args.split()[0] if args else "status"
+    if verb not in ("off", "on", "status") or len(args.split()) > 1:
+        emit("HARNESS SWITCH: usage: /harness off | on | status (nothing changed). Tell the owner so.",
+             "harness: usage: /harness off | on | status")
+        return 0
+    notes = []
+    if verb != "status":
+        try:
+            notes = switch(verb, ctx)
+        except Exception as exc:  # the journal keeps the step; the next switch finishes it
+            notes = ["the switch stopped: %s: %s" % (type(exc).__name__, exc)]
+    lines, _ = status_lines(ctx)
+    text = "\n".join(lines + ["Note: " + n for n in notes])
+    emit("HARNESS SWITCH (/harness %s) - the UserPromptSubmit hook already did it; relay this report "
+         "to the owner verbatim and run nothing:\n%s" % (verb, text), lines[0])
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["hook"]:
+        return cmd_hook()
+    if argv[:1] == ["status"]:
+        lines, code = status_lines({})
+        print("\n".join(lines))
+        return code
+    sys.stderr.write("usage: harness-switch status   (off and on: type /harness off|on in Claude Code)\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -33,6 +33,9 @@ State file: <state dir>/claude-tool-streak-<sid>.json --
   {"schema_version": 2, "per_tool_counts": {"Edit": 1},
    "bash_consecutive": {"last_tool": "Bash", "count": 2}}
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 
 import json
 import os

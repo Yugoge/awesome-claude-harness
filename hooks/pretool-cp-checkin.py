@@ -23,6 +23,9 @@ NOT REINTRODUCE IT under any guise (Codex Q7).
 
 Fail-open: any error -> exit 0. Never block on unexpected input.
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 
 import fcntl
 import json

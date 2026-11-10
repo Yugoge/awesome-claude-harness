@@ -4,6 +4,9 @@ A question goes by its source prefix to one handler, an Agent call to the observ
 close-rating:<task-id> (D9) to close_rating.handle (a row for one of the four exact labels in the CLI's tool_response; the owner summary it returns is printed as one JSON line);
 requirement-round:<task>:r<n> and producer-question:<task>:<role> (D28) to requirement_round.handle (the answer file, nothing printed); Agent and Task to score_events.observe (nothing printed).
 Any other source, Skip, free text, a decline, an error and an AFK auto-continue write nothing (D9b). Quick, silent on any error, exit 0; never prints decision, continue or updatedToolOutput."""
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 import json
 import sys
 from pathlib import Path

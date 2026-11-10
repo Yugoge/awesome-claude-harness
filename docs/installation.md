@@ -247,6 +247,51 @@ It also lists, without failing, CLI-owned keys whose working value differs from 
 and prints a short compatibility report (`--verbose` adds the per-check detail). Doctor exits
 non-zero when a required check fails; with `--strict`, unless the fresh handshake passes.
 
+## Switching the harness off: /harness
+
+`/harness off`, typed by the owner in Claude Code, switches off the harness home the session runs
+from. `/harness on` switches it back on, and `/harness status` reports it. Only the owner's typed
+prompt switches: a UserPromptSubmit hook (`hooks/userprompt-harness-switch.sh`) runs
+`scripts/harness-switch`. An agent's call is refused while the harness is on, whatever path it
+takes: `Skill`, `Bash`, a write of the switch's state or of the home's settings, a script, a
+scheduled prompt (`hooks/pretool-harness-switch-guard.py`).
+
+**What off does.**
+
+- **At once, in the typing session too.** No harness hook runs, for any event. Each registered
+  hook first asks `hooks/lib/harness_switch.{py,sh}` and exits 0, printing nothing, while
+  `<home>/.harness-switch/off` exists.
+- **No background work.** Checkpoint snapshots, the git-fswatch sync (the daemon keeps running
+  and does nothing), the landing, automatic pushes and the keystone are inert.
+- **No live overnight run.** A `/dev-overnight` run that started before the switch is over, so
+  after `/harness on` it arms no time-lock. The command's own text has the session delete its
+  wake, and while off the hook refuses the wake's prompts.
+- **From the next session.**
+  - settings.json is in its off form: no harness hook, env var or permission rule (the
+    settings filter's "harness switch" in `scripts/install/render-settings`).
+  - A sparse checkout leaves `CLAUDE.md`, `commands/` (all but `commands/harness.md`),
+    `agents/` and `skills/` out of the working tree. git keeps them in the index, so `git pull`
+    works while off and lands the new version hidden.
+
+**What it keeps.** MCP servers (`.claude.json`), plugins, login and credentials, session history,
+and your own settings: the overlay's entries (`env.CLAUDE_HOME` included), CLI-written keys,
+anything else in settings.json the harness does not ship. Two keys the harness ships are kept,
+because dropping them would change what is not the harness:
+
+- `cleanupPeriodDays`: without it Claude Code deletes session history after 30 days.
+- `deniedMcpServers`: it keeps three connectors off.
+
+**What on does.** It restores settings.json byte for byte when nothing changed while off. When
+something did, it keeps the owner's changes; after a pull, it brings the pulled version.
+
+**Coverage, and a cut switch.** A switch covers one harness home: the git checkout it is typed in,
+which is also that account's Claude Code config dir. With one config dir per account
+(`CLAUDE_CONFIG_DIR`), each account's clone has its own switch. A switch cut halfway leaves
+`<home>/.harness-switch/journal.json`: `/harness status` names the step it reached, and the next
+`/harness off` or `/harness on` finishes it first. `scripts/harness-switch status` gives the same
+report in a terminal (exit 0 on, 3 off, 4 partial), and `scripts/doctor` prints it and exits 3
+while the harness is off.
+
 ## Guardrails only: the installer `core` profile
 
 The installer puts the guardrails in their own isolated directory and adds only a short,

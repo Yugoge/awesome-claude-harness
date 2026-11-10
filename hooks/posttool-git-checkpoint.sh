@@ -6,6 +6,7 @@
 # Worktree awareness: detects when the edited file is inside a
 # .claude/worktrees/ directory and targets that worktree instead of the
 # main repo.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 # Configuration
 CHECKPOINT_THRESHOLD=${GIT_CHECKPOINT_THRESHOLD:-10}  # Default: 10 files accumulated

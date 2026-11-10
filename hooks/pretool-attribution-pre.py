@@ -5,6 +5,9 @@ Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal
 Purely observational: never blocks, always exits 0, fails soft.
 Paired with posttool-attribution-post.py; registered in settings.json.
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 import json
 import os
 import sys

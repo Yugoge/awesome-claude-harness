@@ -24,6 +24,9 @@ absent, the e2e rule's line for the same path is left out of the report. Both st
 refuse, and with G2 advisory or off the e2e rule states it alone, as before.
 """
 from __future__ import annotations
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 
 import re
 import sys

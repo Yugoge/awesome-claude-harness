@@ -24,6 +24,7 @@
 #
 # Exit 0 always. PostToolUse (posttool-allowlist-consume.py) spends the grant;
 # the Stop hook (stop-cleanup-allowlist.sh) reaps it once it has expired.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 set -u
 
 # Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.

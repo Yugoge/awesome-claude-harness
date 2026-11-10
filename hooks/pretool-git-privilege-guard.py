@@ -165,6 +165,9 @@ is not a policy refusal, and no grant or /do consent lifts it. Another tool,
 and a command that cannot run git (_may_run_git), still exit 0. Unreadable
 input (not a JSON object) is judged on its raw text the same way.
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 
 import glob
 import hashlib

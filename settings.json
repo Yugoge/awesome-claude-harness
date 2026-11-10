@@ -223,6 +223,7 @@
       "Edit(**/*secret*)",
       "Edit(**/.env)",
       "Edit(**/.env.*)",
+      "Edit(**/.harness-switch/**)",
       "Edit(**/credentials*)",
       "Edit(**/passwd)",
       "Edit(**/session_dirs.txt)",
@@ -257,6 +258,7 @@
       "Skill(dev-overnight:*)",
       "Skill(dev:*)",
       "Skill(do:*)",
+      "Skill(harness:*)",
       "Skill(merge:*)",
       "Skill(paseo-daemon:*)",
       "Skill(pull:*)",
@@ -365,6 +367,15 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-bulk-commit-capability.py\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-harness-switch.sh\"",
+            "timeout": 60
           }
         ]
       }

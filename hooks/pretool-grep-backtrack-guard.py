@@ -57,6 +57,9 @@ asks the real engine, in a sandbox that cannot hurt the host.
 
 Exit codes: 0 = allow, 2 = block (stderr shown to the agent). Fails OPEN.
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 
 import json
 import os

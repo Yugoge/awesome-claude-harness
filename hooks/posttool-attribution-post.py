@@ -10,6 +10,9 @@ docstring): it runs after
 record_post, in its own fail-soft path, so a seal failure never affects
 capture and a capture failure never blocks the seal check.
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 import json
 import os
 import sys

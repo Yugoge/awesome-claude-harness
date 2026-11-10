@@ -24,6 +24,8 @@ set -u
 trap 'exit 0' EXIT  # R9: exit 0 whatever fails below
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
 H="$PWD" NOTE="" LOG=logs/landing.log  # the harness home is the working directory from here on
+# /harness off: no landing runs (hooks/lib/harness_switch.sh); /harness on lands what a pull brought
+. hooks/lib/harness_switch.sh 2>/dev/null && harness_switch_off && exit 0
 
 own_hooks() {  # step 5 installs only into this repository's own hooks directory
   case "$HOOK_SCOPE" in ""|local|worktree) return 0 ;; esac

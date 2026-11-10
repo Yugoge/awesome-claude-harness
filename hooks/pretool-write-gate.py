@@ -7,13 +7,16 @@ answers combine into one (lib/write_gate.combine): every refusal is reported at 
 The rules are the guards' own files, so each decides exactly as it did alone:
 pretool-bash-views-guard.py, pretool-overnight-hook-guard.py, pretool-tool-policy.py,
 pretool-cp-state-write-guard.py, lib/write_gate/overwrite.py (pretool-write-guard.sh's
-checks) and pretool-claude-config-guard.py.
+checks), pretool-claude-config-guard.py and pretool-harness-switch-guard.py.
 
 If the gate's own code fails (loading the rule table, or the runner around a rule), it runs
 each rule the call matches as a separate process, as the CLI ran them, so a fault here
 neither refuses every tool nor skips tool-policy's fail-closed check.
 """
 from __future__ import annotations
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")); import harness_switch; sys.path.pop(0)  # noqa: E402,E702
+harness_switch.exit_if_off()
 
 import json
 import os
