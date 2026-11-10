@@ -736,6 +736,7 @@ dot-claude/
 │   │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
+│   │   ├── `test_sites_answered_first.py` - A hook that answers an event first and leaves (an else-less `if` on the payload's hook_event_name
 │   │   ├── `test_trace_reduce.py` - Each case is a run-to-run difference two replays of one driver showed under load:
 │   │   ├── `test_typed_corrections.py` - Each replay types the command with an argument that names nothing: /close of a ticket path of ano...
 │   │   ├── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
