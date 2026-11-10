@@ -262,64 +262,19 @@ def hero_facts() -> dict:
     direction. The cross-validation is the point: a coordinated edit of the status page's region
     AND the evidence file still cannot agree with the capture's first and last timestamps.
     """
-    cap, ev_raw, man_raw, svg = (_read(HERO_CAPTURE), _read(HERO_EVIDENCE),
-                                 _read(HERO_MANIFEST), _read(HERO_ASSET))
-    if not all((cap, ev_raw, man_raw, svg)):
+    inputs = _hero_inputs()
+    recomputed = _capture_seconds(inputs[0]) if inputs else None
+    if recomputed is None:
         return {}
-    try:
-        evidence, manifest = json.loads(ev_raw), json.loads(man_raw)
-    except Exception:
-        return {}
-
-    stamps = [float(m.group(1)) for m in
-              (CAPTURE_TS_RE.match(ln) for ln in cap.splitlines()) if m]
-    if len(stamps) < 2:
-        return {}
-    recomputed = round(stamps[-1] - stamps[0], 3)
+    _cap, evidence, manifest, svg = inputs
     declared = evidence.get("raw_duration_s")
     if not isinstance(declared, (int, float)) or abs(float(declared) - recomputed) > 1e-6:
         return {"duration_conflict": (declared, recomputed)}
-
     durations = {float(d) for d in re.findall(r'\bdur="([\d.]+)s"', svg)}
     loop_s = max(durations) if durations else None
-
     lines = manifest.get("lines", [])
-    by_id = {str(ln.get("id")): ln for ln in lines}
-    marker_id = next((str(ln["id"]) for ln in lines
-                      if str(ln.get("text", "")).startswith(CONSUMPTION_MARKER)), None)
-
-    # When the proof line's reveal begins, read from the asset's own animation schedule.
-    proof_s = None
-    if marker_id and loop_s:
-        for chunk in svg.split('<g data-role="line"')[1:]:
-            if f'data-trace-id="{marker_id}"' not in chunk:
-                continue
-            km = re.search(r'attributeName="opacity"[^>]*keyTimes="([^"]+)"', chunk)
-            if km:
-                kt = [float(x) for x in km.group(1).split(";") if x.strip()]
-                if len(kt) >= 2:
-                    proof_s = round(kt[1] * loop_s, 2)
-            break
-
-    # Clipping, on the renderer's own fixed monospace grid -- both constants read from the
-    # asset rather than assumed, so this stays correct if the renderer's geometry changes.
-    vb = re.search(r'viewBox="0 0 (\d+(?:\.\d+)?) ', svg)
-    logical_w = float(vb.group(1)) if vb else None
-    adv = None
-    am = re.search(r'<animate attributeName="width"[^>]*values="([^"]+)"', svg)
-    if am:
-        vals = [float(v) for v in am.group(1).split(";") if v.strip()]
-        adv = next((b - a for a, b in zip(vals, vals[1:]) if b - a > 0), None)
-    clipped: list[tuple[str, int]] = []
-    if logical_w and adv:
-        for t in re.finditer(r'<text data-trace-id="([^"]+)" x="([\d.]+)"', svg):
-            ln = by_id.get(t.group(1))
-            if not ln:
-                continue
-            x, n = float(t.group(2)), len(str(ln.get("text", "")))
-            if x + n * adv > logical_w:
-                clipped.append((t.group(1), n - max(0, int((logical_w - x) // adv))))
-
+    proof_s = _proof_seconds(svg, lines, loop_s)
+    logical_w, clipped = _clipping(svg, {str(ln.get("id")): ln for ln in lines})
     if loop_s is None or proof_s is None or logical_w is None:
         return {}
     return {
@@ -333,6 +288,55 @@ def hero_facts() -> dict:
         "total_n": len(lines),
         "worst_lost": max((c for _, c in clipped), default=0),
     }
+
+
+def _hero_inputs() -> tuple[str, dict, dict, str] | None:
+    """(the capture, the evidence, the manifest, the asset), or None when one is missing or does not parse."""
+    cap, ev_raw, man_raw, svg = (_read(HERO_CAPTURE), _read(HERO_EVIDENCE), _read(HERO_MANIFEST), _read(HERO_ASSET))
+    if not all((cap, ev_raw, man_raw, svg)):
+        return None
+    try:
+        return cap, json.loads(ev_raw), json.loads(man_raw), svg
+    except Exception:
+        return None
+
+
+def _capture_seconds(cap: str) -> float | None:
+    """The recorded session's length from the capture's own first and last timestamps."""
+    stamps = [float(m.group(1)) for m in (CAPTURE_TS_RE.match(ln) for ln in cap.splitlines()) if m]
+    return round(stamps[-1] - stamps[0], 3) if len(stamps) >= 2 else None
+
+
+def _proof_seconds(svg: str, lines: list, loop_s: float | None) -> float | None:
+    """When the grant-consumed proof line's reveal begins, read from the asset's own animation schedule."""
+    marker_id = next((str(ln["id"]) for ln in lines
+                      if str(ln.get("text", "")).startswith(CONSUMPTION_MARKER)), None)
+    if not (marker_id and loop_s):
+        return None
+    chunk = next((c for c in svg.split('<g data-role="line"')[1:] if f'data-trace-id="{marker_id}"' in c), None)
+    km = re.search(r'attributeName="opacity"[^>]*keyTimes="([^"]+)"', chunk) if chunk is not None else None
+    kt = [float(x) for x in km.group(1).split(";") if x.strip()] if km else []
+    return round(kt[1] * loop_s, 2) if len(kt) >= 2 else None
+
+
+def _clipping(svg: str, by_id: dict) -> tuple[float | None, list[tuple[str, int]]]:
+    """(the panel's logical width, [(line id, characters cut off at its right edge)]), on the renderer's own
+    fixed monospace grid: both constants are read from the asset rather than assumed, so this stays correct
+    if the renderer's geometry changes."""
+    vb = re.search(r'viewBox="0 0 (\d+(?:\.\d+)?) ', svg)
+    logical_w = float(vb.group(1)) if vb else None
+    am = re.search(r'<animate attributeName="width"[^>]*values="([^"]+)"', svg)
+    vals = [float(v) for v in am.group(1).split(";") if v.strip()] if am else []
+    adv = next((b - a for a, b in zip(vals, vals[1:]) if b - a > 0), None)
+    if not (logical_w and adv):
+        return logical_w, []
+    clipped = []
+    for t in re.finditer(r'<text data-trace-id="([^"]+)" x="([\d.]+)"', svg):
+        ln = by_id.get(t.group(1))
+        x, n = (float(t.group(2)), len(str(ln.get("text", "")))) if ln else (0.0, 0)
+        if ln and x + n * adv > logical_w:
+            clipped.append((t.group(1), n - max(0, int((logical_w - x) // adv))))
+    return logical_w, clipped
 
 
 MEASURE_SCRIPT = "scripts/measure-hero-fold.py"
@@ -1174,63 +1178,73 @@ def assert_region_positions(text: str, doc: str) -> list[str]:
     regions in the order limits, disclosure, status. A marker that names no region, or a region of
     the other document, is a violation too. Every violation names the region.
     """
-    out: list[str] = []
+    out = _stray_markers(text, doc)
     heads = headings(text)
     spans: dict[str, tuple[int, int]] = {}
-    own = DOC_REGIONS[doc]
+    for rid in DOC_REGIONS[doc]:
+        span, problem = _one_span(text, rid)
+        problem = problem or _section_problem(text, heads, rid, span)
+        if span is not None:
+            spans[rid] = span
+        if problem:
+            out.append(f"[region-position] region {rid!r}{problem}")
+    return out + _overlaps(spans) + _out_of_order(spans)
+
+
+def _stray_markers(text: str, doc: str) -> list[str]:
+    """A marker that names no region, or a region of the other document."""
+    out = []
     for kind, rid in sorted({(m.group(1), m.group(2)) for m in _MARKER_ANY.finditer(text)}):
         if rid not in REGION_IDS:
             out.append(f"[region-position] a {kind} marker names region {rid!r}, which is none of "
                        f"{', '.join(REGION_IDS)}")
-        elif rid not in own:
+        elif rid not in DOC_REGIONS[doc]:
             out.append(f"[region-position] a {kind} marker of region {rid!r} is in {DOC_NAME[doc]}; the region "
                        f"belongs in {DOC_NAME[DOCUMENT_OF[rid]]}")
-    for rid in own:
-        begins, ends = text.count(BEGIN.format(rid=rid)), text.count(END.format(rid=rid))
-        if begins == 0 and ends == 0:
-            out.append(f"[region-position] region {rid!r} is missing: no BEGIN/END marker pair in the document")
-            continue
-        if begins > 1 or ends > 1:
-            out.append(f"[region-position] region {rid!r} is duplicated: {begins} BEGIN and {ends} END "
-                       f"markers, expected one of each")
-            continue
-        span = region_span(text, rid)
-        if span is None:
-            out.append(f"[region-position] region {rid!r} has {begins} BEGIN and {ends} END markers, "
-                       f"but not a BEGIN followed by an END")
-            continue
-        spans[rid] = span
-        title = SECTION_OF[rid]
-        sections = [(i, h) for i, h in enumerate(heads) if h[0] == 2 and h[1] == title]
-        if not sections:
-            out.append(f"[region-position] region {rid!r} has no H2 section {title!r} to sit in")
-            continue
-        if len(sections) > 1:
-            out.append(f"[region-position] region {rid!r}: the H2 heading {title!r} appears "
-                       f"{len(sections)} times; its section is ambiguous")
-            continue
-        i, (_level, _title, start) = sections[0]
-        stop = next((h[2] for h in heads[i + 1:] if h[0] <= 2), len(text))
-        if not (start <= span[0] and span[1] <= stop):
-            where = next((h[1] for h in reversed(heads) if h[0] == 2 and h[2] <= span[0]), "no H2 section")
-            out.append(f"[region-position] region {rid!r} lies outside the H2 section {title!r} "
-                       f"(it sits under {where!r})")
+    return out
 
+
+def _one_span(text: str, rid: str) -> tuple[tuple[int, int] | None, str | None]:
+    """(the region's one span, None), or (None, why it has no single span, as it follows the region's name)."""
+    begins, ends = text.count(BEGIN.format(rid=rid)), text.count(END.format(rid=rid))
+    if begins == 0 and ends == 0:
+        return None, " is missing: no BEGIN/END marker pair in the document"
+    if begins > 1 or ends > 1:
+        return None, f" is duplicated: {begins} BEGIN and {ends} END markers, expected one of each"
+    span = region_span(text, rid)
+    if span is None:
+        return None, f" has {begins} BEGIN and {ends} END markers, but not a BEGIN followed by an END"
+    return span, None
+
+
+def _section_problem(text: str, heads: list, rid: str, span: tuple[int, int]) -> str | None:
+    """Why the region's span is not inside its one H2 section (SECTION_OF), as it follows the region's name; or None."""
+    title = SECTION_OF[rid]
+    sections = [(i, h) for i, h in enumerate(heads) if h[0] == 2 and h[1] == title]
+    if not sections:
+        return f" has no H2 section {title!r} to sit in"
+    if len(sections) > 1:
+        return f": the H2 heading {title!r} appears {len(sections)} times; its section is ambiguous"
+    i, (_level, _title, start) = sections[0]
+    stop = next((h[2] for h in heads[i + 1:] if h[0] <= 2), len(text))
+    if start <= span[0] and span[1] <= stop:
+        return None
+    where = next((h[1] for h in reversed(heads) if h[0] == 2 and h[2] <= span[0]), "no H2 section")
+    return f" lies outside the H2 section {title!r} (it sits under {where!r})"
+
+
+def _overlaps(spans: dict[str, tuple[int, int]]) -> list[str]:
     ordered = sorted(spans, key=lambda rid: spans[rid][0])
-    for before, after in zip(ordered, ordered[1:]):
-        if spans[before][1] > spans[after][0]:
-            out.append(f"[region-position] region {before!r} overlaps region {after!r}: its END marker "
-                       f"lies below the BEGIN marker of {after!r}, so rewriting one would delete the other "
-                       f"and what lies between")
+    return [f"[region-position] region {before!r} overlaps region {after!r}: its END marker lies below the BEGIN "
+            f"marker of {after!r}, so rewriting one would delete the other and what lies between"
+            for before, after in zip(ordered, ordered[1:]) if spans[before][1] > spans[after][0]]
 
+
+def _out_of_order(spans: dict[str, tuple[int, int]]) -> list[str]:
     present = [rid for rid in CLAIM_REGIONS if rid in spans]
     found = sorted(present, key=lambda rid: spans[rid][0])
-    if found != present:
-        for rid in present:
-            if found.index(rid) != present.index(rid):
-                out.append(f"[region-position] region {rid!r} is out of order: the claim regions "
-                           f"appear as {', '.join(found)}, expected {', '.join(present)}")
-    return out
+    return [f"[region-position] region {rid!r} is out of order: the claim regions appear as {', '.join(found)}, "
+            f"expected {', '.join(present)}" for rid in present if found.index(rid) != present.index(rid)]
 
 
 # --------------------------------------------------------------------------------------
@@ -1500,29 +1514,34 @@ def check_claim_rows(status_text: str, expected_rows: dict[str, list[tuple[str, 
     row byte-compared, so every violation can name its row."""
     committed = [row for rid in CLAIM_REGIONS if (span := region_span(status_text, rid))
                  for row in parse_committed_rows(status_text[span[0]:span[1]])]
+    expected = {m.group("id"): (marker, visible, m.groupdict())
+                for pairs in expected_rows.values() for marker, visible in pairs
+                if (m := MARKER_RE.match(marker))}
+    return _row_census(committed) + _row_agreement(committed, expected)
+
+
+def _row_census(committed: list[tuple[str, str, dict]]) -> list[str]:
+    """(a) every row id exactly once across the claim regions and (b) every state in the closed enum."""
     seen: dict[str, int] = {}
     for _, _, f in committed:
         seen[f["id"]] = seen.get(f["id"], 0) + 1
     out = [f"[completeness] row {rid!r} is missing from the canonical regions" for rid in ROW_IDS if rid not in seen]
     out += [f"[completeness] row {rid!r} appears {n} times; expected exactly once" for rid, n in seen.items() if n > 1]
     out += [f"[completeness] row {rid!r} is not in the closed row enum" for rid in seen if rid not in ROW_IDS]
-    out += [f"[enum] row {f['id']!r} carries state={f['state']!r}, outside {sorted(STATES)}"
-            for _, _, f in committed if f["state"] not in STATES]
-    expected = {m.group("id"): (marker, visible, m.groupdict())
-                for pairs in expected_rows.values() for marker, visible in pairs
-                if (m := MARKER_RE.match(marker))}
-    for marker, visible, f in committed:
-        exp = expected.get(f["id"])
-        if exp is not None and f["state"] != exp[2]["state"]:
-            out.append(f"[predicate] row {f['id']!r} claims state={f['state']!r} but its named "
-                       f"predicate evaluates to {exp[2]['state']!r}")
+    return out + [f"[enum] row {f['id']!r} carries state={f['state']!r}, outside {sorted(STATES)}"
+                  for _, _, f in committed if f["state"] not in STATES]
+
+
+def _row_agreement(committed: list[tuple[str, str, dict]], expected: dict) -> list[str]:
+    """(c) each row's state agrees with its predicate and (d) each row equals its regeneration, byte for byte."""
+    out = [f"[predicate] row {f['id']!r} claims state={f['state']!r} but its named predicate evaluates to "
+           f"{expected[f['id']][2]['state']!r}"
+           for _, _, f in committed if f["id"] in expected and f["state"] != expected[f["id"]][2]["state"]]
     for rid in ROW_IDS:
         got = next((r for r in committed if r[2]["id"] == rid), None)
-        if got is None:
-            continue
-        if got[0] != expected[rid][0]:
+        if got is not None and got[0] != expected[rid][0]:
             out.append(f"[byte-compare] row {rid!r}: marker line differs from regenerated")
-        if got[1] != expected[rid][1]:
+        if got is not None and got[1] != expected[rid][1]:
             out.append(f"[byte-compare] row {rid!r}: visible text differs from regenerated")
     return out
 
