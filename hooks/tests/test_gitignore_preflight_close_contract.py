@@ -1270,7 +1270,7 @@ def test_e1_e4_predicates_unchanged_when_e5_does_not_apply(sandbox):
 
 
 # ==========================================================================
-# G3 applies the same rule (P1b row 6) — one function, two callers
+# One decider: the preflight decides the rule; G3 no longer applies its own copy
 # ==========================================================================
 
 G3_HOOK = os.path.join(REPO_ROOT, 'hooks', 'pretool-aggregate-check.py')
@@ -1291,20 +1291,18 @@ def run_g3(root, prompt, mode, subagent_type='changelog-analyst'):
     return proc.returncode, proc.stderr.strip()
 
 
-def test_g3_applies_the_preflight_rule_only_when_armed(landing_sandbox):
+def test_the_preflight_alone_decides_the_rule(landing_sandbox):
+    """G3 armed or not never re-applies the rule; the preflight refuses and admits
+    the same dispatches G3's former copy did, under every barrier mode."""
     shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
     rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
     refused = commit_step7_prompt(rel)
     admitted = commit_step7_prompt(rel, landing_obligation())
-    assert run_g3(landing_sandbox, refused, None) == (0, '')
-    rc, err = run_g3(landing_sandbox, refused, 'block')
-    assert rc == 2
-    assert err == ('[gitignored_deliverable] %s: tests/generated/x/test_a.py declared in its '
-                   'dev.files_modified/files_created match .gitignore and it carries no '
-                   'gitignore_waiver' % rel)
-    assert run_g3(landing_sandbox, admitted, 'block') == (0, '')
-    # The copy this hook keeps decides the same dispatches the same way.
-    assert run_gate(sandbox_hook(landing_sandbox), refused)[0] == 2
+    for mode in (None, 'advisory', 'block'):
+        assert run_g3(landing_sandbox, refused, mode) == (0, '')
+        assert run_g3(landing_sandbox, admitted, mode) == (0, '')
+    assert run_gate(sandbox_hook(landing_sandbox), refused) == (
+        2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')
     assert run_gate(sandbox_hook(landing_sandbox), admitted)[0] == 0
 
 
@@ -1351,13 +1349,12 @@ def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, prof
 
 
 @pytest.mark.parametrize('profile,role', [('singular', 'dev'), ('final_verification', 'qa')])
-def test_g3_and_the_preflight_keep_the_guard_on_a_dev_dispatch(landing_sandbox, profile, role):
-    """A dev dispatch, and /dev's own final QA (Step 13, pipeline dev)."""
+def test_the_preflight_keeps_the_guard_on_a_dev_dispatch(landing_sandbox, profile, role):
+    """A dev dispatch, and /dev's own final QA (Step 13, pipeline dev): the preflight
+    refuses it; G3 armed leaves the rule to it."""
     shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
     rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
     prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline='dev'))
-    rc, err = run_g3(landing_sandbox, prompt, 'block', role)
-    assert rc == 2
-    assert err.startswith('[gitignored_deliverable] %s: tests/generated/x/test_a.py' % rel)
+    assert run_g3(landing_sandbox, prompt, 'block', role) == (0, '')
     assert run_gate(sandbox_hook(landing_sandbox), prompt) == (
         2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')

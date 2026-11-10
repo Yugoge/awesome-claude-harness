@@ -142,8 +142,7 @@ def _enforce_e2e_status(
     passing = _passing_statuses()
 
     if status in passing:
-        # For legitimately_skipped, blocking_reason should be populated
-        # but we do not hard-block on missing blocking_reason (advisory check only)
+        # A passing status passes; blocking_reason is not checked here.
         return
 
     # status is skipped_without_justification, empty, or unrecognized

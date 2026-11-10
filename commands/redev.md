@@ -1,11 +1,11 @@
 ---
-description: /redev is /dev when saving context — the /dev workflow (same arguments, steps, gates and artifacts) without re-emitting its text, under a fresh task id on every invocation. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
+description: /redev is /dev when saving context — it re-enters the harness in the same conversation without repeating /dev's text and is /dev in every other respect (same arguments, steps, gates and artifacts; a fresh task id each invocation; no earlier cycle continued). Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 argument-hint: "[--codex] [--spec <path>] [<requirement>]"
 disable-model-invocation: true
 ---
 
-`/redev` is `/dev`: run `commands/dev.md` for the requirement in `$ARGUMENTS`, with its argument parsing (`--codex`, `--spec <path>`, `--no-graphify`; Steps 1 and 2), its 17-step checklist (`scripts/todo/redev.py` returns `scripts/todo/dev.py`'s), its steps, gates and artifact names.
+`/redev` is `/dev` when saving context: it re-enters the harness in this conversation without repeating the prompt. Run the `/dev` workflow for the requirement in `$ARGUMENTS`; its one difference is that it does not re-emit `/dev`'s text, which this conversation already holds. In every other respect it is `/dev`: same arguments, steps, gates, artifacts and checklist (`scripts/todo/redev.py` delegates to `scripts/todo/dev.py`), and the same rule that every requested outcome is delivered in this cycle, with no sequential phases or deferred parts.
 
-- It only saves context: it does not re-emit /dev's text, which this conversation already holds. When the conversation no longer holds it (a compaction removed it), read `~/.claude/commands/dev.md` and follow it.
-- The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) starts it exactly as `/dev`, under a fresh task id and registry on every invocation, and every hook treats it as `/dev`. There is no task-id form: text after `/redev` is requirement text, and the cycle continues no earlier cycle and reuses none of its task id, artifact paths or acceptance criteria. An interrupted session is resumed with `/restart`.
-- Bare `/redev` (no requirement text) binds the new cycle to the development need stated in this conversation that no earlier cycle has completed; when there is none, ask for the requirement as `/dev` Step 1 does.
+- If this conversation does not hold `/dev`'s text (a compaction removed it, or `/dev` never ran here), read `<HARNESS_ROOT>/commands/dev.md` and follow it.
+- The hooks start and gate it exactly as `/dev`, under a fresh task id each invocation. Text after `/redev` is always requirement text, never a task id: the cycle continues no earlier cycle and reuses none of its task id, artifact paths or acceptance criteria. An interrupted session is resumed with `/restart`.
+- Bare `/redev` (no requirement text) binds the new cycle to the development need stated in this conversation that no earlier cycle has completed; when there is none, ask for the requirement as `/dev` does for empty arguments.

@@ -1,12 +1,13 @@
 """P10 R6 (P10-9): what P5 left without a caller is gone, and the hooks that kept it still run.
 
 - posttool-subagent-track.py's bookmark marker. P5 moved Gate 4 to the transcript, so
-  only the Codex plan path writes a bookmark's `last_todos`, and the marker was written
-  only under one. That path reads its subagent steps from Codex's own records
-  (`native_subagent_evidence_for_transition`, which sets `subagent_calls` itself), and
-  this hook's PostToolUse matcher is `Agent`, a tool name Codex does not have. The hook
-  now writes only the /dev-overnight cycle contract: a bookmark with `last_todos` is
-  left byte for byte.
+  only the Codex plan path writes `last_todos`, and the marker was written only under
+  them. That path reads its subagent steps from Codex's own records
+  (`native_subagent_evidence_for_transition`, which sets `subagent_calls` itself) and
+  now keeps its plan state in its own record, not the bookmark; a bookmark written
+  before that record still holds `last_todos`. This hook's PostToolUse matcher is
+  `Agent`, a tool name Codex does not have. The hook now writes only the /dev-overnight
+  cycle contract: a bookmark with `last_todos` is left byte for byte.
 - lib.overnight.session_state. P5's PM TRIAGE handler reads the record through
   contract_runtime.session_record, its last caller; the locator is session_state_file.
 """

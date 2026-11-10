@@ -16,12 +16,10 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
-    view = restart.observe_subagent_stop(payload)
-    if view is not None:
-        print(
-            f"RESTART RESPONSE OBSERVED: {payload.get('agent_id')}; "
-            f"complete={str(view['complete']).lower()}"
-        )
+    # An observer: the evidence it records is what /restart reads (lib/subagent_restart). It
+    # prints nothing, because at SubagentStop any output that reaches the model keeps the
+    # stopping subagent running, and plain stdout reaches no one.
+    restart.observe_subagent_stop(payload)
     return 0
 
 

@@ -13,11 +13,11 @@ tree's text spells each one, read at run time:
   (drivers/close.py's Step 1 and Step 2, in /commit's session); the block runs again until it prints
   `chain_pass` (at most four rounds). A run with no DISPOSITION line is run once more, then the text's
   `OPERATION_STALLED:` line ends the turn.
-* Step 5: the repository-plan block once; the late-repair state `invalid` or an empty plan is routed
-  on the path the text names and the block run again. Then the attribution-log slice block; the
-  dispatch-snapshot manifest (the state dir and session id read in Bash, each plan entry's `git status
-  --porcelain=v1`, then a Write of the fields the text lists); one grant per plan entry with the
-  writer block of the step.
+* Step 5: the plan call (scripts/steps/commit-plan.py) once: its JSON object read as data (the late-repair
+  state, the repository plan, the attribution slice, the manifest inputs); the late-repair state `invalid` or an
+  empty plan is routed on the path the text names and the call run again. Then the dispatch-snapshot manifest
+  (a Write of the fields the text lists, from the call's own values); one grant per plan entry with the writer
+  block of the step.
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the commit-qa-report's
   last line. A `COMMIT: REJECT` (variant reject) revokes the grant with the text's revoke call, routes
@@ -25,11 +25,14 @@ tree's text spells each one, read at run time:
 * Step 7: changelog-analyst from the step's prompt block, the real commit in the toy project and
   the push-gate token as the tree's agent text writes it; the status block read and handled per
   its commit_status (a `hook_blocked` failure: the text's one AskUserQuestion, then Steps 5-7 again).
-* Step 8: the selection algorithm as the text orders it (context spec_path, the close-report's
-  continuation line, the specs glob), ending in the outcome the text prints.
-* `--auto`: the discovery block and each discovered parent walked through Steps 3-8, the batch
-  summary; when discovery lists no parent, the task's lifecycle row (dev-lifecycle.py scan, run by
-  the driver, no agent call) is recorded as a fact.
+* Step 8: the selection as the text orders it, by the main agent's own Read, Glob and Grep calls and no
+  script (context spec_path, the close-report's continuation line, the specs glob), ending in the outcome
+  the text prints.
+* Routes, on a task with a late-repair run record: the record-stage call the text names after a BA, dev or QA
+  stage was dispatched again.
+* `--auto`: Step 2's discovery call (the text's `--auto` section runs it) and each discovered parent walked
+  through Steps 3-8, the batch summary; when discovery lists no parent, the task's lifecycle row
+  (dev-lifecycle.py scan, run by the driver, no agent call) is recorded as a fact.
 * The waits (variant waits): each one AskUserQuestion with the options the text names (the stub owner
   picks the first), as AskUserQuestion tool calls the hooks see.
 
@@ -94,6 +97,10 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   variant=late-repair-qa  the late-repair case to CLOSE: YES, then the task's QA report removed and
                           /commit typed in a later session (F8r): Step 3's call names the report, its
                           QA dispatch runs again, the commit lands
+  variant=codex-style-reject   `/commit <task-id> --codex` after /close: pre-commit QA runs the Codex round and the
+                          stub Codex rejects for a style reason; the text's sentences make that a finding QA
+                          classifies, not a verdict: one round, approved, committed (D31 replay 3; the rules are
+                          read from QA's prompt by drivers/_codex.py)
   cycle_variant=V         the /dev variant (drivers/dev.py; fanout runs the fan-out cycle)
   session=same|later      /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every other variant)
@@ -110,6 +117,7 @@ import shlex
 from .. import agents, cmdtext
 from ..pipeline import Deviations, Respelling, Orchestrator, utc_now
 from ..replay import Deviation
+from . import _codex
 from . import close as closedrv
 
 PIPELINE = "commit"
@@ -119,6 +127,10 @@ COST = {"auto": 482, "commit-route": 694, "full": 796}
 # The variants the artifact check replays (tests/artifact_graph/runtime.py): the docstring's others are run
 # on their own (`--arg variant=...`).
 VARIANTS = ["auto", "commit-route", "full"]
+# The Codex variant (D31's replay 3): not in VARIANTS, so the artifact check's shards do not replay it;
+# tests/replay/test_codex_loop.py does.
+CODEX_SCRIPTS = {"codex-style-reject": _codex.STYLE_REJECT}
+CODEX_VARIANTS = tuple(CODEX_SCRIPTS)
 
 RESPELLINGS = [
     Respelling("M1 controller", r"source venv/bin/activate && python3 scripts/late-repair-controller\.py",
@@ -184,6 +196,15 @@ def _last_json(text: str):
     return None
 
 
+def _json_object(text: str) -> dict:
+    """The one JSON object a call printed ({} when it printed none)."""
+    try:
+        doc = json.loads(text or "")
+    except ValueError:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
 def _token(value: str) -> str:
     return json.loads(value) if value.startswith('"') else value
 
@@ -211,8 +232,11 @@ def parse_disposition(stdout: str) -> dict:
 
 
 class CommitRun:
-    def __init__(self, rp, session, tid: str, producer=None, extra_devs=(), variant: str = "plain"):
+    def __init__(self, rp, session, tid: str, producer=None, extra_devs=(), variant: str = "plain", codex=None):
         self.rp, self.tid, self.producer, self.variant = rp, tid, producer, variant
+        # `--codex`: pre-commit QA runs the text's Codex round against the stub of `codex` = (rules, script)
+        self.codex = _codex.CommitCodex(self, codex[0], codex[1], lambda k, v: closedrv.fact(rp, k, v)) if codex else None
+        self.qa_codex = "true" if codex else "false"
         pairs = (list(DEVIATIONS.pairs) + list(closedrv.DEVIATIONS.pairs) + list(extra_devs)
                  + list(getattr(getattr(producer, "devs", None), "pairs", [])))
         self.devs = closedrv.kept_only(rp, Deviations(pairs))
@@ -221,6 +245,7 @@ class CommitRun:
                               respellings=RESPELLINGS + closedrv.RESPELLINGS, rules=self._rules())
         self.analyst_text = self.o.tree.agent_text("changelog-analyst")
         self.plan: dict = {}
+        self.facts: dict = {}        # the Step 5 plan call's JSON object
         self.chain: dict = {}
         self.stalled = ""
         self.plan_files: dict = {}
@@ -327,7 +352,28 @@ class CommitRun:
             return self.rerun_commit_qa(ans, label)
         d, role = closedrv.dispatch_answer(self, ans, path, detail, label, edits=edits)
         self.rp.deviation_at = self.devs.at
+        self.record_stage(role, label)
         return d, role
+
+    def record_stage(self, role: str, label: str) -> None:
+        """Routes' closing paragraph: on a task with a late-repair run record, a BA, dev or QA stage dispatched
+        again is recorded when it returns (the text's record-stage call, its placeholders bound)."""
+        o = self.o
+        report = {"ba": f"ticket-{self.tid}.md", "dev": f"dev-report-{self.tid}.json",
+                  "qa": f"qa-report-{self.tid}.json"}.get(role or "")
+        record = os.path.join(o.project, f"docs/dev/late-repair-run-{self.tid}.json")
+        with self.rp.acting("driver"):
+            run_id = json.load(open(record)).get("repair_run_id") or "" if report and os.path.isfile(record) else ""
+        if not run_id:
+            return
+        call = o.inline("Routes", "record-stage", startswith="python3")
+        c = self.run_text(call, self.label(f"{label} Bash record-stage {role}"),
+                          "Late repair: record the stage dispatched again",
+                          rules=[(r"^ba\|dev\|qa$", role), (r"^path$", f"docs/dev/{report}"),
+                                 (r"^the run record's repair_run_id$", run_id)])
+        got = closedrv.last_json((c.response.get("stdout") or "") if c.ok else (c.error or "")) or {}
+        closedrv.fact(self.rp, "late-repair record-stage at /commit", {"label": label, "stage": role, "ok": c.ok,
+                                                                       "result": got.get("outcome")})
 
     def commit_qa_answer(self, ans, path: str) -> bool:
         return (isinstance(ans, dict) and ans.get("source") == "dispatch"
@@ -335,23 +381,25 @@ class CommitRun:
 
     # ------------------------------------------------------------ Step 5
     def step5_plan(self, rounds: int = 3) -> bool:
+        """The plan call; its JSON is what the main agent reads: the late-repair state and the plan (routed
+        when `invalid` or empty, the call run again), then the values Steps 5-7 take from it."""
         o = self.o
-        block = o.block("Step 5", anchor="LATE_REPAIR_JSON")
-        caps = ("CONTROL_ROOT", "NESTED_REPO", "TASK_DOCS_ROOT", "TASK_PROJECT_ROOT", "LATE_REPAIR_JSON",
-                "LATE_REPAIR_STATE", "TASK_REPORT", "REPOSITORY_PLAN")
+        block = o.block("Step 5", anchor="steps/commit-plan.py")
         for k in range(rounds + 1):
             c = self.run_text(block, self.label(f"Step 5 Bash plan {k}"),
-                              "Step 5: late-repair state and repository plan", capture=caps)
+                              "Step 5: late-repair state, repository plan, attribution slice and manifest inputs")
+            self.facts = _json_object((c.response.get("stdout") or "") if c.ok else "")
+            late = self.facts.get("late_repair") or {}
+            self.plan = self.facts.get("repository_plan") or {}
+            o.values.update(CONTROL_ROOT=self.facts.get("control_root") or "",
+                            NESTED_REPO=self.facts.get("nested_repo") or "",
+                            TASK_REPORT=self.facts.get("task_report") or "",
+                            ATTRIBUTION_LOG=json.dumps(self.facts.get("attribution_log") or {}))
             closedrv.fact(self.rp, "commit Step 5", {
                 "label": f"Step 5 Bash plan {k}", "ok": c.ok,
-                "late_repair_state": o.values.get("LATE_REPAIR_STATE") if c.ok else None,
-                "late_repair_json": o.values.get("LATE_REPAIR_JSON"),
+                "late_repair_state": late.get("state") if c.ok else None,
+                "late_repair_json": json.dumps(late, sort_keys=True) if late else None,
                 "task_report": os.path.basename(o.values.get("TASK_REPORT") or "").replace(self.tid, "<task>")})
-            try:
-                late = json.loads(o.values.get("LATE_REPAIR_JSON") or "{}")
-                self.plan = json.loads(o.values.get("REPOSITORY_PLAN") or "{}")
-            except ValueError:
-                late, self.plan = {}, {}
             if late.get("state") == "invalid" and k < rounds:
                 self.route(late.get("path") or "", "late-repair state invalid (State C)", f"Step 5 round {k + 1}")
                 continue
@@ -362,37 +410,13 @@ class CommitRun:
             break
         return bool(self.plan.get("repositories"))
 
-    def attribution(self) -> None:
-        """The attribution slice's block; one that also prints the manifest's inputs is the call manifest()
-        reads them from."""
-        o = self.o
-        block = o.block("Step 5", anchor="ATTRIBUTION_FILES=()")
-        c = self.run_text(block, self.label("Step 5 Bash attribution slice"), "Attribution-log slice",
-                          capture=("ATTRIBUTION_LOG",))
-        self.snapshot = c if "status --porcelain" in block else None
-
     def manifest(self) -> None:
-        o = self.o
-        c = getattr(self, "snapshot", None)
-        if c is None:  # a text whose attribution block prints no manifest input: the inputs in a call of their own
-            repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
-            cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
-                   'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
-                   + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
-            c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
-        # (the values the snapshot call kept follow its output as `declare -p` lines)
-        out = (c.response.get("stdout") or "").split("\ndeclare -")[0].split("\n") if c.ok else []
-        state, sid = (out + ["", ""])[:2]
-        files, cur = {}, None
-        for line in out[2:]:
-            if line.startswith("--- "):
-                cur = line[4:]
-                files[cur] = []
-            elif cur and line.strip():
-                files[cur].append(line[3:])
+        """The dispatch-snapshot manifest: a Write, at the path and with the values the plan call printed."""
+        o, f = self.o, self.facts
+        sid = f.get("session_id") or o.s.sid
         doc = {"session_id": sid, "task_id": self.tid, "dispatched_at": utc_now(), "repository_plan": self.plan,
-               "artifact_chain": self.chain or None, "files_at_dispatch": files}
-        path = os.path.join(state or self.rp.layout.state, f"claude-commit-manifest-{sid or o.s.sid}.json")
+               "artifact_chain": self.chain or None, "files_at_dispatch": f.get("files_at_dispatch") or {}}
+        path = f.get("manifest_path") or os.path.join(self.rp.layout.state, f"claude-commit-manifest-{sid}.json")
         # A later round of the same session finds its own manifest: Read, then edit in place (the write guard).
         agents.put(o.s.main, path, json.dumps(doc, indent=2) + "\n", self.label("Step 5 Write manifest"))
 
@@ -693,7 +717,7 @@ class CommitRun:
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 6")) if "<obligation" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
         prompt = o.instantiate(tpl, self.tid)
-        rules = [(r"^PLAN_GROUPS$", json.dumps(groups)), (r"^QA_CODEX$", "false"), (r"^true\|false$", "false"),
+        rules = [(r"^PLAN_GROUPS$", json.dumps(groups)), (r"^QA_CODEX$", self.qa_codex), (r"^true\|false$", self.qa_codex),
                  (r"^TASK_ID or ", self.tid)]
         return o.bind(prompt, rules)
 
@@ -717,7 +741,8 @@ class CommitRun:
     def commit_qa(self, groups: list, label: str, verdict: str = "COMMIT: APPROVE", finding: str = "", prompt=None):
         o = self.o
         prompt = prompt or self.qa_prompt(groups)
-        player = agents.Player(o.tree, prompt, self.commit_qa_act(groups, verdict, finding), role="qa")
+        act = self.codex.act(groups) if self.codex else self.commit_qa_act(groups, verdict, finding)
+        player = agents.Player(o.tree, prompt, act, role="qa")
         lab = self.label(label)
         return o.s.dispatch("qa", prompt, description="pre-commit QA", body=player.body, result=player.final, label=lab,
                             deviation=self.devs.at(lab))
@@ -777,27 +802,87 @@ class CommitRun:
             self.reject_first = False
             if not self.step5_plan():
                 return False
-            self.attribution()
             self.manifest()
             self.mint()
         return False
 
     # ------------------------------------------------------------ Step 8
     def step8(self) -> None:
-        o = self.o
+        """The selection as the text orders it, made with the main agent's own calls and no script (a script
+        reading the close report here would be a second decider of it): the context's spec_path (Read), the close
+        report's continuation line (Read, the text's pattern on the lines outside fenced blocks), the specs of this
+        cycle (Glob, then the text's one content test, a Grep, on the files of its time window), ending in the
+        outcome the text prints. A spec that stage 1 or 2 names is recorded as a fact: the toy cycle links none,
+        and no spec-update agent is played."""
+        o, tid = self.o, self.tid
+        sec = re.sub(r"\s+", " ", o.section("Step 8"))
+
+        def text(pattern: str, what: str) -> str:
+            m = re.search(pattern, sec)
+            if m is None:
+                raise cmdtext.TextNotFound(f"Step 8: no {what}")
+            return m.group(1).replace("<TASK_ID>", tid)
+
         docs = os.path.join(o.values.get("CONTROL_ROOT") or o.project, "docs/dev")
-        ctx = os.path.join(docs, f"context-{self.tid}.json")
-        spec = None
-        if os.path.isfile(ctx):
-            o.s.read(ctx, label=self.label("Step 8 Read context"), deviation=self.devs.at(self.label("Step 8 Read context")))
-            spec = json.loads(agents.peek(self.rp, "main", ctx)).get("spec_path")
-        if not spec:
-            cr = os.path.join(docs, f"close-report-{self.tid}.md")
-            o.s.read(cr, label=self.label("Step 8 Read close-report"),
-                     deviation=self.devs.at(self.label("Step 8 Read close-report")))
-            o.s.tool("Glob", {"pattern": "spec-*.md", "path": os.path.join(o.project, "docs/dev/specs")},
-                     label=self.label("Step 8 Glob specs"), deviation=self.devs.at(self.label("Step 8 Glob specs")))
-            o.s.say(f"No spec associated with task-id {self.tid}")
+        context = os.path.join(docs, text(r"`<DEV_DOCS_ROOT>/(context-<TASK_ID>\.json)`", "context file"))
+        report = os.path.join(docs, text(r"read `<DEV_DOCS_ROOT>/(close-report-<TASK_ID>\.md)`", "close report"))
+        sdir = os.path.join(docs, text(r"`<DEV_DOCS_ROOT>/(\w+)/spec-YYYYMMDD-HHMMSS\.md`", "specs directory"))
+        pattern = re.compile(text(r"match each line against ``(.+?)`` \(", "continuation pattern"))
+        marker = text(r"holding the literal line `(<!-- spec-continuation-of: <TASK_ID> -->)`", "marker line")
+        warning = text(r"print `(WARNING: [^`]+)`", "stage 2 warning")
+        none_, one, several = (text(p, w) for p, w in (
+            (r"No file: `([^`]+)`", "stage 4 outcome for no file"), (r"One file: `([^`]+)`", "stage 4 outcome for one"),
+            (r"Several: `([^`]+)`", "stage 4 outcome for several")))
+        project = os.path.dirname(os.path.dirname(docs))     # a relative spec path is the project root's
+
+        def read(path: str, what: str) -> str:
+            lab = self.label(f"Step 8 Read {what}")
+            c = o.s.read(path, label=lab, deviation=self.devs.at(lab))
+            return ((c.response.get("file") or {}).get("content") or "") if c.ok else ""
+
+        def is_file(path: str) -> bool:
+            return os.path.isfile(path if os.path.isabs(path) else os.path.join(project, path))
+
+        stage, found = 0, []
+        if os.path.isfile(context):
+            try:
+                doc = json.loads(read(context, "context"))
+            except ValueError:
+                doc = None
+            spec = doc.get("spec_path") if isinstance(doc, dict) else None
+            if spec and is_file(spec):
+                stage, found = 1, [spec]
+        if not stage:
+            outside, fenced = [], False
+            for line in read(report, "close-report").split("\n"):
+                if line.strip().startswith("```"):
+                    fenced = not fenced
+                elif not fenced:
+                    outside.append(line)
+            hits = [m.group(2) for m in map(pattern.match, outside) if m]
+            if len(hits) == 1 and is_file(hits[0]):
+                stage, found = 2, hits
+        if not stage:
+            lab = self.label("Step 8 Glob specs")
+            g = o.s.tool("Glob", {"pattern": "spec-*.md", "path": sdir}, label=lab, deviation=self.devs.at(lab))
+            mtime = os.path.getmtime(report) if os.path.isfile(report) else float("-inf")
+            window = [f for f in (g.response.get("filenames") or [] if g.ok else [])
+                      if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))
+                      and mtime - 24 * 3600 <= os.path.getmtime(f) <= mtime + 3600]
+            if window:
+                lab = self.label("Step 8 Grep spec marker")
+                m = o.s.tool("Grep", {"pattern": re.escape(marker), "path": sdir, "output_mode": "files_with_matches"},
+                             label=lab, deviation=self.devs.at(lab))
+                held = {os.path.join(sdir, f) for f in (m.response.get("filenames") or [])} if m.ok else set()
+                found = [f for f in window if f in held]
+        if stage:
+            outcome = warning if stage == 2 else f"Step 8: updating the spec {found[0]}"
+        else:
+            outcome = (none_ if not found else one.replace("<path>", found[0]) if len(found) == 1
+                       else several.replace("<paths>", ", ".join(found)))
+        closedrv.fact(self.rp, "commit Step 8", {"stage": stage or 4,
+                                                 "outcome": outcome.replace(project + os.sep, "").replace(tid, "<task>")})
+        o.s.say(outcome)
 
     # ------------------------------------------------------------ Step 7
     def hook_question(self) -> None:
@@ -820,7 +905,6 @@ class CommitRun:
         for k in range(3):
             if not self.step5_plan():
                 return "no repository plan"
-            self.attribution()
             self.manifest()
             self.mint()
             if not self.step6():
@@ -889,6 +973,8 @@ class CommitRun:
         text = self.stalled or f"/commit {self.tid}: {out}"
         ev = self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
         self.rp.terminal("commit", out in COMMITTED and self.clean(), ev, task=self.tid, outcome=out)
+        if self.codex:
+            self.codex.finish()
         return out
 
     def clean(self) -> bool:
@@ -930,11 +1016,9 @@ class CommitRun:
         o.slash(typed, label="/commit --auto typed")
         if typed != "--auto":
             self.flags_question(typed)
-        self.run_text(o.block("`--auto` mode", lang="bash", index=0), "/commit --auto Bash discovery",
-                      "Discover the commit_pending parents", capture=("COMMIT_PENDING_PARENTS",))
-        parents = o.values.get("COMMIT_PENDING_PARENTS") or []
-        if isinstance(parents, str):
-            parents = [parents] if parents else []
+        c = self.run_text(self.list_call("commit"), "/commit --auto Bash discovery",
+                          "Discover the commit_pending parents")
+        parents = [l for l in ((c.response.get("stdout") or "") if c.ok else "").split("\n") if l.strip()]
         results = []
         for line in parents:
             self.tid = line.split()[0]
@@ -963,15 +1047,20 @@ class CommitRun:
                 if not m.group(2) or m.group(1) in typed.split()]
         return self.ask(header, question, opts, "Step 1 AskUserQuestion flags")
 
+    def list_call(self, action: str) -> str:
+        """Step 2's discovery call (the `--auto` section runs it too), for `--next-action <action>`."""
+        sec = re.sub(r"\s+", " ", self.o.section("Step 2"))
+        call = re.search(r"`(python3 \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/dev-lifecycle\.py\" list-actionable "
+                         r"--next-action commit --project-dir \"<PROJECT_ROOT>\")`", sec).group(1)
+        return call.replace("--next-action commit", f"--next-action {action}")
+
     def task_question(self) -> str:
         """Step 2's no-unambiguous-candidate question: the text's discovery calls, then the question."""
         o = self.o
         sec = re.sub(r"\s+", " ", o.section("Step 2"))
-        call = re.search(r"`(python3 \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/dev-lifecycle\.py\" list-actionable "
-                         r"--next-action commit --project-dir \"<PROJECT_ROOT>\")`", sec).group(1)
         cands = []
         for action in ("commit", "close"):
-            c = self.run_text(call.replace("--next-action commit", f"--next-action {action}"),
+            c = self.run_text(self.list_call(action),
                               self.label(f"Step 2 Bash list-actionable {action}"), f"The {action}_pending parents")
             cands += [l.split()[0] for l in (c.response.get("stdout") or "").split("\n") if l.strip()] if c.ok else []
         if not cands:  # "When neither list names a parent, print ... and end."
@@ -991,7 +1080,7 @@ def fanout_dev(rp):
 
 
 VARIANT_NAMES = ("plain", "route", "append", "auto", "commit-route", "full", "unclosed", "laneqa", "aggregate",
-                 "reject", "waits", "late-repair", "late-repair-drift", "late-repair-qa")
+                 "reject", "waits", "late-repair", "late-repair-drift", "late-repair-qa") + CODEX_VARIANTS
 
 
 def run(rp) -> None:
@@ -999,8 +1088,15 @@ def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
     if variant not in VARIANT_NAMES:
         raise ValueError(f"unknown variant {variant!r}")
+    codex = None
+    if variant in CODEX_VARIANTS:
+        # The text's rules first, before any pipeline runs: a text without them (or at odds with the scripted
+        # run) stops the replay here, naming the sentence.
+        codex = (_codex.commit_rules(rp), CODEX_SCRIPTS[variant])
+        _codex.check_commit_script(*codex)
+        closedrv.fact(rp, "codex rules", codex[0].to_fact())
     # Acceptance 7 types the /close or /commit of its routing cases in a later session than the /dev.
-    session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") else "later")
+    session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") + CODEX_VARIANTS else "later")
     rp.pipeline = (closedrv.pipeline_name(after, rp) + "+close+commit" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
     if variant == "laneqa":  # the /dev session interrupted before its QA (Step 13) was ever dispatched
@@ -1016,7 +1112,7 @@ def run(rp) -> None:
     session = rp.later_session(s) if session_kind == "later" else s
     if variant not in ("unclosed", "laneqa", "waits"):
         close_variant = {"commit-route": "plain", "full": "append", "aggregate": "plain",
-                         "reject": "plain", "late-repair-qa": "late-repair"}.get(variant, variant)
+                         "reject": "plain", "late-repair-qa": "late-repair", "codex-style-reject": "plain"}.get(variant, variant)
         cr = closedrv.CloseRun(rp, session, tid, producer=producer, variant=close_variant, auto=variant == "auto")
         if variant == "auto":
             cr.run_auto()
@@ -1036,7 +1132,7 @@ def run(rp) -> None:
     if (variant in ("commit-route", "full", "aggregate", "waits", "late-repair", "late-repair-drift",
                     "late-repair-qa") and session_kind == "later"):
         session = rp.later_session(session)
-    run_ = CommitRun(rp, session, tid, producer=producer, variant=variant)
+    run_ = CommitRun(rp, session, tid, producer=producer, variant=variant, codex=codex)
     if variant == "waits":
         # `/commit` with no task context: the Task question; the stub owner picks the first candidate.
         run_.o.slash("", label=run_.label("typed (no task)"))
@@ -1050,4 +1146,4 @@ def run(rp) -> None:
         # `/commit --auto --force`: the Flags question, then --auto as the answer names it.
         CommitRun(rp, rp.later_session(session), tid, producer=producer).run_auto("--auto --force")
         return
-    run_.run()
+    run_.run(f"{tid} --codex" if codex else None)

@@ -4,7 +4,8 @@ PreToolUse Hook: Bulk-commit detector (advisory: exit 0 always).
 
 Scope: Runs on every Bash tool call. Inspects a `git commit` written with
 nothing between `git` and `commit` (`git -C <dir> commit` is not inspected)
-and warns on stderr when the commit matches the b5d447e shape:
+and warns the model (PreToolUse additionalContext JSON on stdout; the call is never
+refused) when the commit matches the b5d447e shape:
   - staged set spans 3 or more of {hooks/, commands/, scripts/, packages/, docs/}
   - AND commit subject matches `\bsync\b.*\buncommitted\b` (case-insensitive)
     OR `chore\(claude\)\s*:\s*sync` (the b5d447e exact form)
@@ -56,8 +57,9 @@ SUBJECT_PATTERNS = [
 
 
 def _warn(message: str) -> None:
-    """Write to stderr and exit 0 (warn-only per user policy: no text-smell hard-blocks)."""
-    sys.stderr.write(message)
+    """Tell the model and exit 0 (warn-only per user policy: no text-smell hard-blocks)."""
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                        "additionalContext": message.strip()}}))
     sys.exit(0)
 
 

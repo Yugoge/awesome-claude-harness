@@ -15,7 +15,7 @@ _STEPS = [
      "Resolving the disposition; completing the cycle when incomplete", None),
     ("1", "Dispatch three inspectors in parallel", "Dispatching three inspectors in parallel", None),
     ("2", "Delegate close debate to QA subagent", "Delegating close debate to QA subagent", {"subagent_call": {"agent": "qa", "subagent_type": "qa"}}),
-    ("3", "Generate close-report and spec/temp update", "Generating close-report and spec/temp update", None),
+    ("3", "Echo the verdict and name the next step", "Echoing the verdict and naming the next step", None),
     ("3b", "Ask the user to rate each landed cycle", "Asking the user to rate each landed cycle", None),
 ]
 

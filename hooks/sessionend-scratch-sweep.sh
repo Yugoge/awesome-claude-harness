@@ -19,7 +19,9 @@
 # paths named by its own sid. Non-blocking: best-effort, exits 0 unconditionally.
 
 set -u
-exec >&2   # SessionEnd hooks must not pollute stdout (harness JSON channel)
+# Silent: the CLI discards what a SessionEnd hook prints (code.claude.com/docs/en/hooks,
+# "SessionEnd"), so each skip below is named in a comment instead of a message nobody reads.
+exec >/dev/null 2>&1
 
 ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
 INPUT=$(cat 2>/dev/null || true)
@@ -29,7 +31,7 @@ PSID=$(printf '%s' "$INPUT" | python3 -c \
   2>/dev/null || true)
 SID="${CLAUDE_CODE_SESSION_ID:-$PSID}"
 if [ -z "$SID" ]; then
-  echo "sessionend-scratch-sweep: no session id available — skipping"
+  # no session id available — skipping
   exit 0
 fi
 
@@ -38,7 +40,7 @@ fi
 # stands between "remove our own dir" and "remove something else."
 case "$SID $PSID" in
   */*|*..*)
-    echo "sessionend-scratch-sweep: unsafe session id '$SID $PSID' — skipping"
+    # unsafe session id '$SID $PSID' — skipping
     exit 0
     ;;
 esac
@@ -50,7 +52,7 @@ OWN="${CLAUDE_PROJECT_DIR:-$PWD}/.claude"
   "$OWN/dev-start-replays/$PSID" 2>/dev/null
 
 if [ ! -d "$ROOT" ]; then
-  echo "sessionend-scratch-sweep: root $ROOT absent — nothing to sweep"
+  # root $ROOT absent — nothing to sweep
   exit 0
 fi
 
@@ -59,17 +61,17 @@ TARGET="$ROOT/$SID"
 # Must be a real directory, never a symlink (a symlink here could redirect
 # the subsequent rm -rf to an arbitrary path).
 if [ -L "$TARGET" ] || [ ! -d "$TARGET" ]; then
-  echo "sessionend-scratch-sweep: $TARGET is not an own directory — skipping"
+  # $TARGET is not an own directory — skipping
   exit 0
 fi
 
 # Containment guard: the canonicalized target's parent must be the
 # canonicalized root — closes any residual traversal the charset guard above
 # did not already catch.
-ROOT_REAL=$(cd "$ROOT" 2>/dev/null && pwd -P) || { echo "sessionend-scratch-sweep: cannot resolve root"; exit 0; }
-TARGET_PARENT_REAL=$(cd "$TARGET/.." 2>/dev/null && pwd -P) || { echo "sessionend-scratch-sweep: cannot resolve target parent"; exit 0; }
+ROOT_REAL=$(cd "$ROOT" 2>/dev/null && pwd -P) || exit 0                  # cannot resolve root
+TARGET_PARENT_REAL=$(cd "$TARGET/.." 2>/dev/null && pwd -P) || exit 0    # cannot resolve target parent
 if [ "$TARGET_PARENT_REAL" != "$ROOT_REAL" ]; then
-  echo "sessionend-scratch-sweep: $TARGET escapes $ROOT — skipping"
+  # $TARGET escapes $ROOT — skipping
   exit 0
 fi
 
@@ -78,12 +80,10 @@ fi
 # one rule hooks/lib/scratch_owner.py holds, which doc-sync's notice applies
 # too; an undecidable directory is left alone.
 if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/scratch_owner.py" "$TARGET" "$SID" 2>/dev/null; then
-  echo "sessionend-scratch-sweep: $TARGET does not belong to session $SID — skipping"
+  # $TARGET does not belong to session $SID — skipping
   exit 0
 fi
 
-rm -rf -- "$TARGET" 2>/dev/null \
-  && echo "sessionend-scratch-sweep: removed own session dir $TARGET" \
-  || echo "sessionend-scratch-sweep: rm -rf $TARGET failed"
+rm -rf -- "$TARGET" 2>/dev/null   # this session's own dir; a failure leaves it to the orphan floor
 
 exit 0

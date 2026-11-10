@@ -512,6 +512,7 @@ def build_plan(
     supported_repo_args: list[str],
     report_arg: str | None = None,
     verify_ownership: bool = True,
+    excluded_unsupported_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve a task's owned paths into an admitted repository plan.
 
@@ -549,6 +550,23 @@ def build_plan(
     historical-status reuse (scripts/dev-lifecycle.py's commit_detection())
     that predates the ledger and must not misreport already-landed tasks as
     blocked.
+
+    ``excluded_unsupported_paths`` is an exact, per-path declared exclusion
+    list -- never a policy switch, prefix, or glob -- for the case where a
+    cycle's owned set legitimately spans a repository this invocation does not
+    support (e.g. another account's home or the filesystem root), and the
+    operator commits that foreign portion by hand. Repository admission is
+    NOT widened: an exclusion takes effect
+    only for a path that is BOTH unsupported-owner AND named here, and such a
+    path is dropped from every repository entry's ``owned_paths`` and recorded
+    in the emitted plan's ``unsupported_owner_exclusions`` array so the plan
+    (and the commit message built from it) discloses the scope difference. A
+    declared path whose owner IS supported, or that is absent from the
+    report's owned set, raises instead of being honored -- a stale declaration
+    must never silently drop committable work. An unsupported-owner path that
+    is NOT declared still raises exactly as before. When nothing is excluded
+    the key is omitted, so the emitted plan stays byte-identical to the
+    pre-existing shape.
     """
     if not task_id.strip():
         raise PlanError("task id must be non-empty")
@@ -575,14 +593,56 @@ def build_plan(
         for raw in values:
             raw_fields.setdefault(raw, set()).add(field)
 
+    # Explicit per-path declared exclusions (--exclude-unsupported-owned-path).
+    # Matched by canonical absolute path so a declaration shares this module's
+    # single canonicalization convention. A declaration that cannot be
+    # canonicalized at all (nonexistent ancestor, a glob, a typo) matches
+    # nothing and therefore falls to the "not in the owned set" raise below --
+    # never a silent drop, and never a prefix/glob admission.
+    declared_exclusions: list[str] = list(excluded_unsupported_paths or [])
+    exclusion_by_canonical: dict[Path, str] = {}
+    for declared in declared_exclusions:
+        try:
+            canonical = _canonical_owned_path(declared, control_root)
+        except PlanError:
+            continue
+        exclusion_by_canonical.setdefault(canonical, declared)
+    matched_declarations: set[str] = set()
+    unsupported_owner_exclusions: list[dict[str, str]] = []
+    excluded_canonical: set[Path] = set()
+
     by_repo: dict[Path, list[str]] = {control_root: []}
     identity_fields: dict[tuple[Path, str], set[str]] = {}
     identity_display: dict[tuple[Path, str], str] = {}
     for raw in owned_raw:
         absolute = _canonical_owned_path(raw, control_root)
         actual_owner = _repo_root(_existing_ancestor(absolute))
+        declared = exclusion_by_canonical.get(absolute)
         if actual_owner not in supported:
-            raise PlanError(f"owned path is outside the supported repository set: {raw}")
+            if declared is None:
+                raise PlanError(f"owned path is outside the supported repository set: {raw}")
+            matched_declarations.add(declared)
+            if absolute not in excluded_canonical:
+                excluded_canonical.add(absolute)
+                unsupported_owner_exclusions.append(
+                    {
+                        "path": raw,
+                        "declared_as": declared,
+                        "owner_repo_root": str(actual_owner),
+                        "reason": (
+                            "owner repository is outside the supported repository "
+                            "set and this path was explicitly declared via "
+                            "--exclude-unsupported-owned-path; it is committed "
+                            "manually outside this plan"
+                        ),
+                    }
+                )
+            continue
+        if declared is not None:
+            raise PlanError(
+                "declared unsupported-owner exclusion names an owned path whose "
+                f"owner repository {actual_owner} IS supported: {raw}"
+            )
         # Git, not pathname containment alone, determines ownership. This rejects
         # an unadmitted nested checkout instead of laundering it through an
         # admitted outer repository.
@@ -596,6 +656,15 @@ def build_plan(
         identity = (owner, relative)
         identity_fields.setdefault(identity, set()).update(raw_fields.get(raw, set()))
         identity_display.setdefault(identity, raw)
+
+    unmatched_declarations = sorted(
+        declared for declared in declared_exclusions if declared not in matched_declarations
+    )
+    if unmatched_declarations:
+        raise PlanError(
+            "declared unsupported-owner exclusion is not in the report's owned "
+            f"path set: {', '.join(unmatched_declarations)}"
+        )
 
     # Ownership gate (backlog #110, extended -- task 20260923-024043,
     # backlog #121): files_modified is never blindly trusted -- it must be
@@ -727,7 +796,7 @@ def build_plan(
         )
 
     report_bytes = report_path.read_bytes()
-    return {
+    plan: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "task_id": task_id,
         "report_path": str(report_path),
@@ -737,6 +806,14 @@ def build_plan(
         "repositories": targets,
         "transaction_semantics": "ordered_non_atomic_with_partial_failure_reporting",
     }
+    # Emitted only when non-empty, so an invocation that declares no exclusion
+    # keeps the pre-existing plan shape byte-for-byte.
+    if unsupported_owner_exclusions:
+        plan["unsupported_owner_exclusions"] = sorted(
+            unsupported_owner_exclusions,
+            key=lambda item: (item["owner_repo_root"], item["path"]),
+        )
+    return plan
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -745,6 +822,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--control-root", required=True)
     parser.add_argument("--supported-repo", action="append", default=[])
     parser.add_argument("--report")
+    parser.add_argument(
+        "--exclude-unsupported-owned-path",
+        action="append",
+        default=[],
+        metavar="OWNED_PATH",
+        help=(
+            "Exclude exactly this one owned path from the plan because its owner "
+            "repository is not supported by this invocation (repeat the option "
+            "per path). Exact path only -- no prefix or glob. Errors if the path "
+            "is not in the report's owned set, or if its owner IS supported."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -756,6 +845,7 @@ def main(argv: list[str] | None = None) -> int:
             control_root_arg=args.control_root,
             supported_repo_args=args.supported_repo,
             report_arg=args.report,
+            excluded_unsupported_paths=args.exclude_unsupported_owned_path,
         )
     except PlanError as exc:
         print(f"resolve-commit-repos: BLOCKED: {exc}", file=sys.stderr)

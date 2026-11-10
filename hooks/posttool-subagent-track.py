@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-PostToolUse:Agent Hook: write the /dev-overnight cycle contract when PM TRIAGE returns.
+PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight).
 
-PM TRIAGE handler (/dev-overnight): when the returned Agent call is the PM
-TRIAGE step's dispatch, write the cycle's contract,
-`<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json`
+When the returned Agent call is the PM TRIAGE step's dispatch, write the cycle's
+contract, `<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json`
 (lib.contract_runtime.contract_path, N = lib.overnight.cycle_index). It
 renders the dispatches after PM TRIAGE from scripts/todo/dev-overnight.py
 _STEPS, each step's and each re-dispatch's (contract_runtime.post_triage_steps):
@@ -14,17 +13,22 @@ whose dispatch carries a mode (PM RETRO), which runs once per cycle. This hook
 is the contract's only writer and publishes it by rename; a contract the cycle
 already has that lists calls (an earlier PM TRIAGE's, or one an orchestrator
 wrote before this hook did) is kept as it is, so nothing edits a contract
-after it is written.
+after it is written. hooks/posttool-dispatch-record.py runs it before the two
+hooks that read the contract on the same return.
 
-It writes no workflow bookmark: Gate 4 reads a Claude session's Agent calls
-from the transcript (pretool-todo-validate.py), and the Codex plan path reads
-its subagent steps from Codex's own records (pretool-workflow-gate.py,
-native_subagent_evidence_for_transition). Whether the dispatch produced its
-artifact is decided by posttool-overnight-file-check.py at the same
-PostToolUse (G3) and by the producer's own stop (G2), not here.
+This hook writes no workflow bookmark. Whether a step's subagent ran is decided
+once: by the transcript in a Claude session (pretool-todo-validate.py's Gate 4)
+and by the Codex transcript's subagent evidence in the Codex plan path
+(pretool-workflow-gate.py, native_subagent_evidence_for_transition, which records
+it in its own Codex plan record). Whether the dispatch produced its artifact is
+decided by posttool-overnight-file-check.py at the same PostToolUse (G3) and by
+the producer's own stop (G2), not here.
+
+Its outcome (the contract written, kept, or not written and why) reaches the agent
+as additionalContext.
 
 Exit codes:
-  0: Always (never blocks).
+  0: Always (recording only, never blocks).
 """
 
 from __future__ import annotations
@@ -109,6 +113,11 @@ def _pipeline_count(state: dict, cycle_id: int, prompt: str = '') -> int | None:
     return len(pipelines) if isinstance(pipelines, list) else None
 
 
+def _tell(text: str) -> None:
+    """PostToolUse's documented channel to the agent: additionalContext, exit 0."""
+    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': text}}))
+
+
 def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     """Render the cycle contract when PM TRIAGE returns; otherwise do nothing."""
     state = contract_runtime.session_record(session_id, stdin_data)
@@ -120,13 +129,12 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     cycle_id = overnight.cycle_index(state)
     path = contract_runtime.contract_path(state, cycle_id)
     if contract_runtime._iter_required_calls(contract_runtime.load_contract(session_id, cycle_id, state)):
-        print(f'CYCLE CONTRACT KEPT: cycle {cycle_id} already has one: {path}')
+        _tell(f'CYCLE CONTRACT KEPT: cycle {cycle_id} already has one: {path}')
         return
     count = _pipeline_count(state, cycle_id, str((stdin_data.get('tool_input') or {}).get('prompt') or ''))
     if count is None:
-        sys.stderr.write(
-            f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '
-            'report; the next PM TRIAGE dispatch writes it.\n')
+        _tell(f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '
+              'report; the next PM TRIAGE dispatch writes it.')
         return
     calls = []
     for label, call in contract_runtime.post_triage_steps(steps):
@@ -145,9 +153,9 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
         tmp.write_text(json.dumps(contract, indent=2) + '\n', encoding='utf-8')
         os.replace(tmp, path)
     except OSError as exc:
-        sys.stderr.write(f'CYCLE CONTRACT NOT WRITTEN: {path}: {exc}\n')
+        _tell(f'CYCLE CONTRACT NOT WRITTEN: {path}: {exc}')
         return
-    print(f'CYCLE CONTRACT: cycle {cycle_id}, {count} pipeline(s), '
+    _tell(f'CYCLE CONTRACT: cycle {cycle_id}, {count} pipeline(s), '
           f'{len(calls)} required call(s): {path}')
 
 

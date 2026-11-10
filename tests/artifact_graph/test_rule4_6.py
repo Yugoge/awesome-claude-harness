@@ -864,3 +864,103 @@ def test_a_decision_on_what_nothing_writes_is_rule_twos():
     assert vs == ["2-unwritten"]
     a.writers.append(C.Rel("main", "write", "x", "runtime"))
     assert [v.rule for v in C._rechecks(a, a.key, [])] == ["6-move"]
+
+
+GATE_LIB = '''
+    from dataclasses import dataclass
+
+    REFUSE, OBSERVE = "refuse", "observe"
+
+    @dataclass(frozen=True)
+    class Rule:
+        name: str
+        path: str = ""
+        tools: object = None
+        kind: str = REFUSE
+        call: str = ""
+'''
+GATE_HEAD = (
+    "import os, sys\n"
+    "from pathlib import Path\n"
+    "HOOKS = Path(__file__).resolve().parent\n"
+    "sys.path.insert(0, str(HOOKS))\n"
+    "from lib.gates import Rule, REFUSE, OBSERVE\n"
+)
+REC_GUARD = hook('''
+    import json
+    if not json.load(open(harness_state_dir() + "/claude-rec.json")):
+        sys.exit(2)
+''')
+
+
+def test_a_rule_a_registered_gate_runs_decides_at_the_gates_position(tmp_path):
+    """Rule (5): a merged gate runs hook files as rules from its RULES table, so a rule file has no
+    registration of its own. Its deciding read sits at the gate's position: the gate's event and
+    matcher, narrowed to the rule's declared tools; an observe rule refuses nothing through the
+    gate and decides nowhere; a rule file no registered gate names stays elsewhere."""
+    settings = _registered(("PostToolUse", "Bash", "hooks/rec-writer.py"),
+                           ("PreToolUse", "Agent", "hooks/agent-gate.py"),
+                           ("PreToolUse", "*", "hooks/any-gate.py"))
+    m, _vs = check(make_tree(tmp_path, {
+        "hooks/lib/gates.py": GATE_LIB,
+        "hooks/rec-writer.py": hook('open(harness_state_dir() + "/claude-rec.json", "w").write("{}")\n'),
+        "hooks/agent-gate.py": GATE_HEAD + (
+            'RULES = [\n'
+            '    Rule("rec", str(HOOKS / "rec-guard.py"), REFUSE),\n'
+            '    Rule("watch", str(HOOKS / "rec-watch.py"), OBSERVE),\n'
+            ']\n'),
+        "hooks/any-gate.py": GATE_HEAD + 'RULES = (Rule("bash", "rec-bash-guard.py", frozenset({"Bash"})),)\n',
+        "hooks/old-gate.py": GATE_HEAD + 'RULES = [Rule("old", str(HOOKS / "rec-orphan.py"), REFUSE)]\n',
+        "hooks/rec-guard.py": REC_GUARD,
+        "hooks/rec-watch.py": REC_GUARD,
+        "hooks/rec-bash-guard.py": REC_GUARD,
+        "hooks/rec-orphan.py": REC_GUARD,
+    }, settings))
+    a = m.artifacts["<state>/claude-rec.json"]
+    positions = {(d.who, d.position, d.event, d.matcher) for d in a.decisions}
+    # the dispatch gate's refusing rule: PreToolUse on Agent is G1
+    assert ("hooks/rec-guard.py", "G1", "PreToolUse", "Agent") in positions
+    # the write gate's rule on Bash alone: the producer's tool call, not the gate's every-tool G1
+    assert ("hooks/rec-bash-guard.py", "producer tool call", "PreToolUse", "Bash") in positions
+    # an observe rule reads what it reads and decides nothing through the gate
+    assert "hooks/rec-watch.py" in a.consumers()
+    assert not [p for p in positions if p[0] == "hooks/rec-watch.py"]
+    # a table no registered gate holds runs nothing: its rule file decides elsewhere
+    assert {(w, p) for w, p, _e, _m in positions if w == "hooks/rec-orphan.py"} == {("hooks/rec-orphan.py", "elsewhere")}
+    assert not [p for p in positions if p[0] != "hooks/rec-orphan.py" and p[1] == "elsewhere"]
+
+
+def test_a_gates_process_writes_and_decides_as_its_rule_files(tmp_path):
+    """The trace sees a merged gate's rules as the gate's process (the gate runs each rule file in
+    it). What that process writes, a rule file's own code writes, is that rule file's write (one
+    producer); a change of the gate's decision on an artifact its refusing rule decides on is that
+    rule's decision, with its own deciding read, and stands for its static branch."""
+    settings = _registered(("PreToolUse", "Agent", "hooks/agent-gate.py"))
+    root = make_tree(tmp_path, {
+        "hooks/lib/gates.py": GATE_LIB,
+        "hooks/agent-gate.py": GATE_HEAD + (
+            'RULES = [\n'
+            '    Rule("track", str(HOOKS / "rec-writer.py"), OBSERVE),\n'
+            '    Rule("rec", str(HOOKS / "rec-guard.py"), REFUSE),\n'
+            ']\n'),
+        "hooks/rec-writer.py": hook('open(harness_state_dir() + "/claude-rec.json", "w").write("{}")\n'),
+        "hooks/rec-guard.py": REC_GUARD,
+    }, settings)
+    st = derive(root)
+    run = C.Run("fake", "shipped", "")
+    run.env = {"CLAUDE_STATE_DIR": "/sbx/state"}
+    run.events = [{"comp": "hooks/agent-gate.py", "origin": "hooks/agent-gate.py", "actor": "main", "op": op,
+                   "pattern": "<state>/claude-rec.json", "event": seq, "bulk": False, "raw": "/sbx/state/claude-rec.json"}
+                  for seq, op in ((1, "create"), (2, "read"))]
+    run.invocations = {seq: {"seq": seq, "event": "PreToolUse", "label": "Agent(dev)",
+                             "payload": {"tool_name": "Agent"}} for seq in (1, 2)}
+    run.differential = {"units": [{"seq": 2, "event": "PreToolUse", "label": "Agent(dev)", "tool": "Agent",
+                                   "origin": "hooks/agent-gate.py", "kind": "hook", "reproduced": True,
+                                   "runs": [{"pattern": "<state>/claude-rec.json", "raw": "/sbx/state/claude-rec.json",
+                                             "readers": ["hooks/agent-gate.py"], "changed": True, "how": "removed"}]}]}
+    m = C.derive(str(root), st, [run])
+    vs = C.violations(m, st.records)
+    a = m.artifacts["<state>/claude-rec.json"]
+    assert a.producers() == ["hooks/rec-writer.py"]
+    assert not rules_on(vs, a.key) & {"1-producers", "4-one-rule", "6-move", "6-recheck"}
+    assert {(d.who, d.position, d.source) for d in a.decisions} == {("hooks/rec-guard.py", "G1", "differential")}
