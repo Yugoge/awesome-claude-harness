@@ -12,6 +12,7 @@ commands/do.md (which test_skill_deny_coverage.py reads) cannot turn codex into 
 from __future__ import annotations
 
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -40,7 +41,13 @@ def _stems() -> set:
 
 
 def _registered(event: str, script: str, matcher: str) -> bool:
-    for block in _settings().get("hooks", {}).get(event, []):
+    """Read through the launchers' expansion (P12-L7, hooks/lib/launch_settings.py): a hook that
+    runs as a rule of an event's launcher counts as registered under the matcher it runs for."""
+    spec = importlib.util.spec_from_file_location("_launch_settings",
+                                                  os.path.join(ROOT, "hooks", "lib", "launch_settings.py"))
+    launch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launch)
+    for block in launch.expand(_settings(), ROOT).get("hooks", {}).get(event, []):
         if block.get("matcher") == matcher and any(script in h.get("command", "") for h in block.get("hooks", [])):
             return True
     return False

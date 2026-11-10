@@ -25,6 +25,7 @@ without it writes __pycache__ only where the tracked .gitignore ignores it, leav
 home's `git status` and the product repo untouched.
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -96,7 +97,13 @@ def test_hooks_without_the_variable_write_only_ignored_bytecode(tmp_path):
 
     settings = _clean_form()
     chain = _bash_chain(settings)
-    assert sum('python3 "' in cmd for _, cmd in chain) >= 7, chain
+    # The chain runs as registered (P12-L7: one launcher process per event); the Python hooks it
+    # runs are counted through the launchers' expansion (hooks/lib/launch_settings.py).
+    spec = importlib.util.spec_from_file_location("_launch_settings", REPO / "hooks" / "lib" / "launch_settings.py")
+    launch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launch)
+    expanded = _bash_chain(launch.expand(settings, str(REPO)))
+    assert sum('python3 "' in cmd for _, cmd in expanded) >= 7, expanded
     sid = "p10-42-0000-0000-0000-000000000000"
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "list"}}) + "\n")
