@@ -64,7 +64,13 @@ def test_the_pipeline_texts_call_codex_through_the_skill_tool():
 
 def test_the_codex_ledger_is_written_only_by_the_skill_calls_posttooluse():
     assert _registered("PostToolUse", "hooks/posttool-codex-skill-ledger.py", "Skill")
-    assert _registered("SubagentStop", "hooks/subagentstop-codex-enforce.py", "*")
+    # P12-L5 runs the SubagentStop artifact checks in one process: the producer gate is the one registered
+    # hook, and it runs the codex enforcer as its codex-ledger rule.
+    assert _registered("SubagentStop", "hooks/subagentstop-producer-gate.py", "*")
+    with open(os.path.join(ROOT, "hooks", "subagentstop-producer-gate.py"), encoding="utf-8") as fh:
+        gate = fh.read()
+    assert '"subagentstop-codex-enforce.py"' in gate
+    assert os.path.isfile(os.path.join(ROOT, "hooks", "subagentstop-codex-enforce.py"))
 
 
 def test_no_permission_rule_names_the_codex_skill():
