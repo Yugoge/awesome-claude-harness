@@ -20,6 +20,7 @@ An unattended development harness for Claude Code. Give it a requirement and go 
 |---|---|---|
 | **Orchestrator-only architecture** | The main session routes; each real piece of work goes to a fresh agent with one job and a clean context, so quality does not decay as the conversation grows. | `hooks/pretool-orchestrator-gate.py`, `CLAUDE.md` |
 | **Your words are the spec** | Your prompt is written to `docs/dev/user-requirement-<id>.md` before any agent runs; every agent reads it, so none works from a reformulation. | `hooks/prompt-workflow.py` |
+| **You are asked first** | Before any analysis is built on, `/spec`, `/dev`, `/redev` and `/dev-command` ask you about intent, scope, edge cases and acceptance in Claude Code's question dialog. Without a spec, a panel of independent BAs works from separate angles and QA checks their evidence first; with a spec, one BA asks what it left open. Rounds have no cap; a skipped question settles to its stated default. | `commands/dev.md` (the requirement round), `hooks/lib/requirement_round.py` |
 | **Evidence-gated BA → QA → dev → QA** | BA, the business-analyst agent, must cite evidence for the root cause; QA checks the analysis before any code exists and the implementation after it. Each loop ends on its own only when QA passes. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
 | **Parallel lanes, never phases** | Several requested outcomes become lanes, one agent pipeline per outcome, that run in parallel inside one cycle. No plan may split an outcome into phases or defer part of it; QA fails one that does. | `commands/dev.md` ("One cycle, no phases") |
 | **Declared obligations** | Every dispatch declares its obligation: the artifacts (reports, analyses, test manifests) its agent owes. Each is checked against its schema at that agent's own stop, while its context still exists. | `hooks/pretool-obligation-gate.py`, `hooks/subagentstop-artifact-contract-enforce.py` |
@@ -39,12 +40,12 @@ An unattended development harness for Claude Code. Give it a requirement and go 
 
 Autonomous coding agents hurt in places the field has already documented. Each point names its source, then what this repository does about it.
 
-- **The field keeps a person in the loop.** Practitioner guides keep human review before merge ([Augment Code](https://www.augmentcode.com/guides/autonomous-engineering-loop), [Kilo](https://kilo.ai/articles/beyond-autocomplete)). In a study of 37,623 agent-authored pull requests, Claude Code's waited a median of 12.6 hours for a first human review ([arXiv](https://arxiv.org/pdf/2609.17598)). *Here:* you are asked only for a decision the request, the code and sensible defaults cannot settle; the gate before landing is automated verification, the case [one paper](https://arxiv.org/abs/2606.13175v1) argues for.
+- **The field keeps a person in the loop.** Practitioner guides keep human review before merge ([Augment Code](https://www.augmentcode.com/guides/autonomous-engineering-loop), [Kilo](https://kilo.ai/articles/beyond-autocomplete)). In a study of 37,623 agent-authored pull requests, Claude Code's waited a median of 12.6 hours for a first human review ([arXiv](https://arxiv.org/pdf/2609.17598)). *Here:* you are asked first, about what to build, and after that only for a decision the request, the code and sensible defaults cannot settle; the gate before landing is automated verification, the case [one paper](https://arxiv.org/abs/2606.13175v1) argues for.
 - **Autonomy depends on a person building the test oracle.** The parallel-Claude C compiler rested on test suites and verifiers a human wrote ([Anthropic](https://anthropic.com/engineering/building-c-compiler)). *Here:* the oracle lives in `tests/` and runs in CI on every pull request: replays drive each pipeline through the real hooks, fault replays inject failures, and the artifact check demands one producer and a reader for every artifact.
 - **Instructions are not enforcement.** Hooks are the deterministic layer ([Claude Code docs](https://code.claude.com/docs/en/best-practices)); `CLAUDE.md` is context, not enforced configuration ([Towards AI](https://towardsai.com/p/machine-learning/claude-code-skills-vs-subagents-vs-hooks-vs-workflows-which-to-use-in-2026)). *Here:* what must hold is a hook, and [the ledger](docs/ENFORCEMENT-LEDGER.md) says how far each hook is proven.
 - **Claims outrun the code.** Critics of Cursor's agent-built browser found commits that do not compile and failing CI on main ([The Register](https://www.theregister.com/2026/01/26/cursor_opinion/)). *Here:* every figure about the repository is generated from it, and `scripts/verify-claims.sh` fails CI when one drifts.
 
-**What still needs you:** the decisions only you can make, and your rating of the work, which `/close` asks for after a landed cycle and you may skip. `/dev-overnight` asks nobody: it decides by experiment, else by the question's default, and lists each decision in its summary.
+**What still needs you:** your answers to the requirement round at the start of a cycle, the decisions only you can make, and your rating of the work, which `/close` asks for after a landed cycle and you may skip. `/dev-overnight` asks nobody: it decides by experiment, else by the question's default, and lists each decision in its summary.
 
 ## Install
 
@@ -99,10 +100,10 @@ graph TD
 ## The full pipeline
 
 ```
-   /spec                          optional: capture the requirement as a durable spec with per-agent briefs
+   /spec                          optional: ask you first, then write a durable spec with per-agent briefs
      │
      ▼
-   /dev · /redev · /dev-command   orchestrated: BA → QA of the analysis → dev → QA, one-issue lanes in parallel
+   /dev · /redev · /dev-command   ask you first → BA → QA of the analysis → dev → QA, one-issue lanes in parallel
    /dev-overnight                 unattended until an end time; commits nothing
    /do                            the main agent does one task itself, for one turn
      │
@@ -121,7 +122,7 @@ Each stage hands a checked artifact to the next. You start each stage with one c
 - **One cycle, parallel lanes.** `/dev` splits your requirement into independently verifiable outcomes, one lane each. BA, QA, dev and QA run once per lane in parallel batches, a failing lane retries alone, and the cycle passes only when every lane's QA passes. Splitting an outcome into sequential phases, or deferring part of it to a later cycle, is a validation failure, not a plan.
 - **A loop ends on a pass, or when you stop it.** The analysis loop and the build loop each end on their own only when QA passes; there is no round cap. Your `/stop` or Esc interrupts either at any time, so a stubborn failure loops until you do; the [status page](docs/status.md) lists this limit.
 - **One Codex loop, no Codex veto.** With `--codex` on `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`, an agent asks Codex once for a complete review, then only to verify fixes, a capped number of times. Claude classifies every finding as a real bug, a minor point, out of scope or a nitpick, and may reject it with a reason.
-- **Questions reach you only when they must.** An agent that needs a decision writes one question with options and a default; the orchestrator asks it with Claude Code's question dialog, in the turn, then dispatches that agent's role again with your answer.
+- **You are asked first, then only when it matters.** Before any analysis is built on, the requirement round asks you about intent, scope, edge cases and acceptance, in plain product terms, never a code-level choice a measurement can settle. Without a spec, a panel of independent BAs analyses the requirement from separate angles (the root cause traced to the code, the smallest change, your intent); panel QA checks each cited piece of evidence, and only a verified root cause becomes an option, with the recommended option first. With a spec, one BA asks what the spec left open. The orchestrator asks each round verbatim in Claude Code's question dialog, a hook writes your answers to disk, and the dispatch gate refuses the next agent until the round is asked. Skipping is fine: each question names the default it settles to. Rounds have no cap. Later, an agent that needs a decision writes one question with options and a default, asked the same way. The Stop gate refuses to end a turn on a question asked in plain text.
 - **Grants start from a command you type.** A grant is a hook-checked permission that lets one operation through, and only a command you type starts the path that writes one: `/commit` for a commit, `/push` for a push (its push analyst writes the grant), `/allow` for one refused operation. The [trust model](#trust-model-in-practice) below says who may use which.
 
 ## Failure modes this exists to prevent
@@ -130,6 +131,7 @@ Each stage hands a checked artifact to the next. You start each stage with one c
 |---|---|---|
 | An agent does too much in one context and quality silently degrades | The orchestrator gate keeps the main session routing; each piece of work goes to a one-issue agent with a clean context | `hooks/pretool-orchestrator-gate.py` |
 | The implementation drifts from the requirement | Your words on disk before any agent runs; BA cites evidence; QA checks the analysis before any code | `hooks/prompt-workflow.py`, `agents/ba.md`, `agents/qa.md` |
+| Agents build what they guessed you meant, and a question asked in chat is lost when the turn ends | The requirement round asks you first, in the question dialog; no agent is dispatched until it is asked, your answers are written to disk by a hook, and the Stop gate refuses to end a turn on a question in plain text | `hooks/lib/requirement_round.py`, `hooks/pretool-obligation-gate.py`, `hooks/stop-command-gate.py` |
 | A requested outcome quietly becomes "phase two" | One cycle, parallel lanes; QA fails a plan that phases or defers a requested outcome | `commands/dev.md` |
 | Missing artifacts surface only at `/close`, after the producer's context is gone | Each dispatch declares what its agent owes; the contract is checked at that agent's own stop | `hooks/pretool-obligation-gate.py`, `hooks/subagentstop-artifact-contract-enforce.py` |
 | QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA's dispatch while a declared lane has no report, or the aggregate report is missing or does not name every lane | `hooks/pretool-aggregate-check.py` |
@@ -220,7 +222,8 @@ The commit grant is single-use and time-boxed, and the guard spends it as it aut
 |---|---|---|
 | Capture | `UserPromptSubmit` hook | `hooks/prompt-workflow.py` writes your words to `docs/dev/user-requirement-<id>.md` and arms the cycle before any agent runs. |
 | Plan | Orchestrator | Splits the requirement into outcomes, here one lane. Marks each specialist RELEVANT or SKIP with a reason; a layout bug makes `ui-specialist` relevant, and its findings go to BA. |
-| Analyse | BA | Finds the file and the cause that actually produce the misalignment, citing file and line, search results and git history, not a plausible cousin. Writes the ticket, the context and the acceptance criteria. A decision it cannot settle comes to you as one question with options and a default. |
+| Ask first | BA panel, panel QA, you | With no spec, BAs analyse independently: the root cause traced to the code, the smallest change, your intent. Panel QA checks each one's cited evidence, drops a cause it cannot verify, and turns their disagreements into one round of questions: what should you see on a phone, how far the fix should go, which screens count as done. You answer in the question dialog or skip; no agent is dispatched until the round is asked. |
+| Analyse | BA | The BA whose option you chose (else the one whose root cause QA verified) builds on your answers: it finds the file and the cause that actually produce the misalignment, citing file and line, search results and git history, not a plausible cousin, and writes the ticket, the context and the acceptance criteria, each answer tied to the criteria it shaped. A point that still needs you becomes the next round. |
 | Check the analysis | QA | Validates BA's work before any code: is the evidence real, is the scope the one you asked for, nothing narrowed, renamed or deferred? A failing analysis goes back to BA; the loop repeats until QA passes. |
 | Build | Dev | Implements the vetted plan with the smallest change that meets the acceptance criteria and reports what it changed and ran. With several lanes, one dev per lane runs in parallel and a hook assembles their reports. |
 | Verify | QA | Drives the running product against the acceptance criteria, on desktop and mobile. A warning or a failure sends dev back with QA's report, until QA passes or you stop it. |
@@ -277,7 +280,7 @@ The orchestrator dispatches each agent by describing the problem, never the tool
 | Agent | What it does |
 |---|---|
 | `architect` | Reviews architecture: structural issues, technical debt, dependency problems and inconsistent patterns. |
-| `ba` | Analyses the requirement and finds its root cause with cited evidence, then writes the spec, the context and the acceptance criteria, or asks. |
+| `ba` | Writes the requirement round's questions, finds the root cause with cited evidence, alone or on a panel, and writes the ticket, context and acceptance criteria. |
 | `changelog-analyst` | Stages a task's files, writes the conventional commit message and the push-gate token; dispatched only by /commit. |
 | `cleaner` | Applies the cleanup actions approved from the inspectors' reports and reports what it did. |
 | `cleanliness-inspector` | Finds misplaced docs, duplicates, temporary files and build artifacts, and recommends a cleanup. |
@@ -290,7 +293,7 @@ The orchestrator dispatches each agent by describing the problem, never the tool
 | `prompt-inspector` | Finds verbose, non-functional text in command and agent prompts. |
 | `pull-analyst` | Summarizes the risk of the commits a pull brought in; advisory, it writes no grant and blocks nothing. |
 | `push-analyst` | Checks what a push would publish for sensitive files, divergence and branch protection, and writes the push grant; dispatched only by /push. |
-| `qa` | Verifies the analysis before any code and the implementation after it against the acceptance criteria; when in doubt it fails. |
+| `qa` | Checks a BA panel's evidence and writes your first questions; verifies the analysis before any code and the implementation after it; when in doubt it fails. |
 | `rule-inspector` | Discovers each folder's organisation rules from git history and documents them. |
 | `spec` | Splits a spec into the briefs each agent needs and adds checkpoints; dispatched by /spec. |
 | `style-inspector` | Audits development standards: no hardcoding, naming, environment use, step numbering, language and concise documentation. |
@@ -310,9 +313,9 @@ What you type. Owner-only commands carry `disable-model-invocation: true` and a 
 <!-- BEGIN canonical-region id=commands — generated by scripts/generate-hero-status.py; do not hand-edit -->
 | Command | Group | Typed by | What it does |
 |---|---|---|---|
-| `/spec [--codex] [<requirement>]` | Spec | owner only | Write a durable spec from your requirement and split it into per-agent briefs with checkpoints, for /dev or /dev-overnight to build from. |
+| `/spec [--codex] [<requirement>]` | Spec | owner only | Ask you about the requirement first, then write a durable spec and split it into per-agent briefs with checkpoints, for /dev or /dev-overnight to build from. |
 | `/spec-update [--update --spec <path> \| --continue \| --temp] [--spec <path>] [what the next session should focus on]` | Spec | owner only | Turn unfinished work into a continuation spec for a fresh session, enrich an existing spec, or write a short session note. |
-| `/dev [--codex] [--spec <path>] <requirement>` | Develop | owner only | Build a requirement end to end: BA finds the root cause, QA checks it, dev builds in parallel one-issue lanes, QA verifies until it passes. |
+| `/dev [--codex] [--spec <path>] <requirement>` | Develop | owner only | Build a requirement end to end: ask you first, then BA finds the root cause, QA checks it, dev builds in parallel one-issue lanes, QA verifies until it passes. |
 | `/dev-command` | Develop | owner only | The /dev workflow for building a slash command, a subagent or another harness file, with the differences such a file needs. |
 | `/dev-overnight` | Develop | owner only | Run unattended until an end time: explore, fix each real issue in its own pipeline, decide without the owner, and commit nothing. |
 | `/redev [--codex] [--spec <path>] [<requirement>]` | Develop | owner only | Start a fresh /dev cycle in the same conversation without repeating the text of /dev, to save context. |

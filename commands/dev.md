@@ -2,7 +2,7 @@
 description: Orchestrated development workflow with BA subagent delegation, parallel agent execution, and iterative QA verification. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 argument-hint: "[--codex] [--spec <path>] <requirement>"
 disable-model-invocation: true
-summary: "Build a requirement end to end: BA finds the root cause, QA checks it, dev builds in parallel one-issue lanes, QA verifies until it passes."
+summary: "Build a requirement end to end: ask you first, then BA finds the root cause, QA checks it, dev builds in parallel one-issue lanes, QA verifies until it passes."
 group: Develop
 ---
 

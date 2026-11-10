@@ -2,7 +2,7 @@
 description: Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
 argument-hint: "[--codex] [<requirement>]"
 disable-model-invocation: true
-summary: "Write a durable spec from your requirement and split it into per-agent briefs with checkpoints, for /dev or /dev-overnight to build from."
+summary: "Ask you about the requirement first, then write a durable spec and split it into per-agent briefs with checkpoints, for /dev or /dev-overnight to build from."
 group: Spec
 ---
 
