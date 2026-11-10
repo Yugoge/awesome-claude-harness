@@ -12,8 +12,8 @@ file adds the variants A20 names, armed:
 * a question round trip: /dev question (BA's producer question relayed with one AskUserQuestion
   inside the turn): the cycle completes with no blocked Stop between (no Stop at all before its end).
 * a main-agent producer write: /dev plain whose main agent itself edits the QA report QA wrote
-  (faults.py `foreign`): the D8 deny of pretool-tool-policy.py refuses it, and the cycle completes
-  with no other block.
+  (faults.py `foreign`): the D8 deny of pretool-tool-policy.py refuses it (reported by the hook that
+  runs it: the write gate since P12, sites.reporter), and the cycle completes with no other block.
 
 The /dev gate's predicate is P3's disposition (scripts/resolve-dev-artifact-chain.py): the passing
 Stops these cases end with wait for P3's merge.
@@ -25,7 +25,7 @@ import os
 
 import pytest
 
-from tests.replay import suite
+from tests.replay import sites, suite
 
 NOQA = suite.Scenario("/dev QA never dispatched (A20)", "dev", (("variant", "plain"), ("stop_before", "13")),
                       ("dev",), 100)
@@ -68,7 +68,8 @@ def test_a20_a_main_agent_producer_write_is_denied_and_the_cycle_completes(repla
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     with open(os.path.join(r.run_dir, "faults.json")) as fh:
         done = [f for f in json.load(fh) if f.get("kind") == "foreign"]
-    assert len(done) == 1 and done[0]["denied"] and done[0]["hooks"] == ["hooks/pretool-tool-policy.py"], done
+    policy = sites.reporter(suite.REPO, "hooks/pretool-tool-policy.py")
+    assert len(done) == 1 and done[0]["denied"] and done[0]["hooks"] == [policy], done
     assert done[0]["path"].startswith("docs/dev/qa-report-"), done
     denied = [b for b in r.blocks if b["step"].startswith("foreign ")]
     assert len(denied) == 1 and "(D8)" in (denied[0].get("text") or ""), r.explain()

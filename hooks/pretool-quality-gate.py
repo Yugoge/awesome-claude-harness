@@ -2,16 +2,16 @@
 """
 PreToolUse Hook: Quality gate for Write/Edit operations (advisory).
 
-Warns on stderr when a Write's content, or an Edit's result, violates a
-quantified quality threshold:
+Warns the model (PreToolUse additionalContext JSON on stdout, which the CLI adds
+to its context beside the tool result; the call is never refused) when a Write's
+content, or an Edit's result, violates a quantified quality threshold:
 - File length: max 800 lines
 - Function length: max 30 lines
 - Nesting depth: max 3 levels
 
 Option alpha (no-net-worsening): if post-edit content has violations, the hook
 ALSO computes pre-edit metrics. Edits that do not worsen per-function-name
-length or max nesting (file lines are not compared) get a [grandfathered]
-stderr note instead of the warning. New files (no pre-state) and
+length or max nesting (file lines are not compared) get no warning. New files (no pre-state) and
 previously-compliant files are still measured against the thresholds.
 
 Comparators are symmetric (post <= pre). Per-function comparison is name-keyed
@@ -338,11 +338,12 @@ def collect_violations(content, ext):
 
 
 def emit_violations(file_path, violations):
-    """Print the WARNING message (warn-only per user policy: no text-smell hard-blocks)."""
-    print("QUALITY GATE WARNING \u2014 %s:" % file_path, file=sys.stderr)
-    for v in violations:
-        print("  - %s" % v, file=sys.stderr)
-    print("Quality gate warns (advisory only, not blocking). Consider splitting large functions.", file=sys.stderr)
+    """Tell the model (warn-only per user policy: no text-smell hard-blocks)."""
+    text = "\n".join(["QUALITY GATE WARNING \u2014 %s:" % file_path]
+                     + ["  - %s" % v for v in violations]
+                     + ["Quality gate warns (advisory only, not blocking). Consider splitting large functions."])
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                        "additionalContext": text}}))
 
 
 def _grandfather_or_block(data, file_path, ext, post_content, violations):
@@ -354,9 +355,7 @@ def _grandfather_or_block(data, file_path, ext, post_content, violations):
     pre_m = compute_metrics(pre_content, ext)
     post_m = compute_metrics(post_content, ext)
     ok, reason = metric_did_not_worsen(pre_m, post_m)
-    if ok:
-        msg = "QUALITY GATE [grandfathered] \u2014 %s: pre-existing violations preserved, no metric worsened."
-        print(msg % file_path, file=sys.stderr)
+    if ok:  # grandfathered: pre-existing violations preserved, no metric worsened
         return 0
     emit_violations(file_path, violations + ["Worsened: " + reason])
     return 0

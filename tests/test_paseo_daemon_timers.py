@@ -290,7 +290,7 @@ def test_ac8_drain_calls_teardown_declare_exactly_once(tmp_path):
 
 def test_ac9_command_doc_names_ensure_in_bootstrap_and_drain_in_new_section():
     text = COMMAND_DOC.read_text()
-    bootstrap_start = text.index("## Bootstrap (F6)")
+    bootstrap_start = text.index("\n## Bootstrap\n")
     bootstrap_end = text.index("\n## ", bootstrap_start + 1)
     bootstrap_section = text[bootstrap_start:bootstrap_end]
 

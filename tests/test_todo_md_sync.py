@@ -115,3 +115,43 @@ def test_close_checklist_is_steps_0_to_3b_under_every_prompt(monkeypatch) -> Non
     for prompt in ("", "--auto", "--force", "/close --codex 20260101-000000", "/close --late-repair 20260101-000000"):
         monkeypatch.setenv("CLAUDE_TODO_PROMPT", prompt)
         assert CHECKER.extract_py_steps(todo_script) == md_steps, prompt
+
+
+def test_every_command_with_a_todo_script_is_in_sync() -> None:
+    """Every scripts/todo/<cmd>.py and its commands/<cmd>.md list the same steps (the hook's
+    session-start check, run in CI over the whole tree)."""
+    pairs = 0
+    for todo_script in sorted((REPO_ROOT / "scripts" / "todo").glob("*.py")):
+        command_doc = REPO_ROOT / "commands" / f"{todo_script.stem}.md"
+        if not command_doc.is_file():
+            continue
+        md_steps = CHECKER.extract_md_steps(command_doc)
+        py_steps = CHECKER.extract_py_steps(todo_script)
+        if not md_steps or py_steps is None:
+            continue
+        assert CHECKER.diff_steps(todo_script.stem, md_steps, py_steps) == [], todo_script.stem
+        pairs += 1
+    assert pairs >= 5
+
+
+def test_the_hook_reads_its_own_harness_and_tells_the_model(tmp_path) -> None:
+    """It checks the harness it belongs to, whatever HOME is, and a drift line goes to stdout
+    (a SessionStart hook's stdout reaches the model; its stderr reaches no one)."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    home = tmp_path / "harness"
+    for part in ("hooks", "scripts/todo", "commands"):
+        (home / part).mkdir(parents=True)
+    shutil.copy(CHECKER_PATH, home / "hooks" / CHECKER_PATH.name)
+    (home / "commands" / "x.md").write_text("### Step 1: one\n### Step 2: two\n", encoding="utf-8")
+    (home / "scripts" / "todo" / "x.py").write_text(
+        "import json\nprint(json.dumps([{'content': 'Step 1: one'}]))\n", encoding="utf-8")
+    env = dict(os.environ, HOME=str(tmp_path / "elsewhere"), PYTHONDONTWRITEBYTECODE="1")
+    env.pop("CLAUDE_HOME", None)
+    proc = subprocess.run([sys.executable, str(home / "hooks" / CHECKER_PATH.name)], input="{}",
+                          capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+    assert "[todo-md-sync]" in proc.stdout and "Step 2" in proc.stdout, proc.stdout

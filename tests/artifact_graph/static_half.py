@@ -9,7 +9,9 @@ half derives, sorted:
 * ``unresolved``: a file operation whose path the static half could not
   resolve, with the reason (E1's miss classes);
 * ``declaration``: obligation templates, canonical todo steps, the roster, the
-  command files, schema ids and enums, hook registrations, gate switches;
+  command files, schema ids and enums, hook registrations, the rules a
+  registered gate runs (``gate_rule``: the gate's registration as theirs),
+  gate switches;
 * ``deciding``: a read followed by an exit, a block decision, a raise or a
   route on the read (E1's fallback rule), with the evidence;
 * ``chain_call``: a call of the chain resolver and how its output is used;
@@ -195,7 +197,9 @@ def _derive(root: Path, chain_script: str) -> StaticResult:
     schema_decls = D.schemas(root, files)
     decls += schema_decls
     hook_regs, settings_env = _hook_registrations(root, files, sh, decls)
-    decls += _gate_switches(py, sh, hook_regs, settings_env, findings)
+    rule_regs = _gate_rule_registrations(root, hook_regs)
+    decls += rule_regs
+    decls += _gate_switches(py, sh, hook_regs + rule_regs, settings_env, findings)
 
     # Operations never bound at a call site are reported at their own site.
     for o in py.all_param_effects + sh.all_param_effects:
@@ -432,6 +436,50 @@ def _hook_registrations(root: Path, files: list[str], sh: shscan.ShellAnalyzer, 
         out.append(rec)
     sh.memo.clear()
     return out, env
+
+
+def _gate_rule_registrations(root: Path, regs: list) -> list[dict]:
+    """A merged gate's rules take its registration as their own: a hook file a registered gate's
+    module-level `RULES` table names (a `Rule(...)` whose path names a file under hooks/, or a
+    `call="module:function"` naming a module under hooks/) runs in the gate's process on the
+    gate's event, so it carries the gate's event and matcher, narrowed to the rule's declared
+    tools, and the rule's kind (only a `refuse` rule decides through the gate). The table is read
+    statically, as the replays' site enumerator reads it (tests/replay/sites.py)."""
+    from types import SimpleNamespace
+    from tests.replay import sites
+    tree = str(root)
+    out = []
+    for r in regs:
+        gate = r.get("component")
+        if not gate or not gate.endswith(".py"):
+            continue
+        for rule in sites.gate_rules(tree, gate):
+            target = rule.file or _call_module(root, rule.call)
+            if not target or target == gate:
+                continue
+            # the enumerator's narrowing of a registration to a rule's declared tools
+            narrowed = [(gate, r["event"], r["matcher"])] if rule.tools is None else sites.Enumerator._regs(
+                SimpleNamespace(tools={gate: {target: rule.tools}}, regs={gate: [(r["event"], r["matcher"] or "")]}),
+                gate, target)
+            for _hook, event, matcher in narrowed:
+                rec = {"kind": "declaration", "type": "gate_rule", "event": event, "matcher": matcher,
+                       "component": target, "gate": gate, "rule_kind": rule.kind,
+                       "tools": sorted(rule.tools) if rule.tools is not None else None, "site": r["site"]}
+                if rec not in out:
+                    out.append(rec)
+    return out
+
+
+def _call_module(root: Path, call: str) -> str:
+    """The hook file of a function rule's `module:function` (importable with hooks/ on sys.path)."""
+    module = call.partition(":")[0]
+    if not module:
+        return ""
+    base = "hooks/" + module.replace(".", "/")
+    for rel in (base + ".py", base + "/__init__.py"):
+        if (root / rel).is_file():
+            return rel
+    return ""
 
 
 def _py_closure(py: pyscan.Analyzer, start: str) -> list[str]:

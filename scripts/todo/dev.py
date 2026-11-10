@@ -33,7 +33,7 @@ def get_todos():
         {"content": "Step 15: Update settings.json permissions", "activeForm": "Step 15: Updating settings.json permissions", "status": "pending"},
         {"content": "Step 16: Iteration loop (if QA fails)", "activeForm": "Step 16: Iterating based on QA feedback", "status": "pending"},
         # The main agent's own step: it declares the report it writes, which no dispatch template does.
-        {"content": "Step 17: Generate completion report and spec/temp update", "activeForm": "Step 17: Generating completion report and spec/temp update", "status": "pending", "artifacts": [{"kind": "markdown", "path": "docs/dev/completion-<task>.md"}]}
+        {"content": "Step 17: Generate completion report + workflow update", "activeForm": "Step 17: Generating completion report + workflow update", "status": "pending", "artifacts": [{"kind": "markdown", "path": "docs/dev/completion-<task>.md"}]}
     ]
 
 
