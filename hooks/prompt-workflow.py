@@ -12,7 +12,7 @@ Phase A (slash command detected):
   - Prints checklist-ready message + exact first TodoWrite call to use
   - For every harness command (stop_contract.harness_commands), first prints
     PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>, the roots its text's Read paths
-    start from; at /push, then the branch and commit HEAD is at (print_push_head)
+    start from; at /push, then the branch and commit HEAD is at and a line per remote (print_push_head)
 
 Phase B (subsequent prompts, no slash command):
   - While the session's overnight window is open (lib/overnight.window_open):
@@ -1710,6 +1710,31 @@ def print_push_head() -> None:
     if commit:
         ref = git('symbolic-ref', '-q', 'HEAD')
         print(f"[/push] HEAD at the opener: {ref if ref.startswith('refs/heads/') else 'detached'} {commit}")
+        try:
+            print(''.join(_opener_remote_lines(git, ref)), end='')
+        except Exception:  # fail-soft: no remote line is no worse than before P5-61, never a broken opener
+            pass
+
+
+def _opener_remote_lines(git, ref: str) -> list:
+    """P5-61: per remote, `[/push] remote at the opener: <name> <URL's sha256, 16 hex> <branch or -> <its
+    refs/remotes/<name>/<branch> commit or none>[ upstream <the branch's upstream ref there>]`, the
+    record the /push Stop dates and places each remote by (command_span's OPENER_REMOTE_LINE_RE), so a
+    remote's URL, an insteadOf, an added remote or a tracking ref written after the opener changes
+    nothing it reads. The URL is digested, never printed: it can carry a credential. A remote whose URL
+    git cannot give is left out (the Stop then counts no push to it)."""
+    branch = ref[len('refs/heads/'):] if ref.startswith('refs/heads/') else ''
+    up = git('for-each-ref', '--format=%(upstream:remotename) %(upstream:remoteref)', ref).split() if branch else []
+    lines = []
+    for name in git('remote').split():
+        url = git('remote', 'get-url', name)  # insteadOf applied, as the Stop reads it
+        if not url:
+            continue
+        tracking = git('rev-parse', '--verify', '-q', f'refs/remotes/{name}/{branch}^{{commit}}') if branch else ''
+        upstream = f" upstream {up[1]}" if len(up) == 2 and up[0] == name else ''
+        lines.append(f"[/push] remote at the opener: {name} {hashlib.sha256(url.encode()).hexdigest()[:16]} "
+                     f"{branch or '-'} {tracking or 'none'}{upstream}\n")
+    return lines
 
 
 def root_lines(state) -> str:
