@@ -87,7 +87,8 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
                           fan-out cycle with `lanes` lanes)
   rating=label|4|skip|afk|decline|free|none[,...]   Step 4's answer, per landed task in order (default
                           label: the dialog's first option); none: the session offers no AskUserQuestion
-                          (P5 A20's rerun without it), so the main agent makes no call and says why
+                          (P5 A20's rerun without it): the main agent makes the call all the same and the CLI
+                          answers it with `No such tool available` before any hook runs (close.md Step 4)
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
 
@@ -107,7 +108,7 @@ import shlex
 
 from .. import agents, cmdtext, roles, schemagen
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
-from ..replay import Deviation
+from ..replay import MODEL, Deviation
 from . import _codex
 
 PIPELINE = "close"
@@ -1317,13 +1318,22 @@ class CloseRun:
         q = tin["questions"][0]
         labels = [opt["label"] for opt in q["options"]]
         if answer == "none":
-            self.o.s.say(f"Step 4: AskUserQuestion is not available in this session; the rating question for "
-                         f"{self.tid} cannot be asked.")
+            # Step 4 in a session that offers no AskUserQuestion: the call is made all the same, and the CLI
+            # answers it with its own error tool_result before any hook runs (cli.js bp1 and the streaming
+            # executor's addTool: an unknown tool's tool_use gets `No such tool available: <name>`), so no
+            # PreToolUse/PostToolUse fires. That error is a complete Step 4 (close.md Step 4).
+            tid = self.rp.new_tool_id()
+            self.o.s.append({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
+                {"type": "tool_use", "id": tid, "name": "AskUserQuestion", "input": tin}]}})
+            err = "No such tool available: AskUserQuestion"
+            self.o.s.main._result(tid, f"<tool_use_error>Error: {err}</tool_use_error>", error=True,
+                                  resp=f"Error: {err}")
             self.asked.append((self.tid, answer))
             fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                             "multiSelect": q.get("multiSelect"),
                                             "source": (tin.get("metadata") or {}).get("source"),
-                                            "answer": answer, "ok": False, "blocked": False, "asked": False})
+                                            "answer": answer, "ok": False, "blocked": False, "asked": True,
+                                            "error": err})
             return
 
         def perform():
