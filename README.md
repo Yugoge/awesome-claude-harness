@@ -24,11 +24,11 @@ An unattended development harness for Claude Code. Give it a requirement and go 
 | **Parallel lanes, never phases** | Several requested outcomes become lanes, one agent pipeline per outcome, that run in parallel inside one cycle. No plan may split an outcome into phases or defer part of it; QA fails one that does. | `commands/dev.md` ("One cycle, no phases") |
 | **Declared obligations** | Every dispatch declares its obligation: the artifacts (reports, analyses, test manifests) its agent owes. Each is checked against its schema at that agent's own stop, while its context still exists. | `hooks/pretool-obligation-gate.py`, `hooks/subagentstop-artifact-contract-enforce.py` |
 | **A Stop gate that holds** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts; your `/stop` is the exit. | `hooks/stop-launch.py`, `hooks/stop-command-gate.py` |
-| **Release-readiness gate** | `/close` finishes an unfinished cycle, has three inspectors and QA judge the diff, ends on `CLOSE: YES` or the findings, and asks you to rate the work. | `commands/close.md`, `hooks/posttool-close-rating.py` |
-| **One Codex review loop** | With `--codex`, an OpenAI Codex review runs one complete pass and at most two re-reviews that only verify. Claude classifies every finding and may reject it; Codex never sets the verdict. | `templates/prompt-includes/codex-consultation.md`, `commands/codex.md` |
+| **Release-readiness gate** | `/close` finishes an unfinished cycle, has inspectors and QA judge the diff, ends on `CLOSE: YES` or the findings, and asks you to rate the work. | `commands/close.md`, `hooks/posttool-close-rating.py` |
+| **One Codex review loop** | With `--codex`, an OpenAI Codex review runs one complete pass, then only capped re-reviews that verify the fixes. Claude classifies every finding and may reject it; Codex never sets the verdict. | `templates/prompt-includes/codex-consultation.md`, `commands/codex.md` |
 | **Git protection kernel** | Agent `commit`, `push`, `merge` and `reset --hard` are refused unless something you typed allows them: `/commit`, `/push` or `/allow`. `/do` never covers a commit or a push; for the main agent, for one turn, it releases a merge, a hard reset or a ref change that cannot move the protected branch. Stash-as-buffer and wide-path checkouts are refused by shape. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
 | **Grants you mint by typing** | `/commit` writes a single-use, time-boxed grant bound to repository, branch and HEAD; `/push` needs a token from `/commit`; `/allow` lets one refused operation through once. | `scripts/write-commit-grant.py`, `hooks/push.sh`, `hooks/lib/allowlist.py` |
-| **Branch, PR and worktree firewall** | An agent creating a branch, pull request or worktree is refused, except inside a live `/dev-overnight`, under `/do` for the main agent, or with an `/allow` grant for that command. `/merge` and `--worktree` runs work through these exceptions. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
+| **Branch, PR and worktree firewall** | An agent creating a branch, pull request or worktree is refused, except inside a live `/dev-overnight`, under `/do` for the main agent, or with an `/allow` grant for that command. A `--worktree` overnight run creates its worktree under the first exception; `/merge` creates no branch, it merges inside its own wrapper. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
 | **Autonomous overnight runs** | `/dev-overnight 6:00` explores, triages and fixes until a wall-clock end time and commits nothing; the Stop gate's time-lock refuses an early end. You land the work afterwards. | `commands/dev-overnight.md`, `hooks/stop-command-gate.py` |
 | **Lossless quota recovery** | `/restart` resumes each interrupted agent by its original id; replacement agents are forbidden. | `commands/restart.md`, `hooks/lib/subagent_restart.py` |
 | **Crash-proof checkpoints** | Automatic snapshots go to `refs/checkpoints/<branch>` through git plumbing; your branch HEAD never moves, so `git blame` points at real commits. | `hooks/lib/checkpoint-core.sh`, `docs/reference/checkpoint-mechanism.md` |
@@ -48,7 +48,7 @@ Autonomous coding agents hurt in places the field has already documented. Each p
 
 ## Install
 
-Needs `python3`, `git` and `jq`, and Claude Code to use it.
+Needs `python3`, `git` and `jq`, and Claude Code to use it. Codex is optional: only `--codex` and `/codex` use it, and they need the OpenAI Codex CLI.
 
 ```bash
 git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude   # needs an empty ~/.claude
@@ -64,7 +64,7 @@ Guardrails only, without the agents and commands, from a checkout:
 scripts/install/install --profile core   # guardrails in an isolated directory; hook registrations merged additively
 ```
 
-Other install locations, the settings overlay, optional modules, dependencies and troubleshooting: [installation](docs/installation.md).
+`git clone` refuses a non-empty target: if `~/.claude` already holds your settings, move it aside or use one of the [other install locations](docs/installation.md#other-install-locations). The settings overlay, optional modules, dependencies and troubleshooting are in [installation](docs/installation.md) too.
 
 ## System architecture
 
@@ -116,11 +116,13 @@ graph TD
    /merge · /push                 a real merge into the default branch · the push wrapper, after the push analyst
 ```
 
-Each stage hands a checked artifact to the next. You type every stage; agents do the work inside it.
+Each stage hands a checked artifact to the next. You start each stage with one command; agents do all the work inside it, and nobody reviews the code by hand. Only `/dev-overnight` needs no command at all until its end time.
 
 - **One cycle, parallel lanes.** `/dev` splits your requirement into independently verifiable outcomes, one lane each. BA, QA, dev and QA run once per lane in parallel batches, a failing lane retries alone, and the cycle passes only when every lane's QA passes. Splitting an outcome into sequential phases, or deferring part of it to a later cycle, is a validation failure, not a plan.
-- **One Codex loop, no Codex veto.** With `--codex` on `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`, the agents whose instructions call for it ask Codex once for a complete review, then at most twice more only to verify fixes. Claude classifies every finding as a real bug, a minor point, out of scope or a nitpick, may reject it with a reason, and keeps the verdict: at `/close`, QA decides and Codex has no veto.
+- **A loop ends on a pass, or when you stop it.** The analysis loop and the build loop each end on their own only when QA passes; there is no round cap. Your `/stop` or Esc interrupts either at any time, so a stubborn failure loops until you do; the [status page](docs/status.md) lists this limit.
+- **One Codex loop, no Codex veto.** With `--codex` on `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`, an agent asks Codex once for a complete review, then only to verify fixes, a capped number of times. Claude classifies every finding as a real bug, a minor point, out of scope or a nitpick, and may reject it with a reason.
 - **Questions reach you only when they must.** An agent that needs a decision writes one question with options and a default; the orchestrator asks it with Claude Code's question dialog, in the turn, then dispatches that agent's role again with your answer.
+- **Grants start from a command you type.** A grant is a hook-checked permission that lets one operation through, and only a command you type starts the path that writes one: `/commit` for a commit, `/push` for a push (its push analyst writes the grant), `/allow` for one refused operation. The [trust model](#trust-model-in-practice) below says who may use which.
 
 ## Failure modes this exists to prevent
 
@@ -130,7 +132,7 @@ Each stage hands a checked artifact to the next. You type every stage; agents do
 | The implementation drifts from the requirement | Your words on disk before any agent runs; BA cites evidence; QA checks the analysis before any code | `hooks/prompt-workflow.py`, `agents/ba.md`, `agents/qa.md` |
 | A requested outcome quietly becomes "phase two" | One cycle, parallel lanes; QA fails a plan that phases or defers a requested outcome | `commands/dev.md` |
 | Missing artifacts surface only at `/close`, after the producer's context is gone | Each dispatch declares what its agent owes; the contract is checked at that agent's own stop | `hooks/pretool-obligation-gate.py`, `hooks/subagentstop-artifact-contract-enforce.py` |
-| QA runs before every lane has returned | The dispatch gate refuses QA's dispatch when every lane has reported but the aggregate report is missing | `hooks/pretool-aggregate-check.py` |
+| QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA's dispatch while a declared lane has no report, or the aggregate report is missing or does not name every lane | `hooks/pretool-aggregate-check.py` |
 | A false pass ships a broken feature | QA starts from skepticism and fails when in doubt; its report must record the end-to-end status | `agents/qa.md`, `hooks/subagentstop-e2e-enforce.py` |
 | A second model's opinion is taken as the verdict | Claude classifies and may reject every Codex finding; Codex never sets the verdict | `templates/prompt-includes/codex-consultation.md` |
 | Unfinished work handed off as done | The Stop gate refuses the stop until every todo is complete and the artifact chain passes | `hooks/stop-command-gate.py` |
@@ -139,7 +141,7 @@ Each stage hands a checked artifact to the next. You type every stage; agents do
 
 ## Context-engineering guardrails
 
-The orchestrator stays lean so that its judgment stays good. These hooks keep real work in the agents' clean contexts.
+These hooks keep the main session's context lean, so real work happens in the agents' clean contexts.
 
 | Guardrail | What it refuses | Why | Hook |
 |---|---|---|---|
@@ -150,6 +152,34 @@ The orchestrator stays lean so that its judgment stays good. These hooks keep re
 | No background dispatch | An agent dispatch without `run_in_background: false`, and every ordinary `SendMessage` | A background agent escapes the pipeline's checks; only `/restart`'s recovery message may resume one | `hooks/pretool-block-background-tasks.py` |
 | Gitignored deliverable | A dispatch whose dev report names a deliverable that `.gitignore` matches | A cycle that passes QA but can never ship through git | `hooks/pretool-gitignore-preflight.py` (in the dispatch gate) |
 | Todo sequence | A `TodoWrite` that skips, reorders, edits or bulk-completes steps | The plan stays an auditable, one-step-at-a-time record | `hooks/pretool-todo-validate.py` |
+
+## The git protection kernel
+
+It was designed around the damage an agent can do with git: a stash used as a scratch buffer plus a wide-path checkout can silently overwrite uncommitted work, and a bulk "commit and push everything" can land with no one signing off. Every agent `git` command takes this path through the Bash hooks, in the order `settings.json` registers them; the guard is always on, for the main agent and every subagent, interactive or overnight.
+
+```mermaid
+flowchart TD
+    B["an agent's Bash call runs git"] --> S["bash safety<br/>refuses stash-as-buffer, a wide-path checkout or restore from a ref, reset --hard<br/>unless /do (main agent) or a matching /allow"]
+    S --> W["bulk-commit detector<br/>warns on the sync-everything commit shape; never refuses"]
+    W --> G["git privilege guard"]
+    G --> L{"can it read which git<br/>subcommand runs?"}
+    L -->|"no: an expansion or a quoted binary,<br/>unless you issued a residual override"| NO
+    L -->|yes| V{which verb?}
+    V -->|commit| C{"a matching /allow, or a /commit grant bound to this<br/>repository, branch and HEAD, spent by the changelog<br/>analyst that /commit dispatched?"}
+    V -->|push| P{"a matching /allow?<br/>never with the wrapper's variable inline,<br/>never force, delete or mirror"}
+    V -->|"merge, reset --hard,<br/>ref change"| R{"a matching /allow, or /do<br/>that cannot move the protected branch?"}
+    C -->|yes| OK[("allowed; the guard unlinks the grant as it authorizes,<br/>so it is spent once")]
+    P -->|yes| OK2[("allowed once")]
+    R -->|yes| OK2
+    C & P & R -->|no| NO[/"refused, exit 2: the rule, the reason,<br/>and the command that lands it"/]
+
+    classDef block fill:#ffebee,stroke:#c62828
+    classDef ok fill:#e3f2fd,stroke:#1565c0
+    class NO block
+    class OK,OK2 ok
+```
+
+`/push` and `/merge` do their git inside their own wrappers, `hooks/push.sh` and `hooks/merge.sh`, in a subprocess no hook sees; each wrapper decides by its own grant or token, and `push.sh` exits `3` without a token from `/commit`. Read-only git (`status`, `log`, `diff`, `show`, `blame`), `add`, a single-file checkout or `restore`, and `stash list`, `show` or `pop` stay free. What each guard does not see: [the git protection kernel](docs/git-protection-kernel.md).
 
 ## The overnight pipeline
 
@@ -168,7 +198,7 @@ flowchart LR
     TL[["Stop gate time-lock:<br/>refuses to end before the end time"]] -.guards.-> RT
 ```
 
-`/dev-overnight` runs in your checkout by default, or in a linked worktree with `--worktree`, until a wall-clock end time (eight hours if you give none). The Stop gate's time-lock refuses to end the session before then; afterwards it ends once the PM retrospective and the overnight summary are on disk. Nobody is asked anything: each decision a pipeline needs is made by an experiment, else by the question's default, and the summary lists it under "Decisions made without the owner". Nothing is committed; the work waits in `refs/checkpoints/<branch>` until you land it. A typed `/stop` ends the run at once. An in-place run has no worktree boundary, and a `--worktree` run shares the repository's git directory; [the overnight pipeline](docs/overnight-pipeline.md) says what that does and does not protect.
+`/dev-overnight` runs in your checkout by default, or in a linked worktree with `--worktree`, until a wall-clock end time (the default when you give none is in `commands/dev-overnight.md`). The Stop gate's time-lock refuses to end the session before then; afterwards it ends once the PM retrospective and the overnight summary are on disk. Nobody is asked anything: each decision a pipeline needs is made by an experiment, else by the question's default, and the summary lists it under "Decisions made without the owner". Nothing is committed; the work waits in `refs/checkpoints/<branch>` until you land it. A typed `/stop` ends the run at once. An in-place run has no worktree boundary, and a `--worktree` run shares the repository's git directory; [the overnight pipeline](docs/overnight-pipeline.md) says what that does and does not protect.
 
 ## Trust model in practice
 
@@ -189,11 +219,11 @@ The commit grant is single-use and time-boxed, and the guard spends it as it aut
 | Step | Who acts | What happens |
 |---|---|---|
 | Capture | `UserPromptSubmit` hook | `hooks/prompt-workflow.py` writes your words to `docs/dev/user-requirement-<id>.md` and arms the cycle before any agent runs. |
-| Plan | Orchestrator | Splits the requirement into outcomes, here one lane. Marks each of the four specialists RELEVANT or SKIP with a reason; a layout bug makes `ui-specialist` relevant, and its findings go to BA. |
+| Plan | Orchestrator | Splits the requirement into outcomes, here one lane. Marks each specialist RELEVANT or SKIP with a reason; a layout bug makes `ui-specialist` relevant, and its findings go to BA. |
 | Analyse | BA | Finds the file and the cause that actually produce the misalignment, citing file and line, search results and git history, not a plausible cousin. Writes the ticket, the context and the acceptance criteria. A decision it cannot settle comes to you as one question with options and a default. |
 | Check the analysis | QA | Validates BA's work before any code: is the evidence real, is the scope the one you asked for, nothing narrowed, renamed or deferred? A failing analysis goes back to BA; the loop repeats until QA passes. |
 | Build | Dev | Implements the vetted plan with the smallest change that meets the acceptance criteria and reports what it changed and ran. With several lanes, one dev per lane runs in parallel and a hook assembles their reports. |
-| Verify | QA | Drives the running product against the acceptance criteria, on desktop and mobile. A warning or a failure sends dev back with QA's report. There is no round cap: pass is the only exit. |
+| Verify | QA | Drives the running product against the acceptance criteria, on desktop and mobile. A warning or a failure sends dev back with QA's report, until QA passes or you stop it. |
 | Hold | Stop gate | The session cannot end while a todo is open or an artifact fails its check. Your `/stop` ends it at any time. |
 | Land | You | `/close` has inspectors and QA judge the diff and asks for your rating; `/commit` commits the task's files under a single-use grant; `/push` publishes through the wrapper. |
 
