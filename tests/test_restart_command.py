@@ -721,8 +721,9 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     config = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
     assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
     assert "Skill(restart:*)" in config["permissions"]["deny"]
-    pretool_commands = json.dumps(config["hooks"]["PreToolUse"])
-    posttool_commands = json.dumps(config["hooks"]["PostToolUse"])
+    hooks = _expanded(config)["hooks"]  # each launcher read as the hooks it runs
+    pretool_commands = json.dumps(hooks["PreToolUse"])
+    posttool_commands = json.dumps(hooks["PostToolUse"])
     assert "posttool-restart-sendmessage.py" not in pretool_commands
     assert "posttool-restart-sendmessage.py" in posttool_commands
 
@@ -1967,3 +1968,13 @@ def test_no_guidance_resume_message_equals_the_committed_builders_output(
         assert guided.encode("utf-8").startswith(
             baseline.build_resume_message(sid, agent_id).encode("utf-8")
         )
+
+
+def _expanded(settings: dict) -> dict:
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_launch_settings", root / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(settings, str(root))

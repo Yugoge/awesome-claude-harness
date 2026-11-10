@@ -35,10 +35,10 @@ This file keeps its own 16 steps, Step 4 with its 4a-4c (`scripts/todo/dev-comma
 
 ### Step 1: Parse Development Requirement
 
-As `/dev` Step 1. The start-function fallback, run when the hook's lines are not in your context, types this command:
+As `/dev` Step 1. The start-function fallback, run when the hook's lines are not in your context, types this command, with `<HARNESS_ROOT>` the `HARNESS_ROOT=` path of the session's start context as `/dev` Step 1 says:
 
 ```bash
-python3 ~/.claude/hooks/prompt-workflow.py start <<'CMDEOF'
+python3 "<HARNESS_ROOT>/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev-command, then $ARGUMENTS>
 CMDEOF
 ```

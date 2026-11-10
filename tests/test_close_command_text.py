@@ -55,8 +55,8 @@ def test_every_wait_is_an_owner_question_with_a_short_header() -> None:
     assert all(len(h) <= 12 for h in headers)
 
 
-def test_step3b_asks_the_native_rating_once_and_leaves_the_answer_alone() -> None:
-    step4 = _section("### Step 3b:")
+def test_step4_asks_the_native_rating_once_and_leaves_the_answer_alone() -> None:
+    step4 = _section("### Step 4:")
     block = re.search(r"```json\n(.*?)```", step4, re.S).group(1)
     ask = json.loads(block.replace("<task-id>", "20260101-000000"))
     [question] = ask["questions"]

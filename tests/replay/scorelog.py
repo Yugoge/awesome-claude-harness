@@ -61,9 +61,13 @@ def _last_dispatch_payload(rp) -> dict | None:
 
 
 def _run(rp, payload: dict, config_dir: str) -> dict:
-    """The observer hook as settings.json registers it for this payload, with `config_dir` as its config directory."""
-    from . import hookrun
-    hooks = [h for h in hookrun.select(rp.settings, "PostToolUse", payload) if h["hook"] == HOOK]
+    """The observer hook as settings.json registers it for this payload, with `config_dir` as its config directory.
+    A launcher (hooks/lib/hook_launch.py) runs it in its own process; the registration it carries there is read
+    through the launcher's expansion (sites.expand_launchers), and the hook runs alone, as that registration ran it."""
+    from . import hookrun, sites
+    with rp.acting("driver"):
+        settings = sites.expand_launchers(rp.layout.harness, rp.settings)
+    hooks = [h for h in hookrun.select(settings, "PostToolUse", payload) if h["hook"] == HOOK]
     if len(hooks) != 1:
         return {"hooks": len(hooks)}
     env = dict(rp.env, CLAUDE_CONFIG_DIR=config_dir)

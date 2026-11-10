@@ -14,75 +14,12 @@
 #                              --session-id <DEV_SESSION_ID> \
 #                              --flag codex [--flag <...>]
 # Exits 1 on failure; callers must abort if this script fails.
+#
+# The arguments, the registry directory (obligation.registry_dir_named, the
+# one rule) and the write are hooks/prompt-workflow.py's (write-enforce-flags):
+# the path is then the rule's own code, which the artifact check reads (a path
+# this script took from the rule's printed output, it could not follow, and
+# the flag's reader, hooks/subagentstop-codex-enforce.py, had no writer).
 set -euo pipefail
 
-SOURCE_CMD=""
-SESSION_ID=""
-FLAGS=()
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --source-command) SOURCE_CMD="$2"; shift 2 ;;
-    --session-id)     SESSION_ID="$2"; shift 2 ;;
-    --flag)           FLAGS+=("$2"); shift 2 ;;
-    *) echo "Unknown arg: $1" >&2; exit 1 ;;
-  esac
-done
-
-[[ -n "$SOURCE_CMD" ]] || { echo "ERROR: --source-command required" >&2; exit 1; }
-[[ -n "$SESSION_ID" ]] || { echo "ERROR: --session-id required" >&2; exit 1; }
-[[ ${#FLAGS[@]} -gt 0 ]] || { echo "ERROR: at least one --flag required" >&2; exit 1; }
-# Same session-id shape check write-qa-mode.sh applies: the value becomes a path
-# component, so a traversal or separator in it must never reach the filesystem.
-[[ "$SESSION_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
-  echo "ERROR: --session-id contains unsafe characters: $SESSION_ID" >&2; exit 1; }
-
-REGISTRY_DIR="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/.claude/dev-registry/$SESSION_ID"
-CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-# Per-flag output filename.
-flag_filename() {
-  case "$1" in
-    codex)             echo "codex-enforce.json" ;;
-
-    *)                 return 1 ;;
-  esac
-}
-
-# Validate EVERY flag before writing ANY sentinel. Validating inside the write
-# loop would leave a half-applied enforcement state behind when a later flag is
-# bad: the first sentinel already on disk, the caller told to abort.
-for flag in "${FLAGS[@]}"; do
-  flag_filename "$flag" >/dev/null || {
-    echo "ERROR: unknown --flag '$flag' (expected: codex)" >&2; exit 1; }
-done
-
-mkdir -p "$REGISTRY_DIR" \
-  || { echo "ERROR: Failed to create registry dir $REGISTRY_DIR — aborting." >&2; exit 1; }
-
-for flag in "${FLAGS[@]}"; do
-  filename="$(flag_filename "$flag")"
-  target="$REGISTRY_DIR/$filename"
-  # A symlinked target redirects the write out of the registry entirely; the
-  # sentinel would then read as "enforcement active" while living elsewhere.
-  [[ -L "$target" ]] && {
-    echo "ERROR: refusing to write through a symlink: $target" >&2; exit 1; }
-
-  printf '{
-  "schema_version": 1,
-  "enabled": true,
-  "source_command": "%s",
-  "dev_session_id": "%s",
-  "claude_session_id": "%s",
-  "created_at": "%s"
-}\n' "$SOURCE_CMD" "$SESSION_ID" "${CLAUDE_SESSION_ID:-unknown}" "$CREATED_AT" \
-    > "$target" \
-    || { echo "ERROR: Failed to write $filename at $target — aborting." >&2; exit 1; }
-
-  # Preserve the exact success labels the two original scripts emitted; callers
-  # and transcripts grep for these strings.
-  case "$flag" in
-    codex)             echo "Codex enforcement active: $target" ;;
-
-  esac
-done
+exec python3 -B "$(cd "$(dirname "$0")/.." && pwd)/hooks/prompt-workflow.py" write-enforce-flags "$@"

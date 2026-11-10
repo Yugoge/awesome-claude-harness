@@ -52,7 +52,7 @@ OBSERVER = "hooks/posttool-close-rating.py"
 ZULU = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 LANE_REPORT = re.compile(r"docs/dev/qa-report-[\w.-]+\.json")  # the lane QA's report (the BA-validation QA's is ba-qa-report-...)
 OBLIGATION = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
-RATING_LABEL = "/close Step 3b AskUserQuestion"  # the first question's step label; the n-th asked again adds " again n"
+RATING_LABEL = "/close Step 4 AskUserQuestion"  # the first question's step label; the n-th asked again adds " again n"
 
 QA_FAIL_CLOSE = suite.Scenario("score: /dev qa-fail, then /close", "close",
                                (("variant", "plain"), ("cycle_variant", "qa-fail"), ("rating", "4"), ("resweep", "1")),
@@ -217,10 +217,10 @@ def questions(r) -> list[dict]:
     return [q for q in asks(r) if str(q["input"].get("metadata", {}).get("source", "")).startswith("close-rating:")]
 
 
-def step3b(r) -> list[dict]:
-    """What the driver recorded after each rating question (facts.json "close Step 3b"), in order: the answer it
+def rating_steps(r) -> list[dict]:
+    """What the driver recorded after each rating question (facts.json "close Step 4"), in order: the answer it
     played, whether any PostToolUse hook ran, and the rating rows the score log held right after."""
-    return [f["value"] for f in r.facts if f["key"] == "close Step 3b"]
+    return [f["value"] for f in r.facts if f["key"] == "close Step 4"]
 
 
 def after_call(r, label: str) -> list[dict]:
@@ -427,8 +427,8 @@ def test_the_rating_dialog_is_one_question(replays, name):
     r = replays.get(KEYS[name])
     clean_run(r)
     asked = questions(r)
-    assert len(asked) == len(step3b(r)) == (1 if name == "qa-fail-close" else len(ANSWERS)), asked
-    for q in asked:  # close.md Step 3b: one question, header Rating, the four rating options, one answer
+    assert len(asked) == len(rating_steps(r)) == (1 if name == "qa-fail-close" else len(ANSWERS)), asked
+    for q in asked:  # close.md Step 4: one question, header Rating, the four rating options, one answer
         (question,) = q["input"]["questions"]
         assert q["input"]["metadata"] == {"source": f"close-rating:{task_of(r)}"}, q["input"]
         assert (question["header"], question["multiSelect"]) == ("Rating", False), question
@@ -445,7 +445,7 @@ def test_answering_4_minor_gaps_writes_one_rating_row_with_the_roles_and_prints_
     r = replays.get(KEYS["qa-fail-close"])
     clean_run(r)
     (asked,) = questions(r)
-    (answered,) = step3b(r)
+    (answered,) = rating_steps(r)
     assert answered["answer"] == "4" and answered["ok"] and answered["hook_ran"], answered
     (row,) = rating_rows(r)
     roles = sorted({d["identity"] for d in dispatches(r) if d["identity"]})
@@ -469,7 +469,7 @@ def test_answering_4_minor_gaps_writes_one_rating_row_with_the_roles_and_prints_
 def test_skip_decline_a_typed_reply_the_afk_timeout_and_the_apps_skip_write_no_rating_row(replays):
     r = replays.get(KEYS["rating-answers"])
     clean_run(r)
-    steps, asked = step3b(r), questions(r)
+    steps, asked = rating_steps(r), questions(r)
     assert [s["answer"] for s in steps] == ANSWERS and len(asked) == len(ANSWERS), steps
     for n, (step, q) in enumerate(zip(steps, asked)):
         label = step["label"]
@@ -503,6 +503,6 @@ def test_an_event_row_with_the_same_task_id_does_not_stop_the_rating_row_and_a_s
     assert index > max(i for i, row in posted if row["kind"] == "event") and rating["rating"] == 4, posted
     asked = questions(r)
     if name == "rating-answers":  # the dialog asked again for the same task after the row: "5 - Fully met" is not written
-        assert [s["answer"] for s in step3b(r)][-2:] == ["4", "5"] and len(asked) == len(ANSWERS)
+        assert [s["answer"] for s in rating_steps(r)][-2:] == ["4", "5"] and len(asked) == len(ANSWERS)
         assert rating["tool_use_id"] == asked[-2]["tool_use_id"] != asked[-1]["tool_use_id"], (rating, asked[-2:])
-        assert [row["rating"] for row in step3b(r)[-1]["rating_rows"]] == [4]
+        assert [row["rating"] for row in rating_steps(r)[-1]["rating_rows"]] == [4]
