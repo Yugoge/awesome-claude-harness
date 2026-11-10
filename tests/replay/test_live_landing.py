@@ -406,7 +406,14 @@ EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | 
 # (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
 # is among those the scenarios reach.)
 RATING = ("PostToolUse", "AskUserQuestion|Agent")
+# The harness switch's UserPromptSubmit registration (hooks/userprompt-harness-switch.sh, /harness off|on):
+# appended after the event's other hooks, which stay as they were; it acts only on a typed /harness
+# prompt, and no scenario submits a prompt after the landing.
+_PROMPT_HOOKS = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
+                 "hooks/userprompt-restart-authorize.py", "hooks/userprompt-consent-allowlist.sh",
+                 "hooks/userprompt-tmpfs-pressure.sh", "hooks/userprompt-bulk-commit-capability.py"]
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
+             ("UserPromptSubmit", None): (_PROMPT_HOOKS, _PROMPT_HOOKS + ["hooks/userprompt-harness-switch.sh"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
 REACHED = {PRE.name: {RATING}, A.name: {RATING}, B.name: {RATING}}
