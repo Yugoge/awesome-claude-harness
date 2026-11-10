@@ -64,24 +64,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 from lib import obligation as obligation_lib  # noqa: E402
 from lib import contract_runtime  # noqa: E402
-from lib.dev_report_shard_patterns import (  # noqa: E402
-    PREFIXED_WORKER_RE,
-    PREFIXED_CANONICAL_RE,
-    PER_WORKER_ROLE_FIRST_RE,
-    PER_WORKER_TASK_FIRST_RE,
-    CANONICAL_RE,
-    NON_WORKER_LABELS,
-    NON_WORKER_LABEL_RE,
-    classify_filename as _shared_classify_filename,
-)
+from lib.dev_report_shard_patterns import classify_filename as _shared_classify_filename  # noqa: E402
 
 # Filename-classification regexes and the NON_WORKER_LABELS/NON_WORKER_LABEL_RE
-# iteration-suffix filter now live in lib/dev_report_shard_patterns.py (the ONE
+# iteration-suffix filter live in lib/dev_report_shard_patterns.py (the ONE
 # shared module scripts/aggregate-dev-report.py and
 # hooks/posttool-lane-completeness-watch.py also import) -- ticket
-# 20261001-161041-r05 M2. Re-exported here as module attributes (not just used
-# locally) so existing callers/tests referencing them via this module's own
-# namespace keep working unchanged.
+# 20261001-161041-r05 M2. Re-export, not used here: tests/test_aggregate_dev_report.py
+# (test_script_and_hook_prefixed_classifiers_are_identical) reads these two through
+# this module's namespace to prove the script and the hook classify alike.
+from lib.dev_report_shard_patterns import PREFIXED_WORKER_RE, PREFIXED_CANONICAL_RE  # noqa: E402, F401
 
 
 def _load_stdin():
