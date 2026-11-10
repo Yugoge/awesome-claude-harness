@@ -693,7 +693,10 @@ class CommitRun:
         sec = cmdtext.section(self.analyst_text, "Phase 10: Push-gate write")
         blocks = [b.text for b in cmdtext.blocks(sec, None, "bash") if "write-push-gate-token.py" in b.text]
         if blocks:
-            cmd = blocks[0].replace("<GIT_ROOT>", root).replace("<BRANCH>", branch).replace("<COMMIT_SHA>", sha)
+            # <HARNESS_ROOT> is the root the subagent's start context prints (SubagentStart), the value
+            # Pipeline.run substitutes for the main agent; sub.bash does not substitute it.
+            cmd = (blocks[0].replace("<GIT_ROOT>", root).replace("<BRANCH>", branch).replace("<COMMIT_SHA>", sha)
+                   .replace("<HARNESS_ROOT>", self.o.harness))
             c = sub.bash(cmd, "Phase 10: write the push-gate token", label=f"{sub.role} Bash push-gate token {order}")
             return c.ok
         q = shlex.quote(root)
