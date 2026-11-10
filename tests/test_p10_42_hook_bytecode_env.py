@@ -1,19 +1,28 @@
-"""P10-42 (R9, D18): what the clean settings form's PYTHONDONTWRITEBYTECODE buys and costs.
+"""P10-42 (R9, D18): the clean settings form keeps PYTHONDONTWRITEBYTECODE, the accepted choice.
 
 R9 set `"PYTHONDONTWRITEBYTECODE": "1"` in settings.json's env so that hooks stop writing
-__pycache__ into the harness home. Measured for P10-42 (one Bash call through the 22 hooks the clean
-form registers for Bash, 20 Python and 2 shell, 40 interleaved rounds, Python 3.13): with the
-variable every Python hook recompiles every harness module it imports on every call, a median
-277 ms more CPU per Bash call (p10 190, p90 386) than with a warm __pycache__, and about 100 ms
-per call of any other tool (the hooks registered for every tool); without it the bytecode lands
-only in __pycache__ directories the tracked .gitignore ignores, nothing lands in the product repo,
-and no check (git status, render-settings check, check-public-core, release membership from git)
-changes. The variable is dropped from the clean form (integration lane).
+__pycache__ into the harness home. Two measurements, one decision:
 
-The first test pins that drop (strict xfail until the integration lane lands it). The second pins
-the effect the drop relies on, on a copy of this tree: the Bash hook chain run without the variable
-exits as it does with it, writes __pycache__ only where git ignores it, leaves the harness home's
-`git status` and the product repo untouched.
+- Group 2 (fc0d6a6, P10-42): one Bash call through the 22 hooks the pre-P12 clean form registered
+  for Bash (20 Python, 2 shell), run one after another, 40 interleaved rounds, Python 3.13: with
+  the variable every Python hook recompiles every harness module it imports, a median +277 ms CPU
+  summed over the chain (p10 190, p90 386) against a warm __pycache__; it proposed dropping it.
+- P12's integration lane (fc8d436, PR #33 "Decisions"): "PYTHONDONTWRITEBYTECODE=1 stays: about
+  +63 ms per Bash call, and without it 36 .pyc files land in the harness home (15 alternating
+  runs)". That decision is on master and stands.
+
+Re-measured on the merged tree with fc0d6a6's method (17 hooks for Bash after P12's consolidation,
+14 Python and 3 shell, 30 interleaved rounds): +190 ms CPU median (p10 136, p90 252) on Python 3.13
+and +173 ms on 3.12, summed over the chain; the per-hook deltas are 0-44 ms. The two figures measure
+different things: +277/+190 is the CPU the whole chain pays, while +63 is of the order of one
+call's added latency when the CLI runs each event's hooks side by side on an idle host, where only
+the slowest hook's delta shows. P12 recorded no method beyond "15 alternating runs", so that
+reading is an inference, not a reproduction.
+
+The first test pins the accepted choice. The second pins the variable's effect, on a copy of this
+tree: the Bash hook chain decides the same with and without it, writes no __pycache__ with it, and
+without it writes __pycache__ only where the tracked .gitignore ignores it, leaving the harness
+home's `git status` and the product repo untouched.
 """
 
 import json
@@ -22,8 +31,6 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 VAR = "PYTHONDONTWRITEBYTECODE"
@@ -34,11 +41,12 @@ def _clean_form() -> dict:
         return json.load(fh)
 
 
-@pytest.mark.xfail(strict=True, reason="P10-42, integration: settings.json env still sets "
-                   "PYTHONDONTWRITEBYTECODE; the integration lane drops it from the clean form")
-def test_the_clean_form_leaves_hook_bytecode_on():
-    assert VAR not in _clean_form().get("env", {}), (
-        f"settings.json env sets {VAR}: every Python hook recompiles its imports on every call")
+def test_the_clean_form_keeps_hook_bytecode_off():
+    """P12's integration lane kept the variable by experiment (fc8d436, PR #33 "Decisions": about
+    +63 ms per Bash call, and without it 36 .pyc files land in the harness home), over P10-42's
+    +277 ms CPU median per Bash call (fc0d6a6). A change here reopens that decision."""
+    assert _clean_form().get("env", {}).get(VAR) == "1", (
+        f"settings.json env no longer sets {VAR}=1, which P12's integration lane decided to keep")
 
 
 def _bash_chain(settings: dict) -> list:
@@ -119,7 +127,7 @@ def test_hooks_without_the_variable_write_only_ignored_bytecode(tmp_path):
     assert without_var == with_var, "the hooks decide the same without the variable"
 
     written = _caches(home)
-    assert written, "without the variable the hooks write __pycache__ (the cost R9 traded away)"
+    assert written, "without the variable the hooks write __pycache__ (what R9 keeps out)"
     ignored = set(filter(None, subprocess.run(
         ["git", "check-ignore", "--no-index", "--stdin"], cwd=home, env=base, capture_output=True,
         text=True, input="\n".join(d + "/" for d in written)).stdout.splitlines()))
