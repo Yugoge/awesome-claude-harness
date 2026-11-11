@@ -153,6 +153,7 @@ Agents remove a tracked file with a non-forced `git rm` (with or without `-r`, `
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
 | **Control** | `/tickets` | Read-only lifecycle table: the state and next action of every ticket, spec and lane. | Before `/close` or `/commit`, to see where every task stands. |
 | **Control** | `/rating` | Read-only terminal view of every agent's score, rank, trend and latest scored events for this project, then your latest ratings. | After a `/close`, or any time, to see how each agent is doing. |
+| **Control** | `/harness` | `/harness off` switches the whole harness off for this home (no hook from that moment; no harness settings, CLAUDE.md, commands or agents from the next session); `/harness on` brings back exactly what was there; `/harness status` says which. Owner-typed only. | You want plain Claude Code for a while, with your MCP servers, plugins, login and history as they are. |
 | **Control** | `/codex` | Delegate a task to OpenAI Codex for a second opinion or parallel coding. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 

@@ -34,6 +34,15 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      (scripts/bootstrap) overlay when it migrates nothing.
   literals           create the private-literal list <H>/private-literals.txt, empty and mode
                      0600, when there is none: init's (scripts/bootstrap); the landing seeds it.
+  (the harness switch) while <H>/.harness-switch/off exists (/harness off, scripts/harness-switch),
+                     the working settings.json is the OFF FORM of the machine form: what the clean form
+                     and the optional modules ship (their env keys, permission entries, hook commands,
+                     every hook command under <H>/hooks or <H>/scripts, the clean form's other
+                     top-level keys but OFF_KEEPS) is left out; the switch's own hook and permission
+                     entries, env.CLAUDE_HOME and everything else (the owner's) stay. smudge writes the
+                     off form, clean reads an off form back as the machine form it stands for (plus the
+                     owner's changes), so a pull while off neither fails on it nor turns it on; render
+                     and check work on the off form.
   land [--rev | --repair]
                      the settings half of the landing (scripts/install/land, at every Stop, on a
                      home that ran pre-P7 code): undo what a conflicted pull left in the index,
@@ -542,6 +551,117 @@ def smudge_bytes(data, layers):
     return canon(y), None
 
 
+# ------------------------------------------------------------------------- the harness switch
+
+SWITCH_HOOK = "userprompt-harness-switch.sh"  # hooks/<it>: the one hook command the off form keeps
+SWITCH_PERMISSIONS = ("Skill(harness:*)", "Edit(**/.harness-switch/**)")  # the switch's own rules
+# Top-level keys the clean form ships that the off form keeps, because dropping them would change
+# what is not the harness: cleanupPeriodDays (365) guards the session history Claude Code would
+# otherwise delete after its default 30 days; deniedMcpServers keeps three connectors off that
+# the owner never turned on.
+OFF_KEEPS = ("cleanupPeriodDays", "deniedMcpServers")
+
+
+def switched_off(home):
+    """True while the harness switch is off (hooks/lib/harness_switch.py, the one test)."""
+    try:
+        lib = _load_module(os.path.join(home, "hooks", "lib", "harness_switch.py"),
+                           "_render_settings_harness_switch")
+        return bool(lib.is_off(home))
+    except Exception:  # a home without the switch is on
+        return False
+
+
+def _harness_command(hook):
+    key = hook_key(hook)
+    return "@H/hooks/" in key or "@H/scripts/" in key
+
+
+def _switch_command(hook):
+    return ("@H/hooks/" + SWITCH_HOOK) in hook_key(hook)
+
+
+def shipped_entries(base):
+    """What the harness ships, from the clean form `base` and every optional module: (env keys,
+    permission list entries by list, other permission keys, hook keys by event, top-level keys)."""
+    env, perms, values, hooks = set(), {}, set(), {}
+    for src in [base] + [MODULES[name] for name in sorted(MODULES)]:
+        env.update(_d(src.get("env")))
+        for name, val in _d(src.get("permissions")).items():
+            if isinstance(val, list):
+                perms.setdefault(name, set()).update(e for e in val if isinstance(e, str))
+            else:
+                values.add(name)
+        for event, groups in _d(src.get("hooks")).items():
+            hooks.setdefault(event, set()).update(_hook_keys(groups))
+    tops = {k for k in base if k not in STRUCTURED and k not in OFF_KEEPS}
+    return env, perms, values, hooks, tops
+
+
+def off_form(y, base):
+    """The off form of the settings object `y` (a copy): see the module docstring."""
+    y = copy.deepcopy(y)
+    env, perms, values, hooks, tops = shipped_entries(base)
+    if isinstance(y.get("env"), dict):
+        for key in [k for k in y["env"] if k in env]:
+            del y["env"][key]
+        if not y["env"]:
+            del y["env"]
+    if isinstance(y.get("permissions"), dict):
+        p = y["permissions"]
+        for name in list(p):
+            if isinstance(p[name], list):
+                owned = perms.get(name, set())
+                p[name] = [e for e in p[name] if e in SWITCH_PERMISSIONS or e not in owned]
+                if not p[name] and name in perms:
+                    del p[name]
+            elif name in values:
+                del p[name]
+        if not p:
+            del y["permissions"]
+    if isinstance(y.get("hooks"), dict):
+        h = y["hooks"]
+        for event in list(h):
+            if not isinstance(h[event], list):
+                continue
+            known, out = hooks.get(event, set()), []
+            for g in h[event]:
+                if not (isinstance(g, dict) and isinstance(g.get("hooks"), list)):
+                    out.append(g)
+                    continue
+                keep = [x for x in g["hooks"] if not isinstance(x, dict) or _switch_command(x)
+                        or (hook_key(x) not in known and not _harness_command(x))]
+                if keep:
+                    g = dict(g, hooks=keep)
+                    out.append(g)
+            if out:
+                h[event] = out
+            else:
+                del h[event]
+        if not h:
+            del y["hooks"]
+    for key in list(y):
+        if key in STRUCTURED:
+            continue
+        value = y[key]
+        if key in tops or (isinstance(value, dict) and isinstance(value.get("command"), str)
+                           and _harness_command({"type": "command", "command": value["command"]})):
+            del y[key]  # a shipped key, or a statusLine-like command that runs a harness script
+    return y
+
+
+def on_form(working, base, layers):
+    """The machine form an off-form settings object stands for: the machine form of the clean
+    form `base` under `layers`, with what the owner changed in the off form (the working
+    entries the off form of that machine form does not explain) and the CLI-owned keys."""
+    target = merge_all(copy.deepcopy(base), layers)
+    merge(target, diff(working, off_form(target, base), skip_top=CLI_OWNED))
+    for key in CLI_OWNED:
+        if key in working:
+            target[key] = copy.deepcopy(working[key])
+    return target
+
+
 # ------------------------------------------------------------------------------------- diff
 
 _PREFIX = re.compile(r"(?<!\S)\S*?/(hooks|scripts)/")
@@ -649,11 +769,19 @@ def working_extras(working, target, layers):
 def cmd_clean(home):
     data = sys.stdin.buffer.read()
     try:
-        layers = layers_of(load_overlay(home)) + load_record(home)
+        overlay_layers = layers_of(load_overlay(home))
+        layers = overlay_layers + load_record(home)
     except OverlayError as exc:
         _err("clean refused: %s; fix it, then re-stage settings.json" % exc)
         return 1
-    out, problem = clean_bytes(data, layers, load_base(home))
+    base = load_base(home)
+    working = parse(data)
+    if working is not None and switched_off(home):  # an off form reads as the form it stands for
+        try:
+            data = canon(on_form(working, base, overlay_layers))
+        except ShapeError:
+            pass  # clean_bytes names the structure
+    out, problem = clean_bytes(data, layers, base)
     if problem:  # never pass it through: unchanged input may carry machine values
         if data.startswith(b"\xef\xbb\xbf"):
             problem = "input starts with a UTF-8 byte order mark"
@@ -680,6 +808,11 @@ def cmd_smudge(home):
         out, problem = smudge_bytes(data, layers)
         if problem:
             _err("smudge: %s; passing settings.json through unchanged" % problem)
+        elif switched_off(home):  # /harness off: what git writes is the off form
+            try:
+                out = canon(off_form(parse(out), parse(data)))
+            except ShapeError:
+                pass
     sys.stdout.buffer.write(out)
     return 0
 
@@ -783,6 +916,9 @@ def cmd_render(home, force):
     if problem:
         _err("render refused: %s" % problem)
         return 1
+    off = switched_off(home)
+    if off:  # /harness off: render the off form, so no render turns the harness back on
+        target = off_form(target, parse(clean_source(home)) or {})
     if working is not None and not force:
         # Recorded entries the overlay has since dropped are explained: the render drops them.
         extras = working_extras(working, target, layers + recorded)
@@ -811,8 +947,9 @@ def cmd_render(home, force):
     if is_checkout(home):
         refresh_index(home)
     modules = [n for n in sorted(MODULES) if overlay and overlay.get("modules", {}).get(n)]
-    print("render-settings: settings.json %s (overlay: %s; modules: %s)"
+    print("render-settings: settings.json %s%s (overlay: %s; modules: %s)"
           % ("rendered" if changed else "already up to date",
+             " in its off form (/harness off)" if off else "",
              "present" if overlay is not None else "absent", ", ".join(modules) or "none"))
     return 0
 
@@ -932,6 +1069,16 @@ def check_filter(home, overlay_error, overlay, recorded, working):
         cleaned, problem2 = clean_bytes(smudged, layers + recorded, load_base(home))
         if problem or problem2 or cleaned != index:
             problems.append("round trip clean(smudge(index)) does not reproduce the index blob")
+        elif switched_off(home):
+            try:
+                base = load_base(home)
+                off = off_form(parse(smudged), parse(index) or {})
+                cleaned = clean_bytes(canon(on_form(off, base, layers)), layers + recorded, base)[0]
+            except ShapeError:
+                cleaned = None
+            if cleaned != index:
+                problems.append("round trip of the off form (/harness off) does not reproduce the "
+                                "index blob")
     path = record_path(home)
     if overlay is not None and path and not os.path.exists(path):
         problems.append("no record of what render applied (%s)" % RECORD)
@@ -942,6 +1089,8 @@ def check_filter(home, overlay_error, overlay, recorded, working):
     if working is None:
         return True
     target, layers, problem = machine_form(home, overlay, working)
+    if target is not None and switched_off(home):
+        target = off_form(target, parse(clean_source(home)) or {})
     extras = working_extras(working, target, layers) if target is not None else {}
     ok = _ok("settings.json entries: %s the clean form, the enabled modules and the overlay"
              % ("some are outside" if extras else "all explained by"), not extras)
@@ -1009,6 +1158,9 @@ def cmd_check(home):
     if _d((overlay or {}).get("env")).get("GIT_AUTO_PUSH") == "1":  # D1: opt-in, so not a failure
         print('[info] env.GIT_AUTO_PUSH is "1" in %s: automatic pushes are on' % OVERLAY)
     runtime_ok = check_protected_runtime(home)
+    if switched_off(home):
+        print("[info] the harness is off (/harness off): settings.json was checked in its off form;"
+              " scripts/harness-switch status says more")
     return 0 if hooks_ok and filter_ok and runtime_ok else 1
 
 

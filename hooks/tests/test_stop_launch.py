@@ -211,7 +211,8 @@ def test_a10_the_launcher_loads_only_stdlib_and_the_two_modules_and_copies_no_ru
     tree = ast.parse(LAUNCHER.read_text(encoding="utf-8"))
     imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    assert imported <= set(sys.stdlib_module_names), imported
+    # harness_switch: the harness switch's one test, the first statement of every registered hook
+    assert imported <= set(sys.stdlib_module_names) | {"harness_switch"}, imported
     loads = {c.args[0].value for c in ast.walk(tree) if isinstance(c, ast.Call)
              and getattr(c.func, "id", "") == "_load" and isinstance(c.args[0], ast.Constant)}
     assert loads == {"command_span", "overnight"}

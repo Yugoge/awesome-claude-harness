@@ -480,6 +480,11 @@ write_checkpoint() {
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
 
+    # /harness off: no snapshot is written, by any writer (hooks/lib/harness_switch.sh)
+    if . "${BASH_SOURCE[0]%/*}/harness_switch.sh" 2>/dev/null && harness_switch_off; then
+        return 0
+    fi
+
     # rc=2 (not a repo) is a no-op skip, NOT a checkpoint failure: the counter is left alone.
     local git_dir
     git_dir=$(_checkpoint_git_dir "$work_dir")

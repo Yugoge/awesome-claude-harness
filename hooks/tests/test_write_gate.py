@@ -181,9 +181,12 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     by_file = {Path(r.path).name: r for r in write_gate.RULES}
     assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
+    # the harness switch's guard was never a registration of its own: a rule from its start
+    assert by_file.pop("pretool-harness-switch-guard.py").tools == write_gate.WRITE_TOOLS | {
+        "Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"}
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
-                                                  "cp-state", "overwrite", "claude-config"]
+                                                  "cp-state", "overwrite", "claude-config", "harness-switch"]
     assert all(Path(r.file).is_file() for r in write_gate.RULES)
 
 
@@ -415,7 +418,8 @@ def test_the_fallback_answers_as_the_gate(lab, monkeypatch):
 
 def test_l4s_whole_registration_change():
     """The registration change of L4 and L5 together, as settings.json makes it
-    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52."""
+    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52, and the
+    harness switch's own registration makes 53."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -428,8 +432,9 @@ def test_l4s_whole_registration_change():
         exec(compile((HOOKS / gate).read_text(), str(HOOKS / gate), "exec"), ns)
         calls = [(r.name, r.kind) for r in ns["RULES"] if r.call == w.DEV_LOOP]
         assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
+    # + 1: the harness switch's own UserPromptSubmit registration (hooks/userprompt-harness-switch.sh)
     assert len(regs) == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
-        - len(w.DISPATCH) + len(w.GATES) == 52
+        - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
         assert (ROOT / path).is_file(), command
