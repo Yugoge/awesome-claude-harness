@@ -22,7 +22,7 @@ supported without a project-root override.
 
 | Flag | Meaning |
 |------|---------|
-| `<task-id>` | Optional when the session identifies the active cycle (Step 2: ambiguity is asked, never guessed). An explicit task-id is authoritative. Unused with `--bulk`; not allowed with `--auto`. |
+| `<task-id>` | Optional when the session identifies the active cycle (Step 2: ambiguity is asked, never guessed). An explicit task-id that names a task is authoritative (Step 2 checks it). Unused with `--bulk`; not allowed with `--auto`. |
 | `--force` | No-op alias of the normal path: Step 3 and Step 6 both still run. Its one effect is Step 4's audit-log append. |
 | `--bulk` | Batch mode: group by task-id then subsystem, commit coherently, flag orphan files separately. Skips Step 3; keeps the Step 6 QA gate. |
 | `--dry-run` | Step 3 completes the cycle as a real run does; Steps 5-6 plan and review; print the plan and the QA verdict; commit nothing. |
@@ -56,10 +56,19 @@ and `--codex` stay as typed). A legal `--auto` skips Step 2: the `--auto` mode s
 ### Step 2: Resolve task-id (unless --bulk or --auto)
 
 If `BULK=false` and `AUTO=false`:
-- A supplied `TASK_ID` is authoritative.
-- Otherwise infer it from the conversation: the parent task-id of the active `/dev` or `/do`
-  cycle, or of the `/close` that just ran in this session. There is no filesystem scan and no
-  default-to-newest (a report mtime scan picks up other sessions' reports). Inference succeeds
+- A supplied `TASK_ID` is authoritative when it names a task: a file under `docs/dev/` carries
+  it in its name (the task's own report or ticket, or a lane's of that parent), or, typed as a
+  path, that file exists. Check it before Step 3 (that look verifies the typed id; it picks no
+  task, so it is not the scan the next bullet forbids). One that names no task (a mistyped id) is
+  not authoritative, and no conversation candidate replaces it unasked: ask the `Which task`
+  question below, as `close.md`'s Task-id resolution asks it for a path that does not exist, and
+  bind the answer. The `/commit` Stop reads the same rule (`_targets` in the command Stop gate,
+  `stop-command-gate.py`): a typed id that names no task gives way to the task this `/commit`'s
+  dispatches name, and with none dispatched the Stop holds, naming the typed id.
+- Otherwise (no `TASK_ID` supplied) infer it from the conversation: the parent task-id of the
+  active `/dev` or `/do` cycle, or of the `/close` that just ran in this session. There is no
+  filesystem scan and no default-to-newest (a report mtime scan picks up other sessions'
+  reports). Inference succeeds
   only when the conversation names exactly one candidate: Step 3 completes and closes whatever
   task it is given, so with two or more candidates, or any doubt, do not guess.
 - No unambiguous candidate: ask one AskUserQuestion, header `Task`, question `Which task should
@@ -103,7 +112,9 @@ found. Act on its JSON answer:
   `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
   to complete the `/do` work, never `/do`'s own steps; its dev-report, which G2 verifies at dev's
   stop, concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it), and
-  the `/commit` orchestrator writes no report.
+  the `/commit` orchestrator writes no report. That dev-report lists, beside the files dev wrote,
+  each file the do-report lists (dev names each in one of its Bash commands so G2 counts it);
+  nobody rewrites the do-report, whose producer's `/do` has ended.
 - `null` in a commit-QA round, and a commit-QA finding that cites no artifact: the path becomes
   that round's own report, `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA dispatch runs again
   (Step 6) and names a path, routed as above.
@@ -329,7 +340,9 @@ review each that is non-empty:
 Judge by intelligent review — NEVER a hardcoded junk list. REJECT the commit if any of:
   1. Transient / non-authored byproducts (runtime/session state, caches, registries,
      scratch/temp outputs, generated indexes, build products) — by what the file IS,
-     regardless of which folder it sits in.
+     regardless of which folder it sits in. The task's own cycle records (its `docs/dev/`
+     reports and requirement document, its `tests/generated/<task>/manifest.json`) are
+     deliverables of the cycle, not byproducts.
   2. Secrets / sensitive content (credentials, keys, tokens, .env material).
   3. Scope contamination — files unrelated to TASK_ID (BULK=false); or, WITHIN ONE proposed
      group, files belonging to two different task-ids / unrelated subsystems (BULK=true).
@@ -394,8 +407,10 @@ real-commit path keeps the grant: Step 7 consumes it.
        prompt) that re-judges the actual changes against HEAD. A further `COMMIT: REJECT` repeats
        this routing; the loop ends on `COMMIT: APPROVE`, with no round cap.
 - `COMMIT: APPROVE`:
-  - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo): the commit
-    ceiling Step 7 must not exceed (TOCTOU guard).
+  - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo), plus, when
+    `BULK=false`, this round's `docs/dev/commit-qa-report-<TASK_ID>.md` in the control root's
+    repository (the review's record, committed with what it approved, never left untracked): the
+    commit ceiling Step 7 must not exceed (TOCTOU guard).
   - With `--dry-run` (`DRYRUN=true`): print the plan and `QA: APPROVE`, unstage the dry-run-staged
     set (as in the REJECT branch), revoke the grant, and end the invocation with the preview
     delivered: the requested end state; no real commit.
@@ -559,7 +574,13 @@ and dispatch a fresh QA over the actual set.
 
 **A hook rejection** (`hook_blocked`, or any hook refusing a tool call during `/commit`) is
 the owner's decision (CLAUDE.md Subagent Hook Discipline #1-#3): the rejected operation is
-never retried without the owner's grant, and never wrapped or bypassed. Ask one
+never retried without the owner's grant, and never wrapped or bypassed. This rule does not
+cover `grant_missing`, `grant_expired` and `grant_consumed`, though each reaches the analyst as
+the privilege guard refusing the commit for want of a live grant: they are the commit grant's
+own lifecycle (absent, past `expires_at`, or spent by an earlier attempt;
+`agents/changelog-analyst.md` § failure_code values keeps them apart from `hook_blocked`), not a
+hook refusing an operation. The Retryable rule above takes a fresh grant for them and asks
+nothing, and after a landing the Non-retryable rule routes them. Ask one
 AskUserQuestion — header `Authorize`,
 question `<hook> refused <the operation> for task <TASK_ID>: authorize it?` with the hook's
 output verbatim, options `Authorize it` (description: the exact command the owner runs to

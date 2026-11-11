@@ -58,10 +58,10 @@ Its stdout JSON carries `artifact_id` (`SPEC_ID` below), `views_available`, `man
 
 **The cycle is hook-prepared.** The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) printed what it did above: it minted the ids, created `.claude/dev-registry/<DEV_SESSION_ID>/`, and wrote `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim requirement. Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above (lines `DEV_SESSION_ID pre-initialized by hook: …` and `Task id: …`) and use them in every dispatch prompt.
 
-**When those lines are not in your context** (a compaction removed the hook output, or the hook printed none), run the hook's own start function with this command's text exactly as typed and read the same lines from what it prints:
+**When those lines are not in your context** (a compaction removed the hook output, or the hook printed none), run the hook's own start function with this command's text exactly as typed and read the same lines from what it prints. Write `<HARNESS_ROOT>` as the literal path of the `HARNESS_ROOT=` line in your context: `prompt-workflow.py` prints it at the session's start and again after every compaction (`SessionStart`), so it survives the loss of the command's own output:
 
 ```bash
-python3 ~/.claude/hooks/prompt-workflow.py start <<'CMDEOF'
+python3 "<HARNESS_ROOT>/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev or /redev, then $ARGUMENTS>
 CMDEOF
 ```
@@ -295,8 +295,8 @@ Use Task tool with:
 
 When BA needs clarification (`needs_clarification`) it writes its question artifact `docs/dev/producer-question-<timestamp>-ba.json` (schema producer-question.v1: one decision, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends.
 
-1. Relay it with ONE AskUserQuestion: the artifact's options become the dialog's options, its default the recommended option, and `metadata.source` is `producer-question:<timestamp>:ba`. The hook writes the owner's answer to `docs/dev/producer-answer-<timestamp>-ba-<q8>.json` (q8: the first 8 hex digits of the question file's sha256); until it is asked, the dispatch gate refuses any other dispatch (`ASK_FIRST`).
-2. Re-dispatch BA fresh and synchronously with the answer: same subagent_type, task_id, lane, pipeline, profile and obligation template, a fresh dispatched_at:
+1. Relay it with ONE AskUserQuestion: the artifact's options become the dialog's options, its default the recommended option, and `metadata.source` is `producer-question:<timestamp>:ba`. The hook writes the owner's answer to `docs/dev/producer-answer-<timestamp>-ba-<q8>.json` (q8: the first 8 hex digits of the question file's sha256); until it is asked, the dispatch gate refuses any other dispatch (`ASK_FIRST`). A question left unanswered (the dialog skipped or closed with no answer, the call denied, or no AskUserQuestion offered in this session, where the call is made all the same and its error result counts as asked) writes no answer file, never stalls the cycle and is not asked again: take the artifact's `default` as an assumption, say so in one line, and re-dispatch with `Previous answers: none`. The producer records it as an assumption: BA in its spec and the `assumptions` list it returns, dev in `implementation_notes` of its dev report.
+2. Re-dispatch BA fresh and synchronously with the answer: same subagent_type, task_id, lane, pipeline, profile and obligation template, a fresh dispatched_at, the answer in the template's `Clarification round:` and `Previous answers:` lines:
 
 ```
 Use Task tool with:
@@ -529,7 +529,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 Check that its status is "completed", all tasks are documented, scripts created have usage examples, the git rationale references the root cause, and the files reported exist.
 
-If dev wrote its question artifact (`docs/dev/producer-question-<timestamp>-dev.json`) instead of its report, relay it as in Step 5 and re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at). If a check finds a gap, re-dispatch dev the same way with the gap named, until the checks pass. When dev completed, go to Step 13.
+If dev wrote its question artifact (`docs/dev/producer-question-<timestamp>-dev.json`) instead of its report, relay it as in Step 5 (an unanswered question takes its `default` there) and re-dispatch dev fresh with the answer: Step 10's template, a fresh dispatched_at, and right after its `Context file:` line Step 5's two lines `Clarification round: <N>` and `Previous answers: <the producer answer file the hook wrote, or none when the owner gave no answer>` (the hook's `docs/dev/producer-answer-<timestamp>-dev-<q8>.json` for this question, its `metadata.source` `producer-question:<timestamp>:dev`; N the count of this lane's dev questions so far). If a check finds a gap, re-dispatch dev the same way with the gap named, until the checks pass. When dev completed, go to Step 13.
 
 ### Step 13: Delegate to QA Subagent
 

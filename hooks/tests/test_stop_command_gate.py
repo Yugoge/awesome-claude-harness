@@ -539,6 +539,21 @@ def test_a4_the_do_stop_decides_on_the_do_report_itself(env, monkeypatch, conten
     assert code == 2 and f"docs/dev/do-report-{DO_ID}.json" in text and needle in text, text
 
 
+def test_a4_a_do_whose_minted_line_cli_2_1_322_records_as_hook_success_can_end(env):
+    """Seen live on CLI 2.1.322: prompt-workflow.py's plain stdout is recorded as a hook_success
+    attachment, not hook_additional_context, and the /do Stop said the opener had no hook-minted
+    task id although the line was there. The complete report now lets the Stop pass."""
+    env.tx.command("do", "rename the helper")
+    stdout = f"[/do] Consent granted.\n[/do] task-id minted: {DO_ID} — resolve via ...\n"
+    env.tx.add({"type": "attachment", "attachment": {
+        "type": "hook_success", "hookName": "UserPromptSubmit", "hookEvent": "UserPromptSubmit",
+        "content": stdout.rstrip("\n"), "stdout": stdout, "stderr": "", "exitCode": 0}})
+    env.tx.todos(canonical("do", "rename the helper"), len(canonical("do", "rename the helper")))
+    write_files(env, ["src/a.py"])
+    do_report(env, modified=["src/a.py"])
+    assert run(env) == (0, "")
+
+
 def test_a4_the_gate_creates_and_deletes_no_file(env):
     do_span(env)
     before = sorted(p for p in env.tmp.rglob("*"))
@@ -634,22 +649,24 @@ def test_r8_without_a_transcript_or_a_dev_report_the_lists_stand(env):
     assert resolver.do_report_gaps(env.project, DO_ID, path) == []
 
 
-def test_r8_without_a_transcript_the_lists_equal_dev_s_report(env):
+def test_r8_without_a_transcript_dev_s_report_lists_the_do_report_s_files(env):
     """The route without a transcript (Q7, a /close or /commit stage; P3's do branch calls it at
-    P3's merge): where the task's dev-report concludes it, the do-report's lists must equal that
-    report's files, named exactly; no schema is asked of a do-report that route finds not
-    completed."""
+    P3's merge), as P5-62 corrects it: where the task's dev-report concludes it, that report must
+    hold each file the do-report lists (it may hold more: what dev wrote completing the /do); a
+    file it lacks is one gap naming dev's report, which dev repairs, and the files exactly; no
+    schema is asked of a do-report that route finds not completed."""
     path = do_report(env, modified=["src/a.py"])
     dev = env.project / "docs" / "dev" / f"dev-report-{DO_ID}.json"
     dev.write_text(json.dumps({"task_id": DO_ID, "dev": {"files_modified": ["src/a.py"], "files_created": ["src/b.py"]}}))
-    [(code, artifact, detail)] = resolver.do_report_gaps(env.project, DO_ID, path)
-    assert code == "FILES_NOT_DEV_REPORT" and artifact == f"docs/dev/do-report-{DO_ID}.json"
-    assert detail.endswith(json.dumps(["src/a.py", "src/b.py"]))
+    assert resolver.do_report_gaps(env.project, DO_ID, path) == []
     record = json.loads(path.read_text())
     record["report_version"] = 1
-    record["do"].update(status="blocked", files_modified=["src/b.py"], files_created=[str(env.project / "src/a.py")])
+    record["do"].update(status="blocked", files_modified=["src/b.py", "src/c.py"],
+                        files_created=[str(env.project / "src/a.py")])
     path.write_text(json.dumps(record))
-    assert resolver.do_report_gaps(env.project, DO_ID, path) == []
+    [(code, artifact, detail)] = resolver.do_report_gaps(env.project, DO_ID, path)
+    assert code == "FILES_NOT_DEV_REPORT" and artifact == f"docs/dev/dev-report-{DO_ID}.json"
+    assert detail.endswith(json.dumps(["src/c.py"]))
 
 
 def test_r8_span_write_set_actor_and_bound(env):
@@ -2167,7 +2184,7 @@ def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loa
     master's text, this tree's hooks, which hand it this tree's five-step list) and whose close QA
     landed. Its text words Steps 1 and 2 as this tree's does, Step 0 and Step 3 otherwise, has no Step
     3b and asks no rating question: following its three TodoSteps it completes Steps 0-2 of this list
-    (one completion per step of its text), or 0-3, and neither Step 3, Step 3b nor the rating is asked
+    (one completion per step of its text), or 0-3, and neither Step 3, Step 4 nor the rating is asked
     of it. The same span on this tree's own close.md, or with no recorded text, is held exactly as
     before: every open step and the rating question."""
     chain_on_disk(real.project, close="CLOSE: YES")
@@ -2176,7 +2193,7 @@ def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loa
     assert body is None or ("### Step 1: Agent dispatch" in body and "### Step 2: Delegate close debate" in body)
     real.tx.command("close", FAMILY, body=body)
     steps = canonical("close", FAMILY)
-    assert [s["content"].split(":")[0] for s in steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 3b"]
+    assert [s["content"].split(":")[0] for s in steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 4"]
     real.tx.todos(steps, done)
     real.tx.dispatch(FAMILY, role="qa", pipeline="close", result="Judged.\nCLOSE: YES")
     got, text = run(real)
@@ -2191,7 +2208,7 @@ def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loa
 @pytest.mark.parametrize("done", [1, 2])
 def test_d15_real_an_in_flight_close_keeps_every_step_its_text_has(real, done):
     """Master's close.md words Steps 1 and 2 as this tree's does: each of them left open still holds
-    the in-flight /close, and only they are named (Steps 3 and 3b, which its text words otherwise or
+    the in-flight /close, and only they are named (Steps 3 and 4, which its text words otherwise or
     not at all, are not asked)."""
     chain_on_disk(real.project, close="CLOSE: YES")
     real.tx.command("close", FAMILY, body=loaded_text("close", FAMILY, MASTER))

@@ -247,6 +247,22 @@ def _truncate_structural_context(context: dict, hard_cap: int) -> tuple[dict, bo
     return context, True
 
 
+def _registry_dir(task_id: str) -> Path:
+    """The registry directory --task-id names (a registry name: /dev's
+    DEV_SESSION_ID, or /dev-overnight's ``<session>-pipeline-<n>``) by the one
+    rule, hooks/lib/obligation.registry_dir_named; ValueError for an id that
+    names none (not one plain path component)."""
+    harness = str(_SCRIPT_DIR.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    from hooks.lib.obligation import registry_dir_named
+
+    directory = registry_dir_named(_PROJECT_DIR, task_id)
+    if directory is None:
+        raise ValueError(f"--task-id {task_id!r} names no registry directory")
+    return directory
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -258,7 +274,10 @@ def main() -> int:
     parser.add_argument("--no-graphify", action="store_true", help="Explicit per-invocation disable")
     args = parser.parse_args()
 
-    output_dir = _PROJECT_DIR / ".claude" / "dev-registry" / args.task_id / "graphify"
+    try:
+        output_dir = _registry_dir(args.task_id) / "graphify"
+    except ValueError as exc:
+        parser.error(str(exc))
     output_path = output_dir / "pre_query.json"
 
     # Feature flag check — no-op (status=skipped) when disabled
