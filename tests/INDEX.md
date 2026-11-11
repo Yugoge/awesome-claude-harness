@@ -105,15 +105,12 @@ tests/
 │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
+│   ├── `test_score_dispatch.py` - The real hooks run under the shipped settings in a sandbox whose score log starts with the rows a driver argument seeds; the...
 │   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...
 │   ├── `test_trace_reduce.py` - Each case is a run-to-run difference two replays of one driver showed under load:
 │   ├── `test_typed_corrections.py` - Each replay types the command with an argument that names nothing: /close of a ticket path of ano...
 │   ├── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
 │   └── `wake.py` - Modeled CLI behaviour and its sources (none of it measured on a harness host):
-├── score-inject-contract/
-│   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
-├── score-lifecycle-contract/
-│   └── `test-lifecycle-cas.sh` - Description: Verify CAS and append-only invariants for scripts/score-update.sh and
 ├── scripts/
 │   ├── `validate-checklist-completeness.py` - Validator: validate-checklist-completeness
 │   ├── `validate-chinese-content.py` - Validator: validate-chinese-content

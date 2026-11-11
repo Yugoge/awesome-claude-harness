@@ -11,8 +11,12 @@
 # (git-hooks/post-commit-auto-push and install-protection-all.sh's combined hook), which load
 # it from ${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/.
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/harness_switch.sh" 2>/dev/null \
+  || harness_switch_off() { return 1; }
+
 harness_auto_push() {
   local v rc
+  harness_switch_off && return 1  # /harness off: no automatic push of any kind
   v="$(git -C "${1:-.}" config --local --type=bool --get harness.autoPush 2>/dev/null)"
   rc=$?
   case "$rc:$v" in

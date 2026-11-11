@@ -128,6 +128,7 @@ tests/
 ├── `test_role_from_cli.py` - The role is the payload's agent_type when it carries an agent_id, else the agentType of
 ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 ├── `test_runtime_guard.py` - Two layers:
+├── `test_score_view.py` - P13-3 (D29, D32): what a score shows at a dispatch and what a low one costs.
 ├── `test_scratch_lifecycle.py` - Covers:
 ├── `test_session_gitignore_propagate.py` - product repo are listed in the clone's own exclude file, one line each, and nothing else is writt...
 ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in

@@ -29,6 +29,8 @@ LOG_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/git-fswatch-${REPO_NAME}.lo
 HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
   || harness_state_dir() { printf '%s\n' /tmp; }
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_switch.sh" 2>/dev/null \
+  || harness_switch_off() { return 1; }
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/auto_push.sh" 2>/dev/null \
   || harness_auto_push() { return 1; }  # no reader, no push
 LOCK_FILE="$(harness_state_dir)/git-fswatch-${USER}-${REPO_NAME}.lock"
@@ -422,6 +424,11 @@ safe_push() {
 
 # Complete sync operation
 sync_changes() {
+    # /harness off: the daemon keeps running and does nothing (no snapshot, pull or push);
+    # /harness on resumes it with no restart (hooks/lib/harness_switch.sh)
+    if harness_switch_off; then
+        return 0
+    fi
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "Starting sync operation..."
 

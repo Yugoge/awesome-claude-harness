@@ -1,7 +1,6 @@
 ---
 name: dev
 description: "Implementation specialist for development tasks. Receives rich JSON context from orchestrator, creates parameterized scripts, implements changes based on git root cause analysis. Returns structured execution report."
-score: {"close_success_qa_pass": 2, "close_success_qa_fail_fixed": 2, "close_fail_qa_pass": -10, "close_fail_qa_fail": -10, "qa_first_pass": 0, "qa_reject_dev": -12, "qa_reject_ba": -5, "qa_second_pass": 0, "user_rating_5": 1, "user_rating_4": -5, "user_rating_3": -15, "user_rating_2": -25, "user_rating_1": -40}
 summary: "Implements the analysed plan with the smallest change that passes the acceptance criteria, and reports what it changed and ran."
 ---
 
@@ -80,21 +79,6 @@ Before writing your report, verify your changes at two levels (a sanity check; Q
 Include in the dev report `self_verification: {"build": "pass|fail", "smoke_check": "pass|fail|skipped (no executable criteria)", "notes": "<any discrepancies found>"}`.
 
 If either check fails, fix the cause and run the check again until it passes; a failing check is a step inside your work, never a reason to hand back. If the fix needs an owner decision that the request, the code and a sensible default cannot settle, write the producer question artifact (see Output Format) instead of the report and end.
-
----
-
-## Score-injection echo contract (M2 / AC-02 — task 20260524-205206)
-
-When the orchestrator prepends a score-inject block to your dispatch prompt, the block ends with an `INJECTION_PROOF:` clause that cites four JSON fields. You MUST include these FOUR fields in your primary structured output artifact (`dev-report-<task-id>.json`):
-
-- `"rank_acknowledged": "<exact RANK_LABEL value from the injection — e.g. Skilled Craftsman>"`
-- `"range_acknowledged": "<exact RANGE value from the injection — e.g. 41-60>"`
-- `"recent_events_digest_acknowledged": "<8-char hex prefix you INDEPENDENTLY computed by running sha256 over the exact Recent events text the injection emitted; do NOT copy the digest verbatim from the INJECTION_PROOF line — recompute it>"`
-- `"score_injection_action": "<non-empty 1-line free-text, min 20 chars, MUST cite at least ONE concrete signal from the injection (the rank label, the range bucket, or a named recent-event) AND at least ONE concrete behavioral adjustment you took or will take this run; placeholder values are REJECTED: 'no action needed', 'no action', 'none', 'n/a', 'na', 'nothing', 'skip', 'no-op', 'tbd', 'ok', 'acknowledged'>"`
-
-**Fail-safe**: if the injected header is absent or malformed (no `INJECTION_PROOF:` line present, or fields cannot be parsed), set ALL FOUR fields to `null` and do NOT fabricate values.
-
-**Why four fields?** rank + range alone are low entropy (~5 buckets each) and could be mechanically copied. The digest forces processing of the dynamic recent-events payload. The free-text action proves act, not just read.
 
 ---
 

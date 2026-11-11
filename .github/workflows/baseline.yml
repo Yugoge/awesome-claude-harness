@@ -19,16 +19,14 @@ on:
   # workflow_call a tag could publish without these gates ever running on that
   # commit. Purely additive: the push/pull_request triggers are unchanged.
   workflow_call:
-  # Weekly, so a dependency or runner change that breaks the suite shows up even
-  # in a quiet week, and on demand.
-  schedule:
-    - cron: "17 3 * * 1"
+  # On demand. Under D30 this is the only trigger that runs on the private
+  # repository (see the gate on the job below).
   workflow_dispatch:
 
 # A newer push to a pull request cancels its older run (P1c X10): the replay suite runs whole on
 # every push, and a run for a head nobody merges any more only delays the queue. Each pull request
-# has its own group; every other event (master pushes, the release call, the weekly run) is a group
-# of one run (run_id), so nothing else is ever cancelled.
+# has its own group; every other event (a push to master or main, the release call, a dispatch) is a
+# group of one run (run_id), so nothing else is ever cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -36,10 +34,23 @@ concurrency:
 jobs:
   baseline:
     name: baseline checks
+    # D30 visibility gate. The private repository (full history) and the public one
+    # (one commit per publish) carry this same file, and a trigger cannot test
+    # visibility, so the job does: it runs on a manual dispatch anywhere, otherwise
+    # only where the event payload says the repository is public. A skipped job takes
+    # no runner, so the private repository spends Actions minutes only on dispatch.
+    # toJSON() renders a payload without a repository object as 'null', which never
+    # equals 'false', so such a payload counts as not public; comparing the flag with
+    # false directly would coerce null to 0 and count it as public. Called from
+    # release.yml (workflow_call), the payload is the caller's, so the gate holds
+    # there too. The weekly schedule trigger was removed for the same reason: its
+    # payload carries no repository object, so this gate would skip it on both
+    # repositories. Every job in this file carries the same gate. ANDed with it, as
+    # on the jobs below: a draft pull request runs nothing; marking it ready runs
+    # everything.
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # Supported OS: ubuntu-latest (the declared, tested platform). macOS/Windows
     # are not part of the supported matrix.
-    # A draft pull request runs nothing; marking it ready runs everything.
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -55,9 +66,11 @@ jobs:
         # repointed at arbitrary code by anyone who can push to the action repo.
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          # Full history so the provenance audit can resolve commit-source lines
-          # (e.g. 62957b3); a shallow clone would downgrade them to warnings and
-          # verify-claims.sh runs the audit in --strict (downgrades hard-fail).
+          # Full history, so a check that resolves a commit sees every one. Since
+          # D30 no hero manifest line cites a commit id: the public repository holds
+          # only its publish commits, so those lines cite
+          # .github/assets/pipeline-hero-sources.json, and the --strict audit in
+          # verify-claims.sh passes on either repository.
           fetch-depth: 0
 
       - name: Set up Python
@@ -309,8 +322,9 @@ jobs:
     # in one, and E1's mode for the whole job. No driver is named here: a new
     # one lands in a shard by itself.
     name: artifact check plan
-    # A draft pull request runs nothing; marking it ready runs everything.
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing;
+    # marking it ready runs everything.
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -346,6 +360,8 @@ jobs:
     # go to the job below, which derives the check over every shard.
     name: artifact check shard ${{ matrix.shard }}/${{ needs.artifact-graph-plan.outputs.count }}
     needs: artifact-graph-plan
+    # D30 visibility gate (see the baseline job).
+    if: ${{ github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -406,8 +422,9 @@ jobs:
     # job of its own beside the shards it adds nothing to the check's critical
     # path (plan, slowest shard, merge).
     name: artifact check run to run
-    # A draft pull request runs nothing; marking it ready runs everything.
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing;
+    # marking it ready runs everything.
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -449,7 +466,8 @@ jobs:
     # check's mutation tests (acceptance 3) run over the same replays.
     name: artifact check (traced replays)
     needs: [artifact-graph-plan, artifact-graph-shard]
-    if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}
+    # D30 visibility gate (see the baseline job) ANDed with the status check.
+    if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' && (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -533,8 +551,9 @@ jobs:
     # pull_request push runs it all, so a phase PR merges only with the whole suite green on its
     # head (tests/TESTING.md, "Replay suite").
     name: replay suite ${{ matrix.shard }}/6
-    # A draft pull request runs nothing; marking it ready runs everything.
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing;
+    # marking it ready runs everything.
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     # Each untraced replay also runs the launch differential (tests/replay/launchdiff.py): every
     # launcher event's hooks once more on the old path, each as its own process. With it the

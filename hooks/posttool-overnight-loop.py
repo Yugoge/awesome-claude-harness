@@ -18,6 +18,15 @@ the debug log: hookSpecificOutput.additionalContext in one JSON object, exit 0.
 Does NOT directly modify the todos file -- the agent acts on the instructions,
 avoiding race conditions with other hooks.
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+try:  # a hook copied without its lib/ (an old install) is on
+    import harness_switch  # noqa: E402
+    harness_switch.exit_if_off()
+except ImportError:
+    pass
+finally:
+    sys.path.pop(0)
 
 import json
 import sys

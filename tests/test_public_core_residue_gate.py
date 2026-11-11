@@ -127,8 +127,8 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf8")
 
 
-def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", CHECKER, *args], cwd=root, capture_output=True, text=True)
+def _run(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", CHECKER, *args], cwd=root, env=env, capture_output=True, text=True)
 
 
 def _stage(root: Path) -> None:
@@ -745,3 +745,118 @@ def test_filtered_settings_are_gated_from_the_index_not_the_smudged_checkout(pri
                    f"FAIL: private literal ({PRIVATE_LIST} line 2) -> settings.json:",
                    "NEW un-allowlisted e-mail address -> settings.json:"):
         assert needle in committed.stdout, f"a machine form in the index is not caught: {needle}"
+
+
+# ---------------------------------------------------------------------------
+# Fail closed: a failure while listing, reading or scanning stops the check.
+#
+# A failed `git ls-files` scanned nothing, an unreadable tracked file was skipped and a
+# filtered file whose index blob could not be read was read from its checkout: each run
+# passed over bytes it never looked at. Each control fails the run (exit 1) with a FAIL
+# line naming the step or the file, and prints no value: no error text (it carries
+# absolute paths and object names) and nothing of the failing tool's own report.
+# ---------------------------------------------------------------------------
+
+TOOL_VALUE = "/opt/demo/bin/" + "tool"     # a stand-in value inside a failing git's own report
+
+
+def _env_with_failing_git(tmp_path: Path, args_pattern: str) -> dict:
+    """The environment with a `git` first on PATH that fails, reporting TOOL_VALUE on stderr,
+    when " <its arguments> " matches the shell pattern `args_pattern`; the real git otherwise."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    wrapper = bindir / "git"
+    wrapper.write_text("#!/usr/bin/env bash\n"
+                       f'case " $* " in {args_pattern}) echo "fatal: cannot read {TOOL_VALUE}" >&2; exit 128 ;; esac\n'
+                       f'exec {shlex.quote(shutil.which("git"))} "$@"\n', encoding="utf8")
+    wrapper.chmod(0o755)
+    return dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+
+def _assert_stopped(r: subprocess.CompletedProcess, fail_line: str, *values: str) -> None:
+    out = r.stdout + r.stderr
+    assert r.returncode == 1, out
+    assert fail_line in r.stdout.splitlines(), out
+    assert "PASS: no un-allowlisted residue in any tracked file" not in r.stdout, \
+        "after an error nothing is treated as clean"
+    for value in (TOOL_VALUE, "Traceback", "Errno", *values):
+        assert value not in out, "a FAIL line names the step or the file, never a value"
+
+
+@pytest.mark.parametrize("args_pattern, fail_line", [
+    ('*" ls-files -z "*', "FAIL: residue audit stopped: cannot list the tracked files (git ls-files)"),
+    ('" ls-files "', "FAIL: cannot list the tracked files (git ls-files): the top-level path set is unknown"),
+    ('*" check-attr "*', "FAIL: cannot list the files git filters (git ls-files | git check-attr): "
+                         "which to read from the index is unknown"),
+], ids=["residue-audit", "top-level-set", "filtered-files"])
+def test_a_failed_listing_fails_the_run(pristine, tmp_path, args_pattern, fail_line):
+    """Each listing of the tracked paths: the residue audit's own (it scanned nothing and
+    passed), the top-level set (completeness passed vacuously) and the filtered-file list
+    (a filtered file was read from its checkout, the machine form)."""
+    root = _copy(pristine, tmp_path)
+    assert _run(root).returncode == 0, "baseline control must be clean"
+    _assert_stopped(_run(root, env=_env_with_failing_git(tmp_path, args_pattern)), fail_line)
+
+
+def test_an_unreadable_tracked_file_fails_the_run(pristine, tmp_path):
+    """A directory where a tracked file should be: unreadable for root as well."""
+    root = _copy(pristine, tmp_path)
+    assert _run(root).returncode == 0, "baseline control must be clean"
+    victim = root / "agents" / "dev.md"
+    victim.unlink()
+    victim.mkdir()
+    assert "agents/dev.md" in _tracked(root), "still tracked"
+    _assert_stopped(_run(root), "FAIL: residue audit stopped: cannot read -> agents/dev.md", str(victim))
+
+
+def test_a_filtered_file_whose_index_blob_cannot_be_read_fails_the_run(pristine, tmp_path):
+    """The engine reads a filtered file from its index blob; with that object gone it is not
+    read from the checkout (the machine form) instead."""
+    root = _copy(pristine, tmp_path)
+    assert "settings.json" in _filtered(root), "settings.json carries the filter attribute"
+    assert _run(root).returncode == 0, "baseline control must be clean"
+    oid = subprocess.run(["git", "-C", str(root), "rev-parse", ":settings.json"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    loose = root / ".git" / "objects" / oid[:2] / oid[2:]
+    assert loose.is_file(), "the index blob is a loose object of the copy"
+    loose.unlink()   # the copy's own hardlink: the pristine object stays
+    assert subprocess.run(["git", "-C", str(root), "cat-file", "blob", ":settings.json"],
+                          capture_output=True).returncode != 0, "the index blob is unreadable"
+    assert (root / "settings.json").is_file(), "the checkout copy is still there to fall back on"
+    _assert_stopped(_run(root), "FAIL: residue audit stopped: cannot read its index blob -> settings.json", oid)
+
+
+def _link(root: Path, rel: str, target: str) -> None:
+    path = root / rel
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    path.symlink_to(target)
+    _stage(root)
+    mode = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "--", rel],
+                          capture_output=True, text=True, check=True).stdout.split()[0]
+    assert mode == "120000", "tracked as a symlink"
+
+
+@pytest.mark.parametrize("rel, target", [
+    ("templates/overnight-spec.md", "spec-template.md"),   # the repository's own, which resolves
+    ("templates/demo-dangling.md", "no-such-template.md"),
+    ("templates/demo-dir-link", "."),
+], ids=["resolving", "dangling", "to-a-directory"])
+def test_a_tracked_symlink_is_not_a_failure_by_being_one(pristine, tmp_path, rel, target):
+    """A symlink is read as the audit always read it, through the link (its target's text,
+    under the link's path); one that names no file is read as its link text, the content
+    git tracks for it, not taken as an unreadable file."""
+    root = _copy(pristine, tmp_path)
+    _link(root, rel, target)
+    r = _run(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS: no un-allowlisted residue in any tracked file" in r.stdout
+
+
+def test_a_symlink_naming_no_file_is_scanned_as_its_link_text(pristine, tmp_path):
+    """Its link text is what git tracks and publishes, so residue there is caught."""
+    root = _copy(pristine, tmp_path)
+    _link(root, "templates/demo-dangling.md", "/home/" + "authorname/notes.md")
+    r = _run(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "NEW un-allowlisted author-path residue -> templates/demo-dangling.md:1" in r.stdout

@@ -398,7 +398,9 @@ EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | 
 # The registrations that change where EXERCISES names none: P4's close-rating hook (PostToolUse; P13-2
 # widened its matcher to AskUserQuestion|Agent, so the one registration observes every Agent dispatch and every
 # question the owner is asked; REACHED names the scenarios whose events after the landing do reach it: a
-# dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), and two of P12's
+# dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), P13-3's SubagentStart
+# score injector (every dispatch starts an agent), P13-3's codex ledger on a failed Skill call (no landing
+# scenario calls codex; tests/replay/test_score_dispatch.py plays a failed codex call of a low-record QA), and two of P12's
 # removals: the base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no
 # event's list changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an
 # exit-0 stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
@@ -406,10 +408,29 @@ EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | 
 # (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
 # is among those the scenarios reach.)
 RATING = ("PostToolUse", "AskUserQuestion|Agent")
+PROMPT = ("UserPromptSubmit", None)
+# The harness switch's UserPromptSubmit registration (hooks/userprompt-harness-switch.sh, /harness off|on):
+# appended after the event's other hooks, which stay as they were; it acts only on a typed /harness
+# prompt. The scenarios that land at 'start' (PRE, HOME) reach it with their first prompt (REACHED); A and
+# B land after their last typed prompt.
+# (P12-L7 runs the event's Python hooks in its launcher, bulk-commit-capability fourth, as it was registered.)
+_PROMPT_HOOKS = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
+                 "hooks/userprompt-restart-authorize.py", "hooks/userprompt-consent-allowlist.sh",
+                 "hooks/userprompt-tmpfs-pressure.sh", "hooks/userprompt-bulk-commit-capability.py"]
+_PROMPT_HOOKS_NOW = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
+                     "hooks/userprompt-restart-authorize.py", "hooks/userprompt-bulk-commit-capability.py",
+                     "hooks/userprompt-consent-allowlist.sh", "hooks/userprompt-tmpfs-pressure.sh",
+                     "hooks/userprompt-harness-switch.sh"]
+START = ("SubagentStart", None)  # P13-3's score injector, registered on every agent start
+FAILED_SKILL = ("PostToolUseFailure", "Skill")  # P13-3's codex ledger on a failed Skill call; no landing scenario calls codex
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
+             PROMPT: (_PROMPT_HOOKS, _PROMPT_HOOKS_NOW),
+             START: ([], ["hooks/subagentstart-record.py"]),
+             FAILED_SKILL: ([], ["hooks/posttool-codex-skill-ledger.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
-REACHED = {PRE.name: {RATING}, A.name: {RATING}, B.name: {RATING}}
+REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START},
+           B.name: {RATING, START}}  # P13-3: a dispatch starts an agent
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that

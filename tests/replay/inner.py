@@ -8,7 +8,8 @@ registered commands, for E1's differential, differential.py), blocks.json (block
 failed calls, respellings), summary.json (the per-run row), env.json and
 bash-env.json (the environment every hook and every Bash call got), ids.json and markers.jsonl (what trace.parse needs), start-manifest.txt when traced, and, for an
 untraced run in mode scratch, outside-writes.txt from an mtime scan. With the driver argument resweep=1
-it also keeps the score log (score-log.jsonl) and records the score observer's second sweep (scorelog.py).
+it also keeps the score log (score-log.jsonl) and records the score observer's second sweep (scorelog.py); score=<role>:<rank>,...
+seeds that log first (P13-3).
 """
 from __future__ import annotations
 
@@ -61,6 +62,9 @@ def main(argv=None) -> int:
     if rp.args.get("land") or rp.args.get("blocks"):  # P1c A11: the live landing (tests/replay/landing.py)
         from . import landing
         landing.install(rp)
+    if rp.args.get("score"):  # P13-3: the score log the replay starts with (scorelog.py)
+        from . import scorelog
+        scorelog.seed(rp, rp.args["score"])
     t0, err = time.time(), ""
     rp.mark("run", "begin")
     try:

@@ -25,9 +25,14 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 
 HOOK = "hooks/posttool-close-rating.py"
 LOG = os.path.join("logs", "lifecycle.jsonl")
+# P13-3: the points of the one event row that puts a role in a rank from the start of 50 (a score of 50 sits in Skilled Craftsman,
+# the rank of a role with no rows, so that rank is no row); "restored" is a low row and the rows that bring the score back to 30
+RANK_POINTS = {"disgraced": (-60,), "apprentice": (-40,), "journeyman": (-20,), "skilled": (), "senior": (20,), "master": (40,),
+               "restored": (-60, 40)}
 
 
 def log_path(rp) -> str:
@@ -99,3 +104,22 @@ def resweep(rp) -> None:
         "sha256_before": hashlib.sha256(before).hexdigest(), "sha256_after": hashlib.sha256(after).hexdigest()}))
     if os.path.exists(log):
         shutil.copyfile(log, os.path.join(rp.layout.out, "score-log.jsonl"))
+
+
+def seed(rp, spec: str) -> None:
+    """Driver argument score=<role>:<rank>[,<role>:<rank>...] (inner.py runs it before the driver): the score log starts with the rows that put
+    each role in its rank, long before the replay (so every hook of the replay reads them as the record at the command's opener)."""
+    project = rp.layout.project
+    common = subprocess.run(["git", "-C", project, "rev-parse", "--git-common-dir"], capture_output=True, text=True).stdout.strip()
+    key = hashlib.sha256(os.path.realpath(os.path.join(project, common)).encode()).hexdigest()[:12]  # hooks/lib/score_log.py's project_key
+    lines = []
+    for role, _, rank in (item.partition(":") for item in spec.split(",")):
+        for n, points in enumerate(RANK_POINTS[rank], 1):
+            lines.append(json.dumps({"kind": "event", "ts": f"2026-01-0{n}T00:00:00Z", "project": key, "task_id": "20260101-000000",
+                                     "role": role, "event": "qa_fail" if points < 0 else "qa_first_pass", "points": points,
+                                     "key": f"seed:{role}:{n}", "ref": "",
+                                     "why": "edge case not tested" if points < 0 else "lane QA passed at the first round"}))
+    log = log_path(rp)
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write("".join(line + "\n" for line in lines))

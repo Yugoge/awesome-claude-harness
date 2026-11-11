@@ -1,13 +1,17 @@
 # Codex consultation
 
-Read this file when your dispatch prompt carries the line `codex_required: true`. Without that line (the
-default) you skip codex: your output carries `codex_consult: { invoked: false, status: "not_requested",
+Read this file when your dispatch prompt carries the line `codex_required: true`, or, for QA, when the record
+text shown when you started says this round includes a Codex debate. Without either (the default) you skip codex: your output carries `codex_consult: { invoked: false, status: "not_requested",
 findings: [], feedback_summary: null, feedback_incorporated: null }` and nothing below applies.
 
 **Who sets the line.** Codex is off by default; the owner turns it on with `--codex`. The orchestrator adds
 the line to the dispatches whose command text carries it:
 
 - `/dev`, `/redev`, `/dev-command`, `/dev-overnight`: the dispatches whose template carries it.
+- A QA of a `/dev`-family cycle whose score is low (the two lowest ranks, D32): no line; the SubagentStart text
+  (`hooks/subagentstart-record.py`) says so and the SubagentStop codex hook binds it with or without
+  `--codex`; any codex call, failed or not, is the ledger entry that lets it stop. A failed Skill invocation
+  is recorded too (codex may be unavailable: say so in `codex_consult`).
 - `/spec`, `/clean`: the dispatches whose template carries it.
 - `/close`, `/commit`: QA's dispatch (`/commit`: `codex_required: <QA_CODEX>`). That command's own text sets out
   QA's Codex round; the protocol below governs how Codex is asked and answered there too.

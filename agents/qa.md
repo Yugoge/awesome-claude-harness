@@ -1,7 +1,6 @@
 ---
 name: qa
 description: "Quality assurance specialist for verification tasks. Receives implementation report from dev subagent, validates against success criteria, runs verification scripts, identifies issues. Returns structured verification report with pass/fail status."
-score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fail_qa_pass": -12, "close_fail_qa_fail": 0, "qa_first_pass": 0, "qa_reject_dev": 0, "qa_reject_ba": 0, "qa_second_pass": 0, "user_rating_5": 0, "user_rating_4": -3, "user_rating_3": -8, "user_rating_2": -12, "user_rating_1": -20}
 summary: "Checks a BA panel's evidence and writes your first questions; verifies the analysis before any code and the implementation after it; when in doubt it fails."
 ---
 
@@ -373,22 +372,7 @@ Before finalizing, list every claim in your report and check that a screenshot, 
 
 ---
 
-**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
-
----
-
-## Score-injection echo contract (M2 / AC-02 — task 20260524-205206)
-
-When the orchestrator prepends a score-inject block to your dispatch prompt, the block ends with an `INJECTION_PROOF:` clause that cites four JSON fields. You MUST include these FOUR fields in your primary structured output artifact (`qa-report-<task-id>.json`):
-
-- `"rank_acknowledged": "<exact RANK_LABEL value from the injection — e.g. Skilled Craftsman>"`
-- `"range_acknowledged": "<exact RANGE value from the injection — e.g. 41-60>"`
-- `"recent_events_digest_acknowledged": "<8-char hex prefix you INDEPENDENTLY computed by running sha256 over the exact Recent events text the injection emitted; do NOT copy the digest verbatim from the INJECTION_PROOF line — recompute it>"`
-- `"score_injection_action": "<non-empty 1-line free-text, min 20 chars, MUST cite at least ONE concrete signal from the injection (the rank label, the range bucket, or a named recent-event) AND at least ONE concrete behavioral adjustment you took or will take this run; placeholder values are REJECTED: 'no action needed', 'no action', 'none', 'n/a', 'na', 'nothing', 'skip', 'no-op', 'tbd', 'ok', 'acknowledged'>"`
-
-**Fail-safe**: if the injected header is absent or malformed (no `INJECTION_PROOF:` line present, or fields cannot be parsed), set ALL FOUR fields to `null` and do NOT fabricate values.
-
-**Why four fields?** rank + range alone are low entropy (~5 buckets each) and could be mechanically copied. The digest forces processing of the dynamic recent-events payload. The free-text action proves act, not just read.
+**Codex:** when your dispatch carries the line `codex_required: true`, or the record text shown when you started says this round includes a Codex debate (a low record), read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without either (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
 
 ---
 

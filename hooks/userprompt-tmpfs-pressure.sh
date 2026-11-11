@@ -24,6 +24,7 @@
 # `-type f` hook-state sweep predicate and would leak indefinitely). Both
 # are swept by /usr/local/sbin/tmp-cleanup.sh via the `claude-pressure-warn-*`
 # wildcard at the >7d hook-state tier.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
 

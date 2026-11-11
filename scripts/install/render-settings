@@ -34,12 +34,25 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      (scripts/bootstrap) overlay when it migrates nothing.
   literals           create the private-literal list <H>/private-literals.txt, empty and mode
                      0600, when there is none: init's (scripts/bootstrap); the landing seeds it.
-  land [--rev | --repair]
+  (the harness switch) while <H>/.harness-switch/off exists (/harness off, scripts/harness-switch),
+                     the working settings.json is the OFF FORM of the machine form: what the clean form
+                     and the optional modules ship (their env keys, permission entries, hook commands,
+                     every hook command under <H>/hooks or <H>/scripts, the clean form's other
+                     top-level keys but OFF_KEEPS) is left out; the switch's own hook and permission
+                     entries, env.CLAUDE_HOME and everything else (the owner's) stay. smudge writes the
+                     off form, clean reads an off form back as the machine form it stands for (plus the
+                     owner's changes), so a pull while off neither fails on it nor turns it on; render
+                     and check work on the off form.
+  land [--rev | --repair | --history] [--spent N]
                      the settings half of the landing (scripts/install/land, at every Stop, on a
                      home that ran pre-P7 code): undo what a conflicted pull left in the index,
-                     migrate, seed private-literals.txt. --rev prints the pre-pull revision;
-                     --repair only undoes a conflicted pull (exit 1 while git refuses it). Both
-                     drop the overlay's hook commands HEAD retired or already runs (R2).
+                     migrate, seed private-literals.txt (also from the home's git history, the
+                     scan cut 10 s after the landing started, N s before). --rev prints the
+                     pre-pull revision; --repair only undoes a conflicted pull (exit 1 while git
+                     refuses it); both drop the overlay's hook commands HEAD retired or already
+                     runs (R2). --history only seeds the list (run before init step 5 reinstalls
+                     the git hooks): every source while it is absent or empty, else the history
+                     values it lacks, appended.
 
 The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
 render applied to the working file since the last render, so that an entry dropped from the overlay
@@ -542,6 +555,117 @@ def smudge_bytes(data, layers):
     return canon(y), None
 
 
+# ------------------------------------------------------------------------- the harness switch
+
+SWITCH_HOOK = "userprompt-harness-switch.sh"  # hooks/<it>: the one hook command the off form keeps
+SWITCH_PERMISSIONS = ("Skill(harness:*)", "Edit(**/.harness-switch/**)")  # the switch's own rules
+# Top-level keys the clean form ships that the off form keeps, because dropping them would change
+# what is not the harness: cleanupPeriodDays (365) guards the session history Claude Code would
+# otherwise delete after its default 30 days; deniedMcpServers keeps three connectors off that
+# the owner never turned on.
+OFF_KEEPS = ("cleanupPeriodDays", "deniedMcpServers")
+
+
+def switched_off(home):
+    """True while the harness switch is off (hooks/lib/harness_switch.py, the one test)."""
+    try:
+        lib = _load_module(os.path.join(home, "hooks", "lib", "harness_switch.py"),
+                           "_render_settings_harness_switch")
+        return bool(lib.is_off(home))
+    except Exception:  # a home without the switch is on
+        return False
+
+
+def _harness_command(hook):
+    key = hook_key(hook)
+    return "@H/hooks/" in key or "@H/scripts/" in key
+
+
+def _switch_command(hook):
+    return ("@H/hooks/" + SWITCH_HOOK) in hook_key(hook)
+
+
+def shipped_entries(base):
+    """What the harness ships, from the clean form `base` and every optional module: (env keys,
+    permission list entries by list, other permission keys, hook keys by event, top-level keys)."""
+    env, perms, values, hooks = set(), {}, set(), {}
+    for src in [base] + [MODULES[name] for name in sorted(MODULES)]:
+        env.update(_d(src.get("env")))
+        for name, val in _d(src.get("permissions")).items():
+            if isinstance(val, list):
+                perms.setdefault(name, set()).update(e for e in val if isinstance(e, str))
+            else:
+                values.add(name)
+        for event, groups in _d(src.get("hooks")).items():
+            hooks.setdefault(event, set()).update(_hook_keys(groups))
+    tops = {k for k in base if k not in STRUCTURED and k not in OFF_KEEPS}
+    return env, perms, values, hooks, tops
+
+
+def off_form(y, base):
+    """The off form of the settings object `y` (a copy): see the module docstring."""
+    y = copy.deepcopy(y)
+    env, perms, values, hooks, tops = shipped_entries(base)
+    if isinstance(y.get("env"), dict):
+        for key in [k for k in y["env"] if k in env]:
+            del y["env"][key]
+        if not y["env"]:
+            del y["env"]
+    if isinstance(y.get("permissions"), dict):
+        p = y["permissions"]
+        for name in list(p):
+            if isinstance(p[name], list):
+                owned = perms.get(name, set())
+                p[name] = [e for e in p[name] if e in SWITCH_PERMISSIONS or e not in owned]
+                if not p[name] and name in perms:
+                    del p[name]
+            elif name in values:
+                del p[name]
+        if not p:
+            del y["permissions"]
+    if isinstance(y.get("hooks"), dict):
+        h = y["hooks"]
+        for event in list(h):
+            if not isinstance(h[event], list):
+                continue
+            known, out = hooks.get(event, set()), []
+            for g in h[event]:
+                if not (isinstance(g, dict) and isinstance(g.get("hooks"), list)):
+                    out.append(g)
+                    continue
+                keep = [x for x in g["hooks"] if not isinstance(x, dict) or _switch_command(x)
+                        or (hook_key(x) not in known and not _harness_command(x))]
+                if keep:
+                    g = dict(g, hooks=keep)
+                    out.append(g)
+            if out:
+                h[event] = out
+            else:
+                del h[event]
+        if not h:
+            del y["hooks"]
+    for key in list(y):
+        if key in STRUCTURED:
+            continue
+        value = y[key]
+        if key in tops or (isinstance(value, dict) and isinstance(value.get("command"), str)
+                           and _harness_command({"type": "command", "command": value["command"]})):
+            del y[key]  # a shipped key, or a statusLine-like command that runs a harness script
+    return y
+
+
+def on_form(working, base, layers):
+    """The machine form an off-form settings object stands for: the machine form of the clean
+    form `base` under `layers`, with what the owner changed in the off form (the working
+    entries the off form of that machine form does not explain) and the CLI-owned keys."""
+    target = merge_all(copy.deepcopy(base), layers)
+    merge(target, diff(working, off_form(target, base), skip_top=CLI_OWNED))
+    for key in CLI_OWNED:
+        if key in working:
+            target[key] = copy.deepcopy(working[key])
+    return target
+
+
 # ------------------------------------------------------------------------------------- diff
 
 _PREFIX = re.compile(r"(?<!\S)\S*?/(hooks|scripts)/")
@@ -649,11 +773,19 @@ def working_extras(working, target, layers):
 def cmd_clean(home):
     data = sys.stdin.buffer.read()
     try:
-        layers = layers_of(load_overlay(home)) + load_record(home)
+        overlay_layers = layers_of(load_overlay(home))
+        layers = overlay_layers + load_record(home)
     except OverlayError as exc:
         _err("clean refused: %s; fix it, then re-stage settings.json" % exc)
         return 1
-    out, problem = clean_bytes(data, layers, load_base(home))
+    base = load_base(home)
+    working = parse(data)
+    if working is not None and switched_off(home):  # an off form reads as the form it stands for
+        try:
+            data = canon(on_form(working, base, overlay_layers))
+        except ShapeError:
+            pass  # clean_bytes names the structure
+    out, problem = clean_bytes(data, layers, base)
     if problem:  # never pass it through: unchanged input may carry machine values
         if data.startswith(b"\xef\xbb\xbf"):
             problem = "input starts with a UTF-8 byte order mark"
@@ -680,6 +812,11 @@ def cmd_smudge(home):
         out, problem = smudge_bytes(data, layers)
         if problem:
             _err("smudge: %s; passing settings.json through unchanged" % problem)
+        elif switched_off(home):  # /harness off: what git writes is the off form
+            try:
+                out = canon(off_form(parse(out), parse(data)))
+            except ShapeError:
+                pass
     sys.stdout.buffer.write(out)
     return 0
 
@@ -783,6 +920,9 @@ def cmd_render(home, force):
     if problem:
         _err("render refused: %s" % problem)
         return 1
+    off = switched_off(home)
+    if off:  # /harness off: render the off form, so no render turns the harness back on
+        target = off_form(target, parse(clean_source(home)) or {})
     if working is not None and not force:
         # Recorded entries the overlay has since dropped are explained: the render drops them.
         extras = working_extras(working, target, layers + recorded)
@@ -811,8 +951,9 @@ def cmd_render(home, force):
     if is_checkout(home):
         refresh_index(home)
     modules = [n for n in sorted(MODULES) if overlay and overlay.get("modules", {}).get(n)]
-    print("render-settings: settings.json %s (overlay: %s; modules: %s)"
+    print("render-settings: settings.json %s%s (overlay: %s; modules: %s)"
           % ("rendered" if changed else "already up to date",
+             " in its off form (/harness off)" if off else "",
              "present" if overlay is not None else "absent", ", ".join(modules) or "none"))
     return 0
 
@@ -932,6 +1073,16 @@ def check_filter(home, overlay_error, overlay, recorded, working):
         cleaned, problem2 = clean_bytes(smudged, layers + recorded, load_base(home))
         if problem or problem2 or cleaned != index:
             problems.append("round trip clean(smudge(index)) does not reproduce the index blob")
+        elif switched_off(home):
+            try:
+                base = load_base(home)
+                off = off_form(parse(smudged), parse(index) or {})
+                cleaned = clean_bytes(canon(on_form(off, base, layers)), layers + recorded, base)[0]
+            except ShapeError:
+                cleaned = None
+            if cleaned != index:
+                problems.append("round trip of the off form (/harness off) does not reproduce the "
+                                "index blob")
     path = record_path(home)
     if overlay is not None and path and not os.path.exists(path):
         problems.append("no record of what render applied (%s)" % RECORD)
@@ -942,6 +1093,8 @@ def check_filter(home, overlay_error, overlay, recorded, working):
     if working is None:
         return True
     target, layers, problem = machine_form(home, overlay, working)
+    if target is not None and switched_off(home):
+        target = off_form(target, parse(clean_source(home)) or {})
     extras = working_extras(working, target, layers) if target is not None else {}
     ok = _ok("settings.json entries: %s the clean form, the enabled modules and the overlay"
              % ("some are outside" if extras else "all explained by"), not extras)
@@ -1009,6 +1162,9 @@ def cmd_check(home):
     if _d((overlay or {}).get("env")).get("GIT_AUTO_PUSH") == "1":  # D1: opt-in, so not a failure
         print('[info] env.GIT_AUTO_PUSH is "1" in %s: automatic pushes are on' % OVERLAY)
     runtime_ok = check_protected_runtime(home)
+    if switched_off(home):
+        print("[info] the harness is off (/harness off): settings.json was checked in its off form;"
+              " scripts/harness-switch status says more")
     return 0 if hooks_ok and filter_ok and runtime_ok else 1
 
 
@@ -1372,6 +1528,15 @@ AUTO_MARKER = re.compile(rb"^<!-- (/?)AUTO:[^ ]+ -->$")
 INDEX_TITLE = re.compile(rb"^# [^ \t]+$")  # regen_index's `# <directory>`, kept below when stale
 SEED_KEYS = tuple(name for name, _, _ in CODE_DEFAULTS) + ("GRAPHIFY_BIN",)
 _HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:hooks|scripts)/[^\s"';]+)""")
+# Fact 9's history sources: the engine's EMAIL (scripts/check-public-core.sh) from its "@", the
+# local part found backwards (at most 64 characters), and a commit's author and committer lines.
+EMAIL_AT = re.compile(rb"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+LOCAL_PART = re.compile(rb"[A-Za-z0-9._%+-]{1,64}\Z")
+IDENTITY = re.compile(rb"^(?:author|committer) ([^<\n]*?) ?<([^<>\n]*)>", re.M)
+# The history scan stops reading trees and blobs this many seconds after the landing started (R1:
+# under 15 s with the steps after it). Measured: 0.9 s for this repository's history, 1.3 s with
+# 252 backup refs and 3 checkpoint chains, 5 s with 1 GB more of checkpoint snapshots.
+HISTORY_SECONDS = 10
 
 
 def _say(msg):
@@ -1524,12 +1689,77 @@ def _markers(text):
     return found
 
 
-def seed_literals(home, rev):
-    """R5: seed private-literals.txt (mode 0600) from values this machine holds, only when it is
-    absent or empty (blank lines only). {source: count}, or None when it is kept."""
-    data = _read(LITERALS) if os.path.isfile(LITERALS) else None
-    if os.path.lexists(LITERALS) and (data is None or data.strip()):
-        return None
+def public_email(addr):
+    """P11 A2's public allowlist: a noreply address, or one at example.com, example.net,
+    example.org or a .invalid, .test, .example or localhost domain (subdomains included)."""
+    local, _, domain = addr.lower().rpartition("@")
+    labels = domain.split(".")
+    return bool(re.fullmatch(r"no[-_.]?reply|do[-_.]?not[-_.]?reply", local)) or \
+        "noreply" in labels or labels[-1] in ("invalid", "test", "example", "localhost") or \
+        ".".join(labels[-2:]) in ("example.com", "example.net", "example.org")
+
+
+def history_values(home, seconds):
+    """Fact 9 (P11): from every ref (branches, remote-tracking refs, tags, refs/backups/*,
+    refs/checkpoints/*) and every stash entry, the e-mail and the name of each author and
+    committer whose e-mail is not public, and each e-mail address outside the public allowlist in
+    a commit or tag message or a blob. The walk lists the commits first; the trees and blobs left
+    once `seconds` have passed are not read (cut). A missing object, a ref's tip too, is skipped,
+    never fetched. ({source: [values]}, objects read, cut)."""
+    tips = ((_git_out(home, "for-each-ref", "--format=%(objectname)") or "") + "\n" + (_git_out(
+        home, "log", "-g", "--format=%H", "refs/stash") or "")).split()  # every stash entry
+    env = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+    found = subprocess.run(["git", "-C", home, "cat-file", "--batch-check=%(objectname)"],
+                           input="\n".join(tips + ["HEAD"]).encode(), stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, env=env).stdout.decode().split("\n")
+    tips = list(dict.fromkeys(t for t in found if t and " " not in t))  # "<name> missing" left out
+    if not tips:
+        return {"history-identities": [], "history-e-mails": []}, 0, False
+    walk = subprocess.Popen(["git", "-C", home, "rev-list", "--objects", "--no-object-names",
+                             "--missing=allow-any", *tips], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+    cat = subprocess.Popen(["git", "-C", home, "cat-file", "--batch"], stdin=walk.stdout,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+    walk.stdout.close()
+    ids, mails, read, cut, done = {}, {}, 0, False, False
+    deadline = time.monotonic() + max(seconds, 0)
+    try:
+        for head in iter(cat.stdout.readline, b""):
+            kind, size = (head.split() + [b"", b""])[1:3]
+            if kind != b"commit" and time.monotonic() > deadline:
+                cut = True
+                break
+            if kind == b"missing" or not size.isdigit():
+                continue
+            data, read = cat.stdout.read(int(size) + 1)[:-1], read + 1
+            if kind in (b"commit", b"tag"):
+                header, _, data = data.partition(b"\n\n")
+                for name, mail in IDENTITY.findall(header):
+                    name, mail = name.decode("utf-8", "replace"), mail.decode("utf-8", "replace")
+                    if not public_email(mail):
+                        ids.update(dict.fromkeys((mail, name)))
+            elif kind != b"blob":
+                continue
+            for m in EMAIL_AT.finditer(data) if b"@" in data else ():
+                local = LOCAL_PART.search(data, max(0, m.start() - 64), m.start())
+                if local:
+                    mails[data[local.start():m.end()].decode("ascii")] = None
+        done = not cut
+    finally:
+        for proc in (cat, walk):
+            if not done:  # cut, or an error: neither is left waiting on a pipe
+                proc.kill()
+            proc.wait()
+        cat.stdout.close()
+    if done and (walk.returncode or cat.returncode):
+        raise RuntimeError("history walk")
+    return {"history-identities": list(ids),
+            "history-e-mails": [m for m in mails if not public_email(m)]}, read, cut
+
+
+def _machine_sources(home, rev):
+    """R5's sources: the overlay's personal env values, its permission entries' paths outside the
+    harness home, the git user.email and rev's check-public-core.sh markers."""
     overlay = load_overlay(home) or {}
     env, perms = _d(overlay.get("env")), _d(overlay.get("permissions"))
     values = []
@@ -1553,10 +1783,26 @@ def seed_literals(home, rev):
     homes |= {m.group(1) for g in _d(prev.get("hooks")).values() for grp in _list(g)
               for h in _list(_d(grp).get("hooks"))
               for m in _HOME_OF.finditer(str(_d(h).get("command", ""))) if m.group(2) in tracked}
-    sources = {"overlay-env": values, "permission-paths": _paths(
+    return {"overlay-env": values, "permission-paths": _paths(
         [e for v in perms.values() for e in _list(v)], homes), "git-e-mail": [email] if email else [],
         "check-markers": _markers((blob(home, rev + ":scripts/check-public-core.sh") or b"")
                                   .decode("utf-8", "replace"))}
+
+
+def seed_literals(home, rev, seconds):
+    """R5 and fact 9 (P11): seed private-literals.txt (mode 0600) when it is absent or empty
+    (blank lines only) from R5's sources (rev None: the pre-pull revision, else HEAD) and the
+    home's history; a list with lines keeps every line as it is, in order, and gets the history
+    values it lacks appended (a value one of its lines names, a #-line too, is not lacking). Both
+    are written in one atomic write: a run cut short writes nothing. (fresh, {source: count},
+    objects read, cut), or None when the list is not a regular file."""
+    data = _read(LITERALS) if os.path.isfile(LITERALS) else None
+    if os.path.lexists(LITERALS) and data is None:
+        return None
+    fresh = not (data or b"").strip()
+    sources = _machine_sources(home, rev or pre_pull_rev(home) or "HEAD") if fresh else {}
+    history, read, cut = history_values(home, seconds)
+    sources.update(history)
     clean = parse(blob(home, "HEAD:" + SETTINGS)) or {}
     safety = (blob(home, "HEAD:" + SAFETY_HOOK) or b"").decode("utf-8", "replace")
     shipped = {w for v in [v for v in _d(clean.get("env")).values() if isinstance(v, str)] +
@@ -1573,18 +1819,32 @@ def seed_literals(home, rev):
                           input=cands.encode("utf-8", "surrogateescape"), stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL) if cands else None
     lines = grep.stdout.decode("utf-8", "replace").splitlines() if grep else []
-    common = {v for v in cands.split("\n") if v and sum(v in ln for ln in lines) >= 100}
+    hits = {v: sum(v in ln for ln in lines) for v in cands.split("\n") if v}
+    common = {v for v, n in hits.items() if n >= 100}
+    # A history value HEAD's tracked files hold at all is already in the tree the list checks:
+    # listed, every full engine run would fail on it and the pre-push guard would refuse every
+    # push of a file holding it (P11 fact 9's experiment).
+    held = {v.strip() for f in history.values() for v in f if hits.get(v.strip())} - common
     if common:
         _say("not seeded, in 100 or more tracked lines at HEAD: %d value(s)" % len(common))
+    present = {ln.strip().lstrip("#").strip() for ln in (data or b"").decode("utf-8",
+                                                                            "replace").splitlines()}
     seeded, counts = [], {}
     for source, found in sources.items():
+        drop = shipped | common | present | (held if source in history else set())
         keep = [v for v in dict.fromkeys(v.strip() for v in found) if len(v) >= 4
-                and v not in shipped | common and v.lower() != owner and v not in seeded]
+                and v not in drop and v.lower() != owner and v not in seeded]
         seeded += keep
         counts[source] = len(keep)
-    if seeded:
+    if seeded and fresh:
         _write_atomic(os.path.join(home, LITERALS), "\n".join(seeded).encode() + b"\n", 0o600)
-    return counts
+    elif seeded:  # through a symlinked list to its file, whose mode it keeps
+        _write_atomic(os.path.realpath(os.path.join(home, LITERALS)), (
+            data if data.endswith(b"\n") else data + b"\n") + "\n".join(seeded).encode() + b"\n")
+    _say("%s %s history-held=%d history-objects=%d%s" % (
+        "seeded" if fresh else "appended", " ".join("%s=%d" % kv for kv in counts.items()),
+        len(held), read, " history-cut=time-limit" if cut else ""))
+    return fresh, len(seeded), read, cut
 
 
 def overlay_note(dropped):
@@ -1627,9 +1887,25 @@ def from_head(home):
         if lost else [])
 
 
-def land(home, mode):
-    """(notice part or the step that failed, rc): the landing of an upgraded home, or with mode
-    "repair" a landed home whose later pull left a conflicted stash pop (rc 1: git refused it)."""
+def seed_notes(home, rev, seconds):
+    """The notice parts of seed_literals."""
+    res = seed_literals(home, rev, seconds)
+    if res is None:
+        return []
+    fresh, n, read, cut = res
+    return (["private-literals.txt seeded with %d value(s)" % n] if fresh else
+            ["%d value(s) from the home's git history added to private-literals.txt" % n] if n
+            else []) + (["the history scan for private-literals.txt stopped at its time limit "
+                         "after %d object(s)" % read] if cut else [])
+
+
+def land(home, mode, seconds=HISTORY_SECONDS):
+    """(notice part or the step that failed, rc): the landing of an upgraded home, with mode
+    "history" the private-literal list before init step 5 reinstalls the git hooks (fact 9), or
+    with mode "repair" a landed home whose later pull left a conflicted stash pop (rc 1: git
+    refused it). `seconds`: the history scan's time limit."""
+    if mode == "history":
+        return "; ".join(seed_notes(home, None, seconds)), 0
     unmerged, notes = _unmerged(home), []
     if mode == "repair":  # a notice once a path was taken or one git refused stays unmerged
         stash = pull_stash(home, None)
@@ -1672,16 +1948,13 @@ def land(home, mode):
         (0, 0, 0, 0, [])
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
     notes += repaired(res)
-    counts = seed_literals(home, rev)
-    if counts is not None:
-        _say("seeded " + " ".join("%s=%d" % kv for kv in counts.items()))
-        notes.append("private-literals.txt seeded with %d value(s)" % sum(counts.values()))
+    notes += seed_notes(home, rev, seconds)
     if SETTINGS not in _unmerged(home) and not os.path.exists(record_path(home) or ""):
         notes += [n for n in from_head(home) if not any(n in note for note in notes)]
     return "; ".join(notes), 0
 
 
-def cmd_land(home, mode):
+def cmd_land(home, mode, seconds=HISTORY_SECONDS):
     """render-settings land, run by scripts/install/land under its lock once no rebase or merge is
     stopped. It writes its log lines (counts, key names and revision ids, never a value) to stderr,
     which land appends to logs/landing.log, so land is that log's one writer; stdout is one line:
@@ -1693,10 +1966,10 @@ def cmd_land(home, mode):
         return 0 if rev else 1
     with contextlib.redirect_stdout(sys.stderr):
         try:
-            note, rc = land(home, mode)
+            note, rc = land(home, mode, seconds)
         except Exception as exc:  # never a traceback: its text may carry a value
             _say("failed: %s" % type(exc).__name__)
-            note, rc = "settings", 1
+            note, rc = "history seeding" if mode == "history" else "settings", 1
     print(note)
     return rc
 
@@ -1726,6 +1999,10 @@ def main(argv=None):
     p_land = sub.add_parser("land", help="the settings half of the landing (P7b)")
     p_land.add_argument("--rev", dest="mode", action="store_const", const="rev")
     p_land.add_argument("--repair", dest="mode", action="store_const", const="repair")
+    p_land.add_argument("--history", dest="mode", action="store_const", const="history")
+    p_land.add_argument("--spent", type=float, default=0,
+                        help="seconds the landing used before: the history scan has the rest of %d"
+                        % HISTORY_SECONDS)
     args = parser.parse_args(argv)
     home = harness_home()
     if args.command == "clean":
@@ -1742,7 +2019,7 @@ def main(argv=None):
         return cmd_literals(home)
     if args.command == "land":
         try:
-            return cmd_land(home, args.mode)
+            return cmd_land(home, args.mode, HISTORY_SECONDS - args.spent)
         except Exception as exc:  # never a traceback: its text may carry a value
             _err("land: %s" % type(exc).__name__)
             return 1

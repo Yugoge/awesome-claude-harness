@@ -596,40 +596,6 @@ def test_the_shipped_settings_register_the_hook_once_for_askuserquestion_and_age
                       'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py"')]
 
 
-def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -> None:
-    # The score scripts read rows by their `agent` field; rating rows have none.
-    root = tmp_path / "home"
-    (root / "scripts" / "lib").mkdir(parents=True)
-    (root / "venv" / "bin").mkdir(parents=True)
-    (root / "venv" / "bin" / "activate").write_text("", encoding="utf-8")
-    for name in ("score-update.sh", "score-inject.sh"):
-        shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
-    shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
-    (root / "hooks" / "lib").mkdir(parents=True)
-    for name in ("roster.py", "score_log.py"):
-        shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
-    shutil.copytree(REPO_ROOT / "agents", root / "agents")
-    _summary(_run(_payload("4 - Minor gaps"), config))
-    _summary(_run(_payload("1-2 - Not met", task=OTHER), config))
-
-    def score(script: str, *arguments: str, log: Path = _log(config)) -> subprocess.CompletedProcess:
-        return subprocess.run(["bash", str(root / "scripts" / script), *arguments,
-                               "--lifecycle-file", str(log)], capture_output=True, text=True, timeout=60)
-
-    inject = score("score-inject.sh", "--agent", "dev")
-    assert inject.returncode == 0 and "INJECTION_PROOF" in inject.stdout, inject.stderr
-    update = score("score-update.sh", "--agent", "dev", "--event", "qa_first_pass")
-    assert update.returncode == 0, update.stderr
-    rows = _rows(config)
-    assert [row.get("rating") for row in rows[:2]] == [4, 1] and rows[2]["agent"] == "dev" and len(rows) == 3
-    # score-update.sh appends through the log's one writer (score_log.append): no log yet, its row as before
-    fresh = tmp_path / "fresh" / "lifecycle.jsonl"
-    update = score("score-update.sh", "--agent", "dev", "--event", "qa_first_pass", "--note", "naïve", log=fresh)
-    assert update.returncode == 0, update.stderr
-    [line] = fresh.read_text(encoding="utf-8").splitlines()
-    assert '"reason": "naïve"' in line and json.loads(line)["prev_score"] == 50 and len(json.loads(line)) == 9
-
-
 # --------------------------------------------------------------------------
 # The predicates P5 imports (A8)
 # --------------------------------------------------------------------------
