@@ -1841,6 +1841,13 @@ def main():
                 print(recovery)
         else:
             handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
+            try:  # an ask span opens with the main agent's own record, and the roles on notice (D29, D32): context, never a verdict
+                import score_view  # hooks/lib is on sys.path (see the WS1 block above)
+                line = score_view.main_line(cmd_name, str(PROJECT_DIR))
+                if line:
+                    print(line)
+            except Exception:
+                pass
     except SystemExit:
         # M5/AC4: a /dev-overnight launch failure raises SystemExit(2) to fail
         # CLOSED. Do NOT swallow it into exit(0); propagate the failure code.

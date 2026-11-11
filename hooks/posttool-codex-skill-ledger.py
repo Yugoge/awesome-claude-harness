@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PostToolUse Hook (Skill): Stamp codex-ledger entry when codex skill is called.
+"""PostToolUse / PostToolUseFailure Hook (Skill): Stamp codex-ledger entry when codex skill is called.
 
-Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
+Fires on every PostToolUse and PostToolUseFailure for the Skill tool. When tool_input.skill == "codex",
 resolves the calling agent's cycle as its consumer, subagentstop-codex-enforce.py,
 does (lib/agent_cycle.py: from the agent's own dispatch obligation, else its
 agent-index.json entry) and writes a ledger entry to:
@@ -14,7 +14,8 @@ The quota/timeout semantics: the ledger records the call with a status read from
 the Skill output (quota_error, timeout, parse_error, else called). The
 subagentstop-codex-enforce.py hook treats any ledger entry as sufficient — the
 agent tried; infrastructure failure is not agent non-compliance. This hook is
-registered under PostToolUse (matcher Skill) only, not PostToolUseFailure.
+registered under both PostToolUse and PostToolUseFailure (matcher Skill), so an unavailable
+Skill also records the attempt and leaves a stopping agent a way forward (D25).
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -49,7 +50,9 @@ def _load_stdin() -> dict:
 
 
 def _determine_status(data: dict) -> str:
-    """Classify the codex call outcome from PostToolUse payload."""
+    """Classify the call, including a Skill invocation that failed before any output."""
+    if data.get("hook_event_name") == "PostToolUseFailure":
+        return "failed"
     tool_response = data.get("tool_response") or {}
     if isinstance(tool_response, dict):
         output = tool_response.get("output") or ""
@@ -68,7 +71,7 @@ def main() -> None:
     if not data:
         sys.exit(0)
 
-    # Only act on Skill tool PostToolUse
+    # Only act on Skill tool success or failure
     tool_name = data.get("tool_name")
     if tool_name != "Skill":
         sys.exit(0)

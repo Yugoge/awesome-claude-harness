@@ -418,8 +418,9 @@ def test_the_fallback_answers_as_the_gate(lab, monkeypatch):
 
 def test_l4s_whole_registration_change():
     """The registration change of L4 and L5 together, as settings.json makes it
-    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52, and the
-    harness switch's own registration makes 53."""
+    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52; the harness
+    switch's own registration and P13-3's two (the SubagentStart injector, the codex ledger on
+    PostToolUseFailure) make 55."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -432,8 +433,9 @@ def test_l4s_whole_registration_change():
         exec(compile((HOOKS / gate).read_text(), str(HOOKS / gate), "exec"), ns)
         calls = [(r.name, r.kind) for r in ns["RULES"] if r.call == w.DEV_LOOP]
         assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
-    # + 1: the harness switch's own UserPromptSubmit registration (hooks/userprompt-harness-switch.sh)
-    assert len(regs) == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+    # + 1: the harness switch's own UserPromptSubmit registration (hooks/userprompt-harness-switch.sh);
+    # - 2: P13-3's two, the SubagentStart injector and the codex ledger on PostToolUseFailure
+    assert len(regs) - 2 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
         - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')

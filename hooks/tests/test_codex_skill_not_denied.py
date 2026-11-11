@@ -69,8 +69,9 @@ def test_the_pipeline_texts_call_codex_through_the_skill_tool():
     assert "templates/prompt-includes/codex-consultation.md" in callers, callers
 
 
-def test_the_codex_ledger_is_written_only_by_the_skill_calls_posttooluse():
+def test_the_codex_ledger_records_successful_and_failed_skill_calls():
     assert _registered("PostToolUse", "hooks/posttool-codex-skill-ledger.py", "Skill")
+    assert _registered("PostToolUseFailure", "hooks/posttool-codex-skill-ledger.py", "Skill")
     # P12-L5 runs the SubagentStop artifact checks in one process: the producer gate is the one registered
     # hook, and it runs the codex enforcer as its codex-ledger rule.
     assert _registered("SubagentStop", "hooks/subagentstop-producer-gate.py", "*")

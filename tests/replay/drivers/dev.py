@@ -37,7 +37,7 @@ orchestrator runs none and marks the step completed. Step 17 indexes every lane'
 canonical. When Step 17's resolver postcondition does not pass (a failed or refused call), the
 Stop text reports the cycle not complete, as the step says. The framework's dispatch is synchronous, so a stage's "single parallel batch" is
 played as consecutive dispatches, lane by lane, each lane's own pre-dispatch block (the base's
-qa_mode flip) right before its dispatch; a stage's score header is computed once per stage.
+qa_mode flip) right before its dispatch.
 
 Driver arguments (cli.py --arg K=V):
   variant=plain        BA ready, BA-QA pass, dev, QA pass (default)
@@ -60,6 +60,10 @@ Driver arguments (cli.py --arg K=V):
                        names (the score log then holds a qa_fail row and no qa_catch row)
   resweep=1            after the run, the score observer hook runs once more on the final transcript and the
                        score log is kept (tests/replay/scorelog.py; any driver)
+  score=<role>:<rank>[,...]  (any driver; inner.py seeds it) the score log starts with the rows that put each role in its rank
+                       (disgraced, apprentice, journeyman, skilled, senior, master; restored: a low record brought back to 30); a low
+                       dev or BA (the opener's `Low record:` line) gets the extra independent QA round, tests/replay/test_score_dispatch.py
+  extra=skip           (with a low dev) the cycle ends before the extra independent QA round: the Stop gate refuses it, the QA runs, the Stop passes
   lanes=N              fan-out lane count (2 or 3)
   lane_id=text|task    fan-out lane id base: `text` (default) the placeholder the adapter line
                        names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b, `<TASK_ID>-<lane-suffix>` on
@@ -347,7 +351,6 @@ class DevCycle:
                  session=None):
         self.rp, self.variant, self.tier = rp, variant, tier
         self.spec_id = ""
-        self.score: dict = {}
         self.answers: list = []
         self.objections: list = []
         self.iteration = 0
@@ -390,7 +393,6 @@ class DevCycle:
             (r"^baseline_head_sha captured", lambda m: self.o.values.get("baseline_head_sha", "")),
             (r"^baseline_dirty_snapshot captured",
              lambda m: json.dumps(self.o.values.get("baseline_dirty_snapshot", ""))),
-            (r"^(\w+)_SCORE_HEADER prepended here", lambda m: self.score.get(m.group(1).lower(), "")),
             (r"^N$", lambda m: str(len(self.answers))),
             (r"JSON array of \{question, answer\} pairs", lambda m: json.dumps(self.answers)),
             (r"^accumulated hints$", lambda m: self.sc.rel),
@@ -432,11 +434,6 @@ class DevCycle:
                  "text": [h.get("refusal_head") or h.get("stderr", "") for h in ev.blocks]}]
         while not self.o.at_step(n):
             self.o.advance()
-
-    def score_header(self, step: int, agent: str) -> None:
-        cmd = self.o.inline(f"Step {step}", "score-inject.sh", startswith="bash ")
-        call = self.o.run(cmd, f"Mascot score header for {agent}", f"Step {step} Bash score-inject {agent}")
-        self.score[agent] = call.response.get("stdout", "").rstrip("\n") if call.ok else ""
 
     def step_role(self, step: int):
         """The subagent_type the canonical checklist's item for Step <step> names (its subagent_call)."""
@@ -575,7 +572,6 @@ class DevCycle:
         return m.group(1)
 
     def step4_pre(self) -> None:
-        self.score_header(4, "ba")
         self.ba_type = self.step_role(4)
         self.cycle = self.tid  # the round runs once for the cycle, under its task id
 
@@ -784,6 +780,21 @@ class DevCycle:
         self.read(rel, f"{label} Read {rel}")
         return self.load(rel)
 
+    def low_roles(self) -> set:
+        """The roles the opener's hook line names after `Low record:` (P13-3, D32): `dev/ba: one more independent QA round ...; qa: a Codex debate ...`."""
+        found = re.search(r"Low record: (.*)\.$", self.o.hook_out, re.M)
+        return {role for part in found.group(1).split("; ") for role in part.partition(":")[0].split("/")} if found else set()
+
+    def extra_round(self, step: int, role: str, label: str) -> bool:
+        """Whether the cycle plays the extra independent QA round of `role` after Step `step`'s pass: the opener's line names the role, and the step's text
+        states the round (a text without it raises, so a reverted rule fails the replay)."""
+        if role not in self.low_roles():
+            return False
+        if "Extra independent QA round (D32)" not in self.o.section(f"Step {step}"):
+            raise cmdtext.TextNotFound(f"Step {step} of the command text states no extra independent QA round")
+        self.o.s.say(f"{label}: the opener's line names {role} as low; Step {step}'s QA runs once more, with nothing of the first round.")
+        return True
+
     def step8(self) -> None:
         o = self.o
         o.s.say(f"BA-QA iteration 1: QA found {len(self.objections)} objections in BA analysis. "
@@ -848,8 +859,7 @@ class DevCycle:
                 self.read(rel, self.L(f"Step 10 Read {rel}"))
 
     def step10_pre(self) -> None:
-        """Step 10's score header and its pre-dispatch baseline capture."""
-        self.score_header(10, "dev")
+        """Step 10's pre-dispatch baseline capture."""
         self.o.run_step_blocks(10, capture=("baseline_head_sha", "baseline_dirty_snapshot"))
 
     def step10_dev(self) -> None:
@@ -912,27 +922,12 @@ class DevCycle:
 
     def step13(self, label: str = "Step 13", verdict: str = "pass") -> None:
         self.step13_blocks(label)
-        self.score_header(13, "qa")
         self.step13_dispatch(label, verdict)
 
     def step14(self, label: str = "Step 14") -> str:
-        o = self.o
         rel = self.qa_report_rel = self.text_paths(14, "Read QA report")[0]
         self.read(rel, f"{label} Read {rel}")
-        status = (self.load(rel).get("qa") or {}).get("status")
-        sec = o.section("Step 14")
-        first = next(c for c in re.findall(r"`([^`\n]+)`", sec) if c.startswith("bash ") and "score-update.sh" in c)
-        script = first.split(" --", 1)[0]
-        if status == "pass":
-            item = "Second-or-later-round PASS" if self.iteration else "First-round PASS"
-            codes = cmdtext.inline_codes(o.text, "Step 14", item)
-            cmds = [c if c.startswith("bash ") else f"{script} {c}" for c in codes if "--agent" in c]
-        else:
-            codes = cmdtext.inline_codes(o.text, "Step 14", '`primary_cause = "dev_implementation"`')
-            cmds = [c if c.startswith("bash ") else "bash ~/.claude/scripts/" + c for c in codes if "--agent" in c]
-        for k, cmd in enumerate(cmds, 1):
-            o.run(o.bind(cmd), "Mascot score update", f"{label} Bash score-update {k}")
-        return status
+        return (self.load(rel).get("qa") or {}).get("status")
 
     def step15(self, label: str = "Step 15") -> None:
         o = self.o
@@ -964,6 +959,9 @@ class DevCycle:
         self.step13(self.L("Step 16 (Step 13 again)"), "pass")
         status = self.step14(self.L("Step 16 (Step 14 again)"))
         assert status == "pass", status
+        if self.extra_round(14, "dev", "Step 16"):  # D32: both rounds run again after the lane's dev returned
+            self.step13(self.L("Step 16 (Step 13 again, the extra independent round)"), "pass")
+            assert self.step14(self.L("Step 16 (Step 14 again)")) == "pass"
         self.step15(self.L("Step 15"))
 
     def files_generated(self, lines: list) -> list:
@@ -1018,6 +1016,18 @@ class DevCycle:
         return (f"/{self.o.typed} {self.tid}: QA passed, but the completion postcondition "
                 "(resolve-dev-artifact-chain.py) did not pass, so the cycle is not complete.")
 
+    def repair_extra(self) -> None:
+        """extra=skip: a Stop before the extra independent QA round is refused with the gap that names it (D32), the QA runs once more, and the
+        cycle's own Stop then passes."""
+        o = self.o
+        ev = o.s.stop(f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}", label="Stop before the extra round")
+        text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
+        if "owes one more independent final_verification QA dispatch" not in text:
+            raise AssertionError(f"a cycle without the extra round met no gap: {text[:300]}")
+        _round.fact(self.rp, "extra round skipped", {"blocked": True})
+        self.step13("Step 13 again, the extra independent round")
+        self.step14("Step 14 (again)")
+
     def stop(self) -> None:
         o = self.o
         text = (f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}"
@@ -1067,6 +1077,8 @@ class DevCycle:
         self.to(6); self.step6()
         self.to(7)
         report = self.step7(verdict="fail" if self.variant == "ba-qa-fail" else "pass")
+        if report.get("verdict") == "pass" and self.extra_round(7, "ba", "Step 7"):  # D32: a low BA's analysis is judged twice
+            self.step7("Step 7 (the extra independent round)")
         self.to(8)
         if report.get("verdict") == "fail":
             self.objections = report.get("objections") or []
@@ -1084,6 +1096,11 @@ class DevCycle:
         self.to(13); self.step13(verdict="fail" if self.variant == "qa-fail" else "pass")
         self.to(14)
         status = self.step14()
+        if status == "pass" and self.rp.args.get("extra") == "skip" and "dev" in self.low_roles():
+            self.skipped_extra = True  # the cycle ends without the extra round: the Stop gate holds it (repair_extra)
+        elif status == "pass" and self.extra_round(14, "dev", "Step 14"):  # D32: a low dev's work is judged twice
+            self.step13("Step 14 (Step 13 again, the extra independent round)")
+            status = self.step14("Step 14 (again)")
         self.to(15)
         if status == "pass":
             self.step15()
@@ -1092,6 +1109,8 @@ class DevCycle:
             self.step16()
         self.to(17); self.step17()
         o.advance()
+        if getattr(self, "skipped_extra", False):
+            self.repair_extra()
         self.stop()
 
 
@@ -1297,15 +1316,13 @@ class FanoutCycle(DevCycle):
         self.to(11); self.step11()
         self.to(12); self.each(lambda: self.step12(self.L("Step 12")))
         self.to(13)
-        self.score_header(13, "qa")
         def qa():
             self.step13_blocks(self.L("Step 13"))
             self.step13_dispatch(self.L("Step 13"), "fail" if self.variant == "fanout-qa-fail" and self.fails_first()
                                  else "pass")
         self.each(qa)
         self.to(14)
-        with self.one_call(14, "Mascot score updates, every lane"):
-            status = self.each(lambda: self.step14(self.L("Step 14")))
+        status = self.each(lambda: self.step14(self.L("Step 14")))
         self.to(15)
         with self.one_call(15, "Apply the validated permissions, every passing lane"):
             self.each(lambda: self.step15(self.L("Step 15")), [l for l in self.lanes if status[l.name] == "pass"])

@@ -81,11 +81,12 @@ hooks/
 │   ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 │   ├── `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
 │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
+│   ├── `score_view.py` - What a score shows at a dispatch and what a low one costs (D29, D32): the readers of the score log that hooks call. They read the log and the
 │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   ├── `specialist_yield.py` - Public API:
-│   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS
+│   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
 │   ├── `stop_contract.py` - is a prompt the human typed (TC-4)
 │   ├── `subagent.py` - is_subagent_context() and supporting helpers, for the hooks that import it
 │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
@@ -210,6 +211,7 @@ hooks/
 │   ├── `test_role_from_cli.py` - The role is the payload's agent_type when it carries an agent_id, else the agentType of
 │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   ├── `test_runtime_guard.py` - Two layers:
+│   ├── `test_score_view.py` - P13-3 (D29, D32): what a score shows at a dispatch and what a low one costs.
 │   ├── `test_scratch_lifecycle.py` - Covers:
 │   ├── `test_session_gitignore_propagate.py` - product repo are listed in the clone's own exclude file, one line each, and nothing else is writt...
 │   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
@@ -348,6 +350,7 @@ hooks/
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+├── `subagentstart-record.py` - SubagentStart: shows the starting subagent its own record (D29, D32): score, rank and trend, its newest good event and newest miss as facts,
 ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
