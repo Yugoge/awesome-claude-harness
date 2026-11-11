@@ -768,12 +768,14 @@ class DevCycle:
         """BA's context JSON: the JSON file among the BA outputs Step 6 names."""
         return next(p for p in self.ba_outputs if p.endswith(".json"))
 
-    def step7(self, label: str = "Step 7", verdict: str = "pass") -> dict:
+    def step7(self, label: str = "Step 7", verdict: str = "pass", summary: str = "") -> dict:
         o = self.o
         o.run_step_blocks(7, label=label)
         content = {}
         if verdict == "fail":
             content = {"*": {"objections": [self.sc.objection], "summary": "BA's root cause lacks evidence"}}
+        elif summary:
+            content = {"*": {"summary": summary}}
         act = agents.Act(verdict=verdict, content=content, summary="BA analysis checked")
         d = self._dispatch(o.template("Step 7"), act, f"{label} Agent(qa) ba_validation")
         rel = next(a["path"] for a in d.player.b.obligation["artifacts"] if a.get("kind") == "json")
@@ -1078,7 +1080,10 @@ class DevCycle:
         self.to(7)
         report = self.step7(verdict="fail" if self.variant == "ba-qa-fail" else "pass")
         if report.get("verdict") == "pass" and self.extra_round(7, "ba", "Step 7"):  # D32: a low BA's analysis is judged twice
-            self.step7("Step 7 (the extra independent round)")
+            # The independent round writes its own report. With the first round's bytes the player edits nothing, and
+            # the stop gate's freshness rule (2 s slack) holds that stop whenever the two rounds are over 2 s apart.
+            self.step7("Step 7 (the extra independent round)",
+                       summary="BA analysis checked again by an independent QA, with nothing of the first round")
         self.to(8)
         if report.get("verdict") == "fail":
             self.objections = report.get("objections") or []
