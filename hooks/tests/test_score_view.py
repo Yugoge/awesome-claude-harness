@@ -4,6 +4,7 @@ hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/li
 hooks/subagentstart-record.py (run here as a process), the Stop gate's extra-round gaps and the Codex gate's forced debate."""
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -202,7 +203,7 @@ def test_a_low_dev_owes_a_second_final_verification_after_its_last_dispatch(low)
     assert len(score_view.extra_round_gaps(again, "/p")) == 1
 
 
-@pytest.mark.parametrize(("pipeline", "owes"), [("dev", 1), ("dev-command", 1), ("close", 0), ("commit", 0)])
+@pytest.mark.parametrize(("pipeline", "owes"), [("dev", 1), ("dev-command", 1), ("dev-overnight", 1), ("close", 0), ("commit", 0)])
 def test_the_extra_round_is_owed_in_the_dev_family_pipelines_only(low, pipeline: str, owes: int) -> None:
     low("dev")
     span = _span((1, "dev", "singular", None), (2, "qa", "final_verification", None), pipeline=pipeline)
@@ -254,7 +255,7 @@ QA_PROMPT = "FIRST ACTION: Read the sentinel.\n" + obligation.serialize_obligati
      "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{TASK}.json", "schema": "qa-report.v2", "identity": {"task_id": TASK, "request_id": TASK}}]})
 
 
-def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", command="dev", prompt=QA_PROMPT, again=False) -> subprocess.CompletedProcess:
+def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", command="dev", prompt=QA_PROMPT, again=False, failed_attempt=False) -> subprocess.CompletedProcess:
     project, config = tmp_path / "project", tmp_path / "cfg"
     registry = project / ".claude" / "dev-registry" / f"dev-{TASK}"
     registry.mkdir(parents=True)
@@ -273,6 +274,14 @@ def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", com
     payload = {"stop_hook_active": again, "agent_id": "aqa", "agent_type": role, "session_id": "s", "cwd": str(project), "transcript_path": str(_tx(tmp_path / "t.jsonl", command)),
                "agent_transcript_path": str(sub)}
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_CONFIG_DIR": str(config), "HOME": str(tmp_path / "home"), "PYTHONDONTWRITEBYTECODE": "1"}
+    if failed_attempt:
+        attempted = {**payload, "hook_event_name": "PostToolUseFailure", "tool_name": "Skill",
+                     "tool_input": {"skill": "codex"}, "error": "Unknown skill: codex", "tool_use_id": "failed-codex"}
+        recorded = subprocess.run([sys.executable, str(REPO / "hooks" / "posttool-failure-launch.py")],
+                                  input=json.dumps(attempted), capture_output=True, text=True, env=env, timeout=60)
+        assert recorded.returncode == 0, recorded.stderr
+        entry = json.loads((registry / "codex-ledger" / "aqa.json").read_text())
+        assert entry["status"] == "failed" and entry["tool_call_id"] == "failed-codex"
     return subprocess.run([sys.executable, str(CODEX_HOOK)], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=60)
 
 
@@ -282,9 +291,9 @@ def test_a_low_qa_debates_codex_without_the_flag_and_its_ledger_entry_lets_it_st
     assert _codex_stop(tmp_path / "b", _at("qa", 10), ledger=True).returncode == 0  # any codex call, failed or not, is the entry
 
 
-def test_a_qa_bound_by_its_low_record_alone_is_let_go_on_its_second_stop(tmp_path: Path) -> None:
-    # codex may be unavailable and no flag turns the rule off (D25): the block is asked once; the flag's own binding has no such release
-    assert _codex_stop(tmp_path, _at("qa", 10), again=True).returncode == 0
+def test_a_low_qa_cannot_skip_its_debate_by_stopping_twice(tmp_path: Path) -> None:
+    # A second stop is not a Codex attempt. Failed Skill calls must release it instead (D25).
+    assert _codex_stop(tmp_path, _at("qa", 10), again=True).returncode == 2
     flagged = _codex_stop(tmp_path / "b", _at("qa", 10), flag=True, prompt=QA_PROMPT + "\ncodex_required: true\n", again=True)
     assert flagged.returncode == 2 and "CODEX_ENFORCE_BLOCKED" in flagged.stderr
 
@@ -294,9 +303,10 @@ def test_a_qa_that_is_not_low_is_not_bound_without_the_flag(tmp_path: Path, rows
     assert _codex_stop(tmp_path, rows).returncode == 0, case
 
 
-def test_a_dev_command_qa_is_bound_like_a_dev_qa(tmp_path: Path) -> None:
-    prompt = QA_PROMPT.replace('"pipeline": "dev"', '"pipeline": "dev-command"')
-    assert prompt != QA_PROMPT and _codex_stop(tmp_path, _at("qa", 10), command="dev-command", prompt=prompt).returncode == 2
+@pytest.mark.parametrize("command", ["dev-command", "dev-overnight"])
+def test_a_dev_family_qa_is_bound_like_a_dev_qa(tmp_path: Path, command) -> None:
+    prompt = QA_PROMPT.replace('"pipeline": "dev"', f'"pipeline": "{command}"')
+    assert prompt != QA_PROMPT and _codex_stop(tmp_path, _at("qa", 10), command=command, prompt=prompt).returncode == 2
 
 
 def test_the_forced_debate_binds_only_a_dev_family_qa(tmp_path: Path) -> None:
@@ -312,3 +322,40 @@ def test_the_flag_still_binds_a_qa_that_is_not_low(tmp_path: Path) -> None:
 def test_an_error_reading_the_record_is_no_debate(tmp_path: Path) -> None:
     assert score_view.codex_forced({}, {"role": "qa", "pipeline": "dev"}) is False
     assert score_view.codex_forced({"cwd": "/p", "transcript_path": "/nonexistent"}, {"role": "qa", "pipeline": "dev"}) is False
+
+
+@pytest.mark.parametrize("role,profile", score_view.ROUNDS)
+def test_overnight_holds_each_lanes_extra_round_at_its_working_root(monkeypatch, low, role, profile):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("overnight_gate_for_score_view", REPO / "hooks" / "stop-command-gate.py")
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    low(role)
+    lib = importlib.import_module("lib.score_view")
+    monkeypatch.setattr(lib, "is_low", score_view.is_low)
+    overnight = importlib.import_module("lib.overnight")
+    monkeypatch.setattr(overnight, "locate", lambda *args: (None, {"worktree_path": "/working"}))
+    monkeypatch.setattr(overnight, "closeout_gaps", lambda *args: [])
+    monkeypatch.setattr(gate, "disposition", lambda *args: [])
+    span = _span((1, role, "overnight", "l1"), (2, role, "overnight", "l2"),
+                 (3, "qa", profile, "l1"), (4, "qa", profile, "l2"),
+                 (5, "qa", profile, "l1"), pipeline="dev-overnight")
+    span.session_families = lambda: {TASK}
+    gaps = gate.p_overnight(span, "/main", {"session_id": "s"})
+    assert len(gaps) == 1 and "l2" in gaps[0] and profile in gaps[0]
+    calls = span.obligations()
+    calls.append((types.SimpleNamespace(line=6, ok=True), dict(calls[3][1])))
+    assert gate.p_overnight(span, "/main", {"session_id": "s"}) == []
+
+
+def test_overnight_opener_tells_the_orchestrator_which_roles_owe_rounds(monkeypatch):
+    monkeypatch.setattr(score_view, "_rows", lambda: _at("dev", 10, project=score_log.project_key("/p")))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    assert "Low record: dev: one more independent QA round" in (score_view.main_line("dev-overnight", "/p") or "")
+
+
+@pytest.mark.parametrize("command", ["dev", "dev-command", "dev-overnight"])
+def test_a_low_qa_can_stop_after_a_failed_codex_skill_attempt_without_a_flag(tmp_path, command):
+    prompt = QA_PROMPT.replace('"pipeline": "dev"', f'"pipeline": "{command}"')
+    done = _codex_stop(tmp_path, _at("qa", 10), command=command, prompt=prompt, again=True, failed_attempt=True)
+    assert done.returncode == 0, done.stderr
