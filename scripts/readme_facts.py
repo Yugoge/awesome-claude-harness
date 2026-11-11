@@ -875,10 +875,15 @@ def _faults_returned_and_repaired(root: Path) -> dict:
 # directory holding it and no --ignore covers it; the step has no continue-on-error, `if`, working-directory
 # or shell other than bash, and the workflow and job no `defaults`; the job has no continue-on-error and an
 # `if` only when it is the baseline job's own draft skip or made of always(), !cancelled(), success() and
-# `needs.<job>.result == 'success'` of a job it needs that passes these rules too; a matrix that splits the
-# tests over shards (an env value `${{ matrix.K }}/N`) lists the shards 1..N.
+# `needs.<job>.result == 'success'` of a job it needs that passes these rules too; the D30 visibility gate
+# (tests/test_ci_visibility_gate.py), which holds on every pull request of the public repository, counts as no
+# condition in the shapes that test pins: the whole `if`, one `&&` term in parentheses, or ANDed in front of
+# the baseline job's draft skip; a matrix that splits the tests over shards (an env value `${{ matrix.K }}/N`)
+# lists the shards 1..N.
 
 _DRAFT_SKIP = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+_VISIBILITY_GATE = "github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false'"
+_GATED_DRAFT_SKIP = f"({_VISIBILITY_GATE}) && ({_DRAFT_SKIP})"
 _SHELL_SYNTAX = re.compile(r"[;&|<>`$\\()#'\"\n]")
 _PYTEST = (["python3", "-m", "pytest"], ["python", "-m", "pytest"], ["pytest"])
 _FLAG = re.compile(r"-q+|-v+|-s|-x|-r[a-zA-Z]+")
@@ -932,12 +937,15 @@ def _gating_needs(job_id: str, job: dict, reference_if: str) -> tuple[list[str],
     """(the needed jobs this job's run depends on, why its `if` makes it conditional)."""
     needs = [job["needs"]] if isinstance(job.get("needs"), str) else list(job.get("needs") or [])
     expr = _expression(job["if"]) if "if" in job else None
-    if expr is None or (expr == reference_if and reference_if in ("", _DRAFT_SKIP)):
+    if expr in (_VISIBILITY_GATE, f"({_VISIBILITY_GATE})"):  # the D30 gate alone: as if there were no `if`
+        expr = None
+    if expr is None or (expr == reference_if and reference_if in ("", _DRAFT_SKIP, _GATED_DRAFT_SKIP)):
         return needs, []
     gating = []
     for conjunct in (c.strip() for c in expr.split("&&")):
         m = re.fullmatch(r"needs\.([\w-]+)\.result == 'success'", conjunct)
-        if conjunct not in ("always()", "!cancelled()", "success()") and not (m and m.group(1) in needs):
+        if conjunct not in ("always()", "!cancelled()", "success()", f"({_VISIBILITY_GATE})") \
+                and not (m and m.group(1) in needs):
             return gating, [f"job `{job_id}` is conditional (`if: {expr}`)"]
         gating += [m.group(1)] if m else []
     return gating, []

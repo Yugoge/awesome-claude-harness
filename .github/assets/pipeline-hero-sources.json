@@ -1,5 +1,5 @@
 {
-  "_comment": "Durable in-repo provenance sidecar for pipeline-hero trace lines whose verbatim text lived only in gitignored working docs (docs/dev/*, absent from a clean clone). Each entry records the verbatim rendered text, the original gitignored origin path it was harvested from, and the commit that harvest belongs to. Referenced by .github/assets/demo-trace.json via source_ref=this file and source_locator=<key>. Condensation lines (s04/s07/s09) are stylized single-line condensations derived from their origin doc, not verbatim substrings of it.",
+  "_comment": "Durable in-repo provenance sidecar for pipeline-hero trace lines whose verbatim source is absent from a clean clone: text that lived only in gitignored working docs (docs/dev/*), and text harvested from a commit that exists only in the private repository's history. Under D30 the public repository receives the clean tree as one commit per publish, so a commit-id source_ref cannot resolve in a public clone and the strict audit would fail there; those lines (s12/s13/s15) cite this file instead. Each entry records the verbatim rendered text, where it was harvested from (the original gitignored origin path, or for a commit-sourced line the commit's subject line, its short id, or the push output naming it), and the commit that harvest belongs to. Referenced by .github/assets/demo-trace.json via source_ref=this file and source_locator=<key>. Condensation lines (s04/s07/s09) are stylized single-line condensations derived from their origin doc, not verbatim substrings of it.",
   "s02": {
     "text": "Document how the README hero demo is captured and why it is authentic",
     "origin": "docs/dev/ticket-20260714-183239.md",
@@ -28,6 +28,21 @@
   "s09": {
     "text": "close inspectors … 2 (style, cleanliness) …",
     "origin": "docs/dev/close-report-20260714-183239.md",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s12": {
+    "text": "feat(demo): deterministic paper-substrate hero-SVG generator + trace audit",
+    "origin": "subject line of commit 62957b35",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s13": {
+    "text": "62957b35",
+    "origin": "short id of commit 62957b35",
+    "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
+  },
+  "s15": {
+    "text": "7799073f..62957b35  master -> master",
+    "origin": "push output naming commit 62957b35 (master advanced from its parent 7799073f)",
     "harvested_from_commit": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1"
   }
 }

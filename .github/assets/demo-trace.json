@@ -123,8 +123,8 @@
       "stage": "commit",
       "kind": "artifact",
       "text": "feat(demo): deterministic paper-substrate hero-SVG generator + trace audit",
-      "source_ref": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1",
-      "source_locator": "62957b35 (subject)",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s12",
       "extract_hash": "c3a7f30fdd021024e26031d91e360ec9a0548e1650f671b6a3dc2d20527433eb"
     },
     {
@@ -133,8 +133,8 @@
       "stage": "commit",
       "kind": "artifact",
       "text": "62957b35",
-      "source_ref": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1",
-      "source_locator": "62957b35",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s13",
       "extract_hash": "461125f3ecf8212ae77368dcd186a34a8c50dca04407aa504a30c4efae4383a5"
     },
     {
@@ -153,8 +153,8 @@
       "stage": "push",
       "kind": "artifact",
       "text": "7799073f..62957b35  master -> master",
-      "source_ref": "62957b351d81100a7f5a7050f78f4d78b3c2d9b1",
-      "source_locator": "7799073f..62957b35 master -> master",
+      "source_ref": ".github/assets/pipeline-hero-sources.json",
+      "source_locator": "s15",
       "extract_hash": "1789485aaa078fa128ded3730c6826b1d0271367cb7c0dce499328d64ac8badb"
     }
   ]
