@@ -425,7 +425,7 @@ def p_overnight(span, root, payload) -> list[str]:
         return [f"dev-overnight: no overnight state record for session {payload.get('session_id')}"]
     working = overnight.working_root(record)
     gaps = [g for family in sorted(span.session_families()) for g in disposition(working, family, "dev")]
-    return gaps + list(overnight.closeout_gaps(record, working))
+    return gaps + list(overnight.closeout_gaps(record, working)) + importlib.import_module("lib.score_view").extra_round_gaps(span, working)
 
 
 def p_close(span, root, payload) -> list[str]:

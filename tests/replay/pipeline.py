@@ -380,7 +380,11 @@ class Orchestrator:
         prompt = "\n".join(out)
         prompt = self.instantiate(prompt, task_id, lane, lane_set)
         left: list = []
-        prompt = self.bind(prompt, extra_rules, left)
+        # A live session may still dispatch master's pre-P13-3 command text after
+        # the hooks land. Keep its score slots bindable even though new text gets
+        # the record from SubagentStart instead of capturing a shell header.
+        score_headers = [(r"^([A-Z_]+_SCORE_HEADER) prepended here$", lambda m: self.values.get(m[1], ""))]
+        prompt = self.bind(prompt, list(extra_rules) + score_headers, left)
         if left:
             raise cmdtext.TextNotFound(f"dispatch prompt: unbound placeholders {sorted(set(left))}")
         return prompt

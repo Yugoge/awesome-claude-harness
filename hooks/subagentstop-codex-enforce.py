@@ -25,7 +25,7 @@ Activation logic:
      A dispatch whose own obligation names pipeline close or commit is not
      bound by the flag. Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
   7. A QA of a /dev-family cycle whose record is low (lib/score_view.py, D32) is bound with no flag and no line; any codex call,
-     failed or not, or a second stop after the block (`stop_hook_active`: codex may be unavailable) lets it stop.
+     failed or not, lets it stop. PostToolUseFailure records a failed Skill attempt too (D25).
 
 Exit codes:
   0: Allow stop (pass-through).
@@ -107,8 +107,8 @@ def main() -> None:
         sys.exit(0)
     asked = enabled and (CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
                          or _template_asks(resolution, agent_type, data.get("agent_transcript_path")))
-    # bound by its low record alone, a QA is let go on its second stop (D25: codex may be unavailable, no flag turns this off)
-    if not asked and (not forced or data.get("stop_hook_active")):
+    # A repeated stop is no attempt; a failed Skill call has its own ledger entry (D25).
+    if not asked and not forced:
         sys.exit(0)
 
     # No ledger entry: block stop

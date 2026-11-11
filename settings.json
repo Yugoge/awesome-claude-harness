@@ -420,11 +420,11 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-allowlist-consume.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-failure-launch.py\"",
+            "timeout": 120
           }
         ]
       }

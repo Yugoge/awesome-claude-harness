@@ -15,7 +15,7 @@ except ImportError:
 NO_INJECTION = ("close", "commit", "merge", "push")  # spans whose dispatches see no score: /close and /commit stay out of scoring
 ASK_COMMANDS = tuple(json.loads(command_span.COMMAND_SETS_FILE.read_text(encoding="utf-8"))["ASK_COMMANDS"])  # the ask spans: they open with the main agent's own line
 ROUNDS = (("dev", "final_verification"), ("ba", "ba_validation"))  # role, the profile of the QA dispatch that judges its work
-DEV_PIPELINES = ("dev", "dev-command")  # the obligations of /dev and /redev, and of /dev-command
+DEV_PIPELINES = ("dev", "dev-command", "dev-overnight")  # /redev uses dev obligations too
 
 
 def _utc(seconds) -> str:
@@ -50,12 +50,12 @@ def dispatch_context(payload) -> str | None:
 
 
 def main_line(command, cwd) -> str | None:
-    """The UserPromptSubmit line of an ask span's opener (the prompt's time is now)."""
-    return score_log.render_main_line(_rows(), _project(cwd), _utc(time.time())) if command in ASK_COMMANDS else None
+    """The UserPromptSubmit line of an ask or overnight span's opener (the prompt's time is now)."""
+    return score_log.render_main_line(_rows(), _project(cwd), _utc(time.time())) if command in (*ASK_COMMANDS, "dev-overnight") else None
 
 
 def extra_round_gaps(span, cwd) -> list[str]:
-    """/dev, /redev, /dev-command (D32): a lane whose dev has a low record owes a second, independent final-verification QA dispatch after the dev's last
+    """/dev, /redev, /dev-command, /dev-overnight (D32): a lane whose dev has a low record owes a second, independent final-verification QA dispatch after the dev's last
     dispatch, and a BA with a low record a second BA-validation one after its last: one such dispatch so far is the gap. A lane's QA fail sends its dev again."""
     ds = [(call.line, obligation.task_family(ob.get("task_id")), ob.get("lane"), ob.get("role"), ob.get("profile"))
           for call, ob in span.obligations() if ob.get("pipeline") in DEV_PIPELINES and call.ok]
