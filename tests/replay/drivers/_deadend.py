@@ -276,10 +276,10 @@ def _plain(rp, case: str) -> None:
             d = s.dispatch("dev", block(True), description="Write a note", body=body, result=forged,
                            on_stop_block=again, stop_rounds=3, label="main Agent(dev) forged ESCALATION_ACK")
             rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
-    elif case in ("codex", "cp-pending"):
+    elif case in ("codex", "codex-failure", "cp-pending"):
         sid = "20990101-000001"
         run = "source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/"
-        if case == "codex":
+        if case in ("codex", "codex-failure"):
             setup = [f"bash ~/.claude/scripts/write-enforce-flag.sh --source-command dev --session-id {sid} "
                      "--flag codex"]
             first = f"FIRST ACTION: Read {project}/.claude/dev-registry/{sid}/dev.json.\n"
@@ -305,11 +305,24 @@ def _plain(rp, case: str) -> None:
             what = first.split(":", 1)[0].replace("ACTION", "ACTION Read")
             sub.read(first.split("Read ", 1)[1].split()[0].rstrip("."), label=f"agent:dev {what}")
             sub.read(path, label="agent:dev Read")
+            if case == "codex-failure":
+                def unavailable():
+                    raise RuntimeError("Unknown skill: codex")
+                call = sub.tool("Skill", {"skill": "codex", "args": "Review: toy.add returns a + b."},
+                                perform=unavailable, label="agent:dev Skill(codex) unavailable")
+                if call.ok or call.error != "Unknown skill: codex":
+                    raise RuntimeError("the failed Codex Skill call was not played")
+                ledger = os.path.join(project, ".claude", "dev-registry", sid, "codex-ledger", sub.aid + ".json")
+                with rp.acting("driver"):
+                    with open(ledger) as handle:
+                        entry = json.load(handle)
+                if entry.get("status") != "failed":
+                    raise RuntimeError(f"failed Codex attempt not recorded: {entry}")
 
         def again(sub, ev):  # its next round: what the refusal names, then the same final message
             if next(rounds_left, None) is None:
                 return None
-            if case == "codex":
+            if case in ("codex", "codex-failure"):
                 sub.tool("Skill", {"skill": "codex", "args": "Review: toy.add returns a + b."},
                          perform=lambda: {"success": True, "commandName": "codex"},
                          label="agent:dev Skill(codex) (next round)")
@@ -507,7 +520,7 @@ def run(rp) -> None:
         return _qa_declared(rp)
     if case == "ask-first":
         return _ask_first(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):
+    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "codex-failure", "cp-pending", "report-schema"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
                     "checklist-lock"):

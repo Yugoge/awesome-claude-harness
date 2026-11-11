@@ -39,7 +39,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle, dispatch_template, score_view
+from lib import agent_cycle, dispatch_template, obligation, score_view
 from lib.agent_resolver import resolve_agent_type
 
 CODEX_REQUIRED_LINE = re.compile(r"^\s*codex_required:\s*true\s*$", re.M)
@@ -85,6 +85,10 @@ def main() -> None:
     # The agent's own obligation names its cycle (P6 R4); the role is Claude
     # Code's record of the agent.
     resolution, own = agent_cycle.own_resolution(data, project_dir)
+    # The obligation resolver owns whether the dispatch transcript is usable.
+    # Do not make a separate binding decision from an unresolved dispatch.
+    if not isinstance(resolution, (obligation.Resolved, obligation.NoObligationInPrompt)):
+        sys.exit(0)
     registry = agent_cycle.registry_dir(data, own, project_dir)
     # A /dev-family QA whose record is low debates Codex whether or not --codex armed the cycle (D32)
     forced = registry is not None and score_view.codex_forced(data, own)

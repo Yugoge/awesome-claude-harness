@@ -97,7 +97,9 @@ HOME = suite.Scenario("A11 pre-merge session in the harness home", "_home", (), 
 A = suite.Scenario("A11 (a) /redev after a no-progress round", "redev", (("fault", FORGED),), ("dev", "redev"), 300)
 B = suite.Scenario("A11 (b) /dev-overnight, two cycles", "overnight", (("variant", "plain"), ("cycles", "2")),
                    ("dev-overnight",), 1250)
-LAND = {PRE.name: "start", HOME.name: "start", A.name: "after:TodoWrite canonical list#2",
+FAILED_CODEX = suite.Scenario("A11 failed Codex Skill", "_deadend", (("case", "codex-failure"),),
+                             ("plain",), 40)
+LAND = {FAILED_CODEX.name: "start", PRE.name: "start", HOME.name: "start", A.name: "after:TodoWrite canonical list#2",
         B.name: "after:C1 TodoWrite canonical list"}
 PASS = (("blocks", "pass"),)
 HOOKLIST = (("hooklist", "landed"),)  # the session's hook list is this tree's settings.json from the landing on
@@ -124,7 +126,7 @@ class LiveRunner(suite.Runner):
         """(the base replay, the landed replay) of `scn`, side by side."""
         base = (scn, "shipped", PASS, "~base")
         live = (scn, "shipped", PASS + (("land", LAND[scn.name]),), "~landed")
-        if scn in (PRE, HOME):  # the base replay of a session that never meets the base files: none
+        if scn in (PRE, HOME, FAILED_CODEX):  # the base replay of a session that never meets the base files: none
             return None, self.run_all([live])[0]
         return tuple(self.run_all([base, live]))
 
@@ -132,7 +134,7 @@ class LiveRunner(suite.Runner):
         """(the base replay, the replay whose session has this tree's settings.json from the landing on),
         side by side; the pre-merge and harness-home sessions have no base replay (pair)."""
         items = [(scn, "shipped", PASS + (("land", LAND[scn.name]),) + HOOKLIST, "~yours")]
-        if scn not in (PRE, HOME):
+        if scn not in (PRE, HOME, FAILED_CODEX):
             items.insert(0, (scn, "shipped", PASS, "~base"))
         got = self.run_all(items)
         return (None, got[0]) if len(got) == 1 else tuple(got)
@@ -393,7 +395,8 @@ AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "
 # scenario's events after the landing reach (the harness-home session writes no todo list, no file and
 # dispatches no agent); together they must be every one that differs
 # (test_your_settings_differs_only_where_a_replay_runs_it).
-EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
+FAILED_SKILL = ("PostToolUseFailure", "Skill")
+EXERCISES = {FAILED_CODEX.name: {STOP, FAILED_SKILL} | AGENT, PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
              A.name: {STOP, TODO} | BASH | WRITE | AGENT, B.name: {STOP, TODO} | BASH | WRITE | AGENT}
 # The registrations that change where EXERCISES names none: P4's close-rating hook (PostToolUse; P13-2
 # widened its matcher to AskUserQuestion|Agent, so the one registration observes every Agent dispatch and every
@@ -412,7 +415,7 @@ ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              START: ([], ["hooks/subagentstart-record.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
-REACHED = {PRE.name: {RATING, START}, A.name: {RATING, START}, B.name: {RATING, START}}  # P13-3: a dispatch starts an agent
+REACHED = {PRE.name: {RATING, START}, A.name: {RATING, START}, B.name: {RATING, START}, FAILED_CODEX.name: {RATING, START}}  # P13-3: a dispatch starts an agent
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that
@@ -578,11 +581,11 @@ def _yours_lines(name: str, scn: suite.Scenario, r: suite.Result, base: suite.Re
     return out
 
 
-YOURS = {"pre-merge": (PRE, HOME), "a": (A,), "b": (B,)}
+YOURS = {"codex-failure": (FAILED_CODEX,), "pre-merge": (PRE, HOME), "a": (A,), "b": (B,)}
 # for the CI split: the scenario's replays go to one shard under the key its other test names, whose cost
 # is the largest a test gives it; so each is that test's cost plus the wall seconds of this test's own
 # replays (the base replay that test runs is cached)
-YOURS_COST = {"pre-merge": 320, "a": 550, "b": 2400}
+YOURS_COST = {"pre-merge": 320, "a": 550, "b": 2400, "codex-failure": 40}
 PARTS = ("hooklist", "a11", "dependencies")
 
 
@@ -639,7 +642,7 @@ def test_again_with_your_settings(live, case, part):
             assert not _verdicts_after(r, "block", G2), \
                 f"a G2 block after the landing: {_verdicts_after(r, 'block', G2)}"
             assert not _terminals_missed(r, base), f"terminal not reached: {_terminals_missed(r, base)}\n{r.explain()}"
-            if scn in (PRE, HOME):  # every Stop hook of every Stop exits 0
+            if scn in (PRE, HOME, FAILED_CODEX):  # every Stop hook of every Stop exits 0
                 assert _stops(r), r.explain()
                 bad = _stops_not_0(r.hook_events())
                 assert not bad, f"{scn.name}: a Stop hook not exiting 0: {bad}"

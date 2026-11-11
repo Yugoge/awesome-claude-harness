@@ -226,14 +226,45 @@ def test_a_dev_pipeline_qa_is_still_bound(tmp_path):
 
 
 @pytest.mark.parametrize("unresolved", ["invalid_obligation", "role_mismatch"])
-def test_an_unresolved_close_obligation_is_judged_as_before(tmp_path, unresolved):
-    """An obligation G2 would not resolve as this agent's own (a block failing
-    the grammar, or one naming another role than the agent registered as)
-    exempts nothing: its `codex_required: true` line binds it as before R11."""
+def test_an_unresolved_dispatch_is_left_to_the_obligation_owner(tmp_path, unresolved):
+    """G2 owns an invalid dispatch. Codex must not apply a second transcript
+    rule. A resolved block naming another role still cannot exempt QA."""
     prompt = _asked_by("close", "final_verification", role="dev" if unresolved == "role_mismatch" else "qa")
     if unresolved == "invalid_obligation":
         prompt = re.sub(r'"dispatched_at": "[^"]*", ', "", prompt)
     project, agent_id, transcript = _setup(tmp_path, "qa", prompt)
     proc = _stop(tmp_path, project, agent_id, transcript)
-    assert proc.returncode == 2, proc.stderr
-    assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type=qa)" in proc.stderr
+    if unresolved == "invalid_obligation":
+        assert proc.returncode == 0 and not proc.stderr, proc.stderr
+    else:
+        assert proc.returncode == 2, proc.stderr
+        assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type=qa)" in proc.stderr
+
+
+def test_codex_uses_the_obligation_owners_transcript_verdict():
+    """Rule 4: codex takes the resolver's typed verdict before using its fields.
+
+    Reading the returned fields without that verdict makes codex a second rule
+    on the subagent transcript, independent of the obligation owner (G2).
+    """
+    from tests.artifact_graph import check as C, model, pyscan, static_half
+
+    files = static_half.list_files(REPO)
+    finding = model.Findings()
+    py_files = [p for p in files if static_half._in_scope(p) and static_half._lang(REPO, p) == "python"]
+    analyzer = pyscan.Analyzer(py_files, lambda p: (REPO / p).read_text(), finding, "resolve-dev-artifact-chain.py")
+    analyzer.file_set = set(files)
+    module = analyzer.module("hooks/subagentstop-codex-enforce.py")
+    pyscan.FunctionWalk(analyzer, module, None).run()
+    for name in sorted(module.funcs):
+        analyzer.summary(module.funcs[name])
+    reads = [r for r in static_half._deciding(finding, {})
+             if any("hooks/lib/agent_cycle.py:" in p for p in r["read_through"])
+             and (r["path"].endswith(".jsonl") or r["path"] == "<*>")]
+    assert reads
+    ctx = C._Ctx(C.Map(str(REPO)), [], [], [], [], set(files), "", [], str(REPO))
+    owner = C.Decision("obligation owner", "producer stop", "typed resolver", "static", "any", "static",
+                       rule="hooks/lib/obligation.py:_first_line_record")
+    consumers = [C.Decision("codex", "producer stop", r["decision_site"], "static", "any", "static",
+                            rule=ctx._static_rule(r)) for r in reads]
+    assert len(C._rule_groups([owner, *consumers])) == 1
