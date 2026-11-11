@@ -689,11 +689,29 @@ def nested_claude(pid=None):
     """(pid, command) of a Claude Code process above the session's own, when this hook (its parent
     is `pid`) runs in a session that was started from inside another Claude Code session (an
     agent's script that launched `claude`), else None. The hook's ancestry holds the session's own
-    `claude` and, for a nested one, the `claude` above it. The environment cannot tell the two:
+    `claude` and, for a nested one, a shell followed by the `claude` above it. Two CLI
+    processes without an intervening shell can be a service launch and are not refused.
+    The environment cannot tell the two:
     Claude Code sets CLAUDECODE and CLAUDE_CODE_CHILD_SESSION in every session's hooks, a top-level
     one included."""
-    found = claude_processes(os.getppid() if pid is None else pid)
-    return found[1] if len(found) > 1 else None
+    pid = os.getppid() if pid is None else pid
+    seen, own, shell_between = set(), False, False
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        proc = _process(pid)
+        if proc is None:
+            break
+        parent, exe, argv = proc
+        if looks_like_claude(exe, argv):
+            if own and shell_between:
+                return pid, " ".join(argv) or exe
+            own = True
+        elif own and os.path.basename(exe).lstrip("-") in {
+            "sh", "bash", "dash", "zsh", "ksh", "fish", "ash", "csh", "tcsh",
+        }:
+            shell_between = True
+        pid = parent
+    return None
 
 
 # ------------------------------------------------------------------------------ entry points

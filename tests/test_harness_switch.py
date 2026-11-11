@@ -71,7 +71,8 @@ class Home:
         if under:
             line = "bash " + shlex.quote(hook)
             for _ in range(under):  # `; exit` keeps bash from exec'ing the last command in place
-                line = "%s -c %s" % (shlex.quote(str(claude)), shlex.quote(line + "; rc=$?; exit $rc"))
+                shell = "bash -c " + shlex.quote(line + "; rc=$?; exit $rc")
+                line = "%s -c %s" % (shlex.quote(str(claude)), shlex.quote(shell + "; rc=$?; exit $rc"))
             cmd = ["bash", "-c", line + "; rc=$?; exit $rc"]
         return run(cmd, self.path, dict(self.env, **(env or {})), json.dumps(payload), check=False)
 
@@ -342,6 +343,9 @@ def test_reading_stays_free(home):
 
 
 SETTINGS_WRITES = [  # Bash forms that put disableAllHooks into some project's settings*.json
+    "printf '{\"disableAllHooks\":true}' > .claude/settings.local.json",
+    "cp disableAllHooks.json .claude/settings.local.json",
+    "mv disableAllHooks.json .claude/settings.local.json",
     "echo '{\"disableAllHooks\":true}' >settings.local.json",
     "printf '{\"disableAllHooks\":true}' | tee ~/proj/.claude/settings.json",
     "cat > .claude/settings.local.json <<'EOF'\n{\"disableAllHooks\": true}\nEOF",
@@ -353,6 +357,7 @@ SETTINGS_WRITES = [  # Bash forms that put disableAllHooks into some project's s
     "cat > /tmp/s.py <<'EOF'\nopen('/p/.claude/settings.local.json', 'w').write('{\"disableAllHooks\": true}')\nEOF\npython3 /tmp/s.py",
 ]
 SETTINGS_READS = [  # the same words, no settings file written
+    "cat .claude/settings.local.json",
     "grep -n disableAllHooks .claude/settings.json",
     "jq .disableAllHooks .claude/settings.local.json",
     "grep -c disableAllHooks .claude/settings.json > /tmp/n",
@@ -451,6 +456,23 @@ def test_nested_claude_reads_the_hooks_ancestry(monkeypatch):
     assert switch.nested_claude(90) is not None
     monkeypatch.setattr(switch, "_process", lambda pid: None)
     assert switch.nested_claude(90) is None      # nothing readable: not refused
+
+
+@pytest.mark.parametrize("launcher", [
+    ("/bin/zsh", ["zsh"]),
+    ("/usr/share/code/code", ["code"]),
+    ("/Applications/Claude.app/Contents/MacOS/Claude", ["Claude"]),
+    ("/usr/local/bin/claude", ["claude", "agents"]),
+])
+def test_top_level_launcher_without_an_intervening_shell_is_not_nested(monkeypatch, launcher):
+    switch = load_switch()
+    table = {
+        90: (80, "/bin/sh", ["sh", "hooks/userprompt-harness-switch.sh"]),
+        80: (70, "/usr/local/bin/claude", ["claude"]),
+        70: (1, *launcher),
+    }
+    monkeypatch.setattr(switch, "_process", lambda pid: table.get(pid))
+    assert switch.nested_claude(90) is None
 
 
 @pytest.mark.parametrize("levels", [2, 3])
