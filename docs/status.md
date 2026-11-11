@@ -54,8 +54,8 @@ Generated claim rows. `scripts/generate-hero-status.py --check`, run by `scripts
 - **Release** — unreleased (no tags).
 <!-- claim-row id=os state=partial evidence=.github/workflows tracked=none -->
 - **OS** — Ubuntu (CI) only; macOS unverified.
-<!-- claim-row id=enforcement-strength state=not-yet evidence=none tracked=none -->
-- **Enforcement strength** — `docs/ENFORCEMENT-LEDGER.md` could not be read and reconciled with the tracked `settings.json` at build time, so no figure is published.
+<!-- claim-row id=enforcement-strength state=partial evidence=docs/ENFORCEMENT-LEDGER.md tracked=none -->
+- **Enforcement strength** — the ledger has **54** rows, one per registered hook. Behavior labels: **0** enforced, **25** detected, **29** advisory, **0** unsupported. Proof layers: **0** host-observed, **0** host-shaped, **4** component-tested, **50** source-level, **0** none. No row is host-observed. A script that exits 2 is evidence about the script, not about a Claude Code host honouring it.
 <!-- claim-row id=dead-end-sites state=partial evidence=tests/replay/test_no_dead_end.py tracked=none -->
 - **Blocking sites with no clearing class** — **21 of 187** blocking sites of the registered hooks have no clearing class. The enumerator's reasons: **20** × fail-closed: the hook reports that it could not decide (a broken install or configuration); **1** × a PreToolUse refusal whose message names no operation. The suite fails only when a replay reaches one, so this is a known limit and not a proof that there are none.
 <!-- END canonical-region id=status -->
