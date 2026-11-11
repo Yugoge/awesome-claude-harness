@@ -16,7 +16,7 @@ Per event, compare() returns the differences between the two paths:
   lib/hook_launch.combine over the old processes' results (what the CLI makes of those hooks).
 
 Normalised before comparing (and only this): the replay's own ids, times and sandbox roots, as
-norm.refusal_text normalises a refusal, and the durations a hook prints ("12 ms", "0.31 s"),
+norm.refusal_text normalises a refusal, and the durations a hook prints ("12 ms", "0.31 s", "7h 59m"),
 which are its own measurement and differ run to run. A replay with any difference reports it as
 a driver error (Replay.finish), so every pipeline scenario of the suite asserts there is none.
 REPLAY_LAUNCH_DIFFERENTIAL=0 turns it off for a local run; a traced replay never runs it (the
@@ -32,7 +32,9 @@ import sys
 
 from . import differential, hookrun
 
-_DURATION = re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b")
+# A clock reading a hook prints ("Time remaining: 7h 59m", posttool-overnight-loop.py) moves when a
+# minute boundary falls between the two runs, so it is a duration too.
+_DURATION = re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b|\b\d+h \d+m\b")
 
 
 _LIBS: dict = {}
