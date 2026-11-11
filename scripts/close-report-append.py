@@ -62,7 +62,9 @@
 # fully-landed new bytes -- never a partial mix. A same-task-id advisory
 # file lock (fcntl.flock, bounded retry) serializes concurrent
 # invocations so two overlapping appends cannot silently discard one
-# another's content.
+# another's content. The lock file (docs/dev/.<report>.append-lock) is
+# removed by its holder at release, on success and on every failure path,
+# so no lock file is left in the product repository (see _acquire_lock).
 #
 # Behavior: read existing report bytes (if any) + the section file ->
 # validate the section's own last non-empty line is a legal `CLOSE:` form
@@ -191,14 +193,33 @@ def _validate_lock_timing(timeout: float, poll_seconds: float) -> None:
             )
 
 
+def _lock_path_for(report_path: Path) -> Path:
+    return report_path.parent / f".{report_path.name}.append-lock"
+
+
 def _acquire_lock(report_path: Path, timeout: float | None = None):
     """Bounded-wait advisory exclusive lock on a sibling lock file, scoped
     to this report path. Serializes concurrent close-report-append.py
     invocations against the SAME report so two overlapping appends cannot
     both read the same prior bytes and silently discard one another's
     content on publish (codex round-4 finding #3). Returns an open file
-    handle the caller must close (which releases the flock) when done.
-    Raises _LockTimeout if the lock cannot be acquired within `timeout`.
+    handle the caller must hand to _release_lock when done (which unlinks
+    the lock file and then releases the flock). Raises _LockTimeout if the
+    lock cannot be acquired within `timeout`.
+
+    The lock file lives beside the report, in the product repository, so
+    the holder removes it at release (P10 A25: a product repo is left clean
+    after the pipelines; R8 rule 3: a file with no consumer is deleted by
+    its producer). Unlinking a flock'ed file races a waiter that opened the
+    same inode before the unlink: once the holder releases, that waiter
+    would lock an inode no longer at the path while a third process locks a
+    fresh one there. So the lock is held only when, after flock succeeds,
+    the inode this handle locked is still the one at the path; otherwise
+    the handle is dropped and the open/lock is retried against the path's
+    current file. The holder unlinks while it still holds the lock, so at
+    most one process holds the lock on the file at the path at any moment.
+    A lock file left by a killed holder is no obstacle: its flock died with
+    the process, the next invocation locks it, and unlinks it at release.
 
     `timeout` defaults to the module-level `_LOCK_TIMEOUT_SECONDS`, read
     here at call time (not bound as a def-time default) so a CLI/env
@@ -207,19 +228,51 @@ def _acquire_lock(report_path: Path, timeout: float | None = None):
     if timeout is None:
         timeout = _LOCK_TIMEOUT_SECONDS
     _validate_lock_timing(timeout, _LOCK_POLL_SECONDS)
-    lock_path = report_path.parent / f".{report_path.name}.append-lock"
+    lock_path = _lock_path_for(report_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "a+")
     deadline = time.monotonic() + timeout
     while True:
+        fh = open(lock_path, "a+")
         try:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fh
         except OSError:
+            fh.close()
             if time.monotonic() >= deadline:
-                fh.close()
                 raise _LockTimeout(f"could not acquire exclusive lock on {lock_path} within {timeout}s")
             time.sleep(_LOCK_POLL_SECONDS)
+            continue
+        try:
+            held = os.fstat(fh.fileno())
+            current = os.stat(lock_path)
+        except FileNotFoundError:
+            current = None
+        except OSError:
+            fh.close()
+            raise
+        if current is not None and (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino):
+            return fh
+        # The previous holder unlinked the file this handle locked: retry
+        # on the path's current file (no sleep -- nobody holds this inode).
+        fh.close()
+        if time.monotonic() >= deadline:
+            raise _LockTimeout(f"could not acquire exclusive lock on {lock_path} within {timeout}s")
+
+
+def _release_lock(report_path: Path, fh) -> None:
+    """Unlink the lock file, then release the flock by closing the handle.
+    The unlink happens while the lock is still held, so it can only remove
+    this holder's own file (see _acquire_lock); a waiter that locked the
+    unlinked inode sees it is no longer at the path and retries."""
+    try:
+        try:
+            held = os.fstat(fh.fileno())
+            current = os.stat(_lock_path_for(report_path))
+            if (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino):
+                os.unlink(_lock_path_for(report_path))
+        except OSError:
+            pass  # already gone or unreadable: nothing of ours to remove
+    finally:
+        fh.close()
 
 
 # New sentinel prefix (round-7 CRITICAL fix, this revision): NEVER emitted
@@ -461,7 +514,7 @@ def run(report_path: Path, section_path: Path, repo_root: Path) -> tuple[bool, s
         result = {"status": "ok", "report_path": str(report_path), "verdict_line": expected_last_line}
         return True, json.dumps(result, ensure_ascii=False)
     finally:
-        lock_fh.close()
+        _release_lock(report_path, lock_fh)
 
 
 def main(argv: list[str]) -> int:

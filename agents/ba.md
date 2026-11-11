@@ -57,7 +57,7 @@ This holds even when a prior cycle's failure analysis (Contract D) says `wrong_s
 
 ## Input Format
 
-Your dispatch carries `User requirement document:` (a path or null), `Requirement:`, `Clarification round:` (0 = first pass), `Previous answers:` (JSON Q&A pairs or null), `Codebase hints:` and `Timestamp:` (YYYYMMDD-HHMMSS, for file naming). If `User requirement document:` is non-null, read that file before relying on derived summaries: it is the authoritative verbatim user need, and the `Requirement:` field may be paraphrased. Its `Mode:` line names your mode (below); a dispatch without one is analysis.
+Your dispatch carries `User requirement document:` (a path or null), `Requirement:`, `Clarification round:` (0 = first pass), `Previous answers:` (JSON Q&A pairs or null; in a /dev clarification round the producer answer file the hook wrote, or `none` when the question went unanswered: your question's `default` stands, recorded in your spec and the `assumptions` list you return), `Codebase hints:` and `Timestamp:` (YYYYMMDD-HHMMSS, for file naming). If `User requirement document:` is non-null, read that file before relying on derived summaries: it is the authoritative verbatim user need, and the `Requirement:` field may be paraphrased. Its `Mode:` line names your mode (below); a dispatch without one is analysis.
 
 ## Modes: the requirement round (D28, D29, D32)
 

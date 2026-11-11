@@ -565,12 +565,9 @@ class Span:
             raw = data[pos:end]
             if b'"type":"assistant"' in raw or b'"type": "assistant"' in raw:
                 return
-            attachment = (_decode(raw) or {}).get("attachment") if b"hook_additional_context" in raw else None
-            if isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
-                content = attachment.get("content")
-                if isinstance(content, list):
-                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
-                yield from regex.finditer(content) if isinstance(content, str) else ()
+            attachment = (_decode(raw) or {}).get("attachment") if b'"hook_' in raw else None
+            content = _prompt_hook_text(attachment)
+            yield from regex.finditer(content) if content is not None else ()
             pos = end + 1
 
     def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
@@ -609,6 +606,30 @@ class Span:
                 return content
             return "".join(b.get("text", "") for b in _blocks(record) if b.get("type") == "text")
         return None
+
+
+def _prompt_hook_text(attachment) -> str | None:
+    """The text of a context record the CLI writes for a UserPromptSubmit hook's output, else None.
+    CLI 2.1.322 writes a hook's plain stdout (what prompt-workflow.py prints) as a hook_success
+    record whose content is that stdout, and a JSON additionalContext as hook_additional_context
+    whose content is a list of strings; older CLIs wrote the plain stdout as hook_additional_context.
+    A hook_success of any other event is not the prompt's context."""
+    if not isinstance(attachment, dict):
+        return None
+    kind = attachment.get("type")
+    if kind == "hook_success":
+        if attachment.get("hookEvent", attachment.get("hookName")) != "UserPromptSubmit":
+            return None
+        content = attachment.get("content")
+        content = attachment.get("stdout") if not isinstance(content, str) or not content else content
+    elif kind == "hook_additional_context":
+        content = attachment.get("content")
+    else:
+        return None
+    if isinstance(content, list):
+        content = "\n".join(b if isinstance(b, str) else b.get("text", "") for b in content
+                            if isinstance(b, (str, dict)))
+    return content if isinstance(content, str) else None
 
 
 # The task-id lines the UserPromptSubmit hook prints for a /do and a /dev-family opener.

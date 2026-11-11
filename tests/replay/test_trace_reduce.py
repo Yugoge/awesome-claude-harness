@@ -191,3 +191,31 @@ def test_a_fork_inside_another_pid_namespace_keeps_its_parent(tmp_path):
     assert {c for c, _op in comps_of(events, f"{P}/out.txt")} == {"hooks/a.sh"}
     events, _stats = reduce(tmp_path, _namespaced(False), [("event", "1")])
     assert {c for c, _op in comps_of(events, f"{P}/out.txt")} == {"cli"}
+
+
+def test_a_hook_a_launcher_runs_in_its_process_is_that_hooks_component(tmp_path):
+    """A launcher (hooks/lib/hook_launch.py) marks the hook it runs (trace.LAUNCH_MARK): what its one
+    process does until the next mark is that hook's (component and origin), a child the hook starts
+    is too, and after the "-" mark it is the launcher's own again."""
+    m = LAYOUT["markers"]
+    lines = [run(100, "/usr/bin/python3", "python3", "-m", "replay.inner"), mark(100, 1, "event"),
+             "100 vfork() = 200", run(200, "/usr/bin/python3", "python3", f"{H}/hooks/pretool-launch.py"),
+             opn(200, f"{m}/launch.hooks%2Fpretool-a.py", "O_WRONLY|O_CREAT, 0644"),
+             opn(200, f"{H}/state/a.json", "O_WRONLY|O_CREAT|O_TRUNC, 0644"),
+             "200 clone(child_stack=NULL, flags=SIGCHLD) = 300", run(300, "/usr/bin/git", "git", "status"),
+             opn(300, f"{H}/state/git-seen.json", "O_WRONLY|O_CREAT|O_TRUNC, 0644"), "300 +++ exited with 0 +++",
+             opn(200, f"{m}/launch.-", "O_WRONLY|O_CREAT, 0644"),
+             opn(200, f"{m}/launch.hooks%2Fpretool-b.py", "O_WRONLY|O_CREAT, 0644"),
+             opn(200, f"{H}/state/b.json", "O_WRONLY|O_CREAT|O_TRUNC, 0644"),
+             opn(200, f"{m}/launch.-", "O_WRONLY|O_CREAT, 0644"),
+             opn(200, f"{H}/state/own.json", "O_WRONLY|O_CREAT|O_TRUNC, 0644"),
+             "200 +++ exited with 0 +++", "100 +++ exited with 0 +++"]
+    events, _ = reduce(tmp_path, lines, markers=[("event", "1")])
+    comp = {e["raw"]: e["comp"] for e in events}
+    assert comp[f"{H}/state/a.json"] == "hooks/pretool-a.py"
+    assert comp[f"{H}/state/git-seen.json"] == "hooks/pretool-a.py"
+    assert comp[f"{H}/state/b.json"] == "hooks/pretool-b.py"
+    assert comp[f"{H}/state/own.json"] == "hooks/pretool-launch.py"
+    origin = {e["raw"]: e["origin"] for e in events}
+    assert origin[f"{H}/state/a.json"] == origin[f"{H}/state/git-seen.json"] == "hooks/pretool-a.py"
+    assert origin[f"{H}/state/own.json"] == "hooks/pretool-launch.py"

@@ -589,7 +589,7 @@ def test_no_venv_on_path_still_records(config: Path) -> None:
 
 
 def test_the_shipped_settings_register_the_hook_once_for_askuserquestion_and_agent() -> None:
-    settings = json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8"))
+    settings = _expanded(json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8")))
     found = [(event, group.get("matcher"), hook["command"]) for event, groups in settings["hooks"].items()
              for group in groups for hook in group["hooks"] if "posttool-close-rating.py" in hook["command"]]
     assert found == [("PostToolUse", "AskUserQuestion|Agent",
@@ -737,3 +737,13 @@ def test_task_ids_compare_canonically(tmp_path: Path) -> None:
     assert _required(tx, path, TASK) and _required(tx, path, f"dev-{TASK}")
     assert close_rating.rating_asked(path, TASK) and close_rating.rating_asked(path, f"dev-{TASK}")
     assert not _required(tx, path, "") and not close_rating.rating_asked(path, "")
+
+
+def _expanded(settings: dict) -> dict:
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py)."""
+    import importlib.util
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("_launch_settings", root / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(settings, str(root))

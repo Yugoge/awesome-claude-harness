@@ -536,7 +536,10 @@ jobs:
     # A draft pull request runs nothing; marking it ready runs everything.
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Each untraced replay also runs the launch differential (tests/replay/launchdiff.py): every
+    # launcher event's hooks once more on the old path, each as its own process. With it the
+    # heaviest shards took 58-59 min on a 4-CPU hosted runner and one ran past 60.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

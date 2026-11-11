@@ -415,6 +415,7 @@ def _hook_registrations(root: Path, files: list[str], sh: shscan.ShellAnalyzer, 
         return [], {}
     text = (root / "settings.json").read_text(encoding="utf-8", errors="replace")
     regs, env = D.settings_hooks(root, text)
+    regs = _launched(root, regs)
     out = []
     for r in regs:
         script = S.parse(r["command"], r["line"])
@@ -436,6 +437,32 @@ def _hook_registrations(root: Path, files: list[str], sh: shscan.ShellAnalyzer, 
         out.append(rec)
     sh.memo.clear()
     return out, env
+
+
+def _launched(root: Path, regs: list) -> list[dict]:
+    """A launcher's registration (hooks/lib/hook_launch.py) read as the hooks it runs, each with its
+    own matcher, timeout and command, at the launcher's line (hooks/lib/launch_settings.py): the
+    launcher runs each in its one process as that hook ran alone, and a traced replay names each
+    hook as the component and origin of what it does there (tests/replay/trace.py LAUNCH_MARK)."""
+    path = root / "hooks" / "lib" / "launch_settings.py"
+    if not path.is_file():
+        return regs
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_launch_settings", path)
+    ls = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ls)
+    out = []
+    for r in regs:
+        launcher = ls.launcher_of(r["command"], str(root))
+        if launcher is None:
+            out.append(r)
+            continue
+        spelled = ls.spellings(str(root), launcher)
+        for file, tools, timeout in ls.rules(str(root), launcher):
+            out.append({"event": r["event"], "matcher": "|".join(tools) if tools else spelled.get(file),
+                        "command": ls.COMMAND % file,
+                        "timeout": timeout if timeout != ls.DEFAULT_TIMEOUT else None, "line": r["line"]})
+    return out
 
 
 def _gate_rule_registrations(root: Path, regs: list) -> list[dict]:

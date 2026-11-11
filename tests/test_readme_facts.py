@@ -475,7 +475,12 @@ def tracked_settings() -> dict:
 
 
 def test_hook_registrations_equal_a_recount_of_the_tracked_settings(real):
-    settings = tracked_settings()
+    # Each launcher (hooks/lib/hook_launch.py) is read as the hooks it runs, by the tree's own expansion.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_launch_settings", REPO / "hooks" / "lib" / "launch_settings.py")
+    launch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launch)
+    settings = launch.expand(tracked_settings(), str(REPO))
     per_event = {event: sum(len(g["hooks"]) for g in groups) for event, groups in settings["hooks"].items()}
     got = real.facts["hook_registrations"]
     assert got["by_event"] == dict(sorted(per_event.items()))

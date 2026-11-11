@@ -55,6 +55,7 @@ def main(argv=None) -> int:
                        settings_label=cfg["settings_label"], env_extra=cfg.get("env") or {},
                        faults=getattr(driver, "FAULTS", ()), parallel_hooks=cfg.get("parallel_hooks", False))
     rp.args = dict(cfg.get("driver_args") or {})
+    rp.launch_differential = bool(cfg.get("launch_differential"))  # P12-L7 (launchdiff.py)
     if rp.args.get("fault"):  # P1c: the injected faults of the suite (tests/replay/faults.py)
         from . import faults
         faults.install(rp, rp.args["fault"])
