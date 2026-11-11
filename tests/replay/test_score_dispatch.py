@@ -12,6 +12,7 @@ Replays (each is /dev variant plain, or qa-fail, unless it says /close):
   (a compliant run's 0 blocks); a low dev and a low BA get a second independent QA round, which the Stop gate holds.
 * QA_FAIL_LOW and QA_FAIL_HIGH: the same over a first QA that fails: a low dev's two rounds run after its re-dispatch.
 * LOW_QA: a low QA, --codex not given: every QA round of the cycle holds a Codex debate and its ledger entry.
+* CODEX_FAIL: the same low QA whose codex call fails (`codex=fail`): PostToolUseFailure records the attempt, so the stop is not a dead end.
 * RESTORED: the score brought back above the threshold: one QA round each.
 * CLOSE_LOW: a /close after the cycle gets no start text at all, and no block (/close and /commit stay out of scoring).
 """
@@ -36,6 +37,8 @@ SCENARIOS = {
     "qa-fail-low": suite.Scenario("score at dispatch: a QA fail, low ranks", "dev", (("variant", "qa-fail"), ("score", LOW_FIXTURE)), ("dev",), 130),
     "qa-fail-high": suite.Scenario("score at dispatch: a QA fail, high ranks", "dev", (("variant", "qa-fail"), ("score", HIGH_FIXTURE)), ("dev",), 110),
     "low-qa": suite.Scenario("score at dispatch: a low QA, no --codex", "dev", (("variant", "plain"), ("score", "dev:master,ba:senior,qa:disgraced")), ("dev",), 100),
+    "codex-fail": suite.Scenario("score at dispatch: a low QA whose codex call fails", "dev",
+                                 (("variant", "plain"), ("score", "dev:master,ba:senior,qa:disgraced"), ("codex", "fail")), ("dev",), 100),
     "restored": suite.Scenario("score at dispatch: the score restored", "dev", (("variant", "plain"), ("score", "dev:restored,ba:restored,qa:restored")), ("dev",), 90),
     "extra-skip": suite.Scenario("score at dispatch: a low dev's cycle ends before its extra round", "dev",
                                  (("variant", "plain"), ("score", "dev:disgraced"), ("extra", "skip")), ("dev",), 110),
@@ -150,6 +153,15 @@ def test_a_low_qa_holds_a_codex_debate_in_every_round_without_the_flag(replays):
     assert len(called) == 3  # every QA round: one codex call, and the ledger hook ran on it
     assert all(any(h["hook"] == "hooks/posttool-codex-skill-ledger.py" and (h["rc"], h["verdict"]) == (0, "ok") for h in ev["hooks"]) for ev in called)
     assert not any(s["type"] in ("dev", "ba") and "Codex" in s["text"] for s in starts(r))  # dev and ba do not debate
+
+
+@replay("codex-fail")
+def test_a_failed_codex_call_is_the_ledger_entry_that_lets_a_low_qa_stop(replays):
+    r = replays.get(KEYS["codex-fail"])
+    clean_run(r)  # nothing refused: without a ledger entry the forced binding would block each QA's stop, with no flag to turn it off (D25)
+    failed = [ev for ev in r.hook_events() if ev["event"] == "PostToolUseFailure" and ev.get("tool") == "Skill" and ev["agent_type"] == "qa"]
+    assert len(failed) == 3 and not [ev for ev in r.hook_events() if ev["event"] == "PostToolUse" and ev.get("tool") == "Skill"]  # panel, BA validation, final: all failed
+    assert all(any(h["hook"] == "hooks/posttool-codex-skill-ledger.py" and (h["rc"], h["verdict"]) == (0, "ok") for h in ev["hooks"]) for ev in failed)  # the launcher runs it
 
 
 # ---------------------------------------------------------------- /close and /commit stay out of scoring

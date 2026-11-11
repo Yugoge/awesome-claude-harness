@@ -86,11 +86,14 @@ def main() -> None:
     # Code's record of the agent.
     resolution, own = agent_cycle.own_resolution(data, project_dir)
     registry = agent_cycle.registry_dir(data, own, project_dir)
+    if registry is None:
+        # No cycle
+        sys.exit(0)
+    enabled = _read_json(registry / "codex-enforce.json").get("enabled")
     # A /dev-family QA whose record is low debates Codex whether or not --codex armed the cycle (D32)
-    forced = registry is not None and score_view.codex_forced(data, own)
-    enabled = registry is not None and _read_json(registry / "codex-enforce.json").get("enabled")
-    if registry is None or not (forced or enabled):
-        # No cycle, or no (or a disabled) enforcement flag in it
+    forced = score_view.codex_forced(data, own)
+    if not (enabled or forced):
+        # No (or a disabled) enforcement flag in the cycle, and no low record
         sys.exit(0)
     dev_session_id = registry.name
     agent_type = resolve_agent_type(data) or ""

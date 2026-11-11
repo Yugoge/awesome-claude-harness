@@ -771,8 +771,11 @@ class Actor:
             self.s.append({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": d.context,
                                                                 "hookName": "SubagentStart"}}, aid)
         if "Codex debate" in d.context:
-            sub.tool("Skill", {"skill": "codex", "args": "Review the draft once and completely."},
-                     perform=lambda: {"success": True, "commandName": "codex"}, label=f"{label} Skill(codex)")
+            def codex():  # codex=fail: the skill is unavailable here, so the call fails (the CLI fires PostToolUseFailure)
+                if self.rp.args.get("codex") == "fail":
+                    raise ToolError("Unknown skill: codex")
+                return {"success": True, "commandName": "codex"}
+            sub.tool("Skill", {"skill": "codex", "args": "Review the draft once and completely."}, perform=codex, label=f"{label} Skill(codex)")
 
         def rest(on_stop_block=on_stop_block, stop_rounds=stop_rounds):
             if step["body"]:
