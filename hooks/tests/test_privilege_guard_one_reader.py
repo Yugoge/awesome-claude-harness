@@ -3,7 +3,7 @@
 An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
 `-m` given to another command of the same call (`echo -m "auto-bulk: ..."`) makes
 no commit an auto-bulk one, and every commit in the call must carry the subject.
-A commit the grant path cannot locate (one inside `bash -c`) stays refused.
+A commit inside a nested shell is located and bound to the grant like a plain one.
 
 The guard runs as a subprocess with a scratch HOME, state dir and repository; the
 bulk-commit sentinel is written as /commit --bulk's capability hook writes it.
@@ -122,15 +122,19 @@ def test_an_auto_bulk_subject_without_a_sentinel_is_refused(box):
     assert "auto-bulk commit requires a bulk-commit sentinel" in proc.stderr
 
 
-@pytest.mark.parametrize("command", [
-    'bash -c "git commit -F msg"',
-    "sh -c 'git -C /elsewhere commit -m x'",
+@pytest.mark.parametrize("command,why", [
+    ('bash -c "git commit -F msg"', "expected_head mismatch"),
+    ("sh -c 'git -C /elsewhere commit -m x'", "repository mismatch"),
+    ("timeout 9 bash -c 'cd sub && git commit -m x'", "cd/pushd cwd-change before commit"),
+    ("GIT_DIR=/x bash -c 'git commit -m x'", "inline-env GIT_DIR/GIT_WORK_TREE"),
 ])
-def test_a_commit_the_grant_path_cannot_locate_stays_refused(box, command):
+def test_a_commit_in_a_nested_shell_is_bound_like_a_plain_one(box, command, why):
+    # The commit reader and the classifier read one parse, so a nested commit is
+    # located and checked against the grant, not refused as unlocatable.
     box.commit_grant()
     proc = box.run(command)
     assert proc.returncode == 2, (command, proc.stderr)
-    assert "effective target repository could not be resolved" in proc.stderr, proc.stderr
+    assert why in proc.stderr, (command, proc.stderr)
 
 
 @pytest.mark.parametrize("command,why", [

@@ -53,7 +53,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -147,18 +146,12 @@ from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command 
 from lib.agent_resolver import resolve_agent_type  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
-    iter_git_invocations, classify_git_command)
-from lib.git_command_classifier import (  # noqa: E402
-    _unquote_token,
-    _segments as _shell_segments,
-    _command_token_index as _cmd_token_index,
-    _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
-    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,
-)
+    classify_git_command, _unquote_token, GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS)
 # Commit-grant provenance (minted_by) and the hook-written changelog-analyst
 # dispatch attestation, shared with scripts/write-commit-grant.py and
 # hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
+from lib import shell_parse  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
@@ -523,12 +516,14 @@ _PUSH_REWRITE_LONG = ('force', 'force-with-lease', 'force-if-includes', 'delete'
 _PUSH_REWRITE_SHORT = frozenset('fd')
 
 
-def _push_forces_or_deletes(invocation):
-    """True when a `git push` forces, deletes or mirrors a ref: a rewrite option
+def _push_forces_or_deletes(args):
+    """True when push arguments force, delete or mirror a ref: a rewrite option
     (abbreviated, or a letter of a short-option cluster such as `-uf`), or a
-    refspec that forces (`+src:dst`) or deletes (`:dst`)."""
-    for tok in invocation.args:
-        word = _unquote_token(tok)
+    refspec that forces (`+src:dst`) or deletes (`:dst`). A computed word (None)
+    is not read."""
+    for word in args:
+        if word is None:
+            continue
         if word.startswith('--'):
             name = word[2:].partition('=')[0]
             if name and any(opt.startswith(name) for opt in _PUSH_REWRITE_LONG):
@@ -547,102 +542,63 @@ _COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fi
                       '--pathspec-from-file'}
 
 
-def _simple_commands(command):
-    """The command's simple commands as lists of shell-unquoted words, split at
-    unquoted ; & | ( ) < > and newlines, with `#` comments dropped; None when a
-    quote is left open."""
-    cmds, words, word, i, n = [], [], None, 0, len(command)
-    while i < n:
-        ch = command[i]
-        if command.startswith('\\\n', i):
-            i += 2
-            continue
-        if ch in ' \t\r;&|()<>\n' or (ch == '#' and word is None):
-            if word is not None:
-                words.append(''.join(word))
-                word = None
-            if ch == '#':
-                i = command.find('\n', i)
-                i = n if i < 0 else i
-                continue
-            if ch not in ' \t\r' and words:
-                cmds.append(words)
-                words = []
-            i += 1
-            continue
-        word = [] if word is None else word
-        if ch in '\'"':
-            j = i + 1
-            while j < n and command[j] != ch:
-                if ch == '"' and command[j] == '\\' and command[j + 1:j + 2] in ('"', '\\', '$', '`'):
-                    j += 1
-                word.append(command[j])
-                j += 1
-            if j >= n:
-                return None
-            i = j + 1
-        elif ch == '\\' and i + 1 < n:
-            word.append(command[i + 1])
-            i += 2
-        else:
-            word.append(ch)
-            i += 1
-    if word is not None:
-        words.append(''.join(word))
-    return cmds + [words] if words else cmds
+def _git_view(command):
+    """(parse sites in walk order, the git invocations) of `command`, through the
+    shared parser; a command it cannot parse yields no invocations."""
+    script = shell_parse.parse(command)
+    if script.error is not None:
+        return [], []
+    return list(shell_parse.walk(script)), shell_parse.git_invocations(script)
 
 
 def _commit_records(command):
-    """One record per `git ... commit` invocation in `command`, in shell order:
-    text (its words), args (after `commit`), dirs (its -C values), env_redirect
-    (an inline GIT_DIR-style assignment), flag_redirect (--git-dir, --work-tree,
+    """One record per `git commit` the command runs, nested shells included, in
+    order: text, args (long options resolved; None where computed), dirs (its -C
+    values; None where computed), env_redirect (a GIT_DIR-style assignment on it
+    or on any command of the call), flag_redirect (--git-dir, --work-tree,
     --namespace) and cwd_changed (a cd, pushd or popd runs before it, so the
-    guard's probes would not look where it lands). An open quote yields none."""
-    records, cwd_changed = [], False
-    for words in _simple_commands(command) or []:
-        idx = _cmd_token_index(words)
-        if idx is None:
-            continue
-        name = os.path.basename(words[idx])
-        if name in _CWD_CHANGE_CMDS:
-            cwd_changed = True
-            continue
-        if name != 'git':
-            continue
-        dirs, flag_redirect, i = [], False, idx + 1
-        while i < len(words) and words[i].startswith('-'):
-            opt = words[i]
-            flag_redirect |= opt.partition('=')[0] in _GIT_REDIRECT_FLAGS
-            if opt in GIT_GLOBAL_VALUE_OPTS:
-                if opt == '-C' and i + 1 < len(words):
-                    dirs.append(words[i + 1])
-                i += 2
-                continue
-            if opt.startswith('-C'):
-                dirs.append(opt[2:])
-            i += 1
-        if words[i:i + 1] != ['commit']:
+    guard's probes would not look where it lands). A command the parser cannot
+    read yields none."""
+    sites, invocations = _git_view(command)
+    order = {id(site.cmd): k for k, site in enumerate(sites)}
+    names = [(shell_parse.resolve(site.cmd).name, site.cmd) for site in sites]
+    moves = [order[id(cmd)] for name, cmd in names if name in _CWD_CHANGE_CMDS]
+    assigned = any(a.name in _GIT_REDIRECT_ENV_VARS for site in sites for a in site.cmd.assignments)
+    records = []
+    for inv in invocations:
+        if inv.subcommand != 'commit':
             continue
         records.append({
-            'text': ' '.join(words), 'args': words[i + 1:], 'dirs': dirs,
-            'flag_redirect': flag_redirect, 'cwd_changed': cwd_changed,
-            'env_redirect': any(_ENV_ASSIGN_RE.match(w) and w.partition('=')[0] in _GIT_REDIRECT_ENV_VARS
-                                for w in words[:idx]),
+            'text': ' '.join(w.text for w in inv.cmd.words),
+            'args': list(inv.args), 'dirs': _dash_c_words(inv),
+            'flag_redirect': any(opt in _GIT_REDIRECT_FLAGS for opt, _v in inv.global_opts),
+            'env_redirect': assigned or any(k in _GIT_REDIRECT_ENV_VARS for k in inv.env),
+            'cwd_changed': any(m < order.get(id(inv.cmd), 0) for m in moves),
         })
     return records
+
+
+def _dash_c_words(inv):
+    """inv's -C values, a computed one as written (`"${GIT_ROOT}"`)."""
+    words = shell_parse.resolve(inv.cmd).args
+    written = [words[k + 1].text for k in range(len(words) - 1) if words[k].value() == '-C']
+    return [d if d is not None else (written[n] if n < len(written) else '$')
+            for n, d in enumerate(inv.C_dirs)]
 
 
 def _commit_message(rec, cwd):
     """The whole message of one commit invocation: its -m/--message values as git
     joins them, or the whole -F/--file regular file (relative to its -C
-    directory). None when the hook cannot read it: no message option, stdin or a
-    file it cannot read, or -m with -F (git refuses that combination)."""
+    directory). None when the hook cannot read it: no message option, a computed
+    word, stdin or a file it cannot read, or -m with -F (git refuses that)."""
     base = cwd
     for d in rec['dirs']:
         base = os.path.join(base, d)
     texts, path, args, j = [], None, rec['args'], 0
     while j < len(args) and args[j] != '--':
         a, nxt = args[j], (args[j + 1] if j + 1 < len(args) else None)
+        if a is None:  # a computed word may be any option
+            return None
         if a in ('-m', '--message', '-F', '--file'):
             opt, value, j = a, nxt, j + 2
         elif a.startswith(('--message=', '--file=')):
@@ -1018,14 +974,12 @@ def _reset_moves(args):
 
 
 def _branch_writes(inv):
-    """(moves the branch HEAD is on, [branch names it writes]) for one git
+    """(moves the branch HEAD is on, [branch names it writes]) for one parser git
     invocation; the name `*` stands for refs the guard cannot list."""
-    sub = inv.subcommand
+    sub, args = inv.subcommand, list(inv.args)
     if sub not in _MOVES_HEAD | _MOVES_NAMED:
         return False, []
-    try:  # the words as the shell passes them (ref names hold no space)
-        args = shlex.split(' '.join(inv.args))
-    except ValueError:  # the segment splitter cut a quoted word: its operands are unknown
+    if None in args:  # a computed word: its operands are unknown
         return sub in _MOVES_HEAD, ['*'] if sub in _MOVES_NAMED else []
     ops = _operands(args)
     if sub in ('cherry-pick', 'revert') and {'-n', '--no-commit'} & set(args):
@@ -1088,8 +1042,15 @@ def _moves_protected_branch(command, invocations):
     one that writes it by name), or the guard cannot tell where it lands: a
     directory change or GIT_DIR-style redirect in the command, a branch change
     in it for an operation on HEAD, a prefix or an option before the operation's
-    subcommand, a detached HEAD, or an unset origin/HEAD."""
-    writes = [_branch_writes(inv) for inv in invocations]
+    subcommand, a detached HEAD, or an unset origin/HEAD. `invocations` are the
+    classifier's; one the parser does not read as a git command is a landing
+    the guard cannot tell."""
+    parsed = _git_view(command)[1]
+    moving = _MOVES_HEAD | _MOVES_NAMED
+    if (sum(inv.subcommand in moving for inv in invocations)
+            > sum(inv.subcommand in moving for inv in parsed)):
+        return True
+    writes = [_branch_writes(inv) for inv in parsed]
     on_head = any(head for head, _names in writes)
     names = [name for _head, named in writes for name in named]
     if not (on_head or names):
@@ -1097,11 +1058,9 @@ def _moves_protected_branch(command, invocations):
     if (_ambient_git_redirect_present() or _DIR_CHANGE_RE.search(command)
             or (on_head and _BRANCH_CHANGE_RE.search(command))):
         return True
-    for seg in _shell_segments(command):
-        toks = seg.split()
-        if any(any(_branch_writes(inv)) and (
-                _cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
-               for inv in iter_git_invocations(seg)):
+    for inv, write in zip(parsed, writes):
+        if any(write) and (inv.global_opts or inv.env or inv.cmd.assignments or inv.cmd.negated
+                           or inv.context != ('top',) or shell_parse.resolve(inv.cmd).wrappers):
             return True
     protected = _protected_branch()
     if not protected or any(_names_protected(name, protected) for name in names):
@@ -1142,7 +1101,12 @@ def _block_default_deny_push(command):
 
 
 def _evaluate_push(command, invocations, data):
-    if any(_push_forces_or_deletes(inv) for inv in invocations if inv.subcommand == 'push'):
+    # The parser's reading (wrappers and nested shells peeled, quotes removed, long
+    # options resolved), and the classifier's, which also reads a quoted payload
+    # it cannot rule out as code.
+    pushes = [inv.args for inv in _git_view(command)[1] if inv.subcommand == 'push']
+    pushes += [[_unquote_token(t) for t in inv.args] for inv in invocations if inv.subcommand == 'push']
+    if any(_push_forces_or_deletes(args) for args in pushes):
         _block(
             '\nBLOCKED: agent git push - force/delete/ref-rewrite push is forbidden.\n'
             'Command excerpt: %s\n' % command[:200]
