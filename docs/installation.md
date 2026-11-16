@@ -264,8 +264,11 @@ from. `/harness on` switches it back on, and `/harness status` reports it. Only 
 prompt switches: a UserPromptSubmit hook (`hooks/userprompt-harness-switch.sh`) runs
 `scripts/harness-switch`. An agent's call is refused while the harness is on, whatever path it
 takes: `Skill`, `Bash`, a write of the switch's state or of the home's settings, a script, a
-scheduled prompt, a `disableAllHooks` written into any project's settings file
-(`hooks/pretool-harness-switch-guard.py`).
+scheduled prompt, a `disableAllHooks` written into any project's settings file, or a change to
+the `env`, `hooks` or `permissions` of a Claude Code settings file (a project's
+`.claude/settings.json` or `.claude/settings.local.json`, `managed-settings.json`, `.claude.json`)
+(`hooks/pretool-harness-switch-guard.py`). The owner edits those files directly, or lets one
+agent call through with `/allow`.
 
 A session an agent's script starts is not the owner's. `scripts/harness-switch` walks the hook's
 process ancestry, and when a Claude Code process runs above the session's own (a `claude -p
