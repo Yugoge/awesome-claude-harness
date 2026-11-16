@@ -3,7 +3,7 @@
 
 Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
 ``hooks/**/*.py`` and ``scripts/**/*.py``, one mutant at a time, spliced in place and restored
-after each run. Each mutant runs the change's own changed tests plus every test file that names
+after each run. Each mutant runs the change's own changed unit tests plus every unit test file that names
 the mutated file (``<stem>.py``, a ``lib.<stem>``-style path or module, an import of ``<stem>``).
 A mutant the tests do not fail is a survivor: a changed line no test checks. Report-only: survivors are printed as ``SURVIVED <file>:<line> <operator>`` and the exit
 status is 0; it is 2 only when the script cannot judge (git error, the unmutated run is red).
@@ -35,6 +35,9 @@ from pathlib import Path
 
 TARGET_ROOTS = ("hooks", "scripts")
 TEST_ROOTS = ("hooks/tests", "tests")
+# What the unit step of baseline.yml leaves out: the replay suites, run by their own sharded jobs. A mutant
+# never runs them (plan P15 (b): about 23 shard-minutes a mutant), so a mutant runs only unit tests.
+REPLAY_SUITES = ("tests/generated/", "tests/replay/", "tests/test_artifact_graph.py", "tests/artifact_graph/test_mutations.py")
 MAX_MUTANTS = 40
 TIMEOUT_FACTOR = 4.0
 OPERATOR_ORDER = ("compare", "boolean", "return-value", "constant")
@@ -54,6 +57,10 @@ class Mutant:
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+
+
+def is_unit_test(path: str) -> bool:
+    return path.rsplit("/", 1)[-1].startswith("test_") and not path.startswith(REPLAY_SUITES)
 
 
 def is_test(path: str) -> bool:
@@ -76,7 +83,7 @@ def changed_lines(base: str, only: list[str] | None = None) -> dict[str, set[int
 
 def changed_tests(base: str) -> list[str]:
     names = git("diff", "--name-only", "--diff-filter=AMR", base, "--", "*.py").splitlines()
-    return [p for p in names if p.rsplit("/", 1)[-1].startswith("test_") and Path(p).is_file()]
+    return [p for p in names if is_unit_test(p) and Path(p).is_file()]
 
 
 def tests_naming(stem: str) -> list[str]:
@@ -89,7 +96,7 @@ def tests_naming(stem: str) -> list[str]:
     for root in TEST_ROOTS:
         for test in sorted(Path(root).rglob("test_*.py")):
             text = test.read_text(encoding="utf-8", errors="replace")
-            if "generated" not in test.parts and any(p.search(text) for p in patterns):
+            if is_unit_test(test.as_posix()) and any(p.search(text) for p in patterns):
                 found.append(test.as_posix())
     return found
 

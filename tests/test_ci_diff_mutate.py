@@ -97,10 +97,11 @@ def test_ok():
 
 
 def test_survivors_are_reported_by_line_and_operator_and_the_file_is_restored(tmp_path):
-    # a test that uses the word only, without naming the file or importing it, is not run
+    # not run: a test that uses the word only, without naming the file or importing it; a changed replay-suite test
     prose = "# a widget, in prose only\n\n\ndef test_unrelated():\n    assert False\n"
+    replay = IMPORT_LIB.replace("parents[1]", "parents[2]") + "import widget\n\n\ndef test_replay():\n    assert False\n"
     repo = _repo(tmp_path, {"hooks/lib/widget.py": "", "tests/test_widget.py": WIDGET_TEST, "tests/test_prose.py": prose},
-                 {"hooks/lib/widget.py": WIDGET})
+                 {"hooks/lib/widget.py": WIDGET, "tests/replay/test_widget_replay.py": replay})
     done = _run(repo)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "1 test file(s) for hooks/lib/widget.py" in done.stdout
