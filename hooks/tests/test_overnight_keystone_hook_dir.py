@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""An overnight actor leaves the keystone hook dir as it is, in both modes (#27, High).
+"""An overnight actor leaves the keystone hook dir as it is, in both modes.
 
-Measured on 1ace5ee4: in both isolation modes a `chmod -x` of
-`<common>/keystone-hooks/reference-transaction` passed every hook, and in place a redirect or a
-`cp` onto it passed too; after either, the keystone refuses no ref move. The shared write-target
-parser read no operand of chmod, chown, chattr or setfacl, the guard's Write/Edit check covered the
-git config files only, and bubblewrap's read-only rebinds covered `<common>/config` and
-`<common>/hooks` only. Now the parser reads those operands as write targets, the keystone hook dir
-joins the guard's git-config paths for a Write, an Edit and each Bash write target, and bubblewrap
-rebinds it read-only. A file in the worktree, and every session outside overnight, pass as before.
+In both isolation modes neither a `chmod -x` of `<common>/keystone-hooks/reference-transaction`
+nor, in place, a redirect or a `cp` onto it may pass: after either, the keystone would refuse no
+ref move. The shared parser reads the operands of chmod, chown, chattr and setfacl as write
+targets, the keystone hook dir is one of the guard's git-config paths for a Write, an Edit and each
+Bash write target, and bubblewrap rebinds it read-only. A file in the worktree, and every session
+outside overnight, pass.
 """
 from __future__ import annotations
 
@@ -243,8 +241,19 @@ def test_the_installer_installs_and_refreshes(tmp_path):
     assert commit.returncode == 0 and "kept" in commit.stdout + commit.stderr  # the re-homed hook still fires
 
 
-MISSES = {"dd of=": "dd if=/dev/null of={rt}", "truncate": "truncate -s 0 {rt}", "ln -sf": "ln -sf /bin/true {rt}",
-          "rsync": "rsync {work}/x {rt}", "cd, then a relative chmod": "cd {dir} && chmod -x reference-transaction"}
+READ = {"dd of=": "dd if=/dev/null of={rt}", "truncate": "truncate -s 0 {rt}", "ln -sf": "ln -sf /bin/true {rt}",
+        "rsync": "rsync {work}/x {rt}"}
+MISSES = {"cd, then a relative chmod": "cd {dir} && chmod -x reference-transaction"}
+
+
+@pytest.mark.parametrize("form", list(READ))
+def test_the_parser_reads_these_writes_of_the_keystone_hook(repo, form):
+    """The shared parser names the target of each, so the guard refuses it without bubblewrap too."""
+    work = _state(repo, "registered_worktree")
+    rt = _keystone(repo)
+    command = READ[form].format(rt=rt, work=work, dir=rt.parent)
+    r = _hook(repo, "Bash", {"command": command}, work)
+    assert r.returncode == 2, (form, r.stderr)
 
 
 @pytest.mark.xfail(strict=True, reason="out of scope, found: on a --worktree host without bubblewrap the parser "

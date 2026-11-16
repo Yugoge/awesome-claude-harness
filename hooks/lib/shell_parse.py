@@ -1725,6 +1725,10 @@ def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _seen=None):
 
 def _walk_command(cmd, piped, into, context, depth, script):
     if isinstance(cmd, Compound):
+        if cmd.redirects:
+            # The compound's own redirections, as the command `> f` alone is read.
+            bare = SimpleCommand((), (), cmd.redirects, cmd.span)
+            yield Site(bare, context, depth, _feed(bare, piped), False, script)
         for w in cmd.header:
             yield from _walk_word(w, into, context)
         for r in cmd.redirects:
@@ -2262,6 +2266,25 @@ def executable_view(text):
     return "".join(out)
 
 
+def without_heredoc_bodies(text):
+    """``text`` without the lines of each heredoc's body and its closing line; the opener stays."""
+    if not isinstance(text, str):
+        return ""
+    cut = []
+    for site in walk(parse(text), into=("cmdsub", "backtick", "procsub", "shell_c", "eval")):
+        for r in site.cmd.redirects:
+            if r.hd is not None:
+                a, b = r.hd.body_span
+                end = text.find("\n", b) if r.hd.terminated else -1
+                cut.append((max(a - 1, 0), len(text) if end < 0 else end))
+    out, at = [], 0
+    for a, b in sorted(cut):
+        if a >= at:
+            out.append(text[at:a])
+        at = max(at, b)
+    return "".join(out) + text[at:]
+
+
 def _blank(out, a, b, keep_newlines=False):
     for k in range(max(a, 0), min(b, len(out))):
         if keep_newlines and out[k] == "\n":
@@ -2456,7 +2479,59 @@ VERBS = {
     "dd": (_spec(), "dd", TRUNCATE),
     "curl": (_spec(), "opt:-o,--output", TRUNCATE),
     "wget": (_spec(), "opt:-O,--output-document", TRUNCATE),
+    "chmod": (None, "attr", IN_PLACE),
+    "chown": (None, "attr", IN_PLACE),
+    "chattr": (None, "attr", IN_PLACE),
+    "setfacl": (None, "attr", IN_PLACE),
 }
+
+# The commands that change a file's mode, owner, attributes or ACL: the file
+# keeps its bytes, but `chmod -x` of a hook turns the hook off, so each path
+# operand is written in place. Per verb: the short flags (letters that take no
+# value), the short options that take a value, the long options that take one
+# (`--opt V` or `--opt=V`), and how a non-path operand is told apart: "first"
+# (chmod's mode, chown's owner: the first operand unless --reference names the
+# file to copy it from) or "signed" (chattr's modes: words starting + - =).
+_ATTR_VERBS = {
+    "chmod": ("cfvR", "", ("--reference",), "first"),
+    "chown": ("cfvhHLPR", "", ("--from", "--reference"), "first"),
+    "chattr": ("RVf", "vp", (), "signed"),
+    "setfacl": ("bkndRLPvh", "mMxX",
+                ("--modify", "--modify-file", "--remove", "--remove-file", "--set", "--set-file",
+                 "--restore"), ""),
+}
+
+
+def _attr_operands(name, args):
+    """The path operand words of one chmod / chown / chattr / setfacl."""
+    flags, short_values, long_values, kind = _ATTR_VERBS[name]
+    operands = []
+    referenced = skip = ended = False
+    for w in args:
+        t = w.value()
+        if t is None:
+            t = w.static_prefix() or "$"
+        if skip:
+            skip = False
+        elif ended or t == "-" or not t.startswith(("-", "+", "=")):
+            operands.append(w)
+        elif t == "--":
+            ended = True
+        elif t.startswith("--"):
+            opt = t.split("=", 1)[0]
+            referenced = referenced or opt == "--reference"
+            skip = opt in long_values and "=" not in t
+        elif t[0] == "-" and set(t[1:]) <= set(flags):
+            continue
+        elif t[0] == "-" and short_values and t[1] in flags + short_values:
+            k = next((i for i, c in enumerate(t[1:], 1) if c in short_values), 0)
+            skip = bool(k) and k == len(t) - 1
+        elif kind == "first":
+            operands.append(w)
+    if kind == "first" and not referenced:
+        operands = operands[1:]
+    return operands
+
 
 _PKG_MANAGERS = frozenset({
     "pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "aptitude", "yum",
@@ -2466,21 +2541,31 @@ _PKG_MANAGERS = frozenset({
 
 
 def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_shell",
-                                   "shell_c", "eval")):
+                                   "shell_c", "eval"), env=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
 
-    An assignment of a static value earlier in the same list (`X=/p; ... > $X`)
-    projects into a later `$X` / `${X}` target.
+    An assignment earlier in the same list (`X=/p; ... > $X`) projects into a
+    later `$X` / `${X}` target when its value is static or projects itself.
+    ``env`` gives the values of variables the caller knows before the command.
+    A command whose name is computed and whose operands name a copy or a move
+    (`"$CP" cp-01 dest`) is read as that copy: its last operand is the destination.
     """
     if isinstance(script, str):
         script = parse(script)
     out = []
-    env = {}
+    seed = dict(env or {})
+    envs = {}
     for site in walk(script, into=into):
         cmd = site.cmd
+        # A shell started with -c or fed code sees only the caller's (exported) variables.
+        fresh = max((k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell")), default=0)
+        env = envs.setdefault(site.context[:fresh + 1], dict(seed))
         if not cmd.words and cmd.assignments:
             for a in cmd.assignments:
                 v = a.static_value()
+                if v is None and a.value is not None:
+                    v, dec = _project(a.value, env)
+                    v = v if dec else None
                 if v is not None and not a.append:
                     env[a.name] = v
                 else:
@@ -2499,6 +2584,9 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
         res = resolve(cmd)
         name = res.name
         if name is None:
+            if res.unresolved == "dynamic_head" and len(res.args) > 1 and any(
+                    _COPY_MOVE_WORD_RE.match(w.value() or "") for w in res.args):
+                out.extend(_verb_targets("cp", VERBS["cp"], res.args, env, site.context))
             continue
         if name == "git":
             out.extend(_git_write_targets(res, env, site.context))
@@ -2508,8 +2596,24 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
             continue
         if name == "install" and _preceded_by_pkg_manager(cmd, res):
             continue
-        out.extend(_verb_targets(name, verb, res.args, env, site.context))
+        found = [t for t in _verb_targets(name, verb, res.args, env, site.context)
+                 if not any(p.kind.startswith("procsub") for p in t.word.parts)]
+        if verb[1] == "last" and _appends_args(res):
+            for t in found:
+                if t.mode in (COPY_DEST, MOVE_DEST, LINK):
+                    t.decidable = False
+        out.extend(found)
     return out
+
+
+_COPY_MOVE_WORD_RE = re.compile(r"(?:cp|mv)(?!\w)")
+
+
+def _appends_args(res):
+    """True when xargs appends words after the written operands, so the last is no destination."""
+    return any(name == "xargs" and not any(o in ("-I", "-i", "--replace") or (o or "").startswith("--replace=")
+                                           for o, _v in opts)
+               for name, opts in res.wrappers)
 
 
 def _preceded_by_pkg_manager(cmd, res):
@@ -2552,6 +2656,11 @@ def _verb_targets(name, verb, args, env, context):
                 out.append(WriteTarget(v[3:], TRUNCATE, "dd-of", None, True, w, source, context))
             elif v is None and w.static_prefix().startswith("of="):
                 out.append(WriteTarget(None, TRUNCATE, "dd-of", None, False, w, source, context))
+        return out
+    if reading == "attr":
+        for w in _attr_operands(name, args):
+            path, dec = _project(w, env)
+            out.append(WriteTarget(path, mode, name, None, dec, w, None, context))
         return out
     if reading.startswith("opt:"):
         short, long_opt = reading[4:].split(",")
@@ -2673,7 +2782,7 @@ def _git_write_targets(res, env, context):
         args = inv.arg_words
         if sub in ("rm", "mv"):
             vals = [a.value() for a in args]
-            if sub == "rm" and "--cached" in vals:
+            if sub == "rm" and "--cached" in vals[:vals.index("--") if "--" in vals else len(vals)]:
                 continue
             ops = [a for a in args if (a.value() or "x")[:1] != "-"]
             if sub == "rm":

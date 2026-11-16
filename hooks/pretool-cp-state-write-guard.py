@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """PreToolUse hook: deny direct subagent writes to cp-state-*.json.
 
-Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
-scanner was over-engineering of cooperative-threat model. Only direct
-Write/Edit/MultiEdit/NotebookEdit on cp-state paths exit 2.
+Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2;
+a Bash command is out of scope (the cooperative threat model needs only the
+direct-write check).
 Orchestrator (no agent_id) always exits 0.
 
 Failsafe: any unexpected exception exits 0 (never brick the tool pipeline).
@@ -18,14 +18,10 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 # Remediation paths are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
 # actually exists for the invoking user instead of an author-absolute literal.
 SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
-
-from lib.bash_write_targets import extract_bash_write_paths  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
@@ -80,9 +76,7 @@ def _is_cp_state_path(path: str) -> bool:
 
 
 def _extract_targets(tool_name: str, tool_input: dict) -> list:
-    # Cycle-3 slim form: only direct Write/Edit/MultiEdit/NotebookEdit paths
-    # are scanned. Cycle-2 Bash extractor removed (adversarial-threat-model
-    # over-engineering; cooperative model only needs L1 direct-write check).
+    # Only the direct write tools' paths are scanned.
     if not isinstance(tool_input, dict):
         return []
     if tool_name in WRITE_TOOLS:
@@ -118,8 +112,7 @@ def _check_targets(tool_name: str, targets: list) -> None:
 
 
 def _is_in_scope(tool_name: str) -> bool:
-    # Cycle-3 slim form: drop Bash from scope; only direct write tools
-    # are checked. See _extract_targets comment for rationale.
+    # Only the direct write tools are checked.
     return tool_name in WRITE_TOOLS
 
 

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse Hook: user-intent sentinel guard for the /stop release wrapper.
 
-fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
-overnight isolation by running `scripts/break-overnight-lock.py` (via
-`hooks/stop.sh`), the ONLY sanctioned setter of `isolation_released_at`. An
-overnight ACTOR must NOT be able to self-release isolation by invoking that
-helper directly from a Bash tool call.
+The /stop slash command releases overnight isolation by running
+`scripts/break-overnight-lock.py` (via `hooks/stop.sh`), the ONLY sanctioned
+setter of `isolation_released_at`. An overnight ACTOR must NOT be able to
+self-release isolation by invoking that helper directly from a Bash tool call.
 
 Mechanism:
   * The UserPromptSubmit hook (`prompt-workflow.py::_write_userintent_sentinel`)
@@ -45,10 +44,10 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 try:
-    from lib.bash_write_targets import command_without_heredoc_bodies
+    from lib.shell_parse import without_heredoc_bodies
 except Exception:  # pragma: no cover - fail-soft when lib missing
-    def command_without_heredoc_bodies(command: str) -> str:  # type: ignore
-        return command
+    def without_heredoc_bodies(text: str) -> str:  # type: ignore
+        return text
 
 # Wrapper scripts whose direct EXECUTION requires a matching user-intent
 # sentinel. The key is the sentinel command-name (<state dir>/claude-<name>-userintent-).
@@ -112,7 +111,7 @@ def _matched_wrapper(command: str) -> str | None:
     wrapper path as data (test fixtures, documentation, JSON) is not a false
     positive — this MUST NOT break normal sessions' read-only commands that
     happen to reference break-overnight-lock.py / stop.sh."""
-    scan = command_without_heredoc_bodies(command)
+    scan = without_heredoc_bodies(command)
     for name, patterns in _GUARDED_WRAPPERS.items():
         for pat in patterns:
             if pat.search(scan):

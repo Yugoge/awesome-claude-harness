@@ -25,10 +25,11 @@ def _bounded_environment(monkeypatch):
         (f'OUT={SAFE}; printf x | tee "$OUT"', [SAFE]),
         (f'printf x | tee "$OUT"; OUT={SAFE}', ["$OUT"]),
         (f'OUT={SAFE}; tee "$OUT"; OUT=.claude/hooks/x', [SAFE]),
-        (f'OUT={SAFE}; OUT=.claude/hooks/x; tee "$OUT"', ["$OUT"]),
-        (f'OUT=.claude/hooks/x; OUT={SAFE}; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; OUT=.claude/hooks/x; tee "$OUT"', [".claude/hooks/x"]),
+        (f'OUT=.claude/hooks/x; OUT={SAFE}; tee "$OUT"', [SAFE]),
         (f'OUT={SAFE} tee "$OUT"', ["$OUT"]),
-        (f'OUT={SAFE}; (tee "$OUT")', ["$OUT"]),
+        (f'OUT={SAFE}; (tee "$OUT")', [SAFE]),
+        (f"T={SAFE}; bash -c 'tee $T'", ["$T"]),
         ('OUT=$(producer); tee "$OUT"', ["$OUT"]),
         (f'REF=OUT; OUT={SAFE}; tee "${{!REF}}"', ["${!REF}"]),
         ('tee "$OUT"', ["$OUT"]),
@@ -36,6 +37,8 @@ def _bounded_environment(monkeypatch):
     ],
 )
 def test_assignment_target_matrix(command, expected):
+    # The last assignment before the use wins, a subshell inherits it, and a `-c` shell sees
+    # only exported variables.
     assert targets.extract_bash_write_paths(command) == expected
 
 
