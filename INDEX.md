@@ -195,7 +195,6 @@ dot-claude/
 │   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   │   ├── `test_c_layer_protected_targets.py` - d1b244f0 made a shell `-c` layer fail closed: run-time text given to a program outside
-│   │   ├── `test_canary_cleanup_drift.py` - The canary compares a deployed cleanup artifact with its repository copy, and a host's own file is no artifact.
 │   │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   │   ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 │   │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate

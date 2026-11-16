@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
-# Usage: canary-verify.sh [--hooks-dir <path>] [--deploy-root <dir>]
-#   --deploy-root: read each deployed cleanup artifact under <dir> (a test's stand-in for /).
+# Usage: canary-verify.sh [--hooks-dir <path>]
 #   Designed to run as a SessionStart hook (registered in settings.json).
 # Output contract (spec §5.5):
 #   - Healthy run: zero bytes to stdout (exec >/dev/null), exit 0
@@ -19,14 +18,12 @@ exec >/dev/null
 
 HOOKS_DIR_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks"
 HOOKS_DIR="${HOOKS_DIR_DEFAULT}"
-DEPLOY_ROOT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --hooks-dir) HOOKS_DIR="${2:?missing value for --hooks-dir}"; shift 2 ;;
-    --deploy-root) DEPLOY_ROOT="${2:?missing value for --deploy-root}"; shift 2 ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--hooks-dir <path>] [--deploy-root <dir>]" >&2
+      echo "Usage: $(basename "$0") [--hooks-dir <path>]" >&2
       exit 0
       ;;
     *) echo "canary-verify.sh: unknown arg '$1'" >&2; exit 1 ;;
@@ -51,12 +48,9 @@ emit_failure() {
   failures=$((failures + 1))
 }
 
-advisories=()
-
 emit_advisory() {
-  # Advisory: printed to stderr after every failure line (a reader that keeps only the first
-  # line sees a failure when there is one), never counted as a failure (spec §5.5 + Won't Have).
-  advisories+=("canary-verify[ADVISORY]: $*")
+  # Advisory: log to stderr but do not increment failures (spec §5.5 + Won't Have).
+  echo "canary-verify[ADVISORY]: $*" >&2
 }
 
 # ---------------------------------------------------------------------------
@@ -177,20 +171,13 @@ verify_cleanup_drift() {
   )
   local pair deployed repo
   for pair in "${pairs[@]}"; do
-    deployed="${DEPLOY_ROOT}${pair%%:*}"
+    deployed="${pair%%:*}"
     repo="${pair#*:}"
     if [[ ! -f "${repo}" ]]; then
       continue
     fi
     if [[ ! -f "${deployed}" ]]; then
       emit_advisory "cleanup artifact not yet deployed: ${deployed} (repo copy: ${repo})"
-      continue
-    fi
-    # A file there whose first line is not its artifact's first line (`# Deploy target: <path>`
-    # for the tmpfiles rules) is the host's own, not a deployed artifact: an Ubuntu runner image
-    # ships its own /etc/tmpfiles.d/tmp.conf. Named, not compared.
-    if [[ "$(head -n 1 "${deployed}" 2>/dev/null)" != "$(head -n 1 "${repo}")" ]]; then
-      emit_advisory "not a deployed cleanup artifact (its first line is not ${repo}'s): ${deployed}; not compared"
       continue
     fi
     if ! diff -q "${deployed}" "${repo}" >/dev/null 2>&1; then
@@ -254,10 +241,6 @@ verify_read_size_guard
 verify_git_privilege_guard
 verify_cleanup_drift
 check_advisory_prerequisites
-
-for line in ${advisories[@]+"${advisories[@]}"}; do
-  echo "${line}" >&2
-done
 
 if [[ "${failures}" -gt 0 ]]; then
   echo "canary-verify[FAIL]: ${failures} hook(s) broken — see preceding lines" >&2
