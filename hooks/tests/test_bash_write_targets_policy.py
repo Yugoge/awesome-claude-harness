@@ -42,6 +42,48 @@ def test_assignment_target_matrix(command, expected):
     assert targets.extract_bash_write_paths(command) == expected
 
 
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        (f'OUT={SAFE}; [ -f x ] && OUT=.claude/hooks/y; tee "$OUT"', ["$OUT"]),
+        (f'[ -f x ] && OUT={SAFE}; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; for f in a; do OUT=.claude/hooks/y; done; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; while x; do OUT=.claude/hooks/y; done; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; if x; then OUT=.claude/hooks/y; fi; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; case a in a) OUT=.claude/hooks/y;; esac; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; f() {{ OUT=.claude/hooks/y; }}; f; tee "$OUT"', ["$OUT"]),
+        (f'f() {{ OUT=.claude/hooks/y; }}; OUT={SAFE}; f; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; read OUT; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; declare OUT=.claude/hooks/y; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; printf -v OUT %s .claude/hooks/y; tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; OUT=$(cmd); tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE} | tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE} & tee "$OUT"', ["$OUT"]),
+        # eval runs in this shell: its assignment is the value tee writes
+        (f'OUT={SAFE}; eval OUT=.claude/hooks/y; tee "$OUT"', [".claude/hooks/y"]),
+    ],
+)
+def test_an_assignment_that_may_not_hold_projects_nothing(command, expected):
+    # Under a condition, a loop, a case arm, a called function, a pipeline or the background, or
+    # through a builtin that sets a variable, the value is not known: the target stays `$OUT`,
+    # which a role's write check refuses.
+    assert targets.extract_bash_write_paths(command) == expected
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        (f"export T={SAFE}; bash -c 'tee $T'", [SAFE]),
+        (f"T={SAFE}; export T; bash -c 'tee $T'", [SAFE]),
+        (f"T={SAFE} bash -c 'tee $T'", [SAFE]),
+        (f"T={SAFE} bash -c 'tee $T'; bash -c 'tee $T'", [SAFE, "$T"]),
+        (f"T={SAFE}; [ x ] && export T=.claude/hooks/y; bash -c 'tee $T'", ["$T"]),
+    ],
+)
+def test_a_c_shell_sees_exported_and_prefix_assignments(command, expected):
+    assert targets.extract_bash_write_paths(command) == expected
+
+
 def test_approved_home_and_project_expansions_are_projected():
     command = 'OUT="$CLAUDE_PROJECT_DIR/docs/dev/context-x.json"; tee "$OUT"'
     assert targets.extract_bash_write_paths(command) == [str(ROOT / SAFE)]
