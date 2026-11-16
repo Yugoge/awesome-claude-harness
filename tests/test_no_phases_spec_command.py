@@ -1,38 +1,47 @@
-"""commands/spec.md carries the owner's "no phases" ruling (D33).
+"""commands/spec.md's split QA carries the owner's "no phases" ruling (D33), shown by the code that reads it.
 
-Parallel lanes inside one cycle stay. A spec, a view or a hand-off note never splits a requested outcome into
-sequential phases, deferred parts, a "phase 2", an "MVP first" or work for a later cycle: every requested outcome is
-delivered in the same cycle. The split QA of Step 6 is where that is checked, so its prompt must carry a criterion
-that fails such a split; and the rest of the command must not invite phasing or deferral in its own words.
+Parallel lanes inside one cycle stay. A spec or a view never splits a requested outcome into sequential phases,
+deferred parts, a "phase 2", an "MVP first" or work for a later cycle. The split QA of Step 6 is where /spec checks
+that, through criterion 7 of its prompt. No hook or script judges a phased plan: the QA is a model. The one code that
+reads the ruling is the replay /spec driver (tests/replay/drivers/spec.py, SpecRun.split_qa): it renders Step 6's
+split-QA dispatch from the command text and refuses to dispatch it (cmdtext.TextNotFound) unless one criterion fails
+phased or deferred work and keeps parallel lanes. These tests run that step on the command under test, which must
+dispatch, and on a phased variant of it (criterion 7 rewritten to license an MVP first, a 'phase 2' and deferred parts
+for a later cycle; or criterion 7 dropped), which must be refused. The driver's check is word-level: it shows the
+criterion is there, not how a QA model applies it.
+
+The structure tests keep the prompt's criteria parseable (numbered 1 to N, the first six names, which the driver's
+check 3 slicing reads).
 
 SPEC_COMMAND_UNDER_TEST=<path> points the file at another copy of the command; the default is commands/spec.md.
-Pointing it at the pre-ruling text (`git show d64fa96:commands/spec.md`) must fail the rule tests and pass the
-structure tests.
+Pointing it at the pre-ruling text (`git show d64fa96:commands/spec.md`, no criterion 7) fails the dispatch test
+(the driver refuses it), fails the variant tests (nothing to rewrite) and passes the structure tests.
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import re
+import shutil
+import types
 from pathlib import Path
 
 import pytest
 
+from tests.replay import cmdtext
+from tests.replay.drivers import spec as spec_driver
+
 REPO = Path(__file__).resolve().parents[1]
 PATH = Path(os.environ.get("SPEC_COMMAND_UNDER_TEST") or REPO / "commands" / "spec.md")
 TEXT = PATH.read_text(encoding="utf-8")
-LINES = TEXT.split("\n")
 
-# What the criterion must forbid, each as the pattern that names it.
-FORBIDDEN = {
-    "sequential phases": r"\bsequential phases\b",
-    "phase 2": r"\bphase 2\b",
-    "MVP first": r"\bMVP first\b",
-    "deferred parts": r"\bdeferred parts\b",
-    "a later cycle": r"\b(?:a|for a) later cycle\b",
-}
-VOCABULARY = re.compile(r"\bphases?\b|\bMVP\b|\bdeferred\b|\blater cycle\b", re.I)
 CRITERION = re.compile(r"^[ \t]*(\d+)\.[ \t]+([A-Z][A-Z0-9 &()/-]*):")
-JSON_LINE = "Return JSON: {verdict: pass|fail, issues: [...], summary: '...'}"
+
+# Criterion 7 as a phased plan would have it: it names every form of phasing, and licenses it.
+PHASED_CRITERION = (
+    "     7. DELIVERY PLAN: The spec may deliver an MVP first and leave deferred parts, a 'phase 2',\n"
+    "        for a later cycle. List each deferred part in `issues`.")
 
 
 def fenced_blocks(text: str) -> list[tuple[int, str]]:
@@ -50,15 +59,15 @@ def fenced_blocks(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def qa_prompt() -> tuple[int, str]:
-    found = [(n, b) for n, b in fenced_blocks(TEXT) if "Validate the spec split" in b]
+def qa_prompt(text: str = TEXT) -> tuple[int, str]:
+    found = [(n, b) for n, b in fenced_blocks(text) if "Validate the spec split" in b]
     assert len(found) == 1, f"{len(found)} blocks hold the split-QA prompt"
     return found[0]
 
 
-def criteria() -> list[tuple[int, str, str, int]]:
+def criteria(text: str = TEXT) -> list[tuple[int, str, str, int]]:
     """(number, name, text, first line in the file) of each criterion of the split-QA prompt."""
-    first, body = qa_prompt()
+    first, body = qa_prompt(text)
     rows: list[list] = []
     for offset, line in enumerate(body.split("\n")):
         match = CRITERION.match(line)
@@ -71,10 +80,41 @@ def criteria() -> list[tuple[int, str, str, int]]:
     return [tuple(row) for row in rows]
 
 
-def no_phasing() -> tuple[int, str, str, int]:
-    found = [c for c in criteria() if re.search(r"\bphase 2\b", c[2])]
-    assert len(found) == 1, f"{len(found)} criteria of the split QA name a 'phase 2'"
-    return found[0]
+def without_criterion_7(text: str, replacement: str | None) -> str:
+    """`text` with criterion 7 of the split-QA prompt (its lines up to the blank line before Return JSON) replaced by
+    `replacement`, or dropped when it is None."""
+    number, _, body, first = next(c for c in criteria(text) if c[0] == 7)
+    lines = text.split("\n")
+    count = len(body.rstrip("\n").split("\n"))
+    new = [] if replacement is None else replacement.split("\n")
+    return "\n".join(lines[:first - 1] + new + lines[first - 1 + count:])
+
+
+class _Session:
+    """The replay session's dispatch, recorded instead of played."""
+
+    def __init__(self):
+        self.dispatches: list[tuple[str, str, dict]] = []
+
+    def dispatch(self, atype, prompt, **kw):
+        self.dispatches.append((atype, prompt, kw))
+
+
+def split_qa(command_text: str, tmp_path: Path) -> tuple[str, _Session]:
+    """Run the replay /spec driver's Step 6 split QA on `command_text` as commands/spec.md of a harness home in
+    `tmp_path`; returns its verdict and the recorded session."""
+    harness, project = tmp_path / "harness", tmp_path / "project"
+    (harness / "commands").mkdir(parents=True)
+    (harness / "agents").mkdir()
+    (project / "docs" / "dev" / "specs").mkdir(parents=True)
+    (harness / "commands" / "spec.md").write_text(command_text, encoding="utf-8")
+    shutil.copy(REPO / "agents" / "spec.md", harness / "agents" / "spec.md")
+    session = _Session()
+    rp = types.SimpleNamespace(layout=types.SimpleNamespace(harness=str(harness), project=str(project)),
+                               acting=lambda who: contextlib.nullcontext(), session=lambda: session)
+    run = spec_driver.SpecRun(rp, "plain")
+    run.spec_id, run.path = "toy-spec", str(project / "docs" / "dev" / "specs" / "toy-spec.md")
+    return run.split_qa(), session
 
 
 # ------------------------------------------------------------ the split QA keeps its shape
@@ -83,73 +123,25 @@ def test_the_criteria_are_numbered_one_to_n_with_no_gap():
     assert len(numbers) >= 6 and numbers == list(range(1, len(numbers) + 1)), numbers
 
 
-def test_the_qa_returns_the_same_pass_fail_json_after_the_last_criterion():
-    _, body = qa_prompt()
-    assert body.count(JSON_LINE) == 1
-    assert body.index(JSON_LINE) > body.index(criteria()[-1][1])
-
-
 def test_the_first_six_criteria_keep_their_names():
     names = [c[1] for c in criteria()][:6]
     assert names == ["ROLE MANDATE", "AGENT SELECTION", "COVERAGE", "CONTENT RELEVANCE", "FUNCTIONAL COMPLETENESS",
                      "SECTION 9 (DESIGN & EVIDENCE REFERENCES)"]
 
 
-# ------------------------------------------------------------ the ruling (D33)
-def test_the_seventh_criterion_is_the_one_that_fails_phasing():
-    number, name, text, _ = no_phasing()
-    assert number == 7, f"the no-phases criterion is number {number}"
-    assert re.search(r"\bfail\b", text, re.I), "the criterion does not say the split fails"
-    assert re.search(r"\b(?:the spec or any view|any view)\b", text), "the criterion does not cover the views and the spec"
+# ------------------------------------------------------------ the ruling (D33), as the replay driver reads it
+def test_the_replay_dispatches_the_split_qa_of_the_command_under_test(tmp_path):
+    verdict, session = split_qa(TEXT, tmp_path)
+    assert verdict == "pass"
+    assert [(atype, kw["label"]) for atype, _, kw in session.dispatches] == [("qa", "Step 6 Agent(qa) split QA round 1")]
+    result = session.dispatches[0][2]["result"]
+    assert json.loads(result.split("\n\n")[0])["verdict"] == "pass"
+    assert result.split("\n")[-1] == "SPLIT QA: pass"
 
 
-@pytest.mark.parametrize("name", FORBIDDEN)
-def test_the_criterion_forbids(name):
-    _, _, text, _ = no_phasing()
-    assert re.search(FORBIDDEN[name], re.sub(r"\s+", " ", text), re.I), f"the criterion does not forbid {name!r}"
-
-
-def test_the_criterion_says_every_requested_outcome_is_delivered_in_one_cycle():
-    _, _, text, _ = no_phasing()
-    assert re.search(r"every requested outcome is delivered in (?:one|the same) cycle", re.sub(r"\s+", " ", text), re.I)
-
-
-def test_the_criterion_keeps_parallel_lanes_inside_one_cycle():
-    _, _, text, _ = no_phasing()
-    assert re.search(r"parallel lanes inside one cycle are fine", re.sub(r"\s+", " ", text), re.I)
-
-
-def test_the_criterion_is_as_terse_as_the_others():
-    longest_other = max(len(c[2].split()) for c in criteria() if c[0] != 7)
-    assert len(no_phasing()[2].split()) <= longest_other
-
-
-# ------------------------------------------------------------ nothing else in the command invites phasing
-def allowed_lines() -> set[int]:
-    number, _, text, first = no_phasing()
-    allowed = set(range(first, first + text.count("\n") + 1))
-    start = next(i for i, line in enumerate(LINES, 1) if re.match(r"^### Step 7\b", line))
-    end = next((i for i, line in enumerate(LINES, 1) if i > start and re.match(r"^(#{2,3}) ", line)), len(LINES) + 1)
-    return allowed | set(range(start, end))
-
-
-def test_no_other_line_speaks_of_phases_deferral_or_an_mvp():
-    allowed = allowed_lines()
-    stray = [f"{n}: {line.strip()[:100]}" for n, line in enumerate(LINES, 1) if VOCABULARY.search(line) and n not in allowed]
-    assert not stray, "lines outside the criterion and Step 7 speak of phasing or deferral:\n" + "\n".join(stray)
-
-
-def test_step_7_only_mentions_phases_to_forbid_them():
-    start = next(i for i, line in enumerate(LINES) if re.match(r"^### Step 7\b", line))
-    section = "\n".join(LINES[start:])
-    section = section[:section.index("\n## ")] if "\n## " in section else section
-    sentences = [s for s in re.split(r"(?<=[.;:])\s+", re.sub(r"\s+", " ", section)) if VOCABULARY.search(s)]
-    assert sentences, "Step 7 no longer says the hand-off never phases or defers a requested outcome"
-    assert all(re.search(r"\bnever\b|\bno\b|\bnot\b", s, re.I) for s in sentences), sentences
-
-
-def test_step_7_hands_off_to_the_run_that_implements_the_spec_not_to_a_next_phase():
-    start = next(i for i, line in enumerate(LINES) if re.match(r"^### Step 7\b", line))
-    section = "\n".join(LINES[start:start + 6])
-    assert "the `/dev` run that implements this spec" in section
-    assert not re.search(r"\bnext (?:phase|stage|cycle)\b", TEXT, re.I)
+@pytest.mark.parametrize("replacement", [PHASED_CRITERION, None], ids=["licenses-phases", "dropped"])
+def test_the_replay_refuses_a_split_qa_that_does_not_fail_phased_work(tmp_path, replacement):
+    phased = without_criterion_7(TEXT, replacement)
+    assert [c[0] for c in criteria(phased)][-1] == (7 if replacement else 6)
+    with pytest.raises(cmdtext.TextNotFound, match="no criterion that fails phased or deferred work"):
+        split_qa(phased, tmp_path)
