@@ -106,7 +106,6 @@ def test_ac09_the_registered_posttool_consumer_still_cannot_see_a_write_grant(tm
 
 
 CONSUMERS = (
-    "hooks/pretool-tool-policy.py",
     "hooks/pretool-overnight-hook-guard.py",
     "hooks/pretool-cp-state-write-guard.py",
 )
@@ -203,6 +202,23 @@ def test_ac10_consumers_still_compile_and_import_the_frozen_symbol(consumer, tmp
         "existing consumers must be unaffected by the additive extension")
     compiled = py_compile_out_of_tree(path, tmp_path)
     assert compiled.returncode == 0, compiled.stderr
+
+
+def test_ac10_the_tool_policy_reads_bash_write_targets_through_the_shared_parser(tmp_path):
+    """hooks/pretool-tool-policy.py reads every Bash write target from lib/shell_parse, not from
+    the frozen extractor: it compiles, and it names the target of a form only the parser reads."""
+    import importlib.util
+
+    path = REPO / "hooks" / "pretool-tool-policy.py"
+    compiled = py_compile_out_of_tree(path, tmp_path)
+    assert compiled.returncode == 0, compiled.stderr
+    spec = importlib.util.spec_from_file_location("tool_policy_ac10", path)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    policy._bootstrap_security()
+    for command in ("dd if=/x of=/tmp/ac10-a", "echo x &> /tmp/ac10-a", "git restore /tmp/ac10-a"):
+        assert bwt.extract_bash_write_paths(command) == [], command
+        assert policy._extract_targets("Bash", {"command": command}) == ["/tmp/ac10-a"], command
 
 
 def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too(tmp_path):

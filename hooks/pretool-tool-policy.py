@@ -189,17 +189,19 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
 def _bash_writes(command) -> tuple:
     """(path word, removed) of every write the command and each shell -c layer
     it runs make (lib/shell_parse.write_targets): a delete, or the source of a
-    move, is removed; a move's entry in a destination directory is removed too,
-    since it replaces what that directory held there."""
-    found = []
+    move, is removed; each source's entry in the move's destination directory
+    is removed too, since it replaces what that directory held there."""
+    found, into = [], None
     for text in _bash_texts(command):
         for target in shell_parse.write_targets(text):
             word = _path_word(target)
+            if target.mode == shell_parse.MOVE_DEST:
+                into = word
             if word is None:
                 continue
             found.append((word, target.mode == shell_parse.DELETE))
-            if target.mode == shell_parse.MOVE_DEST and target.source:
-                found.append((os.path.join(word, os.path.basename(target.source.rstrip("/"))), True))
+            if into and target.mechanism.endswith("-source"):
+                found.append((os.path.join(into, os.path.basename(word.rstrip("/"))), True))
     return tuple(dict.fromkeys(found))
 
 
