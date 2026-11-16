@@ -3,17 +3,13 @@
 
 Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 
-Exits 2 on a refusal, with its message on stderr. Otherwise it prints one verdict token on stdout:
-  ALLOW               every rule passed
-  CONSENT             main-agent /do consent releases the later rules
-  SENTINEL <task id>  a structured /allow grant matched; the later rules are released
-The shell entry turns CONSENT and SENTINEL into an allow after the pre-clean snapshot guard, and treats
-anything else (no token, a crash, a wrong interpreter) as a refusal.
-
-Order matters. The runtime guard and the commit guard run before the /do and /allow releases and are never
-released by them; every later rule is. A text view that cannot be built degrades to the raw command, so a broken
-helper refuses more, never less.
+Exits 2 on a refusal, its message on stderr; otherwise prints ALLOW, CONSENT (main-agent /do consent) or
+SENTINEL <task id> (a structured /allow grant). The shell entry allows CONSENT and SENTINEL after the pre-clean
+snapshot guard and refuses anything else (no token, a crash, a wrong interpreter). The runtime and commit guards
+run before the /do and /allow releases and neither releases them; every later rule is released by both. A view
+that cannot be built degrades to the raw command, so a broken helper refuses more, never less.
 """
+import contextlib
 import json
 import os
 import re
@@ -36,7 +32,6 @@ def refuse(*lines):
 
 def released_line():
     return "Release: the user can authorize this command with /do or a matching /allow grant."
-
 
 def lines_of(text):
     return text.split("\n")
@@ -172,7 +167,6 @@ def commit_guard(payload):
     (3) a commit whose repository has settings.json changed against HEAD while the claude-settings filter is not
     registered. Text the guard cannot split like the shell fails closed.
     """
-    import contextlib
     import importlib.util as iu
     import itertools
     import shlex
@@ -475,34 +469,23 @@ def consume_daemon_restart_grant(unit, verb, payload, grant_dir, prefix):
             return False
         try:
             data = with_alarm(1, lambda: json.load(open(flag)))
-        except BaseException:  # noqa: BLE001
-            return False
-        if data.get("target", "") not in (target, "all"):
-            return False
-        try:
             exp = datetime.fromisoformat(data.get("expires_at", "").replace("Z", "+00:00"))
-            exp = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
-            if exp <= datetime.now(timezone.utc):
-                return False
-        except Exception:  # noqa: BLE001
+            expired = (exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)) <= datetime.now(timezone.utc)
+        except BaseException:  # noqa: BLE001 - an unreadable or undated grant is no grant
             return False
         gsid = data.get("session_id", "")
-        if gsid and gsid != "no-active-session" and gsid != sid:
+        if expired or data.get("target", "") not in (target, "all") or gsid and gsid not in ("no-active-session", sid):
             return False
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(flag)
-        except FileNotFoundError:
-            pass
         sys.stderr.write(f"[daemon-restart-grant] consumed grant for target={target} unit={unit} verb={verb}\n")
         return True
     except Exception:  # noqa: BLE001
         return False
     finally:
         if fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
 
 
 def daemon_rules(command, payload, env):
@@ -536,8 +519,7 @@ def daemon_rules(command, payload, env):
         refuse("BLOCKED: daemon-restart-http-stop — HTTP /stop on a localhost port is refused", f"Command: {command}",
                    "REASON: /stop on a localhost port is a daemon's shutdown endpoint; false positives on other local "
                    "services are accepted.", released_line())
-    flag_re = re.escape(one_slash(env["grant_dir"]) + "/claude-allow-daemon-restart-")
-    if grep(flag_re + r"[A-Za-z0-9_-]+\.flag", command) and grep(r"(>|>>|tee|cp|mv|ln|touch|cat\s)", command):
+    if writes_namespace(command, re.escape(one_slash(env["grant_dir"]) + "/claude-allow-daemon-restart-")):
         refuse("BLOCKED: daemon-restart-sentinel-write — writing to the daemon-restart grant sentinel is refused",
                    f"Command: {command}",
                    f"REASON: only {hint} (run by the user from a TTY) creates the grant sentinel.", released_line())
@@ -593,8 +575,7 @@ def commit_artifact_rules(command, state):
     """BS-14, BS-15, BS-16: the /commit user-intent flag, the dispatch attestation and the commit grant."""
     from lib.commit_pipeline import ATTEST_PREFIX
     base = one_slash(state)
-    if grep(re.escape(base + "/claude-commit-userintent-") + r"[A-Za-z0-9_-]+\.flag", command) \
-            and grep(r"(>|>>|tee|cp|mv|ln|touch|cat\s)", command):
+    if writes_namespace(command, re.escape(base + "/claude-commit-userintent-")):
         refuse("BLOCKED: commit-userintent-sentinel-write — writing to the /commit mint-authorization sentinel is refused",
                    f"Command: {command}",
                    "REASON: only the UserPromptSubmit hook (fired when a human types /commit) writes this flag.",
@@ -661,12 +642,8 @@ def _ansi_decode(s):
 
     def repl(m):
         g = m.group(0)
-        if g[1] in 'xUu':
-            return chr(int(g[2:], 16))
-        if g[1] == '0':
-            return chr(int(g[2:], 8))
-        if g[1] in '1234567':
-            return chr(int(g[1:], 8))
+        if g[1] in 'xUu01234567':
+            return chr(int(g[2:], 16)) if g[1] in 'xUu' else chr(int(g[2:] if g[1] == '0' else g[1:], 8))
         return escapes.get(g[1], g)
     try:
         return re.sub(r'\\(?:x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8}|u[0-9a-fA-F]{4}|0[0-7]{1,3}|[0-7]{1,3}|[ntrabfv\\\'"])', repl, s)
@@ -755,8 +732,17 @@ _HB_CMD = (r"""(^|[;&|(`{!]|\$\()\s*(([^\s;&|]*/)?(sudo|env|nohup|exec|command|t
            r"""(ba|z|da|k)?sh|if|then|do|else|while|until|[-<]\S*|[0-9]\S*|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*["']?([^\s;&|]*/)?""")
 _HB_RUNS_TEXT = re.compile(
     r"(^|[\s;&|()`])((\S*/)?((ba|z|da|k|c|tc|fi|r)?sh|eval|ssh|watch|trap|su|parallel|tmux|screen|alias|flock|script|xargs"
-    r"|source|exec|[gmn]?awk|perl|ruby|python[\d.]*|node|php|lua|tclsh|expect|sed|n?vim?|make)|-\w*[ce]\w*|--(command|eval)\S*)"
+    r"|source|exec|[gmn]?awk|perl|ruby|python[\d.]*|node|php|lua|tclsh|expect|sed|n?vim?|make))"
     r"(?=$|[\s;&|()`])|(^|[;&|()`])\s*\.\s")
+
+
+def executable_view_or_raw(command):
+    """lib/shell_parse.py's executable view of the command; the raw command when the parser is unavailable."""
+    try:
+        from lib.shell_parse import executable_view
+        return executable_view(command)
+    except Exception:  # noqa: BLE001
+        return command
 
 
 def hard_ban_mask(t):
@@ -813,13 +799,17 @@ def hard_ban_mask(t):
 
 def hard_ban_rule(command):
     """Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs,
-    each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word."""
+    each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word: in the
+    text with its quoted data masked (unless a word outside quotes names a program that runs text), or in the
+    parser's executable view, which keeps what a shell `-c`, a git alias or a substitution runs and blanks the data
+    an option such as git's `-c` merely configures."""
     configured = os.environ.get("CLAUDE_HARD_BANNED_SCRIPTS", "")
     value = (configured or "session-recovery|restart-all-sessions").split("\n", 1)[0]
     bans = value.split("|")
     if bans and bans[-1] == "":
         bans.pop()
     data = None
+    view = None
     for ban in bans:
         if configured:
             rx = ban
@@ -831,7 +821,9 @@ def hard_ban_rule(command):
                 except Exception:  # noqa: BLE001
                     masked = ""
                 data = masked or command
-        if ban and grep(rx, data if data is not None else command):
+        if ban and not configured and view is None:
+            view = executable_view_or_raw(command)
+        if ban and (grep(rx, data if data is not None else command) or (not configured and grep(rx, view))):
             refuse(f"BLOCKED: hard-banned script '{ban}' is refused", f"Command: {command}",
                        "REASON: it manages session state or restarts daemons and can kill all sessions. Only the user "
                        "runs it manually.", released_line())
@@ -841,6 +833,38 @@ def hard_ban_rule(command):
 
 def _subcommands(command):
     return command.replace("&&", "\n").replace("||", "\n").replace(";", "\n").split("\n")
+
+
+SENSITIVE_NAME = re.compile(r"\.env|credentials|secret|password")
+
+
+def sensitive_redirect(command):
+    """'write' when a command redirects its output into a file named like a secret, 'redirect' when a command that
+    names such a file (an argument or an input redirection) writes its output to a file; None otherwise.
+
+    Read from lib/shell_parse.py's commands, so a name inside quoted data is not a redirection. A command the parser
+    cannot read is judged on its raw text.
+    """
+    try:
+        from lib.shell_parse import parse, walk
+        script = parse(command)
+        if script.error is not None:
+            raise ValueError(script.error.code)
+        for site in walk(script):
+            redirs = [r for r in site.cmd.redirects if r.target is not None]
+            outputs = [r for r in redirs if r.writes()]
+            if any(SENSITIVE_NAME.search(r.target.text) for r in outputs):
+                return "write"
+            if outputs and (any(SENSITIVE_NAME.search(w.text) for w in site.cmd.words[1:])
+                            or any(SENSITIVE_NAME.search(r.target.text) for r in redirs if not r.writes())):
+                return "redirect"
+        return None
+    except Exception:  # noqa: BLE001
+        if grep(r"(>|>>)\s*\S*(\.env|credentials|secret|password)", command):
+            return "write"
+        if grep(r"(\.env|credentials|secret|password)\S*\s*(>|>>)", command):
+            return "redirect"
+        return None
 
 
 def all_targets_whitelisted(command, verb_re, whitelist, strip_service=False):
@@ -861,12 +885,13 @@ def all_targets_whitelisted(command, verb_re, whitelist, strip_service=False):
 def service_rules(command, stripped, env):
     """BS-20/21, BS-23..BS-31: secrets, docker, disks, process kills, systemd units, workflow state."""
     family = env["family"]
-    if grep(r"(>|>>)\s*\S*(\.env|credentials|secret|password)", command):
+    sensitive = sensitive_redirect(command)
+    if sensitive == "write":
         refuse("BLOCKED: Attempting to write to sensitive file via Bash", f"Command: {command}",
-                   "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
-    if grep(r"(\.env|credentials|secret|password)\S*\s*(>|>>)", command):
+               "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
+    elif sensitive == "redirect":
         refuse("BLOCKED: Attempting to redirect from/to sensitive file via Bash", f"Command: {command}",
-                   "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
+               "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
     if grep(r"(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.json", command):
         refuse("BLOCKED: Modifying Docker daemon config is refused", f"Command: {command}", released_line())
     if family and grep(r"docker\s+(stop|restart|rm|kill)\s+.*" + re.escape(family), command) \
@@ -963,8 +988,10 @@ def removal_policy(payload_text, command):
 
 
 def npm_and_kill_rules(command, stripped):
-    """BS-34 (npm -g outside comments) and BS-35 (kill <pid>)."""
-    no_comments = "\n".join(re.sub(r"#.*$", "", line) for line in lines_of(command))
+    """BS-34 (npm -g in the parser's executable view: quoted data and comments are not a run) and BS-35 (kill <pid>)."""
+    no_comments = executable_view_or_raw(command)
+    if no_comments == command:
+        no_comments = "\n".join(re.sub(r"#.*$", "", line) for line in lines_of(command))
     if grep(r"npm\s+(install|i)\s+.*(-g|--global)", no_comments) or grep(r"npm\s+(install|i)\s+-g", no_comments):
         refuse("BLOCKED: npm install -g is refused from this environment", f"Command: {command}",
                    "REASON: A global install can replace a shared binary and disrupt running processes.",

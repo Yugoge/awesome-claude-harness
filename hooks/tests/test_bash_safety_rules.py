@@ -171,3 +171,35 @@ def test_the_git_clean_rule_names_its_release(sandbox):
 def test_a_rule_neither_release_reaches_still_says_so(sandbox):
     r = run(sandbox, SAFETY, "git commit --no-verify -m x")
     assert r.returncode == 2 and "commit-hook-bypass" in r.stderr and "FORBIDDEN for every caller" in r.stderr
+
+
+# O1 and O6: over-blocks of raw-text co-occurrence, now read from the parser. Each pairs the fixed command with
+# the command the rule still refuses.
+OVER_BLOCKS_FIXED = [
+    ('git -c x=y commit -m "fix(session-recovery)"', "bash session-recovery.sh", "hard-banned script"),
+    ('echo "see secret > file"', "cat .env > out.txt", "redirect from/to sensitive file"),
+    ('git commit -m "fix: avoid npm install -g"', 'bash -c "npm i -g foo"', "npm install -g"),
+    ('echo "npm install -g foo"', "sh -c 'npm install -g foo'", "npm install -g"),
+]
+
+
+@pytest.mark.parametrize("fixed,refused,label", OVER_BLOCKS_FIXED)
+def test_an_over_block_is_fixed_and_its_rule_still_refuses(sandbox, fixed, refused, label):
+    assert run(sandbox, SAFETY, fixed).returncode == 0, fixed
+    r = run(sandbox, SAFETY, refused)
+    assert r.returncode == 2 and label in r.stderr, (refused, r.stderr)
+
+
+@pytest.mark.parametrize("namespace,label", [
+    ("{state}/claude-commit-userintent-", "commit-userintent-sentinel-write"),
+    ("{tmp}/claude-allow-daemon-restart-", "daemon-restart-sentinel-write"),
+])
+def test_a_read_of_a_grant_namespace_passes_and_a_write_is_refused(sandbox, namespace, label):
+    """O6: reading the /commit user-intent flag or the daemon-restart grant flag is not a write of it."""
+    ns = namespace.format(state=sandbox["env"]["CLAUDE_STATE_DIR"], tmp=sandbox["env"]["TMPDIR"])
+    for read in (f"ls {ns}x.flag 2>/dev/null", f"cat {ns}x.flag", f"cat {ns}x.flag | cat"):
+        assert run(sandbox, SAFETY, read).returncode == 0, read
+    for write in (f"echo x > {ns}x.flag", f"touch {ns}x.flag", f"cp /etc/hostname {ns}x.flag"):
+        r = run(sandbox, SAFETY, write)
+        assert r.returncode == 2 and label in r.stderr, (write, r.stderr)
+
