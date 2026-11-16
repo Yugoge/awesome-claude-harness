@@ -145,7 +145,7 @@ class TestRedirects:
     def test_heredoc(self):
         r = self.red("cat <<-'E'\n\tbody $x\n\tE\nls")[0]
         assert (r.hd.delim, r.hd.quoted, r.hd.strip_tabs, r.hd.terminated) == ("E", True, True, True)
-        assert r.hd.body == "\tbody $x\n"
+        assert r.hd.body == "body $x\n"  # <<- strips the leading tabs as the command reads it
         assert r.hd.expansions == ()
 
     def test_heredoc_end_matches_exactly(self):

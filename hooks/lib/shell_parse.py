@@ -54,6 +54,11 @@ RESERVED = frozenset({
 })
 
 
+def _digits(text):
+    """True for a non-empty run of ASCII digits (bash reads no other digit)."""
+    return text.isascii() and text.isdigit()
+
+
 class LexError(Exception):
     """A lexical error. ``str(err)`` is its code; ``offset`` its raw offset."""
 
@@ -246,7 +251,7 @@ class Part:
 
     def inner(self):
         """The active parts nested in a ${...}, arithmetic or array-literal body."""
-        if self.kind not in ("param", "arith", "arraylit") or self.src is None:
+        if self.kind not in ("param", "arith", "arraylit", "glob", "brace") or self.src is None:
             return ()
         return tuple(_heredoc_parts(self.src, self.depth))
 
@@ -370,7 +375,7 @@ class Redir:
 
     @property
     def fd(self):
-        if self.io is not None and self.io.isdigit():
+        if self.io is not None and _digits(self.io):
             return int(self.io)
         if self.op in ("<", "<<", "<<-", "<<<", "<&", "<>"):
             return 0 if self.fd_var is None else None
@@ -386,7 +391,7 @@ class Redir:
     def dup(self):
         if self.op in (">&", "<&") and self.target is not None:
             lit = self.target.literal()
-            if lit is not None and lit.isdigit():
+            if lit is not None and _digits(lit):
                 return int(lit)
         return None
 
@@ -416,9 +421,16 @@ _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 
 
 def _match_pair(t, i, opener, closer):
-    """Index just past the balanced closer starting at ``t[i] == opener``."""
+    """Index just past the balanced closer starting at ``t[i] == opener``, or -1.
+
+    Inside the pair, quotes ('...', "...", $'...'), comments and heredoc
+    bodies hold no closer, and for `(` the `)` that ends a case pattern does
+    not close it.
+    """
     depth = 0
     n = len(t)
+    pending = []
+    case = []           # per open case: "word" (before `in`), "pattern" or "body"
     while i < n:
         c = t[i]
         if c == "\\":
@@ -438,6 +450,78 @@ def _match_pair(t, i, opener, closer):
                 return -1
             i += 1
             continue
+        if c == "$" and i + 1 < n and t[i + 1] == "'":
+            j = _find_ansi_end(t, i + 2)
+            if j < 0:
+                return -1
+            i = j + 1
+            continue
+        if depth and opener == "(":
+            if c == "#" and t[i - 1] in " \t\n;&|()":
+                j = t.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if t.startswith("<<", i) and not t.startswith("<<<", i):
+                strip = t.startswith("<<-", i)
+                j = i + (3 if strip else 2)
+                while j < n and t[j] in " \t":
+                    j += 1
+                try:
+                    delim, _q, j = _read_heredoc_delim(t, j)
+                except LexError:
+                    return -1
+                pending.append((delim, strip))
+                i = j
+                continue
+            if c == "\n" and pending:
+                i += 1
+                closing = False
+                for delim, strip in pending:
+                    while i < n:
+                        e = t.find("\n", i)
+                        e = n if e < 0 else e
+                        line = t[i:e]
+                        bare = line.lstrip("\t") if strip else line
+                        if bare.startswith(delim) and bare[len(delim):].lstrip(" \t").startswith(")"):
+                            # bash ends the body here and lets the `)` close the substitution
+                            i += len(line) - len(bare) + len(delim)
+                            closing = True
+                            break
+                        i = e + 1
+                        if _heredoc_line_ends(line, delim, strip):
+                            break
+                    if closing:
+                        break
+                pending = []
+                continue
+            if (c.isalpha() and t[i - 1] in " \t\n;&|(") or c == "e":
+                m = re.match(r"(case|in|esac)(?=[\s;&|()]|$)", t[i:])
+                if m and (t[i - 1] in " \t\n;&|(" or i == 0):
+                    word = m.group(1)
+                    if word == "case":
+                        case.append("word")
+                    elif word == "in" and case and case[-1] == "word":
+                        case[-1] = "pattern"
+                    elif word == "esac" and case and case[-1] in ("pattern", "body"):
+                        case.pop()
+                    i += len(word)
+                    continue
+            if case and case[-1] == "body" and t.startswith(";;", i):
+                case[-1] = "pattern"
+                i += 3 if t.startswith(";;&", i) else 2
+                continue
+            if case and case[-1] == "body" and t.startswith(";&", i):
+                case[-1] = "pattern"
+                i += 2
+                continue
+            if case and case[-1] == "pattern":
+                if c == ")":
+                    case[-1] = "body"
+                    i += 1
+                    continue
+                if c == "(":
+                    i += 1
+                    continue
         if c == opener:
             depth += 1
         elif c == closer:
@@ -446,6 +530,15 @@ def _match_pair(t, i, opener, closer):
                 return i + 1
         i += 1
     return -1
+
+
+def _arith_end(t, i):
+    """For `((` at ``t[i]``: the index past the closing `))` when the text is
+    arithmetic, or -1 when bash reads it as a nested subshell (`((a);(b))`)."""
+    end = _match_pair(t, i, "(", ")")
+    if end < 2 or t[end - 2] != ")":
+        return -1
+    return end if _match_pair(t, i + 1, "(", ")") == end - 1 else -1
 
 
 def _find_ansi_end(t, i):
@@ -473,8 +566,8 @@ def _lex_dollar(src, i, segs):
         end = _match_pair(t, i + 1, "(", ")")
         if end < 0:
             raise LexError("cmdsub", off)
-        if i + 2 < n and t[i + 2] == "(":
-            segs.append(("arith", src.slice(i + 2, end - 1), off))
+        if i + 2 < n and t[i + 2] == "(" and _arith_end(t, i + 1) == end:
+            segs.append(("arith", src.slice(i + 3, end - 2), off))
         else:
             segs.append(("sub", src.slice(i + 2, end - 1), off))
         return end
@@ -494,7 +587,7 @@ def _lex_dollar(src, i, segs):
     if t[j].isalpha() or t[j] == "_":
         while j < n and (t[j].isalnum() or t[j] == "_"):
             j += 1
-    elif t[j].isdigit():
+    elif _digits(t[j]):
         j += 1
     elif t[j] in "@*#?-$!0":
         j += 1
@@ -620,7 +713,8 @@ def _lex_word(src, i, depth=0):
                         parts.pop()
                 flush()
                 segs.append(("glob", src.slice(i - 1, end), src.off(i - 1)))
-                parts.append(Part("glob", t[i - 1:end], BARE, _span(src, i - 1, end)))
+                parts.append(Part("glob", t[i - 1:end], BARE, _span(src, i - 1, end),
+                                  src.slice(i - 1, end), depth))
                 i = end
                 continue
             break
@@ -729,7 +823,7 @@ def _lex_word(src, i, depth=0):
             continue
         if c == "[":
             j = t.find("]", i + 1)
-            if j > 0 and not any(x in " \t\n" + _OP_CHARS for x in t[i:j]):
+            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`" for x in t[i:j]):
                 flush()
                 segs.append(("glob", src.slice(i, j + 1), src.off(i)))
                 parts.append(Part("glob", t[i:j + 1], BARE, _span(src, i, j + 1)))
@@ -745,7 +839,8 @@ def _lex_word(src, i, depth=0):
                 if ("," in body or ".." in body) and not any(ch in " \t\n;&|<>()" for ch in body):
                     flush()
                     segs.append(("brace", src.slice(i, end), src.off(i)))
-                    parts.append(Part("brace", t[i:end], BARE, _span(src, i, end)))
+                    parts.append(Part("brace", t[i:end], BARE, _span(src, i, end),
+                                      src.slice(i, end), depth))
                     i = end
                     continue
             keep(i)
@@ -784,11 +879,19 @@ def _read_heredoc_delim(t, j, off=-1):
             j = k + 1
             continue
         if ch == '"':
-            k = t.find('"', j + 1)
-            if k < 0:
+            k = j + 1
+            piece = []
+            while k < n and t[k] != '"':
+                if t[k] == "\\" and k + 1 < n and t[k + 1] in '$`"\\':
+                    piece.append(t[k + 1])
+                    k += 2
+                    continue
+                piece.append(t[k])
+                k += 1
+            if k >= n:
                 raise LexError("heredoc_delim", off)
             quoted = True
-            parts.append(t[j + 1:k])
+            parts.append("".join(piece))
             j = k + 1
             continue
         if ch == "\\":
@@ -799,6 +902,18 @@ def _read_heredoc_delim(t, j, off=-1):
         parts.append(ch)
         j += 1
     return "".join(parts), quoted, j
+
+
+def _strip_tabs(body):
+    """``body`` with each line's leading tabs removed, offsets kept (for <<-)."""
+    keep = []
+    at_start = True
+    for k, ch in enumerate(body.text):
+        if at_start and ch == "\t":
+            continue
+        at_start = ch == "\n"
+        keep.append(k)
+    return Src("".join(body.text[k] for k in keep), [body.idx[k] for k in keep])
 
 
 def _heredoc_line_ends(line, delim, strip_tabs):
@@ -853,7 +968,8 @@ def _lex_into(src, toks, depth=0, comments=None):
                         if line_end < 0:
                             line_end = n
                         if _heredoc_line_ends(t[i:line_end], delim, strip_tabs):
-                            body = src.slice(body_start, i)
+                            body = _strip_tabs(src.slice(body_start, i)) if strip_tabs else \
+                                src.slice(body_start, i)
                             redir.heredoc = (delim, quoted, body)
                             redir.hd = Heredoc(delim, quoted, strip_tabs, body, True, depth)
                             i = min(line_end + 1, n)
@@ -881,6 +997,20 @@ def _lex_into(src, toks, depth=0, comments=None):
             r.end = r.target.raw.end_off()
             toks.append(("R", r))
             continue
+        if c == "(" and t.startswith("((", i) and (
+                not toks or toks[-1][0] == "OP"
+                or (toks[-1][0] == "W" and toks[-1][1].literal() == "for")):
+            end = _arith_end(t, i)
+            if end > 0:
+                toks.append(("OP", "(", src.off(i)))
+                toks.append(("OP", "(", src.off(i + 1)))
+                body = _expansion_word(src.slice(i + 2, end - 2), depth)
+                if body is not None:
+                    toks.append(("W", body))
+                toks.append(("OP", ")", src.off(end - 2)))
+                toks.append(("OP", ")", src.off(end - 1)))
+                i = end
+                continue
         if c in "();&|":
             for op in _OPS:
                 if t.startswith(op, i):
@@ -895,7 +1025,7 @@ def _lex_into(src, toks, depth=0, comments=None):
                 prev = toks[-1][1]
                 plit = prev.literal()
                 adjacent = prev.raw.idx and prev.raw.idx[-1] + 1 == src.idx[i]
-                if plit is not None and adjacent and plit.isdigit():
+                if plit is not None and adjacent and _digits(plit):
                     io = plit
                     toks.pop()
                 elif plit is not None and adjacent and not prev.quoted() and _FD_VAR_RE.match(plit):
@@ -921,13 +1051,56 @@ def _lex_into(src, toks, depth=0, comments=None):
             toks.append(("R", r))
             continue
         w, i = _lex_word(src, i, depth)
-        if not w.segs:
+        if not w.segs and not w.parts:
             i += 1
             continue
+        if not w.segs:
+            w.segs = [("lit", w.raw.slice(0, 0), w.start)]
         toks.append(("W", w))
     if pending_heredocs:
         raise LexError("unterminated_heredoc", pending_heredocs[0][0].off)
     return toks
+
+
+def _expansion_word(body, depth=0):
+    """A Word over ``body`` (arithmetic text) whose $-constructs and backticks are its
+    active parts; quotes in it are text. None for an empty body."""
+    t = body.text
+    if not t.strip():
+        return None
+    segs, parts = [], []
+    i = lit = 0
+    n = len(t)
+
+    def flush(upto):
+        if upto > lit:
+            piece = body.slice(lit, upto)
+            segs.append(("lit", piece, -1))
+            parts.append(Part("lit", piece.text, BARE, (piece.off(0), piece.end_off())))
+
+    while i < n:
+        c = t[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "$`":
+            mark = len(segs)
+            try:
+                j = _lex_dollar(body, i, segs) if c == "$" else _lex_backtick(body, i, segs)
+            except LexError:
+                i += 1
+                continue
+            seg = segs.pop(mark)
+            flush(i)
+            segs.append(seg)
+            kind, sub, off = seg
+            pkind = "backtick" if c == "`" else {"sub": "cmdsub"}.get(kind, kind)
+            parts.append(Part(pkind, sub.text, BARE, (off, body.off(j - 1) + 1), sub, depth))
+            i = lit = j
+            continue
+        i += 1
+    flush(n)
+    return Word(segs, body.off(0), body, parts)
 
 
 def _heredoc_parts(body_src, depth=0):
@@ -971,7 +1144,11 @@ _ANSI_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f",
 
 
 def ansi_decode(text):
-    """Decode the escapes bash applies inside $'...'. Never executes anything."""
+    """Decode the escapes bash applies inside $'...'. Never executes anything.
+
+    An escape bash does not know keeps its backslash (`\\m` stays `\\m`), and
+    a NUL ends the string, as bash's C strings end there.
+    """
     out = []
     i = 0
     n = len(text)
@@ -982,43 +1159,34 @@ def ansi_decode(text):
             i += 1
             continue
         nxt = text[i + 1]
+        ch = None
         if nxt in _ANSI_SIMPLE:
-            out.append(_ANSI_SIMPLE[nxt])
-            i += 2
-            continue
-        if nxt in "xX":
-            j = i + 2
-            k = j
-            while k < n and k < j + 2 and text[k] in "0123456789abcdefABCDEF":
-                k += 1
-            if k > j:
-                out.append(chr(int(text[j:k], 16)))
-                i = k
-                continue
-        if nxt in "uU":
-            width = 4 if nxt == "u" else 8
-            j = i + 2
-            k = j
+            ch, i = _ANSI_SIMPLE[nxt], i + 2
+        elif nxt in "xuU":
+            width = {"x": 2, "u": 4, "U": 8}[nxt]
+            j = k = i + 2
             while k < n and k < j + width and text[k] in "0123456789abcdefABCDEF":
                 k += 1
             if k > j:
                 try:
-                    out.append(chr(int(text[j:k], 16)))
+                    ch = chr(int(text[j:k], 16))
                 except (ValueError, OverflowError):
-                    out.append("�")
+                    ch = "\ufffd"
                 i = k
-                continue
-        if nxt.isdigit():
-            j = i + 1
-            k = j
+        elif nxt in "01234567":
+            j = k = i + 1
             while k < n and k < j + 3 and text[k] in "01234567":
                 k += 1
-            if k > j:
-                out.append(chr(int(text[j:k], 8) & 0xFF))
-                i = k
-                continue
-        out.append(nxt)
-        i += 2
+            ch, i = chr(int(text[j:k], 8) & 0xFF), k
+        elif nxt == "c" and i + 2 < n:
+            ch, i = chr(ord(text[i + 2]) & 0x1F), i + 3
+        if ch is None:
+            out.append(c + nxt)
+            i += 2
+            continue
+        if ch == "\x00":
+            break
+        out.append(ch)
     return "".join(out)
 
 
@@ -1376,9 +1544,12 @@ class _Grammar:
             if self.reserved(tok, "time"):
                 timed = True
                 self.pos += 1
-                nxt = self.peek()
-                if nxt is not None and nxt[0] == "W" and nxt[1].literal() == "-p":
-                    self.pos += 1
+                while True:
+                    nxt = self.peek()
+                    if nxt is not None and nxt[0] == "W" and nxt[1].literal() in ("-p", "--"):
+                        self.pos += 1
+                        continue
+                    break
                 continue
             break
         stages = []
@@ -1563,8 +1734,8 @@ class _Grammar:
         k = _src_index(self.src, tok[2])
         if k < 0:
             return None
-        end = _match_pair(t, k, "(", ")")
-        if end < 2 or t[end - 2] != ")":
+        end = _arith_end(t, k)
+        if end < 0:
             return None
         body = self.src.slice(k + 2, end - 2)
         end_off = self.src.off(end - 1)
@@ -1809,23 +1980,48 @@ def _feed(cmd, piped):
     return frozenset(fed)
 
 
-def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _templated=False):
+def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _templated=False, _state=None):
     """Yield a Site for every simple command in ``script`` and what it runs.
 
     ``into`` names the nested code to descend into: cmdsub, backtick, procsub
-    (substitution bodies, also those nested in ${...} and arithmetic),
-    heredoc_shell (a shell fed a heredoc or here-string), pipe_shell (a shell
-    fed by the stage before it), shell_c (``-c`` payloads), eval, exec_argv
-    (find -exec), alias (git alias bodies; see ``git_invocations``). Payloads
-    come from ``resolve``. A compound command with redirections of its own
-    (`{ ...; } > f`) yields a redirect-only Site for them, before its body.
+    (substitution bodies, also those nested in ${...}, arithmetic, extglob and
+    brace parts), heredoc_shell (a shell fed a heredoc or here-string, its own
+    or one it inherits from a compound or `exec`), pipe_shell (a shell fed by
+    the stage before it, or reading a generated script), shell_c (``-c``
+    payloads), eval (eval, trap, let, PROMPT_COMMAND), exec_argv (find -exec),
+    alias (an alias defined earlier in the text, and git alias bodies; see
+    ``git_invocations``). Payloads come from ``resolve``. A compound command
+    with redirections of its own (`{ ...; } > f`) yields a redirect-only Site
+    for them, before its body.
     """
-    opts = (into,)
+    state = _state if _state is not None else {"aliases": {}, "stdin": None}
+    opts = (into, state)
     depth = len(_context) - 1
     for pl, _sep in script.items:
         for k, stage in enumerate(pl.stages):
             yield from _walk_command(stage, k > 0, opts, _context, depth, script,
-                                     pl.stages[k - 1] if k else None, _templated)
+                                     pl.stages[k - 1] if k else None, _templated, state["stdin"])
+            if isinstance(stage, SimpleCommand) and len(stage.words) == 1 and \
+                    stage.words[0].value() == "exec":
+                fd0 = _stdin_redirect(stage.redirects)
+                if fd0 is not None:
+                    state["stdin"] = fd0
+
+
+def _stdin_redirect(redirects):
+    """The heredoc or here-string a command's stdin reads, from its redirections."""
+    by_fd = {}
+    for red in redirects:
+        if red.fd == 0 and red.op == "<&" and red.dup is not None:
+            if red.dup in by_fd:
+                by_fd[0] = by_fd[red.dup]
+            continue
+        if red.fd is not None:
+            by_fd[red.fd] = red
+    red = by_fd.get(0)
+    if red is not None and (red.hd is not None or red.op == "<<<"):
+        return red
+    return None
 
 
 def _stage_output(cmd):
@@ -1853,13 +2049,17 @@ def _stage_output(cmd):
     return " ".join(vals) if vals else None
 
 
-def _walk_command(cmd, piped, opts, context, depth, script, prev=None, templated=False):
-    into, = opts
+_PROMPT_VARS = ("PS0", "PS1", "PS2", "PS4")
+
+
+def _walk_command(cmd, piped, opts, context, depth, script, prev=None, templated=False, stdin=None):
+    into, state = opts
     if isinstance(cmd, Compound):
         if cmd.redirects:
             # The compound's own redirections, as the command `> f` alone is read.
             bare = SimpleCommand((), (), cmd.redirects, cmd.span)
             yield Site(bare, context, depth, _feed(bare, piped), False, script, templated)
+        inner_stdin = _stdin_redirect(cmd.redirects) or stdin
         for w in cmd.header:
             yield from _walk_parts(w.parts, opts, context, templated)
         for r in cmd.redirects:
@@ -1871,27 +2071,65 @@ def _walk_command(cmd, piped, opts, context, depth, script, prev=None, templated
             for pl, _sep in body.items:
                 for k, stage in enumerate(pl.stages):
                     yield from _walk_command(stage, piped or k > 0, opts, context, depth,
-                                             body, pl.stages[k - 1] if k else None, templated)
+                                             body, pl.stages[k - 1] if k else None, templated,
+                                             inner_stdin)
         return
     fed = _feed(cmd, piped)
     head = cmd.head()
     dynamic = head is not None and head.value() is None
-    yield Site(cmd, context, depth, fed, dynamic, script, templated)
-    for w in _site_words(cmd):
+    words = _site_words(cmd)
+    reexpands = any(p.reexpand for w in words for p in active_parts(w.parts))
+    yield Site(cmd, context, depth, fed, dynamic, script, templated or reexpands)
+    for w in words:
         yield from _walk_parts(w.parts, opts, context, templated)
     for r in cmd.redirects:
         if r.hd is not None and not r.hd.quoted:
             yield from _walk_parts(r.hd.expansions, opts, context, templated)
+    for a in cmd.assignments:
+        yield from _walk_assignment(a, opts, context, depth, templated)
     res = resolve(cmd)
+    if res.name == "export" or res.name == "declare":
+        for w in res.args:
+            if _ASSIGN_PARTS_RE.match(w.raw.text):
+                yield from _walk_assignment(Assignment(w), opts, context, depth, templated)
+    if res.name == "alias":
+        for w in res.args:
+            v = w.value()
+            if v and "=" in v and _NAME_RE.match(v.split("=", 1)[0]):
+                name, body = v.split("=", 1)
+                state["aliases"][name] = body
+    hv = head.value() if head is not None else None
+    if hv in state["aliases"] and "alias" in into:
+        text = state["aliases"][hv] + " " + " ".join(w.text for w in cmd.words[1:])
+        yield from walk(parse(text), into=into, _context=context + ("alias",), _templated=True,
+                        _state=state)
+    if res.payload is None and res.stdin_shell and stdin is not None and \
+            _stdin_redirect(cmd.redirects) is None:
+        _stdin_payload(res, SimpleCommand((), (), (stdin,), cmd.span), depth)
     if res.payload is not None and res.payload_kind in into:
         yield from walk(res.payload, into=into, _context=context + (res.payload_kind,),
-                        _templated=templated or res.unresolved is not None)
+                        _templated=templated or res.unresolved is not None, _state=state)
     elif res.payload is None and res.stdin_shell and piped and "pipe_shell" in into:
         text = _stage_output(prev)
         if text is not None:
             body = parse_src(text, depth + 1) if isinstance(text, Src) else parse(text)
             yield from walk(body, into=into, _context=context + ("pipe_shell",),
-                            _templated=templated)
+                            _templated=templated, _state=state)
+
+
+def _walk_assignment(a, opts, context, depth, templated):
+    """PROMPT_COMMAND's value is code; a prompt variable's value is expanded when shown."""
+    into, state = opts
+    v = a.static_value()
+    if v is None:
+        return
+    if a.name == "PROMPT_COMMAND" and "eval" in into:
+        yield from walk(parse(v), into=into, _context=context + ("eval",), _templated=templated,
+                        _state=state)
+    elif a.name in _PROMPT_VARS:
+        w = _expansion_word(Src(v, [-1] * len(v)), depth)
+        if w is not None:
+            yield from _walk_parts(w.parts, opts, context, templated)
 
 
 def active_parts(parts):
@@ -1902,11 +2140,12 @@ def active_parts(parts):
 
 
 def _walk_parts(parts, opts, context, templated=False):
-    into, = opts
+    into, state = opts
     for p in active_parts(parts):
         kind = "procsub" if p.kind.startswith("procsub") else p.kind
         if kind in into and p.body is not None:
-            yield from walk(p.body, into=into, _context=context + (kind,), _templated=templated)
+            yield from walk(p.body, into=into, _context=context + (kind,), _templated=templated,
+                            _state=state)
 
 
 def iter_commands(script, **kw):
@@ -2196,16 +2435,21 @@ def resolve(cmd, depth=None):
             return r
         name = basename(hv)
         if name == "env":
-            opts, rest, err = split_options(words, WRAPPERS["env"][0], 1)
+            opts, rest, err = split_options(words, WRAPPERS["env"][0], 1, lenient=True)
             r.wrappers.append((name, opts))
             if err:
                 r.unresolved = "env:" + err
-            while rest and rest[0].value() is not None and _ASSIGN_RE.match(rest[0].value()):
-                r.assignments = r.assignments + (Assignment(rest[0]),)
+            while rest and (rest[0].value() or "").find("=") > 0 and not rest[0].value().startswith("-"):
+                if _ASSIGN_RE.match(rest[0].value()):
+                    r.assignments = r.assignments + (Assignment(rest[0]),)
                 rest = rest[1:]
             split = [v for o, v in opts if o in ("-S", "--split-string")]
             if split and split[0].value() is not None:
-                sub = parse(split[0].value() + " " + " ".join(w.text for w in rest))
+                # env -S splits by its own rules (\_ is a blank, and more escapes
+                # than these): read as shell words, and the reading is unresolved.
+                r.unresolved = r.unresolved or "env_split_string"
+                text = split[0].value().replace("\\_", " ")
+                sub = parse(text + " " + " ".join(w.text for w in rest))
                 cmds = [s for s in walk(sub, into=())]
                 if cmds:
                     return _merge(r, resolve(cmds[0].cmd, depth))
@@ -2222,12 +2466,54 @@ def resolve(cmd, depth=None):
             r.wrappers.append((name, opts))
             words = rest
             continue
-        if name in ("eval",):
+        if name == "eval":
             r.head = head
             r.args = tuple(words[1:])
-            if len(words) > 1:
-                _set_payload(r, words[1:], "eval", depth, "eval_dynamic")
+            code = words[2:] if len(words) > 1 and words[1].value() == "--" else words[1:]
+            if code:
+                _set_payload(r, list(code), "eval", depth, "eval_dynamic")
             return r
+        if name == "trap":
+            # trap's first operand is code run later (on a signal, EXIT, ERR, DEBUG ...)
+            r.head = head
+            r.args = tuple(words[1:])
+            ops = list(words[1:])
+            while ops and ops[0].value() in ("-p", "-l", "-P"):
+                return r
+            if ops and ops[0].value() == "--":
+                ops = ops[1:]
+            if len(ops) > 1 and ops[0].value() not in ("-", ""):
+                _set_payload(r, [ops[0]], "eval", depth, "trap_dynamic")
+            return r
+        if name in ("source", "."):
+            r.head = head
+            r.args = tuple(words[1:])
+            ops = list(words[1:])
+            if ops and ops[0].value() == "--":
+                ops = ops[1:]
+            if ops:
+                _script_operand(r, ops[0], cmd, depth)
+            return r
+        if name == "let":
+            # let evaluates each operand as arithmetic: an array subscript's
+            # substitution runs
+            r.head = head
+            r.args = tuple(words[1:])
+            vals = [w.value() for w in words[1:]]
+            if any(v is None for v in vals):
+                r.unresolved = "let_dynamic"
+            elif vals:
+                r.payload = parse(" ".join(": $((%s))" % v for v in vals).replace(" : ", "; : "))
+                r.payload_kind = "eval"
+            return r
+        if name == "xargs":
+            words, replace = _peel_xargs(r, words)
+            if replace is not None and any(replace in (w.value() or w.text) for w in words):
+                r.unresolved = r.unresolved or "xargs_replace"
+            if not words:
+                r.head = None
+                return r
+            continue
         if name in SHELLS:
             return _resolve_shell(r, head, words, cmd, depth)
         if name == "find":
@@ -2347,6 +2633,41 @@ def cmd_source(cmd):
     return " ".join(w.text for w in cmd.words)
 
 
+_XARGS_VALUES = ("-n", "--max-args", "-P", "--max-procs", "-I", "--replace", "-L", "--max-lines",
+                 "-s", "--max-chars", "-d", "--delimiter", "-E", "-a", "--arg-file",
+                 "--process-slot-var")
+
+
+def _peel_xargs(r, words):
+    """xargs's own options: -i, -e and -l take an optional attached value only."""
+    k = 1
+    replace = None
+    opts = []
+    while k < len(words):
+        v = words[k].value()
+        if v is None or not v.startswith("-") or v == "-":
+            break
+        if v == "--":
+            k += 1
+            break
+        name = v.split("=", 1)[0]
+        if name in _XARGS_VALUES and "=" not in v and (v.startswith("--") or len(v) == 2):
+            val = words[k + 1].value() if k + 1 < len(words) else None
+            opts.append((name, words[k + 1] if k + 1 < len(words) else None))
+            if name in ("-I", "--replace"):
+                replace = val
+            k += 2
+            continue
+        if v[:2] in ("-I",) and len(v) > 2:
+            replace = v[2:]
+        elif v[:2] == "-i" or v.startswith("--replace"):
+            replace = v[2:] if v[:2] == "-i" and len(v) > 2 else (v.split("=", 1)[1] if "=" in v else "{}")
+        opts.append((v, None))
+        k += 1
+    r.wrappers.append(("xargs", opts))
+    return words[k:], replace
+
+
 def _merge(outer, inner):
     inner.wrappers = outer.wrappers + inner.wrappers
     inner.assignments = outer.assignments + inner.assignments
@@ -2364,45 +2685,96 @@ def _has_c(words):
 
 
 def _resolve_shell(r, head, words, cmd, depth):
+    """A shell's code: its -c string, a script file it reads, or its stdin.
+
+    A short-option cluster ending in o/O takes the next word as its value
+    (`-eo pipefail`); a lone `-` or `--` ends the options; -s reads the
+    script from stdin even with operands. A script operand that is a process
+    substitution, /dev/stdin or /dev/fd/N is code generated at run time.
+    """
     r.head = head
     r.args = tuple(words[1:])
     k = 1
-    has_c = False
+    has_c = has_s = False
     while k < len(words):
         v = words[k].value()
         if v is None:
             break
-        if v == "--":
+        if v in ("--", "-"):
             k += 1
             break
         if len(v) > 1 and v[0] in "-+" and not v.startswith("--"):
             if v[0] == "-" and "c" in v[1:]:
                 has_c = True
-            if v[1:] in ("o", "O") or v in ("+o", "+O"):
-                k += 2
-                continue
-            k += 1
+            if v[0] == "-" and "s" in v[1:]:
+                has_s = True
+            k += 2 if v[-1] in "oO" else 1
             continue
         if v.startswith("--"):
-            if v in ("--rcfile", "--init-file"):
-                k += 2
-                continue
-            k += 1
+            k += 2 if v in ("--rcfile", "--init-file") else 1
             continue
         break
+    for a in r.assignments:
+        if a.name in ("BASH_ENV", "ENV") and a.value is not None:
+            # the startup file runs before the shell's own code
+            _script_operand(r, a.value, cmd, depth)
+            if r.payload is not None:
+                return r
     if has_c:
         if k < len(words):
             _set_payload(r, [words[k]], "shell_c", depth, "shell_c_dynamic")
         else:
             r.unresolved = "shell_c_missing"
         return r
-    if k < len(words):
+    if k < len(words) and not has_s:
+        _script_operand(r, words[k], cmd, depth)
         return r
     _stdin_payload(r, cmd, depth)
     return r
 
 
-def _stdin_payload(r, cmd, depth):
+_STDIN_FILES = ("/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "-")
+
+
+def _script_operand(r, w, cmd, depth):
+    """A shell or `source` reading the file ``w``: stdin and process substitutions are code."""
+    v = w.value()
+    if v in _STDIN_FILES:
+        _stdin_payload(r, cmd, depth)
+        return
+    procs = [p for p in w.parts if p.kind == "procsub_in"]
+    if procs:
+        body = procs[0].body
+        text = None
+        if body is not None and len(body.items) == 1 and len(body.items[0][0].stages) == 1:
+            text = _stage_output(body.items[0][0].stages[0])
+        if text is not None:
+            r.payload = parse_src(text, depth + 1) if isinstance(text, Src) else parse(text)
+        else:
+            r.payload = parse("")
+            r.unresolved = "generated_code"
+        r.payload_kind = "pipe_shell"
+        return
+    if v is None or (v or "").startswith("/dev/fd/"):
+        r.unresolved = "script_file_computed"
+
+
+def _heredoc_unescape(body):
+    """An unquoted heredoc body as the reader gets it: `\\$`, `\\``, `\\\\` lose the backslash."""
+    t = body.text
+    keep = []
+    k = 0
+    while k < len(t):
+        if t[k] == "\\" and k + 1 < len(t) and t[k + 1] in "$`\\":
+            keep.append(k + 1)
+            k += 2
+            continue
+        keep.append(k)
+        k += 1
+    return Src("".join(t[k] for k in keep), [body.idx[k] for k in keep])
+
+
+def _stdin_payload(r, cmd, depth, inherited=None):
     """The code a shell reading its stdin gets from a heredoc or here-string."""
     r.stdin_shell = True
     by_fd = {}
@@ -2415,13 +2787,13 @@ def _stdin_payload(r, cmd, depth):
             continue
         if fd is not None:
             by_fd[fd] = red
-    red = by_fd.get(0)
+    red = by_fd.get(0, inherited)
     for red in ([red] if red is not None else []):
         if red.op in ("<<", "<<-") and red.hd is not None:
             if red.hd.quoted:
                 r.payload = parse_src(red.hd.body_src, depth + 1)
             else:
-                r.payload = parse_src(red.hd.body_src, depth + 1)
+                r.payload = parse_src(_heredoc_unescape(red.hd.body_src), depth + 1)
                 if red.hd.expansions:
                     r.unresolved = "heredoc_expansion"
             r.payload_kind = "heredoc_shell"
@@ -2781,7 +3153,7 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
                 if any(p.kind.startswith("procsub") for p in red.target.parts):
                     continue
                 path, decidable = _project(red.target, env)
-                if red.op == ">&" and path is not None and path.isdigit():
+                if red.op == ">&" and path is not None and _digits(path):
                     continue
                 mode = _REDIR_MODE.get(red.op, TRUNCATE)
                 out.append(WriteTarget(path, mode, "redirect" + red.op, red.fd, decidable,
@@ -3320,7 +3692,7 @@ def git_invocations(script, *, into=_DEFAULT_INTO, strings=False, _depth=0):
     if isinstance(script, str):
         script = parse(script)
     out = []
-    for site in walk(script, into=tuple(k for k in into if k != "alias")):
+    for site in walk(script, into=into):
         res = resolve(site.cmd)
         for inv in _git_from_resolved(res, site.context):
             inv.cmd = site.cmd
@@ -3388,7 +3760,7 @@ def _git_from_resolved(res, context):
             continue
         break
     count = inv.env.get("GIT_CONFIG_COUNT")
-    if count is not None and count.isdigit():
+    if count is not None and _digits(count):
         for n in range(int(count)):
             key = inv.env.get("GIT_CONFIG_KEY_%d" % n)
             if key is not None:
