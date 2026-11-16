@@ -1,0 +1,1312 @@
+[
+ {
+  "input": "echo $((rm q) )",
+  "view": "walk",
+  "parser_says": "_lex_dollar (shell_parse.py:401-402) treats any `$((` as arithmetic, so the part has kind arith with no body. walk reports only `echo`, with no rm site and no error.",
+  "bash_does": "When `$((` is not closed by an adjacent `))`, bash falls back to command substitution of a subshell and runs rm q. The oracle logged rm\\0q.",
+  "impact": "under-read-high",
+  "class": "$(( fallback to $( ( ... ) ) not modelled",
+  "evidence": "Oracle runs (stub PATH, bash 5.2.21), each with no parse error and no rm site: `echo $((rm q) )` -> rm q; `echo \"$((rm q) )\"` -> rm q; `echo $((rm q);(rm t))` -> rm q, rm t; `X=$((rm q) )`, `[[ $((rm q) ) ]]`, `case $((rm q) ) in *) ;; esac`, `echo ${X:-$((rm q) )}` and `echo $(( $((rm q) ) ))` -> rm q; heredoc body `cat <<EOF\\n$((rm q) )\\nEOF` -> rm q; inside backticks `echo `echo $((rm q) )`` -> rm q; `echo $((git push) )` -> git push, while git_invocations returns [].",
+  "verify_note": "Oracle: bash 5.2.21 with stub PATH logged rm q. Parser: error None, errors() [], one site echo [echo, None], wt [], git []. Confirmed `$((` is taken as arith unconditionally at shell_parse.py:401-402. Every variant gave the same result (bash runs the command, parser has no site and no error): `echo \"$((rm q) )\"`, `echo $((rm q);(rm t))` (rm q and rm t), `X=$((rm q) )`, `[[ $((rm q) ) ]]`, `case $((rm q) ) in *) ;; esac`, `echo ${X:-$((rm q) )}`, `echo $(( $((rm q) ) ))`, the heredoc body form, the form inside backticks, and `echo $((git push) )` (git push runs, git_invocations []). Control: `echo $((1+2))` runs nothing."
+ },
+ {
+  "input": "((rm q);(rm t))",
+  "view": "walk",
+  "parser_says": "parse_command/parse_arith (shell_parse.py:1347-1352, 1465-1478) reads this as Compound arith with header text `rm q);(rm t`. walk yields no site at all, with no error.",
+  "bash_does": "The inner `(` closes at `)` followed by `;`, not `)`, so bash reads two nested subshells and runs rm q and rm t.",
+  "impact": "under-read-high",
+  "class": "(( compound misread when the text ends in ))",
+  "evidence": "`((rm q);(rm t))` -> oracle rm q, rm t; parser sites []. Same result for `((rm q)|(rm t))` and `((rm q) ; (rm t))`. `((rm q);(rm t)) > f` -> rm q, rm t and creates f; parser sites [], wt []. `((git push);(git status))` -> git push and git status run; git_invocations []. Control case: `((rm q)|cat)` is read correctly as a subshell because t[end-2] is not `)`.",
+  "verify_note": "Oracle ran rm q and rm t. Parser: error None, no sites at all, wt [], git []. parse_arith (shell_parse.py:1465-1478) accepts it because t[end-2] is ')'. `((rm q)|(rm t))` and `((rm q) ; (rm t))` give the same result. For `((rm q);(rm t)) > f`, bash runs both commands and creates f, while the parser gives no sites and wt []. For `((git push);(git status))`, bash runs both while git_invocations is []. Control `((rm q)|cat)` is read correctly: rm site, wt q delete."
+ },
+ {
+  "input": "arr=($(rm q))",
+  "view": "walk",
+  "parser_says": "Part.body (shell_parse.py:170-176) returns None for kind arraylit, so the substitutions inside a compound array assignment are never walked. walk yields only an empty assignment site, with no error. write_targets and git_invocations also see nothing inside.",
+  "bash_does": "Bash expands each element of the array list, so rm q runs.",
+  "impact": "under-read-high",
+  "class": "array literal ( ... ) body not walked",
+  "evidence": "Each of these runs rm q in the oracle, with parser error None and no rm site: `arr=($(rm q))`; `declare -a x=($(rm q))`; `local_x=(`rm q`)`; `a=([0]=$(rm q))`; `a+=(<(rm q))`. `arr=($(git push))` -> git push, git_invocations []. `arr=($(echo hi > f))` -> bash creates f, write_targets [].",
+  "verify_note": "Oracle ran rm q. Parser: one empty assignment site, error None, wt [], git []. Part.body (shell_parse.py:171-176) returns None for kind arraylit. These were also confirmed: `declare -a x=($(rm q))` (site declare [-a, None], no rm site), `local_x=(`rm q`)`, `a=([0]=$(rm q))` and `a+=(<(rm q))`, each running rm q with no site. `arr=($(git push))` runs git push while git_invocations is []. `arr=($(echo hi > f))` creates f with 'hi' while wt is []."
+ },
+ {
+  "input": "echo {$(rm q),x}",
+  "view": "walk",
+  "parser_says": "The brace branch of _lex_word (shell_parse.py:666-675) turns the whole `{...}` into one brace Part with no body whenever the text holds a `,` or `..`, which swallows any $( ), backticks or <( ) inside it. Only the `echo` site is reported, with no error.",
+  "bash_does": "Bash brace-expands the word, then runs the command substitution: rm q runs. In an assignment there is no brace expansion, but the substitution still runs.",
+  "impact": "under-read-high",
+  "class": "brace part swallows substitutions",
+  "evidence": "Oracle: `echo {$(rm q),x}` -> rm q; `echo {a,`rm q`}` -> rm q; `X={a,$(rm q)}` -> rm q; `for i in {a,$(rm q)}; do :; done` -> rm q; `echo {$(rm q)..a}` -> rm q; `cat < {$(rm q),}` -> rm q, twice. `echo hi > {a,$(rm q)}` -> rm q, and bash creates a; the parser gives one target, None and undecidable. `echo {$(git push),}` -> git push; git_invocations []. Parse error is None in every case.",
+  "verify_note": "Oracle ran rm q. Parser: only the echo site, error None, wt []. The brace branch at shell_parse.py:666-675 swallows the span. These were also confirmed: `echo {a,`rm q`}`, `X={a,$(rm q)}`, `for i in {a,$(rm q)}; do :; done`, `echo {$(rm q)..a}`, `cat < {$(rm q),}` (rm q runs twice, then an ambiguous redirect error), and `echo {$(git push),}` (git push runs, git_invocations []). For `echo hi > {a,$(rm q)}`, bash runs rm q and writes file a; the parser gives wt [(None, truncate, redirect>, decidable=False)] and no rm site."
+ },
+ {
+  "input": "echo [`rm${IFS}q`]",
+  "view": "walk",
+  "parser_says": "The `[` glob branch (shell_parse.py:655-662) makes `[...]` a single glob Part whenever the span holds no blank or `;&|()` character. A backtick substitution, written with ${IFS} in place of a space, fits that test and is swallowed with no body. Only `echo` is reported.",
+  "bash_does": "Bash runs the backtick substitution `rm q`.",
+  "impact": "under-read-high",
+  "class": "bracket glob part swallows backtick substitutions",
+  "evidence": "Oracle: `echo [`rm${IFS}q`]` -> rm q; `echo x > [`rm${IFS}q`]` -> rm q (the parser gives only an undecidable redirect target); `X=[`rm${IFS}q`]` -> rm q; `for i in [`rm${IFS}q`]; do :; done` -> rm q; `echo [${X:-`rm${IFS}q`}]` -> rm q; `echo [`git${IFS}push`]` -> git push, with git_invocations []. Parse error is None in every case.",
+  "verify_note": "Oracle ran rm q. Parser: only the echo site, error None. The `[` glob branch (shell_parse.py:655-662) swallows the backticks because the span holds no blank or operator character. These were also confirmed: `echo x > [`rm${IFS}q`]` (rm q runs and bash writes file '[]'; the parser gives one undecidable target and no rm site), `X=[`rm${IFS}q`]`, `for i in [`rm${IFS}q`]; do :; done`, `echo [${X:-`rm${IFS}q`}]`, and `echo [`git${IFS}push`]` (git push runs, git_invocations []). Control: `echo [\"$(rm q)\"]` is read correctly, because `(` breaks the glob test."
+ },
+ {
+  "input": "[[ x == @($(rm q)|y) ]]",
+  "view": "walk",
+  "parser_says": "The extglob branch (shell_parse.py:528-550) swallows `@(...)`, `+(...)`, `*(...)`, `?(...)` and `!(...)` into a glob Part with no body, so the command substitution inside the pattern is never walked. No site, no error.",
+  "bash_does": "Bash enables extglob while parsing `[[ ]]` patterns, expands the pattern and runs rm q. With `shopt -s extglob` on an earlier line, the same applies to plain words and case patterns.",
+  "impact": "under-read-high",
+  "class": "extglob pattern swallows substitutions",
+  "evidence": "Oracle, each running rm q with no parse error and no site: `[[ x == @($(rm q)|y) ]]`; `[[ x = +($(rm q)) ]]`; `[[ x != *($(rm q)) ]]`; `[[ x == !($(rm q)) ]]`; `[[ x == ?(`rm q`) ]]`. `[[ x == @($(git push)) ]]` -> git push; git_invocations []. These also run rm q after `shopt -s extglob` on a prior line: `echo @($(rm q))`, `echo !($(rm q)|x)`, `case x in @($(rm q))) ;; esac`. bash -n rejects those three because -n does not run shopt.",
+  "verify_note": "Oracle ran rm q. Parser: no site at all, error None, wt [], git []. Each of these ran rm q with no site: `[[ x = +($(rm q)) ]]`, `[[ x != *($(rm q)) ]]`, `[[ x == !($(rm q)) ]]` and `[[ x == ?(`rm q`) ]]`. `[[ x == @($(git push)) ]]` runs git push while git_invocations is []. With `shopt -s extglob` on an earlier line, `echo @($(rm q))`, `echo !($(rm q)|x)` and `case x in @($(rm q))) ;; esac` all run rm q with no rm site. bash -n rejects those three, because -n does not run shopt. Control: `[[ x == $(rm q) ]]` is read correctly."
+ },
+ {
+  "input": "echo ${X:-$'\\''}; rm q; echo \\'}",
+  "view": "walk",
+  "parser_says": "_match_pair (shell_parse.py:343-373) skips quotes without knowing about $'..' escapes, backticks or nested $( ). It ends the `${` at the final `}`, so the param body becomes `X:-$'\\''}; rm q; echo \\'`. The parser sees one echo command, with no error anywhere.",
+  "bash_does": "The param ends at the first `}`. Bash then runs `rm q`, then `echo \\'}`.",
+  "impact": "under-read-high",
+  "class": "${ } / array-literal extent mismatched (swallows later commands)",
+  "evidence": "Oracle, each running rm q with parse error None, nested errors [] and no rm site: `echo ${X:-$'\\''}; rm q; echo \\'}`; `echo ${X:-`echo {`} ; rm q #}`; `echo ${X:-$(echo {)} ; rm q #}`. The same happens for array literals: `X=($'\\'') ; rm q ; echo \\' #)` and `X=(`echo (`) ; rm q #)` -> rm q. `echo ${X:-$'\\''}; git push; echo \\'}` -> git push; git_invocations []. This differs from known item (1): the commands are outside the ${ } in bash.",
+  "verify_note": "Oracle ran rm q at top level. Parser: one echo site, error None, errors() [], wt [], git []. _match_pair (shell_parse.py:343-373) does not know about $'..' escapes, backticks or $( ), so the `${` closes at the last `}`. These were also confirmed with no error and no rm site: `echo ${X:-`echo {`} ; rm q #}`, `echo ${X:-$(echo {)} ; rm q #}`, `X=($'\\'') ; rm q ; echo \\' #)` and `X=(`echo (`) ; rm q #)`. In the git form, git push runs while git_invocations is []. Unlike item 17, errors() is empty here, so there is no fallback signal."
+ },
+ {
+  "input": "$'rm\\0zz' q",
+  "view": "resolve",
+  "parser_says": "ansi_decode (shell_parse.py:896-945) keeps a NUL and the text after it. The head is the static, non-dynamic value 'rm\\x00zz' (name 'rm\\x00zz'), so no rm site is reported.",
+  "bash_does": "Bash truncates a $'..' word at the first NUL, so the word is `rm`. The oracle logged rm q.",
+  "impact": "under-read-high",
+  "class": "ANSI-C NUL truncation",
+  "evidence": "Oracle: `$'rm\\0zz' q`, `$'rm\\x00' q`, `$'rm\\u0000' q` and `$'rm\\c@' q` -> rm q, while the parser head is 'rm\\x00...' or 'rmc@'. `git $'push\\0zz' origin` -> bash runs git push origin, but git_invocations subcommand is 'push\\x00zz'. `echo hi > $'f\\0g'` -> bash writes f, but write_targets says 'f\\x00g' (decidable). `bash -c $'rm\\0 zz'` -> bash runs rm; the payload head is 'rm\\x00'. `eval $'rm q\\0zz'` -> bash runs rm q; the eval site argv is ['q\\x00zz'].",
+  "verify_note": "Oracle ran rm q. Parser head is the static 'rm\\x00zz', dynamic False, unresolved None, wt []. `$'rm\\x00' q` and `$'rm\\u0000' q` give the head 'rm\\x00'. `$'rm\\c@' q` gives 'rmc@': ansi_decode (shell_parse.py:896-945) does not handle \\c at all. All of these run rm q in bash. Further confirmed: `git $'push\\0zz' origin` runs git push origin while the subcommand is 'push\\x00zz'. `echo hi > $'f\\0g'` writes f while wt is ('f\\x00g', decidable True). `bash -c $'rm\\0 zz'` runs bare rm while the payload head is 'rm\\x00'. `eval $'rm q\\0zz'` runs rm q while the eval site has rm with wt 'q\\x00zz'. `rm$'\\0zz' q` runs rm q while the head is 'rm\\x00zz'."
+ },
+ {
+  "input": "let 'a[$(rm q)]=1'",
+  "view": "walk",
+  "parser_says": "The quoted argument is static data. walk/resolve report only `let` with argv ['a[$(rm q)]=1']. executable_view blanks it to 'let               ', and no site exists for rm.",
+  "bash_does": "let evaluates the string as arithmetic, and the subscript a[$(rm q)] is expanded, so rm q runs.",
+  "impact": "under-read-high",
+  "class": "arithmetic evaluation of quoted data executes subscripts",
+  "evidence": "Oracle, each running rm q with no parser site: `let 'a[$(rm q)]=1'`; `a=(1); let 'x=a[$(rm q)]'`; `x='a[$(rm q)]'; echo $(( x ))`; `[[ 'a[$(rm q)]' -eq 0 ]]`; `[[ x -lt 'a[$(rm q)]' ]]`; `printf -v 'a[$(rm q)]' x`; `read 'a[$(rm q)]' <<< x`; `declare 'a[$(rm q)]=1'`; `declare -g ...`; `typeset ...`; `local ...`; `declare -i x='a[$(rm q)]'`; `declare -i n; n='a[$(rm q)]'`; `declare -n r='a[$(rm q)]'; echo $r`; `test -v 'a[$(rm q)]'`; `X=abc; echo ${X:0:'a[$(rm q)]'}`; `a=(); a['$(rm q)']=1`. Negative controls that did not run: `[ ... -eq 0 ]`, `export`, `readonly`, `getopts`, `mapfile`, `read -a`, `printf %d`, `unset`. executable_view also blanks the payload for let, printf -v and declare -i.",
+  "verify_note": "Oracle ran rm q. Parser: only a let site, no rm site, error None. executable_view gives 'let               '. Every listed positive ran rm q with no parser rm site: `a=(1); let 'x=a[$(rm q)]'`, `x='a[$(rm q)]'; echo $(( x ))`, the two `[[ ]]` arithmetic comparisons, `printf -v`, `read`, `declare`, `declare -g`, `typeset`, `local` (inside a function), `declare -i x=...`, `declare -i n; n=...`, `declare -n r=...; echo $r`, `test -v`, the `${X:0:'a[..]'}` slice, and `a['$(rm q)']=1`. Negative controls that ran nothing: `[ ... -eq 0 ]`, `export`, `printf %d`. `let 'a[$(git push)]=1'` runs git push while git_invocations is []. executable_view also blanks the payload for printf -v and declare -i."
+ },
+ {
+  "input": "X='q t'; rm $X",
+  "view": "write_targets",
+  "parser_says": "_project (shell_parse.py:2524-2537) substitutes the env value without word splitting or pathname expansion, so write_targets is [('q t','delete','rm',decidable=True)].",
+  "bash_does": "The unquoted $X is split and globbed, so bash runs `rm q t`, deleting q and t. With X='*' it deletes every file.",
+  "impact": "under-read-high",
+  "class": "projected variable not word-split / globbed",
+  "evidence": "Oracle: `X='q t'; rm $X` -> rm q t, while wt is [('q t', delete, decidable)]. `IFS=:; X=q:t; rm $X` -> rm q t, while wt is [('q:t', delete, decidable)]. `X='*'; rm $X` -> rm q seed t, while wt is [('*', delete, decidable=True)]. A literal `rm *` would be undecidable instead.",
+  "verify_note": "Oracle ran rm q t. wt is [('q t', delete, rm, decidable True)]. `IFS=:; X=q:t; rm $X` runs rm q t while wt is ('q:t', decidable). `X='*'; rm $X` runs rm q seed t while wt is ('*', decidable True); a literal `rm *` gives an undecidable target instead. New variant: `X='a b'; cp q $X` runs cp q a b (it copies q and a into b), while the parser says copy-dest 'a b', decidable. `X='a b'; echo hi > $X` is an ambiguous redirect in bash (nothing written) while the parser gives the decidable target 'a b', an over-read. _project (shell_parse.py:2524-2537) confirmed."
+ },
+ {
+  "input": "X=p; X=ok | cat; echo hi > $X",
+  "view": "write_targets",
+  "parser_says": "write_targets (shell_parse.py:2478-2487) applies every bare assignment walk reaches, in text order. It ignores subshell scope, pipelines, `&`, conditionals, and loop/read/printf -v/declare setters. Here it reports [('ok','truncate',decidable=True)].",
+  "bash_does": "The assignment runs in a pipeline subshell, so X stays p and bash writes file p.",
+  "impact": "under-read-high",
+  "class": "env projection ignores scope and control flow",
+  "evidence": "Oracle, where the parser gives a decidable target but bash writes another file. Parser 'ok', bash writes p: `X=p; X=ok | cat; echo hi > $X`; `X=p; false && X=ok; ...`; `X=p; if false; then X=ok; fi; ...`; `X=p; echo $(X=ok); ...`; `X=p; X=ok & wait; ...`. Parser 'p', bash writes ok: `X=p; for X in ok; do :; done; echo hi > $X`; `X=p; read X <<< ok; ...`; `X=p; printf -v X ok; ...`; `X=p; declare X=ok; ...`. Subshell case `X=<abs>; (X=ok); echo hi > $X`: parser 'ok', bash wrote the outer value.",
+  "verify_note": "Bash wrote file p; the parser gives wt ('ok', truncate, decidable True). All ten listed cases reproduced. Parser 'ok', bash wrote p: the pipeline, `false && X=ok`, `if false; then X=ok; fi`, `echo $(X=ok)`, `X=ok & wait` and `(X=ok)`. Parser 'p', bash wrote ok: `for X in ok`, `read X <<< ok`, `printf -v X ok` and `declare X=ok`. write_targets (shell_parse.py:2478-2487) applies every bare assignment walk reaches, in text order. A protected path in X can therefore be checked as a harmless name."
+ },
+ {
+  "input": "echo ${X:=$(rm q)}",
+  "view": "walk",
+  "parser_says": "The ${...} part has no body, so walk yields no site. These are new variants of known item (1).",
+  "bash_does": "Bash runs rm q.",
+  "impact": "under-read-high",
+  "class": "variants of known (1): substitutions inside parameter expansion",
+  "evidence": "Each ran rm q in the oracle with no parser site and no error. Operators: `${X:=$(rm q)}`; `Y=1; ${Y:+$(rm q)}`; `${X?$(rm q)}`; `${X#$(rm q)}`; `${X/$(rm q)/y}`; `${X^^$(rm q)}`. Process substitution: `${X:-<(rm q)}`; `Y=1; ${Y:+<(rm q)}`. Subscripts and slices: `${a[$(rm q)]}`; `${a[$(rm q)]:=x}` (runs twice); `${!X[$(rm q)]}`; `${@:$(rm q)}`; `${a[@]:$(rm q)}`. Quoting: `${X:-\"$(rm q)\"}`; `\"${X:-$(rm q)}\"` as the head. Contexts: heredoc body `${X:-$(rm q)}`; redirect target `echo > ${X:-$(rm q)}`; here-string `cat <<< ${X:-$(rm q)}`; function argument `f ${X:-$(rm q)}`.",
+  "verify_note": "These variants of known item (1) all ran rm q with no parser site and no error: `${X:=..}`, `Y=1; ${Y:+..}`, `${X?..}`, `${X:-<(rm q)}`, `Y=1; ${Y:+<(rm q)}`, `${a[$(rm q)]}`, `${a[$(rm q)]:=x}` (twice), `${!X[$(rm q)]}`, `${@:$(rm q)}`, `${X:-\"$(rm q)\"}`, `\"${X:-$(rm q)}\"` as the head, the heredoc body, `echo > ${X:-$(rm q)}` (twice; wt has one undecidable target), the here-string, and the function argument. `${a[$(git push)]}` runs git push while git_invocations is []. Caveat: `${X#$(rm q)}`, `${X/$(rm q)/y}`, `${X^^$(rm q)}` and `${a[@]:$(rm q)}` do NOT run rm when X or a is unset, because bash skips the operand. They reproduce once X=abc or a=(1 2) is set first."
+ },
+ {
+  "input": "echo $[$(rm q)]",
+  "view": "walk",
+  "parser_says": "The $[ ] and $(( )) parts are arith with no body, so there is no site. These are variants of known item (2).",
+  "bash_does": "Bash runs rm q.",
+  "impact": "under-read-high",
+  "class": "variants of known (2): substitutions inside arithmetic",
+  "evidence": "Oracle: `echo $[$(rm q)]` -> rm q; `echo $((`rm q`))` -> rm q. The parser reports only echo in both. The `(( ))` compound form `(( x = $(rm q) ))` and `for ((i=$(rm q);...))` are read correctly, through _plain_word.",
+  "verify_note": "Oracle ran rm q for `echo $[$(rm q)]` and for `echo $((`rm q`))`. The parser reports only echo [echo, None], with error None. `echo $[`git push`]` runs git push while git_invocations is []. Controls `(( x = $(rm q) ))` and `for ((i=$(rm q);i<0;i++))` are read correctly (rm site in cmdsub, wt q delete)."
+ },
+ {
+  "input": "echo hi # c \\\nrm q",
+  "view": "walk",
+  "parser_says": "Src.from_raw (shell_parse.py:100-114) deletes every backslash-newline before lexing, including one inside a comment. The comment then swallows the next line, leaving only echo, with no error.",
+  "bash_does": "A comment ends at the newline (a backslash there is not a continuation), so rm q runs.",
+  "impact": "under-read-high",
+  "class": "line continuation removed inside comment / quoted heredoc (outside my class, distinct from known 5)",
+  "evidence": "Oracle: `echo hi # c \\<nl>rm q` -> rm q; parser sites [echo hi]. A quoted heredoc behaves the same: `cat <<'E'\\nx\\\\\\nE\\nrm q\\nE\\n` -> bash ends the body at line `E` and runs rm q, but the parser joins `x\\`+`E` and keeps rm q in the body. Error None in both.",
+  "verify_note": "Oracle ran rm q. Parser: only `echo hi`, error None, errors() []. Src.from_raw (shell_parse.py:100-114) removes the backslash-newline before comments are lexed. The git push form runs git push while git_invocations is []. Quoted heredoc `cat <<'E'\\nx\\\\\\nE\\nrm q\\nE\\n`: bash ends the body at the first `E` line, then runs rm q and then `E` (command not found). The parser reports only cat, with error None."
+ },
+ {
+  "input": "((echo a) ; (rm b))",
+  "view": "parse/walk",
+  "parser_says": "Compound(arith), header '(echo a) ; (rm b)'; walk yields no site, git_invocations empty, error=None. Same for '((rm b) && (rm c))', '((echo a) | (rm b))', '((x=(1)) ; (rm a))', '((echo a) ; (git push --force))'",
+  "bash_does": "Runs a subshell that contains two subshells, so rm b is invoked (stub log [rm b]); '((echo a) ; (git push --force))' invokes git push --force. bash -n accepts it.",
+  "impact": "under-read-high",
+  "class": "arith command vs nested subshell disambiguation. parse_command/parse_arith (shell_parse.py:1347-1352, 1465-1478) take '((' as arithmetic whenever the outer match ends in '))'. Bash (parse_arith_cmd) reads to the first ')' that brings the depth back to the '((' level and needs a ')' straight after it, or else re-reads the text as '(' subshell.",
+  "evidence": "harness (env -i PATH=<stub>:/usr/bin bash --noprofile --norc -c, sandbox cwd): invs=[['rm','b']]; parser sites=[] wt=[] gi=[]; --facts: {error:null, errors:[], commands:[]}. '((rm b) )' and '( (rm b) )' are read correctly (control).",
+  "verify_note": "Oracle (bash 5.2.21, stub PATH, sandbox cwd): invs [rm b]. Parser: error=None, errors=[], sites=[], wt=[], gi=[]. Same result for '((rm b) && (rm c))' (bash: rm b, rm c), '((echo a) | (rm b))', '((x=(1)) ; (rm a))', and '((echo a) ; (git push --force))' (bash: git push --force, gi=[]). Controls '((rm b) )' and '( (rm b) )' are walked correctly. --facts gives commands=[]. The cause at shell_parse.py:1347-1352 (parse_command takes '((' as arith) matches the claim."
+ },
+ {
+  "input": "echo $((echo a); rm b)",
+  "view": "parse/walk",
+  "parser_says": "Reads '$((' as an arith part, so no cmdsub body. walk gives only echo [None]. Same for 'x=$((echo a); rm b)', 'echo \"$((echo a) ; rm b)\"', 'echo $((rm a) )', 'echo $((rm a);(rm b))', 'echo $((git push); :)', and in a heredoc body ('cat <<EOF\\n$((echo a); rm b)\\nEOF'), [[ ]] operand, for word list and case subject",
+  "bash_does": "Treats the text as command substitution, because it does not end in ')' or its inside is not paren-balanced (subst.c chk_arithsub falls back to comsub). rm b, or rm a and rm b, or git push are invoked. bash -n accepts it.",
+  "impact": "under-read-high",
+  "class": "$(( arithmetic expansion vs $( (subshell) ) command substitution. _lex_dollar (shell_parse.py:401-402) picks arith only because t[i+2]=='('. This differs from known (2), which is a cmdsub inside a real arithmetic expansion.",
+  "evidence": "harness: 'echo $((echo a); rm b)' invs=[['rm','b']]; parser site echo [None] only, errors=[]. 'echo $((rm a);(rm b))' invs=[rm a, rm b], parser none. 'cat <<EOF\\n$((echo a); rm b)\\nEOF', '[[ $((echo a); rm b) ]]', 'for x in $((echo a); rm b); do :; done' and 'case $((echo a); rm b) in *) ;; esac' are all UNDER. Control: 'echo $( (echo a); rm b)' is walked correctly.",
+  "verify_note": "bash invs [rm b]; parser sites only echo [None], errors=[]. All listed variants reproduce: 'x=$((echo a); rm b)', 'echo \"$((echo a) ; rm b)\"', 'echo $((rm a) )', 'echo $((rm a);(rm b))' (bash: rm a, rm b), 'echo $((git push); :)' (bash: git push, gi=[]), the heredoc body form (cat site only), '[[ $((echo a); rm b) ]]' (no site), the for word list (only ':') and the case subject (no site). The control 'echo $( (echo a); rm b)' is walked correctly. The cause at shell_parse.py:401-402 (arith picked when t[i+2]=='(') matches the claim."
+ },
+ {
+  "input": "((x=1<<true))\nrm -rf y\ntrue",
+  "view": "parse/walk",
+  "parser_says": "The lexer runs over the arithmetic text and takes '<<true' as a heredoc operator with delimiter 'true'. The next lines up to 'true' become an orphan heredoc body. walk yields nothing, error=None, errors=[]. Variants: 'for ((i=0; i<<true; )); do :; done\\nrm -rf y\\ntrue', 'if ((x<<true)); then :; fi\\n...', 'while ((x<<true)); do :; done\\n...', '(( x <<= 1 ))\\nrm -rf y\\n=', 'f() ((x<<true))\\n...', 'case a in a) ((x<<true));; esac\\n...', \"((x=1<<'EOF'))\\nrm -rf y\\nEOF\", '((x=1<<true)) && :\\ngit push --force\\ntrue'",
+  "bash_does": "'<<' inside (( )) is a left shift. The following lines are ordinary commands: rm -rf y (or git push --force) is invoked, then 'true'.",
+  "impact": "under-read-high",
+  "class": "heredoc operator lexed inside (( )) and for (( )). _lex_into (shell_parse.py:813-835) registers pending heredocs for tokens that parse_arith (1475) later skips by offset, but the pending heredoc still consumes the following lines.",
+  "evidence": "harness: invs=[['rm','-rf','y']]; parser sites=[], wt=[], gi=[], error=None; --facts {error:null, errors:[], commands:[]}. The git variant gives invs [git push --force] and gi=[].",
+  "verify_note": "bash invs [rm -rf y]; parser sites=[], wt=[], gi=[], error=None, errors=[]. All variants reproduce: the for ((..<<true..)), if ((..)), while ((..)) and f() ((..)) forms, the case-arm form, '(( x <<= 1 ))' with '=' as delimiter, the quoted-'EOF' form (bash still runs rm -rf y) and the '&& :' git form (bash: git push --force; parser gi=[], only ':' site). Each time the following lines are swallowed silently, with no error."
+ },
+ {
+  "input": "!(rm a)",
+  "view": "parse/walk/resolve",
+  "parser_says": "One word '!(rm a)' with an extglob 'glob' part. SimpleCommand with dynamic head, resolve head None, nothing walked. Variants: 'true && !(rm a)', 'while !(rm a); do break; done', '{ !(rm a); }', 'time !(rm a)', '! !(rm a)', 'f() { !(rm a); }; f', 'for i in 1; do !(git push); done' (gi=[]), 'if !(rm a); then :; fi'",
+  "bash_does": "With extglob off (the bash -c default), reads '!' as the negation reserved word followed by a subshell, so rm a or git push is invoked. bash -n accepts it.",
+  "impact": "under-read-high",
+  "class": "pipeline negation glued to a subshell. _lex_word (shell_parse.py:528-550) folds '!(' into an extglob pattern unconditionally.",
+  "evidence": "harness: '!(rm a)' invs=[['rm','a']] rc=1; parser site name=None dyn=True raw=[None]; --facts commands [[null,[],['top'],[],true]]. '!(git push)' invs [git push], gi=[].",
+  "verify_note": "bash (extglob off) invs [rm a], rc=1. Parser: one site with head None and dynamic=True, no rm site, wt=[], gi=[], errors=[]. All variants reproduce: 'true && !(rm a)', 'while !(rm a); do break; done', '{ !(rm a); }', 'time !(rm a)', '! !(rm a)', 'f() { !(rm a); }; f', 'if !(rm a); then :; fi', and '!(git push)' / 'for i in 1; do !(git push); done' (bash: git push, gi=[]). Control '! (rm a)' is read correctly. Partial mitigation: the site is flagged dynamic=True, so a hook that fails closed on dynamic heads would refuse it. Name-based checks, write_targets and git_invocations miss it."
+ },
+ {
+  "input": "time -- rm a",
+  "view": "parse/resolve/git_invocations",
+  "parser_says": "parse_pipeline consumes 'time' (and '-p') but not '--'. The simple command is ['--','rm','a'] and resolve gives head '--', args ['rm','a']. No rm site, no rm write target. 'time -p -- rm a' gives the same; 'time -- git push' gives gi=[]. 'time -- (rm a)' and 'time -p -- { rm a; }' are parse errors.",
+  "bash_does": "bash 5.2 takes '--' after time/time -p as the end of time's options (TIMEIGN) and runs rm a, git push, or the subshell or group.",
+  "impact": "under-read-high",
+  "class": "time reserved word options. parse_pipeline (shell_parse.py:1284-1290) handles only '-p'.",
+  "evidence": "harness: invs=[['rm','a']] with timing on stderr; parser site '--' ['rm','a']; --facts commands [['--',['rm','a'],['top'],[],false]]; wt=[]. 'time -- git push': invs [git push], gi=[].",
+  "verify_note": "bash invs [rm a]; parser site head '--' with args ['rm','a'], wt=[], gi=[], error=None. 'time -p -- rm a' gives the same. 'time -- git push': bash runs git push, gi=[]. 'time -- (rm a)' and 'time -p -- { rm a; }' are parse errors (unexpected_token), so those two fail closed. parse_pipeline (shell_parse.py:1284-1290) consumes only '-p'."
+ },
+ {
+  "input": "f() { rm -rf x; echo \"a, b\"; }; f",
+  "view": "parse/walk/git_invocations/write_targets",
+  "parser_says": "The whole group is lexed as one 'brace' word because its raw body contains ','. The ',' counts even inside quotes, ${a:-,}, a nested group or a heredoc body. The result is one dynamic-head site, and the commands inside are never walked. Variants: '{ rm -rf x; echo a,b; }', 'function g { rm q; echo x,y; }; g', 'coproc { rm x; echo ,; }', 'if true; then { rm x; echo ,; }; fi', 'while true; do { rm z; echo ,; }; break; done', '{ { rm a; }; echo ,; }', '{ rm x; : ${a:-,}; }', 'f() { cat <<EOF\\na,b\\nEOF\\nrm x; }; f', '{ git push origin main; echo a,b; }' (gi=[]). 'for i in 1; { rm x; echo ,; }' gives a parse error instead.",
+  "bash_does": "Runs the group or function body: rm -rf x, rm q, git push origin main and so on are invoked.",
+  "impact": "under-read-high",
+  "class": "brace group read as brace expansion. This is the ',' variant of known (3), which is the '..' variant. _lex_word (shell_parse.py:666-675) tests '\",\" in body' on the raw text from '{' to its matching '}'. Function bodies that contain a comma anywhere are affected, which is very common.",
+  "evidence": "harness: invs=[['rm','-rf','x']]; parser sites [None dyn=True], [f]; wt=[]; --facts for '{ rm -rf x; echo a,b; }': commands [[null,[],['top'],[],true]].",
+  "verify_note": "bash invs [rm -rf x]; parser sites [None dyn=True, f], wt=[], gi=[], errors=[]. All variants reproduce: '{ rm -rf x; echo a,b; }', 'function g { rm q; echo x,y; }; g', 'coproc { rm x; echo ,; }', the brace group inside if and inside while, '{ { rm a; }; echo ,; }', '{ rm x; : ${a:-,}; }', the function whose heredoc body holds 'a,b', and '{ git push origin main; echo a,b; }' (gi=[]). 'for i in 1; { rm x; echo ,; }' gives unbalanced_group, so it fails closed. Control '{ rm -rf x; echo ab; }' is walked correctly. The cause at shell_parse.py:666-675 ('\",\" in body' on the raw text) matches the claim. The outer head is dynamic=True, but the inner commands are never reported."
+ },
+ {
+  "input": "echo \"$(case x in x) rm b;; esac)\"",
+  "view": "walk/executable_view/git_invocations",
+  "parser_says": "_match_pair closes the $( at the case pattern ')', so the cmdsub body is 'case x in x'. Inside double quotes the rest becomes literal text, so the top-level error is None. rm b is not walked, and executable_view blanks it ('echo \"$(case x in x)             \"'). For 'git commit -m \"$(case x in x) git push;; esac)\"' gi=[('commit',...)] only. Variants: 'cat <<EOF\\n$(case x in x) rm b;; esac)\\nEOF', 'X=\"$(case ...)\" && echo', 'echo \"$(if true; then case x in x) rm b;; esac; fi)\"', and as a for word list, case subject, [[ ]] operand or compound redirect target (in these error=None and errors()=[] too). Same root cause, other classes: 'echo \"$(: # )\\nrm a\\n)\"' (comment) and 'echo \"$(cat <<EOF\\n)\\nEOF\\nrm a)\"' (heredoc line).",
+  "bash_does": "Parses the comsub with the full grammar, so rm b and git push are invoked.",
+  "impact": "under-read-high",
+  "class": "case pattern ')' inside $( ) / <( ). _lex_dollar to _match_pair (shell_parse.py:343-373, 397-405) counts raw parens. Only the '(x)' pattern form works ('echo $(case x in (x) rm b;; esac)' is read correctly).",
+  "evidence": "harness: invs=[['rm','b']]; parser site echo [None], error=None, errors=[unbalanced_group@8] (nested only). For '[[ \"$(case x in x) rm b;; esac)\" ]]' error=None and errors=[] with no site at all. git commit case: invs [git push],[git commit -m ''], gi only commit. executable_view output shown above.",
+  "verify_note": "bash invs [rm b]; parser site echo [None], top-level error=None, errors=[unbalanced_group@8]; executable_view 'echo \"$(case x in x)             \"'. 'git commit -m \"$(case x in x) git push;; esac)\"': bash runs git push and git commit, gi has only commit. The heredoc, X=\"...\" &&, and if-nested forms reproduce with a nested error only. The for word list, case subject, [[ ]] operand and '{ :; } > \"$(case...)\"' forms give error=None and errors=[] with no rm site at all. 'echo \"$(: # )\\nrm a\\n)\"' (comment form): errors=[], rm a missed. The heredoc-line form reproduces (nested unterminated_heredoc only). Control 'echo $(case x in (x) rm b;; esac)' is correct. The unquoted 'echo $(case x in x) rm b;; esac)' gives a top-level error (fails closed)."
+ },
+ {
+  "input": "{ bash; } <<< 'rm x'",
+  "view": "resolve/walk",
+  "parser_says": "The here-string sits on the Compound, and the inner 'bash' site has fed=[] and no payload, so rm x is not walked. Plain 'bash <<<\\'rm x\\'' gives fed=[herestring] and a heredoc_shell payload. Variants: '{ bash; } <<EOF\\nrm x\\nEOF', \"( sh ) <<<'rm x'\", \"if true; then bash; fi <<< 'rm x'\", \"while bash; do break; done <<<'rm x'\", \"until bash; do :; done <<<'rm x'\", \"for i in 1; do bash; done <<<'rm x'\", \"case a in a) bash;; esac <<<'rm x'\", \"coproc NAME { bash; } <<<'rm x'\", \"{ { bash; }; } <<<'rm x'\", \"{ bash -s; } <<<'rm x'\", \"f() { bash; } <<<'rm x'; f\", \"f() { bash; }; f <<<'rm x'\" (call-site feed), \"{ bash; } <<<'git push --force'\" (gi=[]), '{ bash; } < <(echo rm x)' (fed lost)",
+  "bash_does": "The shell inside the compound reads the compound's stdin and runs rm x or git push --force.",
+  "impact": "under-read-high",
+  "class": "compound stdin not propagated to inner shells. _resolve_shell (shell_parse.py:2180) and _feed (1696) read only the SimpleCommand's own redirects, and _walk_command (1727-1737) does not pass compound redirects down.",
+  "evidence": "harness: invs=[['rm','x']]; parser sites [bash fed=[]], wt=[]; --facts commands [['bash',[],['top'],[],false]]. Control 'bash <<<\\'rm x\\'' gives sites bash(fed herestring) and rm x (ctx heredoc_shell).",
+  "verify_note": "bash invs [rm x]; parser site bash with fed=[], no heredoc_shell payload, wt=[]. Control 'bash <<<'rm x'' gives fed=[herestring] and an rm x site. All variants reproduce: the heredoc form, '( sh ) <<<', the if/while/until/for/case forms, 'coproc NAME { bash; }', the nested group, 'bash -s', the function definition with a redirect, the call-site feed 'f <<<' (site f has fed herestring but the inner bash does not), the git push --force form (gi=[]) and '{ bash; } < <(echo rm x)' (the procsub echo is walked, but bash is fed=[])."
+ },
+ {
+  "input": "{ cat; } <<EOF\n$(rm x)\nEOF",
+  "view": "walk",
+  "parser_says": "Heredoc expansions on a Compound's redirect are never walked: _walk_command walks only r.target words for compounds. Only 'cat' is reported. Variants: 'while read -r l; do :; done <<EOF\\n`rm y`\\nEOF', 'f() { cat; } <<EOF\\n$(rm x)\\nEOF\\nf', '{ cat; cat <&3; } <<A 3<<B\\n$(rm a)\\nA\\n$(rm b)\\nB' (both missed)",
+  "bash_does": "Expands the unquoted heredoc body and runs rm x, rm y, or rm a and rm b.",
+  "impact": "under-read-high",
+  "class": "heredoc expansions on compound redirects (shell_parse.py:1730-1731 vs 1744-1748 for simple commands)",
+  "evidence": "harness: invs=[['rm','x'],['cat']]; parser sites [cat], wt=[]; --facts errors=[] commands [['cat',...]]. Control 'cat <<EOF\\n$(rm x)\\nEOF' walks rm x (ctx cmdsub).",
+  "verify_note": "bash invs [rm x, cat]; parser sites [cat], wt=[], errors=[]. Variants reproduce: 'while read -r l; do :; done <<EOF\\n`rm y`\\nEOF' (rm y missed), 'f() { cat; } <<EOF\\n$(rm x)\\nEOF\\nf', and the two-heredoc '<<A 3<<B' form (rm a and rm b both missed). Control 'cat <<EOF\\n$(rm x)\\nEOF' walks rm x. '{ cat; } <<<$(rm x)' is walked, because here-string targets are words. Only heredoc bodies on compounds are missed (shell_parse.py:1730-1731 vs 1744-1748)."
+ },
+ {
+  "input": "X=protected; (X=harmless); echo hi > $X",
+  "view": "write_targets",
+  "parser_says": "WriteTarget('harmless', truncate, redirect>, decidable=True). The projection env applies every bare assignment walk reaches, whatever the scope or control flow. Variants that all report 'harmless': 'X=harmless | true', '{ X=harmless; } | cat', 'if false; then X=harmless; fi', 'true || X=harmless', 'false && X=harmless', 'f() { X=harmless; }' (never called), ': $(X=harmless)', \"bash -c 'X=harmless'\", 'case a in b) X=harmless;; esac', 'while false; do X=harmless; done', 'X=harmless & wait', 'coproc { X=harmless; }', and 'X=harmless; for X in protected; do :; done' (loop variable not tracked). The same holds for verbs: 'tee $X' gives tee 'harmless', 'cp /dev/null $X' gives copy-dest 'harmless', 'git rm $X' gives git-rm 'harmless'.",
+  "bash_does": "Writes, copies to or deletes the file 'protected'. Subshell, pipeline-stage, cmdsub, child-shell and background assignments do not persist, and branches not taken do not run.",
+  "impact": "under-read-high",
+  "class": "write_targets assignment projection ignores subshell scope and control flow (shell_parse.py:2478-2487), so a hook checks a decidable but wrong path",
+  "evidence": "harness: files=['protected'] while wt=[('harmless','truncate','redirect>')]. tee variant: stub log [tee protected] vs wt tee 'harmless'. cp: log [cp /dev/null protected] vs wt copy-dest 'harmless'. git rm: log [git rm protected] vs wt git-rm 'harmless'. --facts wt [['harmless','truncate','redirect>',true]].",
+  "verify_note": "bash creates 'protected'; parser wt=[('harmless','truncate','redirect>',True)], a decidable but wrong path. All 13 scope and control-flow variants reproduce: pipeline stage, piped group, if false, ||, &&, an uncalled function, cmdsub, bash -c, an unmatched case arm, while false, background &, coproc, and the for loop variable. Verb variants: tee (stub log tee protected), cp (cp /dev/null protected) and git rm (git rm protected) are each reported as 'harmless'. write_targets (shell_parse.py:2478-2487) updates env for every bare assignment walk yields."
+ },
+ {
+  "input": "if true; then :; fi > o1",
+  "view": "write_targets",
+  "parser_says": "write_targets=[]. Same for 'while false; do :; done > o2', 'until true; do :; done >> o3', 'case x in x) ;; esac > o4', 'select x in; do :; done > o5', '[[ x ]] > o6', '(( x = 1 )) > o1', 'f() { :; } > o7; f', 'function f { :; } >> o8; f', 'f() ( : ) > o9; f', 'coproc { :; } > o10', 'time { :; } > o11', '! { :; } > o12', 'if ..fi 3> o13', 'while ..done > o14 < /dev/null', '{ :; } &> o15', '{ :; } {fd}> o16', '{ :; } <> o17', 'case ..esac >| o18', '{ :; } >& o19', 'while ..done 2>o20 >o21', '[[ $(rm a) == x ]] > o1'",
+  "bash_does": "Creates or truncates each file (o1..o21).",
+  "impact": "under-read-high",
+  "class": "New variants of known (7) for the other compound kinds and redirect operators (if/while/until/case/select/[[ ]]/(( ))/function definitions/coproc/time/! and 3>, &>, {fd}>, <>, >|, >&file, multiple redirects). write_targets iterates SimpleCommand sites only.",
+  "evidence": "harness: each case files=['oN'] and wt=[] (UNWRITTEN). Control 'echo > o; { :; } > p' gives only WriteTarget('o').",
+  "verify_note": "bash creates o1; parser wt=[]. All 22 listed variants reproduce (files created, wt=[]): if, while, until, case, select, [[ ]], (( )), the f() {}, function f {} and f() ( ) definitions, coproc, time, !, 3>, '> o14 < /dev/null', &>, {fd}>, <>, >|, >& file, '2>o20 >o21', and '[[ $(rm a) == x ]] > o1' (rm a found, o1 not). Control 'echo > o; { :; } > p' reports only o. This is a new-kinds/new-operators variant of known (7)."
+ },
+ {
+  "input": "X=($(rm a))",
+  "view": "walk",
+  "parser_says": "The array literal is an 'arraylit' part. Part.body is None for that kind, so the cmdsub inside is not walked. The site has no words and no rm.",
+  "bash_does": "Runs rm a while it expands the array elements.",
+  "impact": "under-read-high",
+  "class": "array assignment literal (out of class, found incidentally). Part.body (shell_parse.py:170-176) excludes arraylit.",
+  "evidence": "harness: invs=[['rm','a']]; parser site None [] raw=[]; wt=[].",
+  "verify_note": "bash invs [rm a]; parser site None [], wt=[], errors=[]. More variants found, all missed: 'X=(`rm a`)', 'X+=($(git push))' (bash: git push, gi=[]), 'X=(a $(rm a) b); echo', 'declare -a X=($(rm a))' (site declare ['-a', None]), 'local X=($(rm a))' and 'X=(<(rm a))' (procsub). Part.body (shell_parse.py:171-176) excludes arraylit."
+ },
+ {
+  "input": "bash <<EOF\necho \"\\$(rm f1)\"\nEOF",
+  "view": "resolve (heredoc_shell payload) / walk / write_targets / git_invocations",
+  "parser_says": "Payload site `echo` with the literal argument '$(rm f1)'. No rm site, unresolved=None, errors=[] (hd.expansions is empty because the outer `\\$` is skipped, so nothing is flagged).",
+  "bash_does": "The outer shell expands the unquoted heredoc body first and turns `\\$` into `$`. The inner bash receives `echo \"$(rm f1)\"` and runs rm f1 (stub log: rm f1).",
+  "impact": "under-read-high",
+  "class": "heredoc-shell payload is parsed from the raw body without the heredoc's backslash processing (\\$, \\`, \\\\)",
+  "evidence": "harness h/harness.py (stub bin first on PATH, env -i, cwd sandbox). Confirmed on the same root, each run without a parse error: 'bash <<EOF\\necho \"\\\\`rm f1\\\\`\"\\nEOF' gives oracle rm f1 vs parser echo arg '`rm f1`'; 'sh <<EOF\\nX=\\\\$(rm f1)\\nEOF' gives rm f1, parser has no site; 'bash <<EOF\\necho \\\\\\\\\"; rm f1; #\"\\nEOF' gives oracle rm f1 vs parser echo arg '\\\\; rm f1; #'; 'bash <<EOF\\necho x > \\\\$PWD/o1\\nEOF' makes bash write work/o1 while write_targets gives a static decidable path '$PWD/o1'; 'bash <<EOF\\ngit \\\\${X:-push}\\nEOF' makes bash run git push while git_invocations gives subcommand '${X:-push}'. The cause is that _resolve_shell (shell_parse.py:2183-2189) calls parse_src(red.hd.body_src) on the raw body. Inside $(...) the same text only produces a nested error: 'x=$(bash <<EOF\\n\\\\$(rm f1)\\nEOF\\n)'.",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser's payload site is echo with the literal argument '$(rm f1)', with unresolved None and no errors. Every listed variant also reproduced: the escaped backtick form (oracle rm f1), 'sh <<EOF\\nX=\\$(rm f1)' (the payload has only an empty assignment site), the echo \\\\\"; rm f1 form, the \\$PWD/o1 form (write_targets gives ('$PWD/o1', decidable=True) while bash wrote work/o1), and the git \\${X:-push} form (oracle git push, git_invocations subcommand '${X:-push}'). Inside $(...) the same text gives only a nested unexpected_token and a bogus '$' site, while the oracle still logs rm f1. Cause: _resolve_shell (shell_parse.py:2183-2189) parses the raw hd.body_src."
+ },
+ {
+  "input": "cat <<'EOF'\nfoo\\\nEOF\nrm f1\nEOF",
+  "view": "parse / walk",
+  "parser_says": "One site: cat. The heredoc body is 'fooEOF\\nrm f1\\n' and errors=[].",
+  "bash_does": "With a quoted delimiter, backslash-newline is kept literally. The heredoc ends at line 3, then rm f1 runs (afterwards: EOF: command not found).",
+  "impact": "under-read-high",
+  "class": "Src.from_raw removes backslash-newline everywhere before lexing, including in quoted-delimiter heredoc bodies and single-quoted strings (not known #5: that one is an escaped backslash; this is a single backslash inside a quoted context)",
+  "evidence": "oracle inv=[rm f1]. The same happens for <<\\EOF. It is carried into payloads: \"bash -c 'cat <<\\\"EOF\\\"\\nfoo\\\\\\nEOF\\nrm f1\\nEOF'\" gives the shell_c argv 'cat <<\"EOF\"\\nfooEOF\\nrm f1\\nEOF' while bash runs rm f1. The same for \"bash <<< '...'\", \"eval '...'\" and \"bash <<'X'\\ncat <<'EOF'\\nfoo\\\\\\nEOF\\nrm f1\\nEOF\\nX\" (all oracle rm f1, parser has no rm). Over-read twins: \"cat <<'EOF'\\nEO\\\\\\nF\\nrm f1\\nEOF\" and 'cat <<\"EOF\"\\nbody\\nEOF\\\\\\n\\nrm f1\\nEOF' (parser reports rm f1, bash runs nothing). Root: shell_parse.py:100-114.",
+  "verify_note": "Reproduced. The oracle logged rm f1, then 'EOF: command not found'. The parser gives one cat site with body 'fooEOF\\nrm f1\\n' and no error. The <<\\EOF, bash -c '...', nested bash <<'X' and eval '...' variants all reproduced (oracle rm f1, parser no rm site). The shell_c and eval argv shows the backslash-newline removed inside single quotes. Both over-read twins reproduced: parser rm f1, bash ran nothing. Cause: Src.from_raw (shell_parse.py:100-114) removes every backslash-newline before lexing."
+ },
+ {
+  "input": "cat <<\"E\\$F\"\nE$F\nrm f1\nE\\$F",
+  "view": "parse / walk",
+  "parser_says": "The delimiter is 'E\\$F', so the heredoc swallows 'E$F' and 'rm f1'. Sites: cat only, errors=[].",
+  "bash_does": "Inside double quotes `\\$` becomes `$`, so the delimiter is E$F. The heredoc ends at line 2 and rm f1 runs.",
+  "impact": "under-read-high",
+  "class": "heredoc delimiter quote removal is wrong (double-quote backslash escapes, $'...' and $\"...\")",
+  "evidence": "oracle inv=[rm f1] for each of these, and the parser shows no rm site and no error: 'cat <<\"E\\\\\\\\F\"\\nE\\\\F\\nrm f1\\nE\\\\\\\\F', 'cat <<\"E\\\\`F\"\\nE`F\\nrm f1\\nE\\\\`F', \"cat <<$'EOF'\\nEOF\\nrm f1\\n$EOF\" (bash 5.2.21 decodes $'EOF' to EOF; the parser's delimiter is '$EOF'), 'cat <<$\"EOF\"\\nEOF\\nrm f1\\n$EOF', \"cat <<$'\\\\x45OF'\\nEOF\\nrm f1\\n$\\\\x45OF\". Root: _read_heredoc_delim shell_parse.py:697-726 only strips quote characters. Same cause, but failing closed (an error): 'cat <<\"E\\\\\"F\"...' and \"cat <<E$'\\\\''F...\".",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser has only a cat site and no error. The \"E\\\\F\", \"E\\`F\", <<$'EOF', <<$\"EOF\" and <<$'\\x45OF' variants each reproduced on bash 5.2.21 (oracle rm f1, parser no rm, no error). The 'cat <<\"E\\\"F\"' variant fails closed (unterminated_heredoc), as the auditor said. Cause: _read_heredoc_delim (shell_parse.py:697-726) only strips quote characters; it applies no double-quote backslash escapes and no $'..' or $\"..\" handling."
+ },
+ {
+  "input": "(( x <<true ))\nrm f1\ntrue",
+  "view": "parse / walk",
+  "parser_says": "No sites at all and no error: `<<true` inside (( )) is lexed as a heredoc operator, and rm f1 becomes its body.",
+  "bash_does": "Runs an arithmetic left shift, then rm f1, then true (bash -n is clean).",
+  "impact": "under-read-high",
+  "class": "`<<` inside an arithmetic command or arithmetic for is lexed as a heredoc",
+  "evidence": "oracle inv=[rm f1] for each: '(( x = 1 << 2 ))\\nrm f1\\n2', 'for (( i=0; i<<1; i++ )); do :; done\\nrm f1\\n1' (parser site ':' only), '((x<<=1))\\nrm f1\\n=1'. The lexer (shell_parse.py:813-835) has no (( )) context. parse_arith (1465) rescans the raw text, but by then the lexer has already consumed the following lines as heredoc body. 'let' and $(( )) agree with bash.",
+  "verify_note": "Reproduced. bash -n is clean and the oracle logged rm f1. The parser gives no sites at all and no error. The '(( x = 1 << 2 ))', 'for (( i=0; i<<1; i++ ))' (parser has only ':') and '((x<<=1))' variants all reproduced. The let and $(( )) forms agree with bash."
+ },
+ {
+  "input": "x=$(cat <<'EOF'\n(\nEOF)\nrm f1\nEOF\n# )",
+  "view": "walk",
+  "parser_says": "Sites: the assignment and cmdsub `cat`. errors=[]. The cmdsub is read up to the final ')' in the comment, so rm f1 is heredoc body.",
+  "bash_does": "bash 5.2 ends the heredoc and the command substitution at 'EOF)' (warning only), runs rm f1 at top level, and treats '# )' as a comment.",
+  "impact": "under-read-high",
+  "class": "heredoc inside $( ) / <( ): _match_pair counts ( ) ' \" in the heredoc body",
+  "evidence": "oracle inv=[rm f1]. The same with an unquoted <<EOF, with <( ... ) ('cat <(cat <<'EOF'\\n(\\nEOF)\\nrm f1\\nEOF\\n# )'), and with '((' plus '# ))'. Root: _lex_dollar to _match_pair (shell_parse.py:343-373, 397-405) is not heredoc-aware. Variants where the top-level error is None and errors() holds only a nested unexpected_token: \"x=$(cat <<'EOF'\\n(\\nEOF\\n); rm f1 # )\" and \"x=$(cat <<'EOF'\\n'\\nEOF\\n)\\nrm f1 #')\" (both oracle rm f1).",
+  "verify_note": "Reproduced. bash -n exits 0 with a warning only, and the oracle logged rm f1. The parser gives only the assignment and cmdsub cat sites, with errors=[]. The unquoted <<EOF, the <( ) and the (( / # )) variants all reproduced. For the two variants with a nested unexpected_token, the top-level error is None and the oracle logs rm f1, as described."
+ },
+ {
+  "input": "while read l; do :; done <<EOF\n$(rm f1)\nEOF",
+  "view": "walk",
+  "parser_says": "Sites `read l` and `:` only. No cmdsub site for the heredoc body, errors=[].",
+  "bash_does": "Expands the unquoted heredoc on the loop and runs rm f1.",
+  "impact": "under-read-high",
+  "class": "heredoc body substitutions on a compound command's redirect are never walked (walk view; known #7 is only write_targets)",
+  "evidence": "oracle rm f1 (or git push) and parser miss for each of: '{ cat; } <<EOF\\n$(rm f1)\\nEOF', '( cat ) <<EOF...', 'for i in 1; do cat; done <<EOF...', 'if true; then cat; fi <<EOF...', 'case a in a) cat;; esac <<EOF...', 'f() { cat; } <<EOF\\n$(rm f1)\\nEOF\\nf', '[[ -n x ]] <<EOF...', '(( 1 )) <<EOF...', 'while read l; do :; done <<EOF\\n`git push`\\nEOF'. Root: the Compound branch of _walk_command (shell_parse.py:1727-1737) calls _walk_redirect (1761-1763), which walks only r.target and never r.hd.expansions. Here-strings on compounds are fine.",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser gives sites read and ':' only, with no cmdsub site. All nine listed compound forms reproduced ({ }, ( ), for, if, case, f(){ }, [[ ]], (( )), and while with a `git push` backtick: oracle git push, git_invocations []). A here-string on a compound is walked correctly. Cause: _walk_redirect (shell_parse.py:1761-1763) walks only r.target and never r.hd.expansions."
+ },
+ {
+  "input": "{ bash; } <<'EOF'\nrm f1\nEOF",
+  "view": "walk / resolve",
+  "parser_says": "bash site with fed=[], payload None, unresolved None.",
+  "bash_does": "The inner bash reads the group's heredoc stdin and runs rm f1.",
+  "impact": "under-read-high",
+  "class": "a compound's stdin heredoc or here-string is not propagated to the shells inside it (fed or payload)",
+  "evidence": "oracle inv=[rm f1] for \"( sh ) <<'EOF'\\nrm f1\\nEOF\" and \"if :; then bash; fi <<'EOF'\\nrm f1\\nEOF\". git_invocations is empty for the same forms with git push. _resolve_shell (2180) only looks at cmd.redirects of the SimpleCommand itself.",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser gives a bash site with fed=[], payload None and unresolved None. The ( sh ) and if..fi variants reproduced, as did my own '{ bash; } <<< 'rm f1'' and '{ bash; } <<'EOF'\\ngit push' (oracle git push, git_invocations [])."
+ },
+ {
+  "input": "bash -s x <<'EOF'\nrm f1\nEOF",
+  "view": "resolve",
+  "parser_says": "bash argv ['-s','x'], payload None, unresolved None (_resolve_shell returns once an operand follows the options).",
+  "bash_does": "-s with positional arguments reads commands from stdin, so rm f1 runs.",
+  "impact": "under-read-high",
+  "class": "forms in which a shell reads its script from stdin are not recognised",
+  "evidence": "oracle rm f1 and parser no payload for each of: \"bash -s -- x <<'EOF'..\", \"bash -s x y <<'EOF'..\", \"bash - <<< 'rm f1'\", \"bash /dev/stdin <<'EOF'..\", \"bash /dev/fd/0 <<'EOF'..\", \"bash /proc/self/fd/0 <<'EOF'..\", \"bash -- /dev/stdin <<'EOF'..\", \"bash -eo pipefail <<'EOF'..\" and \"bash -xo pipefail <<'EOF'..\" (a clustered -o takes its value from the next word, but _resolve_shell (2154-2161) only skips the value for an exact -o or -O), and 'bash -s \"3\"<<'EOF'..' (the quoted 3 is read as fd 3, see the quoted-digit defect). Root: shell_parse.py:2147-2179.",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser gives fed=['heredoc'], payload None and unresolved None. Each listed variant reproduced: -s -- x, -s x y, 'bash - <<<', /dev/stdin, /dev/fd/0, /proc/self/fd/0, -- /dev/stdin, -eo pipefail, -xo pipefail, and 'bash -s \"3\"<<' (the parser reads the redirect as fd 3, so fed=[]). The control 'bash -o pipefail <<' is resolved correctly."
+ },
+ {
+  "input": "source /dev/stdin <<'EOF'\ngit push --force\nEOF",
+  "view": "resolve / executable_view / git_invocations",
+  "parser_says": "source site with no payload. git_invocations is []. executable_view blanks the body: \"source /dev/stdin <<'EOF'\\n                \\nEOF\".",
+  "bash_does": "Sources the heredoc in the current shell and runs git push --force (with rm f1 in the body, the oracle logged rm f1).",
+  "impact": "under-read-high",
+  "class": "source or . of /dev/stdin is not treated as a fed shell, and executable_view blanks the body as data",
+  "evidence": "oracle rm f1 for: \"source /dev/stdin <<'EOF'\\nrm f1\\nEOF\", \". /dev/fd/0 <<'EOF'..\", \"source /dev/stdin <<< 'rm f1'\", \". /dev/stdin <<< 'rm f1'\". executable_view (2239-2242) blanks every heredoc body whose command name is not in SHELLS. 'eval \"$(cat)\" <<'EOF'..' also has its body blanked, although walk flags it as eval_dynamic.",
+  "verify_note": "Reproduced. The oracle logged git push --force. The parser gives source with no payload, git_invocations [], and executable_view blanks the body. The '. /dev/fd/0', 'source /dev/stdin <<<' and '. /dev/stdin <<<' variants all reproduced with oracle rm f1. One sub-claim is NOT a defect: for 'eval \"$(cat)\" <<'EOF'\\nrm f1\\nEOF' the oracle ran nothing, because the cmdsub expands before the heredoc is applied, so blanking that body is correct."
+ },
+ {
+  "input": "cat <<'EOF' | bash\ngit push --force\nEOF",
+  "view": "executable_view / git_invocations / walk",
+  "parser_says": "executable_view is \"cat <<'EOF' | bash\\n                \\nEOF\" (body blanked because cat is not a shell). git_invocations is []. walk gives a bash site with fed=['pipe'] and no payload.",
+  "bash_does": "bash runs the piped heredoc: git push --force (with rm f1 in the body, the oracle logged rm f1).",
+  "impact": "under-read-high",
+  "class": "a heredoc piped into a shell is blanked as data by executable_view and never parsed as a payload",
+  "evidence": "oracle \"cat <<'EOF' | bash\\nrm f1\\nEOF\" gives inv=[rm f1]. Nested: \"bash <<'EOF'\\ncat <<'X' | bash\\nrm f1\\nX\\nEOF\" (oracle rm f1, parser no rm).",
+  "verify_note": "Reproduced. The oracle logged git push --force. executable_view blanks the body, git_invocations is [], and walk gives bash with fed=['pipe'] and no payload. The pipe feed is visible to a hook, but no payload and no unresolved reason are reported. The nested 'bash <<'EOF'\\ncat <<'X' | bash' variant reproduced (oracle rm f1)."
+ },
+ {
+  "input": "exec <<'EOF'\nrm f1\nEOF\nbash",
+  "view": "walk / resolve",
+  "parser_says": "Sites: `exec` (fed heredoc, head None) and `bash` (fed=[], payload None).",
+  "bash_does": "exec makes the heredoc the shell's stdin for the rest of the script. The later bash reads it and runs rm f1.",
+  "impact": "under-read-high",
+  "class": "an inherited stdin heredoc reaches a shell that has no redirect of its own",
+  "evidence": "oracle rm f1 for each, and the parser's inner shell site has no payload: \"exec 0<<<'rm f1'; sh\", \"sh -c sh <<'EOF'\\nrm f1\\nEOF\", \"bash -c 'bash -s' <<'EOF'..\", \"bash -c 'cat | sh' <<'EOF'..\", \"bash -c 'source /dev/stdin' <<'EOF'..\". Not run against the oracle (documented su/sudo behaviour): \"sudo -s <<'EOF'\\nrm f1\\nEOF\" resolves with head None, and \"su - postgres <<'EOF'..\" gives head su with no payload and executable_view blanks the body.",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser gives exec (fed heredoc, head None) and then bash with fed=[] and no payload. These variants reproduced with oracle rm f1 and an inner shell that has no payload: \"exec 0<<<'rm f1'; sh\", 'sh -c sh <<', \"bash -c 'bash -s' <<\", \"bash -c 'cat | sh' <<\" and \"bash -c 'source /dev/stdin' <<\". For sudo -s and su - postgres I checked only the parser output (real sudo and su cannot be run in the sandbox): sudo -s resolves with head None and unresolved None, and su has no payload with its body blanked by executable_view."
+ },
+ {
+  "input": "bash <<-EOF\n\tcat <<X\n\tX\n\trm f1\nX\nEOF",
+  "view": "resolve (heredoc_shell payload) / walk",
+  "parser_says": "The payload is parsed with the leading tabs kept, so the inner heredoc only ends at the bare 'X' line and swallows rm f1. Sites: bash and cat.",
+  "bash_does": "The outer <<- strips the tabs, so the inner heredoc ends at line 3 and rm f1 runs (then X: command not found).",
+  "impact": "under-read-high",
+  "class": "the <<- tab stripping is not applied to the body before it is parsed as a payload",
+  "evidence": "oracle inv=[rm f1], errors=[]. Root: _resolve_shell (shell_parse.py:2185/2187) passes the raw body_src, which still holds the tabs.",
+  "verify_note": "Reproduced. The oracle logged rm f1, then 'X: command not found'. The parser's payload has only a cat site, because the inner heredoc swallowed rm f1. Cause: _resolve_shell passes body_src with the tabs not yet stripped."
+ },
+ {
+  "input": "rm f1 \u00b2>/dev/null",
+  "view": "walk / write_targets / executable_view / git_invocations",
+  "parser_says": "parse() succeeds, then walk(), write_targets(), executable_view() and git_invocations() raise ValueError (Redir.fd calls int('\u00b2')). The --facts CLI returns error code 'internal'.",
+  "bash_does": "\u00b2 is an ordinary word: bash runs rm f1 \u00b2 with stdout to /dev/null.",
+  "impact": "under-read-high",
+  "class": "Unicode digits accepted by str.isdigit() in fd, dup and count handling",
+  "evidence": "'rm \u0661>o1' (Arabic-Indic one) gives walk argv [] while bash passes \u0661 as an argument. 'echo x >&\u0661' gives write_targets [] (dup 1) while bash created a file named \u0661 in the sandbox. 'echo x >&\u00b2' makes write_targets raise. The module promises no public function raises, so a hook that imports it crashes on any command carrying '\u00b2>x'. Same pattern outside redirects: 'GIT_CONFIG_COUNT=\u00b2 git push' makes git_invocations raise ValueError. 'GIT_CONFIG_COUNT=3000000 git push' takes 0.39 s in the range() loop, so a 10^9 count stalls the hook. Root: shell_parse.py:298-299, 312-315, 2494 and the GIT_CONFIG_COUNT check.",
+  "verify_note": "Reproduced. The oracle ran rm f1 \u00b2. walk(), Script.errors(), write_targets(), git_invocations(), executable_view() and facts() all raise ValueError from Redir.fd int('\u00b2') at shell_parse.py:299. The --facts CLI exits 0 with error code 'internal'. 'rm \u0661>o1' gives rm argv [] while bash passes \u0661. 'echo x >&\u0661' gives write_targets [] while bash created a file named \u0661. 'echo x >&\u00b2' makes write_targets raise, and 'GIT_CONFIG_COUNT=\u00b2 git push' makes git_invocations raise. GIT_CONFIG_COUNT=3000000 took 0.33 s, which is linear, so I did not run 1e9. A hook that imports the module and crashes exits non-blocking, which allows the command."
+ },
+ {
+  "input": "tee --output-error o1 < f1",
+  "view": "write_targets",
+  "parser_says": "[] (o1 is consumed as the value of --output-error).",
+  "bash_does": "GNU tee 9.4 takes --output-error[=MODE] only as an attached optional argument, so it writes o1 (checked by running real /usr/bin/tee in the sandbox: o1 created).",
+  "impact": "under-read-high",
+  "class": "tee option spec: --output-error treated as taking a separate value",
+  "evidence": "'tee --output-error warn o6': parser reports only o6, real tee created both 'warn' and o6. 'tee --output-e o7' also gives []. Root: VERBS['tee'] (shell_parse.py:2400-2401) lists --output-error among the value options.",
+  "verify_note": "Reproduced with real GNU tee 9.4 in the sandbox: o1 was created and write_targets is []. 'tee --output-error warn o6' made the files warn and o6, but the parser reports only o6. 'tee --output-e o7' made o7, and the parser gives []. The =warn form is correct. Cause: VERBS['tee'] (shell_parse.py:2400-2401) lists --output-error as an option that takes a value."
+ },
+ {
+  "input": "bash -eo pipefail -c 'rm x'",
+  "view": "resolve",
+  "parser_says": "Resolved(head=bash). No payload, unresolved=None. walk reports only the bash site. Variants: 'bash -euo pipefail -c \"git push --force\"' gives git_invocations=[]; 'bash -xO extglob -c \"rm x\"', 'bash +eo pipefail -c \"rm x\"' and 'sh -eo errexit -c \"rm x\"' behave the same.",
+  "bash_does": "Runs rm x (oracle log [['rm','x']]); variant logs ['git','push','--force'].",
+  "impact": "under-read-high",
+  "class": "shell option cluster ending in o/O (-eo, -euo, -xO, +eo): _resolve_shell (shell_parse.py:2157) skips the option value only when the word is exactly -o/-O, so the value word (pipefail) stops the scan before -c is seen",
+  "evidence": "harness.py cases3/cases5: bash-eo-pipefail, bash-euo-pipefail, sh-eo, sudo-bash-eo, bash-Ox, bash-pluseo, git-bash-eo all flag UNDER; sites list shows only ['bash','-eo','pipefail','-c','rm x'] with no shell_c site",
+  "verify_note": "Oracle log [['rm','x']]. Parser: one site bash, payload None, unresolved None. Variants also reproduce: -euo with \"git push --force\" (oracle ran git push --force, git_invocations=[]), -xO extglob, +eo pipefail, sh -eo errexit, sudo bash -eo pipefail (real rm deleted x), bash -Ox extglob. _resolve_shell skips the value only for an exact -o/-O, so 'pipefail' ends the scan."
+ },
+ {
+  "input": "bash -co pipefail 'rm x'",
+  "view": "resolve",
+  "parser_says": "payload_kind=shell_c, payload parsed from 'pipefail', so the walk site is ['pipefail'] in top/shell_c. rm is never reported. 'bash -oc pipefail \"rm x\"' and 'bash -cO extglob \"rm x\"' give the same result (payload 'pipefail'/'extglob').",
+  "bash_does": "-o/-O in the cluster takes the next word as its value, and 'rm x' is the command string. Oracle log [['rm','x']].",
+  "impact": "under-read-high",
+  "class": "shell -c clustered with o/O: the option value is taken as the -c payload (shell_parse.py:2154-2161)",
+  "evidence": "cases2: bash-co, bash-oc, bash-cO flagged UNDER:rm ['x']; parser site ['pipefail'] ctx=top/shell_c",
+  "verify_note": "Oracle log [['rm','x']]. Parser payload [['pipefail']], site ['pipefail'] in top/shell_c. rm is never reported. -oc pipefail and -cO extglob give the same (payload 'pipefail' / 'extglob')."
+ },
+ {
+  "input": "bash -c - 'rm x'",
+  "view": "resolve",
+  "parser_says": "payload is '-' (site ['-'] ctx top/shell_c). rm is not reported.",
+  "bash_does": "A lone '-' ends bash's options, and 'rm x' is the command string. Oracle log [['rm','x']].",
+  "impact": "under-read-high",
+  "class": "lone '-' option terminator not honoured in _resolve_shell (len(v)>1 check at shell_parse.py:2154 breaks on '-')",
+  "evidence": "cases2 bash-c-dash: ORACLE log=[['rm','x']], parser site ['-'] head=-",
+  "verify_note": "Oracle log [['rm','x']]. Parser payload [['-']], site '-' in top/shell_c. The lone '-' fails the len(v)>1 test and is taken as the -c string."
+ },
+ {
+  "input": "bash -s a b <<< 'rm x'",
+  "view": "resolve",
+  "parser_says": "head=bash, no payload, unresolved=None (fed={'herestring'}). Same for 'bash -s -- a <<< \"rm x\"', 'bash /dev/stdin <<< \"rm x\"' and 'bash - <<< \"rm x\"'.",
+  "bash_does": "Reads the commands from the here-string (-s with positional args; /dev/stdin and '-' read stdin). Oracle log [['rm','x']] for all four.",
+  "impact": "under-read-high",
+  "class": "stdin-fed shell with operands: _resolve_shell returns before the heredoc/herestring check whenever an operand remains (shell_parse.py:2178)",
+  "evidence": "cases2: bash-s-args-here, bash-s-dd-here, bash-devstdin, bash-dash-here all UNDER",
+  "verify_note": "Oracle log [['rm','x']] for all four forms. Parser: head bash, fed=['herestring'], payload None, unresolved None for -s a b, -s -- a, /dev/stdin and '-'. The early return when an operand remains (shell_parse.py:2178) skips the here-string check."
+ },
+ {
+  "input": "{ bash; } <<< 'rm x'",
+  "view": "walk",
+  "parser_says": "Site bash with fed=[] and no payload. The here-string on the group is not passed to the shell. Same for '( bash ) <<< \"rm x\"', 'if true; then bash; fi <<< \"rm x\"', 'f(){ bash; }; f <<< \"rm x\"', 'bash -c \"bash\" <<< \"rm x\"' and 'exec <<< \"rm x\"; bash'.",
+  "bash_does": "The inner bash inherits the redirected stdin and runs rm x (oracle log [['rm','x']] in all six).",
+  "impact": "under-read-high",
+  "class": "shell fed by an inherited stdin redirect (compound, function call, outer -c shell, exec): only the shell's own redirects are read",
+  "evidence": "cases5: group-here-bash, subshell-here-bash, if-here-bash, func-here-bash, bash-c-bash-here, exec-stdin-bash all UNDER",
+  "verify_note": "Oracle log [['rm','x']] in all six forms (group, subshell, if..fi, function call f, bash -c \"bash\" <<<, and exec <<< ...; bash). The inner bash site has fed=[] and no payload each time. Only the function-call site f carries fed=['herestring']."
+ },
+ {
+  "input": "bash 3<<<'rm x' 0<&3",
+  "view": "walk",
+  "parser_says": "Site bash, fed=[], no payload",
+  "bash_does": "Runs rm x (oracle log [['rm','x']])",
+  "impact": "under-read-high",
+  "class": "new variant of known (4): a here-string (not a heredoc) on another fd duplicated to stdin",
+  "evidence": "cases2 bash-fd3-here UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser: bash site with fed=[] and no payload. _feed reads only fd 0 <<, <<< and <, never a dup from another fd. This is a here-string variant of known (4)."
+ },
+ {
+  "input": "source /dev/stdin <<< 'rm x'",
+  "view": "resolve",
+  "parser_says": "head=source, no payload. Same for '. /dev/stdin <<< \"rm x\"', 'builtin source /dev/stdin <<<', \"source /dev/fd/0 <<'E'\\nrm x\\nE\", \"echo 'rm x' | source /dev/stdin\", 'source <(echo rm x)', \". <(printf 'rm x\\\\n')\" and 'exec 3< <(echo rm x); source /dev/fd/3'. For the procsub forms only echo/printf is reported.",
+  "bash_does": "Runs rm x in all eight cases (oracle)",
+  "impact": "under-read-high",
+  "class": "source/. of stdin, /dev/fd or a process substitution is not a payload kind",
+  "evidence": "cases2 source-stdin, dot-stdin, source-procsub, dot-procsub, source-fd0-heredoc, pipe-source, builtin-source; cases4 exec-fd-source all UNDER",
+  "verify_note": "Oracle log [['rm','x']] in all eight cases: source and . on /dev/stdin, builtin source, source /dev/fd/0 with a heredoc, echo | source /dev/stdin, source <(..), . <(printf ..), and exec 3< <(..); source /dev/fd/3. Parser: head source/., payload None, unresolved None. Only echo/printf is reported in procsub."
+ },
+ {
+  "input": "trap 'rm x' EXIT",
+  "view": "walk",
+  "parser_says": "Site ['trap','rm x','EXIT'] only. The command string is not parsed. Same for 'trap -- \"rm x\" EXIT', 'trap \"rm x\" DEBUG; :', 'trap \"rm x\" ERR; false', 'trap \"rm x\" 0', 'trap \"rm x\" INT; kill -INT $$', 'set -T; trap \"rm x\" RETURN; f(){ :; }; f' and \"trap 'git push --force' EXIT\" (git_invocations=[]).",
+  "bash_does": "Runs the trap string: rm x / git push --force (oracle logs confirm each)",
+  "impact": "under-read-high",
+  "class": "trap command strings are not a payload (no eval-like descent)",
+  "evidence": "cases2 trap-exit, trap-dd, trap-debug, trap-err, trap-0; cases4 trap-int, trap-return; cases5 git-trap all UNDER",
+  "verify_note": "Oracle log [['rm','x']] for EXIT, -- EXIT, DEBUG, ERR, 0, INT with kill -INT $$, and set -T RETURN. trap 'git push --force' EXIT ran git push --force. Parser: site trap only, the string is never parsed, and git_invocations=[]."
+ },
+ {
+  "input": "BASH_ENV=/dev/stdin bash -c : <<< 'rm x'",
+  "view": "resolve",
+  "parser_says": "Payload ':' only. The BASH_ENV startup file is ignored. Same for 'env BASH_ENV=/dev/stdin bash -c : <<<', 'export BASH_ENV=/dev/stdin; bash -c : <<<' and 'BASH_ENV=<(echo rm x) bash -c :' (only echo is reported).",
+  "bash_does": "A non-interactive bash sources $BASH_ENV first and runs rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "BASH_ENV startup file fed from stdin or a procsub",
+  "evidence": "cases2 bashenv-stdin, bashenv-procsub, env-bashenv, export-bashenv UNDER",
+  "verify_note": "Oracle log [['rm','x']] for the prefix assignment, env BASH_ENV=, export BASH_ENV; bash -c :, and BASH_ENV=<(echo rm x) bash -c :. Parser payload is [[':']] only; the procsub form reports only echo."
+ },
+ {
+  "input": "shopt -s expand_aliases\nalias x=rm\nx f",
+  "view": "walk",
+  "parser_says": "Head 'x' with args ['f']. Aliases are not tracked. Same for \"bash -O expand_aliases -c $'alias x=rm\\\\nx f'\", \"bash --posix -c $'alias x=rm\\\\nx f'\", \"sh -c 'alias x=rm\\nx f'\" (dash expands aliases by default), 'shopt -s expand_aliases; alias x=rm; eval \"x f\"', 'BASH_ALIASES[x]=rm' then 'x f', a trailing-space chain (alias s=\"command \"; alias y=rm; s y f) and 'alias g=git' then 'g push' (git_invocations=[]).",
+  "bash_does": "Runs rm f / git push (oracle)",
+  "impact": "under-read-high",
+  "class": "shell aliases defined in the same text",
+  "evidence": "cases3 alias-nl, alias-O, alias-eval, alias-sh, alias-chain; cases5 posix-alias, bash-aliases-arr, git-alias all UNDER",
+  "verify_note": "Oracle log [['rm','f']]. Parser head 'x'. The other forms reproduce too: bash -O expand_aliases -c, bash --posix -c, sh -c (dash), eval \"x f\", BASH_ALIASES[x]=rm, the trailing-space chain s y f, and alias g=git; g push (oracle ran git push, git_invocations=[])."
+ },
+ {
+  "input": "hash -p /usr/bin/rm ls; ls x",
+  "view": "resolve",
+  "parser_says": "Head ls, args ['x']",
+  "bash_does": "The hashed path makes ls run /usr/bin/rm x (oracle log [['rm','x']]). 'BASH_CMDS[ls]=/usr/bin/rm; ls x' does the same.",
+  "impact": "under-read-high",
+  "class": "command-hash rebinding (hash -p, BASH_CMDS)",
+  "evidence": "cases3 hash-p, bash-cmds UNDER",
+  "verify_note": "Oracle: the real /usr/bin/rm deleted sandbox x (gone=['x']). BASH_CMDS[ls]=/usr/bin/rm; ls x does the same. Parser: head ls, args ['x'], write_targets=[]."
+ },
+ {
+  "input": "env - rm x",
+  "view": "resolve",
+  "parser_says": "Head '-' with args ['rm','x'], unresolved=None. Variants: 'env - git push --force' gives git_invocations=[]; \"env -S 'env - rm x'\" gives head '-'; 'env - cp f out' gives write_targets=[].",
+  "bash_does": "GNU env treats a lone '-' as -i and runs rm x / git push --force / cp f out (oracle)",
+  "impact": "under-read-high",
+  "class": "env lone '-' (split_options treats '-' as the first operand, shell_parse.py:1028)",
+  "evidence": "cases1 env-dash; cases4 env-S-env; cases5 git-env-dash, wt-env-dash UNDER",
+  "verify_note": "Oracle: rm ran and deleted x. env - clears PATH, so the real rm ran. env - git push --force invoked the real git (fatal: no push destination). env - cp f out created out. Parser: head '-', args [rm,x], unresolved None, write_targets=[] and git_invocations=[]. env -S 'env - rm x' also gives head '-'."
+ },
+ {
+  "input": "env 'X-Y=1' rm x",
+  "view": "resolve",
+  "parser_says": "Head 'X-Y=1' with args ['rm','x']. Same for 'env 1=2 rm x'. \"env 'BASH_FUNC_f%%=() { rm x; }' bash -c f\" gives head 'BASH_FUNC_f%%=() { rm x; }', and bash is never resolved.",
+  "bash_does": "env takes every leading word containing '=' as an assignment and runs rm x. The BASH_FUNC_ form exports function f, which bash -c f imports and runs: rm x (oracle).",
+  "impact": "under-read-high",
+  "class": "env assignments limited to identifier names (_ASSIGN_RE at shell_parse.py:46/2015)",
+  "evidence": "cases1 env-badname, env-num-name, env-bashfunc UNDER",
+  "verify_note": "Oracle log [['rm','x']]; env 1=2 rm x gives the same. Parser head 'X-Y=1' / '1=2'. env 'BASH_FUNC_f%%=() { rm x; }' bash -c f ran rm x (oracle), while the parser gives head 'BASH_FUNC_f%%=() { rm x; }' and never resolves bash."
+ },
+ {
+  "input": "sudo VAR=1 rm x",
+  "view": "resolve",
+  "parser_says": "Head 'VAR=1' with args ['rm','x']. Same for \"sudo 'A-B=1' rm x\". 'sudo GIT_DIR=. git push' gives git_invocations=[].",
+  "bash_does": "sudo takes leading VAR=value words as environment and runs rm x / git push (oracle, real sudo as root, stubbed rm/git)",
+  "impact": "under-read-high",
+  "class": "sudo VAR=value prefix after option parsing",
+  "evidence": "cases3 sudo-var, sudo-bad-name; cases5 git-sudo-var UNDER. Control: 'sudo -u root -- VAR=1 rm x' fails in sudo with 'VAR=1: command not found', which the parser matches.",
+  "verify_note": "Oracle: sudo (secure_path) ran the real rm and deleted sandbox x. sudo 'A-B=1' rm x did the same. sudo GIT_DIR=. git push invoked the real git (fatal: not a git repository). Parser head 'VAR=1' / 'A-B=1' / 'GIT_DIR=.', git_invocations=[]. Control sudo -u root -- VAR=1 rm x fails in sudo with 'VAR=1: command not found', consistent."
+ },
+ {
+  "input": "env -S '-i rm x'",
+  "view": "resolve",
+  "parser_says": "Head '-i' with args ['rm','x']",
+  "bash_does": "env re-reads options from the split string, so this is env -i rm x and runs rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "env -S split string is parsed as a command line, not re-fed to env's own option parser (shell_parse.py:2018-2023)",
+  "evidence": "cases1 env-S-opt UNDER",
+  "verify_note": "Oracle: rm ran (env -i cleared PATH, so the real rm deleted x). Parser head '-i', args [rm,x]."
+ },
+ {
+  "input": "env -S 'rm\\_x'",
+  "view": "resolve",
+  "parser_says": "Head 'rm_x'. Also \"env -S 'rm x;y'\" gives head rm with args ['x'] and write_targets ('x','delete'), and \"env -S 'rm #x' t\" gives rm args [].",
+  "bash_does": "env -S uses its own splitting: \\_ is a separator, ';' is literal and '#' starts a comment. It runs rm x, rm 'x;y' and rm t (oracle logs [['rm','x']], [['rm','x;y']], [['rm','t']]).",
+  "impact": "under-read-high",
+  "class": "env -S string read with bash grammar instead of env's escape/comment rules: wrong head or wrong target",
+  "evidence": "cases1 env-S-underscore UNDER; env-S-semicolon and env-S-hash ARGS mismatch",
+  "verify_note": "Oracle log [['rm','x']]. Parser head 'rm_x', so rm is missed entirely; rated high rather than medium for that reason. env -S 'rm x;y' ran rm 'x;y' while the parser reports args ['x'] and target ('x','delete'). env -S 'rm #x' t ran rm t while the parser reports rm with args []. Those two are wrong-target (medium)."
+ },
+ {
+  "input": "eval -- rm x",
+  "view": "resolve",
+  "parser_says": "eval payload is '-- rm x', so the walk site has head '--' and args ['rm','x']. Same for \"command eval -- 'rm x'\".",
+  "bash_does": "eval skips '--' and runs rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "eval '--' not stripped (shell_parse.py:2037-2044)",
+  "evidence": "cases1 eval-dd, eval-cmd UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser: eval payload [['--','rm','x']], walk site head '--'. command eval -- 'rm x' gives the same."
+ },
+ {
+  "input": "echo x | xargs -i rm {}",
+  "view": "resolve",
+  "parser_says": "Head '{}' (-i took 'rm' as its value). 'xargs -i git push --force {}' gives head 'push' and git_invocations=[]. 'xargs -l rm' and 'xargs -e rm' give head None, unresolved None. 'xargs --replace rm {}' gives head '{}', 'xargs --max-lines rm' gives head None, and 'echo f | xargs -i cp {} out' gives write_targets=[].",
+  "bash_does": "GNU xargs -i/-l/-e and --replace/--max-lines take only an attached optional argument, so rm/git/cp run (oracle logs [['rm','x']], [['git','push','--force','origin']], [['cp','f','out']])",
+  "impact": "under-read-high",
+  "class": "optional-argument options typed as required-value in PEEL['xargs'] (shell_parse.py:1902-1906)",
+  "evidence": "cases1 xargs-i, xargs-l, xargs-e, xargs-replace, xargs-maxlines; cases5 git-xargs-i, wt-xargs-i-cp UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser head '{}'. -i git push --force {}: oracle ran git push --force x, parser head 'push', git_invocations=[]. -l rm, -e rm and --max-lines rm give head None and unresolved None. --replace gives head '{}'. -i cp {} out: oracle ran cp f out, parser write_targets=[]."
+ },
+ {
+  "input": "echo 'rm x' | xargs -I{} sh -c {}",
+  "view": "resolve",
+  "parser_says": "Payload parsed statically from '{}': site ['{}'] in top/shell_c, unresolved=None",
+  "bash_does": "xargs puts each stdin line in place of {}, so sh -c 'rm x' runs (oracle log [['rm','x']])",
+  "impact": "under-read-high",
+  "class": "xargs replace-string inside a shell payload treated as static code",
+  "evidence": "cases5 xargs-I-sh-payload UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser payload [['{}']] in top/shell_c, read as static code, with unresolved None."
+ },
+ {
+  "input": "find . -name x -exec rm {} \\;",
+  "view": "resolve",
+  "parser_says": "Head find. No site for rm and write_targets=[]. Same for '-execdir rm {} +', '-ok rm {} \\;', \"-exec sh -c 'rm \\\"$1\\\"' _ {} \\;\" and '-exec git push --force \\;' (git_invocations=[]).",
+  "bash_does": "find runs rm ./x / git push --force (oracle)",
+  "impact": "under-read-high",
+  "class": "find -exec/-execdir/-ok/-okdir not peeled (find excluded at shell_parse.py:2096)",
+  "evidence": "cases1 find-exec, find-execdir, find-ok, find-sh; cases5 git-find-exec UNDER",
+  "verify_note": "Oracle: -exec and -execdir ran rm ./x, -exec sh -c 'rm \"$1\"' ran rm ./x, and -exec git push --force ran it (git_invocations=[]). -ok/-okdir run only on a yes answer: with stdin /dev/null nothing ran, while yes | find .. -ok and -okdir <<< y ran rm ./x. Parser: head find only, write_targets=[]."
+ },
+ {
+  "input": "watch -n 1 rm x",
+  "view": "resolve",
+  "parser_says": "Head watch, unresolved None. Same for 'watch -x -n 1 rm x' and 'watch -x git push' (git_invocations=[]).",
+  "bash_does": "watch runs rm x repeatedly (oracle logged 8 runs before the timeout)",
+  "impact": "under-read-high",
+  "class": "watch not peeled (excluded at shell_parse.py:2097)",
+  "evidence": "cases3 watch, watch-x; cases5 git-watch UNDER",
+  "verify_note": "Oracle logged rm x 4 times before the 3.5 s timeout; watch -x -n 1 rm x likewise. watch -x git push logged git push twice. Parser: head watch, unresolved None, git_invocations=[]."
+ },
+ {
+  "input": "runuser -u root -- rm x",
+  "view": "resolve",
+  "parser_says": "Head runuser, unresolved None (also 'runuser -u root rm x')",
+  "bash_does": "runuser -u runs the command directly: rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "runuser without -c excluded from peeling even though PEEL has its spec (shell_parse.py:2099)",
+  "evidence": "cases3 runuser-u, runuser-u-nodd UNDER",
+  "verify_note": "Oracle log [['rm','x']] for both the -- form and runuser -u root rm x. Parser: head runuser, unresolved None."
+ },
+ {
+  "input": "su -- root -c 'rm x'",
+  "view": "resolve",
+  "parser_says": "Head su, no payload, unresolved None. Same for \"su root -- -c 'rm x'\", \"su --session-command='rm x' root\" and 'su -s /usr/bin/rm root -- x'.",
+  "bash_does": "All four run rm x (oracle): arguments after the user go to the shell, --session-command runs a command, and -s sets the shell to rm.",
+  "impact": "under-read-high",
+  "class": "su payload forms: -c after '--', --session-command, -s shell",
+  "evidence": "cases3 su-dd-user-c, su-user-dd-c, su-session-cmd; cases4 su-shell UNDER",
+  "verify_note": "Oracle: x deleted (su reset PATH, so the real rm ran) for su -- root -c, su root -- -c, --session-command='rm x' root, and -s /usr/bin/rm root -- x. Parser: head su, payload None, unresolved None for all four."
+ },
+ {
+  "input": "sg root -c 'rm x'",
+  "view": "resolve",
+  "parser_says": "Head sg, no payload (also \"sg root 'rm x'\")",
+  "bash_does": "sg runs the command through /bin/sh -c: rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "sg not peeled",
+  "evidence": "cases3 sg-c, sg-plain UNDER",
+  "verify_note": "Oracle log [['rm','x']] for both sg root -c 'rm x' and sg root 'rm x'. Parser: head sg, no payload."
+ },
+ {
+  "input": "script -qc 'rm x' /dev/null",
+  "view": "resolve",
+  "parser_says": "Head script, no payload",
+  "bash_does": "script -c runs rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "script -c not peeled",
+  "evidence": "cases3 script-c UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser: head script, no payload, unresolved None."
+ },
+ {
+  "input": "setpriv --reuid=0 rm x",
+  "view": "resolve",
+  "parser_says": "Head setpriv, unresolved None",
+  "bash_does": "Runs rm x (oracle)",
+  "impact": "under-read-high",
+  "class": "wrapper missing from WRAPPERS/PEEL (setpriv)",
+  "evidence": "cases3 setpriv UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser: head setpriv, unresolved None."
+ },
+ {
+  "input": "chroot --skip-chdir / rm x",
+  "view": "resolve",
+  "parser_says": "Head 'x', unresolved None. 'chroot --skip-chdir / cp f out' gives head 'f' and write_targets=[].",
+  "bash_does": "--skip-chdir takes no value. chroot runs rm x / cp f out (oracle).",
+  "impact": "under-read-high",
+  "class": "boolean option typed as value in WRAPPERS['chroot'] (shell_parse.py:1792)",
+  "evidence": "cases3 chroot-skip; cases5 wt-chroot-skip UNDER",
+  "verify_note": "Oracle log [['rm','x']] and, for the cp form, [['cp','f','out']]. Parser head 'x', and for cp head 'f' with write_targets=[]."
+ },
+ {
+  "input": "nsenter -t $$ -m rm x",
+  "view": "resolve",
+  "parser_says": "Head 'x' (-m took 'rm' as its value). 'nsenter --target=$$ --mount rm x' gives the same.",
+  "bash_does": "The nsenter namespace options -m/-u/-i/-n/-p/-U/-C (and the long forms) take only an attached optional file. Runs rm x (oracle).",
+  "impact": "under-read-high",
+  "class": "optional-argument options typed as required-value in WRAPPERS['nsenter'] (shell_parse.py:1807-1810)",
+  "evidence": "cases4 nsenter-self, nsenter-self-long UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser head 'x' (-m took rm). Correction: the literal 'nsenter --target=$$ --mount rm x' gives head None with unresolved=dynamic_head, so it is flagged. With a static pid, --target=1234 --mount rm x and -t 1234 -m rm x both give head 'x' with unresolved None."
+ },
+ {
+  "input": "taskset 1 rm x",
+  "view": "resolve",
+  "parser_says": "Head '1' with args ['rm','x'], unresolved None. 'taskset -c 0 rm x' gives head taskset, unresolved taskset:unknown_option:-c.",
+  "bash_does": "The mask is a fixed operand. Runs rm x (oracle).",
+  "impact": "under-read-high",
+  "class": "taskset fixed-operand count 0 instead of 1, and -c/--cpu-list missing (shell_parse.py:1796)",
+  "evidence": "cases3 taskset-mask, taskset-c UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser head '1', args [rm,x], unresolved None. taskset -c 0 rm x (oracle ran rm x) gives head taskset with unresolved taskset:unknown_option:-c, so that form is flagged."
+ },
+ {
+  "input": "time -- rm x",
+  "view": "walk",
+  "parser_says": "Site head '--' with args ['rm','x']. Same for 'time -p -- rm x'. 'time -- git push' gives git_invocations=[].",
+  "bash_does": "bash 5.2's time keyword accepts '--'. Runs rm x / git push (oracle).",
+  "impact": "under-read-high",
+  "class": "time keyword '--' terminator (grammar handles only -p, shell_parse.py:1284-1288)",
+  "evidence": "cases3 time-kw-dd; cases4 time-p-dd; cases5 git-time-dd UNDER",
+  "verify_note": "bash 5.2.21 oracle log [['rm','x']]; time -p -- rm x and time -- git push also ran. Parser site head '--', git_invocations=[]."
+ },
+ {
+  "input": "git -C '' push origin main",
+  "view": "parse/git_invocations",
+  "parser_says": "The lexer drops the empty quoted word, so words are [git,-C,push,origin,main]. GitInvocation: subcommand='origin', args=('main',), C_dirs=['push'], unresolved=None. The same happens for \"\": git -C \"\" push --force origin main gives subcommand '--force'. git --namespace '' push origin main gives subcommand 'origin'. git -C \"\" -c alias.x='!rm -rf f' x gives subcommand 'alias.x=!rm -rf f' with no config_pairs, so the alias is lost.",
+  "bash_does": "git gets argv [-C, '', push, origin, main]. -C '' is a no-op and git runs push (trace2 cmd_name=push, '* [new branch] main -> main'). The --namespace '' form also pushes. The -C \"\" alias form runs rm -rf f (stub logged [rm,-rf,f]).",
+  "impact": "under-read-high",
+  "class": "empty-quoted-word-dropped",
+  "evidence": "oracle #101, #206, #209, #607 (bwrap sandbox, trace2 + stub log). sp.parse(\"git -C '' push origin main\").items[0][0].stages[0].words -> ['git','-C','push','origin','main']. A standalone '' or \"\" word is dropped; $'' is kept (#606 correct).",
+  "verify_note": "verify-git a1-a4. The parser drops the standalone '' word: words0 is [git,-C,push,origin,main], so subcommand is 'origin' and C_dirs is ['push']. git -C \"\" push --force gives subcommand '--force', --namespace '' gives 'origin', and the alias form gives subcommand 'alias.x=!rm -rf f' with no config_pairs. In bash (bwrap, real git 2.43) all three pushed (remote refs/heads/main created, trace2 cmd_name push), and the alias form ran rm -rf f (stub log). Control: git -C $'' push keeps the '' word, and the parser gets subcommand push right."
+ },
+ {
+  "input": "exec -a '' git push origin main",
+  "view": "resolve/git_invocations",
+  "parser_says": "Resolved head='push', args=[origin, main], wrappers=[exec]; git_invocations=[]. The '' is dropped, so -a takes 'git' as its value. Same shape: xargs -E '' git push origin main gives head='push' with no git; sudo -p '' git push origin main gives git_invocations=[]; exec -a \"\" rm -rf f gives head=exec, unresolved exec:unknown_option:-r, and rm is lost.",
+  "bash_does": "exec runs git push origin main with argv0 '' (trace2 start argv ['', push, origin, main], push happened). xargs -E '' runs git push origin main. sudo -p '' (empty prompt) runs git push (stub logged [sudo,-p,'',git,push,origin,main]). exec -a \"\" rm -rf f runs rm (stub logged).",
+  "impact": "under-read-high",
+  "class": "empty-quoted-word-dropped (wrapper option value)",
+  "evidence": "oracle #201, #202, #203, #205, #711.",
+  "verify_note": "b1-b4, b3r. The parser gives resolve head 'push' (wrappers exec, xargs or sudo) and git_invocations []. For exec -a \"\" rm -rf f it gives head exec, unresolved exec:unknown_option:-r, and no rm. In bash, exec -a '' and xargs -E '' pushed. The sudo stub logged [sudo,-p,'',git,push,origin,main], and real /usr/bin/sudo -p '' git push also pushed. exec -a \"\" rm -rf f ran rm (stub)."
+ },
+ {
+  "input": "git -c alias.a=b -c alias.b=push a origin main",
+  "view": "git_invocations",
+  "parser_says": "[a (config alias.a=b, alias.b=push), b (args origin main, config_pairs [])]. The inner 'git b' is parsed without the outer -c pairs, so b is not expanded and no push is reported. Same for git -c alias.x='!git y' -c alias.y=push x origin main, which gives [x, y], and for git -c alias.a=b -c alias.b='!git push origin main' a, which gives [a, b].",
+  "bash_does": "git expands the alias chain a->b->push and pushes. A shell-alias child git inherits the -c pairs through GIT_CONFIG_PARAMETERS, so 'git y' also resolves to push. trace2 cmd_name=push in all three.",
+  "impact": "under-read-high",
+  "class": "alias-chain-config-not-propagated",
+  "evidence": "oracle #127, #128, #611.",
+  "verify_note": "c1-c3. The parser gives [a (alias body 'git b origin main'), b (config_pairs [])]. The inner b, and y in the '!git y' form, is parsed without the outer -c pairs, so no push is reported. In all three, trace2 showed _run_git_alias_ or _run_shell_alias_ and then push, and the remote branch was created."
+ },
+ {
+  "input": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=status git -c alias.x=push x origin main",
+  "view": "git_invocations",
+  "parser_says": "config_pairs [(alias.x,push),(alias.x,status)]. The env pairs are appended after the -c pairs and the last match wins, so the alias body is 'git status origin main'. push is not reported. GIT_CONFIG_PARAMETERS=\"'alias.x'='status'\" git -c alias.x=push x origin main gives the same result.",
+  "bash_does": "git reads GIT_CONFIG_COUNT/PARAMETERS first and command-line -c last, so -c wins and git runs push origin main (pushed).",
+  "impact": "under-read-high",
+  "class": "config-precedence-order",
+  "evidence": "oracle #500, #501. Reverse case #805 (env value '!git push', -c status) gives a push over-read.",
+  "verify_note": "d1, d2. The parser gives config_pairs [(alias.x,push),(alias.x,status)], alias body 'git status origin main', and a nested invocation with subcommand status. The GIT_CONFIG_PARAMETERS form gives the same. In bash, git pushed in both cases (-c wins over the env config)."
+ },
+ {
+  "input": "git -c alias.x='!rm -rf f' x",
+  "view": "walk/write_targets",
+  "parser_says": "walk yields only the git site. write_targets=[]. git_invocations=[x] (alias body has no git). The walk docstring lists 'alias' as an into-kind, but walk never descends git alias bodies.",
+  "bash_does": "git runs sh -c 'rm -rf f' (stub logged [rm,-rf,f]). git -c alias.x='!rm f #' x also runs rm f.",
+  "impact": "under-read-high",
+  "class": "alias-body-not-walked",
+  "evidence": "oracle #200, #619. walk heads: [['git',['-c','alias.x=!rm -rf f','x'],None,'top']].",
+  "verify_note": "e1, e2. walk yields only the git site and write_targets is []. GitInvocation.alias_body is parsed ('rm -rf f'), but walk never descends it, although _DEFAULT_INTO lists 'alias'. In bash, git ran the shell alias: the stub logged 'rm -rf f', and for '!rm f #' it logged 'rm f'."
+ },
+ {
+  "input": "find . -maxdepth 0 -exec git push origin main \\;",
+  "view": "resolve/walk/git_invocations",
+  "parser_says": "Resolved head='find', args include '-exec git push origin main ;', unresolved=None; git_invocations=[]. The same holds for -execdir, -ok, '-exec git push origin main {} +' and -exec sh -c 'git push origin main' \\;. resolve never peels find (it is excluded at shell_parse.py:2096) and nothing reads -exec.",
+  "bash_does": "find runs git push origin main (pushed). The -ok form runs it after 'y' on stdin. The {} + form runs git push origin main . .",
+  "impact": "under-read-high",
+  "class": "wrapper-not-peeled (find -exec)",
+  "evidence": "oracle #300, #301, #302, #303, #717.",
+  "verify_note": "f1-f5. The parser gives head find, unresolved None, and git_invocations []. In bash, -exec, -execdir, -ok (stdin y) and -exec sh -c '...' all pushed. The '{} +' form invoked git push origin main . (trace2 push; it failed only on the refspec '.' here)."
+ },
+ {
+  "input": "runuser -u root -- git push origin main",
+  "view": "resolve/git_invocations",
+  "parser_says": "head='runuser', unresolved=None, git_invocations=[]. runuser is only read when -c is present. sg root -c 'git push origin main' gives head='sg' with no payload. script -qc 'git push origin main' /dev/null and script -q -c ... give head='script' with no payload.",
+  "bash_does": "All three run git push origin main (trace2 push, branch created).",
+  "impact": "under-read-high",
+  "class": "wrapper-not-peeled (runuser/sg/script)",
+  "evidence": "oracle #304, #306, #307, #308. runuser root -c '...' (#305) is handled correctly.",
+  "verify_note": "g1-g5. runuser -u root -- git, sg root -c '...', script -qc '...' /dev/null and script -q -c ... all give head runuser, sg or script, no payload and unresolved None. All four pushed in bash (as root in bwrap). The control runuser root -c '...' is handled correctly (shell_c payload, git push reported)."
+ },
+ {
+  "input": "taskset 1 git push origin main",
+  "view": "resolve/git_invocations",
+  "parser_says": "head='1', args=[git,push,origin,main], wrappers=[taskset], unresolved=None. The WRAPPERS entry for taskset has 0 fixed operands, but taskset needs a mask before the command. Similar: perf stat -o /dev/null git push origin main gives head='-o'.",
+  "bash_does": "taskset runs git push origin main (pushed).",
+  "impact": "under-read-high",
+  "class": "wrapper-operand-count",
+  "evidence": "oracle #310. The perf case comes from the resolve output only (perf is not installed).",
+  "verify_note": "h1. The parser gives head '1', args [git,push,origin,main], unresolved None, and no git invocation. In bash, real taskset pushed. For perf stat -o /dev/null git push, the parser gives head '-o' (perf is not installed here, so bash only reached the stub; that part is confirmed on the parser side only)."
+ },
+ {
+  "input": "env - git push origin main",
+  "view": "resolve/git_invocations",
+  "parser_says": "head='-', args=[git,push,origin,main], unresolved=None, git_invocations=[].",
+  "bash_does": "'env -' is the same as env -i, and git push origin main runs (stderr shows the push).",
+  "impact": "under-read-high",
+  "class": "wrapper-option-misread (env -)",
+  "evidence": "oracle #323. trace2 was cleared by -i, so the evidence is git's stderr '* [new branch] main -> main'.",
+  "verify_note": "i1. The parser gives head '-', unresolved None, and git_invocations []. In bash, env - cleared the environment and the push still ran: the remote branch was created and stderr showed '* [new branch]'."
+ },
+ {
+  "input": "xargs -i git push origin main",
+  "view": "resolve/git_invocations",
+  "parser_says": "head='push', args=[origin,main], git_invocations=[]. -i/-l/-e/--replace are specified as taking a separate value, so they swallow 'git'. xargs -l, xargs -e and xargs --replace give the same result.",
+  "bash_does": "GNU xargs -i[R], -l[N], -e[S] and --replace[=R] take only an attached or '=' value, so xargs runs git push origin main (with stdin 'x', -l and -e append x).",
+  "impact": "under-read-high",
+  "class": "xargs-optional-arg-options",
+  "evidence": "oracle #400, #401, #402, #403.",
+  "verify_note": "j1x-j4x, j2, j3. For -i, -l, -e and --replace, the parser makes the option eat 'git': head push, no git invocation. In bash (stdin x), -i and --replace pushed. -l and -e invoked 'git push origin main x' (trace2 push), and with empty stdin they pushed."
+ },
+ {
+  "input": "echo --force | xargs git push origin main",
+  "view": "git_invocations",
+  "parser_says": "subcommand='push', args=('origin','main'), unresolved=None. Nothing marks the arguments xargs appends from stdin. echo push origin main | xargs git gives subcommand=None, args=(), unresolved=None. xargs -I % git % origin main <<< push gives subcommand='%' (the same with --replace=%).",
+  "bash_does": "git push origin main --force runs. The other two run git push origin main.",
+  "impact": "under-read-high",
+  "class": "xargs-stdin-args-not-flagged",
+  "evidence": "oracle #616, #204, #608, #804, #404.",
+  "verify_note": "k1-k4. The parser gives push (origin, main) with unresolved None. echo push origin main | xargs git gives subcommand None with unresolved None. xargs -I % (and --replace=%) gives subcommand '%'. In bash, git push origin main --force ran (gitlog), and the other three pushed."
+ },
+ {
+  "input": "eval -- 'git push origin main'",
+  "view": "resolve/walk/git_invocations",
+  "parser_says": "The eval payload is parsed from '-- git push origin main', so the nested site has head '--' and args [git,push,origin,main]. git_invocations=[].",
+  "bash_does": "eval skips '--' and runs git push origin main (pushed).",
+  "impact": "under-read-high",
+  "class": "eval-double-dash",
+  "evidence": "oracle #600. walk: [('eval',['--','git push origin main']),('--',['git','push','origin','main'],'top/eval')].",
+  "verify_note": "l1. The parser gives the nested site head '--', args [git,push,origin,main], and no git invocation. In bash, eval skips '--' and pushed."
+ },
+ {
+  "input": "env -S'git push origin main \\c --dry-run'",
+  "view": "resolve/git_invocations",
+  "parser_says": "The -S string is re-parsed with bash grammar instead of env's escape rules: subcommand='push', args=(origin, main, c, --dry-run). So a real push looks like a dry run. env -S'git\\_push\\_origin\\_main' gives head 'git_push_origin_main' and no git invocation.",
+  "bash_does": "env -S stops at \\c and treats \\_ as a space, so both inputs run git push origin main for real (pushed, no --dry-run).",
+  "impact": "under-read-high",
+  "class": "env-S-escape-semantics",
+  "evidence": "oracle #701, #700.",
+  "verify_note": "m1, m2. The parser gives push args (origin, main, c, --dry-run). For \\_ it gives head 'git_push_origin_main'. In bash (coreutils 9.4 env), both pushed for real (no dry run)."
+ },
+ {
+  "input": "a=( $(git push origin main) )",
+  "view": "walk/git_invocations/write_targets",
+  "parser_says": "No cmdsub site: an arraylit Part has no body. walk yields only the empty assignment site and git_invocations=[]. The same holds for declare -a a=( $(git push origin main) ), a+=( \"$(git push origin main)\" ) and f() { local -a x=( $(git push origin main) ); }; f. a=( x $(rm -rf f) ) yields no rm site.",
+  "bash_does": "The substitution runs: git push happens, and rm -rf f runs (stub logged).",
+  "impact": "under-read-high",
+  "class": "array-literal-substitution-not-walked",
+  "evidence": "oracle #440, #442, #801, #802, #803. a[$(git push)]=1 (#441) is handled. ${a[$(git push origin main)]} (#450) is also missed, a variant of known item 1.",
+  "verify_note": "n1-n5. The parser has no cmdsub site in array literals: declare -a, a+=( \"$(..)\" ), local -a inside a function, and a=( x $(rm -rf f) ) are all missed. In bash, all of them pushed or ran rm -rf f (stub). The control a[$(git push)]=1 is handled. ': ${a[$(git push origin main)]}' (n6) is also missed and pushed, but it is a variant of known item 1."
+ },
+ {
+  "input": "bash -s x <<< 'git push origin main'",
+  "view": "resolve/walk",
+  "parser_says": "_resolve_shell stops at the operand 'x' and returns no payload: head bash, args [-s,x], fed={herestring}, unresolved=None. bash - <<< '...' ('-' is read as an operand) and bash /dev/stdin <<< '...' behave the same. source /dev/stdin <<< '...' and . /dev/stdin <<EOF ... EOF are never treated as shells fed code.",
+  "bash_does": "All of them run git push origin main from stdin (pushed).",
+  "impact": "under-read-high",
+  "class": "heredoc_shell variants (stdin script with operands / source)",
+  "evidence": "oracle #409, #410, #411, #601, #602. This is a new variant, distinct from the known '3<<EOF <&3' item.",
+  "verify_note": "o1-o5. bash -s x, bash -, and bash /dev/stdin fed by a here-string give a site with fed={herestring}, no payload, and unresolved None. source /dev/stdin <<< and . /dev/stdin <<EOF are not treated as fed shells either. All five pushed in bash."
+ },
+ {
+  "input": "/usr/lib/git-core/git-push origin main",
+  "view": "git_invocations",
+  "parser_says": "head name 'git-push', which is not 'git', so git_invocations=[]. The same for PATH=/usr/lib/git-core:$PATH git-push origin main. For \"$(git --exec-path)\"/git-push origin main, only the inner 'git --exec-path' is reported (subcommand None).",
+  "bash_does": "The dashed builtin runs push (trace2 cmd_name=push, branch created) in all three.",
+  "impact": "under-read-high",
+  "class": "dashed-git-builtin",
+  "evidence": "oracle #422, #423, #424.",
+  "verify_note": "p1-p3. The parser gives head 'git-push' and git_invocations []. The PATH=/usr/lib/git-core:$PATH git-push form is the same. For \"$(git --exec-path)\"/git-push, it reports only the inner git --exec-path, and the outer site has unresolved dynamic_head. All three pushed in bash."
+ },
+ {
+  "input": "git -C sub rm g",
+  "view": "write_targets",
+  "parser_says": "WriteTarget('g', delete, git-rm). The -C base (C_dirs=['sub']) and --work-tree are ignored. git -C sub checkout -- g gives WriteTarget('g', truncate). git --work-tree=sub --git-dir=.git checkout -- g also gives 'g'.",
+  "bash_does": "git deletes sub/g (the directory was removed after the run). A path such as git -C ~/.claude rm settings.json would be reported as 'settings.json'.",
+  "impact": "under-read-high",
+  "class": "git-write-target-base-dir",
+  "evidence": "oracle #512, #513, #514. A manual bwrap run confirmed sub/ was gone after git -C sub rm -q g.",
+  "verify_note": "q1, q1h, q2x, q3. write_targets gives ('g', delete, git-rm), and git -C ../work/sub rm -q g also gives 'g'. In bash, sub/g was deleted and the top-level g was untouched. git -C sub checkout -- g restored sub/g, but the parser says 'g'. git --work-tree=sub --git-dir=.git checkout -- g overwrote sub/g, but the parser says 'g'."
+ },
+ {
+  "input": "git rebase --exec='git push origin main' HEAD~1",
+  "view": "git_invocations/walk",
+  "parser_says": "Only [rebase, ('--exec=git push origin main', 'HEAD~1')] is reported. The exec payload is neither parsed nor walked. git rebase -x 'rm -f f' HEAD~1 gives no rm site. git push --receive-pack='rm -f f' origin main and git ls-remote --upload-pack='rm -f f' . report only args.",
+  "bash_does": "rebase runs 'git push origin main' through sh (pushed, '* [new branch]'). The -x form runs rm -f f, and --receive-pack/--upload-pack run rm -f f (stub logged).",
+  "impact": "under-read-high",
+  "class": "git-option-runs-shell (exec payloads)",
+  "evidence": "oracle #510, #509, #704, #706. git fetch --upload-pack='git push origin main' (#707) also runs the command string.",
+  "verify_note": "r1-r6. The parser reports only the args; payloads are not parsed or walked. In bash, rebase --exec ran git push (pushed). -x 'rm -f f' ran rm (stub). push --receive-pack='rm -f f' ran 'rm -f f ../remote.git', and ls-remote --upload-pack ran 'rm -f f .'. fetch --upload-pack='git push origin main #' . pushed."
+ },
+ {
+  "input": "!(rm q)",
+  "view": "walk",
+  "parser_says": "_lex_word (shell_parse.py:528-550) reads `!(` as an extglob pattern, even though extglob is off in `bash -c`. The result is one SimpleCommand whose head is a glob word (argv [None], dynamic, unresolved dynamic_head). No rm site, no git invocation, no error.",
+  "bash_does": "With extglob off, `!` is the pipeline-negation reserved word and `(rm q)` is a subshell, so rm q runs.",
+  "impact": "under-read-medium",
+  "class": "! ( subshell read as extglob",
+  "evidence": "Oracle, each with no parse error and no rm site: `!(rm q)` -> rm q; `true && !(rm q)` -> rm q; `if !(rm q); then :; fi`, `{ !(rm q); }`, `while !(rm q); do break; done`, `!(rm q)|cat`, `echo $(!(rm q))`, `time !(rm q)`, `! !(rm q)` and `echo a; !(rm q) &` -> rm q; `bash -c '!(rm q)'` -> rm q, missed in the shell_c payload too. `!(git push)` -> git push; git_invocations [].",
+  "verify_note": "Reproduced: the oracle ran rm q. Parser: error None, one site with argv [None], dynamic True, resolve.unresolved 'dynamic_head', wt [], git []. Every listed variant reproduced the same way: `true && !(rm q)`, `if !(rm q); then :; fi`, `{ !(rm q); }`, `while !(rm q); do break; done`, `!(rm q)|cat`, `echo $(!(rm q))`, `time !(rm q)`, `! !(rm q)`, `echo a; !(rm q) &`, the `bash -c '!(rm q)'` payload, and `!(git push)` (git push runs, git_invocations []). Control `! (rm q)` with a space is read correctly. I rated this medium, not high: in every variant the misread word sits in command position, so the parser always flags the site dynamic with unresolved=dynamic_head, which is the same mitigation as `{rm,q}` (item 16, rated medium). A hook that does not fail closed on dynamic or unresolved heads misses rm, git push and every write inside the subshell."
+ },
+ {
+  "input": "X='$(rm q)'; : ${X@P}",
+  "view": "walk",
+  "parser_says": "The ${X@P} and ${!X} parts are flagged Part.reexpand, but nothing projects the statically assigned value. walk has no site, resolve sets no unresolved marker, and there is no parse error.",
+  "bash_does": "Prompt expansion (@P) runs the command substitution held in X. ${!X} with X='a[$(rm q)]' evaluates the subscript. Both run rm q.",
+  "impact": "under-read-medium",
+  "class": "re-expansion of a statically assigned variable",
+  "evidence": "Oracle: `X='$(rm q)'; : ${X@P}` -> rm q; `X='$(rm q)'; : \"${X@P}\"` -> rm q; `X='a[$(rm q)]'; : ${!X}` -> rm q. The parser sites are only the assignment and `:` (argv [':', None]), with no unresolved marker.",
+  "verify_note": "Oracle ran rm q. Parser sites are the assignment and ':' (argv [':', None]), with unresolved None and no error. `: \"${X@P}\"` and `X='a[$(rm q)]'; : ${!X}` also run rm q. `X='$(git push)'; : ${X@P}` runs git push while git_invocations is []. I kept medium because Part.reexpand is True on the param part, so a caller that inspects the parts can detect it. Nothing in walk, resolve or facts surfaces that flag."
+ },
+ {
+  "input": "{rm,q}",
+  "view": "resolve",
+  "parser_says": "The head is a brace Part, so the site is dynamic and resolve.name is None (unresolved dynamic_head). write_targets has no rm delete.",
+  "bash_does": "Brace expansion is static and gives `rm q`; `r{,}m` gives `rm rm`.",
+  "impact": "under-read-medium",
+  "class": "static brace expansion in command position not resolved",
+  "evidence": "Oracle: `{rm,q}` -> rm q; `r{,}m` -> rm rm. The parser site is argv [None], dynamic True, wt []. The dynamic flag is set, so a hook that refuses dynamic heads blocks it, but rm-specific checks and write_targets miss it.",
+  "verify_note": "Oracle ran rm q; for `r{,}m` it ran rm rm. Parser: argv [None], dynamic True, unresolved dynamic_head, wt [], git []. `{git,push}` runs git push while git_invocations is []. `{rm,-rf,q}` runs rm -rf q with the same dynamic site. Medium, because the dynamic and unresolved flags are set."
+ },
+ {
+  "input": "echo $(echo ${X:-(}) ; rm q #)",
+  "view": "walk",
+  "parser_says": "_match_pair counts a `(` inside ${ }, a comment, a heredoc body or $'\\'' and closes the $( ) late, swallowing `; rm q`. The top-level Script.error is None; only errors() holds a nested unexpected_token from the over-long body. No rm site.",
+  "bash_does": "The $( ) closes at the first `)`, so rm q runs at top level.",
+  "impact": "under-read-medium",
+  "class": "$( ) body extent wrong; only nested errors() flags it",
+  "evidence": "Oracle, each running rm q with error None and nested [unexpected_token]: `echo $(echo ${X:-(}) ; rm q #)`; `echo $(: # (\\n) ; rm q # )`; `echo $(cat <<EOF\\n(\\nEOF\\n) ; rm q # )`; `echo $(echo $'\\'') ; rm q ; echo \\' #)`. A related case is 25 nested $( ) around rm q: error None, nested depth_limit, rm missed (the depth limit is by design). This is safe only if every caller checks errors() and not just error.",
+  "verify_note": "Oracle ran rm q at top level. Parser: Script.error None, errors() [unexpected_token@19], no rm site. These also reproduced with error None, one nested unexpected_token and no rm site: `echo $(: # (\\n) ; rm q # )`, `echo $(cat <<EOF\\n(\\nEOF\\n) ; rm q # )` and `echo $(echo $'\\'') ; rm q ; echo \\' #)`. The git form runs git push while git_invocations is []. The 25-deep nested $( ) case gives error None and errors() [depth_limit]. Medium, because only errors(), not error, flags it."
+ },
+ {
+  "input": "[[ \"$(case x in x) rm b;; esac)\" ]]",
+  "view": "parse (Script.errors)",
+  "parser_says": "Script.errors() never sees nested scripts reached from compound headers or compound redirect targets. '[[ -n $(fi) ]]', 'for x in $(fi); do :; done', 'case $(fi) in *) ;; esac', '{ :; } > $(fi)', '(($(fi)))' and 'if true; then :; fi <<<$(fi)' all give error=None, errors=[], while 'echo $(fi)' gives errors=[unexpected_token]. Combined with the case-in-cmdsub defect, '[[ \"$(case x in x) rm b;; esac)\" ]]', 'for x in \"$(case...)\"; do :; done', 'case \"$(case...)\" in *) ;; esac', '{ :; } > \"$(case...)\"' and '((x=1)) > \"$(case...)\"' fail silently with no error anywhere and no rm site.",
+  "bash_does": "For '$(fi)', bash -n rejects it. For the case forms, bash runs rm b.",
+  "impact": "under-read-medium",
+  "class": "_nested_scripts (shell_parse.py:1639-1653) iterates only walk() SimpleCommand sites, so Compound.header words and Compound.redirects targets are skipped",
+  "evidence": "python: parse('[[ -n $(fi) ]]').errors() == [] vs parse('echo $(fi)').errors() == [ParseError('unexpected_token', 7)]. harness: '[[ \"$(case x in x) rm b;; esac)\" ]]' invs=[['rm','b']], parser error=None errors=[] sites=[].",
+  "verify_note": "Parser: errors()=[] for '[[ -n $(fi) ]]', 'for x in $(fi); do :; done', 'case $(fi) in *) ;; esac', '{ :; } > $(fi)' and 'if true; then :; fi <<<$(fi)', while 'echo $(fi)' gives [unexpected_token@7]. bash -n rejects all of them. '[[ \"$(case x in x) rm b;; esac)\" ]]' and '((x=1)) > \"$(case...)\"': bash runs rm b; parser error=None, errors=[], sites=[]. _nested_scripts (shell_parse.py:1639-1653) iterates only SimpleCommand sites. '(($(fi)))' overlaps known (2), cmdsub inside arithmetic. On its own this is a missing error signal; it matters because it removes the only fail-closed signal for defect 7's compound-header forms."
+ },
+ {
+  "input": "cat <<EOF\n$(rm x)\nEOF",
+  "view": "executable_view",
+  "parser_says": "executable_view blanks the whole unquoted heredoc body of a non-shell command, including the active $(rm x): output 'cat <<EOF\\n       \\nEOF'. walk does report rm x. The same blanking hides 'rm b' in 'cat <<EOF\\n$(case x in x) rm b;; esac)\\nEOF'.",
+  "bash_does": "Runs rm x while it expands the heredoc.",
+  "impact": "under-read-medium",
+  "class": "executable_view heredoc blanking ignores expansions (out of class, found incidentally). shell_parse.py:2238-2241 blanks hd.body_span with no check of hd.quoted or hd.expansions.",
+  "evidence": "python: executable_view('cat <<EOF\\n$(rm x)\\nEOF') == 'cat <<EOF\\n       \\nEOF'. The compound form '{ cat; } <<EOF\\n$(rm x)\\nEOF' keeps it (not blanked).",
+  "verify_note": "executable_view returns 'cat <<EOF\\n       \\nEOF': the active $(rm x) is blanked even though bash runs rm x. walk and write_targets do report rm x, so only consumers of executable_view are affected. The case form 'cat <<EOF\\n$(case x in x) rm b;; esac)\\nEOF' is blanked the same way. The compound form '{ cat; } <<EOF...' is not blanked (its heredoc is never visited). shell_parse.py:2238-2241 blanks hd.body_span without checking hd.quoted or expansions."
+ },
+ {
+  "input": "bash <(cat <<'EOF'\nrm f1\nEOF\n)",
+  "view": "resolve",
+  "parser_says": "bash with a dynamic argument (procsub), payload None, unresolved None. The procsub body shows only `cat`.",
+  "bash_does": "Runs /dev/fd/63 as a script, so rm f1 runs.",
+  "impact": "under-read-medium",
+  "class": "a shell script read from a procsub, /dev/fd/N or a fd-variable heredoc is not parsed (includes variants of known #4)",
+  "evidence": "oracle rm f1 for each: \"source <(echo 'rm f1')\", \". <(cat <<'EOF'\\nrm f1\\nEOF\\n)\", \"bash < <(echo 'rm f1')\" (fed=file, no payload), \"bash /dev/fd/3 3<<'EOF'\\nrm f1\\nEOF\", \"bash {fd}<<'EOF' /dev/fd/10\\nrm f1\\nEOF\".",
+  "verify_note": "Reproduced. The oracle logged rm f1. The parser gives bash with a dynamic argument (None), payload None and unresolved None. The procsub body shows only cat. The variants all reproduced: 'source <(echo ..)', '. <(cat <<..)', 'bash < <(echo ..)' (fed=file, no payload), 'bash /dev/fd/3 3<<' (heredoc on fd 3, fed=[]) and 'bash {fd}<<'EOF' /dev/fd/10' (fd None). I kept medium because the dynamic argument is at least visible in most forms."
+ },
+ {
+  "input": "rm \"1\">o19",
+  "view": "parse (Redir.io) / walk / resolve / git_invocations / argv_split",
+  "parser_says": "rm argv [] with redirect fd 1 to o19.",
+  "bash_does": "A quoted 1 is a word, so bash runs rm with argument 1 and sends stdout to o19.",
+  "impact": "under-read-medium",
+  "class": "quoted, escaped or out-of-range digit words before a redirect operator are taken as the fd",
+  "evidence": "oracle rm ['1'] and parser rm [] for: \"rm \\\\1>o1\", \"rm '1'>o2\", 'rm 1\"\">o4'. 'git push \"2\">o5' gives bash git push 2 vs git_invocations push with args []. argv_split('git push \"2\">x') gives [..,'2>','x']. Overflow cases where bash passes the number as an argument: 'rm 2147483648>o21' and 'rm 99999999999999999999>o20' (both parsed as an fd). Root: the lexer (shell_parse.py:816-822) tests prev.literal().isdigit() with no quoted() check and no int range check.",
+  "verify_note": "Reproduced. The oracle ran rm 1 and created o19. The parser gives rm argv [] with a redirect on fd 1. The \\1>, '1'>, 1\"\"> and 'git push \"2\">o5' variants reproduced (oracle git push 2, git_invocations push args []). argv_split('git push \"2\">x') gives ['git','push','2>','x']. The overflow forms 2147483648> and 99999999999999999999> are parsed as fds while bash passes them as arguments. Cause: shell_parse.py:820 checks plit.isdigit() with no quoted() check and no range check. This also feeds defect 8 ('bash -s \"3\"<<')."
+ },
+ {
+  "input": "xargs git <<< 'push --force origin main'",
+  "view": "git_invocations / resolve / executable_view",
+  "parser_says": "resolve gives head git with args []. git_invocations gives a GitInvocation with subcommand None and args [].",
+  "bash_does": "Real xargs (with a stub git) ran: git push --force origin main.",
+  "impact": "under-read-medium",
+  "class": "argv supplied to an xargs command from a static heredoc or here-string is not read",
+  "evidence": "Stub log: 'git push --force origin main'. \"xargs -n2 rm <<'EOF'\\nf1 src\\nEOF\" gives resolve rm with no operands and write_targets []. executable_view blanks 'f1 src' because xargs and rm are not shells.",
+  "verify_note": "Reproduced with real xargs and a stub git: the log shows git push --force origin main. resolve gives git with args [] and wrapper xargs; git_invocations gives subcommand None. For \"xargs -n2 rm <<'EOF'\\nf1 src\\nEOF\" the oracle ran rm f1 src, while resolve gives rm with args [] and write_targets is [], and executable_view blanks the body. Medium, because the xargs wrapper is recorded and subcommand None signals that the argv is unknown."
+ },
+ {
+  "input": "echo 'rm x' | bash",
+  "view": "resolve",
+  "parser_says": "Site bash with fed=['pipe'], payload None and unresolved=None. Nothing marks the shell as running unknown or static stdin code. Variants: \"printf 'rm x\\\\n' | sh -s\", \"cat <<'E' | bash\" (heredoc 'rm x'), \"echo 'git push --force' | bash\" (git_invocations=[]).",
+  "bash_does": "Runs rm x / git push --force (oracle logs confirm)",
+  "impact": "under-read-medium",
+  "class": "pipe-fed shell has no payload and no unresolved marker",
+  "evidence": "cases2 pipe-bash, pipe-sh-s, heredoc-cat-pipe-bash; cases5 git-pipe-bash all UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser: bash site has fed=['pipe'] but payload None and unresolved None. The variants reproduce too: printf | sh -s, cat <<'E' | bash with a static heredoc, and echo 'git push --force' | bash (oracle ran git push --force, git_invocations=[]). Medium because a hook can still see fed=pipe."
+ },
+ {
+  "input": "bash <(echo rm x)",
+  "view": "resolve",
+  "parser_says": "Only echo is reported (top/procsub). bash has no payload and unresolved=None. Same for 'bash < <(echo rm x)' and 'bash 0< <(echo rm x)'.",
+  "bash_does": "bash runs the process-substitution output as a script (oracle log [['rm','x']])",
+  "impact": "under-read-medium",
+  "class": "shell running a process-substitution file or stdin",
+  "evidence": "cases2 bash-procsub-file, bash-lt-procsub; cases5 bash-0lt-procsub UNDER",
+  "verify_note": "Oracle log [['rm','x']] for bash <(..), bash < <(..) and bash 0< <(..). Parser reports only echo in top/procsub. The bash site has argv [bash, None] or fed=['file'], with no payload and no unresolved."
+ },
+ {
+  "input": "PS4='$(rm x)'; set -x; :",
+  "view": "walk",
+  "parser_says": "Sites: an assignment-only command, set -x and :. The single-quoted PS4 value is never treated as code.",
+  "bash_does": "The xtrace prompt expands PS4 and runs rm x (oracle log [['rm','x']]). Similar: \"PROMPT_COMMAND='rm x' bash -i <<< 'true'\" runs rm x twice, while the parser reports only 'true' in heredoc_shell.",
+  "impact": "under-read-medium",
+  "class": "prompt variables (PS4 with xtrace, PROMPT_COMMAND with -i) evaluated as code",
+  "evidence": "cases5 ps4-set-x; cases2 prompt-command UNDER",
+  "verify_note": "Oracle log [['rm','x']]. Parser: an assignment-only site, then set -x and :. PROMPT_COMMAND='rm x' bash -i <<< 'true' ran rm x twice (HOME was a throwaway dir), while the parser reports only 'true' in heredoc_shell."
+ },
+ {
+  "input": "echo f | xargs -I{} rm {}",
+  "view": "write_targets",
+  "parser_says": "[('{}','delete')] with decidable=True. 'echo f | xargs rm', \"xargs -a list rm\" and 'xargs -P 2 -n 1 rm' give write_targets=[], with no undecidable entry.",
+  "bash_does": "Deletes the stdin-supplied path f (oracle log [['rm','f']])",
+  "impact": "under-read-medium",
+  "class": "xargs-supplied operands: a literal replace-string is reported as a decidable path, and stdin operands yield no target at all",
+  "evidence": "cases4 xargs-I-wt, xargs-wt, xargs-a, xargs-P-n (oracle rm f vs wt '{}' / [])",
+  "verify_note": "Oracle log [['rm','f']]. Parser write_targets [('{}','delete',True)], a decidable literal. echo f | xargs rm, xargs -a list rm and xargs -P 2 -n 1 rm each ran rm f, while the parser gives write_targets=[] with no undecidable entry."
+ },
+ {
+  "input": "find . -name x -delete",
+  "view": "write_targets",
+  "parser_says": "[] (also [] for 'find . -maxdepth 0 -fprint out')",
+  "bash_does": "Deletes ./x (oracle gone=['x']); -fprint creates out (oracle changed=['out'])",
+  "impact": "under-read-medium",
+  "class": "find write actions (-delete, -fprint/-fprintf/-fls) not in VERBS",
+  "evidence": "cases2 find-delete2 gone=['x'] with wt=[]; cases1 find-fprint changed=['out'] with wt=[]",
+  "verify_note": "Oracle: x deleted (gone=['x']); find . -maxdepth 0 -fprint out created out. Parser write_targets=[] for both."
+ },
+ {
+  "input": "nice -5 rm x",
+  "view": "resolve",
+  "parser_says": "Head nice, unresolved nice:unknown_option:-5. Other real options give the same unresolved head: 'env --default-signal rm x' (head None), 'echo f | xargs --process-slot-var=V rm', 'echo x | xargs --eof rm', 'unshare -w . rm x', 'unshare -c rm x', 'unshare --map-user=0 rm x', 'nice -5 tee out < f' (write_targets=[]).",
+  "bash_does": "Each tool accepts the option and runs rm x / tee out (oracle)",
+  "impact": "under-read-medium",
+  "class": "real wrapper options missing from the specs, so the head is unresolved (flagged, but the command and targets are hidden)",
+  "evidence": "cases3 nice-N, unshare-w; cases1 env-default-signal, xargs-eof; cases4 unshare-c, unshare-map-user, xargs-slotvar; cases5 wt-nice-5",
+  "verify_note": "Oracle ran rm x / rm f / tee out in every case. Parser: unresolved head for nice -5, env --default-signal (head None), xargs --process-slot-var=V, xargs --eof, unshare -w ., unshare -c, unshare --map-user=0. nice -5 tee out < f gives write_targets=[] with no undecidable entry. Flagged, but the command and targets are hidden."
+ },
+ {
+  "input": "yes | rm --interactive x",
+  "view": "write_targets",
+  "parser_says": "[] (--interactive took 'x' as its value). Same for 'echo hi | tee --output-error out' ([]). 'cp --copy-contents f out' gives [] because the unknown option before the operands ends the reading.",
+  "bash_does": "Real rm deletes x, tee creates out and cp creates out2 (checked with the real binaries in a scratch dir)",
+  "impact": "under-read-medium",
+  "class": "split_options: optional-argument long options (--interactive[=WHEN], --output-error[=MODE]) typed as required-value, and unknown options yielding no operands in VERBS readings",
+  "evidence": "cases4 rm-interactive, tee-output-error, cp-copy-contents wt=[]; real-binary check: x deleted, out and out2 created",
+  "verify_note": "Real-binary run in the sandbox: x deleted, tee --output-error out created out, cp --copy-contents f out created out. Parser write_targets=[] for all three."
+ },
+ {
+  "input": "POSIXLY_CORRECT=1 cp f out -v",
+  "view": "write_targets",
+  "parser_says": "[('out','copy-dest')]. 'echo hi | POSIXLY_CORRECT=1 tee out2 -a' gives [('out2','append')].",
+  "bash_does": "With POSIXLY_CORRECT, options after operands are operands: cp copies f into the directory '-v' (out is treated as a source), and tee truncates both 'out2' and a file named '-a'",
+  "impact": "under-read-medium",
+  "class": "permute=True in _verb_targets ignores POSIXLY_CORRECT in the command's assignments, so the target is wrong",
+  "evidence": "real-binary run in a scratch dir: '-v/f' created, files '-a' and 'out2' created",
+  "verify_note": "Real cp with an existing dir '-v' created '-v/f'; the parser reports [('out','copy-dest')]. Without that dir cp fails, so that case is an over-read. tee: real tee created out2 (truncate) and '-a'; the parser reports only ('out2','append'). Stronger variant: 'POSIXLY_CORRECT=1 cp f -S d' (also via export) wrote d/f, while the parser reports [('f','copy-dest')]. An arbitrary destination directory is hidden, which could justify high."
+ },
+ {
+  "input": "sed -n '1e rm x' f",
+  "view": "walk",
+  "parser_says": "Site sed only",
+  "bash_does": "The GNU sed 'e' command runs 'rm x' through the shell (oracle log [['rm','x']])",
+  "impact": "under-read-medium",
+  "class": "command execution inside a sed script (e command, s///e)",
+  "evidence": "cases4 sed-e UNDER",
+  "verify_note": "Oracle log [['rm','x']]; sed 's/hello/rm x/e' f also ran rm x. Parser: sed site only."
+ },
+ {
+  "input": "git -c core.editor='rm -f f' commit --allow-empty",
+  "view": "walk/write_targets",
+  "parser_says": "Only the git site is reported, with config_pairs [(core.editor,'rm -f f')]. No rm site and no write target. The same holds for GIT_EDITOR='rm -f f' git commit, GIT_SSH_COMMAND='rm -f f' git push ssh://h/r main, git -c core.sshCommand=..., git -c protocol.ext.allow=always ls-remote 'ext::rm -f f', git -c diff.external='rm -f' diff HEAD~1 and git -c core.fsmonitor='rm -f f' status.",
+  "bash_does": "git runs the configured command through sh. The stub logged rm -f f ... in every case (rm -f f COMMIT_EDITMSG; rm -f f -G h; rm -f f; rm -f sub/g ...; rm -f f 2 <token>).",
+  "impact": "under-read-medium",
+  "class": "git-config-runs-shell",
+  "evidence": "oracle #503, #504, #505, #506, #507, #508, #511.",
+  "verify_note": "s1-s7. The parser reports only the git site, and the config is visible in config_pairs or env. In bash, the stub logged rm in every case: core.editor and GIT_EDITOR (rm -f f .../COMMIT_EDITMSG), GIT_SSH_COMMAND and core.sshCommand (rm -f f -G h and rm -f f h git-receive-pack '/r'), ext:: (rm -f f), diff.external (rm -f f <tmp>, rm -f g ..., rm -f sub/g ...), and core.fsmonitor (rm -f f 2 <token>)."
+ },
+ {
+  "input": "git checkout HEAD~1 f",
+  "view": "write_targets",
+  "parser_says": "[]. git checkout is only read after '--'. git checkout f gives []. git diff --output=out HEAD~1 and git log --output=out2 -1 also give [].",
+  "bash_does": "f is overwritten from HEAD~1 ('Updated 1 path from 10731d0'; content changed back to 'hello'). git checkout f restores f from the index. diff/log --output create out and out2.",
+  "impact": "under-read-medium",
+  "class": "git-write-target-missing-forms",
+  "evidence": "oracle #517, #518, #515, #516. A manual bwrap run confirmed f was reverted and out/out2 were created.",
+  "verify_note": "t1, t2x, t3, t4. write_targets gives [] for all of them. In bash, f was overwritten from HEAD~1 (content changed). After echo x > f, git checkout f restored f. diff --output=out and log --output=out2 created those files."
+ },
+ {
+  "input": "git rm -- -f",
+  "view": "write_targets",
+  "parser_says": "[]. The operand filter drops values starting with '-' even after '--'.",
+  "bash_does": "git treats '-f' after '--' as a pathspec and would delete a file named -f. In the test it reported \"pathspec '-f' did not match\", so the file was read as a path.",
+  "impact": "under-read-medium",
+  "class": "git-write-target-dashdash",
+  "evidence": "oracle #519.",
+  "verify_note": "u1, u1x. write_targets gives [] because operands starting with '-' are dropped even after '--'. In bash, after committing a file named -f, git rm -q -- -f deleted it (the file was absent afterwards). In practice this only matters for paths that start with '-'."
+ },
+ {
+  "input": "nice -5 git push origin main",
+  "view": "resolve/git_invocations",
+  "parser_says": "head='nice', unresolved='nice:unknown_option:-5', git_invocations=[]. Same pattern: strace -o /dev/null git push ... (strace:unknown_option:-o); taskset -c 0 git push ... (taskset:unknown_option:-c); env --ignore-signal git push ... and env --default-signal=INT git push ... (head None, env:unknown_option); xargs --process-slot-var=V git push ... (xargs:unknown_option).",
+  "bash_does": "Every one runs git push origin main (pushed).",
+  "impact": "under-read-medium",
+  "class": "wrapper-option-spec-incomplete",
+  "evidence": "oracle #314, #313, #311, #331, #332, #406. Only unresolved flags these, and the git invocation is never reported.",
+  "verify_note": "v1-v6. The parser sets unresolved to nice:unknown_option:-5, strace:unknown_option:-o, taskset:unknown_option:-c, env:unknown_option:--ignore-signal or --default-signal, or xargs:unknown_option:--process-slot-var, and reports no git invocation. All six pushed in bash, real strace included. A hook that refuses when unresolved is set still catches them, so the impact is medium."
+ },
+ {
+  "input": "trap 'git push origin main' EXIT",
+  "view": "walk/git_invocations",
+  "parser_says": "Site head='trap', unresolved=None, no payload, git_invocations=[]. shopt -s expand_aliases<NL>alias g='git push'<NL>g origin main gives head 'g'. hash -p /usr/bin/git g; g push origin main gives head 'g'.",
+  "bash_does": "All three run git push origin main (pushed).",
+  "impact": "under-read-medium",
+  "class": "deferred-or-aliased-code (trap/alias/hash)",
+  "evidence": "oracle #437, #438, #439.",
+  "verify_note": "w1-w3. The parser gives a trap site with no payload. For alias g='git push' (with expand_aliases) followed by g origin main, and for hash -p /usr/bin/git g; g push, the head is 'g'. All three pushed in bash."
+ },
+ {
+  "input": ". <(echo git push origin main)",
+  "view": "walk/resolve",
+  "parser_says": "Only echo (in procsub) and the '.' site are reported; no payload and no git. bash <(echo git push origin main) and echo 'git push origin main' | bash also have no payload (the last has fed={pipe}, unresolved=None).",
+  "bash_does": "All three run git push origin main (pushed).",
+  "impact": "under-read-medium",
+  "class": "shell-runs-generated-code (procsub/pipe)",
+  "evidence": "oracle #603, #604, #412.",
+  "verify_note": "x1-x3. The parser reports only echo, in procsub or top context. bash <(echo ...) has no payload, and echo '...' | bash has fed={pipe} with unresolved None. All three pushed in bash."
+ },
+ {
+  "input": "git config alias.x push; git x origin main",
+  "view": "git_invocations",
+  "parser_says": "[config(alias.x, push), x(origin, main)]. The second invocation has no alias body. export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=push; git x origin main gives x with config_pairs []. Neither is marked unresolved.",
+  "bash_does": "git x runs push origin main in both cases (pushed).",
+  "impact": "under-read-medium",
+  "class": "git-config-state-across-commands",
+  "evidence": "oracle #605, #137.",
+  "verify_note": "y1, y2. The second invocation is x with no alias body and unresolved None, and the export GIT_CONFIG_COUNT/KEY/VALUE form is the same. Both pushed in bash (trace2 _run_git_alias_ then push). The git config write itself is visible to a hook."
+ },
+ {
+  "input": "E='!git push origin main' git --config-env=alias.x=E x",
+  "view": "git_invocations/walk",
+  "parser_says": "config_pair (alias.x,'$E'). The alias body is always modeled as 'git $E', a git invocation with unresolved=dynamic_global_option. The statically assigned E is not used, and a '!' shell body is never considered, so with E='!rm -rf f' no rm would be reported. env E=... git --config-env=alias.x=E x behaves the same.",
+  "bash_does": "git runs the shell alias: git push origin main (pushed).",
+  "impact": "under-read-medium",
+  "class": "config-env-alias",
+  "evidence": "oracle #112, #613.",
+  "verify_note": "z1-z3. The parser gives config_pair (alias.x,'$E'), alias body 'git $E', and a nested invocation with unresolved dynamic_global_option. The env E=... form is the same. In bash, the shell alias pushed. With E='!rm -rf f', rm ran (stub), and the parser has no rm site or write target."
+ },
+ {
+  "input": "$'r\\m' q",
+  "view": "resolve",
+  "parser_says": "ansi_decode drops the backslash of an unknown escape, so the head is 'rm' and the site is rm q with write target q delete.",
+  "bash_does": "Bash keeps unknown escapes, so the word is `r\\m`: command not found.",
+  "impact": "over-read-low",
+  "class": "ANSI-C unknown escape decoded",
+  "evidence": "Oracle: no calls; stderr `r\\m: command not found`. Parser head 'rm', wt [('q','delete')].",
+  "verify_note": "Bash: `r\\m: command not found`, no calls. Parser: head 'rm', wt [('q', delete, rm)]. Also `$'r\\8m' q`: bash looks up r\\8m while the parser gives 'r8m'. ansi_decode drops the backslash on an unknown escape (and on the non-octal digits \\8 and \\9)."
+ },
+ {
+  "input": "coproc time rm a",
+  "view": "resolve",
+  "parser_says": "Takes 'time' as a wrapper and reports head rm with args ['a'].",
+  "bash_does": "After coproc, 'time' is not a reserved word. Bash looks up a command named 'time' ('time: command not found' here), and rm is not run.",
+  "impact": "over-read-low",
+  "class": "reserved word after coproc",
+  "evidence": "harness: invs=[] stderr 'time: command not found'; parser site rm ['a'].",
+  "verify_note": "Here bash prints 'time: command not found' and rm is not run (no /usr/bin/time on this host); the parser reports head rm ['a'] with time as a wrapper. This depends on the environment: on a host with GNU /usr/bin/time, bash runs '/usr/bin/time rm a' and rm does run, so the parser's reading is then correct. It only ever over-refuses."
+ },
+ {
+  "input": "echo a 3>o13 >&3-",
+  "view": "write_targets / Redir.writes",
+  "parser_says": "WriteTarget('3-', truncate, redirect>&, fd 1) next to o13.",
+  "bash_does": "`>&3-` moves fd 3 to stdout. No file named 3- is created.",
+  "impact": "over-read-low",
+  "class": "the >&N- / N>&M- move form is read as a file write",
+  "evidence": "'echo a >&1-' and 'echo a 2>&1-' give write target '1-'. Redir.dup only accepts all-digit text (shell_parse.py:310-326).",
+  "verify_note": "Reproduced. bash created only o13. write_targets also reports '3-'. The '>&1-' and '2>&1-' forms reproduced with a write target '1-'."
+ },
+ {
+  "input": "rm 1\\\n>o1",
+  "view": "parse (Redir.io) / walk",
+  "parser_says": "rm argv ['1'] with redirect fd 1. The adjacency test uses raw offsets, which differ across the removed continuation.",
+  "bash_does": "The continuation is removed first, so 1> is an fd redirect and bash runs rm with no arguments.",
+  "impact": "over-read-low",
+  "class": "fd number or {var} separated from its operator by a backslash-newline, and {arr[i]}> forms",
+  "evidence": "'rm {fd}\\\\\\n>o2' gives parser arg '{fd}' while bash uses an fd variable. 'rm {x[0]}>o3' gives parser arg None while bash 5.2 treats {x[0]} as an fd variable (bash rm argv []).",
+  "verify_note": "Reproduced. The oracle ran rm with no arguments. The parser gives rm argv ['1'] plus a write target '1'. The '{fd}\\\\\\n>' form reproduced (parser arg '{fd}', fd 1). For 'rm {x[0]}>o3' the oracle ran rm with no arguments, while the parser has a None argument. The same class has an under-read variant, reported separately as the next entry."
+ },
+ {
+  "input": "bash <<A 0<f1\nrm src\nA",
+  "view": "resolve",
+  "parser_says": "The heredoc_shell payload holds rm src.",
+  "bash_does": "The later 0<f1 replaces stdin, so bash reads f1 ('one: command not found') and rm never runs.",
+  "impact": "over-read-low",
+  "class": "payload taken from a heredoc that a later stdin redirect overrides",
+  "evidence": "\"bash <<<'rm f1' 0<&-\" gives parser rm f1 while bash runs nothing.",
+  "verify_note": "Reproduced. bash read f1 ('one: command not found') and never ran rm. The parser payload has rm src. \"bash <<<'rm f1' 0<&-\" reproduced: the parser has rm f1 and bash ran nothing. The reverse order 'bash 0<f1 <<A' is correct (the last redirect wins)."
+ },
+ {
+  "input": "x=$(cat <<EOF) ; rm f1\nbody\nEOF\n",
+  "view": "walk",
+  "parser_says": "Sites include `body` and `EOF` at top level, with a nested unterminated_heredoc in errors().",
+  "bash_does": "Runs rm f1 and consumes the 'body' and 'EOF' lines (warning: command substitution: 1 unterminated here-document). Nothing else runs.",
+  "impact": "over-read-low",
+  "class": "heredoc operator inside a single-line $( ) whose body follows the line",
+  "evidence": "oracle inv=[rm f1] with no 'body: command not found'.",
+  "verify_note": "Reproduced. The oracle ran only rm f1 and printed the unterminated here-document warning. The parser reports top-level sites body and EOF and a nested unterminated_heredoc. With 'git push' as the body line, the parser reports git push but bash does not run it."
+ },
+ {
+  "input": "flock -c 'rm x' l",
+  "view": "resolve",
+  "parser_says": "Payload rm x (site rm in top/shell_c). Also 'builtin rm x' reports rm with target x, 'bash -c --norc \"rm x\"' reports rm, and 'sudo -h rm x' reports head x.",
+  "bash_does": "flock: invalid option -- 'c' (rc 64). builtin: rm: not a shell builtin. bash rejects --norc after -c. sudo -h is --help/host and runs nothing.",
+  "impact": "over-read-low",
+  "class": "over-reads in wrapper readings",
+  "evidence": "cases4 flock-c-first; cases5 builtin-nonbuiltin; cases2 bash-c-norc-after; cases3 sudo-h (oracle logs empty)",
+  "verify_note": "Oracle: flock rc 64 (invalid option -- 'c'), builtin rm x fails (not a shell builtin), bash -c --norc 'rm x' rc 2 (usage), and sudo -h rm x runs nothing. The parser reports rm (with target x) for the first three and head x for sudo -h."
+ },
+ {
+  "input": "git --help push",
+  "view": "git_invocations",
+  "parser_says": "subcommand='push', because --help/-h/--version/-v are read as global flags. git -h push, git --version push and git -v push behave the same.",
+  "bash_does": "git rewrites these to 'git help push' or 'git version push'; no push runs (trace2 cmd_name help/version).",
+  "impact": "over-read-low",
+  "class": "git-help-version-rewrite",
+  "evidence": "oracle #113, #114, #115, #116.",
+  "verify_note": "aa1-aa4. The parser gives subcommand push. trace2 shows cmd_name help (for --help and -h) or version (for --version and -v), and no push."
+ },
+ {
+  "input": "git --exec-path push origin main",
+  "view": "git_invocations",
+  "parser_says": "subcommand='push'. git --html-path push ... and git --list-cmds=main push ... behave the same.",
+  "bash_does": "git prints the path or list and exits (trace2 _query_); no push.",
+  "impact": "over-read-low",
+  "class": "git-query-options",
+  "evidence": "oracle #106, #118, #119.",
+  "verify_note": "ab1-ab3. The parser gives subcommand push. In bash, trace2 shows cmd_name _query_ and nothing was pushed, for --exec-path, --html-path and --list-cmds=main."
+ },
+ {
+  "input": "git -c alias.status=push status",
+  "view": "git_invocations",
+  "parser_says": "[status, push]. The alias body is reported even when it shadows a builtin. git -c alias.x=push -c alias.x= x origin main gives [x, push]: the empty last value is skipped, so the earlier value wins. GIT_CONFIG_COUNT=1 ... VALUE_0='!git push origin main' git -c alias.x=status x gives [x, push].",
+  "bash_does": "git runs the builtin status in the first case. 'expansion of alias x failed' with no push in the second. status in the third, where -c wins.",
+  "impact": "over-read-low",
+  "class": "alias-resolution-over-read",
+  "evidence": "oracle #131, #615, #805.",
+  "verify_note": "ac1-ac3. The parser reports [status, push]. Bash ran builtin status. For alias.x=push -c alias.x=, bash failed with \"expansion of alias 'x' failed\". For the env '!git push' alias with -c alias.x=status, bash ran status. No push in any case."
+ },
+ {
+  "input": "git -calias.x=push x origin main",
+  "view": "git_invocations",
+  "parser_says": "Reads the attached -c as config alias.x=push and reports [x, push].",
+  "bash_does": "git rejects -calias.x=push as an unknown option (usage, rc 129); nothing runs. This is the -c variant of the known -C/p item.",
+  "impact": "over-read-low",
+  "class": "git-attached-global-option",
+  "evidence": "oracle #126 (also #125 -Cfoo).",
+  "verify_note": "ad1. The parser gives config alias.x=push and reports [x, push]. git 2.43 says 'unknown option: -calias.x=push' (rc 129, trace2 _usage_) and runs nothing."
+ },
+ {
+  "input": "bash -c '' 'git push origin main'",
+  "view": "resolve",
+  "parser_says": "Because the '' is dropped, the payload is 'git push origin main' (shell_c), and git push is reported.",
+  "bash_does": "The command string is empty and 'git push origin main' becomes $0; nothing runs.",
+  "impact": "over-read-low",
+  "class": "empty-quoted-word-dropped",
+  "evidence": "oracle #708.",
+  "verify_note": "af1. Because the '' is dropped, the parser takes 'git push origin main' as the shell_c payload and reports the push. In bash nothing ran: no gitlog, no push. Same root cause as the empty-word under-read."
+ },
+ {
+  "input": "git rm --cach f",
+  "view": "write_targets",
+  "parser_says": "WriteTarget('f', delete, git-rm). The --cached check does not resolve abbreviations.",
+  "bash_does": "git resolves --cach to --cached and removes f from the index only; the working-tree file is kept.",
+  "impact": "over-read-low",
+  "class": "git-option-abbreviation (write_targets)",
+  "evidence": "oracle #537.",
+  "verify_note": "ag1. The parser gives WriteTarget('f', delete, git-rm). In bash, git resolved --cach to --cached and the working-tree f was unchanged."
+ },
+ {
+  "input": "echo x &>(rm q)",
+  "view": "parse",
+  "parser_says": "Parses with no error as `echo x &` followed by a `>(rm q)` procsub command (rm site reported). `echo !(rm q)` and `x=1 !(rm q)` also parse with no error.",
+  "bash_does": "bash -n fails with a syntax error near `(`, and nothing runs.",
+  "impact": "accepts-invalid-low",
+  "class": "accepts text bash rejects",
+  "evidence": "bash -n -c fails for `echo x &>(rm q)`, `echo !(rm q)` and `x=1 !(rm q)`. parse() error is None for all three. The first also over-reads an rm site.",
+  "verify_note": "bash -n -c fails with a syntax error near `(` for `echo x &>(rm q)`, `echo !(rm q)` and `x=1 !(rm q)`, and the oracle ran nothing. parse() error is None for all three. The first also over-reads an rm site in procsub, with wt q delete."
+ },
+ {
+  "input": "true | ! rm a",
+  "view": "parse",
+  "parser_says": "Parses without error. Second site is '!' with args ['rm','a']. Others accepted without error: 'coproc ! rm a', '{ }', '( )', 'if true; then fi', 'while false; do done', 'f() rm a', 'function f rm a', and '[[ -n $(fi) ]]' / 'for x in $(fi); do :; done' (nested error invisible).",
+  "bash_does": "bash -n rejects each one with a syntax error (near '!', '}', ')', 'fi', 'done', 'rm', or 'fi' inside the comsub).",
+  "impact": "accepts-invalid-low",
+  "class": "invalid compound and negation syntax accepted",
+  "evidence": "harness: n_ok=False, rc=2 'syntax error near unexpected token'; parser error=None errors=[].",
+  "verify_note": "bash -n rejects each with 'syntax error near unexpected token' (rc=2); the parser gives error=None and errors=[] for 'true | ! rm a' (site '!' ['rm','a']), 'coproc ! rm a', '{ }', '( )', 'if true; then fi', 'while false; do done', 'f() rm a' and 'function f rm a' (both report rm a, so they over-refuse at worst), and the '[[ -n $(fi) ]]' and 'for x in $(fi)...' forms. Bash runs nothing for any of them."
+ },
+ {
+  "input": "echo x >#o7",
+  "view": "parse",
+  "parser_says": "No error, write target '#o7'.",
+  "bash_does": "After the operator, # starts a comment: syntax error near unexpected token `newline' (bash -n fails).",
+  "impact": "accepts-invalid-low",
+  "class": "redirect or heredoc operator followed by '#' or by another operator is accepted",
+  "evidence": "Also accepted without error while bash -n fails: 'echo x 2>#o8', 'cat << #x\\nbody\\n#x\\nrm f1' (parser reports rm f1), 'cat <<<<x', 'cat <<<>x', 'cat <<>x\\nbody\\n\\nrm f1', 'echo x >>>o1' (write target '' then o1), 'echo x &>(rm f1)' (read as background & plus a procsub).",
+  "verify_note": "Reproduced. bash -n exits 2 and the parser reports no error, with a write target '#o7'. All listed variants reproduced: 2>#o8, 'cat << #x' (parser reports rm f1), <<<<x, <<<>x, <<>x, >>>o1 (write targets '' and o1), and '&>(rm f1)' (read as & plus a procsub)."
+ },
+ {
+  "input": "f() rm x",
+  "view": "parse",
+  "parser_says": "error=None, command rm x. Same for 'function f rm x', 'function f() rm x' and 'coproc' alone.",
+  "bash_does": "bash -n -c fails (rc 2): a function body must be a compound command, and coproc needs a command",
+  "impact": "accepts-invalid-low",
+  "class": "function body not required to be compound; bare coproc accepted",
+  "evidence": "python check: bash -n rc=2 and sp.parse(t).error is None for each",
+  "verify_note": "bash -n rc=2 for f() rm x, function f rm x, function f() rm x and a bare coproc. parse().error is None for all four; the first three report rm x with target x."
+ }
+]
