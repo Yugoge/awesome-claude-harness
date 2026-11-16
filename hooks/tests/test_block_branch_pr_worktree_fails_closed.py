@@ -1,12 +1,11 @@
-"""The branch / PR / worktree hook fails closed.
+"""The worktree hook fails closed.
 
-hooks/pretool-block-branch-pr-worktree.py used to exit 0 on any error it did not
-expect and on a payload it could not read, so a crash inside it let a branch, PR
-or worktree creation through; an import that failed at module load exited 1,
-which the harness treats as a non-blocking hook error. The hook now refuses (exit
-2, naming itself, the error and the bypasses) a Bash call that may create one,
-unless a bypass is confirmed, and still exits 0 for a call that cannot create one
-by its own reading (_may_create) and for another tool's call.
+On an error it does not expect, a payload it cannot read or an import that fails
+at module load, hooks/pretool-block-branch-pr-worktree.py refuses (exit 2, naming
+itself, the error and the bypasses) a Bash call that may create a worktree,
+unless a bypass is confirmed, and exits 0 for a call that cannot run
+`git worktree` by its own reading (_may_create), a branch or PR creation
+included, and for another tool's call.
 
 The hook runs as a subprocess with a scratch HOME and CLAUDE_STATE_DIR under the
 test's temp dir. The broken cases run a copy of the hook and hooks/lib in which
@@ -58,10 +57,15 @@ ERROR_NAMES = {
 }
 
 CREATING = [
+    "git worktree add ../wt HEAD",
+    "/usr/bin/git -C /some/repo worktree add ../wt",
+    "sh -c 'git worktree add ../inner'",
+    "true && git worktree add -b br ../chained",
+]
+BRANCH_AND_PR = [
     "git checkout -b feature/x",
     "git switch -c feature/x",
     "git branch new-feature",
-    "git worktree add ../wt HEAD",
     "gh pr create --fill",
     "/usr/bin/git -C /some/repo branch newbr",
     "sh -c 'git switch -c inner'",
@@ -139,11 +143,11 @@ class Sandbox:
         (self.state / f"claude-orchestrator-consent-{SID}.flag").write_text("true")
 
     def grant(self):
-        """A structured sentinel grant for `git checkout`, through its one writer."""
+        """A structured sentinel grant for `git worktree`, through its one writer."""
         code = ("import sys; sys.path.insert(0, sys.argv[1]); "
                 "from lib.allowlist import write_sentinel_grant; "
                 "print(write_sentinel_grant(sys.argv[2], sys.argv[2], "
-                "[{'op': 'git', 'target': 'checkout'}]))")
+                "[{'op': 'git', 'target': 'worktree'}]))")
         out = subprocess.run([sys.executable, "-B", "-c", code, str(HOOKS), SID], check=True,
                              capture_output=True, text=True, env=self.env, cwd=str(self.tmp))
         assert Path(out.stdout.strip()) == self.state / "claude-grants" / f"{SID}.json"
@@ -186,7 +190,7 @@ def test_a_broken_hook_refuses_a_creating_command(box, name):
 @pytest.mark.parametrize("name", sorted(BREAKAGES))
 def test_a_broken_hook_lets_an_unrelated_call_through(box, name):
     hook = box.hooks_copy(name)
-    for command in UNRELATED:
+    for command in UNRELATED + BRANCH_AND_PR:
         proc = box.run(hook, command)
         assert proc.returncode == 0, (command, proc.returncode, proc.stderr)
         assert proc.stderr == "", proc.stderr
@@ -204,7 +208,7 @@ def test_a_subagent_is_told_to_pause(box):
 
 def test_a_bypass_check_that_did_not_load_is_named(box):
     hook = box.hooks_copy("allowlist-raises-at-import")
-    proc = box.run(hook, "git checkout -b x")
+    proc = box.run(hook, "git worktree add ../x")
     _assert_fail_closed_refusal(proc, "RuntimeError")
     assert "has_do_consent did not load" in proc.stderr, proc.stderr
 
@@ -214,34 +218,36 @@ def test_a_bypass_check_that_did_not_load_is_named(box):
 @pytest.mark.parametrize("bypass", ["live_overnight", "do_consent", "grant"])
 def test_each_bypass_named_in_the_refusal_lifts_it(box, bypass):
     hook = box.hooks_copy("classifier-raises-when-called")
-    assert box.run(hook, "git checkout -b feature/x").returncode == 2
+    assert box.run(hook, "git worktree add ../wt").returncode == 2
     getattr(box, bypass)()
-    proc = box.run(hook, "git checkout -b feature/x")
+    proc = box.run(hook, "git worktree add ../wt")
     assert proc.returncode == 0, (bypass, proc.stderr)
 
 
 def test_do_consent_does_not_lift_it_for_a_subagent(box):
     hook = box.hooks_copy("classifier-raises-when-called")
     box.do_consent()
-    assert box.run(hook, "git checkout -b feature/x").returncode == 0
-    proc = box.run(hook, "git checkout -b feature/x", agent_id="sub-2")
+    assert box.run(hook, "git worktree add ../wt").returncode == 0
+    proc = box.run(hook, "git worktree add ../wt", agent_id="sub-2")
     _assert_fail_closed_refusal(proc, "RuntimeError")
 
 
 # (iv) Unreadable input: 0 as before, unless its raw text may create one.
 
-@pytest.mark.parametrize("raw", ["", "not json", "[]", "{", "null", "[" * 100000])
+@pytest.mark.parametrize("raw", ["", "not json", "[]", "{", "null", "[" * 100000,
+                                 '{"tool_name": "Bash", "tool_input": {"command": "git checkout -b x',
+                                 "not json: git switch -c x", '"gh pr create --fill"'])
 def test_unreadable_input_without_a_creating_word_passes(box, raw):
     proc = box.run(HOOK, raw=raw)
     assert proc.returncode == 0, (raw[:40], proc.stderr)
 
 
 @pytest.mark.parametrize("raw, error, what", [
-    ('{"tool_name": "Bash", "tool_input": {"command": "git checkout -b x',  # cut short
+    ('{"tool_name": "Bash", "tool_input": {"command": "git worktree add x',  # cut short
      "JSONDecodeError", "could not read its input"),
-    ("not json: git switch -c x", "JSONDecodeError", "could not read its input"),
+    ("not json: git worktree add x", "JSONDecodeError", "could not read its input"),
     ('["git worktree add ../wt"]', "AttributeError", "internal error"),
-    ('"gh pr create --fill"', "AttributeError", "internal error"),
+    ('"git worktree add ../wt"', "AttributeError", "internal error"),
 ])
 def test_unreadable_input_with_a_creating_word_is_refused(box, raw, error, what):
     proc = box.run(HOOK, raw=raw)
@@ -250,8 +256,8 @@ def test_unreadable_input_with_a_creating_word_is_refused(box, raw, error, what)
 
 
 @pytest.mark.parametrize("tool_input", [
-    "git checkout -b x",                 # not an object
-    {"command": ["git", "branch", "x"]},  # not a string
+    "git worktree add x",                         # not an object
+    {"command": ["git", "worktree", "add", "x"]},  # not a string
 ])
 def test_a_payload_of_the_wrong_shape_is_judged_on_its_text(box, tool_input):
     proc = box.run(HOOK, tool_input=tool_input)
@@ -269,7 +275,7 @@ def test_the_intact_hook_judges_as_before(box):
         proc = box.run(HOOK, command)
         assert proc.returncode == 2 and "creation is forbidden outside /dev-overnight" in proc.stderr
         assert "not a policy refusal" not in proc.stderr
-    for command in UNRELATED + ["git status", "echo git checkout -b x"]:
+    for command in UNRELATED + BRANCH_AND_PR + ["git status", "echo git worktree add x"]:
         assert box.run(HOOK, command).returncode == 0, command
 
 
@@ -309,7 +315,7 @@ def _mutant(rnd, command):
 def test_what_the_cheap_test_clears_the_hook_never_refuses():
     hook = _module(HOOK, "bbpw_fails_closed")
     blocked = [c for c in _blocked_cases() if hook._detect(c)]
-    assert len(blocked) >= 70
+    assert len(blocked) >= 3
     rnd = random.Random(933)
     mutants = [m for m in (_mutant(rnd, rnd.choice(blocked)) for _ in range(6000))
                if hook._detect(m)]
@@ -318,10 +324,11 @@ def test_what_the_cheap_test_clears_the_hook_never_refuses():
     for command in blocked + mutants + [c for c in corpus if hook._detect(c)]:
         assert hook._may_create(command), command
     # Forms the hook reads as git although they delete more than quote characters.
-    for command in ("gi'a b't branch new-feature", "g\\ \nit branch -c old new",
-                    "g\\#x\nit stash branch fo", "g'x'h pr create", "gi\\\nt checkout -b x"):
+    for command in ("gi'a b't worktree add ../w", "g\\ \nit worktree add x",
+                    "g\\#x\nit worktree add x", "gi\\\nt worktree add x"):
         assert hook._detect(command) and hook._may_create(command), command
-    for command in UNRELATED + ["", "grep -n foo bar", "echo 'big apple'", "sed -n 1,5p x"]:
+    for command in UNRELATED + BRANCH_AND_PR + ["", "grep -n foo bar", "echo 'big apple'",
+                                                "sed -n 1,5p x"]:
         assert not hook._may_create(command), command
 
 
@@ -331,5 +338,5 @@ def test_the_cheap_test_is_linear():
     for text in ("g'a'" * 40000 + "i", "g" + "'" * 100000 + "i", "gi" + '"' * 100000,
                  "g#\n" * 50000 + "i", "x" * 200000):
         assert hook._may_create(text) is False
-    assert hook._may_create("g'a'" * 40000 + "h") is True
+    assert hook._may_create("g'a'" * 40000 + "it worktree") is True
     assert time.monotonic() - started < 20
