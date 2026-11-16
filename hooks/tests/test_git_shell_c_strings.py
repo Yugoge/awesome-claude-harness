@@ -509,7 +509,7 @@ def test_a_run_time_value_reads_as_a_placeholder_in_its_layer():
 
 def test_a_shell_named_in_a_commit_message_is_data():
     assert _calls("git commit -m 'run bash -c \"git push\" later'") == [
-        ("commit", ("-m", "'run", "bash", "-c", '"git', 'push"', "later'"))]
+        ("commit", ("-m", "'run bash -c \"git push\" later'"))]
 
 
 def test_every_residual_kind_is_one_the_override_route_accepts():

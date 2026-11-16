@@ -74,7 +74,7 @@ def test_words_are_read_as_the_shell_reads_them(command, subcommand, args):
 @pytest.mark.parametrize("command,subcommand,args", [
     ("git reset --har", "reset", ["--hard"]),
     ("git branch --del x", "branch", ["--delete", "x"]),
-    ("git push --forc origin main", "push", ["--force", "origin", "main"]),
+    ("git push --mirr origin", "push", ["--mirror", "origin"]),
     ("env -C /tmp/B git clean -fd", "clean", ["-fd"]),
     ("strace -f git push", "push", []),
     ("chrt -b 0 git clean -fd", "clean", ["-fd"]),
