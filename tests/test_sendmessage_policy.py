@@ -210,3 +210,74 @@ def test_the_journal_is_registered_for_every_sendmessage():
     assert len(entries) == 1 and entries[0].get("matcher") in (None, "", "*")
     text = (HOOKS / "posttool-launch.py").read_text()
     assert "Rule('restart-sendmessage', 'posttool-restart-sendmessage.py', ('SendMessage',))" in text
+
+
+def _sent(tool_id: str, to: str) -> list[dict]:
+    """A main-agent SendMessage and its CLI 2.1.325 result: the child resumes in the background, and its
+    end arrives later as a <task-notification> carrying that send's tool use id."""
+    use = {"type": "assistant", "isSidechain": False, "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": tool_id, "name": "SendMessage",
+         "input": {"to": to, "summary": "follow up", "message": "Now reply PONG2."}}]}}
+    own = {"success": True, "message": "Resuming agent a2f5a44", "resumedAgentId": CHILD,
+           "pin": {"id": CHILD, "name": CHILD, "ref": "f37851"}}
+    result = {"type": "user", "isSidechain": False, "toolUseResult": own, "message": {"role": "user", "content": [
+        {"tool_use_id": tool_id, "type": "tool_result", "content": [{"type": "text", "text": json.dumps(own)}]}]}}
+    return [use, result]
+
+
+def _journal(session, tool_id: str, to: str) -> None:
+    response = {"success": True, "message": "Resuming agent a2f5a44", "resumedAgentId": CHILD,
+                "pin": {"id": CHILD, "name": CHILD, "ref": "f37851"}}
+    p = session.run(JOURNAL, to, tool_response=response, tool_use_id=tool_id)
+    assert p.returncode == 0, p
+
+
+@pytest.mark.parametrize("to", [CHILD, "probe"])
+def test_a_child_a_journaled_send_resumed_runs_until_its_completion_notification(session, to):
+    """Rule 3 reads the journal (rule 4): a send resumes the child in the background, so the child is running
+    again until a completion notification arrives after that send. A send to it in a later turn (the
+    orchestrator gate's once-per-turn count starts over there) is refused; after the notification it passes."""
+    head = [_typed("look at the repo"), _dispatch("toolu_1", name="probe"), _returned("toolu_1", CHILD),
+            *_sent("toolu_send", to)]
+    session.write(*head)
+    _journal(session, "toolu_send", to)
+    session.write(*head, _typed("and now?"))
+    p = session.run(BACKGROUND, to)
+    assert p.returncode == 2 and "resumed by SendMessage toolu_send" in p.stderr, p.stderr
+    session.write(*head, _typed("and now?"), _notified(CHILD, result="PONG2"))
+    p = session.run(BACKGROUND, to)
+    assert p.returncode == 0, p.stderr
+
+
+@pytest.mark.parametrize("ending", [
+    [_notified(CHILD, status="stopped")],
+    [_notified(CHILD, result="You've hit your session limit · resets 2:40pm (UTC)")],
+], ids=["stopped", "quota-cut"])
+def test_a_resumed_child_whose_resumed_run_was_cut_is_refused(session, ending):
+    head = [_dispatch("toolu_1"), _returned("toolu_1", CHILD), *_sent("toolu_send", CHILD)]
+    session.write(*head)
+    _journal(session, "toolu_send", CHILD)
+    session.write(*head, *ending, _typed("and now?"))
+    p = session.run(BACKGROUND, CHILD)
+    assert p.returncode == 2 and "has not finished" in p.stderr, p.stderr
+
+
+def test_the_journal_is_read_back_through_one_function(session):
+    """lib/send_policy.sends is the journal's one reader: the lines record() wrote, oldest first; a torn or
+    foreign line is skipped, and a session with no journal reads as none."""
+    from lib import send_policy
+
+    _journal(session, "toolu_a", CHILD)
+    _journal(session, "toolu_b", CHILD)
+    path = Path(session.env["CLAUDE_RESTART_STATE_DIR"]) / "sends" / f"{session.sid}.jsonl"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write('{"torn": \n[1, 2]\n')
+    old = os.environ.get("CLAUDE_RESTART_STATE_DIR")
+    os.environ["CLAUDE_RESTART_STATE_DIR"] = session.env["CLAUDE_RESTART_STATE_DIR"]
+    try:
+        assert [e["tool_use_id"] for e in send_policy.sends(session.sid)] == ["toolu_a", "toolu_b"]
+        assert send_policy.sends(str(uuid.uuid4())) == []
+        assert send_policy.sends("../escape") == []
+    finally:
+        os.environ.pop("CLAUDE_RESTART_STATE_DIR") if old is None else os.environ.__setitem__(
+            "CLAUDE_RESTART_STATE_DIR", old)
