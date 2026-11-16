@@ -324,6 +324,21 @@ def test_an_error_reading_the_record_is_no_debate(tmp_path: Path) -> None:
     assert score_view.codex_forced({"cwd": "/p", "transcript_path": "/nonexistent"}, {"role": "qa", "pipeline": "dev"}) is False
 
 
+def test_a_record_that_cannot_be_read_is_no_rows(tmp_path: Path, monkeypatch) -> None:
+    """A log with a malformed line before the last raises ScoreLogError; the readers see no rows (an empty list, not None):
+    nobody is low and the main line is the one of an empty record."""
+    log = tmp_path / "logs" / "lifecycle.jsonl"
+    log.parent.mkdir()
+    log.write_text("not json\n" + json.dumps(_event("dev", -40)) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    with pytest.raises(score_log.ScoreLogError):
+        score_log.read_lines(str(log))
+    assert score_view._rows() == []
+    assert score_view.is_low("dev", "/p", None) is False
+    assert score_view.main_line("dev-overnight", "/p") == score_log.render_main_line([], score_log.project_key("/p"), END)
+
+
 @pytest.mark.parametrize("role,profile", score_view.ROUNDS)
 def test_overnight_holds_each_lanes_extra_round_at_its_working_root(monkeypatch, low, role, profile):
     import importlib.util
