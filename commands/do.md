@@ -31,15 +31,7 @@ The whole `TASK` is done this turn, with nothing left for later: `do.status` `"c
 
 ### Step 3: Codex audit (only when `CODEX_REQUESTED = true`)
 
-Invoke `Skill(skill="codex", args=<audit prompt>)` scoped to Step 2's changes:
-
-```
-USER REQUIREMENT: <TASK>
-SCOPE: bugs that prevent or threaten this requirement.
-OUT OF SCOPE: pre-existing issues, style preferences, unrelated enhancements.
-```
-
-Classify findings per `commands/codex.md` Rule 3. Fix `in_scope_real_bug` items; leave `out_of_scope` findings (pre-existing issues, not part of the request) unfixed and list them in the Step 4 summary.
+Codex calls follow `templates/prompt-includes/codex-consultation.md`; this adds only what /do needs. Invoke `Skill(skill="codex", args=<audit prompt>)` scoped to Step 2's changes. Fix `in_scope_real_bug` findings; leave `out_of_scope` findings unfixed and list them in the Step 4 summary.
 
 If codex fails (quota/timeout/parse): record `codex_consult: {status: "<failed_quota|failed_timeout|failed_parse>", note: "<verbatim error>"}` in the do-report and proceed.
 

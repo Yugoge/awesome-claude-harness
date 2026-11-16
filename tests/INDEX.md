@@ -146,6 +146,7 @@ tests/
 ├── `test_close_report_append_lock_cleanup.py` - the append leaves no `.append-lock` file in the product repo (P10-36), mutual exclusion kept
 ├── `test_close_route_select_compat.py` - It answers the two calls origin/master's /close Step 0 makes (commands/close.md:296 on a7d3a9f, :...
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
+├── `test_command_step_citations.py` - A command text that cites another command's numbered step or rule cites one that exists.
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
