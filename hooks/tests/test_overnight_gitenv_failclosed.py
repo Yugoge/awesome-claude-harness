@@ -45,7 +45,6 @@ REPO = Path(__file__).resolve().parents[2]
 LAUNCHER = Path(os.environ.get("OVERNIGHT_LAUNCHER_UNDER_TEST")
                 or REPO / "scripts" / "create-overnight-state.sh")
 SCRIPTS = REPO / "scripts"
-DOC = REPO / "commands" / "dev-overnight.md"
 PROMPT_WORKFLOW = REPO / "hooks" / "prompt-workflow.py"
 
 LAB_BASE = Path(os.environ.get("OVERNIGHT_GITENV_LAB_BASE")
@@ -272,23 +271,9 @@ def test_launch_does_not_publish_when_in_place_helper_missing(lab):
 # --------------------------------------------------------------------------- #
 # DEFECT TWO -- the actor startup instruction must join source and git with &&
 # --------------------------------------------------------------------------- #
-def _guard_bullet() -> str:
-    text = DOC.read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if "marker_only: false" in line and "source" in line:
-            return line
-    pytest.fail("ACTOR GIT-ENV GUARD worktree bullet not found in commands/dev-overnight.md")
-
-
-def test_doc_startup_instruction_uses_conjunction():
-    bullet = _guard_bullet()
-    assert re.search(r'source\s+"<env_helper>"[^`]*&&\s*command -v git', bullet), (
-        "commands/dev-overnight.md separates `source <env_helper>` from the git op "
-        "with a statement separator instead of `&&`; a non-zero source does not "
-        f"stop the git call.\nbullet: {bullet[:400]}"
-    )
-
-
+# The actor receives the instruction hooks/prompt-workflow.py generates, not the
+# dev-overnight.md bullet that describes it, so the generated text is what these
+# tests check and run.
 def test_generated_startup_instruction_uses_conjunction():
     mod = load_prompt_workflow()
     state = {

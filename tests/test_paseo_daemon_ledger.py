@@ -46,6 +46,9 @@ DELETED_PREMISE_LITERALS = [
     "fires[:-1]",
 ]
 
+# The deleted 400-year horizon premise, in its spelled-out forms.
+HORIZON_PREMISE_PATTERNS = [r"400-year", r"146,?097", r"400\s+Gregorian"]
+
 T0 = "2026-08-28T12:00:00Z"
 SHA_A, SHA_B, SHA_C, SHA_D = "a" * 64, "b" * 64, "c" * 64, "d" * 64
 
@@ -2491,10 +2494,26 @@ def test_watchdog_check_single_cli_invocation_replaces_four_separate_calls(tmp_p
     assert "--event-id" not in r.stdout  # no per-call args a caller must chain in
 
 
-def test_teardown_contract_text_mandates_drain_or_declare():
-    text = (REPO / "commands" / "paseo-daemon.md").read_text()
-    assert "teardown-declare" in text
-    assert "drain" in text.lower()
+def test_teardown_contract_drain_or_declare_runs_as_the_doc_names_it(tmp_path):
+    """Session-end teardown as commands/paseo-daemon.md's section names it: one pending event drained
+    (consume, plan, ack), the other declared with the one subcommand the section names. The declaration
+    journals exactly the event left undrained, with the lease."""
+    text = COMMAND_DOC.read_text()
+    start = text.index("\n## Session-end teardown")
+    section = text[start:text.index("\n## ", start + 1)]
+    [declare] = re.findall(r"`([a-z]+(?:-[a-z]+)+)`", section)
+    root = ledger(tmp_path)
+    append(root, "ev-1")
+    append(root, "ev-2")
+    ok(root, "lease-acquire", "--holder", "ctl-A", now=T0)
+    holder = ("--caller-id", "ctl-A")
+    assert ok(root, "inbox-consume", "--planned-outcome", "dispatch-qa", *holder)["consumed"] == "ev-1"
+    assert ok(root, "inbox-ack", "--event-id", "ev-1", *holder)["already_acked"] is False
+    out = ok(root, declare, "--reason", "session ending", now="2026-08-28T12:30:00Z")
+    assert out["pending_event_ids"] == ["ev-2"]
+    last = json.loads((root / "journal.ndjson").read_text().strip().splitlines()[-1])
+    assert (last["op"], last["pending_event_ids"]) == (declare, ["ev-2"])
+    assert last["lease_disposition"]["holder"] == "ctl-A"
 
 
 def test_source_audit_no_live_ledger_path_in_test_functions():
@@ -2803,15 +2822,14 @@ def test_horizon_527040_unreachable_cadence_refused_at_arm(tmp_path):
 def test_horizon_527040_no_400_year_claim_remains_in_source():
     # The forbidden literals are ITERATED from the single registry, never
     # spelled here: a node that asserts an absence must not itself become the
-    # last carrier of it.
+    # last carrier of it. The command doc's side of this audit is
+    # test_wake_doctrine_block_parses_to_canonical_directives, which parses the
+    # doc's doctrine block.
     engine_source = LEDGER.read_text()
-    doc_source = COMMAND_DOC.read_text()
     for literal in DELETED_PREMISE_LITERALS:
         assert literal not in engine_source, literal
-        assert literal not in doc_source, literal
-    for pattern in [r"400-year", r"146,?097", r"400\s+Gregorian"]:
+    for pattern in HORIZON_PREMISE_PATTERNS:
         assert not re.search(pattern, engine_source), pattern
-        assert not re.search(pattern, doc_source), pattern
 
 
 # ---------------- AC-08: committed vendor-derived golden vectors ----------------
@@ -3853,8 +3871,10 @@ def doctrine_block():
 def test_wake_doctrine_block_parses_to_canonical_directives():
     assert doctrine_block() == CANONICAL_DIRECTIVES
     text = COMMAND_DOC.read_text()
+    for literal in DELETED_PREMISE_LITERALS:
+        assert literal not in text, literal
     for pattern in [r"fires\s+ONCE,\s+at\s+the\s+first\s+occurrence",
-                    r"400-year", r"146,?097",
+                    *HORIZON_PREMISE_PATTERNS,
                     r"both\s+fail-closed\s+for\s+miss\s+detection"]:
         assert not re.search(pattern, text), pattern
 

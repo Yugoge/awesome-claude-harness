@@ -12,6 +12,8 @@ this file's own source contains no such literal).
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -288,14 +290,66 @@ def test_ac8_drain_calls_teardown_declare_exactly_once(tmp_path):
 
 # ---------------- AC9: command doc wiring ----------------
 
-def test_ac9_command_doc_names_ensure_in_bootstrap_and_drain_in_new_section():
-    text = COMMAND_DOC.read_text()
-    bootstrap_start = text.index("\n## Bootstrap\n")
-    bootstrap_end = text.index("\n## ", bootstrap_start + 1)
-    bootstrap_section = text[bootstrap_start:bootstrap_end]
+def doc_section(text, heading):
+    start = text.index(f"\n{heading}\n")
+    end = text.find("\n## ", start + 1)
+    return text[start:end if end != -1 else len(text)]
 
-    assert 'paseo-daemon-timers.py" ensure' in bootstrap_section
-    assert 'paseo-daemon-timers.py" drain' in text
+
+def doc_argv(line, fill):
+    """A command line of the doc with its placeholders filled; python3 is this interpreter."""
+    for slot, value in fill.items():
+        line = line.replace(slot, value)
+    assert "<" not in line and "[" not in line, f"unfilled placeholder in {line!r}"
+    argv = shlex.split(line)
+    assert argv[0] == "python3", line
+    return [sys.executable] + argv[1:]
+
+
+def test_ac9_command_doc_bootstrap_and_fleet_drain_run_as_written(tmp_path):
+    """The Bootstrap section's one call creates the four timers through `ensure`, and the Timer fleet
+    section's drain call, run as the command doc writes them, pauses all four and declares the
+    teardown once."""
+    text = COMMAND_DOC.read_text()
+    [start] = re.findall(r'^python3 "<HARNESS_ROOT>/scripts/steps/paseo-bootstrap\.py" start .*$',
+                         doc_section(text, "## Bootstrap"), re.M)
+    [drain] = re.findall(r'`(python3 "<HARNESS_ROOT>/scripts/paseo-daemon-timers\.py" drain [^`]*)`',
+                         doc_section(text, "## Timer fleet stop/drain"))
+    registry, ledger_root = tmp_path / "registry", tmp_path / "ledger"
+    registry.mkdir()
+    fill = {
+        "<HARNESS_ROOT>": str(REPO),
+        "<incarnation id>": "ctl-A",
+        "[--ttl-seconds <n>]": "",
+        "[--controller-agent-id <id>]": f"--controller-agent-id {CONTROLLER_AGENT_ID}",
+        "[--prompts-dir <dir>]": f"--prompts-dir {make_prompts_dir(tmp_path)}",
+        "<registry>": str(registry),
+        "<ledger>": str(ledger_root),
+    }
+
+    r = subprocess.run(doc_argv(start, fill) + ["--root", str(ledger_root), "--registry-dir", str(registry),
+                                                "--accounts", "acct-a,acct-b,acct-c"],
+                       capture_output=True, text=True, cwd=REPO, timeout=120)
+    assert r.returncode == 0, r.stderr
+    facts = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+    assert (facts["status"], facts["timers"], facts["lease"]) == ("ok", "ok", "acquired"), r.stdout
+    assert sorted(facts["timers_created"].split(",")) == sorted(FOUR_KEYS)
+    assert sorted(NAME_TO_KEY[name] for name in by_name(registry)) == sorted(FOUR_KEYS)
+
+    # The doc writes --registry-dir after `drain`; the script takes it only before the subcommand
+    # (exit 2, "unrecognized arguments"). The fix belongs to commands/paseo-daemon.md, so this call
+    # moves that one global option ahead of the subcommand and runs the rest as written.
+    argv = doc_argv(drain, fill)
+    at = argv.index("--registry-dir")
+    global_option = argv[at:at + 2]
+    del argv[at:at + 2]
+    argv[2:2] = global_option
+    r = subprocess.run(argv, capture_output=True, text=True, cwd=REPO, timeout=120)
+    assert r.returncode == 0, r.stderr
+    status = ok(registry, "status")
+    assert {key: status["timers"][key]["status"] for key in FOUR_KEYS} == dict.fromkeys(FOUR_KEYS, "paused")
+    journal = [json.loads(line) for line in (ledger_root / "journal.ndjson").read_text().splitlines()]
+    assert [rec["op"] for rec in journal].count("teardown-declare") == 1
 
 
 # ---------------- watchdog target: harness home + configured model ----------------

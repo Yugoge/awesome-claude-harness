@@ -4,7 +4,9 @@ c6735512020 item 2, c6737075938 item 2). The replay's /dev devquestion and P5 A2
 runs play this text: the question's `default` taken as a recorded assumption, and the dev re-dispatch's
 `Clarification round:` / `Previous answers:` lines after `Context file:`. Since P13-1 (#38) the answer of
 record is the file the AskUserQuestion hook writes (`Previous answers:` names it), so an unanswered
-question, which writes none, is carried as `Previous answers: none`."""
+question, which writes none, is carried as `Previous answers: none`. agents/dev.md's sentence about that
+line has no test here: no code reads it, and the line dev receives is Step 12's, checked below and played
+by the replay."""
 from __future__ import annotations
 
 import re
@@ -44,7 +46,3 @@ def test_step12_dev_redispatch_carries_step5_lines():
     assert f"  Clarification round: <N>\n  {previous}" in _step(text, 5)
     assert "  Context file: docs/dev/context-<timestamp>.json" in _step(text, 10)
 
-
-def test_dev_agent_reads_previous_answers():
-    agent = (ROOT / "agents" / "dev.md").read_text(encoding="utf-8")
-    assert "re-dispatches dev with the answer in its `Previous answers:` line" in agent
