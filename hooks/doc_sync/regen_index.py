@@ -14,7 +14,7 @@ from .tree import build_tree
 # module is loaded standalone via importlib spec_from_file_location (mirrors the
 # regen_readme/tree.py pattern so the git-tracked filter resolves either way).
 try:
-    from .config import tracked_names, tracked_relpaths, is_github_reserved_subtree
+    from .config import tracked_names, tracked_relpaths, is_github_reserved_subtree, work_tree_root
     from .folder_doc import write_folder_doc
 except ImportError:
     import importlib as _importlib
@@ -27,6 +27,7 @@ except ImportError:
     tracked_names = _cfg.tracked_names  # type: ignore[no-redef]
     tracked_relpaths = _cfg.tracked_relpaths  # type: ignore[no-redef]
     is_github_reserved_subtree = _cfg.is_github_reserved_subtree  # type: ignore[no-redef]
+    work_tree_root = _cfg.work_tree_root  # type: ignore[no-redef]
     write_folder_doc = _importlib.import_module("hooks.doc_sync.folder_doc").write_folder_doc  # type: ignore[no-redef]
 
 
@@ -165,22 +166,24 @@ def _extract_preserved(old: str, dir_name: str) -> str:
     return '\n'.join(preserved)
 
 
-def _folder_name(dir_path: Path, old: str, project_dir: Path | None) -> str:
-    """The name the INDEX gives its folder: the directory's own name, except at the repository
-    root, whose directory is named by wherever it was cloned (~/.claude for a harness home, a
-    CI work path, a public copy under another name); there the title the file already carries
-    is kept, so the text does not depend on the clone's location."""
-    if project_dir is not None:
-        try:
-            at_root = dir_path.resolve() == Path(project_dir).resolve()
-        except OSError:
-            at_root = False
-        if at_root:
-            for line in old.split('\n'):
-                if line.strip():
-                    if line.startswith('# ') and line[2:].strip():
-                        return line[2:].strip()
-                    break
+def _folder_name(dir_path: Path, old: str) -> str:
+    """The name the INDEX gives its folder: the directory's own name, except at the top level
+    of its git work tree, whose directory is named by wherever it was cloned (~/.claude for a
+    harness home, a CI work path, a public copy under another name); there the title the file
+    already carries is kept, so the text does not depend on the clone's location. The root is
+    the repository's own, never the session's project directory, so a clone nested in that
+    directory keeps its title too."""
+    root = work_tree_root(dir_path)
+    try:
+        at_root = root is not None and dir_path.resolve() == root
+    except OSError:
+        at_root = False
+    if at_root:
+        for line in old.split('\n'):
+            if line.strip():
+                if line.startswith('# ') and line[2:].strip():
+                    return line[2:].strip()
+                break
     return dir_path.name
 
 
@@ -245,7 +248,7 @@ def render_index(dir_path: Path, project_dir: Path | None = None) -> tuple[Regen
     skip = classify_region(old, INDEX_MARKER_ID).status
     if skip is not None:
         return skip, None
-    name = _folder_name(dir_path, old, project_dir)
+    name = _folder_name(dir_path, old)
     preserved = _extract_preserved(old, name)
     block = _build_index_block(dir_path, _detect_convention(dir_path), name)
     if marker_line_numbers('\n'.join(block)):

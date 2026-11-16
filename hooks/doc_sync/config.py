@@ -13,36 +13,41 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path, PurePath
 
-# Files a PostToolUse event just wrote and that are not yet in the index: counted as published
-# for the duration of that one regeneration, so the session writes what the tree-wide
-# --check (scripts/regen-folder-docs.py) renders once the file is committed. Set only by
-# counting_written; empty everywhere else, so every other caller sees git-tracked files only.
-_WRITTEN: frozenset = frozenset()
-
-
-def _is_ignored(path: Path) -> bool:
-    try:
-        proc = subprocess.run(['git', '-C', str(path.parent), 'check-ignore', '-q', '--', path.name],
-                              capture_output=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return True
-    return proc.returncode != 1
+# While a PostToolUse event regenerates, a file not yet in the index but not gitignored counts
+# as published: `git add -A` would stage it, so the text written now is the text the tree-wide
+# --check (scripts/regen-folder-docs.py) renders once the change is committed, however many new
+# files the change holds. Set only by counting_untracked; off everywhere else, so every other
+# caller sees git-tracked files only.
+_COUNT_UNTRACKED = False
 
 
 @contextmanager
-def counting_written(paths):
-    """Count each existing, not-gitignored file in `paths` as published while the block runs.
-
-    A gitignored file stays out, as it does once committed; a file git cannot classify is
-    left out too, so nothing the tracked filter exists to hide can be listed by it."""
-    global _WRITTEN
-    previous = _WRITTEN
-    _WRITTEN = frozenset(Path(os.path.abspath(p)) for p in paths
-                         if Path(p).is_file() and not _is_ignored(Path(p)))
+def counting_untracked():
+    """Count untracked, not-gitignored files as published while the block runs."""
+    global _COUNT_UNTRACKED
+    previous = _COUNT_UNTRACKED
+    _COUNT_UNTRACKED = True
     try:
         yield
     finally:
-        _WRITTEN = previous
+        _COUNT_UNTRACKED = previous
+
+
+def work_tree_root(dir_path: Path) -> Path | None:
+    """The resolved top level of the git work tree holding dir_path, or None outside one."""
+    try:
+        proc = subprocess.run(['git', '-C', str(dir_path), 'rev-parse', '--show-toplevel'],
+                              capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = proc.stdout.strip()
+    if proc.returncode != 0 or not top:
+        return None
+    try:
+        return Path(top).resolve()
+    except OSError:
+        return None
+
 
 # GitHub-reserved directory name. A generated README.md anywhere under .github/
 # can hijack the repo landing page (GitHub precedence: .github/README.md >
@@ -126,7 +131,9 @@ def _tracked_relpaths(dir_path: Path) -> set[str] | None:
     """
     try:
         proc = subprocess.run(
-            ['git', '-C', str(dir_path), 'ls-files', '-z', '--', '.'],
+            ['git', '-C', str(dir_path), 'ls-files', '-z',
+             *(('--cached', '--others', '--exclude-standard') if _COUNT_UNTRACKED else ()),
+             '--', '.'],
             capture_output=True, timeout=10, check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -135,13 +142,6 @@ def _tracked_relpaths(dir_path: Path) -> set[str] | None:
         return None
     out = proc.stdout.decode('utf-8', errors='replace')
     relpaths = {entry.replace('\\', '/') for entry in out.split('\0') if entry}
-    if relpaths:
-        base = Path(os.path.abspath(dir_path))
-        for written in _WRITTEN:
-            try:
-                relpaths.add(written.relative_to(base).as_posix())
-            except ValueError:
-                pass
     return relpaths or None
 
 
