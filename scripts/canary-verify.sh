@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Description: Cache-safe canary that behaviorally verifies the four core PreToolUse hooks.
-# Usage: canary-verify.sh [--hooks-dir <path>]
+# Usage: canary-verify.sh [--hooks-dir <path>] [--host-root <dir>]
 #   Designed to run as a SessionStart hook (registered in settings.json).
 # Output contract (spec §5.5):
 #   - Healthy run: zero bytes to stdout (exec >/dev/null), exit 0
 #   - Failure:     stderr message describing the broken hook, exit 2
+#   - Failure lines come first on stderr, advisories after them, so a reader that keeps
+#     only the first stderr line sees why the canary failed.
 #   - Advisory:    stderr message but exit 0 (stdout-polluting prerequisite hooks
 #                  such as session-info.sh / session-git-init.sh — declared
 #                  Won't Have for this cycle; documented in spec §5.5)
@@ -18,12 +20,14 @@ exec >/dev/null
 
 HOOKS_DIR_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks"
 HOOKS_DIR="${HOOKS_DIR_DEFAULT}"
+HOST_ROOT=""  # --host-root: where the deployed cleanup artifacts are read (default: this host)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --hooks-dir) HOOKS_DIR="${2:?missing value for --hooks-dir}"; shift 2 ;;
+    --host-root) HOST_ROOT="${2:?missing value for --host-root}"; shift 2 ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--hooks-dir <path>]" >&2
+      echo "Usage: $(basename "$0") [--hooks-dir <path>] [--host-root <dir>]" >&2
       exit 0
       ;;
     *) echo "canary-verify.sh: unknown arg '$1'" >&2; exit 1 ;;
@@ -48,9 +52,11 @@ emit_failure() {
   failures=$((failures + 1))
 }
 
+advisories=()
+
 emit_advisory() {
-  # Advisory: log to stderr but do not increment failures (spec §5.5 + Won't Have).
-  echo "canary-verify[ADVISORY]: $*" >&2
+  # Advisory: printed after every failure line, and never counted as a failure (spec §5.5 + Won't Have).
+  advisories+=("canary-verify[ADVISORY]: $*")
 }
 
 # ---------------------------------------------------------------------------
@@ -169,9 +175,9 @@ verify_cleanup_drift() {
     "/etc/tmpfiles.d/tmp.conf:${install_dir}/tmpfiles-tmp-override.conf"
     "/etc/tmpfiles.d/var-tmp-claude.conf:${install_dir}/tmpfiles-var-tmp-override.conf"
   )
-  local pair deployed repo
+  local pair deployed repo marker
   for pair in "${pairs[@]}"; do
-    deployed="${pair%%:*}"
+    deployed="${HOST_ROOT}${pair%%:*}"
     repo="${pair#*:}"
     if [[ ! -f "${repo}" ]]; then
       continue
@@ -181,6 +187,13 @@ verify_cleanup_drift() {
       continue
     fi
     if ! diff -q "${deployed}" "${repo}" >/dev/null 2>&1; then
+      # The harness's copy names its own deploy target in a comment line. A file at that path
+      # without the line is the host's own (an image or an administrator put it there), not drift.
+      marker="$(grep -m1 -F -- "${pair%%:*}" "${repo}")"
+      if [[ -n "${marker}" ]] && ! grep -qxF -- "${marker}" "${deployed}"; then
+        emit_advisory "a host file the harness did not deploy: ${deployed} (it lacks '${marker}')"
+        continue
+      fi
       emit_failure "cleanup artifact drift: ${deployed} differs from ${repo}"
     fi
   done
@@ -243,7 +256,12 @@ verify_cleanup_drift
 check_advisory_prerequisites
 
 if [[ "${failures}" -gt 0 ]]; then
-  echo "canary-verify[FAIL]: ${failures} hook(s) broken — see preceding lines" >&2
+  echo "canary-verify[FAIL]: ${failures} hook(s) broken — see the lines above" >&2
+fi
+for line in "${advisories[@]+"${advisories[@]}"}"; do
+  echo "${line}" >&2
+done
+if [[ "${failures}" -gt 0 ]]; then
   exit 2
 fi
 

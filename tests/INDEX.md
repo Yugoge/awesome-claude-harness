@@ -135,6 +135,7 @@ tests/
 ├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 ├── `test_bootstrap_init.py` - Every case runs in its own temporary clone of this repository, synced to the
 ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
+├── `test_canary_cleanup_drift.py` - scripts/canary-verify.sh's cleanup-drift check tells a host's own file from drift of the harness's copy.
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
