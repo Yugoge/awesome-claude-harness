@@ -39,7 +39,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 - `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 - `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-- `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
+- `posttool-restart-sendmessage.py` - PostToolUse: journal every SendMessage call that ran.
 - `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 - `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 - `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's

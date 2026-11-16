@@ -25,4 +25,15 @@ cmd_count=$(find .claude/commands -name "*.md" 2>/dev/null | wc -l)
 agent_count=$(find .claude/agents -name "*.md" 2>/dev/null | wc -l)
 [ "$cmd_count" -gt 0 ] && echo "  Commands:  $cmd_count available"
 [ "$agent_count" -gt 0 ] && echo "  Agents:    $agent_count available"
+
+# The checklist gates read TodoWrite, which the CLI offers only while CLAUDE_CODE_ENABLE_TASKS reads
+# false (settings.json env pins it); the Stop gate names the same gap (stop-command-gate.py todo_gaps).
+tasks=${CLAUDE_CODE_ENABLE_TASKS-}
+tasks=${tasks#"${tasks%%[![:space:]]*}"}  # trim both ends and lowercase, as the CLI reads the switch
+tasks=${tasks%"${tasks##*[![:space:]]}"}
+tasks=$(printf '%s' "$tasks" | tr '[:upper:]' '[:lower:]')  # tr, not ${,,}: macOS ships bash 3.2
+case "$tasks" in
+    0|false|no|off) ;;
+    *) echo "WARNING: CLAUDE_CODE_ENABLE_TASKS is '${CLAUDE_CODE_ENABLE_TASKS-}', not false: this session has the Task tools, not TodoWrite, and gated commands cannot end (settings.json env pins it to false)" ;;
+esac
 exit 0

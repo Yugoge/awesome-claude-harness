@@ -9,9 +9,10 @@ ENFORCEMENT (default disposition matters):
   - Bash → foreground is the default, so only an explicit True is a background
     task (exit 2); absent/False is fine.
   - SendMessage / Workflow → inherently background with NO synchronous mode.
-    SendMessage is blocked except for the exact, validated /restart recovery
-    message to a transcript-discovered, pending interrupted agent id. Workflow
-    remains blocked outright.
+    SendMessage passes only lib/send_policy.decide: the exact, validated /restart
+    recovery message to a pending candidate, or a send to this session's own
+    finished subagent dispatched with no obligation outside every gated span.
+    Workflow remains blocked outright.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
 
@@ -129,33 +130,35 @@ def main():
     if has_do_consent(payload):
         sys.exit(0)
 
-    # SendMessage is normally forbidden because it resumes a child asynchronously.
-    # The sole exception is /restart: an intended UserPromptSubmit-issued capability
-    # plus runtime checks bind `to` to a pending, interrupted parent-transcript agent,
-    # and the message body must byte-match the fixed recovery prompt. Import inside
-    # the branch so a missing helper cannot wedge unrelated tools; SendMessage fails
-    # CLOSED to its prior always-blocked disposition on any helper error.
-    restart_reason = ""
+    # SendMessage resumes a child asynchronously, so the main agent's send passes only
+    # lib/send_policy.decide: a /restart candidate gets the exact recovery message and
+    # nothing else (lesson 16); any other target must be this session's own finished
+    # subagent, dispatched with no obligation and outside every gated command's span.
+    # Import inside the branch so a missing helper cannot wedge unrelated tools;
+    # SendMessage fails CLOSED on any helper error.
     if tool_name == "SendMessage":
         try:
-            from lib.subagent_restart import authorize_send_message
+            from lib.send_policy import decide
 
-            restart_ok, restart_reason = authorize_send_message(payload)
-        except Exception as exc:  # noqa: BLE001 — prior policy is deny
-            restart_ok = False
-            restart_reason = f"restart authorization unavailable: {exc}"
-        if restart_ok:
+            send_ok, send_reason = decide(payload)
+        except Exception as exc:  # noqa: BLE001 — the policy's default is deny
+            send_ok, send_reason = False, f"SendMessage policy unavailable: {exc}"
+        if send_ok:
             sys.exit(0)
-
-    # Workflow spawns a whole background fleet. Unauthorized SendMessage resumes a
-    # background child. Neither has a synchronous mode, so both remain blocked.
-    if tool_name in {"SendMessage", "Workflow"}:
-        detail = f"\nRestart authorization: {restart_reason}" if restart_reason else ""
         print(
-            f"[BLOCK] {tool_name} runs agents in the background and is forbidden for "
+            f"[BLOCK] SendMessage refused for the orchestrator: {send_reason}\n"
+            "Dispatch new work with Agent(run_in_background=false), or use /do.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Workflow spawns a whole background fleet and has no synchronous mode: blocked.
+    if tool_name == "Workflow":
+        print(
+            "[BLOCK] Workflow runs agents in the background and is forbidden for "
             "the orchestrator.\n"
             "There is no synchronous mode; dispatch work with "
-            f"Agent(run_in_background=false), or use /do.{detail}",
+            "Agent(run_in_background=false), or use /do.",
             file=sys.stderr,
         )
         sys.exit(2)
