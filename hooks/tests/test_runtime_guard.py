@@ -4480,7 +4480,7 @@ class TestShellPayloadIsReadLikeAnyCommand:
         for cmd in ('bash -c "npm i -g foo"', "sh -c 'npm install -g foo'",
                     'bash -lc "npm install --global foo"', 'timeout 5 bash -c "npm i -g foo"',
                     "bash -c $'npm i -g foo'", 'eval "npm i -g foo"', "bash <<'EOF'\nnpm i -g foo\nEOF",
-                    "cat <<'EOF' | bash\nnpm i -g foo\nEOF"):
+                    "cat <<'EOF' | bash\nnpm i -g foo\nEOF", "echo 'npm i -g foo' | sh"):
             assert ev(cmd, datafile, fixture_repo) == "BLOCK", cmd
 
     def test_text_that_only_names_a_global_install_allows(self, datafile, fixture_repo):

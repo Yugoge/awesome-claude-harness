@@ -649,22 +649,12 @@ def _command_substitutions(text: str) -> list:
     return out
 
 
-def _reads_script_from_stdin(cmd) -> bool:
-    """A shell with no script operand and no `-c`: it runs what its pipe feeds it."""
-    if not isinstance(cmd, _sp.SimpleCommand):
-        return False
-    r = _sp.resolve(cmd)
-    return (r.name in _sp.SHELLS and r.payload is None and r.unresolved is None
-            and all((a or "-").startswith("-") for a in r.argv()))
-
-
 def _pipeline_groups(command: str) -> list:
     """The simple commands of `command` as pipeline GROUPS of their source texts.
     Commands joined by `|`/`|&` share a group, as does the whole body of a
     compound fed by or feeding a pipe; `;`, `&&`, `||`, `&` and newlines separate
     groups. A compound's own redirects are a segment of their own, the commands an
-    unquoted heredoc expands are groups of their own, so is the body of a heredoc
-    piped into a shell that reads its script from stdin, and on a parse error the text
+    unquoted heredoc expands are groups of their own, and on a parse error the text
     from the start of the command it stopped in is one last group, so no write or
     command in the text goes unread."""
     script = _sp.parse(command)
@@ -697,10 +687,6 @@ def _pipeline_groups(command: str) -> list:
                 flat(st, g, extra)
             groups.append(g)
             groups.extend(extra)
-            if any(_reads_script_from_stdin(st) for st in pl.stages[1:]):
-                groups.extend([(r.span[0], t) for t in sub] for st in pl.stages[:-1]
-                              if isinstance(st, _sp.SimpleCommand) for r in st.redirects
-                              if r.hd is not None for sub in _pipeline_groups(r.hd.body))
 
     items(script)
     if script.error is not None:
@@ -4509,12 +4495,17 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
             if pv[0] == "BLOCK":
                 return pv
 
-    # The code a shell `-c`, `eval` or a fed shell runs (`bash -c "…"`, `sh <<EOF`),
-    # behind any wrapper the parser peels, is evaluated like any command.
-    for c in _sp.iter_commands(_sp.parse(command), into=()):
-        payload = _sp.resolve(c).payload
-        if payload is not None and payload.source != command:
-            pv = evaluate(payload.source, cwd_base)
+    # The code a shell `-c`, `eval` or a fed shell runs (`bash -c "…"`, `sh <<EOF`,
+    # `cat <<EOF | sh`), behind any wrapper the parser peels, is evaluated like any
+    # command. A payload whose text is computed is left to the rules above.
+    script = _sp.parse(command)
+    shell_code = [r.payload.source for r in map(_sp.resolve, _sp.iter_commands(script, into=()))
+                  if r.payload_kind in ("shell_c", "eval", "heredoc_shell") and r.unresolved is None]
+    shell_code += [site.script.source for site in _sp.walk(script, into=("pipe_shell",))
+                   if site.context == ("top", "pipe_shell")]
+    for payload in dict.fromkeys(shell_code):
+        if payload != command:
+            pv = evaluate(payload, cwd_base)
             if pv[0] == "BLOCK":
                 return pv
 
