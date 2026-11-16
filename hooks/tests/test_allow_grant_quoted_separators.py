@@ -149,6 +149,27 @@ def test_text_with_no_quote_splits_exactly_as_before():
         assert AL._bash_subcommands(command) == expect, repr(command)
 
 
+# Inside a comment ; | and && still split, as before: the part after each starts right after the
+# separator, and the character after && is read again as a possible separator. (Mutation of the
+# comment branch survived every other case here: P15 decision (b).)
+IN_A_COMMENT = [
+    ("git commit -m a # x;yz", ["git commit -m a # x", "yz"]),
+    ("git commit -m a # x|yz", ["git commit -m a # x", "yz"]),
+    ("git commit -m a # x&&yz", ["git commit -m a # x", "yz"]),
+    ("git commit -m a # x&&;yz", ["git commit -m a # x", "yz"]),
+    ("git commit -m a # x&&|yz", ["git commit -m a # x", "yz"]),
+    ("git commit -m a # plain words\nrm x", ["git commit -m a # plain words", "rm x"]),
+    ("git commit -m 'a; b' # x&&yz", ["git commit -m 'a; b' # x", "yz"]),
+]
+
+
+@pytest.mark.parametrize("command,parts", IN_A_COMMENT)
+def test_a_separator_inside_a_comment_splits_as_before(command, parts):
+    assert AL._bash_subcommands(command) == parts
+    if "'" not in command:  # with no quote, exactly the legacy split
+        assert AL._legacy_subcommands(command) == parts
+
+
 def _bash_keywords_and_builtins(bash):
     out = subprocess.run([bash, "-c", "compgen -b; compgen -k"], capture_output=True, text=True, timeout=10,
                          stdin=subprocess.DEVNULL, env={"PATH": ""}).stdout

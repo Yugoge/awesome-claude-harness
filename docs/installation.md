@@ -51,8 +51,9 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
      `protected_services`, `protected_hotfiles`, `protected_statefiles`,
      `protected_endpoint_paths`, `protected_proc_idents`, `protected_global_bins`,
      `protected_build_workspaces` and `protected_build_paths`, each an empty list;
-5. installs the pre-commit hook where git runs hooks for the clone (`core.hooksPath`
-   respected), but only into this repository's own hooks directory: under its git directory,
+5. installs the git hooks of `hooks/git-hooks/` that are marked for it (the pre-commit hook and
+   the pre-push guard) where git runs hooks for the clone (`core.hooksPath` respected), keeping a
+   foreign hook of the same name as `<name>.local`, which the installed hook runs last; but only into this repository's own hooks directory: under its git directory,
    or named by `core.hooksPath` in its local (or worktree) config. A global, system or
    command-line `core.hooksPath` can serve every repository on the machine, so init writes
    nothing there, finishes the other steps and exits non-zero, printing the
@@ -109,8 +110,9 @@ end of any of its sessions; nothing has to be stopped or typed. `hooks/auto-comm
 `scripts/install/land`, one session at a time, which never blocks the Stop and shows one line:
 it undoes what a conflicted stash pop of the pull left (`settings.json` from upstream, the paths
 the pop staged unstaged, the stash entry kept), migrates the previous personal settings into a
-new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
-`private-literals.txt` from values the machine already holds, replaces post-commit hooks that are
+new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds `private-literals.txt` from
+values the machine already holds and from the home's own git history (an empty list gets both, a
+list that has lines only the history values it lacks; [the private-literal list](git-protection-kernel.md#commit-protection-the-pre-commit-hook-and-the-private-literal-list)), replaces post-commit hooks that are
 copies of an earlier `post-commit-auto-push` and renames aside the other ones that push unless
 `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
 git-fswatch daemons running older code with their own environment (one in its git work, or in a
@@ -122,15 +124,12 @@ A rebase or merge stopped in the home is left alone: the landing says so and wai
 sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`
 remain.
 
-**When the upstream history is rewritten.** A harness home moves to the rewritten history with its
-next `/pull`, which rebases the home's own commits onto it; nothing has to be typed or stopped. The
-home keeps its local data, pre-rewrite objects included (stash entries, checkpoint and backup refs,
-reflogs), as recoverable local history, and its pre-push guard (installed by the landing beside
-the pre-commit hook) refuses any push that would send an object holding a literal listed in
+**Pushes from the harness home.** The landing installs the pre-push guard beside the pre-commit
+hook. It refuses any push that would send an object holding a literal listed in
 `private-literals.txt` ([the private-literal list](git-protection-kernel.md#commit-protection-the-pre-commit-hook-and-the-private-literal-list)),
-naming the object. If that rebase stops on a conflict, `/pull` stops too and keeps its stash
-entry: finish or abort the rebase, then `git stash pop`. Any other clone of the repository should
-be cloned again.
+naming the object and never the value. The repository's history is not rewritten (D30): the
+public copy is built by `scripts/publish-public`, one commit per publish, so a `/pull` never has
+to move a home to a rewritten history.
 
 ## Other install locations
 
@@ -254,8 +253,29 @@ clean form either way.
 
 It also lists, without failing, CLI-owned keys whose working value differs from the overlay.
 `scripts/doctor --strict` runs, in place of the checks above, a fresh host-capability handshake
-and prints a short compatibility report (`--verbose` adds the per-check detail). Doctor exits
-non-zero when a required check fails; with `--strict`, unless the fresh handshake passes.
+and prints a short compatibility report (`--verbose` adds the per-check detail). Every run opens
+with a new nonce; a cached or preseeded PASS is overwritten before any probe and never trusted.
+The report ends in one of three results, each with its own exit code:
+
+| Result | Exit | Meaning |
+|---|---|---|
+| `PASS` | 0 | Every check was measured by this run and passed. Blocking capability and the four deep checks have no probe yet, so no run reaches it today. |
+| `FAIL` | 1 | A check was measured and failed, named on the `RESULT` line: a lifecycle event whose `hooks/capability-canary.py` is not registered for it in any settings layer (`not_wired`), a live receipt that failed its cross-checks, or an unusable binding. |
+| `NOT_PROVABLE_HERE` | 4 | Nothing failed, but the named checks cannot be measured from where doctor runs. Each line says the one action that proves it. |
+
+Where doctor runs never makes it fail. A Bash call inside a session sees no hook event while it
+runs (its PreToolUse fires before it starts, its PostToolUse after it exits), and a terminal has
+no host at all, so a registered event with no receipt in the window is `NOT_PROVABLE_HERE`, never
+`FAIL`. To prove a session's own PreToolUse and PostToolUse, run `scripts/doctor --strict
+--timeout 60` there as a background task and read its output once while it waits: that read is a
+tool call inside the window, and it puts the run's nonce (the `probe open` line on stderr) in the
+transcript. From a terminal, `--session-id <id> --timeout 120` probes a running session; the
+report names what to do in it per event. The session id is `--session-id`, else
+`CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`. A `NOT_PROVABLE_HERE` or `FAIL` run leaves the
+handshake state UNPROTECTED, so protected routes stay refused. While `/harness off` holds, doctor
+(plain or `--strict`) prints the switch's report and exits 3.
+
+Doctor exits non-zero when a required check fails.
 
 ## Switching the harness off: /harness
 
@@ -264,8 +284,11 @@ from. `/harness on` switches it back on, and `/harness status` reports it. Only 
 prompt switches: a UserPromptSubmit hook (`hooks/userprompt-harness-switch.sh`) runs
 `scripts/harness-switch`. An agent's call is refused while the harness is on, whatever path it
 takes: `Skill`, `Bash`, a write of the switch's state or of the home's settings, a script, a
-scheduled prompt, a `disableAllHooks` written into any project's settings file
-(`hooks/pretool-harness-switch-guard.py`).
+scheduled prompt, a `disableAllHooks` written into any project's settings file, or a change to
+the `env`, `hooks` or `permissions` of a Claude Code settings file (a project's
+`.claude/settings.json` or `.claude/settings.local.json`, `managed-settings.json`, `.claude.json`)
+(`hooks/pretool-harness-switch-guard.py`). The owner edits those files directly, or lets one
+agent call through with `/allow`.
 
 A session an agent's script starts is not the owner's. `scripts/harness-switch` walks the hook's
 process ancestry, and when a Claude Code process runs above the session's own (a `claude -p

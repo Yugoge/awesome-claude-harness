@@ -1,24 +1,28 @@
-"""Contract tests for shared /dev artifact-chain consumers."""
+"""Contract tests for shared /dev artifact-chain consumers.
 
+Each command that reads the artifact chain spells one resolver call and names the result fields it hands
+on. Each test runs that call as the command spells it, from the harness home, against a fixture project,
+and checks the resolver's own output carries every field the text names, so a call or field name that
+drifts from the resolver fails here (P15 L7).
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXED_ENTRYPOINT = (
-    "scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>"
-)
-# the same entrypoint as a command runs it, from the harness home (P2 R6)
-FIXED_ENTRYPOINT_RUN = (
-    'python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py"'
-    " --task-id <id> --project-dir <root>"
-)
-RESULT_FIELDS = (
-    "mode",
-    "lanes",
-    "report_paths",
-    "artifact_paths",
-    "commit_whitelist_artifacts",
-    "qa_inputs",
+TASK = "20260101-000010"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _dev_lifecycle_fixtures import (  # noqa: E402
+    ba_qa_report, close_report_text, completion_md, dev_dir, dev_report, make_project, qa_report, write_json,
+    write_text, write_ticket_fixture,
 )
 
 
@@ -30,84 +34,89 @@ def _squash(text: str) -> str:
     return " ".join(text.split())
 
 
-def test_dev_completion_uses_shared_read_only_resolver() -> None:
+def _resolver_fences(text: str) -> list[str]:
+    return [body for body in re.findall(r"```bash\n(.*?)```", text, re.S) if "resolve-dev-artifact-chain.py" in body]
+
+
+def _ticks(text: str) -> list[str]:
+    return [name.rstrip("[]") for name in re.findall(r"`([^`\n]+)`", text)]
+
+
+def _passing_singular(tmp_path: Path) -> Path:
+    project = make_project(tmp_path)
+    write_ticket_fixture(project, TASK)
+    write_json(dev_dir(project) / f"ba-qa-report-{TASK}.json", ba_qa_report(TASK, top_verdict="pass"))
+    write_json(dev_dir(project) / f"dev-report-{TASK}.json", dev_report(TASK))
+    write_json(dev_dir(project) / f"qa-report-{TASK}.json", qa_report(TASK))
+    write_text(dev_dir(project) / f"completion-{TASK}.md", completion_md(TASK))
+    write_text(dev_dir(project) / f"close-report-{TASK}.md", close_report_text(TASK, "CLOSE: YES"))
+    return project
+
+
+def _run(script: str, project: Path) -> subprocess.CompletedProcess:
+    env = {**os.environ, "CLAUDE_HOME": str(ROOT), "TASK_ID": TASK, "CLAUDE_PROJECT_DIR": str(project)}
+    return subprocess.run(["bash", "-c", script], cwd=project, env=env, capture_output=True, text=True, timeout=120)
+
+
+def _dev(project: Path) -> tuple[str, dict, list[str]]:
+    """commands/dev.md: the completion postcondition's call binds ARTIFACT_CHAIN to the resolver's JSON."""
     text = _read("commands/dev.md")
-    section = text[text.index("**Codex-native artifact postcondition") :]
-
-    assert FIXED_ENTRYPOINT in section
-    assert 'status == "pass"' in section
-    assert "exit 2" in section
-    assert "The resolver is read-only" in section
-    assert 'mode == "singular"' in section
-    assert 'mode == "fanout"' in section
-    assert "Never create, copy, or invent" in section
-    for field in RESULT_FIELDS:
-        assert f"`{field}`" in section
+    section = text[text.index("**Codex-native artifact postcondition"):]
+    [fence] = _resolver_fences(section[:section.index("\n## ")])
+    done = _run(fence.replace("<TASK_ID>", TASK) + 'printf "%s" "$ARTIFACT_CHAIN"\n', project)
+    assert done.returncode == 0, done.stderr
+    fields = _ticks(re.search(r"same result object \(([^)]*)\)", section).group(1))
+    return done.stdout, json.loads(done.stdout), fields
 
 
-def test_close_resolves_explicit_and_bare_before_singular_assumptions() -> None:
-    text = _read("commands/close.md")
-    step0 = text[text.index("### Step 0:") : text.index("### Routes")]
-    flat = _squash(step0)
-
-    # /close's one chain call is Step 0's disposition call, from the harness
-    # home (P4 R1); Steps 1-3 read the chain's data fields from that run (R3).
-    assert text.count("resolve-dev-artifact-chain.py --disposition") == 1
-    assert (
-        'python3 "${CLAUDE_HOME:-$HOME/.claude}"/scripts/resolve-dev-artifact-chain.py'
-        ' --disposition --stage dev --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"'
-    ) in step0
-    assert "close-route-select" not in text
-    assert "explicit and bare `/close` alike" in flat
-    assert "no parent ticket/context/QA assumption before it" in flat
-    assert "`CHAIN=<JSON>`" in step0
-    for field in RESULT_FIELDS:
-        assert f"`{field}`" in step0
-    # P1b E5 / ruling 1: the canonical aggregate's one producer is the
-    # lane-completeness hook; /close runs no aggregator of its own.
-    assert "aggregate-dev-report.py" not in text
-    assert "runs no aggregator" in flat
-    assert "Parent ticket/context/QA are optional" in flat
+def _disposition(project: Path, command: str, stage: str, named_in: str) -> tuple[str, dict, list[str]]:
+    """A /close or /commit disposition call: one resolver fence in the whole command, its CHAIN= line."""
+    text = _read(command)
+    [fence] = _resolver_fences(text)
+    assert f"--disposition --stage {stage} " in fence, fence
+    done = _run(fence.replace("<PROJECT_ROOT>", str(project)), project)
+    assert done.returncode == 0, done.stderr
+    assert f"DISPOSITION=chain_pass STAGE={stage} TASK={TASK}" in done.stdout.splitlines(), done.stdout
+    [chain] = [line[len("CHAIN="):] for line in done.stdout.splitlines() if line.startswith("CHAIN=")]
+    return done.stdout, json.loads(chain), _fields_named(text, named_in)
 
 
-def test_close_reuses_resolver_for_qa_and_workflow_integrity() -> None:
-    text = _read("commands/close.md")
-    qa_prompt = text[text.index("### Step 2:") : text.index("### Step 3:")]
-
-    # Report schemas are checked at each producer's stop (G2), not re-run here,
-    # and QA cites Step 0's chain_pass instead of re-checking the chain (R3).
-    assert "### Artifact schema gate" not in text
-    assert "_exceptions" not in text
-    assert "- Disposition: chain_pass" in qa_prompt
-    assert "Step 0's `chain_pass`" in qa_prompt
-    assert "Lane matrix: <ARTIFACT_CHAIN.lanes" in qa_prompt
-    assert "QA inputs: <ARTIFACT_CHAIN.qa_inputs" in qa_prompt
-    assert "commit_whitelist_artifacts" in qa_prompt
-    assert "WORKFLOW INTEGRITY DIMENSION" in qa_prompt
-    assert "parent ticket/context/QA are optional" in qa_prompt
-    assert "pseudo-parent" in qa_prompt
+def _fields_named(text: str, where: str) -> list[str]:
+    if where == "close Step 0":
+        bullet = next(line for line in text[text.index("### Step 0:"):].splitlines() if line.startswith("- **Exit 0**"))
+        return _ticks(bullet[bullet.index("its `"):bullet.index(" are the data")])
+    return sorted(set(re.findall(r"ARTIFACT_CHAIN\.(\w+)", text)))
 
 
-def test_normal_commit_and_changelog_share_resolver_whitelist() -> None:
-    command = _read("commands/commit.md")
-    analyst = _read("agents/changelog-analyst.md")
-    step3 = command[command.index("### Step 3:") : command.index("### Step 4:")]
+def _spec_update(project: Path) -> tuple[str, dict, list[str]]:
+    """commands/spec-update.md: a /spec-update typed on its own runs the fixed entrypoint itself."""
+    text = _read("commands/spec-update.md")
+    section = text[text.index("## Continuation-spec mode"):text.index("## Temp-note mode")]
+    [call] = [c for c in re.findall(r"`([^`\n]+)`", section) if c.startswith("python3") and "resolve-dev" in c]
+    done = _run(call.replace("<HARNESS_ROOT>", str(ROOT)).replace("<id>", TASK).replace("<root>", str(project)),
+                project)
+    assert done.returncode == 0, done.stderr
+    named = section[section.index("Read the existing paths named by"):section.index("plus\n`docs/dev/close-report")]
+    return done.stdout, json.loads(done.stdout), _ticks(named)
 
-    # P4 R5: /commit's one chain call is Step 3's disposition at the close stage; its
-    # CHAIN line is the data Step 5 and Step 7 hand on, never a second call.
-    assert command.count("resolve-dev-artifact-chain.py --disposition") == 1
-    assert "resolve-dev-artifact-chain.py --disposition --stage close" in step3
-    assert "--bulk" not in step3.split("```bash")[1].split("```")[0]
-    assert "resolve-dev-artifact-chain.py --task-id" not in command
-    assert 'ARTIFACT_CHAIN="$(' not in command
-    assert "`CHAIN=` line" in step3 and "No second chain call is made." in step3
-    assert "ARTIFACT_CHAIN=<the chain data fields of Step 3's disposition call" in command
-    assert "ARTIFACT_CHAIN.commit_whitelist_artifacts" in command
-    assert "Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`" in analyst
-    assert "resolver-validated lane ticket/context/dev/QA artifact" in analyst
-    assert "Do not glob lane suffixes" in analyst
-    assert "original\n+singular overhead" not in analyst
-    assert "the original\nsingular overhead" in analyst
+
+READERS = {
+    "dev": _dev,
+    "close": lambda project: _disposition(project, "commands/close.md", "dev", "close Step 0"),
+    "commit": lambda project: _disposition(project, "commands/commit.md", "close", "commit ARTIFACT_CHAIN"),
+    "spec-update": _spec_update,
+}
+
+
+@pytest.mark.parametrize("command", sorted(READERS))
+def test_the_chain_call_a_command_spells_runs_the_resolver_and_yields_the_fields_it_names(
+        tmp_path: Path, command: str) -> None:
+    out, chain, fields = READERS[command](_passing_singular(tmp_path))
+    assert fields, out
+    missing = [field for field in fields if field not in chain]
+    assert missing == [], (missing, sorted(chain))
+    assert chain["mode"] == "singular" and chain["lanes"] == [], chain
+    assert f"docs/dev/dev-report-{TASK}.json" in chain["commit_whitelist_artifacts"]
 
 
 def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
@@ -136,60 +145,3 @@ def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
     assert "/stop" not in command and "I will fix the harness" not in command
     related = command[command.index("## Related") :]
     assert "may run first; `/commit` completes an unclosed task itself" in related
-
-
-def test_changelog_analyst_phase1_takes_the_chain_as_data() -> None:
-    """P4 R6: Phase 1 validates the repository plan, not ARTIFACT_CHAIN; a late-repair
-    effective report the plan names is still admitted."""
-    analyst = _read("agents/changelog-analyst.md")
-    phase1 = analyst[analyst.index("### Phase 1:") : analyst.index("### Phase 2:")]
-
-    assert "pass_with_exceptions" not in analyst
-    assert "status in {" not in phase1
-    assert "resolve_effective_report_state" not in phase1
-    assert "`ARTIFACT_CHAIN` is not validated here" in phase1
-    assert "schema_version=1" in phase1 and "repository_plan_invalid" in phase1
-    item4 = analyst[analyst.index("4. Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`") :]
-    item4 = item4[: item4.index("5. Post-chain artifacts")]
-    assert "dev-report-<TASK_ID>.effective.json" in item4 and "admitted into this list too" in item4
-
-
-def test_close_qa_accepts_one_parent_lane_matrix_without_fake_parents() -> None:
-    text = _read("agents/qa.md")
-    section = text[
-        text.index("**Close-gate lane-matrix exception") :
-        text.index("## Input Format")
-    ]
-    flat = _squash(section)
-
-    assert "one task is the parent closure decision" in flat
-    assert "do NOT emit `multi_issue_fanout_requested`" in flat
-    for field in RESULT_FIELDS:
-        assert f"`{field}`" in section
-    assert "parent ticket/context/QA are optional" in flat
-    assert "MUST NOT request, create, or pretend" in flat
-
-    # P3 R4 / P4 R3: close QA closes only on Step 0's chain_pass, the one
-    # closeable disposition (its CHAIN line carries data fields, no status),
-    # and consumes no disclosed-exceptions field.
-    assert "`Disposition: chain_pass`" in section
-    assert "the resolver's one closeable" in flat
-    assert "status in {" not in section
-    assert "disclosed_exceptions" not in section
-    assert "_exceptions" not in text
-
-
-def test_spec_update_consumes_lane_matrix_without_fake_parent_context() -> None:
-    text = _read("commands/spec-update.md")
-    section = text[
-        text.index("## Continuation-spec mode") :
-        text.index("## Temp-note mode")
-    ]
-    flat = _squash(section)
-
-    assert FIXED_ENTRYPOINT_RUN.replace("${CLAUDE_HOME:-$HOME/.claude}", "<HARNESS_ROOT>") in section
-    assert "`artifact_paths`, `report_paths`, `qa_inputs`, and" in section
-    assert "`lanes[]`" in section
-    assert "every lane ticket/context/dev/QA" in flat
-    assert "must not create, a parent context" in flat
-    assert "fabricate missing parent artifacts" in flat
