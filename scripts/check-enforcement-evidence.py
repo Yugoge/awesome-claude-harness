@@ -518,8 +518,12 @@ def extract_wrappers(classifier_path):
 
 # The residual classes RISK-3 names: wrapper flags and leading redirections in front of git.
 # Each form must still reach the classifier as a git invocation.
-CLOSED_BOUNDARY_FORMS = ("env -i git status", "env -u FOO git status",
-                         "2>/dev/null git status", "if ! git status; then :; fi")
+CLOSED_BOUNDARY_FORMS = (
+    "env -i git status", "env -u FOO git status", "env -P/usr/bin git status",
+    "2>/dev/null git status", "git status 2>/dev/null",
+    "if ! git status; then :; fi", "if true; then git status; fi",
+    "for x in a; do git status; done", "while ! git status; do :; done",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1096,12 +1100,16 @@ def check_claims(args, report):
         report.fail("_WRAPPERS changed: the wrapper set could not be read from "
                     f"{args.classifier} -- an unreadable set cannot be compared against the "
                     f"published one")
-    elif set(RECORDED_WRAPPERS) <= set(live_wrappers):
-        report.ok(f"_WRAPPERS holds the {len(RECORDED_WRAPPERS)} recorded tokens "
-                  f"({len(live_wrappers)} in all, from the parser's table)")
     else:
-        report.fail(f"_WRAPPERS lost {sorted(set(RECORDED_WRAPPERS) - set(live_wrappers))} -- "
-                    f"the residual class named in the published matrix has grown")
+        published_wrappers = published_token_set(read_text(args.ledger_file), "wrapper") or []
+        lost = sorted((set(RECORDED_WRAPPERS) | set(published_wrappers)) - set(live_wrappers))
+        if lost:
+            report.fail(f"_WRAPPERS lost {lost} -- the residual class named in the published "
+                        f"matrix has grown")
+        else:
+            report.ok(f"_WRAPPERS holds the {len(RECORDED_WRAPPERS)} recorded and the "
+                      f"{len(published_wrappers)} published tokens ({len(live_wrappers)} in all, "
+                      f"from the parser's table)")
 
     # The token sets are matched ONLY inside their anchored publication regions. Matching
     # anywhere in the document is vacuous: '>' appears on every blockquote line and '<' inside
