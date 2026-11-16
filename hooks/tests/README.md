@@ -93,6 +93,7 @@
 - `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
 - `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
 - `test_overnight_inplace_bubblewrap.py` - Replayed in a bwrap-less in-place toy session, every removal of the git
+- `test_overnight_keystone_hook_dir.py` - An overnight actor leaves the keystone hook dir as it is, in both modes (#27, High).
 - `test_overnight_one_state_reader.py` - cycle contract's one writer (P1b row 13, E13)
 - `test_overnight_operand_scan_channel.py` - The commands run harness scripts as `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/x.sh"`. For an
 - `test_overnight_qa_sentinel_bind.py` - P1b E7 removed the one RW exception the boundary had under main's
