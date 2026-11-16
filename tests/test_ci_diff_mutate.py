@@ -12,6 +12,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci" / "diff-mutate.py"
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
@@ -38,9 +40,9 @@ def _repo(tmp_path: Path, base: dict[str, str], head: dict[str, str]) -> Path:
     return repo
 
 
-def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(repo: Path, *args: str, workers: str = "0") -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    return subprocess.run([sys.executable, str(SCRIPT), "--base", "HEAD", *args], cwd=repo, env=env,
+    return subprocess.run([sys.executable, str(SCRIPT), "--base", "HEAD", "--workers", workers, *args], cwd=repo, env=env,
                           capture_output=True, text=True, timeout=300)
 
 
@@ -114,10 +116,11 @@ def test_survivors_are_reported_by_line_and_operator_and_the_file_is_restored(tm
     assert (repo / "hooks/lib/widget.py").read_text() == WIDGET
 
 
-def test_each_mutant_runs_pytest_x(tmp_path):
+@pytest.mark.parametrize("workers", ["0", "2"])  # serial, and in parallel when xdist is installed
+def test_each_mutant_runs_pytest_x(tmp_path, workers):
     counted = WIDGET_TEST + "\n\ndef test_after():\n    with open(Path(__file__).with_name('runs.log'), 'a') as f:\n        f.write('run\\n')\n"
     repo = _repo(tmp_path, {"hooks/lib/widget.py": "", "tests/test_widget.py": counted}, {"hooks/lib/widget.py": WIDGET.split("\n\n\n")[0] + "\n"})
-    done = _run(repo)
+    done = _run(repo, workers=workers)
     assert "3 killed, 0 survived" in done.stdout, done.stdout + done.stderr
     # the unmutated run reached test_after; every mutant stopped at the first failure
     assert (repo / "tests" / "runs.log").read_text() == "run\n"

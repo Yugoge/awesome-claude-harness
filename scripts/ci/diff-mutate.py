@@ -16,7 +16,8 @@ neither is an index argument of ``sys.path`` (``sys.path.insert(0, ..)``, ``sys.
 
 Bounds: at most ``--max-mutants`` (40) per run, spread so every changed line gets a mutant before
 any line gets a second; each mutant's run is ``pytest -x`` with a timeout of ``--timeout-factor``
-(4) times the unmutated run; a mutant that times out counts as killed.
+(4) times the unmutated run; a mutant that times out counts as killed. Runs use ``--workers``
+pytest-xdist workers (default auto) when xdist is installed.
 """
 from __future__ import annotations
 
@@ -201,8 +202,10 @@ def select(mutants: list[Mutant], cap: int) -> list[Mutant]:
     return chosen
 
 
-def pytest_command(python: str, tests: list[str]) -> list[str]:
-    return [python, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *tests]
+def pytest_command(python: str, tests: list[str], workers: str = "0") -> list[str]:
+    """pytest -x over the tests; with workers, in parallel as the unit step runs them (each file whole on one worker)."""
+    parallel = ["-n", workers, "--dist", "loadfile"] if workers != "0" else []
+    return [python, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *parallel, *tests]
 
 
 def run_tests(command: list[str], env: dict, timeout: float | None) -> str:
@@ -223,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-mutants", type=int, default=MAX_MUTANTS)
     ap.add_argument("--timeout-factor", type=float, default=TIMEOUT_FACTOR)
     ap.add_argument("--python", default=sys.executable, help="interpreter that runs pytest")
+    ap.add_argument("--workers", default="auto", help="pytest-xdist workers per run (0: serial; used only when xdist is installed)")
     ap.add_argument("--list", action="store_true", help="print the selected mutants and run nothing")
     ap.add_argument("paths", nargs="*", help="limit the mutated files to these paths (still only hooks/ and scripts/)")
     args = ap.parse_args(argv)
@@ -240,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         for m in chosen:
             print(f"MUTANT   {m.path}:{m.line} {m.operator} ({m.detail})")
         return 0
+    has_xdist = subprocess.run([args.python, "-c", "import xdist"], capture_output=True).returncode == 0
+    workers = args.workers if has_xdist else "0"
     tests_for = {path: sorted(set(own_tests) | set(tests_naming(Path(path).stem))) for path in targets}
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(2))
     counts = {"killed": 0, "survived": 0, "timeout": 0, "untested": 0}
@@ -253,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                 counts["untested"] += 1
                 print(f"UNTESTED {m.path}:{m.line} {m.operator} ({m.detail})")
                 continue
-            command = pytest_command(args.python, tests)
+            command = pytest_command(args.python, tests, workers)
             if tuple(tests) not in baselines:
                 began = time.monotonic()
                 red = subprocess.run(command, env=env, capture_output=True, text=True)
