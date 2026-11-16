@@ -384,3 +384,57 @@ def test_allow_sentinel_grant_allows(cmd, target, tmp_path):
     finally:
         if os.path.exists(grant_path):
             os.unlink(grant_path)
+
+
+# ── Bash is the oracle: obfuscated words that are not git ───────────────────
+
+NOT_GIT = [
+    "gi'a b't worktree add ../w",        # one word: `gia bt`
+    "g\\ \nit worktree add x",           # words `g ` then `it`
+    "g\\#x\nit worktree add x",          # words `g#x` then `it`
+]
+IS_GIT = "gi\\\nt worktree add x"        # a line continuation joins `git`
+
+
+def _bash_runs_git(cmd, tmp_path):
+    """True when bash, given cmd, runs the stub `git` placed first on PATH."""
+    stub = tmp_path / 'bin'
+    stub.mkdir(exist_ok=True)
+    marker = tmp_path / 'git-ran'
+    (stub / 'git').write_text(f'#!/bin/sh\ntouch {marker}\n')
+    (stub / 'git').chmod(0o755)
+    env = dict(os.environ, PATH=f'{stub}:{os.environ.get("PATH", "")}')
+    subprocess.run(['bash', '-c', cmd], cwd=str(tmp_path), env=env,
+                   capture_output=True, timeout=30)
+    return marker.exists()
+
+
+@pytest.mark.parametrize('cmd', NOT_GIT)
+def test_a_word_bash_does_not_read_as_git_is_not_git(cmd, tmp_path):
+    from lib.shell_parse import git_invocations
+    assert git_invocations(cmd) == [], cmd
+    assert not _bash_runs_git(cmd, tmp_path), cmd
+    rc, _ = _run(_bash(cmd), tmp_path)
+    assert rc == 0, cmd
+
+
+def test_the_oracle_sees_git_where_bash_runs_it(tmp_path):
+    from lib.shell_parse import git_invocations
+    assert [i.subcommand for i in git_invocations(IS_GIT)] == ['worktree']
+    assert _bash_runs_git(IS_GIT, tmp_path)
+    rc, _ = _run(_bash(IS_GIT), tmp_path)
+    assert rc == 2
+
+
+@pytest.mark.parametrize('cmd', [
+    'env git worktree add ../w',
+    'bash -c "git worktree add ../w"',
+    'eval "git worktree add ../w"',
+    'command git worktree add ../w',
+    'echo $(git worktree add ../w)',
+    'git -C x worktree add ../w',
+])
+def test_worktree_creation_through_a_wrapper_is_refused(cmd, tmp_path):
+    for extra in ({}, {'agent_id': 'sub-1', 'session_id': 's'}):
+        rc, _ = _run(_bash(cmd, **extra), tmp_path)
+        assert rc == 2, (cmd, extra)
