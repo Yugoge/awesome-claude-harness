@@ -208,25 +208,25 @@ def test_text_with_no_quote_is_never_read_as_fewer_commands_than_a_split_on_ever
             assert len(parts) == 1 and read_as_exactly(command, parts[0].rstrip("& ")), repr(command)
 
 
-# Inside a comment ; | and && still split, as before: the part after each starts right after the
-# separator, and the character after && is read again as a possible separator. (Mutation of the
-# comment branch survived every other case here: P15 decision (b).)
+# A separator inside a comment is comment text: the command ends at its last word. A newline ends
+# the comment, so what follows it is a second command.
 IN_A_COMMENT = [
-    ("git commit -m a # x;yz", ["git commit -m a # x", "yz"]),
-    ("git commit -m a # x|yz", ["git commit -m a # x", "yz"]),
-    ("git commit -m a # x&&yz", ["git commit -m a # x", "yz"]),
-    ("git commit -m a # x&&;yz", ["git commit -m a # x", "yz"]),
-    ("git commit -m a # x&&|yz", ["git commit -m a # x", "yz"]),
-    ("git commit -m a # plain words\nrm x", ["git commit -m a # plain words", "rm x"]),
-    ("git commit -m 'a; b' # x&&yz", ["git commit -m 'a; b' # x", "yz"]),
+    ("git commit -m a # x;yz", "git commit -m a"),
+    ("git commit -m a # x|yz", "git commit -m a"),
+    ("git commit -m a # x&&yz", "git commit -m a"),
+    ("git commit -m a # x&&;yz", "git commit -m a"),
+    ("git commit -m a # x&&|yz", "git commit -m a"),
+    ("git commit -m 'a; b' # x&&yz", "git commit -m 'a; b'"),
 ]
 
 
-@pytest.mark.parametrize("command,parts", IN_A_COMMENT)
-def test_a_separator_inside_a_comment_splits_as_before(command, parts):
-    assert AL._bash_subcommands(command) == parts
-    if "'" not in command:  # with no quote, exactly the legacy split
-        assert AL._legacy_subcommands(command) == parts
+@pytest.mark.parametrize("command,text", IN_A_COMMENT)
+def test_a_separator_inside_a_comment_is_comment_text(command, text):
+    assert read_as_exactly(command, text)
+
+
+def test_a_newline_ends_a_comment_and_starts_a_second_command():
+    assert not read_as_one("git commit -m a # plain words\nrm x")
 
 
 def _bash_keywords_and_builtins(bash):
