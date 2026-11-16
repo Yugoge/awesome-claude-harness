@@ -103,7 +103,6 @@ UNRESOLVED = [
     'bash -c "`cat cmd.txt`"',
     'bash -c "git $SUB"',
     "bash -c 'bash -c \"$X\"'",
-    "bash -c $'git commit -m y'",
     'bash -c "git status',
 ]
 
@@ -362,6 +361,7 @@ def test_the_classifier_yields_the_plain_invocation_inside_every_wrapper(plain, 
     'bash -c "git commit -m y">/dev/null', "xargs -I{} sh -c 'git commit -m y' < list",
     "cat <<'EOF'\nit's a note\nEOF\nbash -c 'git commit -m y'",
     'bash $OPTS -c "git commit -m y"', 'bash $X "git commit -m y"', _nest("git commit -m y", 4),
+    "bash -c $'git commit -m y'",
 ])
 def test_other_spellings_of_a_shell_string_resolve(command):
     assert ("commit", ("-m", "y")) in _calls(command), command

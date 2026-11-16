@@ -1,10 +1,11 @@
-"""Git invocations in a Bash command, read through the shared shell lexer.
+"""Git invocations in a Bash command, read through the shared shell parser.
 
 classify_git_command(text) returns (invocations, residuals). Callers that
 enforce policy must not read an empty invocation list as "no git runs":
 
   invocations  a GitInvocation(cmd_token, path_qualified, subcommand, args) per
-               git command; cmd_token and args are the words as written.
+               git command; cmd_token and args are the words as written, but
+               an abbreviated long option reads as its full name.
   residuals    (kind, text) for a command the scan cannot resolve that may be
                git: obfuscated_git_token (`g\\it push`), dynamic_git_token
                (`$GIT push`), substituted_git_token (`$(which git) push`) and
@@ -39,9 +40,16 @@ import re
 import sys
 
 try:
-    from lib.bash_execution_boundary import LexError, Src, ansi_decode, lex
+    from lib import shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from bash_execution_boundary import LexError, Src, ansi_decode, lex
+    import shell_parse
+
+# One table each, in the parser.
+GIT_GLOBAL_FLAGS = shell_parse.GIT_GLOBAL_FLAGS
+GIT_GLOBAL_VALUE_OPTS = shell_parse.GIT_GLOBAL_VALUE_OPTS
+LexError, Src, ansi_decode, lex = (shell_parse.LexError, shell_parse.Src,
+                                   shell_parse.ansi_decode, shell_parse.lex)
+resolve_long_option = shell_parse.resolve_long_option
 
 
 # ---------------------------------------------------------------------------
@@ -131,12 +139,15 @@ def _unquote_token(tok):
 # The command word
 # ---------------------------------------------------------------------------
 
-# Wrappers that put the next word in command position (basename match).
-_WRAPPERS = {
-    'sudo', 'doas', 'env', 'xargs', 'time', 'nohup', 'setsid', 'stdbuf',
-    'ionice', 'command', 'builtin', 'nice',
-    'exec', 'eval', 'timeout', 'flock', 'chrt', 'taskset', 'unbuffer',
-}
+# Wrappers that put the next word in command position, their flags that take
+# the next word as a value, and the operands before the command word: the
+# parser's wrapper tables (shell_parse.WRAPPERS, PEEL), plus `eval`, whose words
+# are a command line.
+_WRAPPER_SPECS = {name: entry for table in (shell_parse.WRAPPERS, shell_parse.PEEL)
+                  for name, entry in table.items() if entry is not None}
+_WRAPPERS = set(_WRAPPER_SPECS) | {'eval'}
+_WRAPPER_VALUE_FLAGS = {name: spec['val'] for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
+_WRAPPER_POSITIONALS = {name: fixed for name, (_spec, fixed) in _WRAPPER_SPECS.items() if fixed}
 
 # Reserved words (and `!`) after which the grammar puts a command word. `for`,
 # `select`, `case`, `in` and `function` are followed by a name, and `fi`,
@@ -150,29 +161,6 @@ _REDIRECT_RE = re.compile(
     r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?'
     r'(?:<<<|<<-|<<|>>|&>>|&>|>&|<&|>\||<>|>|<)'
 )
-
-# Wrapper flags that take the next word as their value, per wrapper: `sudo -n`
-# takes none, `nice -n` does.
-_WRAPPER_VALUE_FLAGS = {
-    'env': {'-u', '--unset'},
-    'sudo': {'-u', '--user', '-g', '--group', '-U', '--other-user',
-             '-p', '--prompt', '-r', '--role', '-t', '--type',
-             '-C', '--close-from', '-h', '--host'},
-    'doas': {'-u', '-C'},
-    'nice': {'-n', '--adjustment'},
-    'ionice': {'-c', '--class', '-n', '--classdata', '-p', '--pid'},
-    'chrt': {'-p'},
-    'taskset': {'-p', '-c', '--cpu-list'},
-    'xargs': {'-n', '--max-args', '-P', '--max-procs', '-I', '--replace',
-              '-L', '--max-lines', '-s', '--max-chars', '-d', '--delimiter',
-              '-E', '-a', '--arg-file'},
-    'timeout': {'-s', '--signal', '-k', '--kill-after'},
-    'flock': {'-w', '--wait', '-E', '--conflict-exit-code'},
-    'exec': {'-a'},
-}
-
-# Wrappers taking a positional argument before the command word.
-_WRAPPER_POSITIONALS = {'timeout': 1, 'flock': 1}
 
 _ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=')
 
@@ -218,26 +206,6 @@ def _command_token_index(toks):
             continue
         return i
     return None
-
-
-# git's global options, as git parses them between `git` and the subcommand.
-#   GIT_GLOBAL_VALUE_OPTS  take a value as the next word, the long ones also as
-#                          `--opt=<value>`; git rejects `-C<dir>` and `-cname=value`.
-#   GIT_GLOBAL_FLAGS       take no separate value; `--exec-path` and `--list-cmds`
-#                          take theirs only as `=<value>`.
-# Some are accepted only by older or newer gits (--super-prefix, --no-lazy-fetch,
-# --no-advice); the table keeps them for the gits that take them.
-GIT_GLOBAL_VALUE_OPTS = frozenset({
-    '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix',
-    '--config-env', '--attr-source', '--shallow-file',
-})
-GIT_GLOBAL_FLAGS = frozenset({
-    '-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects',
-    '--literal-pathspecs', '--no-literal-pathspecs', '--glob-pathspecs',
-    '--noglob-pathspecs', '--icase-pathspecs', '--no-optional-locks',
-    '--no-lazy-fetch', '--no-advice', '--html-path', '--man-path', '--info-path',
-    '-v', '--version', '-h', '--help', '--exec-path', '--list-cmds',
-})
 
 
 def _git_subcommand_index(args):
@@ -437,7 +405,12 @@ def _invocations(words, aliases=None, depth=0):
         yield GitInvocation(token, '/' in token, None, [])
         return
     static = not _value(words[idx + 1 + k])[1]
-    yield GitInvocation(token, '/' in token, gvals[k] if static else graws[k], graws[k + 1:])
+    sub = gvals[k] if static else graws[k]
+    # An abbreviated long option git accepts reads as its full name (`--har`).
+    args = [raw if full == value else full
+            for raw, value, full in ((r, v, resolve_long_option(sub, v))
+                                     for r, v in zip(graws[k + 1:], gvals[k + 1:]))]
+    yield GitInvocation(token, '/' in token, sub, args)
     aliases = dict(aliases or {})
     i = 0
     while i < k:
@@ -1072,6 +1045,9 @@ def _command_runs_runtime_code(words, fed):
             return True
     args = words[idx + 1:]
     if words[idx][1]:
+        # A wrapper (`chroot /jail $X arg`, `timeout 5 $X`) runs the run-time word.
+        if any(_basename(v) in _WRAPPERS for v in values[:idx]):
+            return True
         nxt = args[0][0] if args else None
         return bool(fed or nxt is None or any(runtime for _v, runtime in args)
                     or nxt in _GIT_SUBCOMMANDS or _basename(nxt) == 'git')

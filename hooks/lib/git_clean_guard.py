@@ -17,7 +17,7 @@ is deliberately not attempted: an allowed clean whose snapshot covered a
 different tree is worse than an honest denial. Redirect presence is decidable;
 redirect resolution is not.
 
-One parse feeds every predicate. The command is read by the shared shell lexer,
+One parse feeds every predicate. The command is read by the shared parser's lexer,
 so adjacent quoted/escaped fragments are one word (`--no-""dry-run`, `g''it`),
 `$'...'` is decoded, and substitution and here-document bodies are commands of
 their own. The clean detector, the dry-run predicate, the git-global scan and
@@ -56,11 +56,9 @@ import re
 import sys
 
 try:
-    from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS
-    from lib.bash_execution_boundary import LexError, Src, ansi_decode, lex
+    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from git_command_classifier import GIT_GLOBAL_VALUE_OPTS
-    from bash_execution_boundary import LexError, Src, ansi_decode, lex
+    from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, ansi_decode, lex
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
