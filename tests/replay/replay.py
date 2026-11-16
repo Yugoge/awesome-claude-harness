@@ -155,6 +155,30 @@ class Dispatch(Call):
     final_line: str = ""
 
 
+def hook_record(event: str, h: dict, context: str, n: int = 0, count: int = 1) -> dict:
+    """The transcript record the CLI (2.1.325) writes for one hook run whose output reaches the model:
+    plain stdout is a hook_success record (content: the stripped stdout; command: "command hook", with
+    the hook's 1-based number when the event has several, as the CLI names it, never the command text);
+    a JSON additionalContext is a hook_additional_context record whose content is a list of strings
+    and which carries no command. hookName is the event, with ":<matcher>" for a tool event."""
+    out = h.get("stdout") or ""
+    tool_use = h.get("tool_use_id") or f"hook-{uuid.uuid4()}"
+    name = f"{event}:{h['matcher']}" if h.get("matcher") and event in TOOL_EVENTS else event
+    if out.strip().startswith("{"):
+        attachment = {"type": "hook_additional_context", "content": [context], "hookName": name,
+                      "toolUseID": tool_use, "hookEvent": event}
+    else:
+        attachment = {"type": "hook_success", "hookName": name, "toolUseID": tool_use, "hookEvent": event,
+                      "content": context, "stdout": out, "stderr": h.get("stderr") or "",
+                      "exitCode": h.get("rc") if isinstance(h.get("rc"), int) else 0,
+                      "command": "command hook" + (f" {n + 1}" if count > 1 else ""),
+                      "durationMs": int(h.get("ms") or 0)}
+    return {"type": "attachment", "attachment": attachment}
+
+
+TOOL_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"}
+
+
 def now_iso() -> str:
     t = time.time()
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dZ" % (int(t * 1000) % 1000)
@@ -546,12 +570,16 @@ class Session:
                                          "sessionId": self.sid})
             self._queued = True
 
-    def _context(self, ev: Event) -> None:
-        for h in ev.hooks:
+    def _context(self, ev: Event, agent_id: str | None = None) -> str:
+        """The record the CLI writes for each hook of ``ev`` whose output reaches the model, in the
+        recorded fixture's shape (hook_record); the joined context."""
+        texts = []
+        for n, h in enumerate(ev.hooks):
             out = hookrun.context(ev.event, h)
             if out:
-                self.append({"type": "attachment", "attachment": {"type": "hook_additional_context",
-                                                                  "content": out, "hookName": ev.event}})
+                self.append(hook_record(ev.event, h, out, n, len(ev.hooks)), agent_id)
+                texts.append(out)
+        return "\n".join(texts)
 
     def prompt(self, text: str, label: str | None = None, deviation=None) -> Event:
         """A plain human prompt."""
@@ -766,10 +794,7 @@ class Actor:
         # in the agent's context (P13-3, C1); a start text that asks for a Codex debate (D32) is followed by the agent
         d.start = self.s.fire("SubagentStart", f"{label} start", {"agent_id": aid, "agent_type": atype})
         self.rp.settle(d.start, f"{label} start", step["deviation"])
-        d.context = "\n".join(c for h in d.start.hooks if (c := hookrun.context("SubagentStart", h)))
-        if d.context:
-            self.s.append({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": d.context,
-                                                                "hookName": "SubagentStart"}}, aid)
+        d.context = self.s._context(d.start, aid)
         if "Codex debate" in d.context:
             def codex():  # codex=fail: the skill is unavailable here, so the call fails (the CLI fires PostToolUseFailure)
                 if self.rp.args.get("codex") == "fail":
