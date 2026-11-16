@@ -110,7 +110,7 @@ flowchart TD
     L3 -.validates against.-> SCH
 ```
 
-- **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
+- **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, `Monitor`, `TaskStop`, `ListAgents`, `PushNotification`, cron/wakeup tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
 - **Command surface (`commands/*.md`).** One file per slash command. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** Specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
@@ -130,7 +130,7 @@ flowchart TD
 The main agent's purity is enforced at two points:
 
 **The orchestrator gate** (`hooks/pretool-orchestrator-gate.py`, `PreToolUse` matcher `*`):
-- **Whitelisted tools** are always allowed; `Bash` is additionally capped at 5 *consecutive* same-name calls (the 6th blocks).
+- **Whitelisted tools** are always allowed; `Bash` is additionally capped at 5 *consecutive* same-name calls (the 6th blocks), and each `Monitor` call counts in that same count (`Monitor` is refused on a CLI below 2.1.314).
 - **Non-whitelist tools** (`Edit`, `Write`, `WebFetch`, `NotebookEdit`, `EnterWorktree`, `mcp__playwright__*`, …) are allowed **once total per tool name per turn** — `NON_WHITELIST_MAX_CONSECUTIVE = 1`; the 2nd same-name call blocks regardless of intervening different calls. A prompt resets the counts; inside the session's open `/dev-overnight` window (no prompt arrives all night, so the session is one turn) an `Agent` dispatch resets them too, as it resets the Bash count.
 - **Permanently blocked**: `EnterPlanMode`, `ExitPlanMode` — even under `/do`.
 - **State** lives at `/tmp/claude-tool-streak-<sid>.json` (`schema_version: 2`, per-tool counts + a Bash-consecutive counter).

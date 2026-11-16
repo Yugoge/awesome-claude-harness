@@ -78,7 +78,7 @@ Each stage hands a verified artifact to the next; `--codex` adds an opt-in adver
 
 | Guardrail | What it exits 2 on | Why (context / safety) | Hook |
 |---|---|---|---|
-| Consecutive-Bash cap | 6th `Bash` in the main agent since the last `Agent` dispatch or prompt (limit 5; other tools between the calls do not reset the count) | Forces delegation before shell output floods the orchestrator's context | `pretool-orchestrator-gate.py` |
+| Consecutive-Bash cap | 6th `Bash` or `Monitor` in the main agent since the last `Agent` dispatch or prompt (limit 5, one count for both; other tools between the calls do not reset the count) | Forces delegation before shell output floods the orchestrator's context | `pretool-orchestrator-gate.py` |
 | Non-whitelist once-per-turn | 2nd `Edit`/`Write`/`WebFetch`/… of the same tool per turn in the main agent | Keeps real edits in clean subagent contexts, not the orchestrator's | `pretool-orchestrator-gate.py` |
 | Read-size cap | Main-agent `Read` of a file >600 lines (unless sliced with `limit`≤600) | Stops one large file from swamping the lean context — delegate a summary instead | `pretool-read-size-guard.py` |
 | Write-over-existing | `Write` onto a file that already exists (forces `Edit`) | Prevents silent whole-file loss from memory-reproduced content — no diff to catch it | `pretool-write-guard.sh` |

@@ -369,7 +369,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-launch.py\"",
-            "timeout": 945
+            "timeout": 1305
           }
         ]
       },

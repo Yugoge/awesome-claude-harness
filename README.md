@@ -153,7 +153,7 @@ These hooks keep the main session's context lean, so real work happens in the ag
 
 | Guardrail | What it refuses | Why | Hook |
 |---|---|---|---|
-| Bash streak cap | The main agent's next `Bash` call after a short run of them, until it dispatches an agent or you type the next prompt | Delegate before shell output floods the orchestrator's context | `hooks/pretool-orchestrator-gate.py` |
+| Bash streak cap | The main agent's next `Bash` or `Monitor` call after a short run of them, until it dispatches an agent or you type the next prompt | Delegate before shell output floods the orchestrator's context | `hooks/pretool-orchestrator-gate.py` |
 | Once per turn | A second call of the same non-whitelisted tool (`Edit`, `Write`, `WebFetch`, ...) by the main agent in one turn | Real edits belong in an agent's clean context | `hooks/pretool-orchestrator-gate.py` |
 | Read-size cap | The main agent reading a large file whole instead of a slice | One file must not swamp the context; delegate a summary | `hooks/pretool-read-size-guard.py` |
 | Write over existing | `Write` onto a file that already exists, so the change goes through `Edit` | A whole-file rewrite from memory loses content with no diff to catch it | `hooks/lib/write_gate/overwrite.py` (in the write gate) |

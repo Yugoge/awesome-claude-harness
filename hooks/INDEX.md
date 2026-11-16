@@ -308,6 +308,7 @@ hooks/
 ├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
 ├── `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 ├── `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+├── `pretool-monitor-command.py` - PreToolUse (Monitor): a Monitor's shell command meets every Bash rule, as a Bash call would.
 ├── `pretool-obligation-gate.py` - WHY THIS HOOK EXISTS:
 ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 ├── `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity

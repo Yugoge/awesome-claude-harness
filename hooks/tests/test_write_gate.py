@@ -420,7 +420,7 @@ def test_l4s_whole_registration_change():
     """The registration change of L4 and L5 together, as settings.json makes it
     (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52; the harness
     switch's own registration and P13-3's two (the SubagentStart injector, the codex ledger on
-    PostToolUseFailure) make 55."""
+    PostToolUseFailure) make 55; T4's Monitor rule makes 56."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -435,7 +435,8 @@ def test_l4s_whole_registration_change():
         assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
     # + 1: the harness switch's own UserPromptSubmit registration (hooks/userprompt-harness-switch.sh);
     # - 2: P13-3's two, the SubagentStart injector and the codex ledger on PostToolUseFailure
-    assert len(regs) - 2 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+    # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py)
+    assert len(regs) - 3 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
         - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
