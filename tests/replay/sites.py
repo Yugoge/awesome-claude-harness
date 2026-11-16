@@ -27,13 +27,14 @@ site. Consult, observe, witness and advise rules refuse nothing through the gate
 unaccounted() cross-checks the walk against a plain token scan of each registered hook's own file
 (and of each refusing rule file).
 Each Site keeps its file, line, function, the source of the conditions guarding it (enclosing tests,
-early returns), the string constants of its message, and the registrations (event, matcher) of the
-hooks that reach it: a registration whose event the hook's own file answers first (a function testing
-the payload's hook_event_name and leaving, answered_first) reaches only what runs before that answer
-and what that code calls (Enumerator.at_event). classify() derives one class per site from that
-code and those registrations (X6 (ii)), with the rule that fired; unreachable() proves a site no path
-runs. match() maps a block a replay recorded to the sites whose message pieces its text holds
-(X6 (iv)).
+early returns), the string constants of its message (with those of a module-level name bound once to a
+string, or to a dict, tuple or list of strings, that the message reads: PyModule.named_text), and the
+registrations (event, matcher) of the hooks that reach it: a registration whose event the hook's own
+file answers first (a function testing the payload's hook_event_name and leaving, answered_first)
+reaches only what runs before that answer and what that code calls (Enumerator.at_event). classify()
+derives one class per site from that code and those registrations (X6 (ii)), with the rule that
+fired; unreachable() proves a site no path runs. match() maps a block a replay recorded to the sites
+whose message pieces its text holds (X6 (iv)).
 """
 from __future__ import annotations
 
@@ -145,10 +146,13 @@ def _const_str(node) -> list[str]:
 
 
 def _flow_text(mod, func, call) -> list[str]:
-    """The string constants a Name argument of `call` is built from inside `func`: the values
-    assigned to it (transitively through the names they read) and the `return` values of the
-    module's own functions those values call."""
+    """The string constants a Name argument of `call` is built from inside `func`: the strings of
+    the module constant it names (PyModule.str_consts, unless `func` binds the name itself), the
+    values assigned to it (transitively through the names they read, with the module constants they
+    read: PyModule.text_of) and the `return` values of the module's own functions those values call."""
     todo, seen, out = [a.id for a in call.args if isinstance(a, ast.Name)], set(), []
+    local = _bound_names(func)
+    out += [t for name in todo if name not in local for t in mod.str_consts.get(name, [])]
     assigns = [n for n in ast.walk(func) if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)) and n.value]
     while todo:
         name = todo.pop()
@@ -158,7 +162,7 @@ def _flow_text(mod, func, call) -> list[str]:
         for a in assigns:
             if not any(isinstance(t, ast.Name) and t.id == name for t in getattr(a, "targets", None) or [a.target]):
                 continue
-            out += _const_str(a.value)
+            out += mod.text_of(a.value)
             for n in ast.walk(a.value):
                 if isinstance(n, ast.Name):
                     todo.append(n.id)
@@ -166,6 +170,37 @@ def _flow_text(mod, func, call) -> list[str]:
                     out += [t for r in ast.walk(mod.funcs[_call_name(n.func)[1]])
                             if isinstance(r, ast.Return) and r.value is not None for t in _const_str(r.value)]
     return out
+
+
+def _bound_names(func) -> set[str]:
+    """The names `func` binds itself (its parameters, the names it assigns or imports, its nested
+    definitions): a module constant of that name is not what it reads there."""
+    if func is None:
+        return set()
+    a = func.args
+    out = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs} | {x.arg for x in (a.vararg, a.kwarg) if x}
+    for n in ast.walk(func):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, ast.Nonlocal):
+            out.update(n.names)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            out.update((x.asname or x.name).split(".")[0] for x in n.names)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n is not func:
+            out.add(n.name)
+    return out
+
+
+def _str_value(node) -> list[str] | None:
+    """The strings a module constant's value holds: a string, or a dict (its values), tuple or list
+    of strings; None for any other value."""
+    if isinstance(node, ast.Constant):
+        return [node.value] if isinstance(node.value, str) else None
+    elems = node.values if isinstance(node, ast.Dict) else node.elts if isinstance(node, (ast.Tuple, ast.List)) \
+        else None
+    if not elems or not all(isinstance(x, ast.Constant) and isinstance(x.value, str) for x in elems):
+        return None
+    return [x.value for x in elems]
 
 
 def _call_name(func) -> tuple:
@@ -192,6 +227,23 @@ class PyModule:
                 for t in st.targets:
                     if isinstance(t, ast.Name):
                         self.consts[t.id] = st.value.value
+        # A module-level name bound once, to a string or a dict / tuple / list of strings, and never
+        # rebound (no function declares it global): a message that reads it reads those strings.
+        binds: dict[str, list] = {}
+        for st in self.ast.body:
+            targets = st.targets if isinstance(st, ast.Assign) else [st.target] \
+                if isinstance(st, (ast.AnnAssign, ast.AugAssign)) else []
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    binds.setdefault(t.id, []).append(st if isinstance(st, ast.Assign) and len(st.targets) == 1
+                                                      or isinstance(st, ast.AnnAssign) else None)
+        rebound = {x for n in ast.walk(self.ast) if isinstance(n, ast.Global) for x in n.names}
+        self.str_consts: dict[str, list[str]] = {}
+        for name, sts in binds.items():
+            if len(sts) == 1 and sts[0] is not None and sts[0].value is not None and name not in rebound:
+                vals = _str_value(sts[0].value)
+                if vals is not None:
+                    self.str_consts[name] = vals
         self.funcs: dict[str, ast.AST] = {}
         self.parent: dict[ast.AST, ast.AST] = {}
         for node in ast.walk(self.ast):
@@ -412,6 +464,39 @@ class PyModule:
             p = self.parent.get(p)
         return func is not None and p is func and st in func.body
 
+    def named_text(self, node) -> list[str]:
+        """The strings of the module constants (str_consts) node reads as a value: the name itself, a
+        subscript of it or a method call on it (`.get(...)`, `.format(...)`); not an operand of a
+        comparison or membership test, not what a loop iterates, and not a name the enclosing function
+        binds itself. Each constant once, however often node reads it."""
+        out, local, seen = [], None, set()
+        for n in ast.walk(node):
+            if not (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in self.str_consts) \
+                    or n.id in seen:
+                continue
+            par = self.parent.get(n)
+            if isinstance(par, ast.Attribute) and not isinstance(self.parent.get(par), ast.Call):
+                continue  # an attribute read, not a call on the value
+            ch, up, tested = n, par, False
+            while up is not None and not isinstance(up, (ast.stmt, ast.Module)):
+                if isinstance(up, ast.Compare) or isinstance(up, ast.comprehension) and ch is up.iter:
+                    tested = True
+                    break
+                ch, up = up, self.parent.get(up)
+            if tested or isinstance(up, (ast.For, ast.AsyncFor)) and ch is up.iter:
+                continue
+            if local is None:
+                local = _bound_names(node if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                     else self.enclosing_func(node))
+            if n.id not in local:
+                seen.add(n.id)
+                out += self.str_consts[n.id]
+        return out
+
+    def text_of(self, node) -> list[str]:
+        """The string constants of node (_const_str) and of the module constants it reads (named_text)."""
+        return _const_str(node) + self.named_text(node)
+
     def message(self, node) -> list[str]:
         """The string constants of the statement holding node and of up to six statements before it in
         the same block (the print / write / helper call composing the message)."""
@@ -423,15 +508,15 @@ class PyModule:
             if isinstance(b, list) and st in b:
                 body = b
                 break
-        out = _const_str(st)
+        out = self.text_of(st)
         stmts = [st]
         if body is not None:
             i = body.index(st)
             stmts = body[max(0, i - 6):i + 1]
             for prev in body[max(0, i - 6):i]:
-                out = _const_str(prev) + out
+                out = self.text_of(prev) + out
         for f in self._called_locals(stmts):
-            out += _const_str(f)
+            out += self.text_of(f)
         return [s for s in out if len(s.strip()) >= 4]
 
     def _called_locals(self, stmts) -> list:
@@ -1070,7 +1155,7 @@ class Enumerator:
             conds, handler = mod.conds(node)
             own = kind == "call"  # a helper call carries its message in its own arguments
             return Site(mod.rel, node.lineno, func.name if func else "<module>", kind, conds=conds,
-                        text=_const_str(mod.statement(node)) if own else mod.message(node), handler=handler,
+                        text=mod.text_of(mod.statement(node)) if own else mod.message(node), handler=handler,
                         dynamic=mod.dynamic(node, own),
                         unconditional=func is not None and mod.top_level(node, func))
 
@@ -1105,7 +1190,7 @@ class Enumerator:
             for node in ast.walk(f) if f is not None and hs and hs[0].kind == "call" else ():
                 if isinstance(node, ast.Call) and self._resolve(mod, node.func) in helpers \
                         and mod.enclosing_func(node) is f and not mod.top_level(node, f):
-                    hs[0].text += [t for t in _const_str(mod.statement(node)) + _flow_text(mod, f, node)
+                    hs[0].text += [t for t in mod.text_of(mod.statement(node)) + _flow_text(mod, f, node)
                                    if t not in hs[0].text]
         called = set()
         for rel, mod in mods.items():
