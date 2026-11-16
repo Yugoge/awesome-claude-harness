@@ -1,10 +1,13 @@
 """hooks/sessionstart-launch.py and hooks/subagentstart-launch.py: prompt-workflow.py at SessionStart (P2-4)
-and SubagentStart (P2-3), in the one Python process each event registers (P12-L7, lib/hook_launch.py).
+and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hook_launch.py).
 
 - settings.json registers each launcher, once, in place of the event's existing Python hook (check-todo-md-sync.py,
   subagentstart-record.py), on every source and every agent type, and no other Python process on the event.
-- One launcher process runs both hooks, the existing one first: the per-hook record (the channel the replay suite
-  reads) names both, each run in the launcher's process, not as a process of its own.
+- The one launcher process runs both hooks at the same time, each in a fork of it (lib/rule_fork: no interpreter
+  starts again, no two hook files share one), the existing one first in the table: the per-hook record (the channel
+  the replay suite reads) names both, in that order, each run as a fork, not as a process of its own. Neither has
+  ``after``: neither writes a file on these events (each run leaves the session's home, state, temp and project
+  directories as they were), so neither reads what the other writes.
 - The existing hook's own result (exit status, stdout, stderr) is what it gives alone, and its text reaches the
   model as before, now beside prompt-workflow.py's PROJECT_ROOT and HARNESS_ROOT lines; when it prints nothing the
   launcher's answer is prompt-workflow.py's alone, byte for byte.
@@ -57,6 +60,7 @@ def _alone(script: Path, payload: dict, env: dict):
 
 def _launched(launcher: Path, payload: dict, env: dict):
     """The launcher's (exit status, stdout, stderr) and its per-hook records (lib/hook_launch.py RECORD_ENV)."""
+    before = _files(Path(env["TMPDIR"]))
     r, w = os.pipe()
     try:
         p = subprocess.run([sys.executable, str(launcher)], input=json.dumps(payload).encode(), capture_output=True,
@@ -66,6 +70,7 @@ def _launched(launcher: Path, payload: dict, env: dict):
         os.close(w)
     with os.fdopen(r, "rb") as fh:
         records = [json.loads(line) for line in fh.read().decode().splitlines()]
+    assert _files(Path(env["TMPDIR"])) == before, "a start hook wrote a file (a rule reading it would need after)"
     return (p.returncode, p.stdout.decode(), p.stderr.decode()), records
 
 
@@ -79,9 +84,15 @@ def _roots(project: str, harness: Path) -> str:
     return f"PROJECT_ROOT={project}\nHARNESS_ROOT={harness}"
 
 
+def _files(root: Path) -> dict:
+    """Every file under `root` with its size and mtime: what a run wrote there."""
+    return {str(p): (p.stat().st_size, p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
+
+
 def _one_process_both_hooks(records, existing: str, alone) -> None:
     assert [r["hook"] for r in records] == ["hooks/" + existing, "hooks/" + PW], records
-    assert all(r["how"] == "in-process" for r in records), records  # run in the launcher, no process of their own
+    # each in a fork of the launcher (lib/hook_launch.py `how`): no process of its own ("process", the fallback)
+    assert [r["how"] for r in records] == ["fork", "fork"], records
     first = records[0]
     assert (first["rc"], first["stdout"], first["stderr"]) == alone, (first, alone)
     assert records[1]["rc"] == 0 and records[1]["stderr"] == "", records[1]

@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T10:20:42Z*
+*Last updated: 2026-11-16T10:27:16Z*
 **Total entries**: 399
 **Convention**: kebab
 
@@ -251,7 +251,7 @@ hooks/
 │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 │   ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 │   ├── `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
-│   ├── `test_start_launchers.py` - and SubagentStart (P2-3), in the one Python process each event registers (P12-L7, lib/hook_launch...
+│   ├── `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
 │   ├── `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 │   ├── `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 │   ├── `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
@@ -377,7 +377,7 @@ hooks/
 ├── `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
-├── `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, in its old registration order, each as
+├── `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 ├── `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
@@ -391,7 +391,7 @@ hooks/
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
-├── `subagentstart-launch.py` - Every Python hook registered on SubagentStart runs here, in its old registration order, each as
+├── `subagentstart-launch.py` - Every Python hook registered on SubagentStart runs here, each as `python3 <file>` would have run it
 ├── `subagentstart-record.py` - rank's reminder (hooks/lib/score_log.py), as additionalContext of at most 3 lines and 400 bytes; ...
 ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 ├── `subagentstop-codex-enforce.py` - Activation logic:

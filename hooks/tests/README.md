@@ -153,7 +153,7 @@
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 - `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
-- `test_start_launchers.py` - and SubagentStart (P2-3), in the one Python process each event registers (P12-L7, lib/hook_launch...
+- `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
 - `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 - `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 - `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default

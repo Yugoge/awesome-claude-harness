@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """SessionStart: the event's Python hooks in one process (lib/hook_launch.py).
 
-Every Python hook registered on SessionStart runs here, in its old registration order, each as
-`python3 <file>` would have run it (its own timeout and failure direction), and the answer is
-the one the CLI gave for those hooks together: check-todo-md-sync.py's drift warnings (plain
-stdout) and prompt-workflow.py's PROJECT_ROOT and HARNESS_ROOT lines (additionalContext, for
-every source: startup, resume, clear and compact; P2-4), both in the model's context. A new
+Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
+(its own timeout and failure direction), at the same time, each in a fork of this process (a rule
+with ``after`` starts once the earlier rules it names have ended), and the answer is the one the
+CLI gave for those hooks together, read in the table's order: check-todo-md-sync.py's drift
+warnings (plain stdout) and prompt-workflow.py's PROJECT_ROOT and HARNESS_ROOT lines
+(additionalContext, for every source: startup, resume, clear and compact; P2-4), both in the
+model's context. Neither writes anything the other reads, so neither has ``after``. A new
 SessionStart Python hook is one Rule line below, at the place its registration would have had:
-its file, its timeout (default 60 s); this file's registered timeout in settings.json is the sum
+its file, its timeout (default 60 s), and ``after`` when it reads what an earlier rule of the same
+call writes (or writes what one reads); this file's registered timeout in settings.json is the sum
 of the rules'. The shell hooks keep their own registrations.
 """
 from __future__ import annotations
