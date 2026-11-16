@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:28:29Z*
-**Total entries**: 259
+*Last updated: 2026-11-16T10:54:41Z*
+**Total entries**: 260
 **Convention**: kebab
 
 ## Tree
@@ -137,6 +137,7 @@ tests/
 ├── shell_parse/
 │   ├── `corpus.jsonl` - jsonl file
 │   ├── `differential.py` - For one command string, ``old_facts`` runs each reader the hooks use today and
+│   ├── `test_bash_oracle.py` - bash runs each generated command with an empty PATH and a
 │   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative

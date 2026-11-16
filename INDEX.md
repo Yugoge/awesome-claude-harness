@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:28:28Z*
-**Total entries**: 972
+*Last updated: 2026-11-16T10:54:40Z*
+**Total entries**: 974
 **Convention**: kebab
 
 ## Tree
@@ -285,6 +285,7 @@ dot-claude/
 │   │   ├── `test_overnight_cycle_contract.py` - - No seed file: the exploration (steps 2-4) passes the dispatch hook in cycles
 │   │   ├── `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
 │   │   ├── `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
+│   │   ├── `test_overnight_guard_bash_parser.py` - Each decision that changed when the guard's Bash path moved onto the parser is pinned here, with
 │   │   ├── `test_overnight_inplace_bubblewrap.py` - Replayed in a bwrap-less in-place toy session, every removal of the git
 │   │   ├── `test_overnight_keystone_hook_dir.py` - In both isolation modes neither a `chmod -x` of `<common>/keystone-hooks/reference-transaction`
 │   │   ├── `test_overnight_one_state_reader.py` - cycle contract's one writer (P1b row 13, E13)
@@ -825,6 +826,7 @@ dot-claude/
 │   ├── shell_parse/
 │   │   ├── `corpus.jsonl` - jsonl file
 │   │   ├── `differential.py` - For one command string, ``old_facts`` runs each reader the hooks use today and
+│   │   ├── `test_bash_oracle.py` - bash runs each generated command with an empty PATH and a
 │   │   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
