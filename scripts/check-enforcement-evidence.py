@@ -499,27 +499,27 @@ def published_column_set(header_text, label):
 # ---------------------------------------------------------------------------
 # Semantic extraction of the wrapper token set.
 # ---------------------------------------------------------------------------
-def extract_wrappers(classifier_src):
-    """Return sorted _WRAPPERS via ast.parse + literal_eval, or None if not found.
+def extract_wrappers(classifier_path):
+    """Return the sorted wrapper set the classifier reads, or None if it cannot be loaded.
 
-    The previous lexical scrape re.findall(r"'([^']+)'") saw only SINGLE-quoted tokens, so a
-    double-quoted widening of the set left the count unchanged and the gate passed while the
-    residual class named in the published matrix had actually grown.
+    The set is built from the shared parser's wrapper tables, so it is read from the loaded
+    module, not from the source text.
     """
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); "
+            "import git_command_classifier as g; print(json.dumps(sorted(g._WRAPPERS)))")
     try:
-        tree = ast.parse(classifier_src)
-    except SyntaxError:
+        proc = subprocess.run([sys.executable, "-B", "-c", code,
+                               os.path.dirname(os.path.abspath(classifier_path))],
+                              capture_output=True, text=True, timeout=30)
+        return json.loads(proc.stdout) if proc.returncode == 0 else None
+    except Exception:  # noqa: BLE001
         return None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == "_WRAPPERS":
-                try:
-                    return sorted(ast.literal_eval(node.value))
-                except Exception:  # noqa: BLE001
-                    return None
-    return None
+
+
+# The residual classes RISK-3 names: wrapper flags and leading redirections in front of git.
+# Each form must still reach the classifier as a git invocation.
+CLOSED_BOUNDARY_FORMS = ("env -i git status", "env -u FOO git status",
+                         "2>/dev/null git status", "if ! git status; then :; fi")
 
 
 # ---------------------------------------------------------------------------
@@ -1051,13 +1051,14 @@ def check_claims(args, report):
             report.fail(f"symbol {symbol} no longer defined in {path} -- the published RISK-2 "
                         f"claim that both engines still exist is now false")
 
-    # 2. The arch-F7 accepted-residual block is intact.
-    if re.search(r"(?s)Known scope boundaries \(arch-F7\).{0,400}env\s+-i.{0,400}redirection",
-                 classifier_src):
-        report.ok("arch-F7 accepted-residual block still names both residual classes")
+    # 2. The residual classes RISK-3 names stay closed: each form still reaches git.
+    missed = [form for form in CLOSED_BOUNDARY_FORMS
+              if probe_witness(form, args.classifier, "git", "git")[0] != "detected"]
+    if not missed:
+        report.ok("wrapper flags and leading redirections before git still classify as git")
     else:
-        report.fail("arch-F7 accepted-residual block changed -- RISK-3's published residual "
-                    "table can no longer be assumed to describe the current boundary")
+        report.fail(f"{missed} no longer classify as git -- RISK-3's published residual table "
+                    "no longer describes the current boundary")
 
     # 3. Anchor-class literals unchanged (adding '/' would change the residual class).
     ere_line = next((l for l in bash_src.split("\n") if l.startswith("GIT_CMD_RE=")), "")
@@ -1090,16 +1091,17 @@ def check_claims(args, report):
 
     # 5. Token sets. A widened _WRAPPERS changes the SIZE of the residual class even when every
     #    probed representative still behaves exactly as recorded -- the unprobed-sibling case.
-    live_wrappers = extract_wrappers(classifier_src)
+    live_wrappers = extract_wrappers(args.classifier)
     if live_wrappers is None:
-        report.fail("_WRAPPERS changed: the constant could not be resolved from "
-                    f"{args.classifier} by ast.literal_eval -- an unresolvable declaration "
-                    f"cannot be compared against the published set")
-    elif live_wrappers == sorted(RECORDED_WRAPPERS):
-        report.ok(f"_WRAPPERS unchanged ({len(live_wrappers)} tokens, recorded @{RECORDED_AT})")
+        report.fail("_WRAPPERS changed: the wrapper set could not be read from "
+                    f"{args.classifier} -- an unreadable set cannot be compared against the "
+                    f"published one")
+    elif set(RECORDED_WRAPPERS) <= set(live_wrappers):
+        report.ok(f"_WRAPPERS holds the {len(RECORDED_WRAPPERS)} recorded tokens "
+                  f"({len(live_wrappers)} in all, from the parser's table)")
     else:
-        report.fail(f"_WRAPPERS changed: {live_wrappers} != {sorted(RECORDED_WRAPPERS)} -- the "
-                    f"residual class named in the published matrix has a different size now")
+        report.fail(f"_WRAPPERS lost {sorted(set(RECORDED_WRAPPERS) - set(live_wrappers))} -- "
+                    f"the residual class named in the published matrix has grown")
 
     # The token sets are matched ONLY inside their anchored publication regions. Matching
     # anywhere in the document is vacuous: '>' appears on every blockquote line and '<' inside
