@@ -36,15 +36,16 @@ def test_every_prose_form_reads_the_written_message(tmp_path):
         f"git commit -F{msg}",
     ]
     for command in forms:
-        assert guard._extract_commit_message(command) == "auto-bulk: chore(toy): sweep", command
+        message = guard._commit_message_text(command, str(tmp_path))
+        assert message.partition("\n")[0] == "auto-bulk: chore(toy): sweep", command
 
 
 def test_an_unresolved_operand_names_no_file(tmp_path):
     guard = _guard()
-    assert guard._extract_commit_message('git -C "/repo" commit -F "${MSGFILE}"') == ""
-    assert guard._extract_commit_message(f'git commit -F "{tmp_path}/missing.txt"') == ""
+    assert guard._commit_message_text('git -C "/repo" commit -F "${MSGFILE}"', str(tmp_path)) is None
+    assert guard._commit_message_text(f'git commit -F "{tmp_path}/missing.txt"', str(tmp_path)) is None
 
 
-def test_the_inline_message_still_wins():
+def test_the_inline_message_still_wins(tmp_path):
     guard = _guard()
-    assert guard._extract_commit_message("git commit -m 'auto-bulk: x'") == "auto-bulk: x"
+    assert guard._commit_message_text("git commit -m 'auto-bulk: x'", str(tmp_path)) == "auto-bulk: x"

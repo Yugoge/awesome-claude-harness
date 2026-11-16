@@ -429,12 +429,12 @@ class TestCommitGrantRedirectBinding(unittest.TestCase):
     def test_enumerator_counts_every_commit(self):
         cmd = (f'git -C {self.A["path"]} commit -m "a" ; '
                f'git -C {self.B["path"]} commit -m "b"')
-        invs = list(guard._iter_commit_invocations(cmd))
+        invs = guard._commit_records(cmd)
         self.assertEqual(len(invs), 2)
 
     def test_enumerator_ignores_commit_word_in_message(self):
         cmd = 'git commit -m "please git commit later and run git commit"'
-        invs = list(guard._iter_commit_invocations(cmd))
+        invs = guard._commit_records(cmd)
         self.assertEqual(len(invs), 1)
 
     # ---- HAPPY paths must still ALLOW ----
