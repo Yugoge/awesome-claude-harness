@@ -1,10 +1,9 @@
-"""T2-16: tool-policy reads the writes inside a shell's -c string as it reads the command run plainly.
+"""Tool-policy reads the writes inside a shell's -c string as it reads the command run plainly.
 
 hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 caller, the role rows for a subagent). Its readers blank quoted text, so a write inside a `-c`
 string named no target: `bash -c "cp x <protected>"` exited 0 where `cp x <protected>` exits 2.
-The layers are now read through lib/git_command_classifier's walker, each as the command run
-plainly. Every case below runs the real hook file for the main agent and for a dev subagent, and
+The layers are read by lib/shell_parse.write_targets, each as the command run plainly. Every case below runs the real hook file for the main agent and for a dev subagent, and
 the layer form exits as its plain form does. A run-time value inside a layer is an unresolvable
 target, decided as the plain command's `$X` is (no stage refuses it by itself); `$HOME` and a
 `T=<path>;` assignment before the shell reach a double-quoted string, as the outer shell expands
@@ -94,16 +93,14 @@ def test_the_refusal_names_the_protected_file_a_layer_writes(tmp_path, caller):
                       "no agent writes, deletes or renames it (D11/D12)"), reason
 
 
-def test_the_layers_read_are_the_walkers_and_the_command_stays_first():
+def test_a_layer_is_read_for_its_writes_with_the_outer_assignment():
     sys.path.insert(0, os.path.join(ROOT, "hooks"))
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("tool_policy_t2_16", HOOK)
+    spec = importlib.util.spec_from_file_location("tool_policy_c_layer", HOOK)
     policy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(policy)
-    command = 'T=/p/out; bash -c "echo x | tee $T"'
-    texts = policy._bash_texts(command)
-    assert texts[0] == command
-    assert "echo x | tee ${__runtime__}" in texts  # the walker's own text: a run-time value
-    assert "T=/p/out; bash -c \necho x | tee $T\n" in texts  # read in its place: the assignment reaches it
-    assert policy._bash_texts("git status") == ("git status",)
+    policy._bootstrap_security()
+    assert ("/p/out", False) in policy._bash_writes('T=/p/out; bash -c "echo x | tee $T"')  # double: it reaches
+    assert ("/p/out", False) not in policy._bash_writes("T=/p/out; bash -c 'echo x | tee $T'")  # single: it does not
+    assert policy._bash_writes("git status") == ()

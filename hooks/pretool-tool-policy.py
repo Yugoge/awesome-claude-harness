@@ -90,8 +90,8 @@ Behavior:
 Bash write targets:
   - Every write target of a Bash command is authorized as if it were a Write
     target, so a redirect, heredoc or copy writes nothing a Write may not.
-  - The text of each shell -c string the command runs is read the same way,
-    as the command run plainly (_bash_texts), here and in the protected stage.
+  - What each shell -c string, eval or command substitution the command runs
+    writes is read the same way, here and in the protected stage.
 
 Scratch namespace actor-exactness:
   - Every write target the prefix layer admits is additionally classified as
@@ -192,16 +192,15 @@ def _bash_writes(command) -> tuple:
     move, is removed; each source's entry in the move's destination directory
     is removed too, since it replaces what that directory held there."""
     found, into = [], None
-    for text in _bash_texts(command):
-        for target in shell_parse.write_targets(text):
-            word = _path_word(target)
-            if target.mode == shell_parse.MOVE_DEST:
-                into = word
-            if word is None:
-                continue
-            found.append((word, target.mode == shell_parse.DELETE))
-            if into and target.mechanism.endswith("-source"):
-                found.append((os.path.join(into, os.path.basename(word.rstrip("/"))), True))
+    for target in shell_parse.write_targets(command) if isinstance(command, str) else ():
+        word = _path_word(target)
+        if target.mode == shell_parse.MOVE_DEST:
+            into = word
+        if word is None:
+            continue
+        found.append((word, target.mode == shell_parse.DELETE))
+        if into and target.mechanism.endswith("-source"):
+            found.append((os.path.join(into, os.path.basename(word.rstrip("/"))), True))
     return tuple(dict.fromkeys(found))
 
 
@@ -225,88 +224,6 @@ def _path_word(target):
         else:
             out.append(part.text)
     return "".join(out)
-
-
-# -- shell -c layers -----------------------------------------------------------
-# A shell's -c string whose text the outer shell computes is read here as its
-# command run plainly is. The layers are lib/git_command_classifier's (the walker the
-# privilege guard, bash-safety and the branch hook read them with): its texts,
-# where a value the outer shell computes reads as a run-time placeholder (an
-# unresolvable target, judged as the plain command's `$X` is), and the same
-# walk over the command with its `$` hidden, which keeps an outer expansion as
-# written. A double-quoted string found there written as its value, after the
-# shell's option word, is read in its place, on a line of its own, as the
-# command run plainly would hold it, so `$HOME` and a `T=<path>;` assignment
-# before the shell (TC-47) reach its words as they reach the plain command's; a
-# single-quoted one, which the outer shell neither expands nor passes its
-# variables to, and any other string are read alone.
-def _bash_texts(command) -> tuple:
-    """``command``, then the text of every shell -c layer it runs (above), each
-    read for write targets as a command is. The walk adds texts and never
-    removes the command: on a failure the texts it found still count. A
-    command that is no string names no target."""
-    return _layer_texts(command) if isinstance(command, str) else ()
-
-
-@functools.lru_cache(maxsize=4)
-def _layer_texts(command: str) -> tuple:
-    texts = [command]
-    if "sh" not in command:  # every shell's name holds "sh" (the walk's own hint)
-        return tuple(texts)
-    try:
-        from lib import git_command_classifier as walker
-
-        texts += list(walker.iter_shell_texts(command))[1:]
-        # `$` hidden as a private-use character the command does not hold: no shell syntax, so the walk reads it as text
-        hidden = next(chr(c) for c in range(0xE000, 0xF900) if chr(c) not in command)
-        _shell_layers(walker, command.replace("$", hidden), hidden, 0, texts, set())
-    except Exception:  # never let the walk cost the command its own reading
-        pass
-    return tuple(dict.fromkeys(texts))
-
-
-def _shown(walker, text: str, hidden: str) -> str:
-    return text.replace(hidden, "$").replace(walker._RUNTIME, walker._RUNTIME_PLACEHOLDER)
-
-
-def _operand_at(text: str, value: str, cursor: int) -> int:
-    """Offset of ``value`` as a double-quoted shell operand in ``text`` from
-    ``cursor`` (after an option word: `-c`, `-lc`, `--`), else -1."""
-    if '"' in value:  # an escaped quote: the operand is not written as its value
-        return -1
-    at = text.find('"%s"' % value, cursor)
-    while at >= 0 and (text[:at].split() or [""])[-1][:1] not in ("-", "+"):
-        at = text.find('"%s"' % value, at + 1)
-    return at
-
-
-def _shell_layers(walker, text: str, hidden: str, depth: int, texts: list, seen: set) -> None:
-    """Append to ``texts`` the layers ``text`` (its `$` hidden) runs, to the
-    walker's own depth limit: ``text`` with each double-quoted -c string read
-    in its place, every other string alone; text the walker cannot lex is
-    read as it reads it, what follows the shell's -c with the quotes dropped."""
-    if depth >= walker._MAX_SHELL_DEPTH:
-        return
-    spliced, cursor = text, 0
-    for kind, value, _fed, _built in walker._shell_c_strings(text):
-        if kind == "unlexable":
-            for m in walker._SHELL_C_SHAPE_RE.finditer(value):
-                rest = re.sub(r"['\"]", "", re.sub(r"\A\S*", "", value[m.end():]))
-                texts.append(_shown(walker, rest, hidden))
-            continue
-        if value in seen:
-            continue
-        seen.add(value)
-        at = _operand_at(spliced, value, cursor)
-        if at < 0:
-            texts.append(_shown(walker, value, hidden))
-            _shell_layers(walker, value, hidden, depth + 1, texts, seen)
-            continue
-        spliced = "%s\n%s\n%s" % (spliced[:at], value, spliced[at + len(value) + 2:])
-        cursor = at + len(value) + 2
-    if spliced != text:
-        texts.append(_shown(walker, spliced, hidden))
-        _shell_layers(walker, spliced, hidden, depth + 1, texts, seen)
 
 
 _RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
