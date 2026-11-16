@@ -244,8 +244,10 @@ def main(argv: list[str] | None = None) -> int:
             command = pytest_command(args.python, tests)
             if tuple(tests) not in baselines:
                 began = time.monotonic()
-                if run_tests(command, env, None) != "pass":
+                red = subprocess.run(command, env=env, capture_output=True, text=True)
+                if red.returncode != 0:
                     print(f"diff-mutate: the unmutated tests fail: {' '.join(command)}", file=sys.stderr)
+                    print("\n".join(red.stdout.splitlines()[-15:]), file=sys.stderr)
                     return 2
                 baselines[tuple(tests)] = time.monotonic() - began
                 print(f"diff-mutate: {len(tests)} test file(s) for {m.path}; unmutated run "
