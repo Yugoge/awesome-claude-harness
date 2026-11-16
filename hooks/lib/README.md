@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 61
+- **Total files**: 62
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
@@ -51,6 +51,7 @@
 - `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 - `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 - `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
+- `rule_fork.py` - A launcher (lib/hook_launch.py) holds an event's Python hooks and, once its interpreter has
 - `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) and the event dispatchers
 - `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 - `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files

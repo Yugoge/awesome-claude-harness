@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T05:48:42Z*
-**Total entries**: 251
+*Last updated: 2026-11-16T09:03:12Z*
+**Total entries**: 254
 **Convention**: kebab
 
 ## Tree
@@ -152,15 +152,18 @@ tests/
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
+├── `test_ci_diff_mutate.py` - Every case builds a scratch git repository under tmp_path, commits a base, changes the working tr...
+├── `test_ci_red_green.py` - The acceptance cases run the script on this repository's own history, in a scratch clone; the res...
 ├── `test_ci_visibility_gate.py` - The private repository (full history) and the public one (the clean tree as one commit per
 ├── `test_clean_orchestrator_merge.py` - clean-merge-reports reads the three inspection reports of the request the Step 3 context
 ├── `test_cleaner_discard.py` - Action Types table gives and prints a DISCARDED line whose recover command restores the file. The
-├── `test_close_command_text.py` - commands/close.md as P4 decided it: one disposition call, in-turn questions, the native rating.
+├── `test_close_command_text.py` - Each test hands the text to the code that consumes it (the obligation reader, the listing script,
 ├── `test_close_rating_step_label.py` - 376a9ae relabelled it so that no command's dispatch template would sit under a heading of the same
 ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 ├── `test_close_report_append_lock_cleanup.py` - product repository is clean after the pipelines; R8 rule 3: a file with no consumer
 ├── `test_close_route_select_compat.py` - It answers the two calls origin/master's /close Step 0 makes (commands/close.md:296 on a7d3a9f, :...
 ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
+├── `test_command_step_citations.py` - Measured on 1ace5ee4: `commands/do.md` Step 3 said "Classify findings per `commands/codex.md` Rul...
 ├── `test_commit_md_typed_id_and_grant_codes.py` - Step 2: a typed task-id is authoritative only when it names a task, the rule the /commit Stop app...
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
@@ -169,7 +172,7 @@ tests/
 ├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME,
 ├── `test_cycle_records_commit_set.py` - (P10 R8 rules 2 and 3, A25; #27 comment 6737075938 item 3)
 ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): the orphan-agent detector asks the command files
-├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
+├── `test_dev_artifact_chain_consumer_contracts.py` - Each command that reads the artifact chain spells one resolver call and names the result fields i...
 ├── `test_dev_commands_no_phases.py` - Every requested outcome is delivered in the same cycle and the cycle ends only when all are done....
 ├── `test_dev_question_relay_route.py` - re-dispatch carries the answer in the same lines as Step 5's BA re-dispatch (group 3 findings on ...
 ├── `test_dev_todo_accounting.py` - Python script
@@ -191,7 +194,7 @@ tests/
 ├── `test_landing.py` - render-settings land, run from hooks/auto-commit.sh), migrate's push exclusion and the settings
 ├── `test_landing_history_seeding.py` - render-settings' seeding (the list's one producer, P7b R5) also takes, from every ref (branches,
 ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
-├── `test_late_repair_route.py` - Covers AC-7..AC-11, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
+├── `test_late_repair_route.py` - Covers AC-7..AC-10, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 ├── `test_launchdiff_durations.py` - A clock reading a hook prints is not a difference: posttool-overnight-loop.py prints "Time remain...
 ├── `test_merge_analyst_moved_tips_grant.py` - Phase 1 blocks when a tip moved between /merge Step 1 and the analysis, and writes the Phase 8 gr...
 ├── `test_no_phases_agent_prompts.py` - Parallel lanes inside one /dev cycle stay. Sequential phases, deferred parts and "later cycle" pl...

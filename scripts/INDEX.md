@@ -1,13 +1,16 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T02:46:58Z*
-**Total entries**: 164
+*Last updated: 2026-11-16T09:03:12Z*
+**Total entries**: 167
 **Convention**: kebab
 
 ## Tree
 ```
 scripts/
+├── ci/
+│   ├── `diff-mutate.py` - Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
+│   └── `red-green.py` - Given a base and a head, the script finds their merge base and judges the diff merge-base..head:
 ├── install/
 │   ├── profiles/
 │   │   └── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
