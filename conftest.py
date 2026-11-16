@@ -94,6 +94,24 @@ def _hermetic_env(tmp_path_factory):
     os.environ.update(saved)
 
 
+@pytest.fixture
+def cli_record():
+    """Records the installed Claude Code CLI wrote (tests/fixtures/cli/CURRENT), by kind.
+
+    cli_record("attachment/hook_success") is the list of those parent-transcript records;
+    cli_record("subagent:attachment/hook_success") reads the subagent transcript, and
+    cli_record("stdin:Stop") is the Stop hook's stdin. Each call returns fresh copies, so a test
+    may change one. Build a CLI record from these, never by hand (P15 section 2(d)).
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_cli_shapes", pathlib.Path(__file__).parent / "tests" / "cli_shapes.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.load_records
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--run-generated",
