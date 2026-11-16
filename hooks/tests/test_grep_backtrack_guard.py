@@ -176,3 +176,22 @@ def test_a_probe_infrastructure_error_lets_the_command_through(monkeypatch):
         raise RuntimeError("no systemd-run")
     monkeypatch.setattr(GUARD, "probe_explodes", broken)
     assert _run(monkeypatch, BOMB) == 0
+
+
+@pytest.mark.parametrize("command", ("x=$(%s) '" % BOMB, "( %s" % BOMB, "if true; then %s" % BOMB))
+def test_a_command_bash_rejects_is_let_through_even_with_a_search_before_the_error(monkeypatch, command):
+    _shape_probe(monkeypatch)
+    assert _run(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("wrapper", ("env", "env FOO=1", "nice", "xargs", "command", "builtin", "sudo", "timeout 5"))
+def test_a_wrapped_grep_inside_a_substitution_runs_the_system_grep(monkeypatch, wrapper):
+    _shape_probe(monkeypatch)
+    assert _run(monkeypatch, "x=`%s %s`" % (wrapper, BOMB)) == 0
+    assert _run(monkeypatch, "x=$(%s %s)" % (wrapper, BOMB)) == 0
+
+
+def test_eval_is_read_as_bash_joins_it_and_word_by_word(monkeypatch):
+    _shape_probe(monkeypatch)
+    assert _run(monkeypatch, "eval ! egrep \"a.*b.*c\" f") == 2
+    assert _run(monkeypatch, "eval grep -E $'a.\\x2a b.*c' f") == 2
