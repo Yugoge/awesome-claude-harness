@@ -138,40 +138,50 @@ def _transcript_cwd(sid: str | None) -> Path | None:
     return None
 
 
-def _project_root(start: Path) -> Path | None:
+def _project_root(start: Path, exclude: tuple = ()) -> Path | None:
     """Nearest ancestor of `start` (itself included) holding .claude/settings*.json,
-    else the git toplevel above it, else None."""
-    git_top = None
+    else the git toplevel above it, else None. A directory in `exclude` (the user's
+    HOME, the harness home) is never taken as the project, and the walk does not
+    pass a git toplevel."""
+    skip = {os.path.realpath(x) for x in exclude}
     for d in (start, *start.parents):
+        is_git = (d / ".git").exists()
+        if os.path.realpath(d) in skip:
+            if is_git:
+                return None
+            continue
         if (d / ".claude" / "settings.json").is_file() or \
                 (d / ".claude" / "settings.local.json").is_file():
             return d
-        if git_top is None and (d / ".git").exists():
-            git_top = d
-            break
-    return git_top
+        if is_git:
+            return d
+    return None
 
 
-def resolve_project(real_sid: str | None, probing_other: bool) -> Path | None:
+def resolve_project(real_sid: str | None, probing_other: bool, home: Path) -> Path | None:
     """The session's project directory, or None when it cannot be known.
 
-    Order: CLAUDE_PROJECT_DIR; the cwd the session's transcript records; and, only
-    when doctor runs inside the session it probes (or with no session at all), the
-    nearest project root above doctor's own working directory. A deleted working
-    directory is skipped, never a crash."""
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env:
-        return Path(env)
+    Order: the cwd the probed session's own transcript records (a recorded cwd that
+    no longer exists leaves the project unknown); then, only when doctor does not
+    probe another session, CLAUDE_PROJECT_DIR and the nearest project root above
+    doctor's own working directory, never the user's HOME or the harness home, so
+    a run's verdict does not depend on where it runs. A deleted working directory
+    is skipped, never a crash."""
     tcwd = _transcript_cwd(real_sid)
     if tcwd is not None:
+        if not tcwd.is_dir():
+            return None
         return _project_root(tcwd) or tcwd
     if probing_other:
         return None
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    if env:
+        return Path(env)
     try:
         cwd = Path(os.getcwd())
     except OSError:
         return None
-    return _project_root(cwd)
+    return _project_root(cwd, exclude=(Path.home(), home))
 
 
 def settings_layers_read(home, project: Path | None) -> list:
@@ -383,7 +393,7 @@ def main(argv=None) -> int:
             )
 
     probing_other = bool(args.session_id) and args.session_id != cs.ambient_session_id()
-    project = resolve_project(real_sid, probing_other)
+    project = resolve_project(real_sid, probing_other, home)
     project_desc = (f"harness home and project {project}" if project is not None
                     else "harness home only")
     checks = classify(state, canary_registrations(home, project), in_session, real_sid,

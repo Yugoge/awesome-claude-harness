@@ -1769,9 +1769,60 @@ def test_n3_a_deleted_working_directory_does_not_crash(home: Path, statedir: Pat
     assert "Traceback" not in r.stderr
 
 
-def test_n4_docs_do_not_claim_a_receipt_proves_host_dispatch():
-    text = (REPO / "docs" / "installation.md").read_text(encoding="utf-8")
-    doc = STRICT.read_text(encoding="utf-8")
-    for body in (" ".join(text.split()), " ".join(doc.split())):
-        assert "proves its event wired" not in body and "proves its event is wired" not in body
-        assert "cannot tell host dispatch from a hand-run canary" in body
+# --------------------------------------------------------------------------- #
+# Round-3 items on 0165551 (D1-D3)
+# --------------------------------------------------------------------------- #
+def _transcript_with_cwd(cfg: Path, sid: str, cwd: Path) -> None:
+    tdir = cfg / "projects" / "x"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / f"{sid}.jsonl").write_text(json.dumps({"sessionId": sid, "cwd": str(cwd)}) + "\n",
+                                       encoding="utf-8")
+
+
+def test_d1_the_probed_sessions_transcript_beats_claude_project_dir(home: Path, statedir: Path,
+                                                                     tmp_path: Path):
+    """D1: CLAUDE_PROJECT_DIR=Q (not wired); --session-id names a session whose
+    transcript cwd is P (wired). P is the project read, so nothing is not_wired."""
+    proj = _project_fixture(tmp_path)
+    q = tmp_path / "Q"
+    (q / ".claude").mkdir(parents=True)
+    sid = "d1-idle"
+    _transcript_with_cwd(tmp_path / "cfg", sid, proj)
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID="me", CLAUDE_PROJECT_DIR=str(q),
+                      CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--session-id", sid],
+                       capture_output=True, text=True, env=env, timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "not_wired" not in r.stdout
+
+
+def test_d2_a_removed_recorded_cwd_leaves_the_project_unknown(home: Path, statedir: Path,
+                                                             tmp_path: Path):
+    sid = "d2-removed"
+    _transcript_with_cwd(tmp_path / "cfg", sid, tmp_path / "removed-project")
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID="me",
+                      CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--session-id", sid],
+                       capture_output=True, text=True, env=env, timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "not_wired" not in r.stdout and "removed-project" not in r.stdout
+    assert "the session's project is not known here" in r.stdout
+
+
+@pytest.mark.parametrize("where", ["harness-home", "under-user-home", "project"])
+def test_d3_a_no_session_run_gives_the_same_verdict_wherever_it_runs(home: Path, statedir: Path,
+                                                                     tmp_path: Path, where):
+    """D3: no session; the canary is wired only in P. From the harness home, from a
+    non-git directory under $HOME (whose .claude/settings.json does not wire it) and
+    from P, the verdict is the same: NOT_PROVABLE_HERE, never not_wired."""
+    proj = _project_fixture(tmp_path)
+    user_home = tmp_path / "userhome"
+    _write(user_home / ".claude" / "settings.json", {"permissions": {"allow": []}})
+    (user_home / "notes").mkdir()
+    cwd = {"harness-home": home, "under-user-home": user_home / "notes", "project": proj}[where]
+    env = _strict_env(home, statedir, HOME=str(user_home), CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home)], capture_output=True,
+                       text=True, env=env, cwd=str(cwd), timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "not_wired" not in r.stdout

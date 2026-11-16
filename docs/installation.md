@@ -269,9 +269,10 @@ runs (its PreToolUse fires before it starts, its PostToolUse after it exits), an
 no host at all, so a registered event with no receipt in the window is `NOT_PROVABLE_HERE`, never
 `FAIL`. So is a receipt that arrived but is not tied to the window (the run's nonce never reached
 that session's transcript, or the transcript did not change in the window): a busy session's other
-tool calls fire canaries too. The session's project is `CLAUDE_PROJECT_DIR`, else the working
-directory its transcript records, else (inside that session, or with no session) the nearest
-directory above doctor's own with `.claude/settings*.json` or a git toplevel. When it cannot be
+tool calls fire canaries too. The session's project is the working directory its transcript
+records (one that no longer exists leaves it unknown), else, unless doctor probes another
+session, `CLAUDE_PROJECT_DIR` or the nearest directory above doctor's own with
+`.claude/settings*.json` or a git toplevel, never your HOME or the harness home. When it cannot be
 known, an event with no receipt and no registration in the layers read is `NOT_PROVABLE_HERE`,
 naming what was read. Run without a session and without `--session-id`, each event's
 action says to rerun inside a session or with `--session-id` of a running session. To prove a session's own PreToolUse and PostToolUse, run `scripts/doctor --strict
