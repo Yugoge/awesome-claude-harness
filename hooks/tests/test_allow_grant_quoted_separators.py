@@ -161,7 +161,6 @@ DATA = [
     ("git commit -m a\\; rm x", "git commit -m a\\; rm x"),
     ("echo x >| /tmp/a", "echo x >| /tmp/a"),
     ("git \\\nclean -fd", "git \\\nclean -fd"),
-    ("find . -exec rm {} \\;", "find . -exec rm {} \\;"),
     ("git commit -m x &", "git commit -m x"),
 ]
 
@@ -182,6 +181,8 @@ NESTED = [
     "bash <<< 'git push'",
     "cat <<EOF\n$(rm x)\nEOF",
     "( git commit -m x )",
+    "find . -exec rm {} \\;",
+    "ssh host <<'EOF'\nrm x\nEOF",
     "! git commit -m x",
     "time git commit -m x",
 ]
