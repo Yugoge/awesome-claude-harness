@@ -145,8 +145,32 @@ def _scan_removal_references(text: str, emit) -> None:
         i = j
 
 
-def census(raw: str) -> dict:
+def _ansi_end(text: str, i: int) -> int:
+    """Index of the quote closing a ``$'...'`` body that starts at ``i``, or -1.
+
+    Inside ``$'...'`` a backslash escapes the next character, so ``\\'`` does
+    not close it."""
+    n = len(text)
+    while i < n:
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == "'":
+            return i
+        i += 1
+    return -1
+
+
+def _starts_word(text: str, i: int) -> bool:
+    return i == 0 or text[i - 1] in " \t\n;&|()<>"
+
+
+def census(raw: str, heredoc_body: bool = False) -> dict:
     """Scan ``raw`` and return the obligation set.
+
+    ``heredoc_body`` scans the body of an unquoted heredoc, where quotes,
+    comments and redirections are literal text and only backslashes, ``$``
+    constructs and backticks act.
 
     Returns {"obligations": [{"kind","offset"}...], "fatal": [str...]}.
     """
@@ -179,6 +203,16 @@ def census(raw: str) -> dict:
 
         if c == "\\":
             i += 2
+            continue
+
+        if heredoc_body and c in "'\"<>#":
+            i += 1
+            continue
+
+        if c == "#" and not in_dq and _starts_word(text, i):
+            # A comment runs to the end of the line; quotes in it are text.
+            j = text.find("\n", i)
+            i = n if j < 0 else j
             continue
 
         if c == "'" and not in_dq:
@@ -234,6 +268,13 @@ def census(raw: str) -> dict:
 
         if c == "$" and i + 1 < n:
             nxt = text[i + 1]
+            if nxt == "'" and not in_dq and not heredoc_body:
+                j = _ansi_end(text, i + 2)
+                if j < 0:
+                    fatal.append(FATAL_UNBALANCED + ":ansi_quote")
+                    return {"obligations": obligations, "fatal": fatal}
+                i = j + 1
+                continue
             if nxt == "(":
                 if i + 2 < n and text[i + 2] == "(":
                     end = _skip_matching(text, i + 1, "(", ")")
@@ -291,7 +332,8 @@ def census(raw: str) -> dict:
                 continue
             emit(KIND_HEREDOC, i)
             j = i + 2
-            if j < n and text[j] == "-":
+            strip_tabs = j < n and text[j] == "-"
+            if strip_tabs:
                 j += 1
             while j < n and text[j] in " \t":
                 j += 1
@@ -325,13 +367,13 @@ def census(raw: str) -> dict:
                     continue
                 delim_chars.append(ch)
                 j += 1
-            pending_heredocs.append(("".join(delim_chars), quoted))
+            pending_heredocs.append(("".join(delim_chars), quoted, strip_tabs))
             i = j
             continue
 
         if not in_dq and c == "\n" and pending_heredocs:
             pos = i + 1
-            for delim, quoted in pending_heredocs:
+            for delim, quoted, strip_tabs in pending_heredocs:
                 body_start = pos
                 terminated = False
                 while pos <= n:
@@ -339,7 +381,8 @@ def census(raw: str) -> dict:
                     if line_end < 0:
                         line_end = n
                     line = text[pos:line_end]
-                    if line.strip() == delim:
+                    # The delimiter line matches exactly; `<<-` drops leading tabs.
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
                         if not quoted:
                             heredoc_bodies.append((text[body_start:pos], body_start))
                         pos = line_end + 1
@@ -368,10 +411,10 @@ def census(raw: str) -> dict:
     # Second pass: unquoted heredoc bodies undergo expansion, so any
     # substitution inside them is ACTIVE.  Offsets are mapped back to the
     # original raw string via the joined-offset table.
-    nested = [(b, list(range(s, s + len(b))), "heredoc_body:") for b, s in heredoc_bodies]
-    nested += [(b, idx, "backtick_body:") for b, idx in nested_bodies]
-    for body, idx_map, label in nested:
-        sub = census(body)
+    nested = [(b, list(range(s, s + len(b))), "heredoc_body:", True) for b, s in heredoc_bodies]
+    nested += [(b, idx, "backtick_body:", False) for b, idx in nested_bodies]
+    for body, idx_map, label, as_body in nested:
+        sub = census(body, heredoc_body=as_body)
         for f in sub["fatal"]:
             fatal.append(label + f)
         for ob in sub["obligations"]:
