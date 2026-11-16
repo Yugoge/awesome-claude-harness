@@ -543,29 +543,32 @@ _COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fi
 
 
 def _git_view(command):
-    """(parse sites in walk order, the git invocations) of `command`, through the
-    shared parser; a command it cannot parse yields no invocations."""
+    """(walk sites, git invocations) of `command` through the shared parser,
+    pairing each git invocation with the index of its site in walk order; a
+    command the parser cannot read yields neither."""
     script = shell_parse.parse(command)
     if script.error is not None:
         return [], []
-    return list(shell_parse.walk(script)), shell_parse.git_invocations(script)
+    sites = list(shell_parse.walk(script))
+    at = [k for k, site in enumerate(sites) if shell_parse.resolve(site.cmd).name == 'git']
+    invocations = shell_parse.git_invocations(
+        script, into=tuple(k for k in shell_parse._DEFAULT_INTO if k != 'alias'))
+    return sites, list(zip(at, invocations))
 
 
 def _commit_records(command):
     """One record per `git commit` the command runs, nested shells included, in
     order: text, args (long options resolved; None where computed), dirs (its -C
-    values; None where computed), env_redirect (a GIT_DIR-style assignment on it
-    or on any command of the call), flag_redirect (--git-dir, --work-tree,
-    --namespace) and cwd_changed (a cd, pushd or popd runs before it, so the
-    guard's probes would not look where it lands). A command the parser cannot
-    read yields none."""
+    values), env_redirect (a GIT_DIR-style assignment on it or on any command of
+    the call), flag_redirect (--git-dir, --work-tree, --namespace) and
+    cwd_changed (a cd, pushd or popd runs before it, so the guard's probes would
+    not look where it lands). A command the parser cannot read yields none."""
     sites, invocations = _git_view(command)
-    order = {id(site.cmd): k for k, site in enumerate(sites)}
-    names = [(shell_parse.resolve(site.cmd).name, site.cmd) for site in sites]
-    moves = [order[id(cmd)] for name, cmd in names if name in _CWD_CHANGE_CMDS]
+    moves = [k for k, site in enumerate(sites)
+             if shell_parse.resolve(site.cmd).name in _CWD_CHANGE_CMDS]
     assigned = any(a.name in _GIT_REDIRECT_ENV_VARS for site in sites for a in site.cmd.assignments)
     records = []
-    for inv in invocations:
+    for at, inv in invocations:
         if inv.subcommand != 'commit':
             continue
         records.append({
@@ -573,7 +576,7 @@ def _commit_records(command):
             'args': list(inv.args), 'dirs': _dash_c_words(inv),
             'flag_redirect': any(opt in _GIT_REDIRECT_FLAGS for opt, _v in inv.global_opts),
             'env_redirect': assigned or any(k in _GIT_REDIRECT_ENV_VARS for k in inv.env),
-            'cwd_changed': any(m < order.get(id(inv.cmd), 0) for m in moves),
+            'cwd_changed': any(m < at for m in moves),
         })
     return records
 
@@ -1045,7 +1048,7 @@ def _moves_protected_branch(command, invocations):
     subcommand, a detached HEAD, or an unset origin/HEAD. `invocations` are the
     classifier's; one the parser does not read as a git command is a landing
     the guard cannot tell."""
-    parsed = _git_view(command)[1]
+    parsed = [inv for _at, inv in _git_view(command)[1]]
     moving = _MOVES_HEAD | _MOVES_NAMED
     if (sum(inv.subcommand in moving for inv in invocations)
             > sum(inv.subcommand in moving for inv in parsed)):
@@ -1104,7 +1107,8 @@ def _evaluate_push(command, invocations, data):
     # The parser's reading (wrappers and nested shells peeled, quotes removed, long
     # options resolved), and the classifier's, which also reads a quoted payload
     # it cannot rule out as code.
-    pushes = [inv.args for inv in _git_view(command)[1] if inv.subcommand == 'push']
+    script = shell_parse.parse(command)
+    pushes = [inv.args for inv in shell_parse.git_invocations(script) if inv.subcommand == 'push']
     pushes += [[_unquote_token(t) for t in inv.args] for inv in invocations if inv.subcommand == 'push']
     if any(_push_forces_or_deletes(args) for args in pushes):
         _block(
