@@ -51,8 +51,9 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
      `protected_services`, `protected_hotfiles`, `protected_statefiles`,
      `protected_endpoint_paths`, `protected_proc_idents`, `protected_global_bins`,
      `protected_build_workspaces` and `protected_build_paths`, each an empty list;
-5. installs the pre-commit hook where git runs hooks for the clone (`core.hooksPath`
-   respected), but only into this repository's own hooks directory: under its git directory,
+5. installs the git hooks of `hooks/git-hooks/` that are marked for it (the pre-commit hook and
+   the pre-push guard) where git runs hooks for the clone (`core.hooksPath` respected), keeping a
+   foreign hook of the same name as `<name>.local`, which the installed hook runs last; but only into this repository's own hooks directory: under its git directory,
    or named by `core.hooksPath` in its local (or worktree) config. A global, system or
    command-line `core.hooksPath` can serve every repository on the machine, so init writes
    nothing there, finishes the other steps and exits non-zero, printing the
@@ -109,8 +110,9 @@ end of any of its sessions; nothing has to be stopped or typed. `hooks/auto-comm
 `scripts/install/land`, one session at a time, which never blocks the Stop and shows one line:
 it undoes what a conflicted stash pop of the pull left (`settings.json` from upstream, the paths
 the pop staged unstaged, the stash entry kept), migrates the previous personal settings into a
-new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
-`private-literals.txt` from values the machine already holds, replaces post-commit hooks that are
+new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds `private-literals.txt` from
+values the machine already holds and from the home's own git history (an empty list gets both, a
+list that has lines only the history values it lacks; [the private-literal list](git-protection-kernel.md#commit-protection-the-pre-commit-hook-and-the-private-literal-list)), replaces post-commit hooks that are
 copies of an earlier `post-commit-auto-push` and renames aside the other ones that push unless
 `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
 git-fswatch daemons running older code with their own environment (one in its git work, or in a
@@ -122,15 +124,12 @@ A rebase or merge stopped in the home is left alone: the landing says so and wai
 sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`
 remain.
 
-**When the upstream history is rewritten.** A harness home moves to the rewritten history with its
-next `/pull`, which rebases the home's own commits onto it; nothing has to be typed or stopped. The
-home keeps its local data, pre-rewrite objects included (stash entries, checkpoint and backup refs,
-reflogs), as recoverable local history, and its pre-push guard (installed by the landing beside
-the pre-commit hook) refuses any push that would send an object holding a literal listed in
+**Pushes from the harness home.** The landing installs the pre-push guard beside the pre-commit
+hook. It refuses any push that would send an object holding a literal listed in
 `private-literals.txt` ([the private-literal list](git-protection-kernel.md#commit-protection-the-pre-commit-hook-and-the-private-literal-list)),
-naming the object. If that rebase stops on a conflict, `/pull` stops too and keeps its stash
-entry: finish or abort the rebase, then `git stash pop`. Any other clone of the repository should
-be cloned again.
+naming the object and never the value. The repository's history is not rewritten (D30): the
+public copy is built by `scripts/publish-public`, one commit per publish, so a `/pull` never has
+to move a home to a rewritten history.
 
 ## Other install locations
 

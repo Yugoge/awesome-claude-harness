@@ -1,14 +1,21 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-28T21:17:21Z*
-**Total entries**: 1
+*Last updated: 2026-11-16T02:46:59Z*
+**Total entries**: 8
 **Convention**: kebab
 
 ## Tree
 ```
 fixtures/
+├── late_repair_golden/
+│   ├── `complete.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
+│   ├── `fanout.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
+│   ├── `mixed_integrity.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
+│   └── `qa_only.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
+├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
+└── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
 ```
 <!-- /AUTO:index-stats -->
 
