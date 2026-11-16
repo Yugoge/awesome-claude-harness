@@ -34,12 +34,12 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `posttool-git-checkpoint.sh` - posttool-git-checkpoint.sh - PostToolUse checkpoint trigger
 - `posttool-git-warn.sh` - posttool-git-warn.sh - PostToolUse (Bash): after a git commit, tell the model which files it left untracked.
 - `posttool-lane-completeness-watch.py` - producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
-- `posttool-launch.py` - Every Python hook registered on PostToolUse runs here, in its old registration order, each as
+- `posttool-launch.py` - Every Python hook registered on PostToolUse runs here, each as `python3 <file>` would have run it
 - `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
 - `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 - `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 - `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-- `posttool-restart-sendmessage.py` - PostToolUse: journal every SendMessage call that ran.
+- `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
 - `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 - `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 - `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's
@@ -66,7 +66,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 - `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
 - `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
-- `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, in its old registration order, each as
+- `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 - `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-obligation-gate.py` - WHY THIS HOOK EXISTS:
@@ -122,7 +122,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
 - `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
 - `userprompt-harness-switch.sh` - userprompt-harness-switch.sh — UserPromptSubmit: the owner's typed /harness off|on|status.
-- `userprompt-launch.py` - Every Python hook registered on UserPromptSubmit runs here, in its old registration order, each as
+- `userprompt-launch.py` - Every Python hook registered on UserPromptSubmit runs here, each as `python3 <file>` would have r...
 - `userprompt-restart-authorize.py` - the /dev-overnight session's own wake (lib.overnight.WAKE_PROMPT) inside its open span
 - `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 - `userprompt-usage-snapshot.py` - Passively injects a per-account usage snapshot (available/exhausted status,

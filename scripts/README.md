@@ -4,8 +4,8 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 110
-- **Subdirectories**: 7
+- **Total files**: 111
+- **Subdirectories**: 8
 - **Naming convention**: kebab
 
 ## Files
@@ -114,6 +114,7 @@ Organization and usage documentation for `scripts/`.
 - `write-qa-mode.sh` - STUB: P1b E7 replaced the qa_mode switch with the record: each QA dispatch's
 
 ## Subdirectories
+- `ci/`
 - `install/`
 - `lib/`
 - `modern-git-slot/`

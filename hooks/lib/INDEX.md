@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T02:46:58Z*
-**Total entries**: 71
+*Last updated: 2026-11-16T08:01:14Z*
+**Total entries**: 73
 **Convention**: kebab
 
 ## Tree
@@ -64,6 +64,7 @@ lib/
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
+├── `rule_fork.py` - A launcher (lib/hook_launch.py) holds an event's Python hooks and, once its interpreter has
 ├── `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) and the event dispatchers
 ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
@@ -71,7 +72,7 @@ lib/
 ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 ├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
-├── `send_policy.py` - The main agent's SendMessage policy (CLAUDE.md lesson 16, Orchestrator-Only Rule).
+├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 ├── `specialist_yield.py` - Public API:

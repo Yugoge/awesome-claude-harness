@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-09T15:40:00Z*
-**Total entries**: 25
+*Last updated: 2026-11-16T08:01:13Z*
+**Total entries**: 26
 **Convention**: kebab
 
 ## Tree
@@ -29,6 +29,7 @@ reference/
 ├── `positioning.md` - Positioning
 ├── `qa-status-gate-gap-orchestrator-side-20261005.md` - The QA-verdict gate does not cover the orchestrator — still open 2026-10-05
 ├── `recoverable-discard-register-20261005.md` - Recoverable-discard register — 2026-10-05 tree-to-zero campaign
+├── `red-test-trailer.md` - The `Red-test:` trailer and the red-then-green job
 ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
