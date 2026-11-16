@@ -1,0 +1,1209 @@
+[
+ {
+  "input": "echo $((rm q) )",
+  "impact": "under-read-high",
+  "class": "$(( fallback to $( ( ... ) ) not modelled",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "((rm q);(rm t))",
+  "impact": "under-read-high",
+  "class": "(( compound misread when the text ends in ))",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "arr=($(rm q))",
+  "impact": "under-read-high",
+  "class": "array literal ( ... ) body not walked",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo {$(rm q),x}",
+  "impact": "under-read-high",
+  "class": "brace part swallows substitutions",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo [`rm${IFS}q`]",
+  "impact": "under-read-high",
+  "class": "bracket glob part swallows backtick substitutions",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "[[ x == @($(rm q)|y) ]]",
+  "impact": "under-read-high",
+  "class": "extglob pattern swallows substitutions",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo ${X:-$'\\''}; rm q; echo \\'}",
+  "impact": "under-read-high",
+  "class": "${ } / array-literal extent mismatched (swallows later commands)",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "$'rm\\0zz' q",
+  "impact": "under-read-high",
+  "class": "ANSI-C NUL truncation",
+  "view": "resolve",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "let 'a[$(rm q)]=1'",
+  "impact": "under-read-high",
+  "class": "arithmetic evaluation of quoted data executes subscripts",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "X='q t'; rm $X",
+  "impact": "under-read-high",
+  "class": "projected variable not word-split / globbed",
+  "view": "write_targets",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "X=p; X=ok | cat; echo hi > $X",
+  "impact": "under-read-high",
+  "class": "env projection ignores scope and control flow",
+  "view": "write_targets",
+  "bash_runs": [
+   "cat"
+  ]
+ },
+ {
+  "input": "echo ${X:=$(rm q)}",
+  "impact": "under-read-high",
+  "class": "variants of known (1): substitutions inside parameter expansion",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo $[$(rm q)]",
+  "impact": "under-read-high",
+  "class": "variants of known (2): substitutions inside arithmetic",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo hi # c \\\nrm q",
+  "impact": "under-read-high",
+  "class": "line continuation removed inside comment / quoted heredoc (outside my class, distinct from known 5)",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "((echo a) ; (rm b))",
+  "impact": "under-read-high",
+  "class": "arith command vs nested subshell disambiguation. parse_command/parse_arith (shell_parse.py:1347-1352, 1465-1478) take '((' as arithmetic whenever the outer match ends in '))'. Bash (parse_arith_cmd) reads to the first ')' that brings the depth back to the '((' level and needs a ')' straight after it, or else re-reads the text as '(' subshell.",
+  "view": "parse/walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo $((echo a); rm b)",
+  "impact": "under-read-high",
+  "class": "$(( arithmetic expansion vs $( (subshell) ) command substitution. _lex_dollar (shell_parse.py:401-402) picks arith only because t[i+2]=='('. This differs from known (2), which is a cmdsub inside a real arithmetic expansion.",
+  "view": "parse/walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "((x=1<<true))\nrm -rf y\ntrue",
+  "impact": "under-read-high",
+  "class": "heredoc operator lexed inside (( )) and for (( )). _lex_into (shell_parse.py:813-835) registers pending heredocs for tokens that parse_arith (1475) later skips by offset, but the pending heredoc still consumes the following lines.",
+  "view": "parse/walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "!(rm a)",
+  "impact": "under-read-high",
+  "class": "pipeline negation glued to a subshell. _lex_word (shell_parse.py:528-550) folds '!(' into an extglob pattern unconditionally.",
+  "view": "parse/walk/resolve",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "time -- rm a",
+  "impact": "under-read-high",
+  "class": "time reserved word options. parse_pipeline (shell_parse.py:1284-1290) handles only '-p'.",
+  "view": "parse/resolve/git_invocations",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "f() { rm -rf x; echo \"a, b\"; }; f",
+  "impact": "under-read-high",
+  "class": "brace group read as brace expansion. This is the ',' variant of known (3), which is the '..' variant. _lex_word (shell_parse.py:666-675) tests '\",\" in body' on the raw text from '{' to its matching '}'. Function bodies that contain a comma anywhere are affected, which is very common.",
+  "view": "parse/walk/git_invocations/write_targets",
+  "bash_runs": [
+   "f",
+   "rm"
+  ]
+ },
+ {
+  "input": "echo \"$(case x in x) rm b;; esac)\"",
+  "impact": "under-read-high",
+  "class": "case pattern ')' inside $( ) / <( ). _lex_dollar to _match_pair (shell_parse.py:343-373, 397-405) counts raw parens. Only the '(x)' pattern form works ('echo $(case x in (x) rm b;; esac)' is read correctly).",
+  "view": "walk/executable_view/git_invocations",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "{ bash; } <<< 'rm x'",
+  "impact": "under-read-high",
+  "class": "compound stdin not propagated to inner shells. _resolve_shell (shell_parse.py:2180) and _feed (1696) read only the SimpleCommand's own redirects, and _walk_command (1727-1737) does not pass compound redirects down.",
+  "view": "resolve/walk",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "{ cat; } <<EOF\n$(rm x)\nEOF",
+  "impact": "under-read-high",
+  "class": "heredoc expansions on compound redirects (shell_parse.py:1730-1731 vs 1744-1748 for simple commands)",
+  "view": "walk",
+  "bash_runs": [
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "X=protected; (X=harmless); echo hi > $X",
+  "impact": "under-read-high",
+  "class": "write_targets assignment projection ignores subshell scope and control flow (shell_parse.py:2478-2487), so a hook checks a decidable but wrong path",
+  "view": "write_targets",
+  "bash_runs": []
+ },
+ {
+  "input": "if true; then :; fi > o1",
+  "impact": "under-read-high",
+  "class": "New variants of known (7) for the other compound kinds and redirect operators (if/while/until/case/select/[[ ]]/(( ))/function definitions/coproc/time/! and 3>, &>, {fd}>, <>, >|, >&file, multiple redirects). write_targets iterates SimpleCommand sites only.",
+  "view": "write_targets",
+  "bash_runs": []
+ },
+ {
+  "input": "X=($(rm a))",
+  "impact": "under-read-high",
+  "class": "array assignment literal (out of class, found incidentally). Part.body (shell_parse.py:170-176) excludes arraylit.",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "bash <<EOF\necho \"\\$(rm f1)\"\nEOF",
+  "impact": "under-read-high",
+  "class": "heredoc-shell payload is parsed from the raw body without the heredoc's backslash processing (\\$, \\`, \\\\)",
+  "view": "resolve (heredoc_shell payload) / walk / write_targets / git_invocations",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "cat <<'EOF'\nfoo\\\nEOF\nrm f1\nEOF",
+  "impact": "under-read-high",
+  "class": "Src.from_raw removes backslash-newline everywhere before lexing, including in quoted-delimiter heredoc bodies and single-quoted strings (not known #5: that one is an escaped backslash; this is a single backslash inside a quoted context)",
+  "view": "parse / walk",
+  "bash_runs": [
+   "EOF",
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "cat <<\"E\\$F\"\nE$F\nrm f1\nE\\$F",
+  "impact": "under-read-high",
+  "class": "heredoc delimiter quote removal is wrong (double-quote backslash escapes, $'...' and $\"...\")",
+  "view": "parse / walk",
+  "bash_runs": [
+   "E$F",
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "(( x <<true ))\nrm f1\ntrue",
+  "impact": "under-read-high",
+  "class": "`<<` inside an arithmetic command or arithmetic for is lexed as a heredoc",
+  "view": "parse / walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "x=$(cat <<'EOF'\n(\nEOF)\nrm f1\nEOF\n# )",
+  "impact": "under-read-high",
+  "class": "heredoc inside $( ) / <( ): _match_pair counts ( ) ' \" in the heredoc body",
+  "view": "walk",
+  "bash_runs": [
+   "EOF",
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "while read l; do :; done <<EOF\n$(rm f1)\nEOF",
+  "impact": "under-read-high",
+  "class": "heredoc body substitutions on a compound command's redirect are never walked (walk view; known #7 is only write_targets)",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "{ bash; } <<'EOF'\nrm f1\nEOF",
+  "impact": "under-read-high",
+  "class": "a compound's stdin heredoc or here-string is not propagated to the shells inside it (fed or payload)",
+  "view": "walk / resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash -s x <<'EOF'\nrm f1\nEOF",
+  "impact": "under-read-high",
+  "class": "forms in which a shell reads its script from stdin are not recognised",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "source /dev/stdin <<'EOF'\ngit push --force\nEOF",
+  "impact": "under-read-high",
+  "class": "source or . of /dev/stdin is not treated as a fed shell, and executable_view blanks the body as data",
+  "view": "resolve / executable_view / git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "cat <<'EOF' | bash\ngit push --force\nEOF",
+  "impact": "under-read-high",
+  "class": "a heredoc piped into a shell is blanked as data by executable_view and never parsed as a payload",
+  "view": "executable_view / git_invocations / walk",
+  "bash_runs": [
+   "bash",
+   "cat"
+  ]
+ },
+ {
+  "input": "exec <<'EOF'\nrm f1\nEOF\nbash",
+  "impact": "under-read-high",
+  "class": "an inherited stdin heredoc reaches a shell that has no redirect of its own",
+  "view": "walk / resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash <<-EOF\n\tcat <<X\n\tX\n\trm f1\nX\nEOF",
+  "impact": "under-read-high",
+  "class": "the <<- tab stripping is not applied to the body before it is parsed as a payload",
+  "view": "resolve (heredoc_shell payload) / walk",
+  "bash_runs": [
+   "X",
+   "bash",
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "rm f1 ²>/dev/null",
+  "impact": "under-read-high",
+  "class": "Unicode digits accepted by str.isdigit() in fd, dup and count handling",
+  "view": "walk / write_targets / executable_view / git_invocations",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "tee --output-error o1 < f1",
+  "impact": "under-read-high",
+  "class": "tee option spec: --output-error treated as taking a separate value",
+  "view": "write_targets",
+  "bash_runs": [
+   "tee"
+  ]
+ },
+ {
+  "input": "bash -eo pipefail -c 'rm x'",
+  "impact": "under-read-high",
+  "class": "shell option cluster ending in o/O (-eo, -euo, -xO, +eo): _resolve_shell (shell_parse.py:2157) skips the option value only when the word is exactly -o/-O, so the value word (pipefail) stops the scan before -c is seen",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash -co pipefail 'rm x'",
+  "impact": "under-read-high",
+  "class": "shell -c clustered with o/O: the option value is taken as the -c payload (shell_parse.py:2154-2161)",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash -c - 'rm x'",
+  "impact": "under-read-high",
+  "class": "lone '-' option terminator not honoured in _resolve_shell (len(v)>1 check at shell_parse.py:2154 breaks on '-')",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash -s a b <<< 'rm x'",
+  "impact": "under-read-high",
+  "class": "stdin-fed shell with operands: _resolve_shell returns before the heredoc/herestring check whenever an operand remains (shell_parse.py:2178)",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "{ bash; } <<< 'rm x'",
+  "impact": "under-read-high",
+  "class": "shell fed by an inherited stdin redirect (compound, function call, outer -c shell, exec): only the shell's own redirects are read",
+  "view": "walk",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash 3<<<'rm x' 0<&3",
+  "impact": "under-read-high",
+  "class": "new variant of known (4): a here-string (not a heredoc) on another fd duplicated to stdin",
+  "view": "walk",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "source /dev/stdin <<< 'rm x'",
+  "impact": "under-read-high",
+  "class": "source/. of stdin, /dev/fd or a process substitution is not a payload kind",
+  "view": "resolve",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "trap 'rm x' EXIT",
+  "impact": "under-read-high",
+  "class": "trap command strings are not a payload (no eval-like descent)",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "BASH_ENV=/dev/stdin bash -c : <<< 'rm x'",
+  "impact": "under-read-high",
+  "class": "BASH_ENV startup file fed from stdin or a procsub",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "shopt -s expand_aliases\nalias x=rm\nx f",
+  "impact": "under-read-high",
+  "class": "shell aliases defined in the same text",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "hash -p /usr/bin/rm ls; ls x",
+  "impact": "under-read-high",
+  "class": "command-hash rebinding (hash -p, BASH_CMDS)",
+  "view": "resolve",
+  "bash_runs": [
+   "ls"
+  ]
+ },
+ {
+  "input": "env - rm x",
+  "impact": "under-read-high",
+  "class": "env lone '-' (split_options treats '-' as the first operand, shell_parse.py:1028)",
+  "view": "resolve",
+  "bash_runs": [
+   "env"
+  ]
+ },
+ {
+  "input": "env 'X-Y=1' rm x",
+  "impact": "under-read-high",
+  "class": "env assignments limited to identifier names (_ASSIGN_RE at shell_parse.py:46/2015)",
+  "view": "resolve",
+  "bash_runs": [
+   "env",
+   "rm"
+  ]
+ },
+ {
+  "input": "sudo VAR=1 rm x",
+  "impact": "under-read-high",
+  "class": "sudo VAR=value prefix after option parsing",
+  "view": "resolve",
+  "bash_runs": [
+   "sudo"
+  ]
+ },
+ {
+  "input": "env -S '-i rm x'",
+  "impact": "under-read-high",
+  "class": "env -S split string is parsed as a command line, not re-fed to env's own option parser (shell_parse.py:2018-2023)",
+  "view": "resolve",
+  "bash_runs": [
+   "env"
+  ]
+ },
+ {
+  "input": "env -S 'rm\\_x'",
+  "impact": "under-read-high",
+  "class": "env -S string read with bash grammar instead of env's escape/comment rules: wrong head or wrong target",
+  "view": "resolve",
+  "bash_runs": [
+   "env",
+   "rm"
+  ]
+ },
+ {
+  "input": "eval -- rm x",
+  "impact": "under-read-high",
+  "class": "eval '--' not stripped (shell_parse.py:2037-2044)",
+  "view": "resolve",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo x | xargs -i rm {}",
+  "impact": "under-read-high",
+  "class": "optional-argument options typed as required-value in PEEL['xargs'] (shell_parse.py:1902-1906)",
+  "view": "resolve",
+  "bash_runs": [
+   "rm",
+   "xargs"
+  ]
+ },
+ {
+  "input": "echo 'rm x' | xargs -I{} sh -c {}",
+  "impact": "under-read-high",
+  "class": "xargs replace-string inside a shell payload treated as static code",
+  "view": "resolve",
+  "bash_runs": [
+   "rm",
+   "xargs"
+  ]
+ },
+ {
+  "input": "find . -name x -exec rm {} \\;",
+  "impact": "under-read-high",
+  "class": "find -exec/-execdir/-ok/-okdir not peeled (find excluded at shell_parse.py:2096)",
+  "view": "resolve",
+  "bash_runs": [
+   "find"
+  ]
+ },
+ {
+  "input": "watch -n 1 rm x",
+  "impact": "under-read-high",
+  "class": "watch not peeled (excluded at shell_parse.py:2097)",
+  "view": "resolve",
+  "bash_runs": [
+   "watch"
+  ]
+ },
+ {
+  "input": "runuser -u root -- rm x",
+  "impact": "under-read-high",
+  "class": "runuser without -c excluded from peeling even though PEEL has its spec (shell_parse.py:2099)",
+  "view": "resolve",
+  "bash_runs": [
+   "runuser"
+  ]
+ },
+ {
+  "input": "su -- root -c 'rm x'",
+  "impact": "under-read-high",
+  "class": "su payload forms: -c after '--', --session-command, -s shell",
+  "view": "resolve",
+  "bash_runs": [
+   "su"
+  ]
+ },
+ {
+  "input": "sg root -c 'rm x'",
+  "impact": "under-read-high",
+  "class": "sg not peeled",
+  "view": "resolve",
+  "bash_runs": [
+   "sg"
+  ]
+ },
+ {
+  "input": "script -qc 'rm x' /dev/null",
+  "impact": "under-read-high",
+  "class": "script -c not peeled",
+  "view": "resolve",
+  "bash_runs": [
+   "script"
+  ]
+ },
+ {
+  "input": "setpriv --reuid=0 rm x",
+  "impact": "under-read-high",
+  "class": "wrapper missing from WRAPPERS/PEEL (setpriv)",
+  "view": "resolve",
+  "bash_runs": [
+   "setpriv"
+  ]
+ },
+ {
+  "input": "chroot --skip-chdir / rm x",
+  "impact": "under-read-high",
+  "class": "boolean option typed as value in WRAPPERS['chroot'] (shell_parse.py:1792)",
+  "view": "resolve",
+  "bash_runs": [
+   "chroot"
+  ]
+ },
+ {
+  "input": "nsenter -t $$ -m rm x",
+  "impact": "under-read-high",
+  "class": "optional-argument options typed as required-value in WRAPPERS['nsenter'] (shell_parse.py:1807-1810)",
+  "view": "resolve",
+  "bash_runs": [
+   "nsenter"
+  ]
+ },
+ {
+  "input": "taskset 1 rm x",
+  "impact": "under-read-high",
+  "class": "taskset fixed-operand count 0 instead of 1, and -c/--cpu-list missing (shell_parse.py:1796)",
+  "view": "resolve",
+  "bash_runs": [
+   "rm",
+   "taskset"
+  ]
+ },
+ {
+  "input": "time -- rm x",
+  "impact": "under-read-high",
+  "class": "time keyword '--' terminator (grammar handles only -p, shell_parse.py:1284-1288)",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "git -C '' push origin main",
+  "impact": "under-read-high",
+  "class": "empty-quoted-word-dropped",
+  "view": "parse/git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "exec -a '' git push origin main",
+  "impact": "under-read-high",
+  "class": "empty-quoted-word-dropped (wrapper option value)",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git -c alias.a=b -c alias.b=push a origin main",
+  "impact": "under-read-high",
+  "class": "alias-chain-config-not-propagated",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=status git -c alias.x=push x origin main",
+  "impact": "under-read-high",
+  "class": "config-precedence-order",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git -c alias.x='!rm -rf f' x",
+  "impact": "under-read-high",
+  "class": "alias-body-not-walked",
+  "view": "walk/write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "find . -maxdepth 0 -exec git push origin main \\;",
+  "impact": "under-read-high",
+  "class": "wrapper-not-peeled (find -exec)",
+  "view": "resolve/walk/git_invocations",
+  "bash_runs": [
+   "find",
+   "git"
+  ]
+ },
+ {
+  "input": "runuser -u root -- git push origin main",
+  "impact": "under-read-high",
+  "class": "wrapper-not-peeled (runuser/sg/script)",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "runuser"
+  ]
+ },
+ {
+  "input": "taskset 1 git push origin main",
+  "impact": "under-read-high",
+  "class": "wrapper-operand-count",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "git",
+   "taskset"
+  ]
+ },
+ {
+  "input": "env - git push origin main",
+  "impact": "under-read-high",
+  "class": "wrapper-option-misread (env -)",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "env"
+  ]
+ },
+ {
+  "input": "xargs -i git push origin main",
+  "impact": "under-read-high",
+  "class": "xargs-optional-arg-options",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "xargs"
+  ]
+ },
+ {
+  "input": "echo --force | xargs git push origin main",
+  "impact": "under-read-high",
+  "class": "xargs-stdin-args-not-flagged",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git",
+   "xargs"
+  ]
+ },
+ {
+  "input": "eval -- 'git push origin main'",
+  "impact": "under-read-high",
+  "class": "eval-double-dash",
+  "view": "resolve/walk/git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "env -S'git push origin main \\c --dry-run'",
+  "impact": "under-read-high",
+  "class": "env-S-escape-semantics",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "env",
+   "git"
+  ]
+ },
+ {
+  "input": "a=( $(git push origin main) )",
+  "impact": "under-read-high",
+  "class": "array-literal-substitution-not-walked",
+  "view": "walk/git_invocations/write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "bash -s x <<< 'git push origin main'",
+  "impact": "under-read-high",
+  "class": "heredoc_shell variants (stdin script with operands / source)",
+  "view": "resolve/walk",
+  "bash_runs": [
+   "bash",
+   "git"
+  ]
+ },
+ {
+  "input": "/usr/lib/git-core/git-push origin main",
+  "impact": "under-read-high",
+  "class": "dashed-git-builtin",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git-push"
+  ]
+ },
+ {
+  "input": "git -C sub rm g",
+  "impact": "under-read-high",
+  "class": "git-write-target-base-dir",
+  "view": "write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git rebase --exec='git push origin main' HEAD~1",
+  "impact": "under-read-high",
+  "class": "git-option-runs-shell (exec payloads)",
+  "view": "git_invocations/walk",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "!(rm q)",
+  "impact": "under-read-medium",
+  "class": "! ( subshell read as extglob",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "X='$(rm q)'; : ${X@P}",
+  "impact": "under-read-medium",
+  "class": "re-expansion of a statically assigned variable",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "{rm,q}",
+  "impact": "under-read-medium",
+  "class": "static brace expansion in command position not resolved",
+  "view": "resolve",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo $(echo ${X:-(}) ; rm q #)",
+  "impact": "under-read-medium",
+  "class": "$( ) body extent wrong; only nested errors() flags it",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "[[ \"$(case x in x) rm b;; esac)\" ]]",
+  "impact": "under-read-medium",
+  "class": "_nested_scripts (shell_parse.py:1639-1653) iterates only walk() SimpleCommand sites, so Compound.header words and Compound.redirects targets are skipped",
+  "view": "parse (Script.errors)",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "cat <<EOF\n$(rm x)\nEOF",
+  "impact": "under-read-medium",
+  "class": "executable_view heredoc blanking ignores expansions (out of class, found incidentally). shell_parse.py:2238-2241 blanks hd.body_span with no check of hd.quoted or hd.expansions.",
+  "view": "executable_view",
+  "bash_runs": [
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash <(cat <<'EOF'\nrm f1\nEOF\n)",
+  "impact": "under-read-medium",
+  "class": "a shell script read from a procsub, /dev/fd/N or a fd-variable heredoc is not parsed (includes variants of known #4)",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "cat"
+  ]
+ },
+ {
+  "input": "rm \"1\">o19",
+  "impact": "under-read-medium",
+  "class": "quoted, escaped or out-of-range digit words before a redirect operator are taken as the fd",
+  "view": "parse (Redir.io) / walk / resolve / git_invocations / argv_split",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "xargs git <<< 'push --force origin main'",
+  "impact": "under-read-medium",
+  "class": "argv supplied to an xargs command from a static heredoc or here-string is not read",
+  "view": "git_invocations / resolve / executable_view",
+  "bash_runs": [
+   "git",
+   "xargs"
+  ]
+ },
+ {
+  "input": "echo 'rm x' | bash",
+  "impact": "under-read-medium",
+  "class": "pipe-fed shell has no payload and no unresolved marker",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "bash <(echo rm x)",
+  "impact": "under-read-medium",
+  "class": "shell running a process-substitution file or stdin",
+  "view": "resolve",
+  "bash_runs": [
+   "bash",
+   "rm"
+  ]
+ },
+ {
+  "input": "PS4='$(rm x)'; set -x; :",
+  "impact": "under-read-medium",
+  "class": "prompt variables (PS4 with xtrace, PROMPT_COMMAND with -i) evaluated as code",
+  "view": "walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "echo f | xargs -I{} rm {}",
+  "impact": "under-read-medium",
+  "class": "xargs-supplied operands: a literal replace-string is reported as a decidable path, and stdin operands yield no target at all",
+  "view": "write_targets",
+  "bash_runs": [
+   "rm",
+   "xargs"
+  ]
+ },
+ {
+  "input": "find . -name x -delete",
+  "impact": "under-read-medium",
+  "class": "find write actions (-delete, -fprint/-fprintf/-fls) not in VERBS",
+  "view": "write_targets",
+  "bash_runs": [
+   "find"
+  ]
+ },
+ {
+  "input": "nice -5 rm x",
+  "impact": "under-read-medium",
+  "class": "real wrapper options missing from the specs, so the head is unresolved (flagged, but the command and targets are hidden)",
+  "view": "resolve",
+  "bash_runs": [
+   "nice",
+   "rm"
+  ]
+ },
+ {
+  "input": "yes | rm --interactive x",
+  "impact": "under-read-medium",
+  "class": "split_options: optional-argument long options (--interactive[=WHEN], --output-error[=MODE]) typed as required-value, and unknown options yielding no operands in VERBS readings",
+  "view": "write_targets",
+  "bash_runs": [
+   "rm",
+   "yes"
+  ]
+ },
+ {
+  "input": "POSIXLY_CORRECT=1 cp f out -v",
+  "impact": "under-read-medium",
+  "class": "permute=True in _verb_targets ignores POSIXLY_CORRECT in the command's assignments, so the target is wrong",
+  "view": "write_targets",
+  "bash_runs": [
+   "cp"
+  ]
+ },
+ {
+  "input": "sed -n '1e rm x' f",
+  "impact": "under-read-medium",
+  "class": "command execution inside a sed script (e command, s///e)",
+  "view": "walk",
+  "bash_runs": [
+   "sed"
+  ]
+ },
+ {
+  "input": "git -c core.editor='rm -f f' commit --allow-empty",
+  "impact": "under-read-medium",
+  "class": "git-config-runs-shell",
+  "view": "walk/write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git checkout HEAD~1 f",
+  "impact": "under-read-medium",
+  "class": "git-write-target-missing-forms",
+  "view": "write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git rm -- -f",
+  "impact": "under-read-medium",
+  "class": "git-write-target-dashdash",
+  "view": "write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "nice -5 git push origin main",
+  "impact": "under-read-medium",
+  "class": "wrapper-option-spec-incomplete",
+  "view": "resolve/git_invocations",
+  "bash_runs": [
+   "git",
+   "nice"
+  ]
+ },
+ {
+  "input": "trap 'git push origin main' EXIT",
+  "impact": "under-read-medium",
+  "class": "deferred-or-aliased-code (trap/alias/hash)",
+  "view": "walk/git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": ". <(echo git push origin main)",
+  "impact": "under-read-medium",
+  "class": "shell-runs-generated-code (procsub/pipe)",
+  "view": "walk/resolve",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git config alias.x push; git x origin main",
+  "impact": "under-read-medium",
+  "class": "git-config-state-across-commands",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "E='!git push origin main' git --config-env=alias.x=E x",
+  "impact": "under-read-medium",
+  "class": "config-env-alias",
+  "view": "git_invocations/walk",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "$'r\\m' q",
+  "impact": "over-read-low",
+  "class": "ANSI-C unknown escape decoded",
+  "view": "resolve",
+  "bash_runs": [
+   "r\\m"
+  ]
+ },
+ {
+  "input": "coproc time rm a",
+  "impact": "over-read-low",
+  "class": "reserved word after coproc",
+  "view": "resolve",
+  "bash_runs": []
+ },
+ {
+  "input": "echo a 3>o13 >&3-",
+  "impact": "over-read-low",
+  "class": "the >&N- / N>&M- move form is read as a file write",
+  "view": "write_targets / Redir.writes",
+  "bash_runs": []
+ },
+ {
+  "input": "rm 1\\\n>o1",
+  "impact": "over-read-low",
+  "class": "fd number or {var} separated from its operator by a backslash-newline, and {arr[i]}> forms",
+  "view": "parse (Redir.io) / walk",
+  "bash_runs": [
+   "rm"
+  ]
+ },
+ {
+  "input": "bash <<A 0<f1\nrm src\nA",
+  "impact": "over-read-low",
+  "class": "payload taken from a heredoc that a later stdin redirect overrides",
+  "view": "resolve",
+  "bash_runs": [
+   "bash"
+  ]
+ },
+ {
+  "input": "x=$(cat <<EOF) ; rm f1\nbody\nEOF\n",
+  "impact": "over-read-low",
+  "class": "heredoc operator inside a single-line $( ) whose body follows the line",
+  "view": "walk",
+  "bash_runs": [
+   "cat",
+   "rm"
+  ]
+ },
+ {
+  "input": "flock -c 'rm x' l",
+  "impact": "over-read-low",
+  "class": "over-reads in wrapper readings",
+  "view": "resolve",
+  "bash_runs": [
+   "flock"
+  ]
+ },
+ {
+  "input": "git --help push",
+  "impact": "over-read-low",
+  "class": "git-help-version-rewrite",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git --exec-path push origin main",
+  "impact": "over-read-low",
+  "class": "git-query-options",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git -c alias.status=push status",
+  "impact": "over-read-low",
+  "class": "alias-resolution-over-read",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "git -calias.x=push x origin main",
+  "impact": "over-read-low",
+  "class": "git-attached-global-option",
+  "view": "git_invocations",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "bash -c '' 'git push origin main'",
+  "impact": "over-read-low",
+  "class": "empty-quoted-word-dropped",
+  "view": "resolve",
+  "bash_runs": [
+   "bash"
+  ]
+ },
+ {
+  "input": "git rm --cach f",
+  "impact": "over-read-low",
+  "class": "git-option-abbreviation (write_targets)",
+  "view": "write_targets",
+  "bash_runs": [
+   "git"
+  ]
+ },
+ {
+  "input": "echo x &>(rm q)",
+  "impact": "accepts-invalid-low",
+  "class": "accepts text bash rejects",
+  "view": "parse",
+  "bash_runs": []
+ },
+ {
+  "input": "true | ! rm a",
+  "impact": "accepts-invalid-low",
+  "class": "invalid compound and negation syntax accepted",
+  "view": "parse",
+  "bash_runs": []
+ },
+ {
+  "input": "echo x >#o7",
+  "impact": "accepts-invalid-low",
+  "class": "redirect or heredoc operator followed by '#' or by another operator is accepted",
+  "view": "parse",
+  "bash_runs": []
+ },
+ {
+  "input": "f() rm x",
+  "impact": "accepts-invalid-low",
+  "class": "function body not required to be compound; bare coproc accepted",
+  "view": "parse",
+  "bash_runs": []
+ }
+]
