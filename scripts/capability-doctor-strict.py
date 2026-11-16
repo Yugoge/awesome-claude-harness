@@ -28,16 +28,19 @@ Three results, never more. PASS certifies only what this run MEASURED:
                      have no probe, so they are always "not provable here".
   FAIL               a check was measured here and failed: a lifecycle event with no
                      receipt whose canary no settings layer this run reads registers
-                     (named), a receipt that failed an identity or session cross-check,
-                     or an unusable binding.
+                     (named), a canary that fired on another host event
+                     (misregistered), a receipt that failed an identity or session
+                     cross-check, or an unusable binding.
   NOT_PROVABLE_HERE  nothing failed, but at least one check could not be measured
                      from where doctor runs. Each such check is named, with the one
                      action that would prove it. Never reported as PASS or FAIL.
 
-A live receipt that passes every cross-check proves its event is wired, wherever
-the registration lives (a layer this run does not read: managed settings, a
-plugin), so the registration read is consulted only for an event with no receipt.
-It never moves anything toward PASS. A receipt that arrived but is not tied to
+A live receipt that passes every cross-check AND whose host event name matches its
+label is taken as proof the event is wired, wherever the registration lives (a
+layer this run does not read: managed settings, a plugin). Doctor cannot tell host
+dispatch from a hand-run canary; the handshake names that residual too. A receipt
+whose host event name differs from its label is a misregistration (FAIL); one with
+no host event name still needs a registration in a layer this run reads. A receipt that arrived but is not tied to
 this window (the run's nonce is not in that session's transcript, or the
 transcript did not change in the window) proves nothing either way, so it is
 NOT_PROVABLE_HERE, not FAIL. The state file the run
@@ -89,7 +92,7 @@ DEEP_ACTIONS = {
 }
 
 
-def canary_registrations(home) -> dict[str, list[str]]:
+def canary_registrations(home, project: Path | None = None) -> dict[str, list[str]]:
     """{event: [settings layer, ...]} for every layer that registers the canary
     under that event key with that event as its label argument.
 
@@ -98,7 +101,7 @@ def canary_registrations(home) -> dict[str, list[str]]:
     handshake rejects, so it does not count as wired.
     """
     out: dict[str, list[str]] = {}
-    for layer in settings_layers_read(home):
+    for layer in settings_layers_read(home, project):
         settings, _err = cs.load_settings(layer)
         hooks = (settings or {}).get("hooks") or {}
         for event in cs.RELIED_UPON_EVENTS:
@@ -112,17 +115,75 @@ def canary_registrations(home) -> dict[str, list[str]]:
     return out
 
 
-def settings_layers_read(home) -> list:
+def _transcript_cwd(sid: str | None) -> Path | None:
+    """The working directory a session's own transcript records, or None."""
+    if not sid:
+        return None
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    try:
+        for tp in root.glob(f"*/{sid}.jsonl"):
+            with open(tp, encoding="utf-8", errors="replace") as fh:
+                for _ in range(200):
+                    line = fh.readline()
+                    if not line:
+                        break
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
+                        return Path(rec["cwd"])
+    except OSError:
+        return None
+    return None
+
+
+def _project_root(start: Path) -> Path | None:
+    """Nearest ancestor of `start` (itself included) holding .claude/settings*.json,
+    else the git toplevel above it, else None."""
+    git_top = None
+    for d in (start, *start.parents):
+        if (d / ".claude" / "settings.json").is_file() or \
+                (d / ".claude" / "settings.local.json").is_file():
+            return d
+        if git_top is None and (d / ".git").exists():
+            git_top = d
+            break
+    return git_top
+
+
+def resolve_project(real_sid: str | None, probing_other: bool) -> Path | None:
+    """The session's project directory, or None when it cannot be known.
+
+    Order: CLAUDE_PROJECT_DIR; the cwd the session's transcript records; and, only
+    when doctor runs inside the session it probes (or with no session at all), the
+    nearest project root above doctor's own working directory. A deleted working
+    directory is skipped, never a crash."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    if env:
+        return Path(env)
+    tcwd = _transcript_cwd(real_sid)
+    if tcwd is not None:
+        return _project_root(tcwd) or tcwd
+    if probing_other:
+        return None
+    try:
+        cwd = Path(os.getcwd())
+    except OSError:
+        return None
+    return _project_root(cwd)
+
+
+def settings_layers_read(home, project: Path | None) -> list:
     """The settings files the registration read covers: the harness home's layers
-    (cs.SETTINGS_LAYERS), the home's .claude/settings.json, and the project's two
-    layers (CLAUDE_PROJECT_DIR, else the working directory). Managed settings and
-    plugins are not read; a receipt proves those."""
-    from pathlib import Path as _P
-    project = _P(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    (cs.SETTINGS_LAYERS), the home's .claude/settings.json, and, when the session's
+    project is known, its two .claude layers. Managed settings and plugins are not
+    read; a receipt whose host event name matches proves those."""
     layers = [home / layer for layer in cs.SETTINGS_LAYERS]
-    layers += [home / ".claude" / "settings.json",
-               project / ".claude" / "settings.json",
-               project / ".claude" / "settings.local.json"]
+    layers.append(home / ".claude" / "settings.json")
+    if project is not None:
+        layers += [project / ".claude" / "settings.json",
+                   project / ".claude" / "settings.local.json"]
     seen, out = set(), []
     for layer in layers:
         key = os.path.realpath(layer)
@@ -158,7 +219,7 @@ def _event_actions(in_session: bool, sid: str | None) -> dict[str, str]:
 
 
 def classify(state: dict, registrations: dict[str, list[str]], in_session: bool,
-             sid: str | None) -> list[dict]:
+             sid: str | None, project_known: bool = True, project_desc: str = "") -> list[dict]:
     """One record per check: {check, result, detail}. `detail` is the failure
     reason for FAIL and the proving action for NOT_PROVABLE_HERE."""
     checks: list[dict] = []
@@ -172,15 +233,31 @@ def classify(state: dict, registrations: dict[str, list[str]], in_session: bool,
     for label in cs.RELIED_UPON_EVENTS:
         ev = by_label.get(label) or {}
         reason = ev.get("failure_reason")
-        if ev.get("outcome") == "PASS":
-            # A receipt that passed every cross-check proves the wiring, wherever it lives.
-            res, detail = PASS, ""
-        elif reason in (None, "missing_event_record"):
-            if label not in registrations:
-                res, detail = FAIL, (f"not_wired: no receipt, and no {CANARY} {label} "
-                                     "registration in the settings layers read")
+        hen = (ev.get("host_receipt") or {}).get("hook_event_name")
+        host_named = bool(hen) and hen != cs.ABSENT
+        unknown = (f"the session's project is not known here (layers read: {project_desc})"
+                   if not project_known else "")
+        arrived = bool(ev.get("host_receipt")) and reason != "missing_event_record"
+        if arrived and host_named and hen != label:
+            # The canary for `label` ran on another host event: a registration under
+            # the wrong key, whatever its nonce says.
+            res, detail = FAIL, f"misregistered: {label} canary fired on {hen}"
+        elif ev.get("outcome") == "PASS":
+            if host_named or label in registrations:
+                # Host event name matches (checked above), or a read layer registers it.
+                res, detail = PASS, ""
             else:
+                res, detail = NOT_PROVABLE, ("receipt names no host event and no read layer "
+                                             f"registers it; proves it: {actions[label]}")
+        elif not arrived:
+            if label in registrations:
                 res, detail = NOT_PROVABLE, f"no receipt in this window; proves it: {actions[label]}"
+            elif not project_known:
+                res, detail = NOT_PROVABLE, (f"no receipt, and {unknown}; proves it: "
+                                             f"{actions[label]}")
+            else:
+                res, detail = FAIL, (f"not_wired: no receipt, and no {CANARY} {label} "
+                                     f"registration in the settings layers read ({project_desc})")
         elif reason in WINDOW_REASONS:
             res, detail = NOT_PROVABLE, (f"receipt not tied to this window ({reason}); "
                                          f"proves it: {actions[label]}")
@@ -305,7 +382,12 @@ def main(argv=None) -> int:
                                        session_id=session_id, state_file=state_file)
             )
 
-    checks = classify(state, canary_registrations(home), in_session, real_sid)
+    probing_other = bool(args.session_id) and args.session_id != cs.ambient_session_id()
+    project = resolve_project(real_sid, probing_other)
+    project_desc = (f"harness home and project {project}" if project is not None
+                    else "harness home only")
+    checks = classify(state, canary_registrations(home, project), in_session, real_sid,
+                      project_known=project is not None, project_desc=project_desc)
     result, _first = overall_result(checks, state)
     code = EXIT_CODES[result]
 

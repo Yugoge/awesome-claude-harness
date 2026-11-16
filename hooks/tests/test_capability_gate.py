@@ -1629,3 +1629,149 @@ def test_empty_route_is_a_route_not_a_handshake(home: Path, statedir: Path):
     rec = json.loads(r.stdout)
     assert (r.returncode, rec["decision"]) == (3, "NOT_PROTECTED")
     assert not cs.state_path(sid, statedir).exists(), "an empty --route ran a handshake"
+
+
+# --------------------------------------------------------------------------- #
+# Re-review findings on e27de4e (N1-N4)
+# --------------------------------------------------------------------------- #
+def _canary_hooks(events, label_for=lambda ev: ev):
+    return {ev: [{"hooks": [{"type": "command",
+                             "command": f'python3 "{CANARY_PATH}" {label_for(ev)}'}]}]
+            for ev in events}
+
+
+def test_n1_a_misregistered_canary_is_fail_not_pass(home: Path, statedir: Path, tmp_path: Path):
+    """N1: PreToolUse's canary line pasted under Stop; only Stop fires. The receipt is
+    labelled PreToolUse but the host names Stop: misregistered, never PASS."""
+    import threading
+    hooks = _canary_hooks([e for e in cs.RELIED_UPON_EVENTS if e not in ("PreToolUse", "Stop")])
+    hooks["Stop"] = _canary_hooks(["Stop"], lambda _ev: "PreToolUse")["Stop"]
+    _write(home / ".claude" / "settings.local.json", {"hooks": hooks})
+    sid = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+    cfg = tmp_path / "cfg"
+    transcript = cfg / "projects" / "p" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"sessionId": sid}) + "\n", encoding="utf-8")
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID=sid, CLAUDE_CONFIG_DIR=str(cfg))
+    proc = subprocess.Popen([sys.executable, str(STRICT), "--home", str(home), "--timeout", "15"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+    def fire_stop_only():
+        import time
+        probe = statedir / f"probe-{cs.state_path(sid).stem}.json"
+        deadline = time.time() + 60
+        while not probe.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        nonce = json.loads(probe.read_text(encoding="utf-8"))["nonce"]
+        with open(transcript, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"sessionId": sid, "content": f"nonce={nonce}"}) + "\n")
+        envelope = {"session_id": sid, "transcript_path": str(transcript), "cwd": str(home),
+                    "hook_event_name": "Stop", "permission_mode": "default"}
+        # The host dispatches the Stop registration, whose argv label is PreToolUse.
+        subprocess.run([sys.executable, str(CANARY_PATH), "PreToolUse"],
+                       input=json.dumps(envelope), text=True, env=env, timeout=60, check=False)
+
+    t = threading.Thread(target=fire_stop_only)
+    t.start()
+    out, err = proc.communicate(timeout=300)
+    t.join()
+    pre = next(ln for ln in out.splitlines() if ln.startswith("PreToolUse "))
+    assert pre.split()[1] == "FAIL" and "misregistered: PreToolUse canary fired on Stop" in pre, out
+    assert proc.returncode == 1
+    assert "PreToolUse" in _result_line(out)
+
+
+def test_n1_a_receipt_without_a_host_event_name_needs_a_read_registration(home: Path):
+    mod = _strict_mod()
+    st = json.loads(json.dumps(_passing_state(home, "n1")))
+    for ev in st["events"]:
+        ev["host_receipt"]["hook_event_name"] = cs.ABSENT
+    unread = {c["check"]: c["result"] for c in mod.classify(st, {}, True, "n1")}
+    assert all(unread[ev] == "NOT_PROVABLE_HERE" for ev in cs.RELIED_UPON_EVENTS), unread
+    wired = {ev: ["fixture"] for ev in cs.RELIED_UPON_EVENTS}
+    read = {c["check"]: c["result"] for c in mod.classify(st, wired, True, "n1")}
+    assert all(read[ev] == "PASS" for ev in cs.RELIED_UPON_EVENTS), read
+
+
+def _project_fixture(tmp_path: Path) -> Path:
+    proj = tmp_path / "P"
+    _write(proj / ".claude" / "settings.json", {"hooks": _canary_hooks(cs.RELIED_UPON_EVENTS)})
+    (proj / "sub").mkdir()
+    return proj
+
+
+@pytest.mark.parametrize("where", ["project-cwd-root", "project-cwd-sub", "project-cwd-other",
+                                   "project-envvar"])
+def test_n2_the_project_read_does_not_depend_on_cwd(home: Path, statedir: Path, tmp_path: Path,
+                                                    where):
+    """N2: the canary is wired only in P/.claude/settings.json. Wherever doctor runs, no
+    event is reported not_wired: from P or below it the project is found; from an
+    unrelated directory it is unknown, so NOT_PROVABLE_HERE names what was read."""
+    proj = _project_fixture(tmp_path)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    cwd = {"project-cwd-root": proj, "project-cwd-sub": proj / "sub",
+           "project-cwd-other": other, "project-envvar": other}[where]
+    extra = {"CLAUDE_PROJECT_DIR": str(proj)} if where == "project-envvar" else {}
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID=f"n2-{where}",
+                      CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"), **extra)
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home)], capture_output=True,
+                       text=True, env=env, cwd=str(cwd), timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "not_wired" not in r.stdout
+    if where == "project-cwd-other":
+        assert "the session's project is not known here (layers read: harness home only)" in r.stdout
+
+
+def test_n2_probing_another_session_with_an_unknown_project_is_not_provable(home: Path,
+                                                                            statedir: Path,
+                                                                            tmp_path: Path):
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID="me",
+                      CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--session-id", "them"],
+                       capture_output=True, text=True, env=env, timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "not_wired" not in r.stdout
+
+
+def test_n2_the_project_comes_from_the_sessions_transcript(home: Path, statedir: Path,
+                                                          tmp_path: Path):
+    proj = _project_fixture(tmp_path)
+    sid = "n2-transcript"
+    tdir = tmp_path / "cfg" / "projects" / "x"
+    tdir.mkdir(parents=True)
+    (tdir / f"{sid}.jsonl").write_text(json.dumps({"sessionId": sid, "cwd": str(proj / "sub")})
+                                       + "\n", encoding="utf-8")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID="me",
+                      CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--session-id", sid],
+                       capture_output=True, text=True, env=env, cwd=str(other), timeout=300,
+                       check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert f"project {proj}" not in r.stdout  # registered there, so no not_wired line names it
+    assert "no receipt in this window" in r.stdout
+
+
+def test_n3_a_deleted_working_directory_does_not_crash(home: Path, statedir: Path, tmp_path: Path):
+    _wire_canary(home)
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    code = ("import os, subprocess, sys; os.chdir(sys.argv[1]); os.rmdir(sys.argv[1]); "
+            "sys.exit(subprocess.run(sys.argv[2:]).returncode)")
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID="n3",
+                      CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    r = subprocess.run([sys.executable, "-c", code, str(gone), sys.executable, str(STRICT),
+                        "--home", str(home)], capture_output=True, text=True, env=env,
+                       timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_n4_docs_do_not_claim_a_receipt_proves_host_dispatch():
+    text = (REPO / "docs" / "installation.md").read_text(encoding="utf-8")
+    doc = STRICT.read_text(encoding="utf-8")
+    for body in (" ".join(text.split()), " ".join(doc.split())):
+        assert "proves its event wired" not in body and "proves its event is wired" not in body
+        assert "cannot tell host dispatch from a hand-run canary" in body
