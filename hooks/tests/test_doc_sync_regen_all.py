@@ -13,6 +13,7 @@ Every scenario builds its own git repository under tmp_path; HOME is redirected 
 reach a real ~/.claude.
 """
 
+import importlib
 import importlib.util
 import subprocess
 import sys
@@ -165,6 +166,53 @@ def test_root_index_does_not_depend_on_the_clone_directory_name(tmp_path):
         assert text.startswith('# project\n') and '\nproject/\n' in text
         texts.append(text.split('*Last updated:')[0] + text.split('\n', 3)[3])
     assert texts[0] == texts[1]
+
+
+def test_hook_regeneration_of_a_new_file_matches_the_check_after_commit(tmp_path, capsys):
+    """A session writes a new file (not yet in the index): the hook's regeneration of that
+    folder and of every ancestor up to the project root is what --check renders once the file
+    is committed, so an ordinary add does not turn the check red."""
+    doc_sync_main = importlib.import_module('hooks.doc_sync.main')
+    command = load_command()
+    repo = tmp_path / 'repo'
+    lib = repo / 'pkg' / 'lib'
+    lib.mkdir(parents=True)
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.email', 'test@example.invalid')
+    git(repo, 'config', 'user.name', 'test')
+    (lib / 'old.py').write_text('"""old."""\n')
+    (repo / '.gitignore').write_text('*.log\n')
+    (repo / 'README.md').write_text('# repo\n\nhand-written, no markers\n')
+    for folder in (repo, repo / 'pkg', lib):
+        (folder / 'INDEX.md').write_text(f'# {folder.name}\n\n{IOPEN}\nstale\n{ICLOSE}\n')
+    (lib / 'README.md').write_text(well_formed_readme().replace('# folder', '# lib'))
+    git(repo, 'add', '-A')
+    assert command.run(repo, check=False) == 0
+    git(repo, 'commit', '-qm', 'base')
+    capsys.readouterr()
+
+    new = lib / 'new.py'
+    new.write_text('"""new."""\n')
+    (lib / 'debug.log').write_text('ignored\n')
+    results = doc_sync_main.process_parent_dirs(lib, repo, written=new)
+    assert 'new.py' in (lib / 'README.md').read_text()
+    assert 'new.py' in (repo / 'INDEX.md').read_text()
+    assert 'debug.log' not in (lib / 'INDEX.md').read_text()
+    assert not [r for r in results if r.path == repo / 'README.md']
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'add new')
+    assert command.run(repo, check=True) == 0
+
+
+def test_a_written_ignored_file_is_not_counted(tmp_path):
+    doc_sync_main = importlib.import_module('hooks.doc_sync.main')
+    repo, folder = make_repo(tmp_path, well_formed_readme())
+    (repo / '.gitignore').write_text('*.log\n')
+    git(repo, 'add', '-A')
+    junk = folder / 'run.log'
+    junk.write_text('x\n')
+    doc_sync_main.process_parent_dirs(folder, repo, written=junk)
+    assert 'run.log' not in (folder / 'README.md').read_text()
 
 
 def test_usage_error(capsys):
