@@ -19,7 +19,7 @@ faults.json; terminals.json), never from a list kept here:
 * P6's file lists (A3.a, A20): F10, a lane's dev report listing a file nobody wrote, and F11, one
   omitting the file the dev wrote: G2 refuses the dev's own stop naming the report and the
   difference, and the dev's rewrite passes its next stop. F3a, a dev that wrote a harness hook file
-  Python's compiler rejects (F3.a): G2 refuses its stop naming the file and the compiler's message,
+  Python's compiler rejects (P6's acceptance item 3.a of F): G2 refuses its stop naming the file and the compiler's message,
   and the dev's rewrite of that file passes its next stop.
 * P1's and P2's disobedient producers at G2 (P1 armed replay V3-V5; P6 A13: still stopped after P6's
   promotions): V3, a dev that writes no report, is F1; V4, a schema-invalid dev report, is F2; V5, a
