@@ -27,44 +27,18 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import sys
 from typing import Optional, Tuple
 
-# Shell-command lexing primitives (_split_pipeline / _strip_quotes / _safe_shlex
-# / redirect scanners) → shell_lex.py (phase-1). Re-imported here to keep _core's
-# public surface unchanged.
-#
-# Dual-context import (INV-3) — REPRESENTATIVE CAUTION for every re-import block
-# below: _core runs BOTH as the `lib.runtime_guard._core` submodule (relative
-# import) AND as a direct script via the runtime_guard.py shim (`os.execv`),
-# which has no parent package so a BARE relative import raises ImportError and
-# the live hook fail-closes. The absolute-fallback form (sys.path[0] is this
-# file's dir) resolves the sibling; keeping both preserves the standalone-script
-# entrypoint pretool-bash-safety.sh depends on. Every block below repeats this
-# same try/except idiom.
-try:  # noqa: F401  — names re-exported for backward compatibility
-    from .shell_lex import (
-        _WRITE_REDIRECT_RE,
-        _has_redirect_to,
-        _is_redirect_amp,
-        _safe_shlex,
-        _split_pipeline,
-        _strip_compound_delims,
-        _strip_quotes,
-        _write_redirect_targets,
-    )
+# The shared Bash parser. Dual-context import (INV-3): _core runs both as the
+# `lib.runtime_guard._core` submodule and as a direct script through the
+# runtime_guard.py shim (`os.execv`), which has no parent package, so every
+# sibling import below falls back to an absolute import from this directory.
+try:
+    from .. import shell_parse as _sp
 except ImportError:  # executed as a top-level script (no package context)
-    from shell_lex import (  # type: ignore[no-redef]
-        _WRITE_REDIRECT_RE,
-        _has_redirect_to,
-        _is_redirect_amp,
-        _safe_shlex,
-        _split_pipeline,
-        _strip_compound_delims,
-        _strip_quotes,
-        _write_redirect_targets,
-    )
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import shell_parse as _sp  # type: ignore[no-redef]
 
 
 MAX_COMMAND_CHARS = int(os.environ.get("CLAUDE_GUARD_MAX_CHARS", "262144"))
@@ -80,8 +54,8 @@ def _block(primitive: str, reason: str) -> Verdict:
 # ── Generic verb / keyword / exec-front-end data tables → constants.py ───────
 # The ~19 pure frozenset/dict vocabularies (PKG_MANAGERS, ENV_WRAPPERS,
 # RUNTIMES, MUTATION_VERBS, KILL_VERBS, EXEC_FRONTEND_PROFILES, …) re-imported
-# here (phase-2). The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core
-# by design. Dual-context import (INV-3, see phase-1 block above).
+# here. The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core
+# by design. Dual-context import (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .constants import (
         BUILD_TOOL_BASENAMES,
@@ -131,9 +105,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── Path/glob matching primitives → pathmatch.py ────────────────────────────
 # The path-normalization + segment-boundary glob-matching family
 # (_normalize_path, _glob_to_segment_regex, _glob_parent, _path_matches_any,
-# _path_under_any, the _any_token_* scanners, ...) re-imported here (phase-3);
+# _path_under_any, the _any_token_* scanners, ...) re-imported here;
 # `_mutation_cand_hits` stays in _core (see its def below). Dual-context import
-# (INV-3, see phase-1 block above).
+# (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .pathmatch import (
         _SHELL_GLOB_METACHARS,
@@ -150,6 +124,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _path_matches_any,
         _path_matches_entries,
         _path_under_any,
+        _strip_quotes,
     )
 except ImportError:  # executed as a top-level script (no package context)
     from pathmatch import (  # type: ignore[no-redef]
@@ -167,6 +142,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _path_matches_any,
         _path_matches_entries,
         _path_under_any,
+        _strip_quotes,
     )
 
 
@@ -174,8 +150,8 @@ except ImportError:  # executed as a top-level script (no package context)
 # The config-file loader + STEP0 self-protection cluster (DATA_FILE_PATH,
 # REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
 # _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
-# _targets_config_file) re-imported here (phase-4). Dual-context import
-# (INV-3, see phase-1 block above).
+# _targets_config_file) re-imported here. Dual-context import
+# (INV-3, see the first import block above).
 #
 # DATA_FILE_PATH reload caution (CANONICAL code-site): DATA_FILE_PATH is read
 # from the env at config's MODULE-IMPORT time. The package __init__ reloads _core
@@ -219,9 +195,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # The pure find/fd argv PARSERS (path-operand / fd search-dir collection, PATH/
 # NAME predicate-value extraction, and the protected-basename matcher
 # `_name_value_matches_protected`) plus their generic option/predicate tables
-# re-imported here (phase-5); the forward-referencing orchestrators
+# re-imported here; the forward-referencing orchestrators
 # (`_find_destructive_target_hits` / `_find_filter_exonerates_reverse`) stay in
-# _core. Dual-context import (INV-3, see phase-1 block above).
+# _core. Dual-context import (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .find_cmds import (
         _FD_OPTS_WITH_ARG,
@@ -257,9 +233,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── git destructive-subcommand parsing leaves → git_cmds.py ─────────────
 # The pure git argv PARSERS (subcommand location, `-C` chdir folding, pathspec-
 # magic stripping, destructive-pathspec collection, destructive-mode predicate)
-# plus their generic verb/option tables re-imported here (phase-5); the STAYING
+# plus their generic verb/option tables re-imported here; the STAYING
 # `_git_inspection_head` and the forward-referencing `_git_destructive_pathspec_hits`
-# remain in _core. Dual-context import (INV-3, see phase-1 block above).
+# remain in _core. Dual-context import (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .git_cmds import (
         _GIT_DESTRUCTIVE_SUBCMDS,
@@ -288,9 +264,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # The cleanly-extractable P0-anchor helper predicates -- the exec-token scanner,
 # the launch-position and fused-option-value primitives, the head-agnostic
 # service-control hit-detector, and the non-protected-workspace-selector
-# exemption -- re-imported here (phase-6). The P0 decision ENGINE `_p0_anchor`
+# exemption -- re-imported here. The P0 decision ENGINE `_p0_anchor`
 # and every forward-referencing anchor helper stay in _core. Dual-context import
-# (INV-3, see phase-1 block above).
+# (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .anchor import (
         _ANCHOR_LAUNCH_FOLLOW,
@@ -322,7 +298,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── Per-evaluation Context object → context.py ───────────────────────────────
 # The frozen dataclass bundling the per-evaluation inputs (cwd_base / simple_cmds
 # / groups / cfg) the decision layers thread positionally. Re-imported here
-# (dual-context, INV-3, see phase-1 block above) so _core's public surface is a
+# (dual-context, INV-3, see the first import block above) so _core's public surface is a
 # superset — no existing name removed. Internal engine plumbing: `evaluate` /
 # `main` signatures are unchanged.
 try:  # noqa: F401  — Context re-exported for engine plumbing
@@ -331,7 +307,6 @@ except ImportError:  # executed as a top-level script (no package context)
     from context import Context  # type: ignore[no-redef]
 
 
-# ── Tokenization primitives → shell_lex.py (re-imported at top of file) ──────
 # ── Path/glob primitives → pathmatch.py (re-imported just above) ─────────────
 
 # `_mutation_cand_hits` stays in _core: it forward-references
@@ -620,156 +595,118 @@ def _fold_wrapper_cwd(cwd: Optional[str], cwd_det: bool, tokens: list):
     return (os.path.normpath(wdir), False)
 
 
-# ── command-substitution extraction ──────────────────────────────────────────
+# ── reading the command through the shared parser ────────────────────────────
+
+def _word_str(w) -> str:
+    """A word as one token: its static value, or its text with quotes removed and
+    each expansion kept as written (`$X`, `${X}`, `$(…)`), so a dynamic token stays
+    recognizable."""
+    v = w.value()
+    if v is not None:
+        return v
+    raw, start = w.raw.text, w.span[0]
+    return "".join(p.text if p.kind == "lit" else raw[p.span[0] - start:p.span[1] - start]
+                   for p in w.parts)
+
+
+def _commands(text: str) -> list:
+    return list(_sp.iter_commands(_sp.parse(text), into=()))
+
+
+def _safe_shlex(simple_cmd: str) -> list:
+    """The tokens of a simple command in source order: assignments, words, and each
+    redirect as its operator then its target. Unreadable text splits on blanks."""
+    script = _sp.parse(simple_cmd)
+    if script.error is not None:
+        return simple_cmd.split()
+    toks = []
+    for c in _sp.iter_commands(script, into=()):
+        items = [(a.word.span[0], [_word_str(a.word)]) for a in c.assignments]
+        items += [(w.span[0], [_word_str(w)]) for w in c.words]
+        items += [(r.off, [(r.io or "") + r.op] + ([_word_str(r.target)] if r.target is not None else []))
+                  for r in c.redirects]
+        toks += [t for _off, ts in sorted(items, key=lambda x: x[0]) for t in ts]
+    return toks
+
+
+def _write_redirect_targets(simple_cmd: str) -> list:
+    """Every file a write redirect of the simple command opens (`>`, `>>`, `>|`,
+    `N>`, `&>`, `&>>`, `<>`)."""
+    return [_word_str(r.target) for c in _commands(simple_cmd) for r in c.redirects
+            if r.writes() and r.target is not None]
+
 
 def _command_substitutions(text: str) -> list:
-    """Return the inner text of every $(...) command substitution (top level and
-    nested, flattened) and every `...` backtick substitution found in `text`.
-
-    Used so a kill executor whose argument list is computed by an embedded
-    pipeline — e.g. `kill $(ps aux | grep <ident> | awk '{print $2}')` — can be
-    inspected for a protected identifier inside the substitution.
-    """
+    """The body text of every command and process substitution in `text`, nested
+    ones included, so a kill whose operands come from an embedded pipeline
+    (`kill $(pgrep -f <ident>)`) can be inspected."""
     out = []
-    n = len(text)
-    i = 0
-    while i < n:
-        # $(...) command substitution and <(...) / >(...) process substitution
-        if (text[i] in ("$", "<", ">")) and i + 1 < n and text[i + 1] == "(":
-            depth = 1
-            j = i + 2
-            start = j
-            while j < n and depth > 0:
-                if text[j] == "(":
-                    depth += 1
-                elif text[j] == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            inner = text[start:j]
-            out.append(inner)
-            # recurse for nested $(...) inside this one
-            out.extend(_command_substitutions(inner))
-            i = j + 1
-            continue
-        if text[i] == "`":
-            j = i + 1
-            while j < n and text[j] != "`":
-                j += 1
-            out.append(text[i + 1:j])
-            i = j + 1
-            continue
-        i += 1
+    for c in _commands(text):
+        words = [a.word for a in c.assignments] + list(c.words) + [r.target for r in c.redirects if r.target]
+        for p in (p for w in words for p in w.parts if p.body is not None):
+            out.append(p.text)
+            out.extend(_command_substitutions(p.text))
     return out
 
 
-# ── pipeline-group splitting (preserve | connectivity) ───────────────────────
+def _reads_script_from_stdin(cmd) -> bool:
+    """A shell with no script operand and no `-c`: it runs what its pipe feeds it."""
+    if not isinstance(cmd, _sp.SimpleCommand):
+        return False
+    r = _sp.resolve(cmd)
+    return (r.name in _sp.SHELLS and r.payload is None and r.unresolved is None
+            and all((a or "-").startswith("-") for a in r.argv()))
+
 
 def _pipeline_groups(command: str) -> list:
-    """Split a command into pipeline GROUPS.
+    """The simple commands of `command` as pipeline GROUPS of their source texts.
+    Commands joined by `|`/`|&` share a group, as does the whole body of a
+    compound fed by or feeding a pipe; `;`, `&&`, `||`, `&` and newlines separate
+    groups. A compound's own redirects are a segment of their own, the commands an
+    unquoted heredoc expands are groups of their own, so is the body of a heredoc
+    piped into a shell that reads its script from stdin, and on a parse error the text
+    from the start of the command it stopped in is one last group, so no write or
+    command in the text goes unread."""
+    script = _sp.parse(command)
+    groups = []  # lists of (offset, text)
 
-    Segments joined by `|` / `|&` belong to the SAME group (data flows between
-    them); `;`, `&&`, `||`, `&`, and newlines separate groups. Each group is a
-    list of its raw simple-command strings, in order. This preserves the
-    upstream→downstream connectivity that cross-segment primitives (P5 endpoint,
-    P6 prockill) need, which the flat `_split_pipeline` discards.
-    """
-    groups = []
-    cur = []
-    buf = []
-    i = 0
-    n = len(command)
-    quote = None
-    loop_depth = 0  # inside a do..done loop body fed by an upstream pipe
-    subst_depth = 0
-    backtick = False
+    def flat(cmd, out, extra):
+        if isinstance(cmd, _sp.Compound):
+            for body in cmd.body:
+                for pl, _sep in body.items:
+                    for st in pl.stages:
+                        flat(st, out, extra)
+            if cmd.redirects:
+                out.append((cmd.redirects[0].span[0],
+                            " ".join(command[r.span[0]:r.span[1]] for r in cmd.redirects)))
+            return
+        out.append((cmd.span[0], command[cmd.span[0]:cmd.span[1]].strip()))
+        for r in cmd.redirects:
+            if r.hd is not None and not r.hd.quoted:
+                extra.extend([(r.span[0], t) for t in g] for p in r.hd.expansions
+                             if p.body is not None for g in _pipeline_groups(p.text))
 
-    def flush_simple():
-        nonlocal loop_depth
-        s = "".join(buf).strip()
-        if s:
-            cur.append(s)
-            # track loop nesting so `;`/newline inside a do..done body do NOT
-            # break the pipe connectivity (`pgrep … | while read x; do kill x;
-            # done` must stay ONE group for P6).
-            words = s.split()
-            for w in words:
-                # increment ONLY on a loop OPENER (while/for/until); `do` is the
-                # body marker of the SAME loop, not a new nesting level, so
-                # counting it double-closes late and over-connects a later
-                # top-level command (e.g. a trailing `; kill 123`) to the group.
-                if w in ("while", "for", "until"):
-                    loop_depth += 1
-                elif w == "done":
-                    loop_depth = max(0, loop_depth - 1)
+    def items(script):
+        for pl, _sep in script.items:
+            if len(pl.stages) == 1 and isinstance(pl.stages[0], _sp.Compound) and not pl.stages[0].redirects:
+                for body in pl.stages[0].body:
+                    items(body)
+                continue
+            g, extra = [], []
+            for st in pl.stages:
+                flat(st, g, extra)
+            groups.append(g)
+            groups.extend(extra)
+            if any(_reads_script_from_stdin(st) for st in pl.stages[1:]):
+                groups.extend([(r.span[0], t) for t in sub] for st in pl.stages[:-1]
+                              if isinstance(st, _sp.SimpleCommand) for r in st.redirects
+                              if r.hd is not None for sub in _pipeline_groups(r.hd.body))
 
-    def flush_group():
-        flush_simple()
-        if cur:
-            groups.append(list(cur))
-
-    while i < n:
-        c = command[i]
-        if quote == "'":
-            buf.append(c)
-            if c == "'":
-                quote = None
-            i += 1
-            continue
-        if quote == '"':
-            if c == "\\" and i + 1 < n and command[i + 1] in ('"', "\\", "$", "`", "\n"):
-                buf.append(c); buf.append(command[i + 1]); i += 2; continue
-            buf.append(c)
-            if c == '"':
-                quote = None
-            i += 1
-            continue
-        if c in ("'", '"'):
-            quote = c
-            buf.append(c)
-            i += 1
-            continue
-        if c == "\\" and i + 1 < n:
-            buf.append(c); buf.append(command[i + 1]); i += 2; continue
-        # command-substitution: keep `$(...)`/`` `...` `` intact within ONE
-        # simple command so a kill-substitution's pipeline isn't split.
-        if c == "`":
-            backtick = not backtick
-            buf.append(c); i += 1; continue
-        if command[i:i + 2] in ("$(", "<(", ">("):
-            subst_depth += 1
-            buf.append(command[i:i + 2]); i += 2; continue
-        if c == ")" and subst_depth > 0:
-            subst_depth -= 1
-            buf.append(c); i += 1; continue
-        if subst_depth > 0 or backtick:
-            buf.append(c); i += 1; continue
-        # fd-redirection `&` is not a group separator.
-        if c == "&" and _is_redirect_amp(command, i):
-            buf.append(c); i += 1; continue
-        two = command[i:i + 2]
-        if two in ("&&", "||", "|&"):
-            if two == "|&":
-                # |& pipes stdout+stderr: stays within the SAME group
-                flush_simple(); buf = []; i += 2; continue
-            if loop_depth > 0:
-                # &&/|| inside a loop body do not break pipe connectivity
-                flush_simple(); buf = []; i += 2; continue
-            flush_group(); cur = []; buf = []; i += 2; continue
-        if c == "|":
-            flush_simple(); buf = []; i += 1; continue
-        if c in (";", "\n", "&"):
-            flush_simple()
-            if loop_depth <= 0:
-                # outside a loop body: a real group separator
-                if cur:
-                    groups.append(list(cur)); cur = []
-            buf = []; i += 1; continue
-        buf.append(c)
-        i += 1
-    flush_group()
-    return groups
+    items(script)
+    if script.error is not None:
+        cut = max([off for g in groups for off, _t in g if off <= script.error.offset] or [0])
+        groups = [[seg for seg in g if seg[0] < cut] for g in groups] + [[(cut, command[cut:])]]
+    return [[t for _off, t in g if t.strip()] for g in groups if any(t.strip() for _off, t in g)]
 
 
 # ── effective cwd tracking across a pipeline ──────────────────────────────────
@@ -1296,18 +1233,6 @@ def _step0_mutation_targets(head: str, args: list) -> list:
     return _mutation_targets_for_verb(head, args)
 
 
-def _step0_redirect_target(sc: str) -> Optional[str]:
-    """Return a write-redirect target in a simple command, covering the fd-prefixed
-    and force forms `_has_redirect_to` misses: `>`, `>>`, `1>`, `2>`, `&>`, `&>>`,
-    `>|`, `N>|`. Best-effort (matches the first write redirect target). Read
-    redirects (`<`) are NOT returned. Used ONLY by STEP0 self-protection so a
-    `<wrapper> echo x 1>|<datafile>` neuter is caught."""
-    m = re.search(r"(?:^|[\s;&|])(?:&|\d+)?>>?\|?\s*([^\s;&|<>]+)", sc)
-    if m:
-        return _strip_quotes(m.group(1))
-    return None
-
-
 def _step0_targets_config_redirect(sc: str, cwd: Optional[str], cwd_det: bool) -> bool:
     """True if `sc` write-redirects to the config path via ANY write-redirect form
     (bare/force/fd-prefixed/stdout+stderr) in ANY position, resolving a relative
@@ -1536,7 +1461,7 @@ def _find_destructive_target_hits(tokens: list, exec_toks: list, globs: list,
         (`_destructive_root_contains_protected`) — closes `find packages -delete`.
     The `-name`/`-g` BASENAME predicate is SCOPED to a search root that intersects a
     protected location (root under/over a protected dir), so a routine
-    `find /tmp -name <basename> -delete` on an unrelated tree ALLOWS (codex F2)."""
+    `find /tmp -name <basename> -delete` on an unrelated tree ALLOWS."""
     for fi, st in exec_toks:
         if os.path.basename(_strip_quotes(st)) not in _FIND_EXEC_HEADS:
             continue
@@ -4474,14 +4399,14 @@ def _anchor_build_hits_protected(tokens: list, exec_toks: list, cfg: dict,
     # protected bundle, so a sibling-package build under a wrapper at the repo
     # root still ALLOWS (no over-block). ONLY input-project flags (`-p`/`--project`
     # /`--tsconfig`/`--config`) exempt — an OUTPUT flag (`--outdir`/`-o`) names
-    # where output goes, NOT what is built, so it must NOT exempt (codex finding).
+    # where output goes, NOT what is built, so it must NOT exempt.
     if _anchor_explicit_nonprotected_input(raw_tokens, cfg, cwd, cwd_det):
         return False
     # An EXPLICIT workspace selector naming a KNOWN non-protected workspace proves
     # the build targets that workspace (not the protected bundle), so the
     # cwd-based fallback must not over-block `<wrapper> yarn workspace <non-prot>
     # build` at the monorepo root. A RECURSIVE/MULTI/glob selector fans into EVERY
-    # workspace (incl. the protected one), so it does NOT exempt (codex finding).
+    # workspace (incl. the protected one), so it does NOT exempt.
     if _anchor_nonprotected_workspace_selector(tokens, cfg):
         return False
     if _cwd_in_protected_build_scope(cwd, cwd_det, cfg):
@@ -4538,25 +4463,11 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     if len(command) > MAX_COMMAND_CHARS:
         # oversized -> fail closed conservatively (treat as indeterminate)
         return _block("STEP1", "oversized command (fail-closed)")
-    # Normalize the bash force-clobber redirect `>|` to plain `>` BEFORE pipeline
-    # splitting. `>|` is a WRITE redirect (noclobber-override), NOT a pipe, but the
-    # `|` would otherwise make `_split_pipeline` mis-split `echo x >| <path>` into
-    # two segments and lose the redirect target — letting a clobber-write to a
-    # protected bundle / statefile / data file leak past every redirect-based
-    # guard (W6/W7/STEP0). Covers fd-prefixed forms (`1>|`, `2>|`, `&>|`). Generic
-    # bash syntax normalization — no project names.
-    command = re.sub(r"((?:&|\d+)?>>?)\|", r"\1", command)
-    # Neutralize compound-group delimiters `( ) { }` so grouped launches/builds
-    # decompose into ordinary simple commands (bare `$(`/`${` are preserved).
-    norm_command = _strip_compound_delims(command)
-    simple_cmds = _split_pipeline(norm_command)
+    groups = _pipeline_groups(command)
+    simple_cmds = [sc for g in groups for sc in g]
     if not simple_cmds:
         return ALLOW
     simple_cmds = _unwrap_corepack(simple_cmds)
-    # Pipeline GROUPS preserve `|` connectivity for cross-segment primitives
-    # (P5 endpoint, P6 prockill). Command-substitution contents are retained for
-    # inspection (the compound-strip leaves `$(...)` intact).
-    groups = _pipeline_groups(norm_command)
 
     # STEP 0 — config self-protection FIRST (before config load). Run against the
     # ORIGINAL simple commands so a self-protection mutation hidden behind a
@@ -4593,8 +4504,17 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # family still blocks even when the data file is absent/corrupt (a benign
     # payload re-evaluates to ALLOW, so this never over-blocks).
     for payload, pcwd, pcwd_det in frontend_payloads:
-        if payload and payload not in (command, norm_command):
+        if payload and payload != command:
             pv = evaluate(payload, pcwd if pcwd_det else None)
+            if pv[0] == "BLOCK":
+                return pv
+
+    # The code a shell `-c`, `eval` or a fed shell runs (`bash -c "…"`, `sh <<EOF`),
+    # behind any wrapper the parser peels, is evaluated like any command.
+    for c in _sp.iter_commands(_sp.parse(command), into=()):
+        payload = _sp.resolve(c).payload
+        if payload is not None and payload.source != command:
+            pv = evaluate(payload.source, cwd_base)
             if pv[0] == "BLOCK":
                 return pv
 
@@ -4610,7 +4530,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # build hidden inside the payload is caught (a benign payload re-evaluates to
     # ALLOW, so this does not over-block).
     for payload, pcwd, pcwd_det in _runner_call_payloads(simple_cmds, cfg, cwd_base):
-        if payload and payload not in (command, norm_command):
+        if payload and payload != command:
             # recurse under the runner's effective cwd (None when indeterminate,
             # which makes relative launch/build payloads fail closed downstream)
             pv = evaluate(payload, pcwd if pcwd_det else None)
@@ -4645,10 +4565,9 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
         return v
     # cross-segment primitives operate on pipeline GROUPS. Build the post-config
     # Context snapshot carrying the SAME per-evaluation inputs P5/P6 read (the
-    # live `groups` + `cfg` formerly passed positionally, plus `cwd_base` +
-    # `simple_cmds` so the snapshot is complete/consistent) and order P5/P6 over
-    # it. cfg is loaded (non-None) here, groups/simple_cmds reflect any front-end
-    # peel above — a fresh snapshot, never a stale pre-peel one (INV-6/INV-7).
+    # live `groups` + `cfg`, plus `cwd_base` + `simple_cmds` so the snapshot is
+    # complete/consistent) and order P5/P6 over it. cfg is loaded (non-None) here,
+    # groups/simple_cmds reflect any front-end peel above — a fresh snapshot, never a stale pre-peel one (INV-6/INV-7).
     p5p6_ctx = Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups, cfg=cfg)
     v = _p5_endpoint(p5p6_ctx)
     if v is not None:

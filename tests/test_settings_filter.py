@@ -127,7 +127,7 @@ def make_home(sb, name="H"):
     target.chmod(0o755)
     guard = home / "hooks" / "lib" / "runtime_guard"
     guard.mkdir(parents=True)
-    for module in ("config.py", "shell_lex.py", "pathmatch.py"):
+    for module in ("config.py", "pathmatch.py"):
         shutil.copyfile(RUNTIME_GUARD / module, guard / module)
     shutil.copyfile(REPO / "hooks" / "lib" / "claude_home.py", guard.parent / "claude_home.py")
     for rel in HOOK_FILES:

@@ -4472,5 +4472,23 @@ class TestEndpointCoversHttpStop:
             assert ev(cmd, datafile, fixture_repo) == "ALLOW", cmd
 
 
+class TestShellPayloadIsReadLikeAnyCommand:
+    """The code a shell `-c`, `eval` or a fed shell runs is evaluated like any
+    command, behind any wrapper the shared parser peels."""
+
+    def test_global_install_in_a_shell_payload_blocks(self, datafile, fixture_repo):
+        for cmd in ('bash -c "npm i -g foo"', "sh -c 'npm install -g foo'",
+                    'bash -lc "npm install --global foo"', 'timeout 5 bash -c "npm i -g foo"',
+                    "bash -c $'npm i -g foo'", 'eval "npm i -g foo"', "bash <<'EOF'\nnpm i -g foo\nEOF",
+                    "cat <<'EOF' | bash\nnpm i -g foo\nEOF"):
+            assert ev(cmd, datafile, fixture_repo) == "BLOCK", cmd
+
+    def test_text_that_only_names_a_global_install_allows(self, datafile, fixture_repo):
+        for cmd in ('git commit -m "fix: avoid npm install -g"', 'echo "npm install -g foo"',
+                    "npm install --global-style foo", 'bash -c "echo npm install -g foo"',
+                    "cat <<'EOF' | tee /tmp/doc\nnpm i -g foo\nEOF"):
+            assert ev(cmd, datafile, fixture_repo) == "ALLOW", cmd
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
