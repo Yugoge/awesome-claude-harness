@@ -59,7 +59,8 @@ Classes:
 | `lib/git_clean_guard.py` | 8 | 8 | 0 | 0 | 0 |
 | `pretool-tool-policy.py` (Bash path) | 18 | 17 | 0 | 0 | 1 |
 | `pretool-overnight-hook-guard.py` (Bash path) | 25 | 19 | 5 | 0 | 1 |
-| **Total** | **137** | **109** | **18** | **2** | **8** |
+| `pretool-block-branch-pr-worktree.py` | 8 | 1 | 0 | 0 | 0 (7 DELETE, owner decision) |
+| **Total** | **145** | **110** | **18** | **2** | **8**, plus **7 DELETE** |
 
 The 109 KEEP rules collapse further:
 - bash-safety pairs fold into one rule each: BS-20+21, BS-29+35, BS-36+37, BS-38+39;
@@ -107,6 +108,27 @@ The GP-04/05/06 row is counted once, as the pair. The MERGE total is 10 in bash-
 | GP-10 to GP-13 | The push-grant checks run only when `CLAUDE_PUSH_COMMAND_ACTIVE=1` is set in the hook's own environment. `hooks/push.sh:397` sets it only inside push.sh, and push.sh's `git push` is seen by no hook (`push.sh:436`). Only tests that set it artificially reach these checks: `test_do_consent_landing.py:267-311` and the replay case `pushgrant`. |
 | TP-15 | The Bash tool-list row check. None of the 23 policy roles excludes Bash, and `echo hi` passes for all 23. |
 | OG-06 `_enforce_bash_worktree` | Unreachable from `main()`: OG-05 runs first, with the same test and the same exemptions. Only tests call it directly. |
+
+### 1.4b DELETE by owner decision (7)
+
+The owner decided on 2026-11-16 that branches and PRs are allowed everywhere; the concern was repository size, and it no longer applies (relayed by the reviewer; see also PR #56). So the branch and PR refusals in `hooks/pretool-block-branch-pr-worktree.py` are deleted:
+
+| Rule | What it refuses today |
+|---|---|
+| BB-02 | `git checkout`/`git switch` that creates a branch (`-b`, `-B`, `-c`, `-C`, `--orphan`, `--track`, `--guess`) (`_is_co_sw_create`) |
+| BB-03 | `git branch <new>` and `git branch --copy` (`_branch_creates`) |
+| BB-04 | `git stash branch` (`_stash_creates`) |
+| BB-05 | `git fetch`/`git pull` refspecs that create a local branch (`_refspec_creates`) |
+| BB-06 | `git update-ref` that creates a ref (`_update_ref_creates`) |
+| BB-07 | `gh pr create` / `gh pr new`, and `gh api` POST to `.../pulls` (`_is_gh_pr_create`, `_is_gh_api_pr_create`) |
+| BB-08 | `gh pr checkout` (`_is_gh_pr_checkout`) |
+
+These stay:
+- **BB-01 (KEEP):** `git worktree add`, together with its `/dev-overnight`, `/do` and `/allow` exceptions, and `hooks/pretool-block-enterworktree.sh` for the `EnterWorktree` tool;
+- **the fail-closed infrastructure** (`_may_create`, `_fail_closed_exit`, `_refuse_on_load_failure`), narrowed to the worktree case;
+- **the branch delete/rename guards:** BS-42 and GP-06 (`git branch -D/-d/-m/-M/-f`, `update-ref`, `symbolic-ref`). `git update-ref` stays refused there as a direct ref mutation, so deleting BB-06 opens no `update-ref` path.
+
+P14-8 does this. Once its hook change lands, it also rewrites CLAUDE.md's "Branches, PRs and worktrees" section (as #56 retitles it), which is the only CLAUDE.md edit P14 makes.
 
 ### 1.5 Dead code that is not a rule
 
@@ -327,7 +349,7 @@ Each lane is one issue. Lanes in the same wave own disjoint files. A lane never 
 | P14-3 | runtime_guard reads the parser | `hooks/lib/runtime_guard/*` | P14-1 | B |
 | P14-6 | tool-policy reads the parser | `hooks/pretool-tool-policy.py` | P14-1 | B |
 | P14-7 | grep-backtrack-guard reads the parser | `hooks/pretool-grep-backtrack-guard.py`, `hooks/lib/grepguard_context_strip.py` | P14-1 | B |
-| P14-8 | block-branch-pr-worktree reads the parser | `hooks/pretool-block-branch-pr-worktree.py` | P14-1 | B |
+| P14-8 | Branch and PR refusals deleted (owner decision); the worktree rule reads the parser | `hooks/pretool-block-branch-pr-worktree.py`, its tests, CLAUDE.md "Branches, PRs and worktrees" section | P14-1 and #56 merged | B |
 | P14-9 | `/allow` grant matching reads the parser | `hooks/lib/allowlist.py` | P14-1 | B |
 | P14-4 | Privilege guard on one reader; dead push checks out | `hooks/pretool-git-privilege-guard.py` | P14-2 (+ G1 if Q1 = replace) | C |
 | P14-5 | bash-safety slimmed | `hooks/pretool-bash-safety.sh`, new `hooks/lib/bash_safety_rules.py`, `hooks/lib/bash_context_strip.py` (deleted when its last user goes), `hooks/lib/pol_degraded_removal_reference.ere` | P14-2, P14-3, P14-4, P14-7, P14-8 | D |
@@ -366,8 +388,8 @@ Prompts are at `prompts/P14-1.md` to `prompts/P14-13.md`, each self-contained.
 | `hooks/lib/runtime_guard/shell_lex.py` (+ adapter in `_core.py`) | 237 | 60 | P14-3 |
 | `hooks/lib/allowlist.py` | 638 | 560 | P14-9 |
 | `hooks/lib/grepguard_context_strip.py` | 231 | 0 | P14-7 |
-| `hooks/pretool-block-branch-pr-worktree.py` | 915 | 860 | P14-8 |
-| **Total** | **23,792** | **about 16,800 (−7,000, −29%)** | |
+| `hooks/pretool-block-branch-pr-worktree.py` | 915 | 300 | P14-8 |
+| **Total** | **23,792** | **about 16,200 (−7,600, −32%)** | |
 
 About 1,500 of the removed lines are history comments:
 - bash-safety: about 500 (594 lines are in history paragraphs);
