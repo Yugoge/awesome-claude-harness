@@ -12,8 +12,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci" / "diff-mutate.py"
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
@@ -40,9 +38,9 @@ def _repo(tmp_path: Path, base: dict[str, str], head: dict[str, str]) -> Path:
     return repo
 
 
-def _run(repo: Path, *args: str, workers: str = "0") -> subprocess.CompletedProcess:
+def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    return subprocess.run([sys.executable, str(SCRIPT), "--base", "HEAD", "--workers", workers, *args], cwd=repo, env=env,
+    return subprocess.run([sys.executable, str(SCRIPT), "--base", "HEAD", *args], cwd=repo, env=env,
                           capture_output=True, text=True, timeout=300)
 
 
@@ -55,11 +53,16 @@ def test_at_most_40_mutants_spread_over_every_changed_line(tmp_path):
     repo = _repo(tmp_path, {"hooks/lib/many.py": ""}, head)
     done = _run(repo, "--list")
     assert done.returncode == 0, done.stderr
-    assert "180 candidate mutant(s), 40 selected (cap 40)" in done.stdout
+    assert "180 candidate mutant(s), 40 selected (cap 40, shard 1/1)" in done.stdout
     lines = [line for _, line, _ in _mutants(done.stdout)]
     assert len(lines) == 40 and len(set(lines)) == 40  # one per line before any line gets two
     assert min(lines) <= 2 and max(lines) >= 58  # thinned across the diff, not cut at its end
     assert len(_mutants(_run(repo, "--list", "--max-mutants", "5").stdout)) == 5
+    # the shards split the 40 into disjoint parts, and together they are the 40
+    shards = [_mutants(_run(repo, "--list", "--shard", f"{i}/3").stdout) for i in (1, 2, 3)]
+    assert [len(part) for part in shards] == [14, 13, 13]
+    assert sorted(m for part in shards for m in part) == sorted(_mutants(done.stdout))
+    assert _run(repo, "--list", "--shard", "4/3").returncode == 2
 
 
 def test_only_changed_lines_of_hooks_and_scripts_code_are_mutated(tmp_path):
@@ -116,11 +119,10 @@ def test_survivors_are_reported_by_line_and_operator_and_the_file_is_restored(tm
     assert (repo / "hooks/lib/widget.py").read_text() == WIDGET
 
 
-@pytest.mark.parametrize("workers", ["0", "2"])  # serial, and in parallel when xdist is installed
-def test_each_mutant_runs_pytest_x(tmp_path, workers):
+def test_each_mutant_runs_pytest_x(tmp_path):
     counted = WIDGET_TEST + "\n\ndef test_after():\n    with open(Path(__file__).with_name('runs.log'), 'a') as f:\n        f.write('run\\n')\n"
     repo = _repo(tmp_path, {"hooks/lib/widget.py": "", "tests/test_widget.py": counted}, {"hooks/lib/widget.py": WIDGET.split("\n\n\n")[0] + "\n"})
-    done = _run(repo, workers=workers)
+    done = _run(repo)
     assert "3 killed, 0 survived" in done.stdout, done.stdout + done.stderr
     # the unmutated run reached test_after; every mutant stopped at the first failure
     assert (repo / "tests" / "runs.log").read_text() == "run\n"
