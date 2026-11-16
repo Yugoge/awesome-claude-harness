@@ -1,17 +1,15 @@
-"""A command separator inside a quoted commit message is message text, to a commit grant too (FR-2).
+"""A command separator inside a quoted commit message is message text, to a commit grant too.
 
-The owner's report: a commit made under a valid grant was refused when its quoted message held a
-semicolon (`git commit -m "fix(x): a; b"`). hooks/lib/allowlist.py::_bash_subcommands, the one place
-the /allow grant matcher splits a command, cut at every `;`, `&&`, `||`, `|` and newline whether
-quoted or not, so the quoted message made two "commands" and a grant authorizes exactly one. The
-pretool-git-privilege-guard, pretool-bash-safety.sh and posttool-allowlist-consume all ask that one
-matcher, so the splitter reads the quoting the way the shell does, where the quoting is purely
-lexical, and splits every separator as before wherever it is not (a here-document, `$(`, a backquote,
-a process substitution, an open quote).
+A grant authorizes exactly one command. pretool-git-privilege-guard, pretool-bash-safety.sh and
+posttool-allowlist-consume all ask the one /allow grant matcher (hooks/lib/allowlist.py), which reads
+the quoting the way the shell does, so `git commit -m "fix(x): a; b"` is one command, while a
+separator outside the quotes starts a second one. Wherever the matcher cannot read the command as the
+shell does (a here-document, `$(`, a backquote, a process substitution, an open quote) it reads more
+commands than the shell runs, never fewer.
 
-The pipeline commit grant (`claude-commit-grant-*`, changelog-analyst's) never split the command that
-way: it reads the message through the classifier's own segmenter. Its cases here pin that it keeps
-passing for the one dispatched analyst and keeps refusing the main agent, a dev and another task.
+The pipeline commit grant (`claude-commit-grant-*`, changelog-analyst's) reads the message through
+the classifier's own segmenter. Its cases here pin that it passes for the one dispatched analyst and
+refuses the main agent, a dev and another task.
 
 Every case judges payload strings or runs the real hook files against a scratch HOME, state directory
 and repository; nothing commits anywhere real.
@@ -54,8 +52,30 @@ SID, TASK = "sid-fr2", "20261109-000000"
 TASK_LINE = f"Task-id: {TASK}"
 
 # --------------------------------------------------------------------------------------------
-# The splitter
+# How many commands the grant matcher reads. A grant authorizes exactly one command, so a probe
+# grant whose regex is the whole command, anchored, matches only when the matcher reads the
+# command as that one command; a probe that matches anything matches only when it reads one.
 # --------------------------------------------------------------------------------------------
+
+
+def _probe(command, regex):
+    grant = {"task_id": TASK, "session_id": "sess", "allowed_operations": [{"op": "*", "regex": regex}],
+             "created_at": time.time(), "expires_at": time.time() + 300}
+    saved = AL.load_sentinel_grant_for_task
+    AL.load_sentinel_grant_for_task = lambda _task: grant
+    try:
+        return AL.match_sentinel_grant_for_bash_command(TASK, command)
+    finally:
+        AL.load_sentinel_grant_for_task = saved
+
+
+def read_as_exactly(command, text):
+    """The matcher reads ``command`` as the one command ``text``."""
+    return _probe(command, r"\A" + re.escape(text) + r"\Z") is not None
+
+
+def read_as_one(command):
+    return _probe(command, "") is not None
 
 ONE = [  # a separator in quoted text is text: one command
     'git commit -m "fix(x): a; b"',
@@ -83,7 +103,7 @@ ONE = [  # a separator in quoted text is text: one command
 
 @pytest.mark.parametrize("command", ONE)
 def test_a_separator_inside_a_quoted_word_is_one_command(command):
-    assert AL._bash_subcommands(command) == [command]
+    assert read_as_exactly(command, command)
 
 
 TWO = [  # a separator outside the quotes starts a second command, checked on its own
@@ -114,7 +134,7 @@ TWO = [  # a separator outside the quotes starts a second command, checked on it
 
 @pytest.mark.parametrize("command,parts", TWO)
 def test_a_separator_outside_quotes_starts_a_second_command(command, parts):
-    assert AL._bash_subcommands(command) == parts
+    assert len(parts) > 1 and not read_as_one(command)
 
 
 # What the scan cannot read as the shell does is split on every separator, quoted or not: as before.
@@ -135,8 +155,7 @@ UNREADABLE = [
 
 @pytest.mark.parametrize("command", UNREADABLE)
 def test_what_the_scan_cannot_read_splits_as_before(command):
-    legacy = command.replace("||", "\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
-    assert AL._bash_subcommands(command) == [p.strip() for p in legacy.split("\n") if p.strip()]
+    assert not read_as_one(command)
 
 
 def test_text_with_no_quote_splits_exactly_as_before():
@@ -146,7 +165,10 @@ def test_text_with_no_quote_splits_exactly_as_before():
         command = "".join(rnd.choice(pieces) for _ in range(rnd.randint(1, 12)))
         legacy = command.replace("||", "\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
         expect = [p.strip() for p in legacy.split("\n") if p.strip()] or [command]
-        assert AL._bash_subcommands(command) == expect, repr(command)
+        if len(expect) == 1:
+            assert read_as_exactly(command, expect[0]), repr(command)
+        else:
+            assert not read_as_one(command), repr(command)
 
 
 def _bash_keywords_and_builtins(bash):
@@ -180,7 +202,7 @@ FRAGMENTS = ["git commit -m ", "x ", "y", " ", "a;b", ";", "&&", "||", "|", "\n"
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash as the oracle")
 def test_the_scan_never_finds_fewer_commands_than_bash_runs(tmp_path):
     """Differential: bash runs each fragment-built command with every unknown word counted once; the
-    splitter must find at least that many sub-commands (a lone `&` is no separator, as before, so the
+    matcher must never read one command where bash runs more (a lone `&` is no separator, as before, so the
     fragments hold none). No real program runs (run_oracle)."""
     bash = shutil.which("bash")
     empty, work = tmp_path / "no-programs", tmp_path / "work"
@@ -201,7 +223,8 @@ def test_the_scan_never_finds_fewer_commands_than_bash_runs(tmp_path):
             skipped += 1
             continue
         checked += 1
-        assert len(AL._bash_subcommands(command)) >= ran, repr(command)
+        if ran > 1:
+            assert not read_as_one(command), repr(command)
     assert checked > 100, f"only {checked} draws checked, {skipped} skipped"
 
 
@@ -429,3 +452,61 @@ def test_the_pipeline_grant_stays_bound_to_its_task_and_its_commit_count(world):
     two = f'git -C "{repo}" commit -m "fix(x): a; b" -m "{TASK_LINE}"; git -C "{repo}" commit -m "again" -m "{TASK_LINE}"'
     assert "pretool-git-privilege-guard.py" in refused(replay(two, repo, analyst))
     assert grant.exists()
+
+
+# --------------------------------------------------------------------------------------------
+# A literal /allow pattern against command shapes: (pattern, command, matches). A literal grant
+# is {op: first word, args_contain: the other words}; a `re:` grant is {op: "*", regex}.
+# --------------------------------------------------------------------------------------------
+
+LITERAL = [
+    ("git commit", 'git commit -m "a b"', True),
+    ('git commit -m "a b"', 'git commit -m "a b"', True),
+    ('git commit -m a', 'git commit -m "a b"', False),
+    ("git commit", "GIT_DIR=/x git commit", True),
+    ("git commit", "A=1 B=2 git commit -q", True),
+    ("git commit", "A=1", False),
+    ("git commit", "/usr/bin/git commit", False),
+    ("git commit", "git commit -F - <<'EOF'\nmsg\nEOF", False),
+    ("git commit", "git commit -m x &", True),
+    ("git commit", "git commit -m x # rm y", True),
+    ("git commit", "(git commit -m x)", False),
+    ("git commit", "{ git commit -m x; }", False),
+    ("git commit", "  git commit  ", True),
+    ("git commit", "git\tcommit", True),
+    ("git commit", "git commit 2>&1", True),
+    ("git commit", "git commit > /tmp/o", True),
+    ("git commit", "sudo git commit", False),
+    ("git commit", "env git commit", False),
+    ("git", "git", True),
+    ("git", "git status", True),
+    ("echo", "echo a\\;b", False),
+    ("echo", "echo 'a;b'", True),
+    ("echo", "", False),
+    ("commit -m", 'git commit -m "a; b"', False),
+    ("rm", 'git commit -m "a; b"; rm x', False),
+]
+
+
+def _literal(pattern):
+    op, _, rest = pattern.partition(" ")
+    return {"op": op, "args_contain": rest.split()} if rest.strip() else {"op": op}
+
+
+@pytest.mark.parametrize("pattern,command,matches", LITERAL)
+def test_a_literal_grant_against_a_command_shape(grants, pattern, command, matches):
+    grants([_literal(pattern)])
+    assert (AL.match_sentinel_grant_for_bash_command(TASK, command) is not None) is matches
+
+
+REGEX = [
+    ("^git commit", "git commit -m x", True),
+    ("^git commit", "A=1 git commit -m x", False),
+    ("^git commit", "  git commit -m x", True),
+]
+
+
+@pytest.mark.parametrize("regex,command,matches", REGEX)
+def test_a_regex_grant_is_searched_in_the_command_as_written(grants, regex, command, matches):
+    grants([{"op": "*", "regex": regex}])
+    assert (AL.match_sentinel_grant_for_bash_command(TASK, command) is not None) is matches
