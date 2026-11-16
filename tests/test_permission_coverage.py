@@ -425,23 +425,14 @@ def agent_lines() -> list[tuple[str, str]]:
 
 
 # Measured lines still on the channel because a replay player that is not this group's cannot fill
-# `<HARNESS_ROOT>` yet, each with that player (group 3's). Respell the line and remove its entry here when that
-# player binds `<HARNESS_ROOT>` (PR #29).
-# - tests/replay/agents.py plays agents/qa.md's Phase 6 block without the root its start context carries, so the
-#   respelled line would fail every replay that reaches QA.
-# - tests/replay/drivers/commit.py (`token`, Phase 10) and drivers/clean.py (`token`, "5. Git Operations") run the
-#   token writer's block with only <GIT_ROOT>, <BRANCH> and <COMMIT_SHA> filled, as the subagent's Bash: respelled
-#   (cba0424), python3 opened `<HARNESS_ROOT>/scripts/write-push-gate-token.py` under the project and exited 2, so
-#   no push-gate token was written and /commit's terminal (drivers/commit.py `clean`) failed in every replay that
-#   commits (run 42758819736, shards 4-6: /push, F4c, F8c, F8r, D31 (3)); /clean's token went unwritten silently.
-REPLAY_PENDING = {
-    _key("agents/qa.md", 'python3 "{H}/scripts/blast-radius-tool.py"  --git-diff --base HEAD  '
-                         '--output /dev/stdout  --task-id <task_id>'): "tests/replay/agents.py",
-    _key("agents/changelog-analyst.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
-                                        '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'): "tests/replay/drivers/commit.py",
-    _key("agents/cleaner.md", 'python3 "{H}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" '
-                              '--branch "<BRANCH>" --commit "<COMMIT_SHA>"'): "tests/replay/drivers/clean.py",
-}
+# `<HARNESS_ROOT>` yet, each with that player. Respell the line and remove its entry here when that player binds
+# `<HARNESS_ROOT>`. Empty since PR #29: tests/replay/agents.py (agents/qa.md's Phase 6 block), drivers/commit.py
+# (`token`, changelog-analyst.md Phase 10) and drivers/clean.py (`token`, cleaner.md "5. Git Operations") bind
+# `<HARNESS_ROOT>` to the tree's harness home, the root the subagent's start context prints, so those three lines
+# are respelled. (Respelled before the players bound it (cba0424), python3 opened
+# `<HARNESS_ROOT>/scripts/write-push-gate-token.py` under the project and exited 2: no push-gate token, and
+# /commit's terminal failed in every replay that commits, run 42758819736, shards 4-6.)
+REPLAY_PENDING: dict[tuple[str, str], str] = {}
 
 
 def _agent_cases():
