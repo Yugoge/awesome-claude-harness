@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -230,11 +231,25 @@ def _step(name: str) -> str:
     return text[m.start():m.end() + (nxt.start() if nxt else len(text))]
 
 
-def test_step_2_names_every_key_the_script_prints_and_runs_it_through_both_forms():
+def test_step_2_runs_both_forms_as_written_and_names_every_key_they_print(tmp_path):
+    """Step 2's two calls, run as the prompt writes them, print the keys in the order the step's
+    sentence names them; `/push <remote>` resolves to the remote it was given."""
     step = _step("Step 2")
-    for key in KEYS:
-        assert f"`{key}`" in step, key
-    assert step.count("scripts/steps/push-snapshot.py") == 2 and "--remote <remote>" in step
+    [block] = re.findall(r"```bash\n(.*?)```", step, re.S)
+    calls = [line for line in block.splitlines() if line.startswith("python3 ")]
+    repo = make_repo(tmp_path / "r", remotes={"origin": "https://example.invalid/o.git",
+                                              "fork": "https://example.invalid/f.git"})
+    printed = []
+    for call in calls:
+        argv = shlex.split(call.replace("<HARNESS_ROOT>", str(REPO)).replace("<remote>", "origin"))
+        assert argv[0] == "python3", call
+        done = subprocess.run([sys.executable, *argv[1:]], cwd=repo, capture_output=True, text=True, env=_env())
+        assert done.returncode == 0, done.stdout + done.stderr
+        printed.append(dict(line.split("=", 1) for line in done.stdout.splitlines()))
+    assert [list(p) for p in printed] == [KEYS, KEYS]
+    assert [p["RESOLVED_REMOTE"] for p in printed] == ["fork", "origin"]
+    sentence = step[step.index("It prints"):].split("\n", 1)[0]
+    assert re.findall(r"`([A-Z][A-Z_]+)`", sentence) == KEYS
 
 
 def test_the_placeholders_of_step_3_and_step_5_are_keys_the_script_prints():

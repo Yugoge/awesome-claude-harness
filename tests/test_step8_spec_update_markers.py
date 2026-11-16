@@ -2,7 +2,9 @@
 COMMIT_STEP8_TRACE=1 emits the STEP8_* markers on stderr, and stage 4's unlinked spec is printed
 and dispatches nothing (exit 0, no dispatch marker). The script is the tested reference of the
 selection the text orders: the text's markers and continuation pattern are the script's, and Step 8
-makes the selection itself, with no call of the script."""
+makes the selection itself, with no call of the script: a script run from Step 8 would read the close report as a
+second decider of the selection, which the artifact check's rules 4 and 6 refuse
+(tests/artifact_graph/test_rule4_6.py), so the text's own wording of that has no test here."""
 
 from __future__ import annotations
 
@@ -90,13 +92,4 @@ def test_the_text_orders_the_scripts_continuation_pattern_and_window() -> None:
     assert re.search(r"match each line against ``(.+?)`` \(", step).group(1) == module.CONTINUATION_RE.pattern
     assert "modified between 24 hours before and 1 hour after the close report's modification time" in step
     assert "`<!-- spec-continuation-of: <TASK_ID> -->`" in step
-
-
-def test_step8_makes_the_selection_itself_and_runs_no_script() -> None:
-    """A script run from Step 8 reads the close report as a second decider of it, which the artifact check
-    (tests/artifact_graph/, rules 4 and 6) refuses: the four stages are the orchestrator's own reads."""
-    step = _step8_text()
-    assert len(re.findall(r"^[1-4]\. \*\*", step, re.M)) == 4
-    assert "```bash" not in step and "python3" not in step
-    assert "it is not a call of this step" in re.sub(r"\s+", " ", step)
 
