@@ -1826,3 +1826,38 @@ def test_d3_a_no_session_run_gives_the_same_verdict_wherever_it_runs(home: Path,
                        text=True, env=env, cwd=str(cwd), timeout=300, check=False)
     assert r.returncode == 4, r.stdout + r.stderr
     assert "not_wired" not in r.stdout
+
+
+@pytest.mark.parametrize("where", ["harness-home", "under-user-home", "project"])
+def test_a2_a_partial_wiring_fails_naming_the_event_wherever_a_terminal_run_starts(
+        home: Path, statedir: Path, tmp_path: Path, where):
+    """A2 with D3: the harness home wires the canary for every event but Notification.
+    A no-session terminal run names Notification as FAIL from the harness home, from
+    a directory under $HOME and from a project P alike."""
+    _wire_canary(home, skip=("Notification",))
+    proj = tmp_path / "P"
+    (proj / ".claude").mkdir(parents=True)
+    _write(proj / ".claude" / "settings.json", {"permissions": {"allow": []}})
+    user_home = tmp_path / "userhome"
+    _write(user_home / ".claude" / "settings.json", {"permissions": {"allow": []}})
+    (user_home / "notes").mkdir()
+    cwd = {"harness-home": home, "under-user-home": user_home / "notes", "project": proj}[where]
+    env = _strict_env(home, statedir, HOME=str(user_home), CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home)], capture_output=True,
+                       text=True, env=env, cwd=str(cwd), timeout=300, check=False)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _result_line(r.stdout) == "RESULT FAIL (exit 1): Notification"
+
+
+def test_a2_a_fully_unwired_install_is_not_provable_from_the_harness_home(home: Path,
+                                                                          statedir: Path,
+                                                                          tmp_path: Path):
+    user_home = tmp_path / "userhome"
+    user_home.mkdir()
+    env = _strict_env(home, statedir, HOME=str(user_home), CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home)], capture_output=True,
+                       text=True, env=env, cwd=str(home), timeout=300, check=False)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "not_wired" not in r.stdout

@@ -262,9 +262,16 @@ def classify(state: dict, registrations: dict[str, list[str]], in_session: bool,
         elif not arrived:
             if label in registrations:
                 res, detail = NOT_PROVABLE, f"no receipt in this window; proves it: {actions[label]}"
-            elif not project_known:
+            elif not project_known and not registrations:
+                # Nothing read wires the canary at all: the wiring may live in the
+                # unknown project's layers, so absence here proves nothing.
                 res, detail = NOT_PROVABLE, (f"no receipt, and {unknown}; proves it: "
                                              f"{actions[label]}")
+            elif not project_known:
+                # The layers read wire the canary for other events but not this one:
+                # a partial wiring, measured where doctor reads, whatever the cwd.
+                res, detail = FAIL, (f"not_wired: no receipt, and the layers read ({project_desc}) "
+                                     f"register the {CANARY} for other events but not {label}")
             else:
                 res, detail = FAIL, (f"not_wired: no receipt, and no {CANARY} {label} "
                                      f"registration in the settings layers read ({project_desc})")
