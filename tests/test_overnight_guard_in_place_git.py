@@ -134,6 +134,21 @@ def _run_hook(main_root: Path, tool_name: str, tool_input: dict,
     )
 
 
+PRIVILEGE_GUARD = REPO_ROOT / "hooks" / "pretool-git-privilege-guard.py"
+
+
+def _run_privilege_guard(main_root: Path, command: str, session_id: str, cwd: str,
+                         agent_id: str = "") -> subprocess.CompletedProcess:
+    """The hook that owns protected-branch ref moves and pushes for every agent, overnight or not."""
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": session_id,
+               "cwd": cwd}
+    if agent_id:
+        payload["agent_id"] = agent_id
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(main_root), PWD=cwd)
+    return subprocess.run([sys.executable, str(PRIVILEGE_GUARD)], input=json.dumps(payload),
+                          capture_output=True, text=True, env=env, cwd=cwd, timeout=120)
+
+
 def _rw_binds(rewritten: str) -> list[str]:
     """Read-write bind TARGETS out of a bwrap re-exec argv.
 
@@ -417,24 +432,26 @@ PROTECTED_REF_MOVES = [
 ]
 
 
+@pytest.mark.parametrize("agent_id", ["", "a1b2c3"], ids=["main agent", "subagent"])
 @pytest.mark.parametrize("command", PROTECTED_REF_MOVES)
-def test_protected_branch_refused_for_in_place_actor(main_root, command):
-    """In-place gains ordinary git -- it must NOT gain the protected branch."""
+def test_protected_branch_refused_for_in_place_actor(main_root, command, agent_id):
+    """In-place gains ordinary git -- it must NOT gain the protected branch. The refusal is
+    pretool-git-privilege-guard.py's, which refuses every agent's branch force/delete and
+    update-ref/symbolic-ref."""
     _write_state(main_root, "sid-inplace", "in_place", main_root)
-    res = _run_hook(main_root, "Bash", {"command": command},
-                    session_id="sid-inplace", cwd=str(main_root))
+    res = _run_privilege_guard(main_root, command, "sid-inplace", str(main_root), agent_id)
     assert res.returncode == BLOCK_EXIT, (
         f"in-place actor was allowed to move the protected branch: {command!r}"
     )
-    assert "REF-MOVE BLOCK" in res.stderr
+    assert "direct git ref mutation" in res.stderr
 
 
+@pytest.mark.parametrize("agent_id", ["", "a1b2c3"], ids=["main agent", "subagent"])
 @pytest.mark.parametrize("command", PROTECTED_REF_MOVES)
-def test_protected_branch_refused_for_isolated_actor(main_root, isolated_worktree, command):
+def test_protected_branch_refused_for_isolated_actor(main_root, isolated_worktree, command, agent_id):
     """Same refusal from inside an isolated worktree."""
     _write_state(main_root, "sid-iso", "registered_worktree", isolated_worktree)
-    res = _run_hook(main_root, "Bash", {"command": command},
-                    session_id="sid-iso", cwd=str(isolated_worktree))
+    res = _run_privilege_guard(main_root, command, "sid-iso", str(isolated_worktree), agent_id)
     assert res.returncode == BLOCK_EXIT, (
         f"isolated actor was allowed to move the protected branch: {command!r}"
     )
@@ -671,15 +688,12 @@ def test_identity_mismatch_isolated_session_never_borrows_in_place(
 
 
 # ---------------------------------------------------------------------------
-# QA F3: remote publication onto the protected branch, in BOTH modes
+# remote publication onto the protected branch, in BOTH modes
 # ---------------------------------------------------------------------------
 #
-# Before the Q2 exemption an in-place push to the protected branch was refused
-# only as COLLATERAL of the blanket main-root block -- the same block that also
-# refused a read-only `log`. Removing that collateral was correct, but it left
-# protected-branch publication resting on one other hook's registration. This
-# hook already owns three command-shaped protected-branch rules (branch -f,
-# update-ref, symbolic-ref), so the publication verb belongs beside them.
+# pretool-git-privilege-guard.py refuses every agent's push without the /push
+# grant and every force push, overnight or not; these pin that it does so for
+# an overnight actor in either isolation mode.
 
 
 PROTECTED_PUBLICATIONS = [
@@ -689,25 +703,27 @@ PROTECTED_PUBLICATIONS = [
 ]
 
 
+@pytest.mark.parametrize("agent_id", ["", "a1b2c3"], ids=["main agent", "subagent"])
 @pytest.mark.parametrize("command", PROTECTED_PUBLICATIONS)
-def test_protected_branch_publication_refused_for_in_place_actor(main_root, command):
-    """In-place gained ordinary git -- it must not have gained publication."""
+def test_protected_branch_publication_refused_for_in_place_actor(main_root, command, agent_id):
+    """In-place gained ordinary git -- it must not have gained publication. The refusal is
+    pretool-git-privilege-guard.py's: no agent pushes without the /push grant, and a force push
+    is refused before any grant."""
     _write_state(main_root, "sid-inplace", "in_place", main_root)
-    res = _run_hook(main_root, "Bash", {"command": command},
-                    session_id="sid-inplace", cwd=str(main_root))
+    res = _run_privilege_guard(main_root, command, "sid-inplace", str(main_root), agent_id)
     assert res.returncode == BLOCK_EXIT, (
         f"in-place actor was allowed to publish the protected branch: {command!r}"
     )
-    assert "PUBLISH BLOCK" in res.stderr
+    assert "BLOCKED: agent git push" in res.stderr
 
 
+@pytest.mark.parametrize("agent_id", ["", "a1b2c3"], ids=["main agent", "subagent"])
 @pytest.mark.parametrize("command", PROTECTED_PUBLICATIONS)
 def test_protected_branch_publication_refused_for_isolated_actor(
-        main_root, isolated_worktree, command):
+        main_root, isolated_worktree, command, agent_id):
     """Same refusal from inside an isolated worktree, so the rule is mode-free."""
     _write_state(main_root, "sid-iso", "registered_worktree", isolated_worktree)
-    res = _run_hook(main_root, "Bash", {"command": command},
-                    session_id="sid-iso", cwd=str(isolated_worktree))
+    res = _run_privilege_guard(main_root, command, "sid-iso", str(isolated_worktree), agent_id)
     assert res.returncode == BLOCK_EXIT, (
         f"isolated actor was allowed to publish the protected branch: {command!r}"
     )

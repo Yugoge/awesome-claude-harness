@@ -9,7 +9,7 @@ reported, including one whose verb is a quoted expansion (`"$CP"`) inside a `cas
 
 Every test goes through the ENTRY POINT of one consumer, never through the library alone:
   * tool_policy - hooks/pretool-tool-policy.py, run as the real hook process
-  * overnight   - hooks/pretool-overnight-hook-guard.py, the six decision functions that consume it
+  * overnight   - hooks/pretool-overnight-hook-guard.py, the decision functions that consume it
   * noncaller   - hooks/pretool-cp-state-write-guard.py, which reads no Bash command, and
                   hooks/pretool-wrapper-userintent.py, which only strips heredoc bodies: both unaffected
 Kinds: `no_phantom` (a command that writes nothing yields no target: red on the unmodified library),
@@ -360,7 +360,7 @@ def test_tool_policy_matched_quote_pair_in_comment_still_detected(role):
         "CONTROL regressed: a matched quote pair inside a comment must still be detected: %r" % command)
 
 
-# ---- consumer 2: the overnight guard, six decision functions ------------------------------------
+# ---- consumer 2: the overnight guard, its decision functions -------------------------------------
 @pytest.fixture(scope="module")
 def overnight():
     sys.path.insert(0, str(HOOKS))
@@ -395,7 +395,6 @@ def _assert_hook(module, hook_name):
 def _bash_sites(module):
     return [
         (module._enforce_bash_all_sessions, lambda c: ("Bash", {"command": c}, [WORKTREE])),
-        (module._enforce_bash_worktree, lambda c: (c, WORKTREE)),
         (module._check_bash_string, lambda c: ({"command": c}, WORKTREE)),
     ]
 
@@ -420,7 +419,7 @@ def test_overnight_no_phantom_beside_real_copy(overnight, command):
 def test_overnight_no_phantom_grant_and_worktree_local(overnight, command):
     _assert_hook(overnight, OVERNIGHT_HOOK)
     granted = overnight.GRANTED_FOR_TEST
-    assert _call(overnight._all_bash_targets_granted, command + " > " + granted)[1] is True
+    assert overnight._bash_write_paths(command + " > " + granted) == [granted]
     assert _call(overnight._command_is_worktree_local, command + " > " + granted, MAIN, WORKTREE, GIT)[1] is True
     assert _call(overnight._raw_git_metadata_write_into_main, command, MAIN, WORKTREE, GIT)[1] is False
 

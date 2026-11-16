@@ -3,17 +3,21 @@
 PreToolUse Hook: Overnight session file modification guard.
 
 Activation: Session-specific — only the session owning an overnight state file
-is subject to worktree enforcement. Global security checks (hooks/state
-protection) apply when any overnight session is active.
+is subject to worktree enforcement. The overnight-state protection applies to
+every session while any overnight session is active.
 
 Enforcement layers:
-  1. Global: Block modifications to .claude/hooks/ and overnight-state files.
-  2. Session: Block file writes where path lacks "worktree" string.
-  3. Session: Block file writes outside the worktree realpath boundary.
-  4. Actor: Block Write/Edit of its checkout's git config (the keystone), and any write onto a
-     worktree's per-worktree config.worktree (P2-8) or a `git config` write of the keystone key.
+  1. Global: Block Write/Edit of .claude/hooks/ and .claude/commands/, and any
+     write of an overnight-state file.
+  2. Session: Block file writes outside the worktree realpath boundary.
+  3. Actor: Block git ops that target the main checkout or the protected branch,
+     Write/Edit of its checkout's git config (the keystone), any write onto a
+     worktree's per-worktree config.worktree, and a `git config` write of the
+     keystone key.
   AskUserQuestion: denied to the /dev-overnight session's main agent and
-  subagents until a human-typed prompt follows its /dev-overnight (D20).
+  subagents until a human-typed prompt follows its /dev-overnight.
+
+A Bash command is read once by the shared parser (lib/shell_parse.py).
 
 Exit codes:
   0: Allow tool use
@@ -21,6 +25,7 @@ Exit codes:
 """
 
 import fnmatch
+import functools
 import json
 import os
 import re
@@ -32,15 +37,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.bash_write_targets import (  # noqa: E402
-    command_without_heredoc_bodies,
-    extract_bash_write_paths,
-)
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
-from lib import command_span, overnight, stop_contract  # noqa: E402
+from lib import command_span, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
 
-try:  # T2.4: optional contract runtime + agent resolver for self_repair grant.
+try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
     from lib.agent_resolver import resolve_agent_type as _resolve_agent_type  # noqa: E402
     from lib.agent_resolver import resolve_dev_registry_entry as _resolve_dev_registry_entry  # noqa: E402
@@ -49,9 +50,8 @@ except Exception:  # pragma: no cover - fail-soft when modules missing
     _resolve_agent_type = None  # type: ignore[assignment]
     _resolve_dev_registry_entry = None  # type: ignore[assignment]
 
-
 # ---------------------------------------------------------------------------
-# T2.4: Contract-driven self-repair grant (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP)
+# Contract-driven self-repair grant
 # ---------------------------------------------------------------------------
 
 
@@ -99,15 +99,9 @@ _HARNESS_STATE_FILE_PFX_REL = ('.claude/overnight-state-',)
 
 
 def _harness_state_dirs() -> list[str]:
-    """Resolved directory-prefix list (M6: 3 project dirs + project file pfx = harness-state set).
-
-    M6/M7/M8/M9 harness-fixes 20260428: worktree-boundary exemption for
-    harness-state path prefixes, gated on falsy stdin agent_id
-    (orchestrator-only). Reuses _path_under_prefix for symlink-realpath
-    symmetry. Inserted at worktree-boundary layer only;
-    apply_global_security_checks line 652 is untouched per arch-6.
-    Direct overnight-state-*.json writes remain blocked by is_state_file_path.
-    """
+    """The harness-state directories, under the project and under HOME, that the orchestrator
+    may write outside the worktree boundary (an overnight-state file stays refused by
+    is_state_file_path)."""
     proj = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     home = Path.home()
     out = []
@@ -138,18 +132,18 @@ def _harness_file_match(target: str) -> bool:
 
 
 def _is_harness_state_path(target: str) -> bool:
-    """True iff target matches any harness-state prefix (M9 dir + file pfx)."""
+    """True iff target matches any harness-state directory or file prefix."""
     return _harness_dir_match(target) or _harness_file_match(target)
 
 
 def _is_orchestrator_actor() -> bool:
-    """M8: True iff stdin payload's agent_id is falsy (orchestrator/main-agent)."""
+    """True iff the payload carries no agent_id (the orchestrator, the main agent)."""
     payload = _REQUEST_CTX.get('payload') or {}
     return not payload.get('agent_id')
 
 
 def _is_harness_state_exempt(target: str) -> bool:
-    """Combined M6+M8+M9 gate: 5-prefix match AND orchestrator actor."""
+    """True iff target is a harness-state path and the actor is the orchestrator."""
     if not target:
         return False
     if not _is_orchestrator_actor():
@@ -278,26 +272,15 @@ def _grant_skips_block(target: str) -> bool:
 
 
 def _is_session_live(state: dict) -> bool:
-    """Check if the overnight session's isolation still binds (M9 liveness fix).
+    """Check if the overnight session's isolation still binds.
 
     The verdict is lib/overnight.py's `isolation_held`: keyed on the isolation
     window (`isolation_active_until`, falling back to `end_time`) and an
     explicit `isolation_released_at` — NOT on `current_phase`, so a state write
-    that marks the phase complete cannot release isolation prematurely
-    (round-3 §5); only the user `/stop` path sets `isolation_released_at`.
+    that marks the phase complete cannot release isolation prematurely; only
+    the user `/stop` path sets `isolation_released_at`.
     """
     return overnight.state_verdicts(state).isolation_held
-
-
-def _cleanup_expired_state(sf: Path, state: dict) -> None:
-    """No-op retained for call-site compatibility.
-
-    Changed 2026-04-21: previously unlinked expired overnight-state files;
-    now retains them on disk as post-mortem evidence. Enforcement naturally
-    stands down because `_is_session_live()` already returns False once the
-    end_time has passed.
-    """
-    return
 
 
 def _file_age_seconds(sf: Path) -> float:
@@ -326,7 +309,7 @@ def _load_state(sf: Path) -> dict | None:
 def _extract_live_worktree_path(sf: Path) -> str:
     """Return the ISOLATED worktree_path from a live state file; else empty.
 
-    An `in_place` session (2026-08-08: `/dev-overnight` without `--worktree`) is
+    An `in_place` session (`/dev-overnight` without `--worktree`) is
     deliberately excluded. Its `worktree_path` is the main root, and this list
     is the set of roots that writes are confined TO — so including it would
     declare the main checkout an isolated worktree for *every* session, not just
@@ -358,21 +341,12 @@ def _get_active_worktree_paths() -> list[str]:
 
 
 def _get_protected_branches() -> list[str]:
-    """Union of `protected_branch` over every NON-RELEASED overnight session
-    record (M3-RESOLUTION / M5-NO-ENUMERATION).
+    """Union of `protected_branch` over every NON-RELEASED overnight session record.
 
-    The protected branch is never a literal and never a fixed enumeration: it
-    is read from the session-state record at decision time. There is NO literal
-    fallback on the failure branch — an unresolvable set simply carries no
-    branch-name signal, and the independent main-targeting / not-in-worktree
-    predicates at this layer (which are already fail-closed on their own terms)
-    continue to govern. M4's deny-on-unresolvable rule is scoped to the two
-    IN-CONFINEMENT consumers (keystone, policy shim); this pre-execution guard
-    is not one of them and must not be turned into a blanket blocker.
-
-    Union is additive only; the sole subtractive operator is the non-released
-    filter (lib/overnight.py's `released` verdict), admissible because
-    `isolation_released_at` is immutable.
+    The protected branch is read from the session-state records at decision time, never a literal;
+    an unresolvable set carries no branch-name signal, and the main-targeting / not-in-worktree
+    predicates still govern. A released record (lib/overnight.py's `released`, which is immutable)
+    is the only one left out.
     """
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
     names: list[str] = []
@@ -395,7 +369,7 @@ def _operand_branch_names(token: str) -> list[str]:
 
     Covers bare <N>, refs/heads/<N>, heads/<N>, <N>@{0} and refspec forms.
     Every transformation is a STRUCTURAL ref-namespace normalisation; none
-    inspects the branch NAME, so none is a name-shape gate under AC-7.
+    inspects the branch NAME, so none is a name-shape gate.
     """
     out: list[str] = []
     for part in token.lstrip('+').split(':'):
@@ -448,7 +422,7 @@ def _in_isolated_main_root(file_path: str) -> bool:
     The /tmp exemption must not reach the very checkout an isolated session
     exists to protect (a main root under /tmp would otherwise fail open). A
     harness state dir placed INSIDE the main root keeps its exemption; the
-    default state dir (/tmp) does not. in_place records add nothing (Q1).
+    default state dir (/tmp) does not. in_place records add nothing.
     """
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
     state_root = harness_state_dir()
@@ -488,7 +462,7 @@ def _block_global_worktree(tool_name: str, target: str, worktree_paths: list[str
 
 
 def _enforce_write_edit_all_sessions(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
-    """Block Write/Edit outside active overnight worktrees for all sessions (T2.4-aware)."""
+    """Block Write/Edit outside active overnight worktrees for all sessions (self_repair-grant aware)."""
     if tool_name not in ('Write', 'Edit', 'MultiEdit'):
         return
     fp = tool_input.get('file_path', '')
@@ -498,13 +472,12 @@ def _enforce_write_edit_all_sessions(tool_name: str, tool_input: dict, worktree_
 
 
 def _enforce_bash_all_sessions(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
-    """Block Bash writes outside active overnight worktrees for all sessions (T2.4-aware)."""
+    """Block Bash writes outside active overnight worktrees for all sessions (self_repair-grant aware).
+    A `docker compose build|up` command's own output redirection is QA's and passes."""
     if tool_name != 'Bash':
         return
     command = tool_input.get('command', '')
-    if _is_docker_compose_safe(command):  # docker compose build/up needed for QA
-        return
-    for path in _extract_bash_write_paths(command):
+    for path in _bash_write_paths(command, _compose_up_redirects(command)):
         if _is_path_allowed_during_overnight(path, worktree_paths) or _grant_skips_block(path):
             continue
         _block_global_worktree('Bash', path, worktree_paths)
@@ -522,21 +495,10 @@ def apply_global_worktree_enforcement(tool_name: str, tool_input: dict, worktree
 
 
 def _any_live_state(sf: Path) -> bool:
-    """Return True if sf describes a live, non-orphaned overnight session.
-
-    Calls `_cleanup_expired_state` for expired/orphaned entries (now a
-    no-op per 2026-04-21) to keep the legacy call graph intact.
-    """
+    """Return True if sf describes a live, non-orphaned overnight session. An expired state file
+    stays on disk as evidence."""
     state = _load_state(sf)
-    if state is None:
-        return False
-    if not _is_session_live(state):
-        _cleanup_expired_state(sf, state)
-        return False
-    if _is_orphaned_state(sf, state):
-        _cleanup_expired_state(sf, state)
-        return False
-    return True
+    return state is not None and _is_session_live(state) and not _is_orphaned_state(sf, state)
 
 
 def is_overnight_active() -> bool:
@@ -555,6 +517,179 @@ def get_overnight_state_for_session(project_dir: Path, session_id: str) -> dict 
     return _load_state(project_dir / '.claude' / f'overnight-state-{session_id}.json')
 
 
+# ---------------------------------------------------------------------------
+# A Bash command, read once by the shared parser (lib/shell_parse.py)
+# ---------------------------------------------------------------------------
+
+
+def _known_env() -> dict:
+    """The variables whose value the hook shares with the shell it guards."""
+    known = {'HOME': os.environ.get('HOME') or os.path.expanduser('~')}
+    if os.environ.get('CLAUDE_PROJECT_DIR'):
+        known['CLAUDE_PROJECT_DIR'] = os.environ['CLAUDE_PROJECT_DIR']
+    return known
+
+
+class _Read:
+    """One Bash command as the shared parser reads it: each command it runs (also inside
+    substitutions, `bash -c`, `eval` and fed shells) with what that command resolves to past its
+    wrappers, and each path it writes."""
+
+    def __init__(self, command: str, env: dict):
+        self.command = command
+        self.script = sp.parse(command)
+        self.unreadable = bool(self.script.errors())
+        self.resolved = [(site, sp.resolve(site.cmd)) for site in sp.walk(self.script)]
+        self.targets = sp.write_targets(self.script, env=env)
+
+
+@functools.lru_cache(maxsize=8)
+def _read_with(command: str, env: tuple) -> _Read:
+    return _Read(command, dict(env))
+
+
+def _read(command: str) -> _Read:
+    return _read_with(command or '', tuple(sorted(_known_env().items())))
+
+
+def _word_text(word) -> str:
+    """A word as the shell hands it on where it is static, each expansion kept as written."""
+    raw, at = word.raw.text, word.start
+    return ''.join(p.text if p.kind == 'lit' else raw[p.span[0] - at:p.span[1] - at] for p in word.parts)
+
+
+def _harness_home() -> str:
+    return os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _word_path(word) -> str:
+    """A path word as the shell expands it where the value is known: `~`, $HOME,
+    $CLAUDE_PROJECT_DIR and $CLAUDE_HOME (the home this hook runs from when unset), also as
+    `${NAME:-default}`; any other expansion stays as written."""
+    env = dict(_known_env(), CLAUDE_HOME=_harness_home())
+    out = []
+    for p in word.parts:
+        m = re.fullmatch(r'([A-Za-z_]\w*)(?::?-(.*))?', p.text, re.S) if p.kind == 'param' else None
+        if p.kind == 'lit':
+            out.append(p.text)
+        elif m and m.group(1) in env:
+            out.append(env[m.group(1)])
+        elif m and m.group(2) is not None:
+            out.append(re.sub(r'\$\{?([A-Za-z_]\w*)\}?', lambda v: env.get(v.group(1), v.group(0)), m.group(2)))
+        else:
+            out.append(word.raw.text[p.span[0] - word.start:p.span[1] - word.start])
+    text = ''.join(out)
+    return os.path.expanduser(text) if text.startswith('~') else text
+
+
+def _target_text(t) -> str:
+    """A write target as the path text the checks match: the static path, else its word with each
+    known variable expanded and any other expansion kept as written."""
+    text = t.path if t.path is not None else _word_text(t.word)
+    for name, value in _known_env().items():
+        text = text.replace('${%s}' % name, value).replace('$' + name, value)
+    return os.path.expanduser(text) if text.startswith('~') else text
+
+
+def _bash_write_paths(command: str, skip=frozenset()) -> list[str]:
+    """The path of each file the command writes or creates (a deletion is not one), first seen order.
+    ``skip`` holds the ids of target words not to report."""
+    found = (_target_text(t) for t in _read(command).targets
+             if t.mode != sp.DELETE and id(t.word) not in skip)
+    return list(dict.fromkeys(p for p in found if p))
+
+
+def _interpreter(name) -> bool:
+    """True iff the command named ``name`` runs code it reads: a shell or a script interpreter."""
+    return bool(name) and (name in sp.SHELLS or bool(sp._SCRIPT_INTERP_RE.match(name)))
+
+
+def _code_text(site, res) -> str:
+    """What an interpreter command is handed as code: its arguments and the bodies of the heredocs
+    and here-strings that feed it."""
+    parts = [w.raw.text for w in res.args]
+    for red in site.cmd.redirects:
+        if red.hd is not None:
+            parts.append(red.hd.body)
+        elif red.op == '<<<' and red.target is not None:
+            parts.append(red.target.raw.text)
+    return ' '.join(parts)
+
+
+def _harness_launch(res, worktree_path: str, main_root: str = '') -> bool:
+    """True iff an interpreter command's first argument is a harness script (``_harness_script``)."""
+    return bool(res.args) and _harness_script(_word_path(res.args[0]), worktree_path, main_root)
+
+
+def _interpreter_runs(command: str, worktree_path: str = '', main_root: str = '') -> list:
+    """(site, resolved) of each interpreter the command launches, but a launch of a harness script."""
+    return [(site, res) for site, res in _read(command).resolved
+            if _interpreter(res.name) and not _harness_launch(res, worktree_path, main_root)]
+
+
+def _cd_target(res, cwd: str):
+    """(directory, known) after a `cd`/`pushd`: unknown for a bare `cd`, `cd -`, `~` or a computed one."""
+    ops = [w for w in res.args if not (w.value() or '').startswith('-') or w.value() == '-']
+    if not ops:
+        return None, False
+    v = ops[0].value()
+    if v is None or v == '-' or v.startswith('~'):
+        return None, False
+    return os.path.join(cwd, v), True
+
+
+def _git_of(site, res) -> list:
+    """The git invocations one command runs (with a git alias body it defines), or, for a command
+    that is not git, that it hands its words to: from the first word past the command word that
+    names git when the parser does not peel the wrapper (`xargs -i git ...`), and the commands a
+    string argument or a heredoc / here-string fed to it holds (`echo "git checkout x"`,
+    `. /dev/stdin <<< 'git clean -fd'`), read as shell text."""
+    one = sp.Script([(sp.Pipeline([site.cmd], ()), None)], site.script.source, site.cmd.span)
+    found = sp.git_invocations(one, into=('alias',))
+    if found or res.name == 'git':
+        return found
+    words = list(site.cmd.words)
+    for k, w in enumerate(words[1:], 1):
+        if os.path.basename(w.value() or '') == 'git':
+            return sp.git_invocations(' '.join(x.raw.text for x in words[k:]))
+    if res.payload is not None:
+        return []
+    texts = [w.value() for w in res.args] + [r.hd.body if r.hd is not None else r.target.value()
+                                            for r in site.cmd.redirects if r.op in ('<<', '<<-', '<<<')]
+    return [inv for t in texts if t and 'git' in t
+            for inv in sp.git_invocations(sp.parse(t), strings=True)]
+
+
+def _git_runs(command: str, payload_cwd: str) -> list:
+    """(GitInvocation, cwd, cwd_known) for each git invocation the command runs, or that a command
+    other than git names in its words, with the directory a preceding `cd`/`pushd` moved to
+    (``cwd`` is None when none did). A wrapper option with a value (`env -C <dir>`, `sudo -D <dir>`)
+    may move the directory too, so behind one the directory is not known."""
+    out = []
+    cwd, known = None, True
+    for site, res in _read(command).resolved:
+        if res.name in ('cd', 'pushd'):
+            cwd, known = _cd_target(res, cwd or payload_cwd)
+        moved = any(v is not None for _name, opts in res.wrappers for _o, v in opts)
+        out.extend((inv, cwd, known and not moved) for inv in _git_of(site, res))
+    return out
+
+
+def _assigned(command: str, names: tuple) -> list[str]:
+    """The values the command gives these environment names: a prefix assignment, or a NAME=value
+    argument (`export`, `env`, `declare`); a computed value as written."""
+    out = []
+    for site, res in _read(command).resolved:
+        for a in site.cmd.assignments:
+            if a.name in names and a.value is not None:
+                out.append(_word_text(a.value))
+        for w in site.cmd.words[1:]:
+            name, eq, _v = (w.value() or _word_text(w)).partition('=')
+            if eq and name in names:
+                out.append(_word_text(w).partition('=')[2])
+    return out
+
+
 def is_hooks_path(file_path: str) -> bool:
     """Check if a file path targets the .claude/hooks/ directory."""
     normalized = file_path.replace('\\', '/')
@@ -562,13 +697,7 @@ def is_hooks_path(file_path: str) -> bool:
 
 
 def is_commands_path(file_path: str) -> bool:
-    """Check if a file path targets the .claude/commands/ directory.
-
-    Mirrors `is_hooks_path()` structure (R4.1, spec-20260424-233926 §5.2.4).
-    Added 2026-04-25 to close the gap that allowed b5d447e-style sweep
-    commits to silently rewrite slash-command files during overnight
-    sessions.
-    """
+    """Check if a file path targets the .claude/commands/ directory."""
     normalized = file_path.replace('\\', '/')
     return '.claude/commands/' in normalized or '.claude/commands\\' in normalized
 
@@ -586,91 +715,13 @@ def is_outside_worktree(file_path: str, worktree_path: str) -> bool:
     return not abs_file.startswith(abs_wt + os.sep) and abs_file != abs_wt
 
 
-def path_outside_session_worktree(file_path: str, worktree_path: str) -> bool:
-    """Check if file_path is outside the session worktree_path.
-
-    Uses realpath comparison instead of naive 'worktree' substring matching.
-    Falls back to legacy string check if worktree_path is not available.
-    """
-    if not worktree_path:
-        return 'worktree' not in file_path.lower()
-    abs_file = os.path.realpath(os.path.abspath(file_path))
-    abs_wt = os.path.realpath(os.path.abspath(worktree_path))
-    return not abs_file.startswith(abs_wt + os.sep) and abs_file != abs_wt
-
-
-def _matches_any(command: str, patterns: list[str]) -> bool:
-    """Return True if command matches any regex pattern."""
-    return any(re.search(p, command) for p in patterns)
-
-
 def check_bash_targets_state(command: str) -> bool:
-    """Check if bash command modifies/deletes overnight state files.
-
-    Heredoc payload bodies are stripped before regex matching so a
-    heredoc body that merely *mentions* an overnight-state path string
-    (e.g. inside a JSON document being written elsewhere) is not a false
-    positive. Only the heredoc OPENER line and out-of-heredoc content
-    are scanned for actual state-file write/delete idioms.
-    """
-    stripped = command_without_heredoc_bodies(command)
-    return _matches_any(stripped, [
-        r'rm\s+.*overnight-state-',
-        r'rm\s+-f\s+.*overnight-state-',
-        r'rm\s+-rf\s+.*overnight-state-',
-        r'>\s*.*overnight-state-',
-        r'>>\s*.*overnight-state-',
-        r'mv\s+.*overnight-state-',
-        r'cp\s+.*overnight-state-.*\.json\s',
-        r'echo\s+.*>\s*.*overnight-state-',
-        r'cat\s+.*>\s*.*overnight-state-',
-        r'tee\s+.*overnight-state-',
-    ])
-
-
-def check_bash_targets_hooks(command: str) -> bool:
-    """Check if a bash command writes to .claude/hooks/ directory.
-
-    Heredoc payload bodies are stripped before regex matching so a
-    heredoc body that merely mentions a `.claude/hooks/` path literal
-    (e.g. JSON value or documentation text) is not a false positive.
-    Only real redirect/copy/move/tee targets in the heredoc OPENER or
-    outside any heredoc trigger this check.
-    """
-    stripped = command_without_heredoc_bodies(command)
-    return _matches_any(stripped, [
-        r'(?:echo|printf)\s+.*>\s*.*\.claude/hooks/',
-        r'cat\s+.*>\s*.*\.claude/hooks/',
-        r'cp\s+.*\.claude/hooks/',
-        r'mv\s+.*\.claude/hooks/',
-        r'tee\s+.*\.claude/hooks/',
-        r'>\s*.*\.claude/hooks/',
-        r'>>\s*.*\.claude/hooks/',
-    ])
-
-
-def check_bash_targets_commands(command: str) -> bool:
-    r"""Check if a bash command writes to .claude/commands/ directory.
-
-    Mirrors `check_bash_targets_hooks()` (R4.1, spec-20260424-233926 §5.2.4).
-    Pattern matches `\.claude/commands/[A-Za-z0-9_.-]+\.md` reachable via
-    echo/printf/cat/cp/mv/tee/>/>> redirects.
-
-    Heredoc payload bodies are stripped before regex matching so a
-    heredoc body mentioning `.claude/commands/` paths in payload content
-    (documentation, JSON, etc.) is not a false positive. Only the
-    opener line and non-heredoc content trigger this check.
-    """
-    stripped = command_without_heredoc_bodies(command)
-    return _matches_any(stripped, [
-        r'(?:echo|printf)\s+.*>\s*.*\.claude/commands/',
-        r'cat\s+.*>\s*.*\.claude/commands/',
-        r'cp\s+.*\.claude/commands/',
-        r'mv\s+.*\.claude/commands/',
-        r'tee\s+.*\.claude/commands/',
-        r'>\s*.*\.claude/commands/',
-        r'>>\s*.*\.claude/commands/',
-    ])
+    """True iff the command writes, moves or deletes an overnight-state file, or names one in a
+    command the parser cannot read."""
+    r = _read(command)
+    if r.unreadable and 'overnight-state-' in command:
+        return True
+    return any('overnight-state-' in _target_text(t) for t in r.targets)
 
 
 def _block(message: str) -> None:
@@ -682,9 +733,8 @@ def _block(message: str) -> None:
 def _check_write_edit_security(tool_name: str, file_path: str) -> None:
     """Block Write/Edit to hooks, commands, or state files during overnight.
 
-    T2.4: A contract-authorized self_repair grant short-circuits the block
-    for this exact file_path. Overnight-state files are NEVER grantable
-    (state-file integrity is non-negotiable).
+    A contract-authorized self_repair grant lets a hooks or commands path through; an
+    overnight-state file is never grantable.
     """
     if is_hooks_path(file_path) and not _grant_skips_block(file_path):
         _block(
@@ -695,9 +745,7 @@ def _check_write_edit_security(tool_name: str, file_path: str) -> None:
     if is_commands_path(file_path) and not _grant_skips_block(file_path):
         _block(
             '\nOVERNIGHT COMMANDS PROTECTION: Modifying .claude/commands/ '
-            'is blocked during overnight sessions (R4.1; closes the gap '
-            'that allowed b5d447e-style sweep commits to silently rewrite '
-            'slash-command files).\n'
+            'is blocked during overnight sessions.\n'
             f'Blocked: {tool_name} to {file_path}\n'
         )
     if is_state_file_path(file_path):
@@ -708,63 +756,32 @@ def _check_write_edit_security(tool_name: str, file_path: str) -> None:
         )
 
 
-def _all_bash_targets_granted(command: str) -> bool:
-    """T2.4: True iff every extracted Bash write target is grant-authorized."""
-    targets = _extract_bash_write_paths(command)
-    return bool(targets) and all(_grant_skips_block(t) for t in targets)
-
-
-def _maybe_block_bash(command: str, predicate, message: str, grantable: bool) -> None:
-    """Run predicate; block with message unless (grantable and all targets granted)."""
-    if not predicate(command):
-        return
-    if grantable and _all_bash_targets_granted(command):
-        return
-    _block(message)
-
-
-def _check_bash_security(command: str) -> None:
-    """Block Bash commands targeting hooks, commands, or state files (T2.4-aware)."""
-    _maybe_block_bash(command, check_bash_targets_hooks,
-                      '\nOVERNIGHT HOOK PROTECTION: Writing to .claude/hooks/ '
-                      'via Bash is blocked during overnight sessions.\n', True)
-    _maybe_block_bash(command, check_bash_targets_commands,
-                      '\nOVERNIGHT COMMANDS PROTECTION: Writing to .claude/commands/ '
-                      'via Bash is blocked during overnight sessions (R4.1).\n', True)
-    _maybe_block_bash(command, check_bash_targets_state,
-                      '\nOVERNIGHT STATE PROTECTION: Modifying or deleting '
-                      'overnight-state-*.json via Bash is blocked.\n', False)
-
-
 def apply_global_security_checks(tool_name: str, tool_input: dict) -> None:
-    """Block hooks/state modifications for ALL sessions during any overnight."""
+    """Block hooks/commands/state modifications for ALL sessions during any overnight. A Bash write
+    to .claude/hooks/ or .claude/commands/ is pretool-claude-config-guard.py's refusal."""
     if tool_name in ('Write', 'Edit', 'MultiEdit'):
         _check_write_edit_security(tool_name, tool_input.get('file_path', ''))
-    if tool_name == 'Bash':
-        _check_bash_security(tool_input.get('command', ''))
+    if tool_name == 'Bash' and check_bash_targets_state(tool_input.get('command', '')):
+        _block('\nOVERNIGHT STATE PROTECTION: Modifying or deleting '
+               'overnight-state-*.json via Bash is blocked.\n')
 
 
-def _is_docker_compose_safe(command: str) -> bool:
-    """Check if command is a safe docker compose build/up (not down/restart)."""
-    return bool(re.search(r'docker[\s-]compose\s+(build|up)', command))
-
-
-def _extract_bash_write_paths(command: str) -> list[str]:
-    """Extract file paths from common Bash write patterns.
-
-    Thin wrapper around lib.bash_write_targets.extract_bash_write_paths
-    (T2.1). The library helper strips heredoc PAYLOAD lines before
-    extracting redirect/tee/cp/mv/sed-i/install targets, so a heredoc
-    body that mentions paths or redirect-like syntax cannot produce
-    spurious write-target hits. The OPENER line is preserved so an
-    actual `cat > /protected/path << EOF` opener still surfaces its
-    redirect target.
-    """
-    return extract_bash_write_paths(command)
+def _compose_up_redirects(command: str) -> frozenset:
+    """The ids of the redirect target words of each `docker compose build|up` command (QA runs them)."""
+    out = set()
+    for site, res in _read(command).resolved:
+        args = res.argv()
+        if res.name == 'docker' and args[:1] == ['compose']:
+            args = args[1:]
+        elif res.name != 'docker-compose':
+            continue
+        if args[:1] in (['build'], ['up']):
+            out.update(id(r.target) for r in site.cmd.redirects if r.target is not None)
+    return frozenset(out)
 
 
 def _block_worktree_string_violation(tool_name: str, path: str) -> None:
-    """Block operation on path lacking 'worktree' string."""
+    """Block operation on a path outside the session's worktree."""
     _block(
         f'\nWORKTREE STRING ENFORCEMENT: Path does not contain "worktree".\n'
         f'Overnight sessions can only modify files in worktree directories.\n'
@@ -772,67 +789,34 @@ def _block_worktree_string_violation(tool_name: str, path: str) -> None:
     )
 
 
-def _block_worktree_violation(tool_name: str, path: str, wt: str) -> None:
-    """Block operation outside worktree with exit 2."""
-    _block(
-        f'\nWORKTREE ENFORCEMENT: File is outside the overnight worktree.\n'
-        f'Overnight changes MUST stay inside: {wt}\n'
-        f'Attempted: {tool_name} to {path}\n'
-        f'Use absolute paths inside the worktree.\n'
-    )
-
-
-def _enforce_write_edit_worktree(tool_name: str, tool_input: dict, wt: str) -> None:
-    """Check Write/Edit file_path against worktree boundary (T2.4-aware)."""
-    file_path = tool_input.get('file_path', '')
-    if file_path and not _is_path_exempt(file_path) and not _is_harness_state_exempt(file_path) and is_outside_worktree(file_path, wt) and not _grant_skips_block(file_path):
-        _block_worktree_violation(tool_name, file_path, wt)
-
-
-def _enforce_bash_worktree(command: str, wt: str) -> None:
-    """Check Bash write targets against worktree boundary (T2.4-aware)."""
-    for path in _extract_bash_write_paths(command):
-        if not _is_path_exempt(path) and not _is_harness_state_exempt(path) and is_outside_worktree(path, wt) and not _grant_skips_block(path):
-            _block_worktree_violation('Bash', path, wt)
-
-
 def _check_write_edit_string(tool_name: str, tool_input: dict, worktree_path: str) -> None:
-    """Emit string-fallback block for Write/Edit outside session worktree (T2.4-aware)."""
+    """Block a Write/Edit outside the session worktree (self_repair-grant aware)."""
     file_path = tool_input.get('file_path', '')
     if not file_path or _is_path_exempt(file_path) or _is_harness_state_exempt(file_path) or _grant_skips_block(file_path):
         return
-    if path_outside_session_worktree(file_path, worktree_path):
+    if is_outside_worktree(file_path, worktree_path):
         _block_worktree_string_violation(tool_name, file_path)
 
 
 def _check_bash_string(tool_input: dict, worktree_path: str) -> None:
-    """Emit string-fallback block for Bash writes outside session worktree (T2.4-aware)."""
-    command = tool_input.get('command', '')
-    for path in _extract_bash_write_paths(command):
+    """Block a Bash write outside the session worktree (self_repair-grant aware)."""
+    for path in _bash_write_paths(tool_input.get('command', '')):
         if _is_path_exempt(path) or _is_harness_state_exempt(path) or _grant_skips_block(path):
             continue
-        if path_outside_session_worktree(path, worktree_path):
+        if is_outside_worktree(path, worktree_path):
             _block_worktree_string_violation('Bash', path)
 
 
-def apply_worktree_string_check(tool_name: str, tool_input: dict, worktree_path: str = '') -> None:
-    """Block when overnight session writes outside worktree_path (or lacks 'worktree' string as fallback)."""
+def apply_worktree_string_check(tool_name: str, tool_input: dict, worktree_path: str) -> None:
+    """Block when an overnight session writes outside its worktree_path."""
     if tool_name in ('Write', 'Edit', 'MultiEdit'):
         _check_write_edit_string(tool_name, tool_input, worktree_path)
     if tool_name == 'Bash':
         _check_bash_string(tool_input, worktree_path)
 
 
-def apply_worktree_enforcement(tool_name: str, tool_input: dict, wt: str) -> None:
-    """Hard-block when overnight session writes outside its worktree."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
-        _enforce_write_edit_worktree(tool_name, tool_input, wt)
-    if tool_name == 'Bash':
-        _enforce_bash_worktree(tool_input.get('command', ''), wt)
-
-
 def _parse_hook_input() -> tuple[str, dict, str, dict]:
-    """Parse PreToolUse JSON; T2.4 also returns full payload for grant resolution."""
+    """Parse PreToolUse JSON; the full payload is returned too, for grant resolution."""
     try:
         data = json.load(sys.stdin)
     except Exception:
@@ -842,7 +826,7 @@ def _parse_hook_input() -> tuple[str, dict, str, dict]:
 
 
 def _payload_cwd(payload: dict) -> str:
-    """M9/round-3: effective cwd = payload['cwd'] -> $PWD -> os.getcwd()."""
+    """Effective cwd: payload['cwd'], else $PWD, else os.getcwd()."""
     if isinstance(payload, dict):
         c = payload.get('cwd')
         if isinstance(c, str) and c:
@@ -854,16 +838,16 @@ def _payload_cwd(payload: dict) -> str:
 
 
 def _is_cwd_in_worktree(worktree_paths: list[str], cwd: str | None = None) -> bool:
-    """C8/M9: True if the effective cwd is inside an overnight worktree."""
+    """True if the effective cwd is inside an overnight worktree."""
     base = cwd if cwd else os.getcwd()
     cwd_real = os.path.realpath(base)
     return any(_path_under_prefix(cwd_real, wt) for wt in worktree_paths)
 
 
 def _resolve_child_session(payload: dict) -> dict | None:
-    """M9/round-3 overnight_child: the overnight state of the session that
+    """overnight_child: the overnight state of the session that
     dispatched the subagent (payload.session_id), which records its dispatch
-    obligation (P6 R4). A pre-pull agent-index.json dev_session_id names it only
+    obligation. A pre-pull agent-index.json dev_session_id names it only
     for a dispatch without one (its transcript is read only for such an entry)."""
     if not isinstance(payload, dict):
         return None
@@ -886,7 +870,7 @@ def _resolve_child_session(payload: dict) -> dict | None:
 
 
 def _governing_state_for_cwd(cwd: str) -> dict | None:
-    """VECTOR-3 (Cycle-3): resolve the live overnight state whose worktree_path
+    """Resolve the live overnight state whose worktree_path
     contains `cwd`. Lets the worktree_context path carry a governing state and
     run the same git enforcement as owner/child."""
     if not cwd:
@@ -918,13 +902,12 @@ def _classify_actor(payload: dict, owner_state: dict | None,
     | normal. Returns (classification, governing_state_or_None).
 
     A `normal` actor (concurrent user session on main) is NOT enforced, so the
-    user's concurrent main session is never false-blocked (round-3 honest
-    limitation: ambiguous unregistered subagents fall back to `normal`).
+    user's concurrent main session is never false-blocked (an ambiguous
+    unregistered subagent falls back to `normal`).
 
-    VECTOR-3 (Cycle-3): worktree_context now carries the governing overnight
-    state resolved from the cwd's worktree (was None), so the enforce gate runs
-    the same git block for an in-worktree actor whose owner/child resolution
-    fails — closing the classification hole."""
+    worktree_context carries the governing overnight state resolved from the
+    cwd's worktree, so the enforce gate runs the same git block for an
+    in-worktree actor whose owner/child resolution fails."""
     if owner_state is not None and _is_session_live(owner_state):
         return ('overnight_owner', owner_state)
     child_state = _resolve_child_session(payload)
@@ -936,11 +919,8 @@ def _classify_actor(payload: dict, owner_state: dict | None,
 
 
 def _apply_session_enforcement(state: dict, tool_name: str, tool_input: dict) -> None:
-    """Apply session-specific worktree string + realpath enforcement."""
-    wt = state.get('worktree_path', '')
-    apply_worktree_string_check(tool_name, tool_input, wt)
-    if wt:
-        apply_worktree_enforcement(tool_name, tool_input, wt)
+    """Apply the session's worktree realpath enforcement."""
+    apply_worktree_string_check(tool_name, tool_input, state.get('worktree_path', ''))
 
 
 def _load_session_state(session_id: str) -> dict | None:
@@ -949,146 +929,14 @@ def _load_session_state(session_id: str) -> dict | None:
     return get_overnight_state_for_session(project_dir, session_id) if session_id else None
 
 
-_ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
-# Command-wrappers / launchers that may precede the real git token (VECTOR-1,
-# Cycle-3; codex round-3 #2/#5): `command git …`, `exec git …`, `env git …`,
-# `nice -n 10 git …`, `nohup git …`, `time git …`, `stdbuf -oL git …`,
-# `builtin git …`, `setsid git …`, `ionice -c 2 -n 7 git …`, `timeout 5 git …`,
-# `flock /tmp/l git …`, `sudo git …`, `doas git …`, `xargs … git …`, …. Codex
-# proved that enumerating wrapper option-arity is unsound (nice -n 10 leaves a
-# bare `10` operand). So rather than model each wrapper's flags precisely, the
-# parser skips ANY leading non-git command word and ALL of its operands until it
-# reaches a basename-`git` token (a launcher chain ALWAYS ends at the real argv).
-# This is generic and fail-safe: the only thing it needs to find is the git
-# token; everything before it that is not itself git is a launcher to skip.
-_GROUP_OPEN = {'(', '{', '((', '!'}
-
-
-def _strip_leading_wrappers(toks: list[str]) -> int:
-    """VECTOR-1 (Cycle-3, codex round-3 #2/#5): return the index of the real git
-    argv[0] inside a segment, skipping any leading `VAR=val` assignments, group
-    openers `(` / `{` / `!`, and launcher/wrapper command words together with all
-    of their operands. Generic: skip everything that is not a basename-`git`
-    token until a `git` token is found. Returns len(toks) if no git token."""
-    i = 0
-    n = len(toks)
-    # skip leading env-assignments and group openers
-    while i < n and (_ENV_ASSIGN_RE.match(toks[i]) or toks[i] in _GROUP_OPEN):
-        i += 1
-    # If the first executable word IS git, we are done.
-    if i < n and os.path.basename(toks[i].strip('\'"')) == 'git':
-        return i
-    # Otherwise everything up to the first basename-git token is a launcher chain
-    # (command/exec/env/nice/timeout/flock/xargs/sudo/…) plus its operands.
-    while i < n:
-        base = os.path.basename(toks[i].strip('\'"'))
-        if base == 'git':
-            return i
-        i += 1
-    return n
-
-
-def _segment_cd_target(toks: list[str]) -> str | None:
-    """VECTOR-1: if a shell segment is a `cd <dir>` / `pushd <dir>` (optionally
-    after leading env-assignments or group openers `(` / `{`), return its target
-    dir; else None. A bare `cd` / `cd -` / `cd ~` is treated as non-deterministic
-    -> returns '' so the caller can fail closed on a subsequent HEAD-move."""
-    i = 0
-    while i < len(toks) and (_ENV_ASSIGN_RE.match(toks[i]) or toks[i] in _GROUP_OPEN):
-        i += 1
-    if i >= len(toks):
-        return None
-    if os.path.basename(toks[i].strip('\'"')) in ('cd', 'pushd'):
-        j = i + 1
-        # skip flags like `-P`
-        while j < len(toks) and toks[j].startswith('-'):
-            j += 1
-        if j < len(toks):
-            return toks[j].strip('\'"')
-        return ''  # bare cd -> ambiguous
-    return None
-
-
-def _iter_git_invocations(command: str):
-    """VECTOR-1 (Cycle-3): shell-aware iterator over git invocations.
-
-    Splits `command` on shell separators IN ORDER, tracks the effective cwd
-    across `cd`/`pushd` segments, strips leading `VAR=val` assignments and
-    command/exec wrappers (`command`, `exec`, `env`, …) before identifying the
-    git token by BASENAME, and yields one tuple per git invocation:
-        (subtoks, cwd_override, cwd_ambiguous)
-    where `cwd_override` is the cwd in effect for that git op when a prior `cd`
-    changed it (None if unchanged from the payload cwd), and `cwd_ambiguous` is
-    True when a preceding `cd` target could not be statically resolved (bare cd /
-    `cd -` / `cd $VAR`) -> the caller fails closed for HEAD-moving ops.
-
-    codex round-3 #1: group openers/closers `(` `)` `{` `}` are normalized to
-    standalone separator tokens so a `( cd MAIN && git … )` / `{ cd MAIN; git …;
-    }` cannot hide the `cd` behind a glued delimiter. The cwd_override carries
-    ACROSS sub-segments within the command (a `cd` inside a group affects the
-    following git op), which is the conservative/fail-safe choice for the
-    cooperative threat model (a within-group cd that returns is rare and erring
-    toward block is correct here)."""
-    # Normalize group delimiters + the `&` background op into standalone tokens,
-    # then split the token stream on shell separators IN ORDER.
-    spaced = command
-    for d in ('(', ')', '{', '}', ';'):
-        spaced = spaced.replace(d, f' {d} ')
-    # tokenize, then break into segments on separators.
-    raw = spaced.split()
-    segs: list[list[str]] = []
-    cur: list[str] = []
-    SEPS = {';', '&', '|', '&&', '||', '(', ')', '{', '}'}
-    for tok in raw:
-        if tok in SEPS:
-            if cur:
-                segs.append(cur); cur = []
-        else:
-            cur.append(tok)
-    if cur:
-        segs.append(cur)
-
-    cwd_override = None      # str path set by a resolvable cd; None = unchanged
-    cwd_ambiguous = False    # a cd target we could not resolve statically
-    for toks in segs:
-        if not toks:
-            continue
-        cd_tgt = _segment_cd_target(toks)
-        if cd_tgt is not None:
-            if cd_tgt == '' or '$' in cd_tgt or cd_tgt == '-' or cd_tgt.startswith('~') or '`' in cd_tgt:
-                cwd_ambiguous = True
-                cwd_override = None
-            else:
-                cwd_override = cd_tgt
-                cwd_ambiguous = False
-        k = _strip_leading_wrappers(toks)
-        if k >= len(toks):
-            continue
-        first = toks[k].strip('\'"')
-        if os.path.basename(first) == 'git':
-            yield (toks[k + 1:], cwd_override, cwd_ambiguous)
-
-
 _GIT_HOOK_SUPPRESS_RE = re.compile(
     r'(-c\s+core\.hooksPath\s*=|--config-env|'
     r'GIT_CONFIG_(COUNT|KEY|VALUE|GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS)|'
     r'\bGIT_CONFIG\s*=|-c\s+core\.hooksPath=)', re.IGNORECASE)
 
-# Cycle-4 (task 20260611-100500): config-INCLUDE firewall. The raw regex above
-# misses the per-command config-INCLUDE channels (`-c include.path=<f>`,
-# `-c includeIf.<cond>.path=<f>`) that load an arbitrary config file which can
-# itself set `core.hooksPath=/dev/null` and so DISABLE the keystone for one
-# invocation WITHOUT touching shared .git/config — distinct from the accepted
-# shared-config-write residual. Codex (gpt-5.5) verified on git 2.54 that
-# include.path / includeIf.*.path are the COMPLETE include-form set and that a
-# raw regex is unsound here for two reasons: (1) shell quoting evades it
-# (`-c 'include.path=…'`), and (2) it over-blocks a `-c` that sits AFTER the
-# subcommand (e.g. `git grep -c include.path= …`, where `-c` means --count).
-# So the include channels are matched TOKEN-aware, only in git's GLOBAL-OPTION
-# region (before the subcommand), with quotes stripped and keys lowercased.
-# `core.hooksPath` is included here too as a quote-robust complement to the raw
-# regex (the raw regex is retained as defense-in-depth; this adds the quoted
-# form the raw regex cannot see).
+# The keys whose value redirects or disables the keystone: core.hooksPath directly, and the
+# config-include keys (include.path, includeIf.<cond>.path), which load a file that can set it.
+# pretool-bash-safety.sh reads these three names from this module.
 _HOOKS_REDIRECT_CONFIG_KEYS = ('core.hookspath', 'include.path')
 
 
@@ -1107,7 +955,7 @@ def _config_key_redirects_keystone(key: str) -> bool:
 
 def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
     """Token-aware config-firewall over ONE git invocation's argv (the tokens
-    AFTER the `git` word, as produced by `_iter_git_invocations`). Scans only the
+    AFTER the `git` word, as pretool-bash-safety.sh passes them). Scans only the
     GLOBAL-OPTION region — the options BEFORE the first subcommand — for a
     keystone-redirecting config injection:
       * `-c <key>=<val>` / `-c<key>=<val>` (glued) where <key> redirects, OR
@@ -1156,7 +1004,7 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
             break
         # Any other value-taking git global option (`-C <dir>`, `--git-dir <d>`,
         # …, from the classifier's option table): skip BOTH the option and its
-        # operand so a later `-c` injection is still reached (codex F2). The
+        # operand so a later `-c` injection is still reached. The
         # glued `-C<dir>` / `--git-dir=<d>` forms carry the value in-token and
         # consume no separate operand.
         if t in GIT_GLOBAL_VALUE_OPTS:
@@ -1177,55 +1025,19 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
     return False
 
 
-def _command_injects_keystone_config(command: str) -> bool:
-    """True iff ANY git invocation in `command` injects a keystone-redirecting
-    config via the per-command `-c` / `--config-env` channels (token-aware,
-    quote-robust, global-option-position-only)."""
-    for subtoks, _cwd, _amb in _iter_git_invocations(command):
-        if subtoks and _git_invocation_injects_keystone_config(subtoks):
-            return True
-    return False
-
-
-# P2-5: `git config` that writes the keystone key. In --worktree mode the key sits in the shared
-# common-dir config, which only bubblewrap's read-only rebind kept Bash off: measured on d64fa96
-# with no bubblewrap, `git config --unset core.hooksPath` and `git config core.hooksPath /dev/null`
-# run from the working root passed every hook and removed the key (main agent and subagent).
+# `git config` reads and the forms that open, remove or rename (a section of) the config.
 _CONFIG_READ_FLAGS = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color',
                       '--get-colorbool', '-l', '--list'}
 _CONFIG_SECTION_OPS = {'--remove-section', '--rename-section', 'remove-section', 'rename-section'}
 _CONFIG_EDIT_OPS = {'-e', '--edit', 'edit'}
-
-
-def _git_subcommand_index(subtoks: list[str]) -> int:
-    """Index of the subcommand in one git invocation's argv (after `git`), skipping global
-    options and the operands of the value-taking ones; len(subtoks) when there is none."""
-    j = 0
-    while j < len(subtoks):
-        t = subtoks[j].strip('\'"')
-        if t in GIT_GLOBAL_VALUE_OPTS or t in ('-c', '--config-env'):
-            j += 2
-        elif t.startswith('-'):
-            j += 1
-        else:
-            return j
-    return j
-
-
 _CONFIG_VALUE_OPTS = {'-f', '--file', '--blob', '--type', '--default', '--comment', '--url'}
 _EXPANSION_RE = re.compile(r'\$(?:[A-Za-z_0-9]+|[@*#?$!-])|`')
 
 
-def _unquote_word(token: str) -> str:
-    """The word the shell hands git: quotes and backslashes dropped, lowercased (git compares
-    section and key names without case). P2-8: `core.hooks"Path"` is the key `core.hookspath`."""
-    return re.sub(r'[\\\'"]', '', token).lower()
-
-
 def _key_may_be_keystone(word: str) -> bool:
     """True iff the (unquoted, lowercased) config key operand is, or can expand at run time to, a
-    key that redirects the keystone. An expansion (`$K`, `$SUBST...`) matches any text, so `$K` and
-    `core.$K` can be `core.hookspath` while `alias.$name` cannot."""
+    key that redirects the keystone. An expansion (`$K`) matches any text, so `$K` and `core.$K` can
+    be `core.hookspath` while `alias.$name` cannot."""
     if not _EXPANSION_RE.search(word):
         return _config_key_redirects_keystone(word)
     pat = '.*'.join(re.escape(part) for part in _EXPANSION_RE.split(word))
@@ -1255,15 +1067,25 @@ def _config_key_operand(args: list[str]) -> str:
     return words[0] if words else ''
 
 
-def _config_writes_keystone(subtoks: list[str]) -> bool:
+def _config_args(inv) -> list[str]:
+    """The arguments of a `git config` as git compares them: lowercased, each expansion written `$_`."""
+    return [''.join(p.text if p.kind == 'lit' else '$_' for p in w.parts).lower() for w in inv.arg_words]
+
+
+def _config_reads(args: list[str]) -> bool:
+    opts = args[:args.index('--')] if '--' in args else args
+    words = [a for a in opts if not a.startswith('-')]
+    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] in (['get'], ['list']))
+
+
+def _config_writes_keystone(inv) -> bool:
     """True iff this git invocation is a `git config` that is not a pure read and names the
     keystone key (core.hooksPath, include.path, includeIf.*.path) or builds the key operand from
     an expansion that could be one, removes or renames the `core` section, or opens the config in
     an editor."""
-    k = _git_subcommand_index(subtoks)
-    if k >= len(subtoks) or subtoks[k].strip('\'"') != 'config':
+    if inv.subcommand != 'config':
         return False
-    args = [_unquote_word(t) for t in subtoks[k + 1:]]
+    args = _config_args(inv)
     opts = args[:args.index('--')] if '--' in args else args  # after `--` every word is a value
     words = [a for a in opts if not a.startswith('-')]
     verb = words[0] if words else ''  # `git config get|set|unset|edit|remove-section ...`
@@ -1272,70 +1094,35 @@ def _config_writes_keystone(subtoks: list[str]) -> bool:
     if (verb in _CONFIG_SECTION_OPS or any(a in _CONFIG_SECTION_OPS for a in opts if a.startswith('-'))) \
             and 'core' in args:
         return True
-    reads = any(a in _CONFIG_READ_FLAGS for a in opts) or verb in ('get', 'list')
-    if reads:
+    if _config_reads(args):
         return False
     key = _config_key_operand(args)
-    # (the key operand first; any operand that is a keystone key stays enough, as before P2-8)
     return (bool(key) and _key_may_be_keystone(key)) or any(
         _config_key_redirects_keystone(a.split('=', 1)[0]) for a in args)
 
 
-def _neutralize_substitutions(command: str) -> str:
-    """`command` with every `$(...)`, `${...}`, `$((...))` and backtick span replaced by one word
-    `$SUBST_<its text, every character that is not a letter or digit turned into _>`. The git-invocation tokenizer cuts a
-    command at each `(`, `)`, `{` and `}`, so `git config -f "$(git rev-parse --git-dir)/c" KEY v`
-    reached it as `config -f "$`, with the key cut off (P2-8, measured: the write passed). A span
-    that does not close leaves the command unchanged."""
-    out: list[str] = []
-    i, n = 0, len(command)
-    while i < n:
-        c = command[i]
-        if c == '\\' and i + 1 < n:
-            out.append(command[i:i + 2]); i += 2; continue
-        if c == '`':
-            j = command.find('`', i + 1)
-            if j < 0:
-                return command
-            out.append('$SUBST_' + re.sub(r'[^A-Za-z0-9]', '_', command[i + 1:j])); i = j + 1; continue
-        if c == '$' and i + 1 < n and command[i + 1] in '({':
-            opener = command[i + 1]
-            closer = ')' if opener == '(' else '}'
-            depth, j = 1, i + 2
-            while j < n and depth:
-                depth += (command[j] == opener) - (command[j] == closer)
-                j += 1
-            if depth:
-                return command
-            out.append('$SUBST_' + re.sub(r'[^A-Za-z0-9]', '_', command[i + 2:j - 1])); i = j; continue
-        out.append(c)
-        i += 1
-    return ''.join(out)
-
-
-def _command_writes_keystone_config(command: str) -> bool:
-    """True iff some `git config` in `command` is a keystone write, read both as written (the
-    invocations inside a substitution) and with its substitutions neutralized (the invocation that
-    holds one)."""
-    for text in (command, _neutralize_substitutions(command)):
-        if any(_config_writes_keystone(subtoks) for subtoks, _cwd, _amb in _iter_git_invocations(text)):
+def _injects_keystone_config(command: str, runs: list) -> bool:
+    """True iff a command it runs sets git's config through the environment (GIT_CONFIG_*,
+    --config-env) or a git invocation's own config (-c, --config-env, GIT_CONFIG_*) names a key
+    that redirects the keystone."""
+    for site, _res in _read(command).resolved:
+        words = [a.word for a in site.cmd.assignments] + list(site.cmd.words)
+        if any(_GIT_HOOK_SUPPRESS_RE.search(w.raw.text) for w in words):
             return True
-    return False
+    return any(key is not None and _config_key_redirects_keystone(key)
+               for inv, _c, _k in runs for key, _v in inv.config_pairs)
 
 
-# P2-8: the per-worktree config file. With extensions.worktreeConfig on, git reads
+# The per-worktree config file: with extensions.worktreeConfig on, git reads
 # `<gitdir>/config.worktree` after the shared config, so a core.hooksPath or include.path in it
-# redirects the keystone for that worktree. bubblewrap's read-only rebind (P2 R13) covers
-# `<common>/config` and `<common>/hooks` only; the file sits in the per-worktree git dir, which
-# stays writable for commits.
+# redirects the keystone for that worktree. bubblewrap's read-only rebind covers `<common>/config`
+# and `<common>/hooks` only; the file sits in the per-worktree git dir, which stays writable.
 _WORKTREE_CONFIG_LEAF = 'config.worktree'
 # The keystone hook dir, `<common>/<leaf>` (scripts/install-git-keystone.sh creates it and points
 # core.hooksPath at it): `chmod -x` or a copy onto its reference-transaction turns the keystone off.
 _KEYSTONE_HOOKS_LEAF = 'keystone-hooks'
-_WRITE_VERBS = {'tee', 'cp', 'mv', 'sed', 'perl', 'ln', 'dd', 'install', 'truncate', 'rm', 'unlink',
-                'shred', 'touch', 'chmod', 'chown', 'rsync', 'ed', 'ex', 'vi', 'vim', 'nano', 'emacs',
-                'awk', 'gawk', 'python', 'python3', 'ruby', 'node', 'nodejs', 'php', 'xargs'}
-_COMMAND_PREFIXES = {'sudo', 'command', 'exec', 'env', 'time', 'nice', 'nohup'}
+# Commands that write their file operands which the parser's write table does not hold.
+_EDITORS = {'touch', 'ed', 'ex', 'vi', 'vim', 'nano', 'emacs', 'awk', 'gawk'}
 # a path built from a query for git's own directories (the plain `--show-toplevel` is not one)
 _GIT_DIR_QUERY_RE = re.compile(r'git[_-]?(?:common[_-]?)?dir|git[_-]?path', re.I)
 
@@ -1348,189 +1135,69 @@ def _names_worktree_config(word: str) -> bool:
         _WORKTREE_CONFIG_LEAF, leaf))
 
 
-def _builds_git_dir_path(word: str) -> bool:
-    return bool(_EXPANSION_RE.search(word) and _GIT_DIR_QUERY_RE.search(word))
+def _builds_git_dir_path(word) -> bool:
+    """True iff a word holds an expansion and names a query for git's own directory."""
+    return any(p.kind != 'lit' for p in word.parts) and bool(_GIT_DIR_QUERY_RE.search(word.raw.text))
 
 
-def _command_writes_worktree_config(command: str) -> bool:
-    """True iff a segment of `command` writes the per-worktree git config file, in any mode:
-    a redirect target, or an operand of a write verb or of `git config` (not a read form), that
-    names `config.worktree` (also as a glob); or a redirect target or write-verb operand built from
-    a query for git's directory (`$(git rev-parse --git-dir)/...`), which names it at run time."""
-    for seg in re.split(r'[;&|\n]+', _neutralize_substitutions(command).replace('>|', '>')):
-        words = [w.lstrip('({') for w in seg.split()]
-        words = [w for w in words if w and w not in (')', '}', '!')]
-        if not words:
-            continue
-        redirects = [t for t in re.findall(r'(?:^|[\s\d])>>?\|?\s*([^\s<>]+)', seg)
-                     if t != '/dev/null' and not t.startswith('&')]
-        head = next((os.path.basename(_unquote_word(w)) for w in words
-                     if not _ENV_ASSIGN_RE.match(w) and w not in _COMMAND_PREFIXES), '')
-        operands = words if head in _WRITE_VERBS else []
-        if head == 'git' and not _is_pure_config_read(words):
-            if any(_names_worktree_config(w) for w in words):
-                return True
-        for t in redirects + operands:
-            if _names_worktree_config(t) or _builds_git_dir_path(t):
-                return True
-    return False
+def _command_writes_worktree_config(command: str, runs: list = None) -> bool:
+    """True iff the command writes the per-worktree git config file, in any mode: a write target,
+    an operand of an interpreter or editor, or a word of a `git config` that is not a read, that
+    names `config.worktree` (also as a glob); or a write target built from a query for git's
+    directory (`$(git rev-parse --git-dir)/...`), which names it at run time."""
+    r = _read(command)
+    for t in r.targets:
+        if t.word is not None and (_names_worktree_config(t.word.raw.text) or _builds_git_dir_path(t.word)):
+            return True
+    for site, res in r.resolved:
+        if (_interpreter(res.name) or res.name in _EDITORS) and _names_worktree_config(_code_text(site, res)):
+            return True
+    runs = _git_runs(command, _payload_cwd(_REQUEST_CTX.get('payload') or {})) if runs is None else runs
+    return any(inv.subcommand == 'config' and not _config_reads(_config_args(inv))
+               and any(_names_worktree_config(w.raw.text) for w in inv.arg_words) for inv, _c, _k in runs)
 
 
-def _is_pure_config_read(words: list[str]) -> bool:
-    """True iff this git command line is not a `git config` write: another subcommand (the word
-    `config` inside a commit message is not one), or one of the read forms."""
-    args = [_unquote_word(w) for w in words]
-    gi = next((i for i, w in enumerate(args) if os.path.basename(w) == 'git'), -1)
-    sub = args[gi + 1:]
-    k = _git_subcommand_index(sub) if gi >= 0 else len(sub)
-    if k >= len(sub) or sub[k] != 'config':
-        return True
-    rest = sub[k + 1:]
-    return any(a in _CONFIG_READ_FLAGS for a in rest) or (bool(rest) and rest[0] in ('get', 'list'))
-
-
-def _strip_shell_comments(command: str) -> str:
-    """The command without its `#` comments, which the shell never runs (P2-5: Step 1's comment
-    words "the git common dir" read as a git op on the main root). A `#` is a comment only at the
-    start of a word (after a blank) at the top level: never inside quotes, `$(...)`, `${...}`
-    or backticks, whose own quotes nest. Conservative: a command with a heredoc, or whose quoting
-    does not close, is returned unchanged (more text to read can only refuse more)."""
-    if '#' not in command or '<<' in command or re.search(r'\besac\b', command):
-        return command  # a heredoc body, or a `case` pattern's `)` inside `$(...)`, defeats the scan
-    out: list[str] = []
-    stack: list[list] = []  # [kind, depth]: "'", "$'", '"', '`', '$(', '${'
-    i, n = 0, len(command)
-    while i < n:
-        c = command[i]
-        kind = stack[-1][0] if stack else ''
-        nxt = command[i + 1] if i + 1 < n else ''
-        if c == '\\' and kind != "'" and nxt:
-            out.append(c + nxt); i += 2; continue
-        if kind in ("'", "$'"):
-            if c == "'":
-                stack.pop()
-        elif kind == '`':
-            if c == '`':
-                stack.pop()
-        elif c == '$' and nxt and nxt in '({':
-            stack.append(['$' + nxt, 1]); out.append(c + nxt); i += 2; continue
-        elif kind == '"':
-            if c == '"':
-                stack.pop()
-            elif c == '`':
-                stack.append(['`', 0])
-        else:  # top level, `$(...)` or `${...}`: quotes nest here
-            if c == '$' and nxt == "'":
-                stack.append(["$'", 0]); out.append(c + nxt); i += 2; continue
-            if c in ('"', "'", '`'):
-                stack.append([c, 0])
-            elif kind in ('$(', '${') and c == ('(' if kind == '$(' else '{'):
-                stack[-1][1] += 1
-            elif kind in ('$(', '${') and c == (')' if kind == '$(' else '}'):
-                stack[-1][1] -= 1
-                if stack[-1][1] == 0:
-                    stack.pop()
-            elif not kind and c == '#' and (i == 0 or command[i - 1] in ' \t\n'):
-                while i < n and command[i] != '\n':
-                    i += 1
-                continue
-        out.append(c)
-        i += 1
-    return command if stack else ''.join(out)
-
-# fix-2 (Cycle-2): interpreter / subprocess launchers. The 2026-06-03 incident
-# vector is a python-subprocess `git -C <main> checkout other`. On git 2.43 the
-# keystone does NOT fire for a symref branch-switch (codex empirically confirmed),
-# so the ONLY env-independent BEFORE-block on this host is the PreTool hook-guard
-# reading the OUTER Bash command string. These launchers can carry a hidden git
-# main-targeting op (inline `-c`, a script file, or a heredoc).
-_INTERPRETER_LAUNCHER_RE = re.compile(
-    r'(?<![\w./-])(?:/[\w./-]*/)?(python3?|perl|ruby|node|nodejs|sh|bash|zsh|env)\b')
-
-# fix-2: dangerous/mutating git subcommands that can move HEAD off the
-# protected branch or
-# write the main worktree (codex #2 main-targeting dangerous-op predicate).
-_DANGEROUS_GIT_SUBCMDS = {
-    'checkout', 'switch', 'reset', 'restore', 'clean', 'stash',
-    'update-ref', 'symbolic-ref', 'branch', 'merge', 'rebase', 'pull',
-    'cherry-pick', 'am', 'worktree',
-}
-# fix-2: any mention of git inside an interpreter payload (covers /usr/bin/git,
-# /usr/lib/git-core/git, `command git`, `env … git`, the literal `'git'`).
-_GIT_TOKEN_RE = re.compile(r'(?<![\w./-])(?:/[\w./-]*/)?git\b')
-_DANGEROUS_GIT_OP_RE = re.compile(
-    r'\b(checkout|switch|reset|restore|clean|stash|update-ref|symbolic-ref|'
-    r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
-# P2 R6: a command names a harness script through the CLAUDE_HOME channel; the operand scan
-# reads it at the path the shell expands it to (CLAUDE_HOME, else the home this hook runs from).
-_CHANNEL_RE = re.compile(r'^\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?=/)')
-
-
-# Per-request working root of the record GOVERNING this actor, for `in_place`
-# records only (2026-08-09). This exists because ONE collection
-# (`_get_active_worktree_paths`) was answering TWO different questions:
-#   Q1  which roots are write-confinement targets for EVERY session -- an
-#       in_place record must NOT contribute (see `_extract_live_worktree_path`:
-#       its root IS the main checkout, and putting it on the shared allow-list
-#       would hand a concurrent isolated session write access to the very tree
-#       its isolation exists to protect).
-#   Q2  which root is the legitimate working root of a GIVEN live record, used
-#       to decide whether a git op is main-targeting -- an in_place record MUST
-#       contribute, or its own session cannot run git at all (not status, not
-#       add, not commit, not even a read-only log) in the root it was told to
-#       work in. in_place is the DEFAULT mode.
-# Q2 is answered PER REQUEST, never as a shared collection: the exemption is
-# scoped to the record governing THIS actor, so a concurrently running isolated
-# session (whose governing record is its own worktree record) still sees the
-# main root as fully main-targeting.
+# Per-request working root of the record governing this actor, for `in_place`
+# records only. Two questions are kept apart:
+#   which roots are write-confinement targets for EVERY session -- an in_place
+#       record must NOT contribute (see `_extract_live_worktree_path`: its root
+#       IS the main checkout, and on the shared allow-list it would hand a
+#       concurrent isolated session write access to the tree its isolation
+#       exists to protect);
+#   which root is the legitimate working root of a GIVEN live record, used to
+#       decide whether a git op is main-targeting -- an in_place record MUST
+#       contribute, or its own session cannot run git at all in the root it was
+#       told to work in. in_place is the DEFAULT mode.
+# The second is answered PER REQUEST, scoped to the record governing THIS actor,
+# so a concurrently running isolated session still sees the main root as fully
+# main-targeting.
 #
-# QA F5 (2026-09-03) -- LAYERING DEPENDENCY, DO NOT ASSUME THIS LAYER COVERS IT.
-# Every protected-branch rule in this file is COMMAND-SHAPED: it matches argv
-# tokens and never resolves HEAD. So it cannot see that an ordinary permitted
-# `commit` advances the protected branch when HEAD is attached to it. Under
-# in_place that STATEFUL case is owned entirely by two other layers:
+# LAYERING DEPENDENCY, DO NOT ASSUME THIS LAYER COVERS IT. Every protected-branch
+# rule in this file is COMMAND-SHAPED: it matches argv and never resolves HEAD,
+# so it cannot see that an ordinary permitted `commit` advances the protected
+# branch when HEAD is attached to it. Under in_place that STATEFUL case is owned
+# by two other layers:
 #   * `scripts/create-overnight-state.sh` refuses to launch in-place mode while
-#     the checkout is on the protected branch (so the configuration cannot be
-#     produced by the supported launch path); and
+#     the checkout is on the protected branch; and
 #   * the git-native `hooks/git-keystone/reference-transaction`, which denies
 #     the ref move itself (`OVERNIGHT-KEYSTONE-DENY reason=branch_protected`).
-# Before the Q2 exemption the blanket main-root block masked this gap by
-# refusing the commit as collateral. It no longer does. Neither of those two
-# layers may be removed on the assumption that this PreToolUse guard covers the
-# stateful case -- it does not, and after Q2 it covers it less than it
-# incidentally did before.
+# Neither may be removed on the assumption that this PreToolUse guard covers the
+# stateful case.
 _GOVERNING_OWN_ROOT: str = ''
 
 
 def _set_governing_own_root(gov_state: dict | None,
                             payload: dict | None = None) -> None:
-    """Record the governing state's own working root, for `in_place` only (Q2).
+    """Record the governing state's own working root, for `in_place` only.
 
-    Isolated records already answer Q2 through `_get_active_worktree_paths()`,
-    so they deliberately set nothing here -- keeping the main root fully guarded
-    for every isolated actor.
+    Isolated records already answer it through `_get_active_worktree_paths()`, so they set nothing
+    here and the main root stays fully guarded for every isolated actor. The root must lie under the
+    record's own `main_root`, so the widest it reaches is the checkout the guard is scoped to.
 
-    The exemption is BOUNDED by the record's own `main_root` (the launcher sets
-    the two equal under `in_place`). A record whose working root escapes its
-    main_root is malformed and earns no exemption -- so the widest this can ever
-    reach is the checkout the guard was already scoped to, never `/`.
-
-    QA F1 (2026-09-03): the exemption also requires an UNCONTRADICTED identity.
-    `_classify_actor` resolves `overnight_owner` from the payload's session_id
-    before it consults the agent_id -> dev_session_id child mapping, so a payload
-    whose session_id named this in_place record while its agent_id mapped to a
-    different live session took the exemption on an identity the agent index
-    disagrees with (measured: `git -C <main> commit` allowed). When the two
-    identities cannot be proven to name the SAME record we decline the exemption
-    and fall back to '' -- the pre-exemption value, which blocks. Declining is
-    the only safe direction: preferring the child mapping instead would let an
-    isolated actor borrow the exemption through a stale index entry, which is
-    strictly worse than the hole it would close.
-
-    Both identities are corroborated, not just the child, so the rule does not
-    depend on the order `_classify_actor` happens to consult them in -- that
-    ordering IS the hazard, and a check that only reads the later one would be
-    fixed against today's order alone.
+    The identity must be UNCONTRADICTED: the record the payload's session_id names and the record
+    its agent_id maps to (dev_session_id) must, where live, be the same one; otherwise the root stays
+    '' (which blocks), so an isolated actor cannot borrow the exemption through a stale index entry
+    and the result does not depend on the order `_classify_actor` consults them in.
     """
     global _GOVERNING_OWN_ROOT
     _GOVERNING_OWN_ROOT = ''
@@ -1551,12 +1218,11 @@ def _set_governing_own_root(gov_state: dict | None,
 
 
 def _path_targets_main(tgt_dir: str, main_real: str) -> bool:
-    """fix-3: True iff tgt_dir resolves UNDER main_root but OUTSIDE every active
-    overnight worktree. Replaces the exact-root equality (which let a main-subdir
-    target evade). A worktree physically lives under .claude/worktrees but is an
+    """True iff tgt_dir resolves UNDER main_root but OUTSIDE every active
+    overnight worktree. A worktree physically lives under .claude/worktrees but is an
     independent checkout, so it is NOT main-targeting.
 
-    2026-08-09 (Q2): the governing record's OWN working root is likewise not
+    The governing record's OWN working root is likewise not
     main-targeting FOR THAT RECORD'S ACTOR. Under `in_place` that root IS the
     main root, so without this the actor's own checkout is unreachable.
     """
@@ -1572,153 +1238,112 @@ def _path_targets_main(tgt_dir: str, main_real: str) -> bool:
     return True
 
 
-def _gitdir_into_main(command: str, main_real: str, main_git_dir: str) -> bool:
-    """fix-3/codex#6: True iff --git-dir / GIT_DIR / GIT_COMMON_DIR redirect into
-    the main repo's git dir (a way to operate on main without a -C)."""
+def _into_main_git_dir(values: list[str], main_real: str, main_git_dir: str) -> bool:
+    """True iff one of these --git-dir / GIT_DIR / GIT_COMMON_DIR values names the main repo's git dir."""
     if not main_real:
         return False
     main_gd = os.path.realpath(main_git_dir) if main_git_dir else os.path.join(main_real, '.git')
-    candidates = []
-    for m in re.finditer(r'--git-dir(?:=|\s+)(\S+)', command):
-        candidates.append(m.group(1))
-    for m in re.finditer(r'GIT_DIR=(\S+)', command):
-        candidates.append(m.group(1))
-    for m in re.finditer(r'GIT_COMMON_DIR=(\S+)', command):
-        candidates.append(m.group(1))
-    for c in candidates:
-        c = c.strip('\'"')
-        try:
-            cr = os.path.realpath(c)
-        except Exception:
-            cr = c
+    for c in values:
+        cr = os.path.realpath(c.strip('\'"'))
         if cr == main_gd or cr == main_real or cr.startswith(main_gd.rstrip('/') + os.sep):
             return True
     return False
 
 
+def _into_main_work_tree(values: list[str], main_real: str) -> bool:
+    """True iff one of these --work-tree / GIT_WORK_TREE values is under main_root and outside every
+    active worktree: git then writes the main working directory even with an in-worktree -C."""
+    return bool(main_real) and any(
+        c.strip('\'"') and _path_targets_main(os.path.realpath(c.strip('\'"')), main_real) for c in values)
+
+
+def _git_option_values(command: str, option: str, env_names: tuple) -> list[str]:
+    """The values the command gives a git global option (`--git-dir`, `--work-tree`) and the
+    environment names that stand for it."""
+    out = _assigned(command, env_names)
+    for inv, _c, _k in _git_runs(command, ''):
+        out.extend(v for o, v in inv.global_opts if o == option and v is not None)
+    return out
+
+
+_GIT_TOKEN_RE = re.compile(r'(?<![\w./-])(?:/[\w./-]*/)?git\b')
+_DANGEROUS_GIT_OP_RE = re.compile(
+    r'\b(checkout|switch|reset|restore|clean|stash|update-ref|symbolic-ref|'
+    r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
+_TEXT_GIT_DIR_RE = re.compile(r'(?:--git-dir(?:=|\s+)|GIT_DIR=|GIT_COMMON_DIR=)(\S+)')
+_TEXT_WORK_TREE_RE = re.compile(r'(?:--work-tree(?:=|\s+)|GIT_WORK_TREE=)(\S+)')
+
+
+def _gitdir_into_main(command: str, main_real: str, main_git_dir: str) -> bool:
+    """True iff --git-dir / GIT_DIR / GIT_COMMON_DIR redirect a git op into the main repo's git dir."""
+    return _into_main_git_dir(_git_option_values(command, '--git-dir', ('GIT_DIR', 'GIT_COMMON_DIR')),
+                              main_real, main_git_dir)
+
+
 def _worktree_into_main(command: str, main_real: str) -> bool:
-    """VECTOR-2 (Cycle-3): True iff a --work-tree / GIT_WORK_TREE override whose
-    realpath is under main_root and OUTSIDE every active worktree is present. A
-    work-tree redirect into main writes the main working directory even when -C
-    points inside the isolated worktree (the index/HEAD come from the worktree's
-    .git but the checkout TARGET is the main tree)."""
-    if not main_real:
-        return False
-    candidates = []
-    for m in re.finditer(r'--work-tree(?:=|\s+)(\S+)', command):
-        candidates.append(m.group(1))
-    for m in re.finditer(r'GIT_WORK_TREE=(\S+)', command):
-        candidates.append(m.group(1))
-    for c in candidates:
-        c = c.strip('\'"')
-        if not c:
+    """True iff --work-tree / GIT_WORK_TREE point a git op at the main working directory."""
+    return _into_main_work_tree(_git_option_values(command, '--work-tree', ('GIT_WORK_TREE',)), main_real)
+
+
+def _script_hides_main_git(site, res, command: str, main_real: str, worktree_path: str) -> bool:
+    """True iff a script file an interpreter runs holds a dangerous git op that names main_root, a
+    protected branch, a -C, or a checkout/switch. A script operand it cannot read fails closed
+    when the command names main_root."""
+    for w in res.args:
+        t = _word_path(w)
+        if not t or t.startswith('-') or _harness_script(t, worktree_path, main_real):
             continue
-        try:
-            cr = os.path.realpath(c)
-        except Exception:
-            cr = c
-        if _path_targets_main(cr, main_real):
+        looks_script = bool(re.search(r'\.(py|sh|bash|rb|pl|js|mjs|cjs)$', t))
+        is_file = os.path.isfile(t)
+        if not (looks_script or is_file):
+            continue
+        if is_file and os.access(t, os.R_OK):
+            body = Path(t).read_text(errors='replace')
+            if _GIT_TOKEN_RE.search(body) and _DANGEROUS_GIT_OP_RE.search(body):
+                if (main_real and main_real in body) or _body_mentions_protected_branch(body) \
+                   or re.search(r'-C\s+\S', body) or 'checkout' in body or 'switch' in body:
+                    return True
+        elif main_real and main_real in command:
             return True
     return False
 
 
 def _scan_script_files_for_main_git(command: str, main_real: str, worktree_path: str = '') -> bool:
-    """fix-2/codex#3: cover `python3 script.py` where the OUTER command does not
-    mention git. Scan readable script-file operands (and any main_root mention)
-    for a dangerous main-targeting git op. Cooperative threat model: a readable
-    script is scanned; an unreadable script that runs an interpreter and mentions
-    main_root (or whose content cannot be proven git-free) fails closed."""
-    if not _INTERPRETER_LAUNCHER_RE.search(command):
-        return False
-    # If the command itself names main_root + a dangerous git op, the inline scan
-    # already covers it; here we focus on file operands.
-    home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for tok in command.split():
-        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable"; a
-        # channel-spelled operand is read at the path the shell expands it to (P2 R6).
-        t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"')))
-        if not t or t.startswith('-'):
-            continue
-        # P2-5: a file of this harness's hooks/ or scripts/ is the code the guard itself runs from,
-        # not an actor-written script (a text that carries no comment word "git" used to meet
-        # this scan: `python3 ~/.claude/hooks/lib/overnight.py`, Step 1 of the p1b and master text).
-        if _harness_script(tok, worktree_path, main_real):
-            continue
-        # heuristically a script operand: a path ending in a known script ext OR
-        # an existing readable file under the project.
-        looks_script = bool(re.search(r'\.(py|sh|bash|rb|pl|js|mjs|cjs)$', t))
-        try:
-            is_file = os.path.isfile(t)
-        except Exception:
-            is_file = False
-        if not (looks_script or is_file):
-            continue
-        if is_file and os.access(t, os.R_OK):
-            try:
-                body = Path(t).read_text(errors='replace')
-            except Exception:
-                body = ''
-            if _GIT_TOKEN_RE.search(body) and _DANGEROUS_GIT_OP_RE.search(body):
-                if (main_real and main_real in body) \
-                   or _body_mentions_protected_branch(body) \
-                   or re.search(r'-C\s+\S', body) or 'checkout' in body or 'switch' in body:
-                    return True
-        else:
-            # script operand we cannot read; fail closed if it mentions main_root
-            if main_real and main_real in command:
-                return True
-    return False
+    """True iff an interpreter the command launches runs a script file that hides a main-targeting
+    git op (``_script_hides_main_git``)."""
+    return any(_script_hides_main_git(site, res, command, main_real, worktree_path)
+               for site, res in _interpreter_runs(command, worktree_path, main_real))
 
 
 def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str,
                                 worktree_path: str = '') -> bool:
-    """fix-2 PRIMARY: True iff the OUTER Bash command launches an interpreter /
-    subprocess whose payload carries a dangerous MAIN-TARGETING git op. This is
-    the env-independent block for the git-2.43 symref-switch incident shape (the
-    keystone provably cannot catch it on 2.43; the policy shim is bypassed by an
-    env-scrubbed / absolute-git subprocess). Scoped to main-targeting so a
-    worktree-local `subprocess.run(['git','add','.'])` is NOT blocked."""
-    if not _INTERPRETER_LAUNCHER_RE.search(command):
-        return False
-    has_git = bool(_GIT_TOKEN_RE.search(command))
-    if not has_git:
-        # The git op may live in a script file (no `git` token in the outer cmd).
-        return _scan_script_files_for_main_git(command, main_real, worktree_path)
-    if not _DANGEROUS_GIT_OP_RE.search(command):
-        return False
-    # A dangerous git op is present in an interpreter payload. Now require a
-    # main-targeting signal so worktree-local ops are allowed (codex #2):
-    #   * a -C / --git-dir / GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR into main
-    #   * an explicit main_root path operand
-    #   * a RESOLVED protected-branch ref operand (protected ref move)
-    #   * checkout/switch/reset with NO -C and NO worktree path == ambiguous HEAD
-    #     move -> fail closed (cannot prove it targets the worktree)
-    if _gitdir_into_main(command, main_real, main_git_dir):
-        return True
-    if _worktree_into_main(command, main_real):  # VECTOR-2
-        return True
-    if main_real and main_real in command:
-        # mentions the main root path AND a dangerous op.
-        return True
-    if _mentions_protected_branch(command.split()):
-        return True
-    # No qualifying target proven worktree-local; for HEAD-moving ops that lack a
-    # -C/path the destination is the process cwd which the launcher controls and
-    # we cannot statically prove is the worktree -> fail closed for the exact
-    # incident shape (checkout/switch/reset/restore of HEAD).
-    if re.search(r'\b(checkout|switch|reset|restore)\b', command) \
-       and not re.search(r'-C\s+\S', command) and not _mentions_worktree_path(command):
-        return True
+    """True iff an interpreter the command launches (a harness script's launch aside) is handed
+    code with a dangerous git op that targets main: a --git-dir / --work-tree / GIT_DIR into main,
+    main_root's path, a protected branch, or a checkout/switch/reset/restore with no -C and no
+    worktree path, whose directory is the launcher's and cannot be proven the worktree. Code with
+    no git in it is read for the script files it runs."""
+    for site, res in _interpreter_runs(command, worktree_path, main_real):
+        code = _code_text(site, res)
+        if not _GIT_TOKEN_RE.search(code):
+            if _script_hides_main_git(site, res, command, main_real, worktree_path):
+                return True
+            continue
+        if not _DANGEROUS_GIT_OP_RE.search(code):
+            continue
+        if _into_main_git_dir(_TEXT_GIT_DIR_RE.findall(code), main_real, main_git_dir) \
+                or _into_main_work_tree(_TEXT_WORK_TREE_RE.findall(code), main_real) \
+                or (main_real and main_real in code) or _mentions_protected_branch(code.split()):
+            return True
+        if re.search(r'\b(checkout|switch|reset|restore)\b', code) \
+           and not re.search(r'-C\s+\S', code) and not _mentions_worktree_path(code):
+            return True
     return False
 
 
 def _mentions_worktree_path(command: str) -> bool:
-    """True iff the command text mentions an active worktree path (so a
-    worktree-qualified op is not falsely flagged main-targeting)."""
-    for wt in _get_active_worktree_paths():
-        if wt and wt in command:
-            return True
-    return False
+    """True iff the text mentions an active worktree path (so a worktree-qualified op is not
+    falsely flagged main-targeting)."""
+    return any(wt and wt in command for wt in _get_active_worktree_paths())
 
 
 _KEYSTONE_CONFIG_BLOCK = (
@@ -1726,28 +1351,90 @@ _KEYSTONE_CONFIG_BLOCK = (
     '(core.hooksPath, include.path, includeIf.*.path), builds that key from an expansion, removes or '
     'renames the core section, or edits the config is forbidden for overnight actors; the keystone '
     'stays as the launcher set it. Reading it (--get, --list) is allowed.\n')
+# git subcommands that move HEAD or write the working tree, refused after a `cd` that cannot be read
+_HEAD_MOVERS = ('checkout', 'switch', 'reset', 'restore', 'clean', 'stash', 'update-ref', 'symbolic-ref',
+                'branch', 'merge', 'rebase', 'cherry-pick', 'am', 'pull')
+
+
+def _git_run_dir(inv, cwd: str | None, payload_cwd: str) -> str:
+    """The directory a git invocation runs in: its -C values, applied in order, over the directory
+    a `cd` moved to, else the actor's cwd (a computed -C is read as a directory below that one)."""
+    base = cwd or payload_cwd
+    for d in inv.C_dirs:
+        base = os.path.join(base or '', d if d is not None else '$')
+    return os.path.realpath(base) if base else ''
+
+
+def _enforce_git_invocation(inv, cwd, cwd_known: bool, main_real: str, payload_cwd: str) -> None:
+    """The main-root, ambiguous-cwd, branch-switch, main-write and worktree rules for one git
+    invocation of an overnight actor."""
+    sub = inv.subcommand
+    has_C = bool(inv.C_dirs)
+    tgt_dir = _git_run_dir(inv, cwd, payload_cwd)
+    work_trees = [v for o, v in inv.global_opts if o == '--work-tree' and v is not None]
+    targets_main = _path_targets_main(tgt_dir, main_real) or _into_main_work_tree(work_trees, main_real)
+    positionals = [a for a in inv.args if a and not a.startswith('-')]
+    switches_protected = _mentions_protected_branch(positionals)
+    if _config_writes_keystone(inv):
+        _block(_KEYSTONE_CONFIG_BLOCK)
+    # `rev-parse` only reads (it runs no hook and writes no file), and Step 1 runs it in the main root.
+    if targets_main and sub != 'rev-parse':
+        _block(
+            '\nOVERNIGHT MAIN-ROOT BLOCK: git op targeting the main '
+            'working directory (effective -C/cwd under main_root, outside '
+            'the isolated worktree) is forbidden for overnight actors.\n'
+        )
+    in_worktree = bool(tgt_dir) and any(_path_under_prefix(tgt_dir, w) for w in _get_active_worktree_paths())
+    if not cwd_known and not has_C and sub in _HEAD_MOVERS:
+        _block(
+            f'\nOVERNIGHT AMBIGUOUS-CWD BLOCK: git {sub} after a directory change '
+            'that cannot be read (a bare or computed cd, a wrapper\'s option) cannot be '
+            'proven to run inside the isolated worktree; refused for '
+            'overnight actors (it could target the main working '
+            'directory).\n'
+        )
+    if sub in ('checkout', 'switch') and (targets_main or switches_protected or not in_worktree):
+        _block(
+            f'\nOVERNIGHT BRANCH-SWITCH BLOCK: git {sub} that could move '
+            "the main worktree's HEAD off the protected branch is forbidden for "
+            'overnight actors. Branch ops INSIDE the isolated worktree (non-protected target) '
+            'are allowed.\n'
+        )
+    if sub in ('reset', 'restore', 'clean') and (targets_main or switches_protected or not in_worktree):
+        _block(
+            f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
+            'the main working directory is forbidden for overnight '
+            'actors. Run it inside the isolated worktree instead.\n'
+        )
+    if sub == 'stash' and any(p in ('apply', 'pop') for p in positionals) and (targets_main or not in_worktree):
+        _block(
+            '\nOVERNIGHT MAIN-WRITE BLOCK: git stash apply/pop against '
+            'the main working directory is forbidden for overnight '
+            'actors.\n'
+        )
+    if sub == 'worktree' and positionals[:1] != ['list']:
+        _block(
+            '\nOVERNIGHT WORKTREE BLOCK: an overnight actor may not add, move, remove, prune, lock '
+            'or repair git worktrees; `git worktree list` reads them.\n'
+        )
 
 
 def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: str,
                                    main_git_dir: str = '') -> None:
-    """M13/M14a/M15 + fix-2/fix-3 (Cycle-2): for an overnight actor, block
-    (a) hook-suppression/config overrides (M14a),
-    (b) branch-switch / worktree / protected-branch ops targeting main_root (M13/M15) with
-        a realpath-under-main-but-outside-worktree predicate (fix-3),
-    (c) --git-dir/GIT_DIR/GIT_COMMON_DIR redirection into main (fix-3),
-    (d) an interpreter/subprocess that hides a main-targeting git op — the
-        env-independent block for the git-2.43 python-subprocess incident vector
-        (fix-2 PRIMARY)."""
+    """For an overnight actor's Bash command, refuse: a command the parser cannot read; a git
+    config override or keystone config write; a write onto a per-worktree config or onto the
+    repository's git config; --git-dir / --work-tree into main; an interpreter hiding a
+    main-targeting git op; and each git invocation's main-root, branch-switch and worktree rules."""
     if not command:
         return
     main_real = os.path.realpath(main_root) if main_root else ''
-    # M14a: hook-suppression / config firewall (never relaxes). Two layers:
-    #  (1) raw-regex env/-c firewall (GIT_CONFIG_* incl. PARAMETERS, --config-env,
-    #      unquoted `-c core.hooksPath=`); and
-    #  (2) Cycle-4 token-aware include-channel firewall (`-c include.path=`,
-    #      `-c includeIf.<cond>.path=`, plus the quoted `core.hooksPath` form the
-    #      raw regex cannot see), evaluated only in git's global-option region.
-    if _GIT_HOOK_SUPPRESS_RE.search(command) or _command_injects_keystone_config(command):
+    payload_cwd = _payload_cwd(_REQUEST_CTX.get('payload') or {})
+    if _read(command).unreadable:
+        _block('\nOVERNIGHT UNREADABLE COMMAND: the shared Bash parser cannot read this command, so '
+               'what it runs cannot be checked; refused for overnight actors. Write it in plain '
+               'shell syntax.\n')
+    runs = _git_runs(command, payload_cwd)
+    if _injects_keystone_config(command, runs):
         _block(
             '\nOVERNIGHT CONFIG FIREWALL: git hook-suppression / config-override '
             '(-c core.hooksPath, -c include.path / includeIf.*.path, GIT_CONFIG_* '
@@ -1755,33 +1442,27 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             'overnight actors — it would redirect/disable the reference-transaction '
             'keystone for the invocation (config-include bypass).\n'
         )
-    # P2-5/P2-8: a `git config` write of the keystone key, also when a substitution cut the command
-    # for the invocation scanner; and any write onto the per-worktree config file (config.worktree).
-    if _command_writes_keystone_config(command):
+    if any(_config_writes_keystone(inv) for inv, _c, _k in runs):
         _block(_KEYSTONE_CONFIG_BLOCK)
-    if _command_writes_worktree_config(command):
+    if _command_writes_worktree_config(command, runs):
         _block(
             '\nOVERNIGHT WORKTREE CONFIG BLOCK: a write onto a worktree\'s config.worktree (a redirect, '
             'tee, cp, mv, sed -i, ln, git config --file ...) or onto a path built from `git rev-parse '
             '--git-dir` is forbidden for overnight actors; with extensions.worktreeConfig on, '
             'that file can redirect core.hooksPath for the worktree. Reading it is allowed.\n'
         )
-    payload_cwd = _payload_cwd(_REQUEST_CTX.get('payload') or {})
-    # The Write/Edit check's paths, for each write target the shared parser reads in the command (a
-    # relative one against the payload cwd); bubblewrap's read-only rebinds keep the rest off them.
-    for t in _extract_bash_write_paths(command):
+    # The Write/Edit check's paths, for each write target (a relative one against the payload cwd);
+    # bubblewrap's read-only rebinds keep the rest off them.
+    for t in _bash_write_paths(command):
         path = os.path.join(payload_cwd or os.getcwd(), t)
         if not path.startswith('/dev/') and _targets_git_config(path):
             _block_git_config('Bash', path)
-    # fix-3/codex#6: --git-dir / GIT_DIR / GIT_COMMON_DIR into the main repo.
     if _gitdir_into_main(command, main_real, main_git_dir):
         _block(
             '\nOVERNIGHT GIT-DIR REDIRECT BLOCK: a git op redirected into the '
             'main repo (--git-dir / GIT_DIR / GIT_COMMON_DIR -> main/.git) is '
             'forbidden for overnight actors.\n'
         )
-    # VECTOR-2 (Cycle-3): --work-tree / GIT_WORK_TREE override into the main
-    # working directory writes the main tree even with an in-worktree -C.
     if _worktree_into_main(command, main_real):
         _block(
             '\nOVERNIGHT WORK-TREE REDIRECT BLOCK: a git op redirected at the '
@@ -1789,197 +1470,26 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             'outside the isolated worktree) is forbidden for overnight actors — '
             'it would write the main worktree in place.\n'
         )
-    # fix-2 PRIMARY: interpreter/subprocess hiding a main-targeting git op.
     if _interpreter_hides_main_git(command, main_real, main_git_dir, worktree_path):
         _block(
             '\nOVERNIGHT SUBPROCESS GIT BLOCK: an interpreter/subprocess that '
             'could run a main-targeting git op (checkout/switch/reset/protected-branch '
             'ref-move against the main working directory) is forbidden for '
-            'overnight actors. This is the exact 2026-06-03 python-subprocess '
-            'incident vector; on git 2.43 the reference-transaction keystone '
-            'cannot catch a symref branch-switch, so it is blocked here before '
-            'execution. Run git ops INSIDE the isolated worktree instead.\n'
+            'overnight actors. The reference-transaction keystone cannot catch a symref '
+            'branch-switch, so it is blocked here before execution. Run git ops INSIDE the '
+            'isolated worktree instead.\n'
         )
-    # VECTOR-1 (Cycle-3): shell-aware iteration — leading env-assignment /
-    # command-wrapper stripping + cd/pushd effective-cwd tracking.
-    for subtoks, cwd_override, cwd_ambiguous in _iter_git_invocations(command):
-        if not subtoks:
-            continue
-        # find the subcommand, any -C target, --work-tree, and positionals
-        eff_dir = None
-        work_tree = None
-        sub = None
-        positionals = []
-        j = 0
-        while j < len(subtoks):
-            t = subtoks[j]
-            if t == '-C' and j + 1 < len(subtoks):
-                eff_dir = subtoks[j + 1]; j += 2; continue
-            if t.startswith('-C') and len(t) > 2:
-                eff_dir = t[2:]; j += 1; continue
-            if t == '--work-tree' and j + 1 < len(subtoks):
-                work_tree = subtoks[j + 1]; j += 2; continue
-            if t.startswith('--work-tree='):
-                work_tree = t[len('--work-tree='):]; j += 1; continue
-            if sub is None and t.startswith('-'):
-                j += 1; continue
-            if sub is None:
-                sub = t; j += 1; continue
-            # after the subcommand, collect positionals (skip flags)
-            if not t.startswith('-'):
-                positionals.append(t)
-            j += 1
-
-        # Resolve the EFFECTIVE directory the op runs in:
-        #   explicit -C  >  a resolvable `cd <dir>` override  >  the actor cwd.
-        # VECTOR-1: a `cd <main>` before the git op moves the effective cwd into
-        # main even though the payload cwd is the worktree.
-        if eff_dir:
-            resolve_base = eff_dir
-        elif cwd_override is not None:
-            resolve_base = cwd_override
-        else:
-            resolve_base = payload_cwd
-        try:
-            tgt_dir = os.path.realpath(resolve_base) if resolve_base else ''
-        except Exception:
-            tgt_dir = resolve_base or ''
-        # fix-3: under-main-but-outside-worktree main-targeting (was exact-root).
-        targets_main = _path_targets_main(tgt_dir, main_real)
-        # VECTOR-2: a --work-tree override at main is itself main-targeting even
-        # when -C / cwd is the worktree.
-        wt_targets_main = False
-        if work_tree:
-            try:
-                wt_real = os.path.realpath(work_tree.strip('\'"'))
-            except Exception:
-                wt_real = work_tree
-            wt_targets_main = _path_targets_main(wt_real, main_real)
-        if wt_targets_main:
-            targets_main = True
-        switches_protected = _mentions_protected_branch(positionals)
-
-        # P2-5: the keystone key stays in every mode, bubblewrap or not, from any directory.
-        if _config_writes_keystone(subtoks):
-            _block(_KEYSTONE_CONFIG_BLOCK)
-
-        # M13: any git op whose effective dir is main-targeting -> block. P2-5: `rev-parse` only
-        # reads (it runs no hook and writes no file), and Step 1 runs it in the main root.
-        if targets_main and sub != 'rev-parse':
-            _block(
-                '\nOVERNIGHT MAIN-ROOT BLOCK: git op targeting the main '
-                'working directory (effective -C/cwd under main_root, outside '
-                'the isolated worktree) is forbidden for overnight actors.\n'
-            )
-
-        in_worktree = any(_path_under_prefix(tgt_dir, w)
-                          for w in _get_active_worktree_paths()) if tgt_dir else False
-
-        # VECTOR-1 (Cycle-3): a preceding `cd`/`pushd` whose target could not be
-        # statically resolved (bare `cd`, `cd -`, `cd $VAR`, `cd ~`) AND no
-        # explicit -C means we cannot prove the HEAD-moving / tree-writing op
-        # lands inside the isolated worktree -> fail closed for the incident
-        # shape (the cwd could be main).
-        if cwd_ambiguous and not eff_dir and sub in (
-                'checkout', 'switch', 'reset', 'restore', 'clean', 'stash',
-                'update-ref', 'symbolic-ref', 'branch', 'merge', 'rebase',
-                'cherry-pick', 'am', 'pull'):
-            _block(
-                f'\nOVERNIGHT AMBIGUOUS-CWD BLOCK: git {sub} after an '
-                'unresolvable directory change (bare/variable cd) cannot be '
-                'proven to run inside the isolated worktree; refused for '
-                'overnight actors (it could target the main working '
-                'directory).\n'
-            )
-
-        # M15: branch-switch / switch -c is the exact incident when it could move
-        # the MAIN worktree's HEAD. A checkout/switch whose effective dir is the
-        # overnight worktree and the target is NOT in the resolved protected
-        # set is LEGITIMATE and ALLOWED.
-        if sub in ('checkout', 'switch'):
-            if targets_main or switches_protected or not in_worktree:
-                _block(
-                    f'\nOVERNIGHT BRANCH-SWITCH BLOCK: git {sub} that could move '
-                    "the main worktree's HEAD off the protected branch is forbidden for "
-                    'overnight actors (the exact 2026-06-03 incident shape). '
-                    'Branch ops INSIDE the isolated worktree (non-protected target) '
-                    'are allowed.\n'
-                )
-        # fix-3: reset/restore that could write the main worktree.
-        if sub in ('reset', 'restore', 'clean'):
-            if targets_main or switches_protected or not in_worktree:
-                _block(
-                    f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
-                    'the main working directory is forbidden for overnight '
-                    'actors. Run it inside the isolated worktree instead.\n'
-                )
-        # fix-3: stash apply/pop against main.
-        if sub == 'stash':
-            applyish = any(p in ('apply', 'pop') for p in positionals)
-            if applyish and (targets_main or not in_worktree):
-                _block(
-                    '\nOVERNIGHT MAIN-WRITE BLOCK: git stash apply/pop against '
-                    'the main working directory is forbidden for overnight '
-                    'actors.\n'
-                )
-        # fix-3: protected-branch ref-move (branch -f <protected> /
-        # update-ref refs/heads/<protected>). The operand is resolved from the
-        # session-state record, never a literal (M5-NO-ENUMERATION).
-        if sub == 'branch':
-            forcey = any(p in ('-f', '--force', '-D', '--delete', '-M', '--move')
-                         for p in subtoks)
-            if forcey and (switches_protected or targets_main):
-                _block(
-                    '\nOVERNIGHT MASTER REF-MOVE BLOCK: git branch force/move/'
-                    'delete of the protected branch is forbidden for overnight actors.\n'
-                )
-        if sub in ('update-ref', 'symbolic-ref'):
-            if switches_protected or targets_main:
-                _block(
-                    f'\nOVERNIGHT MASTER REF-MOVE BLOCK: git {sub} touching '
-                    'the protected branch / HEAD is forbidden for overnight actors.\n'
-                )
-        # QA F3 (2026-09-03): publication of the protected branch to a remote.
-        # Under in_place this used to be refused only as COLLATERAL of the
-        # blanket main-root block above -- the same block that also refused a
-        # read-only `log`, so the redundancy was incidental, not designed.
-        # Removing that collateral was correct, but it left protected-branch
-        # publication resting on a single other hook's registration. This layer
-        # already owns three command-shaped protected-branch rules, so the
-        # publication verb belongs beside them, in BOTH isolation modes.
-        # Command-shaped like its siblings: a bare `git push` naming no refspec
-        # carries no branch signal here and is covered by the layers named in
-        # the Q2 note above.
-        if sub == 'push' and switches_protected:
-            _block(
-                '\nOVERNIGHT MASTER PUBLISH BLOCK: git push of the protected '
-                'branch to a remote is forbidden for overnight actors.\n'
-            )
-        if sub == 'worktree':
-            _block(
-                '\nOVERNIGHT WORKTREE BLOCK: an overnight actor may not manage '
-                'git worktrees.\n'
-            )
-
-
-def _command_has_git_or_interpreter(command: str) -> bool:
-    """VECTOR-3 helper: True iff the command contains a git token OR launches an
-    interpreter/subprocess that could run git. Used to fail-closed under a
-    worktree_context with no resolvable governing state."""
-    if not command:
-        return False
-    if _GIT_TOKEN_RE.search(command):
-        return True
-    return bool(_INTERPRETER_LAUNCHER_RE.search(command))
+    for inv, cwd, known in runs:
+        _enforce_git_invocation(inv, cwd, known, main_real, payload_cwd)
 
 
 def _fail_closed_worktree_context(command: str) -> None:
-    """VECTOR-3 (Cycle-3): an in-worktree actor with NO resolvable governing
-    overnight state cannot have its main_root derived for a targeted block. Any
-    git or interpreter command is therefore refused fail-closed (it could move
-    main HEAD off the protected branch or write the main worktree); ordinary non-git commands
-    are left to the worktree-boundary enforcement."""
-    if _command_has_git_or_interpreter(command):
+    """An in-worktree actor with no resolvable governing overnight state cannot have its main_root
+    derived for a targeted block: any command that runs git or an interpreter (or that the parser
+    cannot read) is refused; other commands are left to the worktree-boundary enforcement."""
+    r = _read(command)
+    if r.unreadable or any(res.name == 'git' or _interpreter(res.name) for _s, res in r.resolved) \
+            or _git_runs(command, ''):
         _block(
             '\nOVERNIGHT WORKTREE-CONTEXT FAIL-CLOSED: a git/interpreter command '
             'is running inside an overnight worktree but no governing overnight '
@@ -1990,8 +1500,9 @@ def _fail_closed_worktree_context(command: str) -> None:
         )
 
 
+
 def _block_invalid_isolation(classification: str) -> None:
-    """M9: a null/missing worktree in an owner/child state is INVALID isolation
+    """A null/missing worktree in an owner/child state is INVALID isolation
     and BLOCKS the actor (it must not silently no-op into no-enforcement)."""
     _block(
         '\nOVERNIGHT ISOLATION INVALID: the governing overnight state has no '
@@ -2001,28 +1512,21 @@ def _block_invalid_isolation(classification: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# WRITE-HALF (L6, task 20260611-100500, fix-7): per-Bash-command bwrap OS
-# execution boundary. When the live overnight state classifies the caller as the
-# ACTIVE overnight actor, the actor's Bash command is re-exec'd inside a bwrap
-# (bubblewrap) mount namespace where the PROTECTED MAIN working tree (= main_root
-# MINUS the registered worktree_path, codex #8) is bind-mounted READ-ONLY and the
-# overnight worktree is bind-mounted READ-WRITE. The kernel VFS then DENIES every
-# cooperative-shell tree-write into the main checkout (EROFS) regardless of shell
-# expression — closing the 14-form class the L4 string parser provably could not
-# enumerate AND the "keystone-aborted checkout writes the tree first" residue.
+# The write half: a per-Bash-command bwrap execution boundary. For the overnight
+# actor, the Bash command is re-exec'd inside a bwrap mount namespace where the
+# PROTECTED MAIN working tree (main_root minus the registered worktree_path) is
+# bind-mounted READ-ONLY and the overnight worktree READ-WRITE, so the kernel
+# refuses every shell write into the main checkout (EROFS), whatever the shell
+# expression.
 #
-# Control-flow order (codex #4): security/raw-metadata checks (apply_global_
-# security_checks + _enforce_overnight_git_command) run FIRST in main(); the
-# bwrap rewrite for an active-actor Bash command runs AFTER them and SHORT-
-# CIRCUITS by emitting hookSpecificOutput.updatedInput.command; the L4 string
-# guard is the fallback ONLY when the boundary is unavailable/unhonored. The
-# boundary is layered ON TOP OF (not replacing) the L4 guard.
+# Order: the security and raw-metadata checks (apply_global_security_checks,
+# _enforce_overnight_git_command) run FIRST in main(); the bwrap rewrite runs
+# after them and ends the hook by emitting hookSpecificOutput.updatedInput.command.
 #
-# Fail-CLOSED (codex #3): if bwrap/userns is unavailable the WRITE GUARANTEE
-# fails closed — an active-actor Bash command that cannot be proven entirely
-# worktree-local is DENIED, NOT silently allowed under the known-incomplete L4
-# floor. Isolation/worktree creation is never gated on bwrap (the launch already
-# created the worktree); only the per-command write boundary is.
+# Fail-CLOSED: if bwrap/userns is unavailable, an actor's Bash command that
+# cannot be proven entirely worktree-local is DENIED. Isolation/worktree creation
+# is never gated on bwrap (the launch already created the worktree); only the
+# per-command write boundary is.
 
 _BWRAP_BIN = None  # resolved lazily
 
@@ -2058,7 +1562,7 @@ def _bwrap_boundary_available() -> bool:
     user namespace is usable. This gates the WRITE guarantee (not isolation).
 
     Honors CLAUDE_OVERNIGHT_FORCE_NO_BWRAP=1 — a test/operator seam to simulate a
-    bwrap-unavailable host so the fail-closed degradation (AC-W5/AC-W6) can be
+    bwrap-unavailable host so the fail-closed degradation can be
     exercised deterministically without uninstalling bubblewrap."""
     if os.environ.get('CLAUDE_OVERNIGHT_FORCE_NO_BWRAP') == '1':
         return False
@@ -2079,27 +1583,13 @@ def _git_query(args: list[str], cwd: str) -> str:
 
 
 def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
-    """codex #6: DERIVE (never hardcode) the .git metadata paths a LINKED
-    worktree needs RW so the SUPPORTED surface (add/commit/status/diff) works
-    inside the boundary. Returned paths are RW-bound on top of the RO main tree.
-
-    The per-worktree gitdir (`git rev-parse --git-dir`) and the shared common-dir
-    (`--git-common-dir`) are the two roots git writes during add/commit. They are
-    derived at runtime from git itself. SHARED-.git CLOSURE (ARCHITECTURE §8): the
-    common-dir is RW-bound, but `<common>/config` and `<common>/hooks` are now RE-
-    BOUND READ-ONLY nested over that RW bind (see `_shared_common_dir_ro_rebinds`),
-    so a `git config` write to the shared config (e.g. `--unset core.hooksPath`,
-    which would disable the keystone) and default-hook drops now hit EROFS. RESIDUAL
-    LIMITATION (codex finalize-review, task 20260611-100500): `gc`/`fetch`/`repack`
-    writes that land under common-dir/objects are still NOT blocked by this OS
-    boundary; they are NOT part of the supported add/commit surface but the bwrap
-    layer alone does not refuse them. A fuller pre-rewrite git-subcommand denylist
-    (config/fetch/gc/submodule/sparse) in `_apply_write_boundary` remains surfaced
-    to the orchestrator (scope_review_requested) rather than silently asserted.
-    Raw cooperative writes to refs/objects/HEAD/packed-refs through these RW paths
-    that bypass git's ref-transaction ARE denied by the retained security/L4 layer
-    (`_raw_git_metadata_write_into_main`) that runs BEFORE this boundary
-    (codex #1/#4) — the bwrap RW exposure is for git-mediated writes only."""
+    """The .git metadata paths a LINKED worktree needs RW so add/commit/status/diff work inside the
+    boundary, derived from git itself: the per-worktree gitdir and the shared common-dir. They are
+    RW-bound over the RO main tree; `<common>/config` and `<common>/hooks` are re-bound READ-ONLY
+    over that bind (`_shared_common_dir_ro_rebinds`). `gc`/`fetch`/`repack` writes under
+    common-dir/objects are not refused by this boundary. A raw write to refs/objects/HEAD/
+    packed-refs that bypasses git's ref transaction is refused before the boundary
+    (`_raw_git_metadata_write_into_main`)."""
     gd = _git_query(['rev-parse', '--path-format=absolute', '--git-dir'], worktree_path)
     gcd = _git_query(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree_path)
     paths: list[str] = []
@@ -2112,8 +1602,7 @@ def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
 
 
 def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
-    """Shared-.git residual closure (codex world-class review, ARCHITECTURE §8):
-    the shared git COMMON-DIR is RW-bound (via `_linked_worktree_git_paths`) so the
+    """The shared git COMMON-DIR is RW-bound (via `_linked_worktree_git_paths`) so the
     supported add/commit/status/diff surface works — but that ALSO exposes
     `<common>/config` and `<common>/hooks` READ-WRITE, letting an overnight actor
     run `git config --unset core.hooksPath` (writes `<common>/config`) to DISABLE
@@ -2144,7 +1633,7 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
     """Build the bwrap argv that re-execs `command` with the PROTECTED MAIN tree
     RO and the overnight worktree RW. Returns None if the layout cannot be built.
 
-    Canonical mount order (codex #7, no-RW-alias invariant):
+    Canonical mount order (no RW alias of main):
       1. --ro-bind / /            entire host RO (so no path reaches main RW via
                                   a second bind, incl. a /dev/shm-resident main)
       2. --dev /dev               private devtmpfs (writable /dev/null git needs);
@@ -2207,7 +1696,7 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
             # worktree are already RW via the worktree bind).
             if not _path_under_prefix(p, wt_real):
                 argv += ['--bind', p, p]
-        # (7) SHARED-.git RESIDUAL CLOSURE (ARCHITECTURE §8): nest RO binds for
+        # (7) nest RO binds for
         # <common>/config + <common>/hooks + the keystone hook dir OVER the RW common-dir bind above, so a
         # keystone-disabling `git config --unset core.hooksPath` and default-hook
         # drops hit EROFS, while <common>/objects + <common>/refs + logs stay RW so
@@ -2219,49 +1708,30 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
 
 def _command_is_worktree_local(command: str, main_root: str, worktree_path: str,
                                main_git_dir: str) -> bool:
-    """Best-effort: True iff `command` provably does NOT target the main tree
-    (no -C/--work-tree/--git-dir into main, no interpreter hiding a main-git op,
-    no raw main-root write path). Used by the fail-closed degradation (AC-W6):
-    when bwrap is unavailable, an active-actor command that is NOT provably
-    worktree-local is DENIED rather than allowed under the incomplete L4 floor."""
+    """True iff `command` provably does not target the main tree: the parser reads it, it sends no
+    git op into main (-C/--work-tree/--git-dir) and hides none in an interpreter, writes no path
+    under main outside the worktree, and launches no interpreter but a harness script. Used when
+    bwrap is unavailable: an actor's command that is not provably worktree-local is refused."""
     main_real = os.path.realpath(main_root) if main_root else ''
-    if not main_real:
+    if not main_real or _read(command).unreadable:
         return False
-    if _worktree_into_main(command, main_real):
-        return False
-    if _gitdir_into_main(command, main_real, main_git_dir):
+    if _worktree_into_main(command, main_real) or _gitdir_into_main(command, main_real, main_git_dir):
         return False
     if _interpreter_hides_main_git(command, main_real, main_git_dir, worktree_path):
         return False
-    # any explicit write path resolving under main but outside the worktree -> not local
-    for p in _extract_bash_write_paths(command):
-        try:
-            rp = os.path.realpath(p)
-        except Exception:
-            rp = p
-        if _path_under_prefix(rp, main_real) and not _path_under_prefix(rp, os.path.realpath(worktree_path or '')):
+    wt_real = os.path.realpath(worktree_path or '')
+    for p in _bash_write_paths(command):
+        rp = os.path.realpath(p)
+        if _path_under_prefix(rp, main_real) and not _path_under_prefix(rp, wt_real):
             return False
-    # a bare interpreter/subprocess that could write anywhere is not provably local; one that
-    # runs a harness script is the harness's own code (P2-5)
-    if _INTERPRETER_LAUNCHER_RE.search(_without_harness_launches(command, worktree_path, main_root)):
-        return False
-    return True
-
-
-# P2-5: an interpreter whose script operand is a file of this harness's hooks/ or scripts/, the
-# code the guard itself runs from. Measured on d64fa96 with no bubblewrap: /dev-overnight Step 1
-# (python3 hooks/lib/overnight.py, bash scripts/overnight-init.sh) was refused as "not provably
-# worktree-local", so a --worktree session could not start. Any other interpreter launch (`-c`,
-# `-m`, stdin, a script elsewhere) still fails closed.
-_HARNESS_LAUNCH_RE = re.compile(
-    r'(?<![\w./-])(?:/[\w./-]*/)?(?:python3?|bash|sh)[ \t]+("[^"\n]+"|\'[^\'\n]+\'|[^\s;&|()<>]+)')
+    # an interpreter could write anywhere; one that runs a harness script is the harness's own code
+    return not _interpreter_runs(command, worktree_path, main_root)
 
 
 def _harness_script(operand: str, worktree_path: str, main_root: str = '') -> bool:
-    """True iff `operand` names a file of this harness's hooks/ or scripts/ that lies in neither the
-    worktree nor the main root (there an actor can write it)."""
-    home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, operand.strip('\'"')))
+    """True iff `operand` (a path as the shell expands it) names a file of this harness's hooks/ or
+    scripts/ that lies in neither the worktree nor the main root (there an actor can write it)."""
+    t = operand.strip('\'"')
     if not os.path.isabs(t) or any(ch in t for ch in '$`*?[\\'):
         return False
     real = os.path.realpath(t)
@@ -2272,20 +1742,14 @@ def _harness_script(operand: str, worktree_path: str, main_root: str = '') -> bo
         _path_under_prefix(real, os.path.join(own, d)) for d in ('hooks', 'scripts'))
 
 
-def _without_harness_launches(command: str, worktree_path: str, main_root: str = '') -> str:
-    """`command` with every interpreter launch of a harness script blanked out."""
-    return _HARNESS_LAUNCH_RE.sub(
-        lambda m: ' ' if _harness_script(m.group(1), worktree_path, main_root) else m.group(0), command)
-
-
 def _targets_git_config(file_path: str) -> bool:
-    """R13: file_path is the config or config.worktree of the git dir or common dir of the
+    """file_path is the config or config.worktree of the git dir or common dir of the
     checkout it lies in, or the keystone hook dir of that common dir or a file in it, which the
     bwrap rebind keeps Bash off; an Edit runs outside bwrap. Read for a Write or Edit target and
     for each write target of an actor's Bash command."""
     real = os.path.realpath(os.path.abspath(file_path))
     parts = real.lower().split(os.sep)
-    # P2-8: whatever the git dir is (also one that does not exist yet), a file of this name inside a
+    # whatever the git dir is (also one that does not exist yet), a file of this name inside a
     # `.git` directory or a `worktrees/<name>` one is a per-worktree git config
     if parts[-1] == _WORKTREE_CONFIG_LEAF and ('.git' in parts[:-1] or 'worktrees' in parts[:-2]):
         return True
@@ -2320,62 +1784,49 @@ def _emit_command_rewrite(new_command: str) -> None:
 
 _GIT_META_LEAF_RE = re.compile(
     r'/\.git(?:/|$)|/refs/|/packed-refs|/logs/|/objects/|/HEAD$|/packed-refs$')
+_OPEN_FOR_WRITE_RE = re.compile(r"open\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]")
 
 
 def _raw_git_metadata_write_into_main(command: str, main_root: str,
                                       worktree_path: str, main_git_dir: str) -> bool:
-    """codex #1 (raw-.git-write deny): True iff `command` raw-writes (redirect /
-    tee / interpreter open) to a `.git` ref/object/log/packed-refs/HEAD path under
-    main that is NOT inside the isolated worktree. Such a RAW write (no git ref
-    transaction) would corrupt the main working-tree view through the RW-exposed
-    .git binds, bypassing both the keystone and the VFS RO-bind — so it MUST be
-    denied BEFORE the bwrap rewrite (codex #4 control-flow order)."""
+    """True iff `command` writes, outside git (a redirect, tee, cp, mv ..., or an interpreter's
+    open(..., 'w')), a `.git` ref/object/log/packed-refs/HEAD path under main that is not inside
+    the isolated worktree. Such a write corrupts the main working-tree view through the RW-exposed
+    .git binds, past both the keystone and the RO-bind, so it is refused before the bwrap rewrite."""
     main_real = os.path.realpath(main_root) if main_root else ''
-    wt_real = os.path.realpath(worktree_path) if worktree_path else ''
-    gitdir_real = os.path.realpath(main_git_dir) if main_git_dir else (
-        os.path.realpath(os.path.join(main_real, '.git')) if main_real else '')
     if not main_real:
         return False
-    # explicit redirect/tee/cp/mv write targets
-    targets = list(_extract_bash_write_paths(command))
-    # interpreter open('...','w') targets
-    for mo in re.finditer(r"open\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]", command):
-        targets.append(mo.group(1))
-    # raw-text fallback: a redirect (`>`/`>>`) or `tee` whose target path appears
-    # ANYWHERE in the command (incl. inside eval/source quoting the L4 extractor
-    # cannot unwrap). Scan for a write operator immediately preceding a path that
-    # contains a .git-metadata leaf, so an `eval 'echo x > MAIN/.git/logs/HEAD'`
-    # form is caught despite the quoting.
-    for mo in re.finditer(r'(?:>>?|\btee\b\s+(?:-a\s+)?)\s*([^\s\'";|&)]+)', command):
-        targets.append(mo.group(1))
+    wt_real = os.path.realpath(worktree_path) if worktree_path else ''
+    gitdir_real = os.path.realpath(main_git_dir) if main_git_dir else os.path.realpath(
+        os.path.join(main_real, '.git'))
+    targets = _bash_write_paths(command)
+    for site, res in _read(command).resolved:
+        if _interpreter(res.name):
+            targets += _OPEN_FOR_WRITE_RE.findall(_code_text(site, res))
     for t in targets:
-        try:
-            rp = os.path.realpath(t)
-        except Exception:
-            rp = t
-        under_main = _path_under_prefix(rp, main_real) or (
-            gitdir_real and _path_under_prefix(rp, gitdir_real))
+        rp = os.path.realpath(t)
+        under_main = _path_under_prefix(rp, main_real) or _path_under_prefix(rp, gitdir_real)
         in_worktree = wt_real and _path_under_prefix(rp, wt_real)
         if under_main and not in_worktree and _GIT_META_LEAF_RE.search(rp):
             return True
     return False
 
 
+
 def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
-                          journal: tuple = (), run_command: str = '') -> None:
-    """WRITE-HALF entry (fix-7): for the ACTIVE overnight actor's Bash command,
-    re-exec it inside the bwrap RO-bind boundary (emit updatedInput.command) when
-    the boundary is available; FAIL-CLOSED (deny non-worktree-local commands)
-    when bwrap is unavailable. No-op (returns) only for an empty command. Runs
-    AFTER the security/L4 checks in main() (codex #4 control-flow order)."""
+                          journal: tuple = ()) -> None:
+    """For the overnight actor's Bash command: re-exec it inside the bwrap RO-bind
+    boundary (emit updatedInput.command) when the boundary is available; FAIL-CLOSED
+    (deny non-worktree-local commands) when bwrap is unavailable. No-op only for an
+    empty command. Runs AFTER the security checks in main()."""
     if not command:
         return
     main_root = gov_state.get('main_root', '') or ''
     worktree_path = gov_state.get('worktree_path', '') or ''
     isolation_kind = gov_state.get('isolation_kind', '') or ''
     if not main_root or not worktree_path:
-        return  # cannot scope a boundary without both roots; L4 already ran
-    # codex #1/#4: RAW .git-metadata write into main (outside the worktree) is
+        return  # cannot scope a boundary without both roots; the checks already ran
+    # A RAW .git-metadata write into main (outside the worktree) is
     # denied FIRST — before any bwrap rewrite — because the RW-exposed .git binds
     # cannot distinguish a git-mediated write from a raw corrupting write.
     if _raw_git_metadata_write_into_main(command, main_root, worktree_path, main_git_dir):
@@ -2387,16 +1838,15 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
             'keystone and the RO-bind). Use git inside the worktree instead.\n'
         )
     if _bwrap_boundary_available():
-        argv = _build_bwrap_argv(run_command or command, main_root, worktree_path, isolation_kind, journal)
+        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind, journal)
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
             _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv))
         # boundary requested but argv could not be built -> fall through to the
         # fail-closed deny below (do not silently allow).
-    # FAIL-CLOSED (codex #3): bwrap unavailable OR argv unbuildable. The write
-    # guarantee cannot be honored by the kernel, and the L4 floor is known-
-    # incomplete for the write-half, so an active-actor command that is not
+    # FAIL-CLOSED: bwrap unavailable OR argv unbuildable. The write guarantee
+    # cannot be honored by the kernel, so an actor's command that is not
     # provably worktree-local is DENIED. Worktree-local commands are allowed
     # (no over-block; isolation is never gated on bwrap).
     if not _command_is_worktree_local(command, main_root, worktree_path, main_git_dir):
@@ -2421,7 +1871,7 @@ def _restart_journal(payload: dict) -> tuple:
     return tuple(os.path.realpath(d) for d in (restart.state_dir(), restart.grant_dir()))
 
 
-_UNATTENDED_DENY = {  # D20: nobody answers a question asked inside /dev-overnight
+_UNATTENDED_DENY = {  # nobody answers a question asked inside /dev-overnight
     False: "Overnight is unattended; nobody answers. Decide (experiment, else the question's default), record the "
            "decision in the cycle log and in the summary's 'Decisions made without the owner', and continue.",
     True: "Nobody answers overnight. Decide by experiment if one can be run, else take the question's default; "
@@ -2450,75 +1900,54 @@ def _unattended(payload: dict) -> bool:
 
 
 def main():
-    """Entry point: apply global + actor-scoped overnight enforcement (M9)."""
+    """Entry point: apply global + actor-scoped overnight enforcement."""
     tool_name, tool_input, session_id, payload = _parse_hook_input()
-    if tool_name == 'AskUserQuestion':  # R10: the deny is this hook's only rule for it
+    if tool_name == 'AskUserQuestion':  # the deny is this hook's only rule for it
         if _unattended(payload):
             _block(_UNATTENDED_DENY[bool(payload.get('agent_id'))] + '\n')
         sys.exit(0)
     state = _load_session_state(session_id)
-    _set_request_ctx(state, payload)  # T2.4: enable self_repair grant lookup
+    _set_request_ctx(state, payload)  # enables the self_repair grant lookup
     if is_overnight_active():
         apply_global_security_checks(tool_name, tool_input)
     cwd = _payload_cwd(payload)
     wt_paths = _get_active_worktree_paths()
     classification, gov_state = _classify_actor(payload, state, wt_paths, cwd)
-    # Q2 (2026-08-09): scope the governing record's own working root to THIS
-    # request before any main-targeting predicate runs. in_place only; isolated
-    # records leave the main root fully guarded.
+    # Scope the governing record's own working root to THIS request before any
+    # main-targeting predicate runs. in_place only; isolated records leave the
+    # main root fully guarded.
     _set_governing_own_root(gov_state, payload)
 
-    # M9: a `normal` concurrent user session on main is NOT enforced — exit 0 so
-    # the user's main session is never false-blocked.
+    # A `normal` concurrent user session on main is NOT enforced, so the user's
+    # main session is never false-blocked.
     if classification == 'normal':
         sys.exit(0)
 
-    # M9: owner/child with a null/missing worktree = invalid isolation = BLOCK.
+    # owner/child with a null/missing worktree = invalid isolation = BLOCK.
     if classification in ('overnight_owner', 'overnight_child'):
         wt = (gov_state or {}).get('worktree_path') if gov_state else None
         if not wt:
             _block_invalid_isolation(classification)
 
-    # M13/M14a/M15: for overnight actors, block hook-suppression + branch-switch
-    # + main-root git ops (the exact-incident layered block; AC11).
-    # VECTOR-3 (Cycle-3): the git enforce gate now also runs for worktree_context
-    # (an in-worktree actor whose owner/child resolution failed) so the same
-    # main-targeting block fires — closing the classification hole where
-    # worktree_context skipped enforcement entirely.
+    # For overnight actors (also an in-worktree actor whose owner/child resolution
+    # failed): the git and write checks first, then the bwrap rewrite.
     if classification in ('overnight_owner', 'overnight_child', 'worktree_context') \
             and tool_name == 'Bash':
+        command = tool_input.get('command', '')
         if gov_state is not None:
-            main_root = gov_state.get('main_root', '')
-            worktree_path = gov_state.get('worktree_path', '')
             main_git_dir = gov_state.get('main_git_dir', '')
-            # (codex #4 control-flow order) STEP A: security/raw-metadata + L4
-            # string guard FIRST. _enforce_overnight_git_command denies raw
-            # .git-ref writes / --work-tree-into-main / --git-dir-into-main /
-            # interpreter-hidden main-git ops BEFORE any rewrite, so AC-W1's raw-
-            # .git-write denial and AC-K6 are attributed to this retained layer.
-            # P2-5: the checks read the command without its comments; the shell never runs them.
-            raw_command = tool_input.get('command', '')
-            command = _strip_shell_comments(raw_command)
-            _enforce_overnight_git_command(command, main_root, worktree_path, main_git_dir)
-            # STEP B: WRITE-HALF (fix-7) bwrap rewrite for the active overnight
-            # actor — re-exec the surviving command inside the RO-bind boundary
-            # (emit updatedInput.command + exit 0) when bwrap is available, else
-            # FAIL-CLOSED. Layered ON TOP OF the L4 guard (STEP A still ran).
-            # /restart's helper (the overnight wake runs it, P1c X8) runs inside the boundary too, with
-            # only its journal bound writable: option (b) of P1c review 1, by D18. A check of the
-            # helper against its blobs at the harness's HEAD (option (a)) cannot see what it runs:
-            # measured, its hooks/lib modules load from untracked __pycache__ bytecode and the untracked
-            # venv runs any .pth in it; a planted .pyc and .pth ran with the check passing.
-            _apply_write_boundary(command, gov_state, main_git_dir,
-                                  _restart_journal(payload), raw_command)
+            _enforce_overnight_git_command(command, gov_state.get('main_root', ''),
+                                           gov_state.get('worktree_path', ''), main_git_dir)
+            # /restart's helper (the overnight wake runs it) runs inside the boundary too, with only
+            # its journal bound writable: a check of the helper against its blobs at the harness's
+            # HEAD cannot see what it runs (its hooks/lib modules load from untracked __pycache__
+            # bytecode, and the untracked venv runs any .pth in it).
+            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload))
         elif classification == 'worktree_context':
-            # VECTOR-3 fail-closed: cwd is inside an active worktree but no
-            # governing overnight state could be resolved for it. We cannot derive
-            # the main_root to scope a targeted block, so any git / interpreter
-            # command is refused (it could move main HEAD or write main). A
-            # non-git, non-interpreter command is left to the worktree-boundary
-            # enforcement below.
-            _fail_closed_worktree_context(_strip_shell_comments(tool_input.get('command', '')))
+            # No governing state: the main_root cannot be derived to scope a targeted
+            # block, so any git / interpreter command is refused; any other command is
+            # left to the worktree-boundary enforcement below.
+            _fail_closed_worktree_context(command)
     target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
     if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
             and target and _targets_git_config(target):
@@ -2532,7 +1961,7 @@ def main():
 
 
 def _self_test() -> int:
-    """T2.4 AC8: simulated overnight + self_repair-enabled contract grant test."""
+    """Simulated overnight + self_repair-enabled contract grant test."""
     sr = {'enabled': True, 'reason': 'ac8', 'allowed_roles': ['dev'],
           'allowed_path_prefixes': ['/tmp/t24-ac8/'],
           'expires_at': '2099-01-01T00:00:00Z', 'audit_required': False}
@@ -2546,7 +1975,7 @@ def _self_test() -> int:
     g, _ = _grant_decision_for('/etc/passwd', 'dev', '', sr); assert not g, 'outside-prefix denied'
     g, _ = _grant_decision_for('/tmp/t24-ac8/x.py', 'dev', '',
                                dict(sr, expires_at='2020-01-01T00:00:00Z')); assert not g, 'expired denied'
-    print('T2.4 self-test: PASS (8 grant-logic assertions)'); return 0
+    print('self-repair grant self-test: PASS (8 grant-logic assertions)'); return 0
 
 
 if __name__ == '__main__':

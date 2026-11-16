@@ -15,6 +15,7 @@ corpus. What stays here has a live subject:
 from __future__ import annotations
 
 import ast
+import importlib.util
 import inspect
 import json
 import os
@@ -107,7 +108,6 @@ def test_ac09_the_registered_posttool_consumer_still_cannot_see_a_write_grant(tm
 
 CONSUMERS = (
     "hooks/pretool-tool-policy.py",
-    "hooks/pretool-overnight-hook-guard.py",
 )
 
 
@@ -264,6 +264,23 @@ def test_ac10_consumers_compile_and_import_the_shim(consumer, tmp_path):
     assert "extract_bash_write_paths" in text
     compiled = py_compile_out_of_tree(path, tmp_path)
     assert compiled.returncode == 0, compiled.stderr
+
+
+@pytest.mark.parametrize("command", [
+    "cat > /tmp/a << EOF\nhello\nEOF", "echo x >> ~/b.txt", "cp src $HOME/c", "tee -a /tmp/d < /dev/null",
+    "sed -i s/a/b/ /tmp/e", "printf x | tee '/tmp/f g'", "rm /tmp/h", "mv /tmp/i /tmp/j",
+])
+def test_ac10_the_overnight_guard_reads_the_parser_as_the_shim_does(command, tmp_path):
+    """The overnight guard reads write targets from lib/shell_parse.py directly; the paths it
+    checks are the ones the shim's callers get."""
+    path = REPO / "hooks" / "pretool-overnight-hook-guard.py"
+    compiled = py_compile_out_of_tree(path, tmp_path)
+    assert compiled.returncode == 0, compiled.stderr
+    sys.path.insert(0, str(REPO / "hooks"))
+    spec = importlib.util.spec_from_file_location("overnight_guard_ac10", path)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    assert guard._bash_write_paths(command) == bwt.extract_bash_write_paths(command)
 
 
 def test_ac10_the_cp_state_guard_imports_no_bash_reader(tmp_path):
