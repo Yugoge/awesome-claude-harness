@@ -1809,7 +1809,7 @@ def _feed(cmd, piped):
     return frozenset(fed)
 
 
-def walk(script, *, into=_DEFAULT_INTO, compounds=False, _context=("top",), _templated=False):
+def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _templated=False):
     """Yield a Site for every simple command in ``script`` and what it runs.
 
     ``into`` names the nested code to descend into: cmdsub, backtick, procsub
@@ -1817,10 +1817,10 @@ def walk(script, *, into=_DEFAULT_INTO, compounds=False, _context=("top",), _tem
     heredoc_shell (a shell fed a heredoc or here-string), pipe_shell (a shell
     fed by the stage before it), shell_c (``-c`` payloads), eval, exec_argv
     (find -exec), alias (git alias bodies; see ``git_invocations``). Payloads
-    come from ``resolve``. ``compounds`` also yields a Site whose ``cmd`` is
-    each Compound, before its body, so its redirections are seen.
+    come from ``resolve``. A compound command with redirections of its own
+    (`{ ...; } > f`) yields a redirect-only Site for them, before its body.
     """
-    opts = (into, compounds)
+    opts = (into,)
     depth = len(_context) - 1
     for pl, _sep in script.items:
         for k, stage in enumerate(pl.stages):
@@ -1854,10 +1854,12 @@ def _stage_output(cmd):
 
 
 def _walk_command(cmd, piped, opts, context, depth, script, prev=None, templated=False):
-    into, compounds = opts
+    into, = opts
     if isinstance(cmd, Compound):
-        if compounds:
-            yield Site(cmd, context, depth, _feed(cmd, piped), False, script, templated)
+        if cmd.redirects:
+            # The compound's own redirections, as the command `> f` alone is read.
+            bare = SimpleCommand((), (), cmd.redirects, cmd.span)
+            yield Site(bare, context, depth, _feed(bare, piped), False, script, templated)
         for w in cmd.header:
             yield from _walk_parts(w.parts, opts, context, templated)
         for r in cmd.redirects:
@@ -1882,15 +1884,14 @@ def _walk_command(cmd, piped, opts, context, depth, script, prev=None, templated
             yield from _walk_parts(r.hd.expansions, opts, context, templated)
     res = resolve(cmd)
     if res.payload is not None and res.payload_kind in into:
-        yield from walk(res.payload, into=into, compounds=compounds,
-                        _context=context + (res.payload_kind,),
+        yield from walk(res.payload, into=into, _context=context + (res.payload_kind,),
                         _templated=templated or res.unresolved is not None)
     elif res.payload is None and res.stdin_shell and piped and "pipe_shell" in into:
         text = _stage_output(prev)
         if text is not None:
             body = parse_src(text, depth + 1) if isinstance(text, Src) else parse(text)
-            yield from walk(body, into=into, compounds=compounds,
-                            _context=context + ("pipe_shell",), _templated=templated)
+            yield from walk(body, into=into, _context=context + ("pipe_shell",),
+                            _templated=templated)
 
 
 def active_parts(parts):
@@ -1901,12 +1902,11 @@ def active_parts(parts):
 
 
 def _walk_parts(parts, opts, context, templated=False):
-    into, compounds = opts
+    into, = opts
     for p in active_parts(parts):
         kind = "procsub" if p.kind.startswith("procsub") else p.kind
         if kind in into and p.body is not None:
-            yield from walk(p.body, into=into, compounds=compounds, _context=context + (kind,),
-                            _templated=templated)
+            yield from walk(p.body, into=into, _context=context + (kind,), _templated=templated)
 
 
 def iter_commands(script, **kw):
@@ -2045,6 +2045,17 @@ PEEL = {
                    ("-p", "--pid", "-T", "--sched-runtime", "-P", "--sched-period",
                     "-D", "--sched-deadline")), 1),
     "unbuffer": (_spec(("-p",)), 0),
+    "setpriv": (_spec(("-d", "--dump", "--nnp", "--no-new-privs", "--init-groups", "--keep-groups",
+                       "--clear-groups", "--reset-env"),
+                      ("--reuid", "--regid", "--ruid", "--euid", "--rgid", "--egid", "--groups",
+                       "--securebits", "--pdeathsig", "--selinux-label", "--apparmor-profile",
+                       "--inh-caps", "--ambient-caps", "--bounding-set", "--landlock-access",
+                       "--landlock-rule")), 0),
+    "choom": (_spec((), ("-n", "--adjust", "-p", "--pid")), 0),
+    "runcon": (_spec(("-c", "--compute"), ("-u", "--user", "-r", "--role", "-t", "--type",
+                                           "-l", "--range")), "context"),
+    "systemd-inhibit": (_spec(("--list", "--no-pager", "--no-legend"),
+                              ("--what", "--who", "--why", "--mode")), 0),
     "numactl": (_spec(("-a", "--all", "-l", "--localalloc", "-H", "--hardware", "-s", "--show",
                        "-b", "--balancing"),
                       ("-i", "--interleave", "-w", "--weighted-interleave", "-N", "--cpunodebind",
@@ -2279,6 +2290,9 @@ def resolve(cmd, depth=None):
                 # An option the table does not know may take a value: the
                 # command found past it is a guess, so the reading is unresolved.
                 r.unresolved = r.unresolved or name + ":" + err
+            if fixed == "context":
+                # runcon CONTEXT COMMAND, unless options give the context's parts
+                fixed = 0 if opts else 1
             if len(rest) < fixed:
                 r.head = head
                 r.args = tuple(words[1:])
@@ -2490,6 +2504,25 @@ def executable_view(text):
     return "".join(out)
 
 
+def without_heredoc_bodies(text):
+    """``text`` without the lines of each heredoc's body and its closing line; the opener stays."""
+    if not isinstance(text, str):
+        return ""
+    cut = []
+    for site in walk(parse(text), into=("cmdsub", "backtick", "procsub", "shell_c", "eval")):
+        for r in site.cmd.redirects:
+            if r.hd is not None:
+                a, b = r.hd.body_span
+                end = text.find("\n", b) if r.hd.terminated else -1
+                cut.append((max(a - 1, 0), len(text) if end < 0 else end))
+    out, at = [], 0
+    for a, b in sorted(cut):
+        if a >= at:
+            out.append(text[at:a])
+        at = max(at, b)
+    return "".join(out) + text[at:]
+
+
 def _blank(out, a, b, keep_newlines=False):
     for k in range(max(a, 0), min(b, len(out))):
         if keep_newlines and out[k] == "\n":
@@ -2628,23 +2661,6 @@ VERBS = {
                    "--one-file-system", "-z", "--zero")), "all", DELETE),
     "shred": (_spec(("-f", "--force", "-u", "--remove", "-v", "--verbose", "-x", "--exact",
                      "-z", "--zero"), ("-n", "--iterations", "-s", "--size")), "all", DELETE),
-    "chmod": (_spec(("-c", "--changes", "-f", "--silent", "--quiet", "-v", "--verbose", "-R",
-                     "--recursive", "--no-preserve-root", "--preserve-root", "-H", "-L", "-P"),
-                    ("--reference",)), "mode-first", IN_PLACE),
-    "chown": (_spec(("-c", "--changes", "-f", "--silent", "--quiet", "-v", "--verbose", "-R",
-                     "--recursive", "-h", "--no-dereference", "--dereference", "-H", "-L", "-P",
-                     "--no-preserve-root", "--preserve-root"),
-                    ("--reference", "--from")), "mode-first", IN_PLACE),
-    "chgrp": (_spec(("-c", "--changes", "-f", "--silent", "--quiet", "-v", "--verbose", "-R",
-                     "--recursive", "-h", "--no-dereference", "--dereference", "-H", "-L", "-P",
-                     "--no-preserve-root", "--preserve-root"),
-                    ("--reference",)), "mode-first", IN_PLACE),
-    "chattr": (_spec(("-R", "-V", "-f"), ("-v", "-p")), "signed", IN_PLACE),
-    "setfacl": (_spec(("-b", "--remove-all", "-k", "--remove-default", "-n", "--no-mask",
-                       "--mask", "-d", "--default", "-R", "--recursive", "-L", "--logical",
-                       "-P", "--physical", "--test", "-v", "--version", "-h", "--help"),
-                      ("-m", "--modify", "-M", "--modify-file", "-x", "--remove", "-X",
-                       "--remove-file", "--set", "--set-file", "--restore")), "all", IN_PLACE),
     "sed": (_spec(("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-s",
                    "--separate", "-u", "--unbuffered", "-z", "--null-data", "--posix",
                    "--debug", "--sandbox", "--follow-symlinks"),
@@ -2652,7 +2668,61 @@ VERBS = {
     "dd": (_spec(), "dd", TRUNCATE),
     "curl": (_spec(), "opt:-o,--output", TRUNCATE),
     "wget": (_spec(), "opt:-O,--output-document", TRUNCATE),
+    "chmod": (None, "attr", IN_PLACE),
+    "chown": (None, "attr", IN_PLACE),
+    "chgrp": (None, "attr", IN_PLACE),
+    "chattr": (None, "attr", IN_PLACE),
+    "setfacl": (None, "attr", IN_PLACE),
 }
+# The commands that change a file's mode, owner, attributes or ACL: the file
+# keeps its bytes, but `chmod -x` of a hook turns the hook off, so each path
+# operand is written in place. Per verb: the short flags (letters that take no
+# value), the short options that take a value, the long options that take one
+# (`--opt V` or `--opt=V`), and how a non-path operand is told apart: "first"
+# (chmod's mode, chown's owner: the first operand unless --reference names the
+# file to copy it from) or "signed" (chattr's modes: words starting + - =).
+_ATTR_VERBS = {
+    "chmod": ("cfvR", "", ("--reference",), "first"),
+    "chown": ("cfvhHLPR", "", ("--from", "--reference"), "first"),
+    "chgrp": ("cfvhHLPR", "", ("--reference",), "first"),
+    "chattr": ("RVf", "vp", (), "signed"),
+    "setfacl": ("bkndRLPvh", "mMxX",
+                ("--modify", "--modify-file", "--remove", "--remove-file", "--set", "--set-file",
+                 "--restore"), ""),
+}
+
+
+def _attr_operands(name, args):
+    """The path operand words of one chmod / chown / chattr / setfacl."""
+    flags, short_values, long_values, kind = _ATTR_VERBS[name]
+    operands = []
+    referenced = skip = ended = False
+    for w in args:
+        t = w.value()
+        if t is None:
+            t = w.static_prefix() or "$"
+        if skip:
+            skip = False
+        elif ended or t == "-" or not t.startswith(("-", "+", "=")):
+            operands.append(w)
+        elif t == "--":
+            ended = True
+        elif t.startswith("--"):
+            opt = t.split("=", 1)[0]
+            referenced = referenced or opt == "--reference"
+            skip = opt in long_values and "=" not in t
+        elif t[0] == "-" and set(t[1:]) <= set(flags):
+            continue
+        elif t[0] == "-" and short_values and t[1] in flags + short_values:
+            k = next((i for i, c in enumerate(t[1:], 1) if c in short_values), 0)
+            skip = bool(k) and k == len(t) - 1
+        elif kind == "first":
+            operands.append(w)
+    if kind == "first" and not referenced:
+        operands = operands[1:]
+    return operands
+
+
 
 _PKG_MANAGERS = frozenset({
     "pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "aptitude", "yum",
@@ -2662,29 +2732,46 @@ _PKG_MANAGERS = frozenset({
 
 
 def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_shell",
-                                   "pipe_shell", "shell_c", "eval", "exec_argv")):
+                                   "pipe_shell", "shell_c", "eval", "exec_argv"), env=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
 
-    An assignment of a static value earlier in the same list (`X=/p; ... > $X`)
-    projects into a later `$X` / `${X}` target. The redirections of a
-    compound command (`{ ...; } > f`, `for ...; done >> f`) are targets too. A
-    computed command word with operands names its last operand as an
-    undecidable target (mechanism ``computed-command``): what it writes is
-    unknown, so the caller must fail closed on it.
+    An assignment earlier in the same list (`X=/p; ... > $X`) projects into a
+    later `$X` / `${X}` target when its value is static or projects itself.
+    ``env`` gives the values of variables the caller knows before the command.
+    A command whose name is computed and whose operands name a copy or a move
+    (`"$CP" cp-01 dest`) is read as that copy: its last operand is the destination.
+    Any other computed command word with operands names its last operand as an
+    undecidable target (mechanism ``computed-command``), and one with none names
+    the head word itself: what it writes is unknown, so the caller fails closed.
+    The redirections of a compound command come from walk's redirect-only Site.
     """
     if isinstance(script, str):
         script = parse(script)
     out = []
-    env = {}
-    for site in walk(script, into=into, compounds=True):
+    seed = dict(env or {})
+    envs, exported, prefix = {}, set(), {}
+    scope = _AssignScope(script)
+    for site in walk(script, into=into):
         cmd = site.cmd
-        if isinstance(cmd, SimpleCommand) and not cmd.words and cmd.assignments:
-            for a in cmd.assignments:
-                v = a.static_value()
-                if v is not None and not a.append:
-                    env[a.name] = v
-                else:
-                    env.pop(a.name, None)
+        # A shell started with -c or fed code sees the caller's variables, the ones exported before
+        # it and its own command's prefix assignments; a templated payload's expansions are the
+        # outer shell's.
+        fresh = 0 if site.templated else max(
+            (k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell", "pipe_shell")), default=0)
+        key = site.context[:fresh + 1]
+        if key not in envs:
+            envs[key] = dict(seed)
+            if fresh:
+                outer = envs.get(site.context[:fresh], {})
+                envs[key].update((k, v) for k, v in outer.items() if k in exported)
+                envs[key].update(prefix.get(site.context[:fresh], {}))
+        env = envs[key]
+        if cmd.words:
+            for k in [k for k in envs if len(k) > len(site.context) and k[:len(site.context)] == site.context]:
+                del envs[k]
+            prefix[site.context] = {a.name: v for a in cmd.assignments
+                                    for v in [_assigned(a, env)] if v is not None}
+        _track_assignments(site, cmd, env, seed, exported, scope)
         for red in cmd.redirects:
             if red.target is None or not red.writes():
                 continue
@@ -2696,12 +2783,15 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
             mode = _REDIR_MODE.get(red.op, TRUNCATE)
             out.append(WriteTarget(path, mode, "redirect" + red.op, red.fd, decidable,
                                    red.target, None, site.context))
-        if isinstance(cmd, Compound):
-            continue
         res = resolve(cmd)
         name = res.name
         if name is None:
-            if res.head is not None:
+            if res.unresolved == "dynamic_head" and len(res.args) > 1 and any(
+                    _COPY_MOVE_WORD_RE.match(w.value() or "") for w in res.args):
+                for t in _verb_targets("cp", VERBS["cp"], res.args, env, site.context):
+                    t.decidable = False
+                    out.append(t)
+            elif res.head is not None:
                 last = [w for w in res.args if not (w.value() or "").startswith("-")]
                 word = last[-1] if last else res.head
                 path = _project(word, env)[0] if last else None
@@ -2716,8 +2806,106 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
             continue
         if name == "install" and _preceded_by_pkg_manager(cmd, res):
             continue
-        out.extend(_verb_targets(name, verb, res.args, env, site.context))
+        found = [t for t in _verb_targets(name, verb, res.args, env, site.context)
+                 if not any(p.kind.startswith("procsub") for p in t.word.parts)]
+        if verb[1] == "last" and _appends_args(res):
+            for t in found:
+                if t.mode in (COPY_DEST, MOVE_DEST, LINK):
+                    t.decidable = False
+        out.extend(found)
     return out
+
+
+_COPY_MOVE_WORD_RE = re.compile(r"(?:cp|mv)(?!\w)")
+
+
+def _appends_args(res):
+    """True when xargs appends words after the written operands, so the last is no destination."""
+    return any(name == "xargs" and not any(o in ("-I", "-i", "--replace") or (o or "").startswith("--replace=")
+                                           for o, _v in opts)
+               for name, opts in res.wrappers)
+
+
+# Commands that may set a shell variable in a way the parser does not follow: after one, only the
+# caller's variables project.
+_STATE_BUILTINS = frozenset({"read", "mapfile", "readarray", "declare", "typeset", "local", "readonly",
+                             "unset", "printf", "eval", "source", ".", "getopts", "let", "export"})
+
+
+class _AssignScope:
+    """Which scripts are a compound's body, and which names are functions."""
+
+    def __init__(self, script):
+        self.seen, self.bodies, self.functions = set(), set(), set()
+        self.scan(script)
+
+    def scan(self, script):
+        if id(script) in self.seen:
+            return
+        self.seen.add(id(script))
+        for pl, _sep in script.items:
+            for st in pl.stages:
+                if isinstance(st, Compound):
+                    if st.kind == "function" and st.name:
+                        self.functions.add(st.name if isinstance(st.name, str) else str(st.name))
+                    for body in st.body:
+                        self.bodies.add(id(body))
+                        self.scan(body)
+
+    def certain(self, site, cmd):
+        """True when an assignment in ``cmd`` surely holds after it: run unconditionally, not in
+        a compound's body, a pipeline or the background."""
+        self.scan(site.script)
+        if id(site.script) in self.bodies:
+            return False
+        before = None
+        for pl, sep in site.script.items:
+            if any(st is cmd for st in pl.stages):
+                return len(pl.stages) == 1 and sep != "&" and before not in ("&&", "||")
+            before = sep
+        return False
+
+
+def _assigned(a, env):
+    v = a.static_value()
+    if v is None and a.value is not None:
+        v, dec = _project(a.value, env)
+        v = v if dec else None
+    return None if a.append else v
+
+
+def _track_assignments(site, cmd, env, seed, exported, scope):
+    if not cmd.words:
+        for a in cmd.assignments:
+            v = _assigned(a, env)
+            if v is not None and scope.certain(site, cmd):
+                env[a.name] = v
+            else:
+                env.pop(a.name, None)
+        return
+    name = basename(cmd.words[0].value() or "")
+    if name == "printf" and not any((w.value() or "-v").startswith("-v") for w in cmd.words[1:]):
+        return
+    if name in _STATE_BUILTINS or name in scope.functions:
+        if name == "export" and scope.certain(site, cmd):
+            for w in cmd.words[1:]:
+                m = _ASSIGN_PARTS_RE.match(w.raw.text)
+                if m and not m.group(2) and not m.group(3):
+                    a = Assignment(w)
+                    v = _assigned(a, env)
+                    exported.add(a.name)
+                    if v is not None:
+                        env[a.name] = v
+                    else:
+                        env.pop(a.name, None)
+                elif w.value() and _NAME_RE.match(w.value()):
+                    exported.add(w.value())
+                else:
+                    env.clear()
+                    env.update(seed)
+            return
+        env.clear()
+        env.update(seed)
 
 
 def _preceded_by_pkg_manager(cmd, res):
@@ -2761,6 +2949,11 @@ def _verb_targets(name, verb, args, env, context):
             elif v is None and w.static_prefix().startswith("of="):
                 out.append(WriteTarget(None, TRUNCATE, "dd-of", None, False, w, source, context))
         return out
+    if reading == "attr":
+        for w in _attr_operands(name, args):
+            path, dec = _project(w, env)
+            out.append(WriteTarget(path, mode, name, None, dec, w, None, context))
+        return out
     if reading.startswith("opt:"):
         short, long_opt = reading[4:].split(",")
         for w, path, dec in _flag_values(args, short, long_opt, env):
@@ -2801,25 +2994,7 @@ def _verb_targets(name, verb, args, env, context):
             path, dec = _project(w, env)
             out.append(WriteTarget(path, IN_PLACE, "sed-in-place", None, dec, w, None, context))
         return out
-    if reading in ("signed", "mode-first"):
-        # A mode (`-x`, `+i`) reads like an option: drop the declared options
-        # and read the rest in order.
-        opts, operands, err = [], [], None
-        k = 0
-        while k < len(args):
-            v = args[k].value() or ""
-            name_ = v.split("=", 1)[0]
-            if name_ in spec["val"]:
-                opts.append((name_, args[k]))
-                k += 1 if "=" in v else 2
-                continue
-            if v in spec["bool"]:
-                k += 1
-                continue
-            operands.append(args[k])
-            k += 1
-    else:
-        opts, operands, err = split_options(list(args), spec, 0, permute=True)
+    opts, operands, err = split_options(list(args), spec, 0, permute=True)
     if err:
         # An option this table does not know: every non-option word may be a
         # target, and none of them is decidable.
@@ -2827,16 +3002,6 @@ def _verb_targets(name, verb, args, env, context):
                    for w in args if not (w.value() or "").startswith("-"))
         return out
     target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
-    if reading in ("mode-first", "signed"):
-        if reading == "mode-first" and not any(o == "--reference" for o, _v in opts):
-            operands = operands[1:]
-        for w in operands:
-            v = w.value()
-            if reading == "signed" and v is not None and v[:1] in "+-=":
-                continue
-            path, dec = _project(w, env)
-            out.append(WriteTarget(path, mode, name, None, dec, w, None, context))
-        return out
     if name == "tee":
         append = any(o in ("-a", "--append") for o, _v in opts)
         for w in operands:
@@ -2915,9 +3080,10 @@ def _git_write_targets(res, env, context):
         args = inv.arg_words
         if sub in ("rm", "mv"):
             vals = [a.value() for a in args]
-            if sub == "rm" and "--cached" in vals:
+            if sub == "rm" and "--cached" in vals[:vals.index("--") if "--" in vals else len(vals)]:
                 continue
-            ops = [a for a in args if (a.value() or "x")[:1] != "-"]
+            dd = vals.index("--") if "--" in vals else len(vals)
+            ops = [a for a in args[:dd] if (a.value() or "x")[:1] != "-"] + list(args[dd + 1:])
             if sub == "rm":
                 for w in ops:
                     path, dec = _project(w, env)
