@@ -721,9 +721,35 @@ def test_notice_unit_nu_regenstatus_identity():
     assert len(notice.notifiable([('/x/README.md', status)])) == 1
 
 
-def test_notice_unit_nu_malformed_notice_carries_shape_and_hint():
-    """A malformed notice names the shape and gives one concrete action for it."""
-    notice = load('notice')
+def regeneration_records(tmp_path, monkeypatch):
+    """The doc-sync regeneration as the hook runs it, in-process with HOME redirected: its records."""
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    for name in SCRUBBED_ENV:
+        monkeypatch.delenv(name, raising=False)
+    from hooks.doc_sync.main import process_parent_dirs
+    from hooks.doc_sync.patch import patch_claude_md
+
+    def folder_records(name, file_name, text):
+        folder = tmp_path / name / 'sub'
+        folder.mkdir(parents=True)
+        (folder / file_name).write_text(text)
+        return {r.kind.name: r for r in process_parent_dirs(folder, folder.parent)}
+
+    def section_records(name, skill_dir):
+        project = tmp_path / name
+        (project / '.claude' / 'skills' / skill_dir).mkdir(parents=True)
+        (project / 'CLAUDE.md').write_text(f'{CLAUDE_HEAD}<!-- AUTO:skill-list -->\nold\n<!-- /AUTO:skill-list -->\n')
+        return patch_claude_md(project)
+
+    return folder_records, section_records
+
+
+def test_notice_unit_nu_malformed_notice_carries_shape_and_hint(tmp_path, monkeypatch):
+    """A malformed notice names the shape and gives one concrete action for it. Each shape comes from the
+    regeneration that refuses it: an INDEX.md in that shape, or a CLAUDE.md section whose generated body
+    (a skill directory's name) would carry a marker line or a fence."""
+    from hooks.doc_sync import notice
+    folder_records, section_records = regeneration_records(tmp_path, monkeypatch)
     hints = {
         'DUPLICATE_OPENING': 'keep exactly one <!-- AUTO:index-stats -->',
         'DUPLICATE_CLOSING': 'keep exactly one <!-- AUTO:index-stats -->',
@@ -735,20 +761,29 @@ def test_notice_unit_nu_malformed_notice_carries_shape_and_hint():
         'BODY_CONTAINS_MARKER': 'nothing was written',
         'BODY_BREAKS_REGION': 'nothing was written',
     }
+    records = {shape: folder_records(token, 'INDEX.md', text)['INDEX']
+               for token, text, _status, shape in INDEX_SHAPE_ROWS if shape is not None}
+    for shape, skill_dir in (('BODY_CONTAINS_MARKER', 'x\n<!-- AUTO:skill-list -->\ny'),
+                             ('BODY_BREAKS_REGION', 'x\n```\ny')):
+        [records[shape]] = section_records(shape, skill_dir)
+    assert sorted(records) == sorted(hints) == sorted(MALFORMED_SHAPES)
     for shape, hint in hints.items():
-        text = notice.build_notice_text(notice.notifiable([record('INDEX', '/x/INDEX.md', 'SKIPPED_MALFORMED_MARKERS', None, shape)]))
+        assert records[shape].shape.name == shape
+        text = notice.build_notice_text(notice.notifiable([records[shape]]))
         assert f'shape {shape}' in text and hint in text, shape
         assert text.count('Action:') == 1
 
 
-def test_notice_unit_nu_unclosed_fence_hint_line_number():
-    """The unclosed-fence notice names the line the fence starts on, or degrades without one."""
-    notice = load('notice')
-    with_line = notice.build_notice_text(notice.notifiable(
-        [record('README', '/x/README.md', 'SKIPPED_MALFORMED_MARKERS', None, 'UNCLOSED_FENCE', '12')]))
-    without = notice.build_notice_text(notice.notifiable(
-        [record('README', '/x/README.md', 'SKIPPED_MALFORMED_MARKERS', None, 'UNCLOSED_FENCE', None)]))
-    assert 'close the code fence that starts at line 12' in with_line
+def test_notice_unit_nu_unclosed_fence_hint_line_number(tmp_path, monkeypatch):
+    """The unclosed-fence notice names the line the regeneration found the fence on, or degrades without one."""
+    from hooks.doc_sync import notice
+    folder_records, _ = regeneration_records(tmp_path, monkeypatch)
+    readme = folder_records('fence', 'README.md', f'# sub\n\nintro\n```\n{RO}\nstale\n{RC}\n')['README']
+    assert (readme.status.name, readme.shape.name, readme.detail) == (
+        'SKIPPED_MALFORMED_MARKERS', 'UNCLOSED_FENCE', '4')
+    with_line = notice.build_notice_text(notice.notifiable([readme]))
+    without = notice.build_notice_text(notice.notifiable([readme._replace(detail=None)]))
+    assert 'close the code fence that starts at line 4' in with_line
     assert 'close the code fence that hides the marker' in without and 'line None' not in without
 
 
