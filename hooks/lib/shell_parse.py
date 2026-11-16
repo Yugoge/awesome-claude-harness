@@ -2619,24 +2619,29 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
         script = parse(script)
     out = []
     seed = dict(env or {})
-    envs = {}
+    envs, exported, prefix = {}, set(), {}
+    scope = _AssignScope(script)
     for site in walk(script, into=into):
         cmd = site.cmd
-        # A shell started with -c or fed code sees only the caller's (exported) variables; a
-        # templated payload's expansions are the outer shell's.
+        # A shell started with -c or fed code sees the caller's variables, the ones exported before
+        # it and its own command's prefix assignments; a templated payload's expansions are the
+        # outer shell's.
         fresh = 0 if site.templated else max(
             (k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell", "pipe_shell")), default=0)
-        env = envs.setdefault(site.context[:fresh + 1], dict(seed))
-        if not cmd.words and cmd.assignments:
-            for a in cmd.assignments:
-                v = a.static_value()
-                if v is None and a.value is not None:
-                    v, dec = _project(a.value, env)
-                    v = v if dec else None
-                if v is not None and not a.append:
-                    env[a.name] = v
-                else:
-                    env.pop(a.name, None)
+        key = site.context[:fresh + 1]
+        if key not in envs:
+            envs[key] = dict(seed)
+            if fresh:
+                outer = envs.get(site.context[:fresh], {})
+                envs[key].update((k, v) for k, v in outer.items() if k in exported)
+                envs[key].update(prefix.get(site.context[:fresh], {}))
+        env = envs[key]
+        if cmd.words:
+            for k in [k for k in envs if len(k) > len(site.context) and k[:len(site.context)] == site.context]:
+                del envs[k]
+            prefix[site.context] = {a.name: v for a in cmd.assignments
+                                    for v in [_assigned(a, env)] if v is not None}
+        _track_assignments(site, cmd, env, seed, exported, scope)
         for red in cmd.redirects:
             if red.target is None or not red.writes():
                 continue
@@ -2681,6 +2686,88 @@ def _appends_args(res):
     return any(name == "xargs" and not any(o in ("-I", "-i", "--replace") or (o or "").startswith("--replace=")
                                            for o, _v in opts)
                for name, opts in res.wrappers)
+
+
+# Commands that may set a shell variable in a way the parser does not follow: after one, only the
+# caller's variables project.
+_STATE_BUILTINS = frozenset({"read", "mapfile", "readarray", "declare", "typeset", "local", "readonly",
+                             "unset", "printf", "eval", "source", ".", "getopts", "let", "export"})
+
+
+class _AssignScope:
+    """Which scripts are a compound's body, and which names are functions."""
+
+    def __init__(self, script):
+        self.seen, self.bodies, self.functions = set(), set(), set()
+        self.scan(script)
+
+    def scan(self, script):
+        if id(script) in self.seen:
+            return
+        self.seen.add(id(script))
+        for pl, _sep in script.items:
+            for st in pl.stages:
+                if isinstance(st, Compound):
+                    if st.kind == "function" and st.name:
+                        self.functions.add(st.name if isinstance(st.name, str) else str(st.name))
+                    for body in st.body:
+                        self.bodies.add(id(body))
+                        self.scan(body)
+
+    def certain(self, site, cmd):
+        """True when an assignment in ``cmd`` surely holds after it: run unconditionally, not in
+        a compound's body, a pipeline or the background."""
+        self.scan(site.script)
+        if id(site.script) in self.bodies:
+            return False
+        before = None
+        for pl, sep in site.script.items:
+            if any(st is cmd for st in pl.stages):
+                return len(pl.stages) == 1 and sep != "&" and before not in ("&&", "||")
+            before = sep
+        return False
+
+
+def _assigned(a, env):
+    v = a.static_value()
+    if v is None and a.value is not None:
+        v, dec = _project(a.value, env)
+        v = v if dec else None
+    return None if a.append else v
+
+
+def _track_assignments(site, cmd, env, seed, exported, scope):
+    if not cmd.words:
+        for a in cmd.assignments:
+            v = _assigned(a, env)
+            if v is not None and scope.certain(site, cmd):
+                env[a.name] = v
+            else:
+                env.pop(a.name, None)
+        return
+    name = basename(cmd.words[0].value() or "")
+    if name == "printf" and not any((w.value() or "-v").startswith("-v") for w in cmd.words[1:]):
+        return
+    if name in _STATE_BUILTINS or name in scope.functions:
+        if name == "export" and scope.certain(site, cmd):
+            for w in cmd.words[1:]:
+                m = _ASSIGN_PARTS_RE.match(w.raw.text)
+                if m and not m.group(2) and not m.group(3):
+                    a = Assignment(w)
+                    v = _assigned(a, env)
+                    exported.add(a.name)
+                    if v is not None:
+                        env[a.name] = v
+                    else:
+                        env.pop(a.name, None)
+                elif w.value() and _NAME_RE.match(w.value()):
+                    exported.add(w.value())
+                else:
+                    env.clear()
+                    env.update(seed)
+            return
+        env.clear()
+        env.update(seed)
 
 
 def _preceded_by_pkg_manager(cmd, res):
