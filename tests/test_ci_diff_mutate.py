@@ -87,13 +87,7 @@ def ok(x):
 def unchecked(x):
     return x == 3
 """
-WIDGET_TEST = IMPORT_LIB + """\
-import widget
-
-
-def test_ok():
-    assert widget.ok(1) and not widget.ok(0)
-"""
+WIDGET_TEST = IMPORT_LIB + "import widget\n\n\ndef test_ok():\n    assert widget.ok(1) and not widget.ok(0)\n"
 
 
 def test_survivors_are_reported_by_line_and_operator_and_the_file_is_restored(tmp_path):
