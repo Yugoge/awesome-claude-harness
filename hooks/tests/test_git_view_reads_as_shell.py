@@ -105,6 +105,9 @@ def test_a_command_word_the_scan_cannot_resolve_is_a_residual(command, kind):
     ("git -c 'alias.x=!git config core.hooksPath .githooks' x", ["x", "config"]),
     ('git -c alias.ci=commit -c "alias.p=!git ci -n" p -m x', ["p", "ci", "commit"]),
     ("git --config-env=alias.ci=CI_VALUE ci", ["ci"]),
+    ("git -c alias.a=ci -c alias.ci=commit a -n -m x", ["a", "ci", "commit"]),
+    ("git -c alias.ci=ci ci -n -m x", ["ci", "ci"]),
+    ("git -c alias.a=b -c alias.b=a a -m x", ["a", "b", "a"]),
 ])
 def test_an_alias_defined_on_the_command_line_is_read(command, expected):
     assert subcommands(command) == expected

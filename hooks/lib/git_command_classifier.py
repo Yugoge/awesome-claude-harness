@@ -384,7 +384,7 @@ def _values(words):
     return [_value(w)[0] for w in words]
 
 
-def _invocations(words, aliases=None, depth=0):
+def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     """The GitInvocation of a simple command whose command word is git, then its alias's.
 
     An alias the invocation defines with `-c alias.<name>=<value>` (or inherits
@@ -421,13 +421,15 @@ def _invocations(words, aliases=None, depth=0):
         if eq and key.lower().startswith('alias.'):
             aliases[key[len('alias.'):].lower()] = val if opt == '-c' else None
         i += 2 if opt in GIT_GLOBAL_VALUE_OPTS else 1
-    body = aliases.get(gvals[k].lower())
-    if body is None or depth >= _MAX_SHELL_DEPTH:
+    name = gvals[k].lower()
+    body = aliases.get(name)
+    # git refuses an alias that reaches itself again, so a loop runs nothing more.
+    if body is None or name in seen or depth >= _MAX_SHELL_DEPTH:
         return
     rest = ' '.join(graws[k + 1:])
     text = body[1:] + ' ' + rest if body.startswith('!') else 'git %s %s' % (body, rest)
     for cmd in _code_commands(text)[0]:
-        yield from _invocations(cmd.words, aliases, depth + 1)
+        yield from _invocations(cmd.words, aliases, depth + 1, seen | {name})
 
 
 # Commands known to leave their arguments and their standard input unexecuted:
