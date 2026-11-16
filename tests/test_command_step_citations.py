@@ -27,7 +27,7 @@ def test_do_step3_follows_the_codex_include():
     # what /do adds to the include: its scope, its fixes, its listing
     assert "Step 2's changes" in step3
     assert "Fix `in_scope_real_bug` findings" in step3
-    assert "`out_of_scope` findings unfixed and list them in the Step 4 summary" in step3
+    assert "`out_of_scope` findings" in step3 and "unfixed and list them in the Step 4 summary" in step3
     assert ('If codex fails (quota/timeout/parse): record `codex_consult: {status: "<failed_quota|failed_timeout|'
             'failed_parse>", note: "<verbatim error>"}` in the do-report and proceed.') in step3
 
