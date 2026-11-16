@@ -64,12 +64,13 @@ Driver arguments (cli.py --arg K=V):
                        (pipeline.Orchestrator.ask; P5 A20's rerun without AskUserQuestion): the default
                        `answered` picks the recommended option; skip, decline and none leave the question
                        unanswered (closed, refused, or no AskUserQuestion in the session), and the
-                       orchestrator takes the question's `default` as an assumption, says so, and carries it
-                       in Step 5's `Previous answers` entry (`assumption`), which BA records in its context
-                       (`clarification_answers`). commands/dev.md Step 5 names no route for an unanswered
-                       question; the assumption follows the plan's residual for a surface without
-                       AskUserQuestion (decide and record the assumption) and agents/dev.md's own rule
-                       (settle it from a sensible default, record the assumption)
+                       orchestrator takes the question's `default` as an assumption, says so, and
+                       re-dispatches BA with `Previous answers: none` (commands/dev.md Step 5 since #27);
+                       BA's player reads the question it wrote and records its default as agents/ba.md's
+                       Input Format says: in its spec and the `assumptions` list it returns
+                       (agents.Player._unanswered). On a text before #27 the orchestrator carries it in
+                       Step 5's `Previous answers` JSON entry (`assumption`), which BA records in its
+                       context (`clarification_answers`)
   stop_before=N        (singular cycle) the orchestrator ends its turn before Step N, claiming the
                        cycle done (P5 A20: stop_before=13, QA never dispatched); each such Stop is
                        recorded in the terminal's `early_stops`; the cycle then goes on with Step N
@@ -581,8 +582,13 @@ class DevCycle:
                 dict(ob, evidence=f"{sc.before} before the change") for ob in addressed]
             notes = "## QA objections addressed\n\n" + "\n".join(
                 f"- {ob['dimension']}: {ob['required_evidence']} -> {sc.before}" for ob in addressed)
-        if self.answers:
-            content["context.v1"]["clarification_answers"] = list(self.answers)
+        # The answers BA's prompt carries. Since #27 Step 5's `Previous answers:` is the producer answer file the
+        # hook wrote, or `none` for a question left unanswered: such a question's default is no answer BA is
+        # given; BA records it as its text says (agents.Player._unanswered), not here.
+        by_file = bool(self.answers) and "Previous answers: <the producer answer file" in self.o.section("Step 5")
+        given = [a for a in self.answers if not (by_file and "assumption" in a)]
+        if given:
+            content["context.v1"]["clarification_answers"] = given
         def ac_path(sub, b, player):  # the context names BA's own acceptance-criteria artifact
             return {"context.v1": {"acceptance_criteria_path": next(
                 a["path"] for a in b.obligation["artifacts"] if a.get("schema") == "acceptance-criteria.v1")}}

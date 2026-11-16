@@ -58,6 +58,10 @@ _INPUT_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9 _()./-]*?):\s+([A-Za-z0-9_.$/{}
 _LITERAL_RE = re.compile(r"literal line `([^`]+)`")
 _RUN_RE = re.compile(r"^\s*Run:\s*(\S.*)$", re.M)
 _REGISTRY_RE = re.compile(r"\.claude/dev-registry/[^/\s]+/([A-Za-z0-9_-]+)\.json")
+# agents/ba.md Input Format (since #27): "`none` when the question went unanswered: your question's `default`
+# stands, recorded in your spec and the `assumptions` list you return" (the token, then where it is recorded).
+_UNANSWERED_RE = re.compile(r"`(\w+)` when the question went unanswered: your question's `default` stands, "
+                            r"recorded in ([^)]*)\)")
 
 
 class PlayError(RuntimeError):
@@ -366,6 +370,7 @@ class Player:
         self.written: list[str] = []
         self.unchanged: list[str] = []
         self.question_written: str | None = None
+        self.assumed: dict | None = None   # an unanswered question's default the role records (_unanswered)
 
     # ------------------------------------------------------------ helpers
     def rel(self, path: str) -> str:
@@ -414,9 +419,45 @@ class Player:
             self.question_written = rel
         if self.act.instead:
             return
+        self.assumed = self._unanswered(sub)
         for art in (b.obligation or {}).get("artifacts") or []:
             if art.get("kind") in ("json", "markdown"):
                 self._write_artifact(sub, art, extra or {})
+
+    def _unanswered(self, sub) -> dict | None:
+        """The role text's rule for a clarification round whose question went unanswered: when the prompt's
+        `Previous answers:` line carries the token the text names (`none`), the role reads the question it
+        wrote (the path its text gives the question schema's file, the schema with `options` and a `default`)
+        and its `default` stands, recorded where the text says: the spec (`spec`) and the list it returns
+        (`returns`, the list's name). None when the prompt carries an answer or the text has no such rule."""
+        text = self.tree.agent_text(self.role)
+        m = _UNANSWERED_RE.search(text)
+        prev = re.search(r"^\s*Previous answers:[ \t]*(.*?)\s*$", self.b.prompt, re.M)
+        if not m or not prev or prev.group(1) != m.group(1):
+            return None
+        where = m.group(2)
+        returns = re.search(r"`(\w+)` list you return", where)
+        sid = None
+        for cand in dict.fromkeys(re.findall(r"`schemas/([\w.-]+)\.json`", text)):
+            try:
+                props = self.tree.schema(cand).get("properties") or {}
+            except Exception:
+                continue
+            if "default" in props and "options" in props:
+                sid = cand
+                break
+        if not sid:
+            raise PlayError(f"agents/{self.role}.md names no question schema with options and a default")
+        rel = self.tree.question_path(self.role, sid, self.b.task_id or "")
+        path = os.path.join(self.b.project, rel)
+        if not os.path.isfile(path):
+            raise PlayError(f"`Previous answers: {prev.group(1)}` and no question artifact at {rel}")
+        sub.read(path, label=f"{sub.role} Read {rel}")
+        q = json.loads(peek(self.tree.rp, sub.role, path))
+        return {"question": q.get("need", ""), "default": q.get("default", ""), "question_path": rel,
+                "spec": bool(re.search(r"\bspec\b", where)), "returns": returns.group(1) if returns else None,
+                "line": f"{q.get('need', '')}: {q.get('default', '')} (the question's default; "
+                        f"the question went unanswered, `Previous answers: {prev.group(1)}`)"}
 
     def _id_binds(self) -> dict:
         tid = self.b.task_id or ""
@@ -496,6 +537,8 @@ class Player:
         text = text.rstrip("\n") + "\n"
         if self.act.notes:
             text += "\n" + self.act.notes.rstrip("\n") + "\n"
+        if self.assumed and self.assumed["spec"] and art.get("kind") == "markdown":
+            text += "\n## Assumptions\n\n- " + self.assumed["line"] + "\n"
         rx = art.get("terminal_line_regex")
         if rx:
             text += "\n" + self.terminal_line(art["path"], rx, art["path"]) + "\n"
@@ -551,6 +594,8 @@ class Player:
                    "artifacts": self.written}
             if self.act.summary:
                 obj["summary"] = self.act.summary
+            if self.assumed and self.assumed["returns"]:
+                obj.setdefault(self.assumed["returns"], []).append(self.assumed["line"])
         lines.append(json.dumps(obj, indent=2))
         tail = None
         for art in (self.b.obligation or {}).get("artifacts") or []:

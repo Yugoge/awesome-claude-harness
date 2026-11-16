@@ -17,10 +17,12 @@ file adds the variants A20 names, armed:
 * the rerun without AskUserQuestion: /dev question again, its Step 5 question left unanswered in
   each form a session meets (pipeline.Orchestrator.ask's `ask` argument): `none`, a session that
   offers no AskUserQuestion (no call is made); `skip`, the dialog closed with no answer; `decline`,
-  the call refused (an error tool_result, as a headless session's permission refusal). The
-  orchestrator takes the question's `default` as an assumption and says so; the re-dispatched BA's
-  prompt carries it in `Previous answers` and BA records it in its context (`clarification_answers`).
-  The cycle completes with no block at all, a blocked Stop included, and asks nothing again.
+  the call refused (an error tool_result, as a headless session's permission refusal). The hook
+  writes no producer answer; the orchestrator takes the question's `default` as an assumption, says
+  so, and re-dispatches BA with `Previous answers: none` (commands/dev.md Step 5 since #27). BA reads
+  the question it wrote and its default stands, recorded as agents/ba.md's Input Format says: in its
+  spec and the `assumptions` list it returns (never as an answer in its context). The cycle completes
+  with no block at all, a blocked Stop included, and asks nothing again.
 
 The /dev gate's predicate is P3's disposition (scripts/resolve-dev-artifact-chain.py): the passing
 Stops these cases end with wait for P3's merge.
@@ -30,6 +32,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 
 import pytest
 
@@ -99,6 +102,19 @@ def _payloads(r, event: str, tool: str) -> list[dict]:
     return out
 
 
+def _returned(payload: dict) -> dict:
+    """The JSON object a subagent's final message returns (its Agent tool_response text), {} when none."""
+    text = "".join(c.get("text", "") for c in (payload.get("tool_response") or {}).get("content") or [])
+    for chunk in text.split("\n\n"):
+        try:
+            doc = json.loads(chunk)
+        except ValueError:
+            continue
+        if isinstance(doc, dict) and "status" in doc:
+            return doc
+    return {}
+
+
 @pytest.mark.parametrize("form, key", [pytest.param(f, _key(QUESTION, (("ask", f),)), id=f,
                                                     marks=pytest.mark.replay(_key(QUESTION, (("ask", f),)), QUESTION.cost))
                                        for f in NO_ANSWER])
@@ -116,14 +132,25 @@ def test_a20_rerun_without_askuserquestion_completes_with_the_assumption_recorde
     redispatch = [p for p in _payloads(r, "PreToolUse", "Agent")
                   if "Clarification round: 1" in (p["tool_input"].get("prompt") or "")]
     assert len(redispatch) == 1, [p["label"] for p in _payloads(r, "PreToolUse", "Agent")]
-    prev = next(line for line in redispatch[0]["tool_input"]["prompt"].split("\n")
-                if line.strip().startswith("Previous answers:"))
-    entries = json.loads(prev.split("Previous answers:", 1)[1])
-    assert [(e["question"], e["answer"]) for e in entries] == [(q["need"], q["default"])], prev
-    assert "no answer" in entries[0].get("assumption", ""), prev
+    prev = [line.strip() for line in redispatch[0]["tool_input"]["prompt"].split("\n")
+            if line.strip().startswith("Previous answers:")]
+    assert prev == ["Previous answers: none"], prev
+    assert r.fact("Step 5 AskUserQuestion") == {"producer_answer": None}, r.facts  # the hook wrote no answer
+    # BA reads the question it wrote; its default stands (agents/ba.md Input Format), recorded in the
+    # `assumptions` list it returns and in its spec, never as an answer in its context.
+    read = [p["tool_input"]["file_path"] for p in _payloads(r, "PreToolUse", "Read") if p.get("agent_type") == "ba"]
+    assert [f for f in read if re.search(r"/docs/dev/producer-question-[^/]+-ba\.json$", f)], read
+    returned = [_returned(p) for p in _payloads(r, "PostToolUse", "Agent")
+                if "Clarification round: 1" in (p["tool_input"].get("prompt") or "")]
+    assert len(returned) == 1 and returned[0].get("status") == "ready", returned
+    assumed = [a for a in returned[0].get("assumptions") or [] if a.startswith(f"{q['need']}: {q['default']} ")]
+    assert len(assumed) == 1 and "default" in assumed[0] and "unanswered" in assumed[0], returned[0]
+    spec = [p["tool_input"]["content"] for p in _payloads(r, "PreToolUse", "Write")
+            if p.get("agent_type") == "ba" and "/ticket-" in p["tool_input"]["file_path"]]
+    assert spec and "## Assumptions\n\n- " + assumed[0] in spec[-1], spec[-1:]
     context = [json.loads(p["tool_input"]["content"]) for p in _payloads(r, "PreToolUse", "Write")
                if p.get("agent_type") == "ba" and "/context-" in p["tool_input"]["file_path"]]
-    assert context and context[-1].get("clarification_answers") == entries, context[-1:]
+    assert context and not context[-1].get("clarification_answers"), context[-1:]
     said = [line for f in glob.glob(os.path.join(r.run_dir, "transcripts", "*", "*.jsonl")) for line in open(f)
             if "Assumption: " + q["default"] in line]
     assert said, "the main agent did not say which assumption it took"
