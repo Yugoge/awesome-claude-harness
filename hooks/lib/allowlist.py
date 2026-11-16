@@ -23,10 +23,11 @@ Sentinel-file grant lifecycle:
     /allow (`/allow re:<regex>`) writes one {op: "*", regex} entry. It is
     the only /allow grant file.
   - load_sentinel_grant_for_task() reads and validates the sentinel.
-  - match_sentinel_grant_for_bash_command() returns the entry a single bash
-    sub-command satisfies: a structural entry by equality on op/target and
-    a positional prefix of the arguments, never a substring of the raw
-    command line; a regex entry by re.search over that sub-command.
+  - match_sentinel_grant_for_bash_command() returns the entry a Bash command
+    satisfies when hooks/lib/shell_parse.py reads it as exactly one simple
+    command: a structural entry by equality on op/target and a positional
+    prefix of the arguments, never a substring of the raw command line; a
+    regex entry by re.search over that command.
     match_sentinel_grant_for_write() and match_sentinel_grant_for_tool()
     match a Write target and a tool name.
   - consume_sentinel_grant_on_terminal_result() unlinks the task's grant
@@ -41,7 +42,7 @@ Shell hooks reach has_do_consent() through this file's one entry point:
 `python3 <hooks>/lib/allowlist.py consent` with the hook payload on stdin
 exits 0 when it holds /do consent and 1 when it does not.
 
-Stdlib-only; Python 3.10+.
+Stdlib-only (plus hooks/lib/shell_parse.py for Bash matching); Python 3.10+.
 """
 
 import json
@@ -277,221 +278,118 @@ def match_sentinel_grant_for_tool(session_id: str, tool_name: str) -> dict | Non
     return None
 
 
-def _legacy_subcommands(command: str) -> list[str]:
-    """Split on every && || ; | and newline, quoted or not (the conservative view)."""
-    s = command.replace("||", "\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
-    return [p.strip() for p in s.split("\n") if p.strip()]
+def _one_simple_command(command: str):
+    """The one simple command ``command`` runs, read by hooks/lib/shell_parse.py, or None.
 
-
-def _bash_subcommands(command: str) -> list[str]:
-    """Split a compound bash command on && || ; | and newline into stripped sub-commands.
-
-    A separator inside a quoted word is text, as the shell reads it: `git commit -m
-    "fix(x): a; b"` is one command. The quoting is read only where it is purely lexical:
-    '...' and $'...' hold anything, "..." holds anything but an expansion that runs code,
-    and a backslash before a quote keeps that quote from opening one. Whatever else could
-    make this scan disagree with the shell -- a here-document, `$(`, a backquote, a process
-    substitution, a quote left open -- is split on every separator as before, so a command
-    with any of them can only get more sub-commands than the shell runs, never fewer. A
-    separator outside quotes, a backslash-escaped one and one in a comment split as before.
-    `&` alone is no separator, as before.
+    A grant authorizes exactly one command, so this is None when the text does
+    not parse, or runs more than one command anywhere (a list, a pipeline, a
+    background job, a command substitution, a process substitution, a -c or
+    eval payload, a fed shell), or runs its command inside a compound command,
+    under `!` or under `time`. The parser is imported here, not at module load:
+    the core install profile ships this module without it, and its hooks never
+    match a Bash grant.
     """
-    n, i, start = len(command), 0, 0
-    parts: list[str] = []
-    while i < n:
-        ch = command[i]
-        if ch == "\\":
-            nxt = command[i + 1:i + 2]
-            i += 2 if nxt and nxt not in ";|&\n" else 1
-        elif ch in "'\"" or (ch == "$" and command[i + 1:i + 2] == "'"):
-            ansi = ch == "$"
-            i += 1 if ansi else 0
-            quote, i = command[i], i + 1
-            while i < n and command[i] != quote:
-                if command[i] == "\\" and (ansi or quote == '"'):
-                    i += 1
-                elif quote == '"' and (command[i] == "`" or command.startswith("$(", i)):
-                    return _legacy_subcommands(command) or [command]
-                i += 1
-            if i >= n:
-                return _legacy_subcommands(command) or [command]
-            i += 1
-        elif ch == "`" or command.startswith(("$(", "<(", ">(", "<<"), i):
-            return _legacy_subcommands(command) or [command]
-        elif ch == "#" and (i == 0 or command[i - 1] in " \t\n;&|()<>"):
-            # A comment: no quote in it opens one. Its separators still split, as before.
-            while i < n and command[i] != "\n":
-                if command[i] in ";|":
-                    parts.append(command[start:i])
-                    start = i + 1
-                elif command.startswith("&&", i):
-                    parts.append(command[start:i])
-                    start, i = i + 2, i + 1
-                i += 1
-        elif ch in ";|\n":
-            parts.append(command[start:i])
-            start, i = i + 1, i + 1
-        elif command.startswith("&&", i):
-            parts.append(command[start:i])
-            start, i = i + 2, i + 2
-        else:
-            i += 1
-    parts.append(command[start:])
-    return [p.strip() for p in parts if p.strip()] or [command]
+    try:
+        from lib.shell_parse import SimpleCommand, parse, walk
+    except ImportError:
+        try:
+            from shell_parse import SimpleCommand, parse, walk
+        except ImportError:
+            return None
+    script = parse(command)
+    if script.errors() or len(script.items) != 1:
+        return None
+    pipeline = script.items[0][0]
+    if len(pipeline.stages) != 1 or pipeline.negated or pipeline.timed:
+        return None
+    cmd = pipeline.stages[0]
+    if (not isinstance(cmd, SimpleCommand) or not cmd.words
+            or sum(1 for _ in walk(script)) != 1):
+        return None
+    return cmd
 
 
-# git global options that may be skipped when locating the subcommand for grant
-# matching: a subset of git_command_classifier's git global-option table (a test
-# pins it; the core install profile ships this module without the classifier),
-# DELIBERATELY NARROWER: the table is for *classification* (identify the verb no
-# matter what), while this subset gates *authorization*. Only options that
-# retarget the repository or toggle a no-op are listed; every option carrying a
-# code-execution vector is omitted on purpose, so a command bearing one never
-# inherits a shorter grant and instead fails closed:
-#   -c <k=v> / --config-env=  -> core.pager, alias.*, core.sshCommand,
-#                                uploadpack.packObjectsHook => arbitrary exec
-#   --exec-path[=<p>]         -> redirects the git subcommand binaries
-#   --super-prefix            -> not needed here; omitted conservatively
-# Anything unrecognized also stops the skip (default-deny).
-#
-# `-C` has NO bare-attached form in real git: `git -C/tmp status` is rejected
-# by git itself with "unknown option: -C/tmp" (verified against git 2.54.0).
-# Only the separated form `-C <dir>` (handled by _GRANT_SKIPPABLE_GIT_VALUE_OPTS
-# below) is valid git syntax for `-C`, unlike --git-dir/--work-tree/--namespace,
-# which DO have a real `=`-joined attached form. So `-C` is deliberately
-# excluded from _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES — including it would
-# model a syntax that does not exist (harmless, since git itself fails closed
-# on that token before running anything, but incorrect domain modeling). The
-# table says the same: only its long value options take `=<value>`.
+# The git global options a short grant may read past to reach the subcommand:
+# a subset of shell_parse's GIT_GLOBAL_VALUE_OPTS and GIT_GLOBAL_FLAGS (a test
+# pins it), narrower on purpose, since this table authorizes. Only options that
+# retarget the repository or toggle a no-op are listed. An option that carries
+# a code-execution vector (-c, --config-env, --exec-path) or is unknown stops
+# the skip, so a command bearing one never inherits a shorter grant. `-C` has
+# no attached form in git (`git -C/p` is rejected), so only `-C <dir>` skips.
 _GRANT_SKIPPABLE_GIT_VALUE_OPTS = frozenset({
     '-C', '--git-dir', '--work-tree', '--namespace',
 })
 _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES = ('--git-dir=', '--work-tree=', '--namespace=')
 _GRANT_SKIPPABLE_GIT_FLAGS = frozenset({
     '-p', '--paginate', '--no-pager', '--bare', '--literal-pathspecs',
-    '--no-literal-pathspecs', '--icase-pathspecs', '--no-replace-objects',
-    '--no-optional-locks',
+    '--no-literal-pathspecs', '--icase-pathspecs', '--no-optional-locks',
 })
 
 
-def _strip_git_global_opts(arg_tokens: list[str]) -> list[str]:
-    """Drop repo-retargeting git global options sitting before the subcommand.
-
-    Input is the token list FOLLOWING the `git` head token. Returns the suffix
-    beginning at the first token that is not a safely-skippable global option.
-    Stops (rather than skipping) at any option not on the safe-list, so
-    `git -c core.pager=x commit` keeps its `-c` and can never prefix-match a
-    plain `git commit` grant.
-    """
-    i = 0
-    n = len(arg_tokens)
-    while i < n:
-        tok = arg_tokens[i]
-        if tok in _GRANT_SKIPPABLE_GIT_VALUE_OPTS:
-            # Separated form: `-C <dir>`. A dangling option (no value) is
-            # malformed; stop rather than run off the end.
-            if i + 1 >= n:
-                break
+def _first_non_global_word(words) -> int:
+    """Index of the first word after a git head that is not a skippable global option."""
+    i = 1
+    while i < len(words):
+        value = words[i].value()
+        if value in _GRANT_SKIPPABLE_GIT_VALUE_OPTS and i + 1 < len(words):
             i += 2
-            continue
-        if tok in _GRANT_SKIPPABLE_GIT_FLAGS:
+        elif value in _GRANT_SKIPPABLE_GIT_FLAGS or (value is not None and any(
+                value.startswith(p) and len(value) > len(p)
+                for p in _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES)):
             i += 1
-            continue
-        # Attached form: `--git-dir=<dir>`, `--work-tree=<dir>`, `--namespace=<ns>`.
-        # `-C` is NOT included here: real git has no bare-attached `-C<dir>`
-        # form (only the separated `-C <dir>` form above is valid git syntax).
-        # Require a non-empty value so a bare `--git-dir=` etc. is not silently
-        # treated as attached.
-        if any(tok.startswith(p) and len(tok) > len(p)
-               for p in _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES):
-            i += 1
-            continue
-        break
-    return arg_tokens[i:]
-
-
-def _is_git_head(head_op: str) -> bool:
-    """True when the head token invokes git (bare or path-qualified)."""
-    return head_op == 'git' or head_op.rsplit('/', 1)[-1] == 'git'
+        else:
+            break
+    return i
 
 
 def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | None:
-    """Structural match of bash command against sentinel-grant allowed_operations[].
+    """The allowed_operations[] entry the task's grant gives ``command``, or None.
 
-    Two entry types are supported:
+    The command must be exactly one simple command (_one_simple_command); its
+    text runs from its first assignment or word to its last word or redirect,
+    and its tokens from its first word or redirect, past its assignments.
 
-    1. Structural entries (op != "*"): the first whitespace-separated token of
-       each sub-command after compound splitting is compared against entry["op"]
-       by exact equality. Leading KEY=VALUE env-var assignments are skipped
-       before extracting the head token so that `GIT_DIR=/tmp git push` matches
-       an entry with op="git". Optional entry["target"] (second token) and
-       entry["args_contain"] (a POSITIONAL PREFIX of the argument tokens, not a
-       free substring search) apply as before.
+    1. Regex entries (op "*" with a "regex"): re.search of the regex over that
+       text, assignments included.
+    2. Structural entries: the text's whitespace-separated tokens, from the
+       command word on, as /allow splits its pattern. entry["op"] equals the
+       command token; entry["target"], when present, equals the token after
+       it; entry["args_contain"] is a positional prefix of the tokens after
+       it, never a substring of the command line.
 
-       When the head token is git, the argument tokens are matched twice: once
-       verbatim, and once with repo-retargeting global options removed (see
-       _strip_git_global_opts). This is what lets `/allow git commit` authorize
-       the canonical `git -C <dir> commit -F <msgfile>` shape. The verbatim view
-       is retained so a grant that names a global option itself keeps pinning it
-       exactly. Options carrying a code-execution vector (-c, --exec-path) are
-       never skipped, so such a command fails closed against a shorter grant.
-
-    2. Regex entries (op="*" with "regex" field): the "regex" value is tested
-       with re.search() against the full subcommand string (before env-var
-       stripping). This lets regex /allow grants reach subagents too.
-
-    The function NEVER substring-matches the entry["op"] against the raw
-    command line — that was the legacy bash-safety bypass closed by R2.
-
-    Returns the matched allowed_operations[] entry on success, None otherwise.
+       For a git command the tokens after it are also read from its first
+       word that is not a skippable global option (_first_non_global_word), so
+       `/allow git commit` reaches `git -C <dir> commit -F <msgfile>`. The
+       verbatim tokens are tried too, so a grant that names a global option
+       keeps pinning it exactly.
     """
     grant = load_sentinel_grant_for_task(task_id)
     if grant is None:
         return None
-    ops = grant.get("allowed_operations", [])
-    subcommands = _bash_subcommands(command)
-
-    # Compound-command guard (applies to BOTH regex and structural grants):
-    # a single grant authorizes exactly one operation. Compound commands like
-    # "git push origin; echo PWNED" or "git push && rm -rf /" would otherwise
-    # let an attacker chain an unauthorized operation after the authorized one.
-    if len(subcommands) != 1:
+    cmd = _one_simple_command(command)
+    if cmd is None:
         return None
+    ops = grant.get("allowed_operations", [])
+    end = cmd.span[1]
+    text = command[cmd.span[0]:end]
 
-    # Pass 1: regex sentinel entries (op="*" with "regex" field).
-    # Single subcommand already guaranteed above.
     for entry in ops:
         if not isinstance(entry, dict) or entry.get("op") != "*":
             continue
         regex_pattern = entry.get("regex")
-        if isinstance(regex_pattern, str):
-            if _regex_safe(regex_pattern, subcommands[0]):
-                return entry
+        if isinstance(regex_pattern, str) and _regex_safe(regex_pattern, text):
+            return entry
 
-    # Pass 2: structural entries.
-    sub = subcommands[0]
-    # Skip leading KEY=VALUE env-var tokens.
-    tokens = sub.split()
-    if not tokens:
-        return None
-    env_skip = 0
-    while env_skip < len(tokens) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[env_skip]):
-        env_skip += 1
-    if env_skip >= len(tokens):
-        return None
-    tokens = tokens[env_skip:]
+    words = cmd.words
+    start = min([words[0].span[0]] + [r.off - len(r.io or "") for r in cmd.redirects])
+    tokens = command[start:end].split()
     head_op = tokens[0]
-    head_target = tokens[1] if len(tokens) >= 2 else None
-    raw_rest = tokens[1:]
-    # Second candidate view with repo-retargeting git global options removed, so
-    # a short `git commit` grant reaches the canonical `git -C <dir> commit ...`
-    # shape this repo actually emits. Both views are tried; the raw view is kept
-    # so an explicitly-pinned grant (`/allow git --git-dir=/a commit`) still
-    # requires that exact prefix and is never widened to another repository.
-    stripped_rest = _strip_git_global_opts(raw_rest) if _is_git_head(head_op) else raw_rest
-    rest_views = [raw_rest] if stripped_rest == raw_rest else [raw_rest, stripped_rest]
-    target_views = {head_target}
-    target_views.update(v[0] for v in rest_views if v)
+    rest_views = [tokens[1:]]
+    if head_op.rsplit('/', 1)[-1] == 'git':
+        k = _first_non_global_word(words)
+        if 1 < k < len(words):
+            rest_views.append(command[words[k].span[0]:end].split())
+    target_views = {v[0] for v in rest_views if v}
     for entry in ops:
         if not isinstance(entry, dict):
             continue
@@ -504,19 +402,13 @@ def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | 
         args_contain = entry.get("args_contain") or []
         if not isinstance(args_contain, list):
             continue
-        # Normalize: split multi-word entries into individual tokens for
-        # prefix matching. Prevents comment-injection bypass via substring
-        # matching (e.g. "push origin" in "commit -m push origin").
-        normalized_ac: list[str] = []
-        for a in args_contain:
-            if isinstance(a, str):
-                normalized_ac.extend(a.split())
-        if not normalized_ac:
+        # Multi-word items split into tokens, so "push origin" is a two-token
+        # prefix, never a substring of "commit -m push origin".
+        wanted = [t for a in args_contain if isinstance(a, str) for t in a.split()]
+        if not wanted:
             return entry
-        for rest_tokens_list in rest_views:
-            if (len(rest_tokens_list) >= len(normalized_ac)
-                    and rest_tokens_list[:len(normalized_ac)] == normalized_ac):
-                return entry
+        if any(view[:len(wanted)] == wanted for view in rest_views):
+            return entry
     return None
 
 
@@ -527,9 +419,9 @@ def match_sentinel_grant_for_write(task_id: str, session_id: str, target_path: s
     Match requires session_id equality and op=='Write'. Target matching:
       - 'target' key present: exact string equality with target_path required;
         absent or null or non-string 'target' values deny (fail-closed).
-      - 'args_contain' key present (no 'target'): legacy fallback — allow only
-        if args_contain is a one-item list whose sole element exactly equals
-        target_path (no substring matching).
+      - 'args_contain' key present (no 'target'): allow only if args_contain
+        is a one-item list whose sole element exactly equals target_path (no
+        substring matching).
       - Neither key present (bare {"op":"Write"}): intentional wildcard — matches
         any target_path. This preserves /allow Write (no path) wildcard behavior.
 
@@ -557,21 +449,15 @@ def match_sentinel_grant_for_write(task_id: str, session_id: str, target_path: s
             continue
         if entry.get("op") != "Write":
             continue
-        # Key-presence branching (ORIGINAL matcher fix):
-        #   'target' present  → exact equality required; fail-closed on non-string/empty
-        #   'args_contain' present (no 'target') → legacy compat: one-item exact equality
-        #   neither → intentional wildcard (bare /allow Write)
         if "target" in entry:
             t = entry["target"]
             if isinstance(t, str) and t and t == target_path:
                 return entry
-            # else: target present but null/empty/wrong path — deny (fail-closed)
         elif "args_contain" in entry:
             ac = entry["args_contain"]
             if isinstance(ac, list) and len(ac) == 1 and isinstance(ac[0], str) and ac[0] == target_path:
                 return entry
         else:
-            # Bare {"op":"Write"} — intentional wildcard
             return entry
     return None
 

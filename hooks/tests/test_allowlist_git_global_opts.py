@@ -81,7 +81,7 @@ class TestGlobalOptionsAShortGrantSkips(unittest.TestCase):
 
     def test_skippable_options_are_a_subset_of_the_option_table(self):
         from lib import allowlist
-        from lib.git_command_classifier import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS
+        from lib.shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS
         self.assertLessEqual(allowlist._GRANT_SKIPPABLE_GIT_VALUE_OPTS, GIT_GLOBAL_VALUE_OPTS)
         self.assertLessEqual(allowlist._GRANT_SKIPPABLE_GIT_FLAGS, GIT_GLOBAL_FLAGS)
         self.assertEqual(sorted(allowlist._GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES),

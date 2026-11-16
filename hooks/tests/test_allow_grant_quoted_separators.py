@@ -95,7 +95,6 @@ ONE = [  # a separator in quoted text is text: one command
     'git -C "/some/dir" commit -m "fix(x): a; b" -m "' + TASK_LINE + '"',
     "git commit -m 'fix(x): $(not run); `not run` << x'",
     'git commit -m "fix: a \\$(not run); b"',
-    'git commit -m "fix(x): a; b" # a comment',
     'X=1 git commit -m "fix(x): a; b"',
     'git commit -F "/tmp/some; odd name.txt"',
 ]
@@ -122,13 +121,10 @@ TWO = [  # a separator outside the quotes starts a second command, checked on it
     ('git commit -m "a"; git commit -m "b; c"', ['git commit -m "a"', 'git commit -m "b; c"']),
     # a quote in a comment opens nothing: the separators after it are real
     ("git commit -m a # don't\nrm x; echo '", ["git commit -m a # don't", "rm x", "echo '"]),
-    ("git commit -m a #it's; rm x", ["git commit -m a #it's", "rm x"]),
     # nothing in a comment opens a quote or an expansion
     ('git commit -m "a; b" # c\nrm x # ok" $(y', ['git commit -m "a; b" # c', 'rm x # ok" $(y']),
     # a backslash before a quote keeps it from opening one
     ("git commit -m a\\'; rm x; echo \\'", ["git commit -m a\\'", "rm x", "echo \\'"]),
-    # an escaped separator outside quotes splits as before (the safe direction)
-    ("git commit -m a\\; rm x", ["git commit -m a\\", "rm x"]),
 ]
 
 
@@ -137,14 +133,13 @@ def test_a_separator_outside_quotes_starts_a_second_command(command, parts):
     assert len(parts) > 1 and not read_as_one(command)
 
 
-# What the scan cannot read as the shell does is split on every separator, quoted or not: as before.
+# A command the parser cannot read, or one that runs more than one command, is never one command.
 UNREADABLE = [
     'git commit -m "$(echo a; rm x)"',
     'git commit -m "`echo a; rm x`"',
     'git commit -m "a; b" $(rm x; y)',
     'git commit -m "a; b" `rm x; y`',
     'git commit -m "a; b" <(rm x; y)',
-    "git commit -F - <<'EOF'\na; b\nEOF",
     "git commit -F - <<'EOF'\ndon't\nEOF\nrm x; echo '",
     "git commit -m \"a; b",
     "git commit -m 'a; b",
@@ -154,21 +149,62 @@ UNREADABLE = [
 
 
 @pytest.mark.parametrize("command", UNREADABLE)
-def test_what_the_scan_cannot_read_splits_as_before(command):
+def test_what_runs_more_than_one_command_or_cannot_be_read_is_not_one_command(command):
     assert not read_as_one(command)
 
 
-def test_text_with_no_quote_splits_exactly_as_before():
+# Text the shell does not read as a separator: one command, read as far as its last word or redirect.
+DATA = [
+    ("git commit -F - <<'EOF'\na; b\nEOF", "git commit -F - <<'EOF'"),
+    ('git commit -m "fix(x): a; b" # a comment', 'git commit -m "fix(x): a; b"'),
+    ("git commit -m a #it's; rm x", "git commit -m a"),
+    ("git commit -m a\\; rm x", "git commit -m a\\; rm x"),
+    ("echo x >| /tmp/a", "echo x >| /tmp/a"),
+    ("git \\\nclean -fd", "git \\\nclean -fd"),
+    ("find . -exec rm {} \\;", "find . -exec rm {} \\;"),
+    ("git commit -m x &", "git commit -m x"),
+]
+
+
+@pytest.mark.parametrize("command,text", DATA)
+def test_a_separator_the_shell_reads_as_data_is_not_a_second_command(command, text):
+    assert read_as_exactly(command, text)
+
+
+# Code the shell runs inside the command is a second command.
+NESTED = [
+    'git commit -m "$(cat msg)"',
+    "git commit -m `cat msg`",
+    "git commit -F <(echo x)",
+    "git commit -m x & rm y",
+    "bash -c 'echo test'",
+    "eval 'git commit -m x'",
+    "bash <<< 'git push'",
+    "cat <<EOF\n$(rm x)\nEOF",
+    "( git commit -m x )",
+    "! git commit -m x",
+    "time git commit -m x",
+]
+
+
+@pytest.mark.parametrize("command", NESTED)
+def test_code_run_inside_the_command_is_a_second_command(command):
+    assert not read_as_one(command)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to reject what it cannot run")
+def test_text_with_no_quote_is_never_read_as_fewer_commands_than_a_split_on_every_separator():
+    """A text bash rejects runs nothing, so only the texts `bash -n` accepts are judged."""
+    bash = shutil.which("bash")
     rnd = random.Random(7)
     pieces = ["git", "commit", "-m", "x", "a;b", ";", "&&", "||", "|", "&", "\n", " ", "  ", "-C", "/d", "&&&", "|&", ";;"]
     for _ in range(3000):
         command = "".join(rnd.choice(pieces) for _ in range(rnd.randint(1, 12)))
         legacy = command.replace("||", "\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
-        expect = [p.strip() for p in legacy.split("\n") if p.strip()] or [command]
-        if len(expect) == 1:
-            assert read_as_exactly(command, expect[0]), repr(command)
-        else:
-            assert not read_as_one(command), repr(command)
+        parts = [p.strip() for p in legacy.split("\n") if p.strip()]
+        if read_as_one(command) and subprocess.run([bash, "-n", "-c", command], capture_output=True,
+                                                   env={"PATH": ""}).returncode == 0:
+            assert len(parts) == 1 and read_as_exactly(command, parts[0].rstrip("& ")), repr(command)
 
 
 def _bash_keywords_and_builtins(bash):
@@ -467,7 +503,7 @@ LITERAL = [
     ("git commit", "A=1 B=2 git commit -q", True),
     ("git commit", "A=1", False),
     ("git commit", "/usr/bin/git commit", False),
-    ("git commit", "git commit -F - <<'EOF'\nmsg\nEOF", False),
+    ("git commit", "git commit -F - <<'EOF'\nmsg\nEOF", True),
     ("git commit", "git commit -m x &", True),
     ("git commit", "git commit -m x # rm y", True),
     ("git commit", "(git commit -m x)", False),
@@ -480,7 +516,7 @@ LITERAL = [
     ("git commit", "env git commit", False),
     ("git", "git", True),
     ("git", "git status", True),
-    ("echo", "echo a\\;b", False),
+    ("echo", "echo a\\;b", True),
     ("echo", "echo 'a;b'", True),
     ("echo", "", False),
     ("commit -m", 'git commit -m "a; b"', False),
