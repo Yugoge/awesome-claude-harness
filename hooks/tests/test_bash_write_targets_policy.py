@@ -76,6 +76,8 @@ def test_an_assignment_that_may_not_hold_projects_nothing(command, expected):
         (f"export T={SAFE}; bash -c 'tee $T'", [SAFE]),
         (f"T={SAFE}; export T; bash -c 'tee $T'", [SAFE]),
         (f"T={SAFE} bash -c 'tee $T'", [SAFE]),
+        (f'T={SAFE}; bash -c "tee $T"', [SAFE]),
+        (f"T={SAFE}; bash -c 'tee $T'", ["$T"]),
         (f"T={SAFE} bash -c 'tee $T'; bash -c 'tee $T'", [SAFE, "$T"]),
         (f"T={SAFE}; [ x ] && export T=.claude/hooks/y; bash -c 'tee $T'", ["$T"]),
     ],
