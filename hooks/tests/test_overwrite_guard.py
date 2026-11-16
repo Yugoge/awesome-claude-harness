@@ -112,16 +112,16 @@ CONSUMERS = (
 
 
 @pytest.mark.parametrize("command, expected", [
-    ("cat > /root/foo.txt << EOF\nhello\nEOF", ["/root/foo.txt"]),
-    ("cat > /root/a.txt << EOF\necho > /root/b.txt\nEOF", ["/root/a.txt"]),
-    ("tee /root/x.txt", ["/root/x.txt"]),
-    ("tee -a /root/x.txt", ["/root/x.txt"]),
+    ("cat > /srv/foo.txt << EOF\nhello\nEOF", ["/srv/foo.txt"]),
+    ("cat > /srv/a.txt << EOF\necho > /srv/b.txt\nEOF", ["/srv/a.txt"]),
+    ("tee /srv/x.txt", ["/srv/x.txt"]),
+    ("tee -a /srv/x.txt", ["/srv/x.txt"]),
     ("cp src dest", ["dest"]),
     ("mv src dest", ["dest"]),
-    ("sed -i s/a/b/ /root/file", ["/root/file"]),
+    ("sed -i s/a/b/ /srv/file", ["/srv/file"]),
     ("install -m 755 src /usr/local/bin/x", ["/usr/local/bin/x"]),
     ("echo X", []),
-    ('cmd <<<"hello world" > /root/out', ["/root/out"]),
+    ('cmd <<<"hello world" > /srv/out', ["/srv/out"]),
     ("echo hello >> /var/log/app.log", ["/var/log/app.log"]),
     ("cat <<-'END'\n\techo > /tmp/inside\n\tEND", []),
     ("echo 'need >=10/3 items'", []),
