@@ -26,7 +26,7 @@ PY = sys.executable
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 OWNER_HOOK = {"type": "command", "command": "/usr/local/bin/owner-own-hook"}
-REFUSED = {"tool_name": "Bash", "tool_input": {"command": "git reset --hard HEAD"}}
+REFUSED = {"tool_name": "Bash", "tool_input": {"command": "git stash"}}
 
 
 def run(cmd, cwd, env=None, input=None, check=True):

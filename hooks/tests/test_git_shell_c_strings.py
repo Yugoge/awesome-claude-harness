@@ -13,10 +13,9 @@ command line of its own; a string it cannot resolve (an expansion the outer
 shell performs, quoting it cannot follow, nesting past its limit) is the
 residual `unresolved_shell_string`, which the privilege guard refuses.
 
-PR #15's second review (finding 1) measured that residual refusing commands
-with no git in them: every `-c` string holding an expansion, text the scan
-could not lex, and every here-document body. Such a string is now a residual
-only when it is git-shaped, and a here-document is shell text only when a
+A string with no git in it (a `-c` string holding an expansion, text the scan
+cannot lex, a here-document body) is no residual: a string is a residual only
+when it is git-shaped, and a here-document is shell text only when a
 shell may read it (REVIEW_ROWS, GIT_SHAPED).
 
 That narrowing let a layer hand its run-time text to a shell, an interpreter
@@ -76,11 +75,6 @@ REFUSED = [
     (PRIVILEGE, "git commit --no-verify -m y"),
     (PRIVILEGE, "git rebase master"),
     (PRIVILEGE, "git revert HEAD~1"),
-    (SAFETY, "git reset --hard HEAD"),
-    (SAFETY, "git update-ref refs/heads/x HEAD"),
-    (SAFETY, "git branch -D feature"),
-    (SAFETY, "git symbolic-ref HEAD refs/heads/x"),
-    (SAFETY, "git push --force origin master"),
     (SAFETY, "git stash"),
     (SAFETY, "git checkout HEAD -- ."),
     (SAFETY, "git restore --source=HEAD -- ."),
@@ -93,7 +87,7 @@ REFUSED = [
     (BRANCH, "git fetch origin master:feat"),
     (BRANCH, "gh pr create --fill"),
 ]
-SUBAGENT = [(PRIVILEGE, "git commit -m y"), (SAFETY, "git push --force origin master"),
+SUBAGENT = [(PRIVILEGE, "git commit -m y"), (PRIVILEGE, "git push --force origin master"), (SAFETY, "git stash"),
             (BRANCH, "git checkout -b feat")]
 
 UNRESOLVED = [
@@ -107,9 +101,8 @@ UNRESOLVED = [
     'bash -c "git status',
 ]
 
-# PR #15 review finding 1: the reviewer's table, (command, exit code of the
-# privilege guard); 103a1b4, before P10's change, gave the same codes. Each row
-# but the last has no git in it and was refused as an unresolved string.
+# (command, exit code of the privilege guard). Each row but the last has no git
+# in it.
 REVIEW_ROWS = [
     ('bash -c "cd $DIR && npm test"', 0),
     ('timeout 30 bash -c "until curl -s localhost:$PORT; do sleep 1; done"', 0),

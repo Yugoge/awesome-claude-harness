@@ -41,7 +41,7 @@ drops one fails here instead of silently reopening the hole.
 NOTHING IS HARDCODED, AND NOTHING IS WRITTEN
 ────────────────────────────────────────────
 Three derivations, no mirrored constants (a sibling constant in this same area
-of the hook was previously hand-mirrored with nothing binding the copies):
+of a hook is easy to hand-mirror with nothing binding the copies):
 
   * the attestation filename prefix comes from the named production constant
     `hooks/lib/commit_pipeline.py::ATTEST_PREFIX`, which the hook's own
@@ -53,8 +53,8 @@ of the hook was previously hand-mirrored with nothing binding the copies):
     `hooks/lib/harness_state_dir.sh::harness_state_dir`, the same function the
     hook itself calls.
 
-`test_hook_prefix_literal_matches_production_*` then asserts the hook's own
-shell literal equals the Python-derived prefix. That is the drift tie: rename
+`test_hook_prefix_literal_matches_production_*` then asserts the hook refuses
+exactly the Python-derived prefix. That is the drift tie: rename
 a prefix on either side alone and these tests FAIL loudly, rather than
 quietly re-targeting themselves at a namespace nobody protects.
 
@@ -96,8 +96,10 @@ GRANT_MINTER = os.path.join(REPO_ROOT, "scripts", "write-commit-grant.py")
 sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
 
 from commit_pipeline import ATTEST_PREFIX  # noqa: E402
+import bash_safety_rules  # noqa: E402
 
-with open(HOOK) as _fp:
+RULES = os.path.join(HOOKS_DIR, "lib", "bash_safety_rules.py")
+with open(RULES) as _fp:
     HOOK_SRC = _fp.read()
 HOOK_LINES = HOOK_SRC.splitlines()
 
@@ -106,8 +108,8 @@ ALLOW = 0
 
 # The shell variables the hook uses for the two namespaces. These are variable
 # NAMES, not namespace values -- the values are derived below.
-ATTEST_VAR = "COMMIT_DISPATCH_ATTEST_RE"
-GRANT_VAR = "COMMIT_GRANT_RE"
+ATTEST_VAR = "attestation"
+GRANT_VAR = "grant"
 
 # The one list deliberately spelled out: AC6's whole point is that THESE names
 # must stay in branch 2 of BOTH layers. An interpreter writes with no
@@ -122,7 +124,7 @@ def harness_state_dir(state_dir_value):
     """Call the production `harness_state_dir` the hook itself sources.
 
     `state_dir_value=None` => CLAUDE_STATE_DIR removed from the environment,
-    yielding the historical default root.
+    yielding the default root.
     """
     env = os.environ.copy()
     if state_dir_value is None:
@@ -175,111 +177,40 @@ def _grant_prefix_from_minter():
 GRANT_PREFIX = _grant_prefix_from_minter()
 
 
-# ── derivation 3: the hook's own shell literal, for the drift tie ───────────
-def _hook_prefix_literal(var):
-    """Extract the filename prefix the hook appends to the state root for `var`."""
-    pat = re.compile(
-        r"^" + re.escape(var) + r"=.*?%/\}/(?P<prefix>[^\"]+)\"",
-    )
-    for lineno, line in enumerate(HOOK_LINES, start=1):
-        m = pat.search(line)
-        if m:
-            return m.group("prefix"), lineno
-    raise AssertionError(
-        f"no `{var}=` assignment composing a prefix onto the state root was "
-        f"found in {HOOK}. The layer was restructured; re-point this "
-        "derivation rather than hardcoding a prefix."
-    )
+# ── the rule's line, for messages ───────────────────────────────────────────
+PREDICATE_LINENO = next(i for i, line in enumerate(HOOK_LINES, 1) if line.startswith("def writes_namespace("))
 
 
 # ── derivation 4: the SHARED verb alternation, from its ONE definition ──────
-# Until 2026-10-08 each layer carried its OWN inline copy of this alternation,
-# and this derivation parsed the copy out of the layer's own `if` block. That
-# shape was itself the defect: the two copies had ALREADY drifted (identical
-# 16-token sets, `\bi?python([^A-Za-z_]|$)` 7th in Layer 1.E3 and 12th in Layer
-# 1.E4), so a per-layer parse could only ever report what each copy happened to
-# say and could NEVER report that the two disagreed. The alternation is now
-# hoisted into one shell variable; this derivation reads THAT, and the two
-# `test_*shared_verb_definition*` / `*defined_exactly_once` tests below assert
-# both layers reference it and no second copy has reappeared.
+# Both layers evaluate one predicate, lib/bash_safety_rules.py::writes_namespace,
+# over one verb alternation, ARTIFACT_WRITE_VERB_RE. This derivation reads that
+# constant; the tests below assert no second copy exists and both layers call
+# the one predicate.
 VERB_VAR = "ARTIFACT_WRITE_VERB_RE"
+VERB_ALT_LINENO = next(i for i, line in enumerate(HOOK_LINES, 1) if line.startswith(VERB_VAR + " = "))
+VERB_ALT = bash_safety_rules.ARTIFACT_WRITE_VERB_RE[1:-1]
+# Branch 1 of the predicate: a redirection whose TARGET is the namespace.
+REDIRECT_BRANCH = """grep(r\"\"\">>?[&|]?\\s*['"]?\"\"\" + ns_re, command)"""
+# Branch 2: a listed verb HANDED the namespace.
+BOUND_BRANCH2 = 'grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one)'
 
 
-def _hoisted_verb_alternation():
-    """(lineno, alternation) of the single shared write-verb definition."""
-    pat = re.compile(r"^" + re.escape(VERB_VAR) + r"='\((?P<alt>.+)\)'$")
-    for lineno, line in enumerate(HOOK_LINES, start=1):
-        m = pat.match(line)
-        if m:
-            return lineno, m.group("alt")
-    raise AssertionError(
-        f"no single-quoted `{VERB_VAR}='(...)'` definition was found in {HOOK}. "
-        "The shared write-verb alternation was renamed, split, or inlined back "
-        "into the layers. Re-point this derivation at its new single source of "
-        "truth. Do NOT restate the token list here, and do NOT go back to "
-        "parsing a per-layer copy -- that is the shape that let the two copies "
-        "drift apart in the first place."
-    )
-
-
-VERB_ALT_LINENO, VERB_ALT = _hoisted_verb_alternation()
-
-
-def _layer_condition(var):
-    """The full `if` condition text of a layer, as a list of source lines."""
-    guard = 'grep -qE "${%s}"' % var
-    for idx, line in enumerate(HOOK_LINES):
-        if guard in line and line.lstrip().startswith("if "):
-            out = []
-            for cur in HOOK_LINES[idx:idx + 12]:
-                out.append(cur)
-                if cur.rstrip().endswith("; then"):
-                    return idx + 1, out
-            raise AssertionError(
-                f"layer {var} at line {idx + 1}: no `; then` terminator within "
-                "12 lines; the condition was restructured."
-            )
-    raise AssertionError(f"no layer guarded by ${{{var}}} found in {HOOK}")
-
-
-def _layer_branches(var):
-    """Return (lineno, redirection_branch_text, branch2_alternation) for a layer."""
-    guard = 'grep -qE "${%s}"' % var
-    for idx, line in enumerate(HOOK_LINES):
-        if guard in line and line.lstrip().startswith("if "):
-            block = "\n".join(HOOK_LINES[idx : idx + 7])
-            assert "${%s}" % VERB_VAR in block, (
-                f"layer {var} at line {idx + 1} does not reference the shared "
-                f"verb definition ${{{VERB_VAR}}}. Either it grew a private "
-                "copy of the alternation again -- the exact drift this hoist "
-                "exists to prevent -- or the reference was renamed."
-            )
-            redirect = None
-            # The first occurrence is the bare namespace guard; the redirection
-            # branch is the one whose pattern has operator syntax ahead of the
-            # variable reference. The pattern may itself contain a backslash-
-            # escaped double quote (the optional quote-character class), so the
-            # scanner must step over `\"` rather than stop at it.
-            for cand in re.finditer(r'grep -qE "(?P<pat>(?:[^"\\]|\\.)*)"', block):
-                pat = cand.group("pat")
-                if pat.endswith("${%s}" % var) and pat != "${%s}" % var:
-                    redirect = pat
-                    break
-            return idx + 1, redirect, VERB_ALT
-    raise AssertionError(f"no layer guarded by ${{{var}}} found in {HOOK}")
+def _layer_calls():
+    """The writes_namespace calls of commit_artifact_rules, one per protected namespace."""
+    body = HOOK_SRC[HOOK_SRC.index("def commit_artifact_rules("):]
+    body = body[:body.index("\ndef ", 1)]
+    return re.findall(r"writes_namespace\(command, re\.escape\(base \+ \"/\" \+ (\w+|\"[^\"]+\")\)\)", body)
 
 
 # Branch 2's verbs are ANCHORED -- `\bVERB([^A-Za-z_]|$)`, some carrying an
 # optional real-binary-alias group (`cp(io)?`, `i?python`, `[gmn]?awk`,
 # `node(js)?`). That shape puts a `|` INSIDE a group, so the alternation can
 # only be split at paren depth 0: a flat `alt.split("|")` shreds every token
-# into fragments like `$)` and `tee([^A-Za-z_]`. This parser previously assumed
-# the FLAT, UNANCHORED token shape and is upgraded here, not relaxed -- the
-# polarity assertions it feeds are unchanged.
+# into fragments like `$)` and `tee([^A-Za-z_]`.
 #
-# T1-1 widened the right bound from one character to the rest of the shell
-# word, refusing a `/` before its end, so a DIRECTORY named like a verb
-# (`node20`, `python3-x`, a home directory named node) is no longer read as a launch.
+# The right bound runs to the end of the shell word and refuses a `/` before
+# it, so a DIRECTORY named like a verb (`node20`, `python3-x`, a home directory
+# named node) is not read as a launch.
 # OLD_BOUNDARY_SUFFIX is the bound before that change; the T1-1 tests below
 # restore it on a throwaway copy as their positive control.
 BOUNDARY_SUFFIX = "([^A-Za-z_/][-0-9A-Za-z._+@%~:=#^]*)?([^-/0-9A-Za-z._+@%~:=#^]|$)"
@@ -335,7 +266,7 @@ def _normalize_verb(token):
 
 
 def _layer_verbs(var):
-    _, _, alt = _layer_branches(var)
+    alt = VERB_ALT
     return [
         _normalize_verb(tok)
         for tok in _split_alternation(alt)
@@ -361,7 +292,7 @@ class Layer:
         self.label = label
         self.var = var
         self.prefix = prefix
-        self.lineno, self.redirect_branch, _ = _layer_branches(var)
+        self.lineno, self.redirect_branch = PREDICATE_LINENO, REDIRECT_BRANCH
         self.verbs = _layer_verbs(var)
 
     def path(self, state_root):
@@ -392,6 +323,20 @@ def run_hook(command, state_root):
         ["bash", HOOK], input=payload, env=env, text=True, capture_output=True
     )
     return proc.returncode, proc.stderr
+
+
+def _write_mutant(tmp_path, name, src):
+    """A throwaway hooks tree whose rules module is `src`; every other file links to the live one."""
+    root = tmp_path / name
+    (root / "lib").mkdir(parents=True)
+    for entry in os.listdir(HOOKS_DIR):
+        if entry not in ("lib", "tests", "__pycache__"):
+            (root / entry).symlink_to(os.path.join(HOOKS_DIR, entry))
+    for entry in os.listdir(os.path.join(HOOKS_DIR, "lib")):
+        if entry not in ("bash_safety_rules.py", "__pycache__"):
+            (root / "lib" / entry).symlink_to(os.path.join(HOOKS_DIR, "lib", entry))
+    (root / "lib" / "bash_safety_rules.py").write_text(src)
+    return str(root / "pretool-bash-safety.sh")
 
 
 def refusal_labels(stderr):
@@ -432,14 +377,11 @@ READ_SHAPES = [
     # The exact shape the pre-repair predicate refused, which is what made the
     # artifact carrying the security claim un-auditable from Bash.
     ("long-listing-suppressing-own-stderr", "ls -la {p} 2>/dev/null"),
-    # ── the WIDER half of the same over-block, measured 2026-10-08 ──────────
-    # Branch 2 used to match a verb ANYWHERE in the command, so the real
-    # trigger was "names the namespace AND mentions any enumerated interpreter
-    # or destination-as-argument verb anywhere, for ANY reason" -- not "hands
-    # that verb the namespace". Every shape below is fully read-only and was
-    # REFUSED under the layer's own label on both layers. The natural auditing
-    # shape is the first two: list the namespace, parse the JSON with a
-    # one-liner.
+    # ── the WIDER half of the same over-block ───────────────────────────────
+    # A verb that merely appears ANYWHERE in the command, for any reason, is
+    # not one HANDED the namespace. Every shape below is fully read-only; the
+    # natural auditing shape is the first two: list the namespace, parse the
+    # JSON with a one-liner.
     ("listing-piped-to-version-suffixed-python", "ls -1 {p} 2>/dev/null | python3 -c 'import sys; print(len(sys.stdin.read()))'"),
     ("read-piped-to-dotted-python-jsontool", "cat {p} 2>/dev/null | python3.12 -m json.tool"),
     ("jq-read-piped-to-python", "jq -r .minted_by {p} | python3 -c 'print(1)'"),
@@ -561,23 +503,25 @@ def test_label_detector_can_both_hit_and_miss(state_root):
 
 
 # ── AC4: the drift tie between the hook and the production constants ────────
-def test_hook_prefix_literal_matches_production_attest_constant():
-    literal, lineno = _hook_prefix_literal(ATTEST_VAR)
-    assert literal == ATTEST_PREFIX, (
-        f"{HOOK}:{lineno} composes a different attestation prefix than the "
-        f"production constant commit_pipeline.ATTEST_PREFIX. The two copies "
-        f"have drifted: hook={literal!r} constant={ATTEST_PREFIX!r}. Every "
-        "probe in this file would otherwise have silently re-targeted itself."
+def _refuses_exactly_the_prefix(layer, state_root):
+    """The layer refuses a write at its production prefix and not at a sibling one letter off."""
+    hit = os.path.join(state_root, f"{layer.prefix}sid-nonce.json")
+    sibling = os.path.join(state_root, f"{layer.prefix[:-2]}X-sid-nonce.json")
+    return (layer.label in refusal_labels(run_hook(f"echo x > {hit}", state_root)[1]),
+            layer.label in refusal_labels(run_hook(f"echo x > {sibling}", state_root)[1]))
+
+
+def test_hook_prefix_literal_matches_production_attest_constant(state_root):
+    assert _refuses_exactly_the_prefix(ATTEST_LAYER, state_root) == (True, False), (
+        "the attestation rule no longer refuses exactly commit_pipeline.ATTEST_PREFIX; "
+        "every probe in this file would otherwise have silently re-targeted itself."
     )
 
 
-def test_hook_prefix_literal_matches_production_grant_minter():
-    literal, lineno = _hook_prefix_literal(GRANT_VAR)
-    assert literal == GRANT_PREFIX, (
-        f"{HOOK}:{lineno} composes a different grant prefix than the "
-        f"canonical minter {GRANT_MINTER} writes: hook={literal!r} "
-        f"minter={GRANT_PREFIX!r}. A hand-authored grant at the minter's "
-        "filename would no longer be refused by this layer."
+def test_hook_prefix_literal_matches_production_grant_minter(state_root):
+    assert _refuses_exactly_the_prefix(GRANT_LAYER, state_root) == (True, False), (
+        f"the grant rule no longer refuses exactly the prefix the canonical minter {GRANT_MINTER} "
+        "writes; a hand-authored grant at the minter's filename would pass."
     )
 
 
@@ -594,8 +538,9 @@ def test_layer_binds_redirection_operator_to_its_target(layer):
         "whose pattern ENDS at the namespace reference was found. Branch 1 "
         "either vanished or stopped binding the operator to its target."
     )
-    assert layer.redirect_branch.endswith("${%s}" % layer.var)
-    operator_part = layer.redirect_branch[: -len("${%s}" % layer.var)]
+    assert layer.redirect_branch in HOOK_SRC
+    assert layer.redirect_branch.endswith('" + ns_re, command)')
+    operator_part = layer.redirect_branch[: -len('" + ns_re, command)')]
     assert ">" in operator_part, (
         f"{layer.name}: branch 1 no longer carries a redirection operator "
         f"ahead of the namespace: {layer.redirect_branch!r}"
@@ -661,29 +606,21 @@ def test_reverting_the_repair_would_be_caught(layer, state_root, tmp_path):
     The real hook is never read-write opened, never modified, and never
     re-pointed; the copy lives in pytest's tmp_path and is discarded.
     """
-    bound = 'grep -qE "%s"' % layer.redirect_branch.replace("\\", "\\")
+    bound = layer.redirect_branch
     assert bound in HOOK_SRC, (
         f"{layer.name}: could not locate branch 1's text to revert; "
         f"parsed pattern was {layer.redirect_branch!r}"
     )
-    reverted_src = HOOK_SRC.replace(bound, 'grep -qE ">"', 1)
+    reverted_src = HOOK_SRC.replace(bound, 'grep(r">", command)', 1)
     assert reverted_src != HOOK_SRC, "mutation was a no-op"
 
-    mutant = tmp_path / "reverted-hook.sh"
-    mutant.write_text(reverted_src)
-    # The hook resolves its libraries relative to its OWN location and falls
-    # back to the default state root when it cannot source them. Without this
-    # symlink the mutant would silently ignore CLAUDE_STATE_DIR, aim at the
-    # real namespace, and permit the sandbox probe for the wrong reason.
-    lib_link = tmp_path / "lib"
-    if not lib_link.exists():
-        lib_link.symlink_to(os.path.join(HOOKS_DIR, "lib"))
+    mutant = _write_mutant(tmp_path, "reverted", reverted_src)
 
     probe = f"ls -la {layer.path(state_root)} 2>/dev/null"
     env = os.environ.copy()
     env["CLAUDE_STATE_DIR"] = state_root
     proc = subprocess.run(
-        ["bash", str(mutant)],
+        ["bash", mutant],
         input=json.dumps({"tool_name": "Bash", "tool_input": {"command": probe}}),
         env=env,
         text=True,
@@ -767,25 +704,8 @@ def _unanchored_mutant(tmp_path, layer):
     The real hook is never opened read-write, never modified and never
     re-pointed; the copy lives in pytest's tmp_path and is discarded.
     """
-    anchored = "%s='(%s)'" % (VERB_VAR, VERB_ALT)
-    assert anchored in HOOK_SRC, (
-        f"{layer.name}: could not locate the shared verb definition to "
-        f"de-anchor; parsed {VERB_ALT!r} at line {VERB_ALT_LINENO}"
-    )
-    src = HOOK_SRC.replace(
-        anchored, "%s='(%s)'" % (VERB_VAR, _deanchored(VERB_ALT)), 1
-    )
-    assert src != HOOK_SRC, "de-anchoring mutation was a no-op"
-    mutant = tmp_path / f"unanchored-{layer.name}-hook.sh"
-    mutant.write_text(src)
-    # The hook resolves its libraries relative to its OWN location and falls
-    # back to the default state root when it cannot source them. Without this
-    # symlink the mutant would ignore CLAUDE_STATE_DIR and aim at the real
-    # namespace, permitting the probe for the wrong reason.
-    lib_link = tmp_path / "lib"
-    if not lib_link.exists():
-        lib_link.symlink_to(os.path.join(HOOKS_DIR, "lib"))
-    return str(mutant)
+    src = _rebind_verbs(_deanchored(VERB_ALT))
+    return _write_mutant(tmp_path, f"unanchored-{layer.name}", src)
 
 
 @pytest.mark.parametrize("layer", LAYERS, ids=LAYER_IDS)
@@ -887,109 +807,56 @@ def test_anchoring_did_not_narrow_the_reach(layer, case, tmpl, state_root):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 2026-10-08 — the four symptoms of the ONE un-hoisted / mis-documented /
-# mis-bound shared predicate. Each block below pins one so it cannot silently
-# return. Every negative result here carries a positive control.
+# The four ways the ONE shared predicate can go wrong: copied, mis-documented,
+# unbound, or mis-bounded. Each block below pins one. Every negative result
+# here carries a positive control.
 # ════════════════════════════════════════════════════════════════════════════
 
 def _hook_grep(pattern, text):
-    """Match with the SAME grep the hook resolves at runtime.
-
-    Deliberately NOT a hardcoded path and NOT Python's `re`: the hook calls a
-    bare `grep` from a non-interactive bash, so resolving it the same way is
-    the only measurement that describes production. (An interactive shell here
-    may alias `grep` to an ignore-file-applying wrapper, which is a different
-    program and would measure the wrong thing.)
-    """
-    proc = subprocess.run(
-        ["bash", "-c", 'grep -oE "$1" || true', "_", pattern],
-        input=text,
-        text=True,
-        capture_output=True,
-    )
-    return [line for line in proc.stdout.splitlines() if line]
+    """Every match, line by line, with the matcher the rules use (Python `re`)."""
+    rx = re.compile(pattern)
+    return [m.group(0) for line in text.split("\n") for m in rx.finditer(line) if m.group(0)]
 
 
-def _write_mutant(tmp_path, name, src):
-    """Materialise a throwaway hook copy that can still find its libraries."""
-    mutant = tmp_path / name
-    mutant.write_text(src)
-    lib_link = tmp_path / "lib"
-    if not lib_link.exists():
-        lib_link.symlink_to(os.path.join(HOOKS_DIR, "lib"))
-    return str(mutant)
+def _rebind_verbs(alt):
+    """The rules source with the shared verb alternation replaced by `(alt)`, before anything reads it."""
+    marker = "ARTIFACT_NS_CAPTURE_RE = "
+    assert HOOK_SRC.count(marker) == 1, "the definition after the verb alternation moved"
+    return HOOK_SRC.replace(marker, "%s = %r\n%s" % (VERB_VAR, "(%s)" % alt, marker), 1)
 
 
-def _comment_region(marker, var):
-    """(lineno, flowed_text) of the comment block from `marker` to the `if`.
-
-    The text is FLOWED -- comment markers stripped and whitespace collapsed --
-    so an assertion about a sentence is not defeated by where the sentence
-    happens to wrap. Asserting on raw lines would make every phrase check a
-    hostage to line width.
-    """
-    start = next(
-        (i for i, line in enumerate(HOOK_LINES) if line.startswith(marker)), None
-    )
-    assert start is not None, f"no comment block starting {marker!r} in {HOOK}"
-    guard = 'grep -qE "${%s}"' % var
-    for end in range(start, len(HOOK_LINES)):
-        if guard in HOOK_LINES[end] and HOOK_LINES[end].lstrip().startswith("if "):
-            body = " ".join(
-                re.sub(r"^#\s?", "", line) for line in HOOK_LINES[start:end]
-            )
-            return start + 1, re.sub(r"\s+", " ", body)
-    raise AssertionError(f"no `if` guarded by ${{{var}}} after {marker!r}")
+def _predicate_doc():
+    """The flowed docstring of the one predicate both layers evaluate."""
+    return re.sub(r"\s+", " ", bash_safety_rules.writes_namespace.__doc__ or "")
 
 
 # ── Symptom A: the shared alternation is defined ONCE, and provably so ──────
 def test_verb_alternation_is_defined_exactly_once():
-    """A second copy anywhere is the drift this hoist exists to prevent."""
-    literal = "(%s)" % VERB_ALT
-    occurrences = HOOK_SRC.count(literal)
+    """A second copy anywhere is the drift the one definition exists to prevent."""
+    first = _split_alternation(VERB_ALT)[0]
+    occurrences = HOOK_SRC.count(first)
     assert occurrences == 1, (
-        f"the write-verb alternation appears {occurrences} times in {HOOK}; it "
-        f"must appear exactly ONCE (the definition at line {VERB_ALT_LINENO}). "
-        "Two copies is precisely the state that drifted: identical 16-token "
-        "sets in a different order, each block telling maintainers to anchor "
-        "any verb they add, and nothing detecting the disagreement."
+        f"the first write-verb token {first!r} appears {occurrences} times in {RULES}; the "
+        f"alternation must be defined exactly ONCE (line {VERB_ALT_LINENO})."
     )
 
 
 @pytest.mark.parametrize("layer", LAYERS, ids=LAYER_IDS)
 def test_both_layers_reference_the_one_shared_verb_definition(layer):
-    lineno, lines = _layer_condition(layer.var)
-    text = "\n".join(lines)
-    assert "${%s}" % VERB_VAR in text, (
-        f"{layer.name} layer (hook line {lineno}) does not reference "
-        f"${{{VERB_VAR}}}. It has its own verb list again."
-    )
-    assert "\\btee" not in text and "\\bruby" not in text, (
-        f"{layer.name} layer (hook line {lineno}) spells verb tokens inline "
-        f"again instead of referencing ${{{VERB_VAR}}}:\n{text}"
+    body = HOOK_SRC[HOOK_SRC.index("def writes_namespace("):]
+    body = body[:body.index("\ndef ", 1)]
+    assert VERB_VAR in body, f"writes_namespace does not reference {VERB_VAR}"
+    assert "\\btee" not in body and "\\bruby" not in body, (
+        f"writes_namespace spells verb tokens inline again instead of referencing {VERB_VAR}"
     )
 
 
 def test_the_two_layer_conditions_are_textually_identical():
-    """The strongest divergence pin: same branches, same order, same patterns.
-
-    Normalising away only each layer's own namespace variable, the two
-    conditions must be byte-identical. This fails on ANY divergence -- a verb
-    reordered, a branch added to one layer only, a gap pattern changed, a
-    binding dropped -- not merely on the verb list drifting.
-    """
-    rendered = {}
-    for layer in LAYERS:
-        lineno, lines = _layer_condition(layer.var)
-        rendered[layer.name] = (
-            lineno,
-            "\n".join(lines).replace("${%s}" % layer.var, "${__NAMESPACE__}"),
-        )
-    (n1, (l1, t1)), (n2, (l2, t2)) = rendered.items()
-    assert t1 == t2, (
-        f"the {n1} layer (hook line {l1}) and the {n2} layer (hook line {l2}) "
-        "no longer share one predicate. Normalised for their own namespace "
-        f"variable they must be identical.\n--- {n1} ---\n{t1}\n--- {n2} ---\n{t2}"
+    """The strongest divergence pin: both layers evaluate ONE predicate, each on its own namespace."""
+    calls = _layer_calls()
+    assert len(calls) == 2 and len(set(calls)) == 2, (
+        "commit_artifact_rules no longer hands exactly the two namespaces to the one predicate "
+        f"writes_namespace: {calls!r}"
     )
 
 
@@ -1020,6 +887,7 @@ def test_self_match_probe_is_zero_on_the_bound_predicate():
             "a word character, so no boundary exists). The token shape changed."
         )
     for layer in LAYERS:
+        assert BOUND_BRANCH2 in HOOK_SRC, "branch 2 no longer binds the verb to the namespace"
         # The alternation MUST be parenthesised before `.*` is appended:
         # without the group, `.*<namespace>` binds to the LAST alternative
         # only and every other verb stays unbound. That is how the hook
@@ -1038,14 +906,13 @@ def test_self_match_probe_is_zero_on_the_bound_predicate():
 # ── Symptom D, mechanism 2: mere co-occurrence must not refuse ──────────────
 def _unbound_branch2_mutant(tmp_path, layer):
     """A throwaway copy with branch 2's namespace binding removed."""
-    bound = 'grep -qE "${%s}.*${%s}"' % (VERB_VAR, layer.var)
-    assert bound in HOOK_SRC, (
+    assert BOUND_BRANCH2 in HOOK_SRC, (
         f"{layer.name}: could not locate branch 2's bound pattern to unbind; "
-        f"looked for {bound!r}. Re-derive before trusting the control."
+        f"looked for {BOUND_BRANCH2!r}. Re-derive before trusting the control."
     )
-    src = HOOK_SRC.replace(bound, 'grep -qE "${%s}"' % VERB_VAR, 1)
+    src = HOOK_SRC.replace(BOUND_BRANCH2, "grep(ARTIFACT_WRITE_VERB_RE, one)", 1)
     assert src != HOOK_SRC, "unbinding mutation was a no-op"
-    return _write_mutant(tmp_path, f"unbound-{layer.name}-hook.sh", src)
+    return _write_mutant(tmp_path, f"unbound-{layer.name}", src)
 
 
 CO_OCCURRENCE_READS = [
@@ -1138,41 +1005,19 @@ def test_separator_evading_writes_are_refused(layer, case, tmpl, state_root):
 
 # ── Symptoms B and C: the comments must not re-assert what was measured false
 def test_symptom_b_difference_three_is_stated_as_a_relaxation():
-    lineno, region = _comment_region("# Layer 1.E3", ATTEST_VAR)
-    assert "none of them a relaxation" not in region, (
-        f"{HOOK}:{lineno} again asserts its three differences from Layer 1.E2 "
-        "include no relaxation. Difference #3 IS one: the predicate went from "
-        "(namespace anywhere) AND (write token anywhere) to a BOUND form, "
-        "which reduces reach on purpose. Asserting otherwise tells a "
-        "maintainer the repair had no cost when it has a named one."
-    )
-    assert "RELAXATION" in region, (
-        f"{HOOK}:{lineno}: the relaxation is no longer labelled as such."
-    )
-    assert "RESIDUAL" in region, (
-        f"{HOOK}:{lineno}: the residual the relaxation leaves is no longer "
-        "named. A maintainer must not have to re-measure to find it."
-    )
-    assert "pretool-git-privilege-guard.py" in region, (
-        f"{HOOK}:{lineno}: the structural barrier that actually covers the "
-        "residual is no longer named beside it."
+    """The predicate's own account names its limits and the barrier that covers them."""
+    doc = _predicate_doc()
+    assert "Positional, not semantic" in doc
+    assert "Residual under-block" in doc, "the writes the predicate misses are no longer named"
+    assert "pretool-git-privilege-guard.py" in doc, (
+        "the structural barrier that covers the residual is no longer named beside it."
     )
 
 
 def test_symptom_c_read_only_claim_stays_qualified():
-    lineno, region = _comment_region("# Layer 1.E4", GRANT_VAR)
-    assert "Read-only inspection: permitted, but" not in region, (
-        f"{HOOK}:{lineno} restates the unqualified claim. It sat in the "
-        "comment block of the very layer that refused a read-only probe: a "
-        "fully read-only command naming this namespace and separately "
-        "invoking an enumerated interpreter WAS refused here."
-    )
-    assert "RESIDUAL OVER-BLOCK" in region, (
-        f"{HOOK}:{lineno}: the residual over-block that survives the repair is "
-        "no longer named, so 'permitted' is unqualified again."
-    )
-    assert "does not HAND the namespace" in region, (
-        f"{HOOK}:{lineno}: the qualification on 'permitted' is gone."
+    doc = _predicate_doc()
+    assert "Residual over-block" in doc, (
+        "the reads the predicate still refuses are no longer named, so 'permitted' is unqualified again."
     )
 
 
@@ -1272,18 +1117,12 @@ def _run_payload(hook, command, state_root, home, extra):
 
 def _old_right_bound_mutant(tmp_path):
     """A throwaway hook copy whose verbs carry the pre-T1-1 right bound."""
-    shared = "%s='(%s)'" % (VERB_VAR, VERB_ALT)
-    assert shared in HOOK_SRC and BOUNDARY_SUFFIX in VERB_ALT, (
-        "could not locate the shared verb definition or its right bound; "
+    assert BOUNDARY_SUFFIX in VERB_ALT, (
+        "could not locate the shared verb definition's right bound; "
         f"parsed {VERB_ALT!r} at line {VERB_ALT_LINENO}"
     )
-    src = HOOK_SRC.replace(
-        shared,
-        "%s='(%s)'" % (VERB_VAR, VERB_ALT.replace(BOUNDARY_SUFFIX, OLD_BOUNDARY_SUFFIX)),
-        1,
-    )
-    assert src != HOOK_SRC, "old-right-bound mutation was a no-op"
-    return _write_mutant(tmp_path, "old-right-bound-hook.sh", src)
+    src = _rebind_verbs(VERB_ALT.replace(BOUNDARY_SUFFIX, OLD_BOUNDARY_SUFFIX))
+    return _write_mutant(tmp_path, "old-right-bound", src)
 
 
 @pytest.mark.parametrize("layer", LAYERS, ids=LAYER_IDS)

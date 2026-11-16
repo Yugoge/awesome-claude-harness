@@ -171,9 +171,8 @@ RECORDED_WRAPPERS = [
 ]
 RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 
-# Anchor-class literals as they appear in the two guard sources. Extracted live and compared:
-# adding '/' to either class would change the residual class, so the published table must fail.
-RECORDED_ERE_ANCHOR = "(^|[[:space:];&|()`])git"
+# Anchor-class literal as it appears in the privilege guard's source. Extracted live and compared:
+# adding '/' to the class would change the residual class, so the published table must fail.
 RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 
 # Gate-architecture census, counted at RECORDED_AT.
@@ -185,10 +184,10 @@ RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 #       CLASSIFIER_HAS_PATH_QUALIFIED_GIT. These have no regex fallback of their own because
 #       they never carried one: they exist to ADD path-qualified coverage on top of a separate
 #       bare-form regex gate, so there is nothing for an empty parse to suppress.
-# All three are counted. Counting only A and B would be MISLEADINGLY NARROW -- a reader
-# counting classifier-consuming branches in the guard finds 11, not 3, and would reasonably
-# conclude the published census was cherry-picked to fit the finding.
-RECORDED_CENSUS = {"architecture_a": 1, "architecture_b": 2, "architecture_c": 8}
+# All three are counted. The shell entry of bash-safety holds no gate of any of these shapes:
+# its git rules are predicates in lib/bash_safety_rules.py over the classifier's invocations, so
+# a shell gate reappearing in it changes this census.
+RECORDED_CENSUS = {"architecture_a": 0, "architecture_b": 0, "architecture_c": 0}
 
 # Every mandated cell witness, probed INDIVIDUALLY. Probing one representative per cell is not
 # sufficient: teaching the tokenizer to skip an unprobed sibling leaves every representative
@@ -1005,7 +1004,7 @@ def extract_first_quoted(line, quote):
     return None if end < 0 else line[start + 1:end]
 
 
-def probe_witness(form, classifier_path, ere_anchor, py_anchor):
+def probe_witness(form, classifier_path, py_anchor):
     """Return (classifier_outcome, anchor_outcome) for one form.
 
     Only the harmless `status` subcommand is ever used. Both _command_token_index() and the
@@ -1025,14 +1024,6 @@ def probe_witness(form, classifier_path, ere_anchor, py_anchor):
     else:
         classifier = "MISS"
     py_match = re.search(py_anchor, form) is not None
-    try:
-        ere = subprocess.run(["grep", "-qE", ere_anchor + "[[:space:]]+"],
-                             input=form + "\n", capture_output=True, text=True, timeout=30)
-        ere_match = ere.returncode == 0
-    except Exception:  # noqa: BLE001
-        ere_match = py_match
-    if py_match != ere_match:
-        return classifier, "DIVERGENT"
     return classifier, ("MATCH" if py_match else "no-match")
 
 
@@ -1041,15 +1032,19 @@ def check_claims(args, report):
     guard_src = read_text(args.git_guard)
     classifier_src = read_text(args.classifier)
 
-    # 1. Both regex engines still exist. A future consolidation must break the RISK-2 prose
-    #    loudly instead of silently outdating it.
-    for symbol, src, path in (("GIT_CMD_RE", bash_src, args.bash_safety),
-                              ("GIT_COMMAND_RE", guard_src, args.git_guard)):
-        if re.search(rf"^{symbol}\s*=", src, re.M):
-            report.ok(f"symbol {symbol} still defined in {path}")
-        else:
-            report.fail(f"symbol {symbol} no longer defined in {path} -- the published RISK-2 "
-                        f"claim that both engines still exist is now false")
+    # 1. One git regex engine: the privilege guard's. bash-safety's git rules read the classifier;
+    #    a second hand-written engine there would bring back RISK-2's drift class.
+    rules_src = read_text(os.path.join(os.path.dirname(args.bash_safety), "lib", "bash_safety_rules.py"))
+    if re.search(r"^GIT_COMMAND_RE\s*=", guard_src, re.M):
+        report.ok(f"symbol GIT_COMMAND_RE still defined in {args.git_guard}")
+    else:
+        report.fail(f"symbol GIT_COMMAND_RE no longer defined in {args.git_guard} -- the published "
+                    f"RISK-2 entry names it as the one remaining engine")
+    if re.search(r"^GIT_CMD_RE\s*=", bash_src + "\n" + rules_src, re.M):
+        report.fail("bash-safety defines GIT_CMD_RE again -- a second hand-synced git regex engine "
+                    "is RISK-2's drift class")
+    else:
+        report.ok("bash-safety defines no git regex engine of its own")
 
     # 2. The arch-F7 accepted-residual block is intact.
     if re.search(r"(?s)Known scope boundaries \(arch-F7\).{0,400}env\s+-i.{0,400}redirection",
@@ -1059,26 +1054,20 @@ def check_claims(args, report):
         report.fail("arch-F7 accepted-residual block changed -- RISK-3's published residual "
                     "table can no longer be assumed to describe the current boundary")
 
-    # 3. Anchor-class literals unchanged (adding '/' would change the residual class).
-    ere_line = next((l for l in bash_src.split("\n") if l.startswith("GIT_CMD_RE=")), "")
-    ere_anchor = extract_first_quoted(ere_line, "'") or ""
+    # 3. Anchor-class literal unchanged (adding '/' would change the residual class).
     py_line = next((l for l in guard_src.split("\n") if l.startswith("GIT_COMMAND_RE")), "")
     py_anchor = extract_first_quoted(py_line, "'") or ""
-    if ere_anchor == RECORDED_ERE_ANCHOR:
-        report.ok("POSIX ERE anchor class unchanged")
-    else:
-        report.fail(f"POSIX ERE anchor class changed: {ere_anchor!r} != {RECORDED_ERE_ANCHOR!r}")
     if py_anchor == RECORDED_PY_ANCHOR:
         report.ok("Python anchor class unchanged")
     else:
         report.fail(f"Python anchor class changed: {py_anchor!r} != {RECORDED_PY_ANCHOR!r}")
-    if not ere_anchor or not py_anchor:
+    if not py_anchor:
         return
 
     # 4. Every witness probed INDIVIDUALLY.
     drift = 0
     for witness in MANDATED_WITNESSES:
-        classifier, anchor = probe_witness(witness["form"], args.classifier, ere_anchor, py_anchor)
+        classifier, anchor = probe_witness(witness["form"], args.classifier, py_anchor)
         if (classifier, anchor) != (witness["classifier"], witness["anchor"]):
             drift += 1
             report.fail(f"matrix_probe {witness['id']} ({witness['form']!r}): recorded "

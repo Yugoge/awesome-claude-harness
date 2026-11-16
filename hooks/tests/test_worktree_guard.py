@@ -1,12 +1,11 @@
 """hooks/pretool-worktree-guard.sh against scratch repositories that hold stale
 agent worktrees.
 
-The guard runs before every tool. Until 2026-11-08 it exited 2 (block) on every
-tool while an agent worktree was behind the main branch. That blocked its own
-advice: `git worktree remove` is a Bash call, so the guard refused it, and the
-other half of the advice, `git branch -D`, is refused by pretool-bash-safety.sh
-and pretool-git-privilege-guard.py. Reads, AskUserQuestion and Agent calls were
-refused too, so only the human could end the state.
+The guard runs before every tool, so it must never exit 2 (block) on a stale
+agent worktree: a block on every tool would refuse its own advice (`git worktree
+remove` is a Bash call, and `git branch -D` is refused by
+pretool-git-privilege-guard.py), and Reads, AskUserQuestion and Agent calls with
+it, so only the human could end the state.
 
 These tests pin the fix:
   * no stale-worktree state makes the guard exit 2, for any tool;
@@ -344,7 +343,7 @@ def test_locked_worktree_can_be_unlocked_then_removed(tmp_path):
 
 
 def test_advice_never_asks_the_agent_for_a_blocked_command(tmp_path):
-    """The old advice ended in `git branch -D <branch>`, which pretool-bash-safety.sh
+    """The old advice ended in `git branch -D <branch>`, which pretool-git-privilege-guard.py
     refuses. Branch deletion is now handed to the user, and the branch is left."""
     repo, _ = _scratch_repo(tmp_path, "clean")
     env = _env(tmp_path)

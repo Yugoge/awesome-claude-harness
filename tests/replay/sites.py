@@ -609,6 +609,7 @@ def unreachable_after_exit(mod: PyModule) -> dict[int, int]:
 _SH_FUNC = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{?\s*(.*)$")
 _SH_EXIT2 = re.compile(r"(?:^|[\s;&|{(])exit\s+2\b")
 _SH_SOURCE = re.compile(r"""(?:^|[\s;&|])(?:source|\.)\s+"?([^"\s;]+\.sh)""")
+_SH_RUN_PY = re.compile(r"""(?:^|[\s;&|(`])"?(?:python3?|\$\{?\w*PYTHON\w*\}?)"?\s+"?([^"\s;&|)`]+\.py)\b""")
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 _OPEN = re.compile(r"(?:^|[\s;(])(if|case|while|until|for|select)\b")
 _CLOSE = re.compile(r"(?:^|[\s;])(fi|esac|done)\b")
@@ -700,6 +701,19 @@ class ShModule:
         if "&&" in pre or "||" in pre or re.search(r"^\s*[^()]*\)\s", ln) or re.search(r"\bthen\b|\belse\b", pre):
             d += 1
         return max(d, 0)
+
+    def run_files(self) -> list[str]:
+        """The hooks/ and hooks/lib/ Python files a line hands to an interpreter (python, python3, $PYTHON_BIN)."""
+        out = []
+        for ln in self.code:
+            for m in _SH_RUN_PY.finditer(ln):
+                base = os.path.basename(m.group(1))
+                for d in ("hooks/lib", "hooks"):
+                    p = os.path.join(d, base)
+                    if os.path.isfile(os.path.join(self.tree, p)):
+                        out.append(p)
+                        break
+        return sorted(set(out))
 
     def sourced(self) -> list[str]:
         out = []
@@ -850,6 +864,13 @@ class Enumerator:
                             todo.append(f)
                 nxt = [f for f in m.imported_files() if f.startswith("hooks/")] + [f for f in loads if f not in table]
             else:
+                if roles[rel] in ("main", "child", "rule"):
+                    procs = m.run_files()
+                    self.children[rel] = procs
+                    for f in procs:
+                        if f not in roles:
+                            roles[f] = "child"
+                            todo.append(f)
                 nxt = m.sourced()
             for f in nxt:
                 if f not in roles:
