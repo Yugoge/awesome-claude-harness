@@ -131,8 +131,20 @@ if [[ -z "$SESSION_ID" ]]; then
     echo "Generated session ID: $SESSION_ID" >&2
 fi
 
+# --- The clock, read ONCE ---
+# Every time this launch derives (the start time, a relative end time, the
+# clock-time rollover, the time-budget warning, the worktree's date stamp) is
+# an offset from this one reading. Reading the clock afresh for each let a
+# second boundary fall between two readings: an end time of `9m` then warned of
+# a budget of 9m or 8m depending on where it fell, and two runs of one launch
+# disagreed (replay shard 6/6's launch differential,
+# test_f6o_usage_limit_before_end_time_resumed_by_the_wake).
+# tests/test_overnight_state_budget_clock.py pins it with a clock that ticks on
+# every reading.
+NOW_EPOCH="$(date +%s)"
+
 # --- Start time ---
-START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+START_TIME="$(date -u -d "@$NOW_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 
 # --- End time parsing ---
 parse_end_time() {
@@ -140,7 +152,7 @@ parse_end_time() {
 
     # Empty → now + 8 hours
     if [[ -z "$input" ]]; then
-        date -u -d "+8 hours" +%Y-%m-%dT%H:%M:%SZ
+        date -u -d "@$((NOW_EPOCH + 8 * 3600))" +%Y-%m-%dT%H:%M:%SZ
         return
     fi
 
@@ -183,7 +195,7 @@ parse_end_time() {
             fi
             minutes="$whole"
         fi
-        date -u -d "+${minutes} minutes" +%Y-%m-%dT%H:%M:%SZ
+        date -u -d "@$((NOW_EPOCH + minutes * 60))" +%Y-%m-%dT%H:%M:%SZ
         return
     fi
     if [[ "$input" == +* ]]; then
@@ -197,18 +209,20 @@ parse_end_time() {
         return
     fi
 
-    # HH:MM or HH:MM AM/PM → parse as clock time today, if past → tomorrow
+    # HH:MM or HH:MM AM/PM → parse as clock time today, if past → tomorrow.
+    # "Today" is NOW_EPOCH's local calendar day (the clock time is local too),
+    # not a second reading of the clock.
+    local today
+    today=$(date -d "@$NOW_EPOCH" +%Y-%m-%d)
     local target_epoch
-    target_epoch=$(date -d "today $input" +%s 2>/dev/null) || {
+    target_epoch=$(date -d "$today $input" +%s 2>/dev/null) || {
         echo "Cannot parse end-time: $input" >&2
         exit 1
     }
-    local now_epoch
-    now_epoch=$(date +%s)
 
-    if [[ "$target_epoch" -le "$now_epoch" ]]; then
+    if [[ "$target_epoch" -le "$NOW_EPOCH" ]]; then
         # Already past today → use tomorrow
-        target_epoch=$(date -d "tomorrow $input" +%s)
+        target_epoch=$(date -d "$today tomorrow $input" +%s)
     fi
 
     date -u -d "@$target_epoch" +%Y-%m-%dT%H:%M:%SZ
@@ -218,9 +232,8 @@ END_TIME="$(parse_end_time "$END_TIME")"
 
 # C12 (redev-tier123): warn (do not error) when time budget is <60 min.
 target_epoch=$(date -u -d "$END_TIME" +%s 2>/dev/null || echo 0)
-now_epoch=$(date +%s)
 if [[ "$target_epoch" -gt 0 ]]; then
-    delta_min=$(( (target_epoch - now_epoch) / 60 ))
+    delta_min=$(( (target_epoch - NOW_EPOCH) / 60 ))
     if [[ "$delta_min" -lt 60 ]]; then
         echo "WARNING: time budget <1h (${delta_min}m). Recommended minimum: 1h for 1 pipeline; 2h for 2-3 pipelines; 6h+ for overnight." >&2
     fi
@@ -414,7 +427,7 @@ if [[ "$WORKTREE_CHOICE" == "in_place" ]]; then
 else
 
 WORKTREE_SCRIPT="$(dirname "$0")/create-worktree.sh"
-WORKTREE_NAME="overnight-$(date +%Y%m%d)-${SESSION_ID:0:8}"
+WORKTREE_NAME="overnight-$(date -d "@$NOW_EPOCH" +%Y%m%d)-${SESSION_ID:0:8}"
 # M3-ORDERING: the worktree script's `worktree add -b` is the launcher's most
 # ref-mutating pre-state operation (old 0000... != new, so the keystone evaluates
 # it). It is out of scope for edits, so the marker is cleared AT THE CALL
