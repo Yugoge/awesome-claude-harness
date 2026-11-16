@@ -439,3 +439,24 @@ def test_every_write_form_meets_the_role_row_as_a_redirect_does(tmp_path, form, 
         proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller])
         assert proc.returncode == 2 and proc.stderr.startswith("BLOCKED by tool-policy.v1: "), (command, proc.stderr)
         assert reason in json.loads(proc.stderr.splitlines()[0].split(": ", 1)[1])["deny_reason"], command
+
+
+@pytest.mark.parametrize("spelling", [
+    '"$CLAUDE_STATE_DIR/{name}"',                    # a variable the hook's environment holds
+    '"${CLAUDE_STATE_DIR}/{name}"',
+    '"${CLAUDE_STATE_DIR:-/nowhere}/{name}"',        # set: its value
+    '"${P14_UNSET_VAR:-{state}}/{name}"',            # unset: its default
+    '"${P14_UNSET_VAR:-$CLAUDE_STATE_DIR}/{name}"',  # a default that is itself a variable
+    'D={state}; rm -f "$D/{name}"',                  # an assignment earlier in the command
+])
+def test_a_path_word_is_read_with_its_variables_expanded(tmp_path, spelling):
+    name, state = f"claude-do-task-{SID}.json", str(tmp_path / "state")
+    word = spelling.replace("{name}", name).replace("{state}", state)
+    command = word if word.startswith("D=") else f"rm -f {word}"
+    assert_denied(run(tmp_path, "Bash", {"command": command}), "a /do task sidecar")
+
+
+def test_a_path_word_that_stays_computed_is_not_judged_as_a_protected_file(tmp_path):
+    name = f"claude-do-task-{SID}.json"
+    for command in (f'rm -f "$P14_UNSET_VAR/{name}"', f'rm -f "$(pwd)/{name}"'):
+        assert run(tmp_path, "Bash", {"command": command}).returncode == 0, command
