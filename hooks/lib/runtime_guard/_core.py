@@ -302,6 +302,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _anchor_nonprotected_workspace_selector,
         _anchor_service_hits_protected,
         _fused_option_values,
+        _service_unit_re,
     )
 except ImportError:  # executed as a top-level script (no package context)
     from anchor import (  # type: ignore[no-redef]
@@ -314,6 +315,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _anchor_nonprotected_workspace_selector,
         _anchor_service_hits_protected,
         _fused_option_values,
+        _service_unit_re,
     )
 
 
@@ -976,6 +978,21 @@ def _operands_and_tdir(head: str, args: list):
     return operands, tdir
 
 
+def _dest_entries(dest: str, srcs: list, args: list) -> list:
+    """The entries a cp/mv DEST writes. When DEST is a directory (it ends in `/`, or
+    names an existing directory by an absolute or home-relative path) and `-T` /
+    `--no-target-directory` is absent, each SRC lands at DEST/basename(SRC) and the
+    directory entry itself is left in place; otherwise DEST is the written entry."""
+    st = _strip_quotes(dest)
+    norm = _normalize_path(st)
+    into_dir = (st.endswith("/") or (os.path.isabs(norm) and os.path.isdir(norm))) and not any(
+        a in ("-T", "--no-target-directory")
+        or (a.startswith("-") and not a.startswith("--") and "T" in a[1:]) for a in args)
+    if not into_dir or not srcs:
+        return [dest]
+    return [os.path.join(norm, os.path.basename(_strip_quotes(s).rstrip("/"))) for s in srcs]
+
+
 def _mutation_targets_for_verb(head: str, args: list) -> list:
     """THE SINGLE position-COMPLETE mutation-target extractor for a mutation verb's
     OWN argv (the tokens AFTER the verb). This is the ONE shared helper used by
@@ -1041,17 +1058,10 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
             # BLOCK, while a literal protected source stays a read (ALLOW).
             out += [s for s in srcs if _has_shell_glob(_strip_quotes(s))]
             return out
-        # `cp SRC… DEST`: the DEST (last operand) is written. SRC is read — EXCEPT a
+        # `cp SRC… DEST`: the DEST entry is written. SRC is read — EXCEPT a
         # shell-GLOB source (`cp <dir>/* DEST`) over-blocked like the cp glob source.
-        # If DEST ends with '/' (an explicit destination DIRECTORY) the written file
-        # is DEST/basename(SRC) for each source, so emit those too (a protected exact
-        # file inside that dir must not be dropped).
-        out = barewords[-1:] if barewords else []
         srcs = barewords[:-1]
-        if barewords:
-            dest = _strip_quotes(barewords[-1])
-            if dest.endswith("/"):
-                out += [os.path.join(dest, os.path.basename(_strip_quotes(s))) for s in srcs]
+        out = _dest_entries(barewords[-1], srcs, args) if barewords else []
         out += [s for s in srcs if _has_shell_glob(_strip_quotes(s))]
         return out
     if head in ("mv", "rename"):
@@ -1060,17 +1070,12 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
             out = [os.path.join(_strip_quotes(tdir), os.path.basename(_strip_quotes(s))) for s in srcs]
             out.extend(barewords)  # the SOURCEs are removed (mutated) by mv
             return out
-        # `mv SRC… DEST`: the DEST is written AND the SRC(s) are removed — both are
-        # mutation targets (moving the protected file away deletes it from its
+        # `mv SRC… DEST`: the DEST entry is written AND the SRC(s) are removed — both
+        # are mutation targets (moving the protected file away deletes it from its
         # watched path → daemon auto-handoff / statefile removal / config neuter).
-        # If DEST ends with '/' (explicit dir) also emit DEST/basename(SRC) so a
-        # protected exact file inside that dir is not dropped.
-        out = list(barewords)
-        if barewords:
-            dest = _strip_quotes(barewords[-1])
-            if dest.endswith("/"):
-                out += [os.path.join(dest, os.path.basename(_strip_quotes(s))) for s in barewords[:-1]]
-        return out
+        if not barewords:
+            return []
+        return barewords[:-1] + _dest_entries(barewords[-1], barewords[:-1], args)
     if head == "rsync":
         # `rsync SRC… DEST` — DEST may be a file or a dir. If DEST ends with '/'
         # (or is an existing dir) the written file is DEST/basename(SRC); else DEST.
@@ -2271,10 +2276,7 @@ def _p2_service(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
     services = cfg.get("protected_services", [])
     if not services:
         return None
-    # match `unit`, `unit.service`, and the template-instance form
-    # `unit@instance` / `unit@instance.service` (without matching a longer
-    # hyphenated unrelated unit name — the boundary after the instance enforces).
-    svc_re = [re.compile(r"(^|[\s=])" + re.escape(s) + r"(@[^\s.=/]*)?(\.service)?(\s|$|\.|=)") for s in services]
+    svc_re = [_service_unit_re(s) for s in services]
     for sc in simple_cmds:
         tokens = _safe_shlex(sc)
         if not tokens:

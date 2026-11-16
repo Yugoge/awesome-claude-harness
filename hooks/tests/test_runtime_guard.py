@@ -4400,5 +4400,77 @@ class TestCycle16CodexFollowup:
             assert name not in src, f"engine must stay project-name-free: {name!r}"
 
 
+class TestDestinationDirectoryEntry:
+    """A cp/mv whose destination is a directory writes DEST/basename(SRC), not the
+    directory entry, so moving or copying a file into the home directory that holds
+    the data file is not a mutation of one of the data file's ancestors."""
+
+    @pytest.fixture
+    def home_datafile(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        cfgdir = home / ".config" / "claude"
+        cfgdir.mkdir(parents=True)
+        df = cfgdir / "protected-runtime.json"
+        df.write_text(json.dumps(FIXTURE))
+        monkeypatch.setenv("HOME", str(home))
+        return str(df)
+
+    def test_into_home_allows(self, home_datafile):
+        for cmd in ("mv f ~", "mv f ~/", "mv f $HOME", 'mv f "$HOME"', "mv f ${HOME}",
+                    "cp f ~", "cp f ~/", "cp -r d ~", "mv a b ~", "mv f ~/.config/claude"):
+            assert ev_nested(cmd, home_datafile) == "ALLOW", cmd
+
+    def test_entry_that_lands_on_the_data_file_or_an_ancestor_blocks(self, home_datafile):
+        for cmd in ("mv protected-runtime.json ~/.config/claude", "cp x/protected-runtime.json ~/.config/claude/",
+                    "cp -r claude ~/.config", "mv claude/ ~/.config", "mv -T f ~", "cp -T f ~/.config",
+                    "mv ~/.config /tmp/x", "mv f ~/.config/claude/protected-runtime.json"):
+            assert ev_nested(cmd, home_datafile) == "BLOCK", cmd
+
+
+class TestServiceUnitFamily:
+    """A `*` in a protected_services entry names a family of units, so `<prefix>`
+    plus `<prefix>-*` protect every unit the daemon-prefix switch names."""
+
+    @pytest.fixture
+    def family_datafile(self, tmp_path):
+        cfg = json.loads(json.dumps(FIXTURE))
+        cfg["protected_services"] = ["demo-daemon", "demo-daemon-*"]
+        p = tmp_path / "protected-runtime.json"
+        p.write_text(json.dumps(cfg))
+        return str(p)
+
+    def test_family_units_block_bare_and_wrapped(self, family_datafile):
+        for cmd in ("systemctl restart demo-daemon-acct-a", "systemctl stop demo-daemon",
+                    "systemctl kill -s SIGTERM demo-daemon-acct-b.service",
+                    "sudo systemctl restart demo-daemon-acct-a", "timeout 5 systemctl reload demo-daemon-x",
+                    "systemctl restart demo-daemon-acct-a@1"):
+            assert ev_nested(cmd, family_datafile) == "BLOCK", cmd
+
+    def test_other_units_and_reads_allow(self, family_datafile):
+        for cmd in ("systemctl status demo-daemon-acct-a", "systemctl restart demo-daemonx",
+                    "systemctl restart other-demo-daemon", "systemctl restart other", "ls /tmp"):
+            assert ev_nested(cmd, family_datafile) == "ALLOW", cmd
+
+    def test_literal_entries_keep_exact_matching(self, datafile, fixture_repo):
+        assert ev("systemctl restart standin-unit-q7", datafile, fixture_repo) == "BLOCK"
+        assert ev("systemctl restart standin-unit-q7-other", datafile, fixture_repo) == "ALLOW"
+
+
+class TestEndpointCoversHttpStop:
+    """With `/stop` in protected_endpoint_paths the guard refuses the shell-client
+    forms of a loopback /stop request, behind a wrapper too."""
+
+    def test_loopback_stop_blocks(self, datafile, fixture_repo):
+        for cmd in ("curl -X POST http://localhost:8080/stop", "wget -qO- http://127.0.0.1:9/stop",
+                    "echo POST /stop | nc localhost 8080", "timeout 5 curl http://[::1]:8080/stop",
+                    "http POST localhost:8080/stop"):
+            assert ev(cmd, datafile, fixture_repo) == "BLOCK", cmd
+
+    def test_other_paths_and_hosts_allow(self, datafile, fixture_repo):
+        for cmd in ("curl http://localhost:8080/stopwatch", "curl https://example.com/stop",
+                    "curl http://localhost:8080/health"):
+            assert ev(cmd, datafile, fixture_repo) == "ALLOW", cmd
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

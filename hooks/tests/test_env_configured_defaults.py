@@ -105,6 +105,35 @@ def test_stand_in_daemon_is_gated_and_grantable(sandbox):
     assert not list((tmp_path / "config").rglob("*.log"))
 
 
+GUARD = REPO / "hooks" / "lib" / "runtime_guard.py"
+
+
+def guard(env, command, services):
+    runtime = Path(env["CLAUDE_PROTECTED_RUNTIME_FILE"])
+    runtime.write_text(json.dumps({"schema_version": 1, **{k: [] for k in REQUIRED_KEYS},
+                                   "protected_services": services}))
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    return subprocess.run([sys.executable, str(GUARD)], input=payload, text=True,
+                          capture_output=True, env=env, timeout=60).stdout.strip()
+
+
+def test_guard_alone_inert_without_daemon_services(sandbox):
+    _, env = sandbox
+    for command in ("systemctl restart demo-daemon-acct-a", "timeout 5 bash -c 'echo restart'", "ls /tmp"):
+        assert guard(env, command, []) == "ALLOW", command
+
+
+def test_guard_alone_refuses_the_daemon_family_from_the_prefix(sandbox):
+    _, env = sandbox
+    prefix = STAND_INS["CLAUDE_PROTECTED_DAEMON_PREFIX"]
+    services = [prefix, prefix + "-*"]
+    for command in ("systemctl restart demo-daemon-acct-a", "systemctl stop demo-daemon",
+                    "systemctl kill -s SIGTERM demo-daemon-acct-b", "timeout 5 systemctl restart demo-daemon"):
+        assert guard(env, command, services) == "BLOCK", command
+    for command in ("systemctl status demo-daemon-acct-a", "systemctl restart demo-unit", "ls /tmp"):
+        assert guard(env, command, services) == "ALLOW", command
+
+
 def test_unset_grant_helper_guidance_reads_sensibly(sandbox):
     _, env = sandbox
     env = {**env, **STAND_INS, "CLAUDE_DAEMON_RESTART_GRANT_HELPER": ""}
