@@ -276,6 +276,9 @@ def _unwritten(line: str, name: str, templates: tuple | None) -> bool:
 
 
 # ---------------------------------------------------------------- the todo half
+TASKS_OFF = ("0", "false", "no", "off")  # the CLI's false spellings for an env switch
+
+
 def todo_gaps(span) -> list[str]:
     """A command with a canonical list (scripts/todo/<command>.py): the span's
     last ok TodoWrite has its contents and every step completed. Any other
@@ -285,8 +288,14 @@ def todo_gaps(span) -> list[str]:
     that text's step and is not asked. Steps complete in order
     (pretool-todo-validate.py), so a later step the text has, completed,
     still holds every step before it."""
+    switches = []
     if os.environ.get("CLAUDE_CODE_ENABLE_TODO_TOOLS") != "1":
-        return ["todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)"]
+        switches.append("todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)")
+    # The CLI offers TodoWrite only while this switch reads false; unset or any other value gives the Task tools.
+    if os.environ.get("CLAUDE_CODE_ENABLE_TASKS", "").strip().lower() not in TASKS_OFF:
+        switches.append("task tools enabled (CLAUDE_CODE_ENABLE_TASKS is not false)")
+    if switches:
+        return switches
     todo_canonical = importlib.import_module("lib.todo_canonical")
     script, _project = todo_canonical._find_todo_script(span.command)
     current = span.last_todos()

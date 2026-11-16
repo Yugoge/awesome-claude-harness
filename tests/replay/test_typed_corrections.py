@@ -79,6 +79,7 @@ def _on_the_transcript(r, root: str, disposition: str) -> dict:
     assert len(paths) == 1, paths
     sid = os.path.basename(paths[0])[:-len(".jsonl")]
     env = {**os.environ, "CLAUDE_PROJECT_DIR": root, "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1",
+           "CLAUDE_CODE_ENABLE_TASKS": "false",
            "PYTHONDONTWRITEBYTECODE": "1"}
     env.pop("CLAUDE_COMPAT_RUNTIME", None)
     done = subprocess.run([sys.executable, "-c", STAND_INS, GATE, sid, paths[0], disposition, root], cwd=root,
