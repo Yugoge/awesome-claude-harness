@@ -317,7 +317,7 @@ def test_what_the_cheap_test_clears_the_hook_never_refuses():
     blocked = [c for c in _blocked_cases() if hook._detect(c)]
     assert len(blocked) >= 3
     rnd = random.Random(933)
-    mutants = [m for m in (_mutant(rnd, rnd.choice(blocked)) for _ in range(6000))
+    mutants = [m for m in (_mutant(rnd, rnd.choice(blocked)) for _ in range(8000))
                if hook._detect(m)]
     assert len(mutants) >= 2000
     corpus = [case["payload"] for case in json.loads(CORPUS.read_text())]
