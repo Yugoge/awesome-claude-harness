@@ -212,17 +212,15 @@ def _path_word(target):
         return target.path
     if target.word is None:
         return None
-    out = []
+    out, start = [], target.word.span[0]
     for part in target.word.parts:
         named = re.fullmatch(r"(\w+)(:-(.*))?", part.text, re.S) if part.kind == "param" else None
-        if named and (os.environ.get(named[1]) or named[2] is not None):
-            out.append(os.environ.get(named[1]) or os.path.expandvars(named[3]))
-        elif part.kind == "param":
-            out.append(("$%s" if re.fullmatch(r"\w+", part.text) else "${%s}") % part.text)
-        elif part.kind in ("cmdsub", "backtick", "arith"):
-            out.append({"cmdsub": "$(%s)", "backtick": "`%s`", "arith": "$(%s)"}[part.kind] % part.text)
-        else:
+        if part.kind == "lit":
             out.append(part.text)
+        elif named and (os.environ.get(named[1]) or named[2] is not None):
+            out.append(os.environ.get(named[1]) or os.path.expandvars(named[3]))
+        else:
+            out.append(target.word.text[part.span[0] - start:part.span[1] - start])
     return "".join(out)
 
 
