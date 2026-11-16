@@ -528,9 +528,14 @@ class Span:
             return None
 
     def minted_id(self) -> str | None:
-        """The task id the UserPromptSubmit hook printed for the opener
-        (MINTED_LINE_RE): the first in the opener's hook context."""
-        return next((found.group(1) for found in self._opener_context(MINTED_LINE_RE)), None)
+        """The task id the harness's own UserPromptSubmit launcher printed for the opener
+        (MINTED_LINE_RE), from the opener's hook context. A hook_success record counts only when its
+        command names the minting launcher (MINTING_LAUNCHER_RE): another hook's line, printed first or
+        not, is never the id. A hook_additional_context record carries no command and counts. Two
+        different ids among the records that count give None (fail closed)."""
+        found = {match.group(1) for attachment in self._opener_attachments()
+                 for match in MINTED_LINE_RE.finditer(_prompt_hook_text(attachment, MINTING_LAUNCHER_RE) or "")}
+        return found.pop() if len(found) == 1 else None
 
     def opener_heads(self) -> list:
         """(branch, commit) of each HEAD line the UserPromptSubmit hook printed for a /push opener
@@ -557,6 +562,13 @@ class Span:
         records the CLI writes after the typed prompt and before the turn's
         first assistant record. An agent's echo of a line (its text, a tool
         result) is never read."""
+        for attachment in self._opener_attachments():
+            content = _prompt_hook_text(attachment)
+            yield from regex.finditer(content) if content is not None else ()
+
+    def _opener_attachments(self):
+        """The hook attachment of each record the CLI writes after the typed prompt and before the
+        turn's first assistant record, in order."""
         lines, pos = self._lines()
         data = lines.data
         while pos < len(data):
@@ -566,8 +578,8 @@ class Span:
             if b'"type":"assistant"' in raw or b'"type": "assistant"' in raw:
                 return
             attachment = (_decode(raw) or {}).get("attachment") if b'"hook_' in raw else None
-            content = _prompt_hook_text(attachment)
-            yield from regex.finditer(content) if content is not None else ()
+            if isinstance(attachment, dict):
+                yield attachment
             pos = end + 1
 
     def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
@@ -608,17 +620,21 @@ class Span:
         return None
 
 
-def _prompt_hook_text(attachment) -> str | None:
+def _prompt_hook_text(attachment, command=None) -> str | None:
     """The text of a context record the CLI writes for a UserPromptSubmit hook's output, else None.
     CLI 2.1.322 writes a hook's plain stdout (what prompt-workflow.py prints) as a hook_success
     record whose content is that stdout, and a JSON additionalContext as hook_additional_context
     whose content is a list of strings; older CLIs wrote the plain stdout as hook_additional_context.
-    A hook_success of any other event is not the prompt's context."""
+    A hook_success of any other event is not the prompt's context; given ``command`` (a regex), nor
+    is one whose command it does not find (hook_additional_context names no command).
+    The one parser of the CLI's hook-output channel (tests/artifact_graph: channel:cli-hook-output)."""
     if not isinstance(attachment, dict):
         return None
     kind = attachment.get("type")
     if kind == "hook_success":
         if attachment.get("hookEvent", attachment.get("hookName")) != "UserPromptSubmit":
+            return None
+        if command is not None and not command.search(str(attachment.get("command") or "")):
             return None
         content = attachment.get("content")
         content = attachment.get("stdout") if not isinstance(content, str) or not content else content
@@ -635,6 +651,9 @@ def _prompt_hook_text(attachment) -> str | None:
 # The task-id lines the UserPromptSubmit hook prints for a /do and a /dev-family opener.
 MINTED_LINE_RE = re.compile(
     r"^(?:\[/do\] task-id minted|DEV_SESSION_ID pre-initialized by hook): ([A-Za-z0-9._-]+)", re.M)
+# The harness's own minting launcher, as a hook_success record's command names it (settings.json:
+# `python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-launch.py"`; prompt-workflow.py, the rule it runs).
+MINTING_LAUNCHER_RE = re.compile(r"(?:^|[\s/\"'])(?:userprompt-launch|prompt-workflow)\.py(?=$|[\s\"'])")
 # The HEAD line it prints for a /push opener (prompt-workflow.py print_push_head).
 OPENER_HEAD_LINE_RE = re.compile(r"^\[/push\] HEAD at the opener: (refs/heads/\S+|detached) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$",
                                  re.M)

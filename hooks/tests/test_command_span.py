@@ -557,12 +557,72 @@ def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path)
     assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_heads() == []
 
 
-def _plain_stdout_context(tx, stdout, event="UserPromptSubmit"):
+LAUNCHER = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-launch.py"'
+FOREIGN = "python3 /opt/other/hooks/echo-ids.py"
+
+
+def _plain_stdout_context(tx, stdout, event="UserPromptSubmit", command=LAUNCHER, content=None):
     """The record CLI 2.1.322 writes for a hook's plain stdout (seen live: a /do whose Stop never
-    found the minted id): a hook_success attachment whose content is that stdout."""
+    found the minted id): a hook_success attachment whose content is that stdout, and whose command
+    is the hook's command line as settings.json registers it."""
     return tx.add(tx._envelope("attachment", attachment={
-        "type": "hook_success", "hookName": event, "hookEvent": event, "content": stdout.rstrip("\n"),
-        "stdout": stdout, "stderr": "", "exitCode": 0, "command": "command hook"}))
+        "type": "hook_success", "hookName": event, "hookEvent": event,
+        "content": stdout.rstrip("\n") if content is None else content,
+        "stdout": stdout, "stderr": "", "exitCode": 0, "command": command}))
+
+
+def _do_span(tmp_path, name, *contexts):
+    """A /do opener whose hook context is ``contexts`` (callables adding records), as a Span."""
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("do", "fix it")
+    for add in contexts:
+        add(tx)
+    return command_span.active_span(tx.write(tmp_path / f"{name}.jsonl"))
+
+
+def test_a_foreign_hooks_minted_line_printed_first_is_not_the_minted_id(tmp_path):
+    """Another UserPromptSubmit hook prints a task-id line before the harness's launcher does: the id is
+    the launcher's, not the first one in the opener's context (P15-L2)."""
+    span = _do_span(tmp_path, "foreign",
+                    lambda tx: _plain_stdout_context(tx, "[/do] task-id minted: 20261116-000001\n", command=FOREIGN),
+                    lambda tx: _plain_stdout_context(tx, "[/do] task-id minted: 20261116-000002\n"))
+    assert span.minted_id() == "20261116-000002"
+    alone = _do_span(tmp_path, "alone",
+                     lambda tx: _plain_stdout_context(tx, "[/do] task-id minted: 20261116-000001\n", command=FOREIGN))
+    assert alone.minted_id() is None
+    workflow = _do_span(tmp_path, "workflow", lambda tx: _plain_stdout_context(
+        tx, "[/do] task-id minted: 20261116-000003\n", command="python3 /h/.claude/hooks/prompt-workflow.py"))
+    assert workflow.minted_id() == "20261116-000003"
+
+
+def test_two_different_minted_ids_in_the_openers_context_give_none(tmp_path):
+    """Two different ids among the records that count (the launcher's hook_success, a
+    hook_additional_context, which names no command) give None: fail closed. The same id twice is it."""
+    def context(tid):
+        return lambda tx: tx.add(tx._envelope("attachment", attachment={
+            "type": "hook_additional_context", "content": [f"[/do] task-id minted: {tid}"],
+            "hookName": "UserPromptSubmit", "toolUseID": "t", "hookEvent": "UserPromptSubmit"}))
+    two = _do_span(tmp_path, "two", lambda tx: _plain_stdout_context(tx, "[/do] task-id minted: 20261116-000004\n"),
+                   context("20261116-000005"))
+    assert two.minted_id() is None
+    same = _do_span(tmp_path, "same", lambda tx: _plain_stdout_context(tx, "[/do] task-id minted: 20261116-000004\n"),
+                    context("20261116-000004"))
+    assert same.minted_id() == "20261116-000004"
+
+
+def test_a_hook_success_without_a_content_string_is_read_from_its_stdout(tmp_path):
+    """A hook_success whose content is empty or not a string is read from its stdout; one whose content is
+    a non-empty string is read from that content, not its stdout."""
+    line = "[/do] task-id minted: 20261116-000006\n"
+    for name, content in (("empty", ""), ("none", None), ("number", 7), ("list", [line])):
+        span = _do_span(tmp_path, name, lambda tx, c=content: tx.add(tx._envelope("attachment", attachment={
+            "type": "hook_success", "hookName": "UserPromptSubmit", "hookEvent": "UserPromptSubmit",
+            "content": c, "stdout": line, "stderr": "", "exitCode": 0, "command": LAUNCHER})))
+        assert span.minted_id() == "20261116-000006", name
+    both = _do_span(tmp_path, "both", lambda tx: _plain_stdout_context(
+        tx, "[/do] task-id minted: 20261116-000007\n", content="[/do] task-id minted: 20261116-000008"))
+    assert both.minted_id() == "20261116-000008"
 
 
 def test_the_openers_context_is_read_in_the_cli_2_1_322_record_forms(tmp_path):

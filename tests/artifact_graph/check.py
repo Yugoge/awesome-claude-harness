@@ -203,11 +203,12 @@ class Decision:
 @dataclass
 class Artifact:
     key: str
-    kind: str = "file"      # file | response | vocabulary | rule | stdout
+    kind: str = "file"      # file | response | vocabulary | rule | stdout | channel
     writers: list = field(default_factory=list)
     readers: list = field(default_factory=list)
     decisions: list = field(default_factory=list)
     declared: list = field(default_factory=list)   # obligations that declare it: {"role", "site", "schema"}
+    synthesizers: list = field(default_factory=list)   # channel: code that builds its records by hand
     runtime: bool = False
     note: str = ""
 
@@ -225,6 +226,7 @@ class Map:
     runs: list = field(default_factory=list)
     static_records: int = 0
     extra: list = field(default_factory=list)       # violations not tied to one artifact
+    pending: list = field(default_factory=list)     # violations of a rule not yet enforced (REPORTED_ONLY)
     measures: dict = field(default_factory=dict)
     ctx: object = None
 
@@ -1464,6 +1466,8 @@ class _Ctx:
                 a.readers.append(Rel(comp_identity(r["component"]), "read", r["site"], "static"))
         # the task-id rule: the minting hook, and every site that templates or matches a minted id
         self._task_id_rule()
+        # the CLI's hook-output channel: its producer, its one parser, its readers, its synthesizers
+        self._channel()
         # the chain function's stdout
         a = None
         for r in self.recs:
@@ -1480,6 +1484,95 @@ class _Ctx:
             if "fields" in r["uses"]:
                 a.decisions.append(Decision(who, "elsewhere", r["site"], "static", "any", "static",
                                             rule=r["site"], matcher=",".join(r["uses"])))
+
+    def _channel(self) -> None:
+        """Artifact `channel:cli-hook-output`: the records the CLI writes into a session's transcript for a
+        hook's output (pyscan.HOOK_RECORD_KINDS). Its one producer is the CLI, declared by the recorded
+        fixture's shapes (CHANNEL_DECLARATION, tests/fixtures/cli). Its readers are derived: the code that
+        parses its records (pyscan `transcript_key`) and, through the calls the code makes, every function
+        and component that reaches that parser. Enforced:
+        (C1) only the CLI produces it: production code that builds such a record by hand is a violation,
+             and a test synthesizer passes only if the shape it builds is the fixture's;
+        (C2) every key the parser reads exists in the fixture for the kinds it compares;
+        (C3) the channel has one parser."""
+        from .pyscan import channel_records, HOOK_RECORD_KINDS
+        py = sorted(f for f in self.tree_files if f.endswith(".py") and not f.startswith("tests/fixtures/"))
+        # the modules that name a record kind, then the production modules that name a function of theirs
+        recs = [r for rel in py if any(k in self._text(rel) for k in HOOK_RECORD_KINDS)
+                for r in channel_records(rel, self._text(rel))]
+        done = {r["component"] for r in recs}
+        names = {r["function"].rsplit(".", 1)[-1] for r in recs if r["kind"] == "py_calls"}
+        names = {n for n in names if not n.startswith("_")}
+        recs += [r for rel in py if rel not in done and _production(rel)
+                 and any(n + "(" in self._text(rel) for n in names)
+                 for r in channel_records(rel, self._text(rel))]
+        keys = [r for r in recs if r["kind"] == "transcript_key"]
+        synths = [r for r in recs if r["kind"] == "transcript_synth"]
+        if not keys and not synths:
+            return
+        a = self.m.art(CHANNEL, "channel")
+        declaration, shapes, why = cli_shapes(self.tree)
+        a.writers.append(Rel("cli", "write", declaration, "declaration"))
+        a.declared.append({"role": "", "site": declaration, "schema": declaration})
+        out = []
+        if why:
+            out.append(Violation("C1-producer", CHANNEL, f"the producer's declaration is unreadable: {why}",
+                                 evidence=[declaration]))
+        # (C3) one parser: the production functions that compare a record's kind with the channel's
+        parsers = sorted({(r["component"], r["function"]) for r in keys if _production(r["component"])})
+        if len(parsers) > 1:
+            out.append(Violation("C3-one-parser", CHANNEL, f"{len(parsers)} parsers: "
+                                 + "; ".join(f"{c}#{f}" for c, f in parsers),
+                                 evidence=sorted({r["site"] for r in keys if _production(r["component"])})[:8]))
+        # readers: each parser, every function of its module that reaches it, and each production
+        # function elsewhere that calls a public one of those
+        calls = [r for r in recs if r["kind"] == "py_calls"]
+        reached: dict = {}
+        for comp, fn in parsers:
+            names = {fn.rsplit(".", 1)[-1]}
+            local = {(c["function"], c["site"]) for c in calls if c["component"] == comp}
+            grow = True
+            while grow:
+                grow = False
+                for c in calls:
+                    if c["component"] == comp and c["function"].rsplit(".", 1)[-1] not in names \
+                            and names & set(c["calls"]):
+                        names.add(c["function"].rsplit(".", 1)[-1])
+                        grow = True
+            for qual, site in sorted(local):
+                if qual.rsplit(".", 1)[-1] in names:
+                    reached.setdefault(comp, []).append((qual, site))
+            public = {n for n in names if not n.startswith("_")}
+            for c in calls:
+                if c["component"] != comp and _production(c["component"]) and public & set(c["calls"]):
+                    reached.setdefault(c["component"], []).append((c["function"], c["site"]))
+        for comp in sorted(reached):
+            for qual, site in sorted(set(reached[comp])):
+                rel = Rel(comp_identity(comp), "read", site, "static", via=qual)
+                if not self._seen(a.readers, rel):
+                    a.readers.append(rel)
+        # (C2) every key a parser reads is in the fixture for the kinds it compares
+        if shapes:
+            for r in keys:
+                known = set().union(*(_shape_keys(shapes.get(k) or {}) for k in r["record_kinds"]))
+                if r["key"] not in known:
+                    out.append(Violation("C2-key", CHANNEL, f"{r['component']}#{r['function']} reads key "
+                                         f"{r['key']!r}, which no {'/'.join(r['record_kinds'])} record of the "
+                                         f"fixture has", evidence=[r["site"], declaration]))
+        # (C1) the producer: a record built by hand
+        for r in synths:
+            a.synthesizers.append(Rel(comp_identity(r["component"]), "write", r["site"], "static",
+                                      via=r["record_kind"]))
+            if _production(r["component"]):
+                out.append(Violation("C1-producer", CHANNEL, f"{r['component']} builds a {r['record_kind']} "
+                                     f"record: only the CLI produces the channel", evidence=[r["site"]]))
+                continue
+            diff = _shape_diff(r, (shapes or {}).get(r["record_kind"]))
+            if diff:
+                out.append(Violation("C1-synth", CHANNEL, f"{r['component']} synthesizes a {r['record_kind']} "
+                                     f"record unlike the CLI's: {diff}", evidence=[r["site"], declaration]))
+        for v in out:
+            (self.m.pending if v.rule in REPORTED_ONLY else self.m.extra).append(v)
 
     def _task_id_rule(self) -> None:
         m = self.m
@@ -1500,21 +1593,20 @@ class _Ctx:
                 for t in tasks:
                     if t in text:
                         held[t] = min(held.get(t, k), k)
-            first = None
             # a hook mints an id its output carries that its event's payload did not hand it and
             # the run did not already hold (a PreToolUse rewrite of the call's input passes on the
-            # ids the call held; a hook that lists a cycle's files names ids the run started with)
+            # ids the call held; a hook that lists a cycle's files names ids the run started with).
+            # Every hook of the first event that mints one is a minter, not the first to print: a
+            # foreign hook that prints before the harness's launcher neither hides it nor stands in
+            # for it, and is a second producer of its own (command_span.Span.minted_id's rule)
             for n, h in sorted(enumerate(run.hooks, 1), key=lambda p: p[1].get("t", 0)):
                 given = json.dumps((run.invocations.get(n) or {}).get("payload") or {})
-                for x in h.get("hooks", []):
-                    if any(t in (x.get("stdout") or "") and t not in given and held.get(t, n + 1) > n
-                           for t in tasks):
-                        first = os.path.normpath(x["hook"])
-                        break
-                if first:
+                found = {os.path.normpath(x["hook"]) for x in h.get("hooks", [])
+                         if any(t in (x.get("stdout") or "") and t not in given and held.get(t, n + 1) > n
+                                for t in tasks)}
+                if found:
+                    minters |= found
                     break
-            if first:
-                minters.add(first)
         forms = [r for r in self.recs if r["kind"] in ("id_form", "id_regex")]
         if not minters and not forms:
             return
@@ -1547,6 +1639,86 @@ _DIR_TEST = re.compile(r"(^|\.)(is_?dir)$|^test -d$")
 # opened), as against one of its content or of its times: E1's 'invalid' mutation rewrites the
 # file in place and leaves every such answer as it was, so only its removal can change them
 _PRESENCE_TEST = re.compile(r"(^|\.)(exists|lexists|is_?file|is_?symlink|islink|access)$|^test -[aefsrwxLhGO]$")
+
+
+CHANNEL = "channel:cli-hook-output"
+# The producer's declaration: the shapes of the records the CLI wrote, recorded from the version
+# CURRENT names (tests/fixtures/cli, scripts/cli-fixture-record.sh).
+CHANNEL_FIXTURES = "tests/fixtures/cli"
+CHANNEL_DECLARATION = CHANNEL_FIXTURES + "/CURRENT/shapes.json"
+# Rules reported but not yet failing the check: the hand-built records of the tests that lane P15-L3
+# moves onto the recorded fixture. Empty this once L3 has merged: the check is then on at zero.
+REPORTED_ONLY = frozenset({"C1-synth"})
+
+
+def _production(component: str) -> bool:
+    """Code that ships: not a test file, a test directory's or the replay harness's."""
+    parts = component.split("/")
+    return not (parts[0] == "tests" or "tests" in parts[:-1] or parts[-1].startswith(("test_", "conftest"))
+                or parts[-1].endswith("_test.py"))
+
+
+def cli_shapes(tree: str) -> tuple:
+    """(declaration path, {record kind: {dotted key path: [JSON types]}}, why it is unreadable or "") of
+    the CLI fixture's shapes.json: the version CURRENT names. A record's key in the file is its `type`
+    plus its attachment's `type` or its `subtype`; only the hook-output kinds are kept, each path
+    relative to the record (an attachment's paths to the attachment)."""
+    from .pyscan import HOOK_RECORD_KINDS
+    try:
+        with open(os.path.join(tree, CHANNEL_FIXTURES, "CURRENT"), encoding="utf-8") as fh:
+            version = fh.read().strip()
+    except OSError as e:
+        return CHANNEL_DECLARATION, {}, f"{CHANNEL_FIXTURES}/CURRENT: {e.strerror}"
+    rel = f"{CHANNEL_FIXTURES}/{version}/shapes.json" if version and "/" not in version else CHANNEL_DECLARATION
+    try:
+        with open(os.path.join(tree, rel), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:
+        return rel, {}, f"{rel}: {getattr(e, 'strerror', None) or e}"
+    if isinstance(data, dict) and isinstance(data.get("records"), dict):
+        data = data["records"]
+    out: dict = {}
+    for key, shape in (data.items() if isinstance(data, dict) else ()):
+        kind = next((k for k in HOOK_RECORD_KINDS if re.search(r"(^|[^a-z_])" + k + r"($|[^a-z_])", key)), None)
+        if kind is None or not isinstance(shape, dict):
+            continue
+        paths = {}
+        for path, types in shape.items():
+            p = path[len("attachment."):] if key.startswith("attachment") and path.startswith("attachment.") else path
+            if key.startswith("attachment") and not path.startswith("attachment."):
+                continue
+            paths[p] = sorted(types) if isinstance(types, (list, tuple, set)) else [types]
+        out[kind] = paths
+    if not out:
+        return rel, {}, f"{rel}: no hook-output record ({', '.join(HOOK_RECORD_KINDS)})"
+    return rel, out, ""
+
+
+def _shape_keys(paths: dict) -> set:
+    """Every key name a record kind's shape has, at any depth."""
+    return {seg for p in paths for seg in re.split(r"\.|\[\]", p) if seg}
+
+
+def _shape_diff(rec: dict, paths: dict | None) -> str:
+    """How a hand-built record's top-level keys and the JSON types its literal states differ from the
+    fixture's shape for its kind; "" when they match."""
+    if not paths:
+        return f"the fixture has no {rec['record_kind']} record"
+    top = {p.split(".", 1)[0].split("[]", 1)[0]: set() for p in paths}
+    for p, types in paths.items():
+        if "." not in p and "[]" not in p:
+            top[p] |= set(types)
+    got = rec["keys"]
+    parts = []
+    missing, extra = sorted(set(top) - set(got)), sorted(set(got) - set(top))
+    if missing and not rec.get("open"):
+        parts.append("missing " + ", ".join(missing))
+    if extra:
+        parts.append("not in the CLI's record: " + ", ".join(extra))
+    for k in sorted(set(top) & set(got)):
+        if got[k] and top[k] and got[k] not in top[k]:
+            parts.append(f"{k} is {got[k]}, the CLI's is {'|'.join(sorted(top[k]))}")
+    return "; ".join(parts)
 
 
 def _decides(reg: dict) -> bool:
@@ -2281,6 +2453,9 @@ def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, 
             fh.write(part)
     with open(os.path.join(work, "violations.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(v.text() for v in vs) + ("\n" if vs else ""))
+    with open(os.path.join(work, "reported-only.txt"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(v.text() for v in m.pending) + ("\n" if m.pending else ""))
+    c["reported_only"] = len(m.pending)
     with open(os.path.join(work, "advisory-copies.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(advisory_copies(m)) + "\n")
     with open(os.path.join(work, "e1-sample.tsv"), "w", encoding="utf-8") as fh:
@@ -2454,6 +2629,8 @@ def main(argv=None) -> int:
         print(v.text())
     print(json.dumps({"counts": res["counts"], "e1": res["measures"]["e1"], "timing": res["measures"]["timing"],
                       "errors": res["errors"]}, indent=1, sort_keys=True))
+    for v in res["map"].pending:
+        print("reported, not yet enforced (REPORTED_ONLY): " + v.text())
     parts = len(os.listdir(os.path.join(work, "map-comments")))
     print(f"map: {work}/map.txt ({parts} PR-comment parts in {work}/map-comments/); "
           f"violations: {work}/violations.txt; advisory copies (E4): {work}/advisory-copies.txt")

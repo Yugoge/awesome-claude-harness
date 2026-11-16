@@ -2674,3 +2674,115 @@ def literal_facts(mod: PyModule, findings: M.Findings) -> None:
             if results:
                 pairs = tuple((t, results[0]) for t in tests)
                 findings.literals.append(M.LiteralFact(comp, mod.ln(n), "branch_map", tuple(tests), pairs))
+
+
+# ---------------------------------------------------------------- the CLI's hook-output channel
+
+# The record kinds the CLI writes for a hook's output into a session's transcript (an attachment's
+# `type`, or a system record's `subtype`): the channel `channel:cli-hook-output` (check.py), whose one
+# producer is the CLI.
+HOOK_RECORD_KINDS = ("hook_success", "hook_additional_context", "stop_hook_summary")
+
+
+def _json_type(node) -> str | None:
+    """The JSON type a literal value node builds, None when the ast does not say."""
+    if isinstance(node, ast.Constant):
+        v = node.value
+        if v is None:
+            return "null"
+        if isinstance(v, bool):
+            return "boolean"
+        if isinstance(v, (int, float)):
+            return "number"
+        if isinstance(v, str):
+            return "string"
+        return None
+    if isinstance(node, ast.JoinedStr):
+        return "string"
+    if isinstance(node, (ast.List, ast.ListComp, ast.Tuple)):
+        return "array"
+    if isinstance(node, (ast.Dict, ast.DictComp)):
+        return "object"
+    return None
+
+
+def _functions(tree) -> list:
+    """(qualified name, node) of every function of a module, innermost last."""
+    out = []
+
+    def walk(node, prefix):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                q = f"{prefix}.{child.name}" if prefix else child.name
+                out.append((q, child))
+                walk(child, q)
+            elif isinstance(child, ast.ClassDef):
+                walk(child, f"{prefix}.{child.name}" if prefix else child.name)
+            else:
+                walk(child, prefix)
+    walk(tree, "")
+    return out
+
+
+def _own_nodes(fn):
+    """The nodes of a function's body, not those of a function nested in it."""
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        yield n
+        stack.extend(ast.iter_child_nodes(n))
+
+
+def channel_records(component: str, source: str) -> list[dict]:
+    """The static records of the CLI's hook-output channel in one Python module:
+
+    * ``transcript_key``: a key a function reads of a hook record, in a function that compares a value
+      with a hook-record kind literal (HOOK_RECORD_KINDS): each literal ``.get("<k>")`` and ``["<k>"]``
+      read in it, with the kinds it compares (the function parses the channel);
+    * ``transcript_synth``: a dict literal whose ``type`` (or ``subtype``) is a hook-record kind: a record
+      built by hand, with its keys and the JSON type of each value the literal states;
+    * ``py_calls``: the names each function calls (the readers of a parser are derived from them).
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+    out: list[dict] = []
+    for qual, fn in _functions(tree):
+        own = list(_own_nodes(fn))
+        kinds = sorted({c.value for n in own if isinstance(n, ast.Compare)
+                        for c in [n.left, *n.comparators]
+                        if isinstance(c, ast.Constant) and c.value in HOOK_RECORD_KINDS})
+        calls = sorted({(n.func.id if isinstance(n.func, ast.Name) else n.func.attr) for n in own
+                        if isinstance(n, ast.Call) and isinstance(n.func, (ast.Name, ast.Attribute))})
+        out.append({"kind": "py_calls", "component": component, "function": qual, "site": f"{component}:{fn.lineno}",
+                    "calls": calls})
+        if not kinds:
+            continue
+        keys = set()
+        for n in own:
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" and n.args:
+                k = _const_str(n.args[0])
+                if k is not None:
+                    keys.add((k, n.lineno))
+            elif isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Load):
+                k = _const_str(n.slice)
+                if k is not None:
+                    keys.add((k, n.lineno))
+        for k, line in sorted(keys):
+            out.append({"kind": "transcript_key", "component": component, "function": qual,
+                        "site": f"{component}:{line}", "key": k, "record_kinds": kinds})
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Dict):
+            continue
+        pairs = {_const_str(k): v for k, v in zip(n.keys, n.values) if k is not None and _const_str(k) is not None}
+        kind = next((_const_str(pairs[f]) for f in ("type", "subtype")
+                     if f in pairs and _const_str(pairs[f]) in HOOK_RECORD_KINDS), None)
+        if kind is None:
+            continue
+        out.append({"kind": "transcript_synth", "component": component, "site": f"{component}:{n.lineno}",
+                    "record_kind": kind, "keys": {k: _json_type(v) for k, v in sorted(pairs.items())},
+                    "open": any(k is None for k in n.keys)})
+    return out
