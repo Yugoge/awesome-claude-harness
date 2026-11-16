@@ -254,8 +254,29 @@ clean form either way.
 
 It also lists, without failing, CLI-owned keys whose working value differs from the overlay.
 `scripts/doctor --strict` runs, in place of the checks above, a fresh host-capability handshake
-and prints a short compatibility report (`--verbose` adds the per-check detail). Doctor exits
-non-zero when a required check fails; with `--strict`, unless the fresh handshake passes.
+and prints a short compatibility report (`--verbose` adds the per-check detail). Every run opens
+with a new nonce; a cached or preseeded PASS is overwritten before any probe and never trusted.
+The report ends in one of three results, each with its own exit code:
+
+| Result | Exit | Meaning |
+|---|---|---|
+| `PASS` | 0 | Every check was measured by this run and passed. Blocking capability and the four deep checks have no probe yet, so no run reaches it today. |
+| `FAIL` | 1 | A check was measured and failed, named on the `RESULT` line: a lifecycle event whose `hooks/capability-canary.py` is not registered for it in any settings layer (`not_wired`), a live receipt that failed its cross-checks, or an unusable binding. |
+| `NOT_PROVABLE_HERE` | 4 | Nothing failed, but the named checks cannot be measured from where doctor runs. Each line says the one action that proves it. |
+
+Where doctor runs never makes it fail. A Bash call inside a session sees no hook event while it
+runs (its PreToolUse fires before it starts, its PostToolUse after it exits), and a terminal has
+no host at all, so a registered event with no receipt in the window is `NOT_PROVABLE_HERE`, never
+`FAIL`. To prove a session's own PreToolUse and PostToolUse, run `scripts/doctor --strict
+--timeout 60` there as a background task and read its output once while it waits: that read is a
+tool call inside the window, and it puts the run's nonce (the `probe open` line on stderr) in the
+transcript. From a terminal, `--session-id <id> --timeout 120` probes a running session; the
+report names what to do in it per event. The session id is `--session-id`, else
+`CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`. A `NOT_PROVABLE_HERE` or `FAIL` run leaves the
+handshake state UNPROTECTED, so protected routes stay refused. While `/harness off` holds, doctor
+(plain or `--strict`) prints the switch's report and exits 3.
+
+Doctor exits non-zero when a required check fails.
 
 ## Switching the harness off: /harness
 
