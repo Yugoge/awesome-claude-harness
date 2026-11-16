@@ -1,8 +1,8 @@
-"""The six lint checks on this repository's tree: one test each, no finding allowed.
+"""The lint checks on this repository's tree: one test each, no finding allowed.
 
 Collected only under HARNESS_LINT=1, which the baseline workflow's lint step sets; the
 ordinary suite skips them, so the step can stay off until the P12 lanes that clear today's
-findings have landed. `python3 -m tests.lint` prints the same findings.
+findings have landed (prose-only: P15's L7, L8 and L9). `python3 -m tests.lint` prints the same findings.
 """
 from __future__ import annotations
 
