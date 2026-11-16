@@ -8,6 +8,7 @@ from pathlib import Path
 from .regen_index import regen_index
 from .regen_readme import regen_readme
 from .patch import patch_claude_md
+from .config import counting_written
 from .notice import emit_post_tool_notice
 from .regions import (
     INDEX_MARKER_ID, README_MARKER_ID, ArtifactKind, RegenRecord, RegenStatus, RegionShape,
@@ -113,17 +114,48 @@ def _regen_if_dir(d: Path, project_dir: Path, results: list | None = None):
     return status
 
 
-def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | None = None):
-    """Regenerate the written file's own directory; returns the `results` list.
+def _dirs_to_regen(parent_dir: Path, project_dir: Path) -> list[Path]:
+    """The written file's directory, then each ancestor up to and including project_dir.
 
-    Records (README first, then INDEX) are appended to the caller's `results` as each call
-    finishes, so a failure in a later call does not lose what an earlier one already reported.
-    No other directory is touched: a product repository's write leaves the global ~/.claude
-    copies alone.
+    An ancestor's INDEX tree (three levels deep) and README stats list the file too, so they
+    change with it. A directory outside project_dir (a write to the global ~/.claude from a
+    product repository) gets its own directory only: no other one there is touched."""
+    dirs = [parent_dir]
+    try:
+        root = project_dir.resolve()
+        current = parent_dir.resolve()
+        current.relative_to(root)
+    except (OSError, ValueError):
+        return dirs
+    while current != root:
+        current = current.parent
+        dirs.append(current)
+    return dirs
+
+
+def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | None = None,
+                        written: Path | None = None):
+    """Regenerate the written file's directory and its ancestors; returns the `results` list.
+
+    Records (README first, then INDEX, per directory, nearest first) are appended to the
+    caller's `results` as each call finishes, so a failure in a later call does not lose what
+    an earlier one already reported. `written`, the file the event names, is counted while it
+    is not yet in the index (config.counting_written), so the text written now is the text the
+    tree-wide check renders once the file is committed.
     """
     if results is None:
         results = []
-    _regen_if_dir(parent_dir, project_dir, results)
+    with counting_written([written] if written is not None else []):
+        for depth, directory in enumerate(_dirs_to_regen(parent_dir, project_dir)):
+            if depth == 0:
+                _regen_if_dir(directory, project_dir, results)
+                continue
+            # An ancestor's hand-written README (no markers at all) is not a skip worth a notice
+            # on every write below it; any other refusal there is reported as for the file's own.
+            ancestor: list = []
+            _regen_if_dir(directory, project_dir, ancestor)
+            results.extend(r for r in ancestor
+                           if r.status is not RegenStatus.SKIPPED_NO_OPENING_MARKER)
     return results
 
 
@@ -145,7 +177,7 @@ def main():
             sys.exit(0)
         if not should_sync(fp, rel):
             sys.exit(0)
-        process_parent_dirs(fp.parent, project_dir, results)
+        process_parent_dirs(fp.parent, project_dir, results, written=fp)
         section_skips = patch_claude_md(project_dir)
         if isinstance(section_skips, list):
             results.extend(section_skips)
