@@ -59,6 +59,9 @@ emit_advisory() {
   advisories+=("canary-verify[ADVISORY]: $*")
 }
 
+# A CLI other than the one the hook-record fixtures were recorded from: re-record them (P15 2(d)); version only, no session.
+cli_v="$(timeout 5 claude --version 2>/dev/null | awk 'NR == 1 { print $1 }')"; fixture_v="$(cat "$CLAUDE_HOME/tests/fixtures/cli/CURRENT" 2>/dev/null)"; [[ -n "$cli_v" && -n "$fixture_v" && "$cli_v" != "$fixture_v" ]] && emit_advisory "claude CLI is ${cli_v} but tests/fixtures/cli/CURRENT is ${fixture_v}: re-record with bash scripts/cli-fixture-record.sh and commit the fixture"
+
 # ---------------------------------------------------------------------------
 # Behavioural test for each guard. Inputs are synthetic minimal JSON envelopes
 # matching Claude's PreToolUse contract. We only check the hook is invocable
