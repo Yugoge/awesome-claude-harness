@@ -6,7 +6,7 @@
 - no Claude Code sandbox;
 - one shared parser;
 - delete what is dead;
-- use GitHub where it fits;
+- use GitHub where it fits (applied: owner decision Q1 (b), section 3, keeps the push refusals local, because the harness protects every user's repositories and every remote);
 - no history comments;
 - no hardcode explosion.
 
@@ -46,21 +46,21 @@ They stay out of the parser work. Their edge cases are in section 7.
 Classes:
 - **KEEP**: stays, re-expressed on the shared parser.
 - **MERGE**: a duplicate of a rule in another hook or in `settings.json` deny, which stays.
-- **GITHUB**: replaced by a GitHub ruleset.
+- **GITHUB**: replaced by a GitHub ruleset. After owner decision Q1 (b) no rule is in this class.
 - **DEAD**: unreachable, superseded, or protects nothing (evidence in the inventory row).
 
 ### 1.1 Counts
 
 | File | Rules | KEEP | MERGE | GITHUB | DEAD |
 |---|---|---|---|---|---|
-| `pretool-bash-safety.sh` | 45 | 33 | 10 | 1 | 1 |
-| `pretool-git-privilege-guard.py` | 30 | 21 | 3 | 1 | 5 |
+| `pretool-bash-safety.sh` | 45 | 33 | 11 | 0 | 1 |
+| `pretool-git-privilege-guard.py` | 30 | 22 | 3 | 0 | 5 |
 | `lib/git_command_classifier.py` | 11 | 11 | 0 | 0 | 0 |
 | `lib/git_clean_guard.py` | 8 | 8 | 0 | 0 | 0 |
 | `pretool-tool-policy.py` (Bash path) | 18 | 17 | 0 | 0 | 1 |
 | `pretool-overnight-hook-guard.py` (Bash path) | 25 | 19 | 5 | 0 | 1 |
 | `pretool-block-branch-pr-worktree.py` | 8 | 1 | 0 | 0 | 0 (7 DELETE, owner decision) |
-| **Total** | **145** | **110** | **18** | **2** | **8**, plus **7 DELETE** |
+| **Total** | **145** | **111** | **19** | **0** | **8**, plus **7 DELETE** |
 
 The 109 KEEP rules collapse further:
 - bash-safety pairs fold into one rule each: BS-20+21, BS-29+35, BS-36+37, BS-38+39;
@@ -71,7 +71,7 @@ Each KEEP rule becomes one predicate over the parse.
 
 `bash_write_targets.py` holds no rules but 9 extraction capabilities (WT-01 to WT-09). Eight move into the shared parser. The ninth, the FROZEN extractor at `:803`, is superseded by the write-mode extractor's coverage. Its `mode`/`mechanism` labels have no production reader.
 
-GP-09 (refuse every agent push without a `/push` grant) was proposed as GITHUB and is kept local here. GitHub judges the credential, not who typed the command. On the owner's machine the agent pushes with the owner's key, so GitHub cannot tell an agent push from the owner's.
+GP-08 and BS-41 were proposed as GITHUB. Under owner decision Q1 (b), GP-08 stays as the one local refusal of force, delete and tag-delete pushes, and BS-41 merges into it (1.2). GP-09 (refuse every agent push without a `/push` grant) was also proposed as GITHUB and is kept local. GitHub judges the credential, not who typed the command. On the owner's machine the agent pushes with the owner's key, so GitHub cannot tell an agent push from the owner's.
 
 ### 1.2 MERGE (18)
 
@@ -88,16 +88,14 @@ GP-09 (refuse every agent push without a `/push` grant) was proposed as GITHUB a
 | BS-45 | `git revert <hash>` | GP-04 (broader) |
 | GP-04 (part), GP-05, GP-06 | The other side of the four pairs above | They stay in GP; bash-safety's copies go |
 | OG-01, OG-02 | `.claude/hooks/`, `.claude/commands/` writes | `pretool-claude-config-guard.py` (same regex list, always on, the same verdicts measured) |
+| BS-41 | `git push --force/-f/--force-with-lease/--delete/-d/--mirror/+ref/:ref` | GP-08 (the same token set; GP-08 is stricter: neither `/do` nor a broad `/allow` releases it). P14-4 extends GP-08 as in section 3. |
 | OG-19, OG-20, OG-21 | Branch force, update-ref/symbolic-ref, push of the protected branch | GP (rc=2 measured on each) |
 
-The GP-04/05/06 row is counted once, as the pair. The MERGE total is 10 in bash-safety, 3 in GP and 5 in OG.
+The GP-04/05/06 row is counted once, as the pair. The MERGE total is 11 in bash-safety, 3 in GP and 5 in OG.
 
-### 1.3 GITHUB (2)
+### 1.3 GITHUB (0)
 
-| Rule | What it refuses | Replaced by |
-|---|---|---|
-| BS-41 | `git push --force/-f/--force-with-lease/--delete/-d/--mirror/+ref/:ref` | Section 3, rulesets R1 and R2. It is also a GP-08 duplicate. |
-| GP-08 | Force or delete pushes | Section 3, rulesets R1, R2 and R3. Owner decision Q1. |
+None. Owner decision Q1 (b): no GitHub rulesets. Section 3 says what stays local instead.
 
 ### 1.4 DEAD (8)
 
@@ -144,7 +142,7 @@ These go in the lane that owns the file:
 - **bash_write_targets:** the `mode`/`mechanism` labels.
 - **pretool-cp-state-write-guard.py:** its `bash_write_targets` import, which is never called.
 
-TP-13 and TP-14 are in-flight compatibility code. Their own comments say to delete them once no session predates train 2. That is owner decision Q5.
+TP-13 and TP-14 are in-flight compatibility code. Their own comments say to delete them once no session predates train 2. Owner decision Q5 (a): delete them now (P14-6).
 
 ### 1.6 Over-blocks this plan fixes
 
@@ -164,11 +162,11 @@ The cd-then-config case from #14 is not an over-block. `cd <repo> && git config 
 - it is refused by BS-05 and pinned by `test_commit_hook_bypass_deny.py::test_keystone_write_whose_target_rests_on_the_shell_state_stays_denied_in_the_harness_home` (`:604-615`);
 - `git -C <repo> config …` passes.
 
-The plan keeps it (Q2).
+The plan keeps it (owner decision Q2 (a)).
 
 ### 1.7 Under-blocks the parser exposes
 
-These are owner decision Q3. Reading the command correctly makes some existing rules see what they miss today. Each item is a rule that already exists and starts working; no new rule or list is involved.
+Owner decision Q3 (a): these are in scope, each changed decision pinned by a test. Reading the command correctly makes some existing rules see what they miss today. Each item is a rule that already exists and starts working; no new rule or list is involved.
 - **Write forms:**
   - `&>`, `>|`, `dd of=`, `truncate`, `ln -sf`, `rsync`, `curl -o`, `git checkout -- <path>`, `git restore <path>`, written into paths that TP and OG protect. Measured rc=0 today, while the same target with `>` is refused.
   - `X=/p; echo > $X` resolves in the frozen extractor but not in the write-mode one.
@@ -184,7 +182,7 @@ These are owner decision Q3. Reading the command correctly makes some existing r
 - a shell fed by a pipe or here-string: `echo "git push --force" | sh`, `sh <<< "…"`;
 - `python3 -c "os.system('git push --force')"`;
 - `core.logAllRefUpdates=false` and `git reflog expire`;
-- tag deletion, which ruleset R3 covers on GitHub.
+- local `git tag -d`/`git tag -f` (a local ref change; a push that deletes or moves a tag is GP-08's, section 3).
 
 The parser records how each command is fed (`walk` gives pipe, heredoc, here-string or file), so a later rule can be one predicate, not a list.
 
@@ -256,7 +254,7 @@ For every string, record:
 
 Pass: for every reader, each fact it extracts is extracted by the new view (a superset). Every difference falls in one of three groups:
 - a listed fix (O1 to O7);
-- a listed under-block (1.7), only once Q3 says yes;
+- a listed under-block (1.7; owner decision Q3 (a));
 - a string bash rejects, where the new parser's `ParseError` stands in for the old one's error.
 
 Zero differences may be unexplained. Measured today: 3,636 strings are accepted alike by bash, the census and `lex()`. The census rejects 17 strings that bash accepts:
@@ -264,7 +262,7 @@ Zero differences may be unexplained. Measured today: 3,636 strings are accepted 
 - 6 are comments holding an apostrophe;
 - 7 are unterminated heredocs, which looks deliberate.
 
-**E2 Decisions.** Every hook decision on every Bash call stays the same, except O1 to O7 (and 1.7 under Q3). Measured on 1ace5ee4, with baseline files in the session scratchpad that the P14-1 lane re-creates (section 4):
+**E2 Decisions.** Every hook decision on every Bash call stays the same, except O1 to O7 and the 1.7 list (Q3 (a)). Measured on 1ace5ee4, with baseline files in the session scratchpad that the P14-1 lane re-creates (section 4):
 
 | Suite | Result | Bash decisions |
 |---|---|---|
@@ -277,48 +275,35 @@ Zero differences may be unexplained. Measured today: 3,636 strings are accepted 
 
 The replay suite has to be baselined in CI's six shards (`replay suite i/6`), or in local shards with pytest-xdist already on `PYTHONPATH`. Without xdist, `tests/replay/sandbox.py:213-238` runs `pip install -r requirements.txt` over the network.
 
-## 3. GitHub branch protection
+## 3. GitHub branch protection: none (owner decision Q1 (b))
 
-The repository `Yugoge/awesome-claude-harness` is public, so baseline CI runs on it (D30 visibility gate). Required status checks are left out, because on a direct push they amount to requiring a pull request (Q4). The settings below are owner steps (G1). Nothing in a lane applies them.
+The owner decided on 2026-11-16 that P14 uses no GitHub rulesets. The harness has to protect every user's repositories and every remote, and a ruleset protects only the one repository it is set on. So there are no owner steps (no G1, no R1 to R4), and no README ruleset step.
 
-| Ruleset | Target | Rules | Bypass |
-|---|---|---|---|
-| R1 `default-branch` | `~DEFAULT_BRANCH` | Restrict deletions; Block force pushes | none |
-| R2 `all-branches` | `~ALL` branches | Block force pushes | none |
-| R3 `tags` | all tags (`refs/tags/*`) | Restrict deletions; Restrict updates | none |
-| R4, optional (Q4) | `~DEFAULT_BRANCH` | Require a pull request before merging, 0 approvals | none |
+**GP-08 is the one local refusal of force, delete and tag-delete pushes.**
+- **What it refuses today:** pushes with `--force`, `-f`, `--force-with-lease[=]`, `--delete`, `-d`, `--mirror`, a `+refspec` or a `:refspec`, for every agent. It is checked before `/allow` and `/do`, so neither releases it. It already refuses a tag deletion written as `git push origin :refs/tags/v1` or `git push --delete origin v1` (measured rc=2).
+- **What P14-4 extends it to cover**, on the shared parser's option reading:
+  - clustered short flags such as `-uf`;
+  - `--force-if-includes`;
+  - abbreviated long options (`--forc`, `--del`, `--mir`);
+  - `--prune`, which deletes remote refs (tags included) that have no local counterpart;
+  - a refspec that deletes or force-moves a tag, whether written `refs/tags/<t>` or as a short name;
+  - payloads inside `bash -c` and wrappers, through `resolve`.
 
-Path: Settings → Rules → Rulesets → New branch ruleset. Each ruleset has Enforcement "Active".
+  Each extension is an existing rule reading correctly, and each one is pinned by a test.
+- **BS-41 is deleted** from bash-safety as the duplicate (P14-5).
 
-**Why there is no bypass.** On the owner's machine an agent pushes with the owner's credential, so a repository-admin bypass would exempt the agent too.
-
-**Phases that rewrite history.** P11 rewrites history and deletes remote refs. During that run the owner sets R1 to R3 to "Disabled", and enables them again afterwards.
-
-**What the rulesets replace:**
-- BS-41: force, delete, mirror and `+ref`/`:ref` pushes, through R1, R2 and R3. A `--mirror` push can still delete non-default branches, because R2 does not restrict deletions; agent branches are deleted after merge.
-- GP-08: force and delete pushes, through R1 to R3. Tag deletion, which neither hook refuses today, is covered by R3.
-
-**What stays local, because GitHub cannot see it:**
-- GP-09: an agent push without a `/push` grant (GitHub sees the owner's key);
-- every commit rule (GP-14 to GP-30, BS-04 to BS-07);
-- local ref mutations (GP-06, GP-03 on the local default branch);
-- reset, clean, stash and checkout/restore (BS-36 to BS-39, BS-43, GCL);
-- the harness home and state-namespace rules;
-- every non-git rule;
-- pushes to remotes that are not GitHub;
-- product users whose repositories carry no ruleset. The README's install section names R1 to R3 as a recommended step; the integration lane writes it.
-
-**Verification for G1.** On a throwaway branch of the repository, run from a plain terminal (not an agent):
-- `git push --force` of a rewritten commit is refused by GitHub;
-- `git push origin :<branch>` on the default branch is refused;
-- `git push origin :refs/tags/<t>` is refused.
-
-The owner pastes the three refusals into the P14-4 PR. P14-4 removes the local copy only after that, if Q1 says so.
+**Everything else stays local**, as before:
+- GP-09, which refuses any agent push without a `/push` grant;
+- the commit rules;
+- local ref mutations;
+- reset, clean, stash and checkout/restore;
+- the harness home rules;
+- every non-git rule.
 
 ## 4. Bars (every lane, and the train)
 
 1. **Decisions unchanged.** The bar covers the corpus (39), the fail-closed companions (45), `test_commit_hook_bypass_deny.py` (850), `test_env_configured_defaults.py` (67), the artifact check (0 violations, 1,494 Bash decisions per hook, as in `tools/p14/dump_replay_decisions.py`'s TSV), and the full replay and fault suite. Both are compared as the per-hook decision on each Bash call, against a baseline each lane records on `origin/master` before its change (CI shards or local shards).
-   - The only allowed differences are O1 to O7 and, under Q3, the 1.7 list.
+   - The only allowed differences are O1 to O7, the 1.7 list (Q3 (a)), the BB-02 to BB-08 deletions (1.4b), the GP-08 extensions (section 3) and the Q6 closure.
    - Each changed decision gets a test pinning its new value.
    - Tests that pin source text (in `test_blackbox_integration.py`, `test_commit_artifact_rw_boundary.py`, `test_fail_closed_drift.py`, `test_git_cmd_cross_consistency.py`, `test_bash_safety_git_clean.py::_mutant_hook`, `test_pol_generative_sweeps.py`) may be rewritten into behaviour tests over the same cases, never deleted. The PR lists each one, old assertion against new.
 2. **Net lines.** `pretool-bash-safety.sh` plus any rules module it delegates to totals at most 1,354 lines (half of 2,709); the target is about 1,000. The total over the files in section 6 drops by at least as much as bash-safety does: no line moves out of bash-safety without leaving the total. Every lane reports `wc -l` before and after for the files it owns.
@@ -351,12 +336,12 @@ Each lane is one issue. Lanes in the same wave own disjoint files. A lane never 
 | P14-7 | grep-backtrack-guard reads the parser | `hooks/pretool-grep-backtrack-guard.py`, `hooks/lib/grepguard_context_strip.py` | P14-1 | B |
 | P14-8 | Branch and PR refusals deleted (owner decision); the worktree rule reads the parser | `hooks/pretool-block-branch-pr-worktree.py`, its tests, CLAUDE.md "Branches, PRs and worktrees" section | P14-1 and #56 merged | B |
 | P14-9 | `/allow` grant matching reads the parser | `hooks/lib/allowlist.py` | P14-1 | B |
-| P14-4 | Privilege guard on one reader; dead push checks out | `hooks/pretool-git-privilege-guard.py` | P14-2 (+ G1 if Q1 = replace) | C |
+| P14-4 | Privilege guard on one reader; dead push checks out; GP-08 extended | `hooks/pretool-git-privilege-guard.py` | P14-2 | C |
 | P14-5 | bash-safety slimmed | `hooks/pretool-bash-safety.sh`, new `hooks/lib/bash_safety_rules.py`, `hooks/lib/bash_context_strip.py` (deleted when its last user goes), `hooks/lib/pol_degraded_removal_reference.ere` | P14-2, P14-3, P14-4, P14-7, P14-8 | D |
 | P14-10 | Write targets retired into the parser | `hooks/lib/bash_write_targets.py` (kept as an import shim), `hooks/pretool-cp-state-write-guard.py`, `hooks/pretool-wrapper-userintent.py`, `hooks/lib/attribution_journal.py` | the keystone PR merged; P14-1 | gated |
 | P14-11 | Overnight guard's Bash path on the parser | `hooks/pretool-overnight-hook-guard.py` | the keystone PR merged; P14-10 | gated |
 | P14-12 | Harness-switch guard on the parser | `hooks/pretool-harness-switch-guard.py` | the settings-switch PR merged; P14-1 | gated |
-| P14-13 | Integration: replay drivers' DEVIATION entries, README ruleset step, final accounting | `tests/replay/drivers/` (DEVIATION entries only), `README.md` install section, `docs/ENFORCEMENT-LEDGER.md`, `docs/ADVERSARIAL-CORPUS.md` line citations, INDEX files | #29 merged; all lanes | last |
+| P14-13 | Integration: replay drivers' DEVIATION entries, final accounting | `tests/replay/drivers/` (DEVIATION entries only), `docs/ENFORCEMENT-LEDGER.md`, `docs/ADVERSARIAL-CORPUS.md` line citations, INDEX files | #29 merged; all lanes | last |
 
 `hooks/pretool-claude-config-guard.py` is not in any lane. OG-01 and OG-02 merge into it as it stands, with no change to it.
 
@@ -422,14 +407,14 @@ The rest are gate concerns for a separate plan. Each was reproduced on 1ace5ee4 
 
 None of 2 and 4 to 11 is pinned by a test.
 
-## 8. Owner decisions
+## 8. Owner decisions (answered 2026-11-16, relayed by the reviewer)
 
-| # | Decision | Options | Recommendation |
+| # | Decision | Answer | Effect |
 |---|---|---|---|
-| Q1 | Force/delete pushes: does GitHub replace the local refusal? | (a) Apply R1 to R3; P14-5 deletes BS-41 and P14-4 deletes GP-08's force/delete branch after the G1 check. (b) Keep GP-08 as the one local copy and delete only BS-41. | **(a)** for this repository, as the owner's direction says. Product users get R1 to R3 as a README step. |
-| Q2 | `cd <repo> && git config core.hooksPath …` from the harness home | (a) Keep the refusal (pinned; `-C` works). (b) Allow when the cd target is provably another repository. | **(a)**: it is intended, and (b) needs shell-state tracking. |
-| Q3 | Under-blocks the parser exposes (1.7) | (a) Let the existing rules see them (decisions change to deny on that list only, each pinned by a test). (b) Keep today's decisions exactly. | **(a)**: these are the same rules reading correctly, with no new list. |
-| Q4 | Require a pull request on the default branch (R4) | (a) Yes. (b) No. | **(b)** for now: `/push` on the owner's machine pushes the default branch directly, and R4 would refuse it. |
-| Q5 | TP-13, TP-14 in-flight compatibility code | (a) Delete now. (b) Keep until the owner says no session older than train 2 is running. | **(a)** if no session started before 2026-11-08 is still running; only the owner knows. |
-| Q6 | The bulk-commit sentinel can be minted from Bash: BS-17's canonical form at `pretool-bash-safety.sh:1273` exits 0 for `python3 <home>/scripts/write-bulk-commit-sentinel.py`, while `commands/commit.md:188-191` says the UserPromptSubmit hook is the only minter | (a) Close it: the canonical form allows only reads; change the pinned allow in `test_env_configured_defaults.py::test_harness_home_resolves_from_the_hook_location` to a deny. (b) Keep it, and correct commit.md. | **(a)**: it is the only allow on bash-safety's path that skips every later rule. |
-| Q7 | Rules whose messages say "PERMANENTLY FORBIDDEN" are released by `/do` and `/allow` (everything after `:835`) | (a) Keep the behaviour and correct the messages. (b) Move the hard bans before the bypass. | **(a)**: CLAUDE.md says `/do` lifts every limit but the permanent one. P14-5 makes the messages say what is true. |
+| Q1 | Does GitHub replace the local force/delete push refusal? | **(b)**, and no GitHub rulesets at all: a ruleset protects only the repository it is set on, while the harness protects every user's repositories and remotes. | GP-08 stays as the one local refusal of force, delete and tag-delete pushes. P14-4 extends it (section 3), and P14-5 deletes BS-41 as its duplicate. There is no G1, no R1 to R4 and no README step. |
+| Q2 | `cd <repo> && git config core.hooksPath …` from the harness home | **(a)** keep the refusal. | No change to BS-05. |
+| Q3 | Under-blocks the parser exposes (1.7) | **(a)** let the existing rules see them. | The decisions on the 1.7 list change to deny, each pinned by a test (P14-2, P14-4, P14-6, P14-11, P14-12). |
+| Q4 | Require a pull request on the default branch | **(b)** no. | Moot, since there are no rulesets. |
+| Q5 | TP-13, TP-14 in-flight compatibility code | **(a)** delete now. | P14-6 deletes them. |
+| Q6 | Bulk-commit sentinel minted from Bash (`pretool-bash-safety.sh:1273`) | **(a)** close it. | P14-5 allows only reads in BS-17's canonical form, and changes `test_env_configured_defaults.py::test_harness_home_resolves_from_the_hook_location` to expect a deny. |
+| Q7 | "PERMANENTLY FORBIDDEN" rules released by `/do` and `/allow` | **(a)** messages only. | P14-5 rewords the messages and keeps the behaviour. |
