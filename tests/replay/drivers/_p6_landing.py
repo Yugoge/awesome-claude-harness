@@ -123,10 +123,10 @@ class Codex(devdrv.DevCycle):
         self.o.line_rules = [(rx, fn) for rx, fn in self.o.line_rules if "codex_required" not in rx] + [
             (r"^\s*<If codex_required = true, include the literal next line", lambda l: devdrv.DROP)]
 
-    def _dispatch(self, fields, act, label, subagent_type=None):
+    def _dispatch(self, fields, act, label, subagent_type=None, on_stop_block=None):
         if "codex_required: true" in fields.get("prompt", ""):
             act.work = _with_codex(act.work)
-        return super()._dispatch(fields, act, label, subagent_type=subagent_type)
+        return super()._dispatch(fields, act, label, subagent_type=subagent_type, on_stop_block=on_stop_block)
 
 
 def _with_codex(inner):
