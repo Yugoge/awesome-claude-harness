@@ -31,8 +31,10 @@ except ImportError:
 
 
 def _detect_convention(dir_path: Path) -> str:
-    """Detect naming convention from existing files."""
-    files = list(dir_path.iterdir())
+    """Detect naming convention from existing published files (untracked ones, such as a
+    __pycache__, would make the text differ between a working tree and a clean checkout)."""
+    published = tracked_names(dir_path)
+    files = [f for f in dir_path.iterdir() if published is None or f.name in published]
     if not files:
         return 'kebab'
     lower_count = sum(1 for f in files if f.name.islower())
@@ -163,7 +165,26 @@ def _extract_preserved(old: str, dir_name: str) -> str:
     return '\n'.join(preserved)
 
 
-def _build_index_block(dir_path: Path, convention: str) -> list[str]:
+def _folder_name(dir_path: Path, old: str, project_dir: Path | None) -> str:
+    """The name the INDEX gives its folder: the directory's own name, except at the repository
+    root, whose directory is named by wherever it was cloned (~/.claude for a harness home, a
+    CI work path, a public copy under another name); there the title the file already carries
+    is kept, so the text does not depend on the clone's location."""
+    if project_dir is not None:
+        try:
+            at_root = dir_path.resolve() == Path(project_dir).resolve()
+        except OSError:
+            at_root = False
+        if at_root:
+            for line in old.split('\n'):
+                if line.strip():
+                    if line.startswith('# ') and line[2:].strip():
+                        return line[2:].strip()
+                    break
+    return dir_path.name
+
+
+def _build_index_block(dir_path: Path, convention: str, name: str | None = None) -> list[str]:
     """The generated lines between the markers."""
     tree = _filter_tree_published(build_tree(dir_path, max_depth=3), dir_path)
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -174,19 +195,65 @@ def _build_index_block(dir_path: Path, convention: str) -> list[str]:
         '',
         '## Tree',
         '```',
-        f'{dir_path.name}/',
+        f'{name or dir_path.name}/',
     ]
     lines.extend(tree)
     lines.append('```')
     return lines
 
 
-def _compose_index(dir_path: Path, block: list[str], preserved: str = '') -> str:
-    lines = [f'# {dir_path.name}', '', AUTO_START, *block, AUTO_END]
+def _compose_index(dir_path: Path, block: list[str], preserved: str = '',
+                   name: str | None = None) -> str:
+    lines = [f'# {name or dir_path.name}', '', AUTO_START, *block, AUTO_END]
     if preserved.strip():
         lines.extend(['', preserved])
     lines.extend(['', f'---\n{_FOOTER}'])
     return '\n'.join(lines)
+
+
+_TIMESTAMP_RE = re.compile(r'^\*Last updated: [^*\n]*\*$', re.MULTILINE)
+
+
+def _keep_timestamp(old: str, new: str) -> str:
+    """`new` with the old file's Last-updated line when that line is all that differs, so a
+    regeneration of an unchanged folder rewrites the same bytes and the INDEX dates the
+    last change of its listing, not the last run of the generator."""
+    old_ts = _TIMESTAMP_RE.findall(old)
+    new_ts = _TIMESTAMP_RE.findall(new)
+    if len(old_ts) == 1 and len(new_ts) == 1 and \
+            _TIMESTAMP_RE.sub('', old) == _TIMESTAMP_RE.sub('', new):
+        return old
+    return new
+
+
+def render_index(dir_path: Path, project_dir: Path | None = None) -> tuple[RegenStatus, str | None]:
+    """(status, the INDEX text regeneration would write); the text is None on every skip.
+
+    Writes nothing: regen_index writes this text, and the tree-wide --check of
+    scripts/regen-folder-docs.py compares it with the file, so both read one rendering.
+    """
+    # Never generate an INDEX under the GitHub-reserved subtree: a stub there is
+    # repo-noise (nested) or a landing-page hijack risk. Skip when the folder IS
+    # .github or lies beneath it (tested relative to project_dir), robust to
+    # non-canonical '..' inputs.
+    if is_github_reserved_subtree(dir_path, project_dir):
+        return RegenStatus.SKIPPED_GITHUB_RESERVED, None
+    index_path = dir_path / 'INDEX.md'
+    if not index_path.exists():
+        return RegenStatus.SKIPPED_ABSENT, None
+    old = index_path.read_text()
+    skip = classify_region(old, INDEX_MARKER_ID).status
+    if skip is not None:
+        return skip, None
+    name = _folder_name(dir_path, old, project_dir)
+    preserved = _extract_preserved(old, name)
+    block = _build_index_block(dir_path, _detect_convention(dir_path), name)
+    if marker_line_numbers('\n'.join(block)):
+        return RegenStatus.SKIPPED_MALFORMED_MARKERS, None
+    content = _compose_index(dir_path, block, preserved, name)
+    if classify_region(content, INDEX_MARKER_ID).shape is not RegionShape.WELL_FORMED:
+        return RegenStatus.SKIPPED_MALFORMED_MARKERS, None
+    return RegenStatus.WRITTEN, _keep_timestamp(old, content)
 
 
 def regen_index(dir_path: Path, project_dir: Path | None = None) -> RegenStatus:
@@ -202,24 +269,7 @@ def regen_index(dir_path: Path, project_dir: Path | None = None) -> RegenStatus:
 
     project_dir (the repository root) anchors the GitHub-reserved-subtree check to
     the repo, making it CWD-independent; see config.is_github_reserved_subtree."""
-    # Never generate an INDEX under the GitHub-reserved subtree: a stub there is
-    # repo-noise (nested) or a landing-page hijack risk. Skip when the folder IS
-    # .github or lies beneath it (tested relative to project_dir), robust to
-    # non-canonical '..' inputs.
-    if is_github_reserved_subtree(dir_path, project_dir):
-        return RegenStatus.SKIPPED_GITHUB_RESERVED
-    index_path = dir_path / 'INDEX.md'
-    if not index_path.exists():
-        return RegenStatus.SKIPPED_ABSENT
-    old = index_path.read_text()
-    skip = classify_region(old, INDEX_MARKER_ID).status
-    if skip is not None:
-        return skip
-    preserved = _extract_preserved(old, dir_path.name)
-    block = _build_index_block(dir_path, _detect_convention(dir_path))
-    if marker_line_numbers('\n'.join(block)):
-        return RegenStatus.SKIPPED_MALFORMED_MARKERS
-    content = _compose_index(dir_path, block, preserved)
-    if classify_region(content, INDEX_MARKER_ID).shape is not RegionShape.WELL_FORMED:
-        return RegenStatus.SKIPPED_MALFORMED_MARKERS
-    return write_folder_doc(index_path, content, project_dir)
+    status, text = render_index(dir_path, project_dir)
+    if text is None:
+        return status
+    return write_folder_doc(dir_path / 'INDEX.md', text, project_dir)

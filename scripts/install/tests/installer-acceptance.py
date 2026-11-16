@@ -447,7 +447,7 @@ def ac3(tmp: Path) -> None:
     check("AC3(N1)", "STRICT IS NOT AN ALIAS: plain doctor exits 0 while strict exits nonzero",
           rc_plain2 == 0 and rc_strict2 != 0, f"plain={rc_plain2} strict={rc_strict2}")
     check("AC3(N1)", "the strict-only check cites an in-repo documented host requirement",
-          ".github/workflows/baseline.yml:24-28" in err2, err2[-200:])
+          ".github/workflows/baseline.yml (the baseline job's python-version matrix)" in err2, err2[-200:])
 
     # (N2) abort before mutation
     n2, prefix = tmp / "ac3" / "n2", tmp / "ac3" / "prefix"
