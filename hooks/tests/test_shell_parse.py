@@ -427,8 +427,8 @@ class TestConsumerDefects:
         'case x in y) "$MV" mv-tool /srv/data/out ;; esac',
     ])
     def test_computed_command_word_names_its_last_operand_undecidably(self, text):
-        t = [t for t in sp.write_targets(text) if t.mechanism == "computed-command"]
-        assert [(x.path, x.decidable) for x in t] == [("/srv/data/out", False)]
+        t = [t for t in sp.write_targets(text) if t.path == "/srv/data/out"]
+        assert [x.decidable for x in t] == [False]
 
     @pytest.mark.parametrize("text", ["taskset -c 0 git push", "taskset 0x1 git push",
                                       "taskset -a 0x3 git push", "numactl -N 0 git push",
@@ -454,3 +454,25 @@ class TestConsumerDefects:
     def test_permission_verbs(self, text, paths):
         t = sp.write_targets(text)
         assert [x.path for x in t] == paths and {x.mode for x in t} == {"in-place"}
+
+    @pytest.mark.parametrize("text,word", [
+        ("cp${IFS}/etc/hostname${IFS}out.txt", "cp${IFS}/etc/hostname${IFS}out.txt"),
+        ("printf x | tee${IFS}out.txt", "tee${IFS}out.txt"),
+    ])
+    def test_ifs_split_command_word_is_an_undecidable_target(self, text, word):
+        t = [x for x in sp.write_targets(text) if x.mechanism == "computed-command"]
+        assert [(x.path, x.decidable, x.word.text) for x in t] == [(None, False, word)]
+
+    @pytest.mark.parametrize("text", ["setpriv --reuid 1 git push", "choom -n 5 git push",
+                                      "runcon u:r:t:s0 git push", "runcon -t t git push",
+                                      "systemd-inhibit --why x git push"])
+    def test_more_wrappers_reach_git(self, text):
+        assert [g.subcommand for g in sp.git_invocations(text)] == ["push"]
+
+    def test_git_rm_cached_after_double_dash_is_a_path(self):
+        assert [t.path for t in sp.write_targets("git rm -- --cached x")] == ["--cached", "x"]
+
+    def test_compound_redirections_are_a_redirect_only_site(self):
+        sites = list(sp.walk(sp.parse("{ echo x; } > a")))
+        assert [s.cmd.argv() for s in sites] == [[], ["echo", "x"]]
+        assert [r.target.value() for r in sites[0].cmd.redirects] == ["a"]
