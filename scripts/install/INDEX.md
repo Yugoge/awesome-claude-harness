@@ -1,8 +1,8 @@
 # install
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-09-17T08:24:24Z*
-**Total entries**: 13
+*Last updated: 2026-11-16T02:46:58Z*
+**Total entries**: 15
 **Convention**: kebab
 
 ## Tree
@@ -14,7 +14,9 @@ install/
 │   └── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
 ├── `install` - install file
 ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
+├── `land` - land file
 ├── `preflight` - preflight file
+├── `push-guard` - push-guard file
 ├── `render-settings` - render-settings file
 ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 ├── `tmpfiles-claude-scratch.conf` - conf file

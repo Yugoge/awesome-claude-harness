@@ -800,12 +800,98 @@ def _extract_install_targets(command: str) -> List[str]:
     return targets
 
 
+#: The commands that change a file's mode, owner, attributes or ACL. The file keeps its path and its
+#: bytes, but `chmod -x` of a hook turns the hook off, so each path operand is a write target. Per
+#: verb: the short flags (letters that take no value), the short options that take a value, the long
+#: options that take one (`--opt V` or `--opt=V`), and how a non-path operand is told apart: "first"
+#: (chmod's mode, chown's owner: the first operand unless a --reference option names the file to copy
+#: it from) or "signed" (chattr's modes: every word that starts with + - or =).
+_ATTR_VERBS = {
+    "chmod": ("cfvR", "", ("--reference",), "first"),
+    "chown": ("cfvhHLPR", "", ("--from", "--reference"), "first"),
+    "chattr": ("RVf", "vp", (), "signed"),
+    "setfacl": ("bkndRLPvh", "mMxX",
+                ("--modify", "--modify-file", "--remove", "--remove-file", "--set", "--set-file",
+                 "--restore"), ""),
+}
+_ATTR_WORD_RE = re.compile(r"(?:^|[\s;|&])(" + "|".join(_ATTR_VERBS) + r")(?=[ \t])")
+
+
+def _attr_segment_tokens(original: str, masked: str, start: int) -> List[str]:
+    """`_segment_tokens`, without the fd number of a redirect that ends the segment (`2>/dev/null`)."""
+    end = _segment_end(masked, start)
+    tokens: List[str] = []
+    i = start
+    while i < end:
+        tok, nxt = _next_token_from_original(original, i)
+        if nxt <= i:
+            break
+        if tok and not (tok.isdigit() and original[nxt:nxt + 1] in ("<", ">")):
+            tokens.append(tok)
+        i = nxt
+    return tokens
+
+
+def _attr_operands(verb: str, tokens: List[str]) -> List[str]:
+    """The path operands of one chmod / chown / chattr / setfacl invocation."""
+    flags, short_values, long_values, kind = _ATTR_VERBS[verb]
+    operands: List[str] = []
+    referenced = skip = ended = False
+    for t in tokens:
+        if skip:
+            skip = False
+        elif ended or t == "-" or not t.startswith(("-", "+", "=")):
+            operands.append(t)
+        elif t == "--":
+            ended = True
+        elif t.startswith("--"):
+            name = t.split("=", 1)[0]
+            referenced = referenced or name == "--reference"
+            skip = name in long_values and "=" not in t
+        elif t[0] == "-" and set(t[1:]) <= set(flags):
+            continue
+        elif t[0] == "-" and short_values and t[1] in flags + short_values:
+            # a cluster of flags ending in a value option: its value is the rest of the word or the next word
+            k = next((i for i, c in enumerate(t[1:], 1) if c in short_values), 0)
+            skip = bool(k) and k == len(t) - 1
+        elif kind == "first":
+            operands.append(t)  # chmod's `-x`, `+x`, `=r`: the mode
+        # else: a chattr mode (`+i`, `-a`, `=e`)
+    if kind == "first" and not referenced:
+        operands = operands[1:]
+    return operands
+
+
+def _extract_attr_targets(command: str) -> List[str]:
+    """Path operands of chmod, chown, chattr and setfacl."""
+    masked = _strip_quoted_regions(command)
+    targets: List[str] = []
+    for m in _ATTR_WORD_RE.finditer(masked):
+        for path in _attr_operands(m.group(1), _attr_segment_tokens(command, masked, m.end())):
+            targets.append(_resolve_path(path))
+    return targets
+
+
 def extract_bash_write_paths(command: str) -> List[str]:
     """Extract write-target paths from a bash command string.
 
     Strips heredoc bodies first, then scans for redirect targets, tee,
-    cp/mv DEST, sed -i FILE, and install DEST. Returns a deduplicated
-    list preserving first-seen order.
+    cp/mv DEST, sed -i FILE, install DEST, and the path operands of
+    chmod, chown, chattr and setfacl. Returns a deduplicated list
+    preserving first-seen order.
+
+    >>> extract_bash_write_paths('chmod -x /r/.git/k/rt && chmod 000 /r/a 2>/dev/null')
+    ['/dev/null', '/r/.git/k/rt', '/r/a']
+    >>> extract_bash_write_paths('chmod -R u+x,g-w a b; chmod --reference=r c; /bin/chmod +x d')
+    ['a', 'b', 'c', 'd']
+    >>> extract_bash_write_paths('chown -h --from root:root me:me a; chown --reference r b')
+    ['a', 'b']
+    >>> extract_bash_write_paths('chattr -R +i -a a; chattr -v 7 =e b')
+    ['a', 'b']
+    >>> extract_bash_write_paths('setfacl -m u:x:rwx a; setfacl -Rbm g:y:r b; setfacl --set=u::r -- c')
+    ['a', 'b', 'c']
+    >>> extract_bash_write_paths("echo 'chmod -x a'; git log --grep chmod")
+    []
     """
     if not isinstance(command, str) or not command.strip():
         return []
@@ -818,6 +904,7 @@ def extract_bash_write_paths(command: str) -> List[str]:
     targets.extend(_extract_cp_mv_targets(stripped))
     targets.extend(_extract_sed_i_targets(stripped))
     targets.extend(_extract_install_targets(stripped))
+    targets.extend(_extract_attr_targets(stripped))
     # Dedupe while preserving order
     seen = set()
     deduped: List[str] = []

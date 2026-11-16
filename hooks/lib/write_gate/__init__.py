@@ -90,7 +90,9 @@ RULES: tuple[Rule, ...] = (
          WRITE_TOOLS | {"Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"},
          "both", "open",
          ("reading the switch's state or settings files",
-          "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files"),
+          "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files",
+          "an /allow grant for the one call, for a Claude Code settings file's env, hooks or permissions "
+          "(a Bash grant naming the command, any actor; a Write or tool grant, main agent)"),
          5.0),
 )
 
