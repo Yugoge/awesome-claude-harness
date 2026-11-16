@@ -748,7 +748,7 @@ def lex(src, depth=0):
     return toks
 
 
-def _lex_into(src, toks, depth=0):
+def _lex_into(src, toks, depth=0, comments=None):
     t = src.text
     n = len(t)
     pending_heredocs = []
@@ -760,7 +760,10 @@ def _lex_into(src, toks, depth=0):
             continue
         if c == "#" and _word_start(t, i):
             j = t.find("\n", i)
-            i = n if j < 0 else j
+            j = n if j < 0 else j
+            if comments is not None:
+                comments.append((src.off(i), src.off(j - 1) + 1))
+            i = j
             continue
         if c == "\n":
             toks.append(("OP", "\n", src.off(i)))
@@ -1417,6 +1420,8 @@ class _Grammar:
                 self.pos += 2
             self.skip_newlines()
             body = self.parse_command()
+            if body is None:
+                self.fail("unexpected_token", off)
             return Compound("function", (name_tok[1],), (_as_script(body, self),), (), (off, off), name)
         if self.reserved(tok, "coproc"):
             self.pos += 1
@@ -1433,6 +1438,8 @@ class _Grammar:
             self.pos += 3
             self.skip_newlines()
             body = self.parse_command()
+            if body is None:
+                self.fail("unexpected_token", off)
             return Compound("function", (tok[1],), (_as_script(body, self),), (), (off, off),
                             tok[1].literal())
         return self.parse_simple()
@@ -1663,11 +1670,14 @@ class Site:
     context: the chain of contexts from the top (``("top",)``, ``("top",
     "cmdsub")``, ``("top", "shell_c")`` ...). fed: how its stdin is fed
     (pipe, heredoc, herestring, file). dynamic: its head word is computed.
+    templated: it was read from a payload whose text is computed (``bash -c
+    "$X"``), so it shows the shape of the code, not the code.
     """
 
-    __slots__ = ("cmd", "context", "depth", "fed", "dynamic", "script")
+    __slots__ = ("cmd", "context", "depth", "fed", "dynamic", "script", "templated")
 
-    def __init__(self, cmd, context, depth, fed, dynamic, script):
+    def __init__(self, cmd, context, depth, fed, dynamic, script, templated=False):
+        self.templated = templated
         self.cmd = cmd
         self.context = context
         self.depth = depth
@@ -1679,7 +1689,8 @@ class Site:
         return "Site(%r, %s, fed=%s)" % (self.cmd, "/".join(self.context), sorted(self.fed))
 
 
-_DEFAULT_INTO = ("cmdsub", "backtick", "procsub", "heredoc_shell", "shell_c", "eval", "alias")
+_DEFAULT_INTO = ("cmdsub", "backtick", "procsub", "heredoc_shell", "pipe_shell", "shell_c", "eval",
+                 "exec_argv", "alias")
 
 
 def _site_words(cmd):
@@ -1709,7 +1720,7 @@ def _feed(cmd, piped):
     return frozenset(fed)
 
 
-def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _seen=None):
+def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _templated=False):
     """Yield a Site for every simple command in ``script`` and what it runs.
 
     ``into`` names the nested code to descend into: cmdsub, backtick, procsub
@@ -1720,51 +1731,85 @@ def walk(script, *, into=_DEFAULT_INTO, _context=("top",), _seen=None):
     depth = len(_context) - 1
     for pl, _sep in script.items:
         for k, stage in enumerate(pl.stages):
-            yield from _walk_command(stage, k > 0, into, _context, depth, script)
+            yield from _walk_command(stage, k > 0, into, _context, depth, script,
+                                     pl.stages[k - 1] if k else None, _templated)
 
 
-def _walk_command(cmd, piped, into, context, depth, script):
+def _stage_output(cmd):
+    """The static text a pipeline stage writes, when it is echo, printf or a cat of a heredoc."""
+    if isinstance(cmd, Compound) and cmd.kind in ("group", "subshell") and len(cmd.body) == 1:
+        items = cmd.body[0].items
+        if len(items) == 1 and items[0][0].stages:
+            return _stage_output(items[0][0].stages[-1])
+        return None
+    if not isinstance(cmd, SimpleCommand):
+        return None
+    res = resolve(cmd)
+    if res.name == "cat" and not res.args:
+        for red in cmd.redirects:
+            if red.hd is not None:
+                return red.hd.body_src
+            if red.op == "<<<" and red.target is not None and red.target.value() is not None:
+                return red.target.value()
+        return None
+    vals = [w.value() for w in res.args]
+    if res.name not in ("echo", "printf") or any(v is None for v in vals):
+        return None
+    while res.name == "echo" and vals and vals[0] in ("-n", "-e", "-E", "-ne", "-en"):
+        vals = vals[1:]
+    return " ".join(vals) if vals else None
+
+
+def _walk_command(cmd, piped, into, context, depth, script, prev=None, templated=False):
     if isinstance(cmd, Compound):
         if cmd.redirects:
             # The compound's own redirections, as the command `> f` alone is read.
             bare = SimpleCommand((), (), cmd.redirects, cmd.span)
-            yield Site(bare, context, depth, _feed(bare, piped), False, script)
+            yield Site(bare, context, depth, _feed(bare, piped), False, script, templated)
         for w in cmd.header:
-            yield from _walk_word(w, into, context)
+            yield from _walk_word(w, into, context, templated)
         for r in cmd.redirects:
-            yield from _walk_redirect(r, into, context)
+            yield from _walk_redirect(r, into, context, templated)
         for body in cmd.body:
             for pl, _sep in body.items:
                 for k, stage in enumerate(pl.stages):
-                    yield from _walk_command(stage, piped or k > 0, into,
-                                             context, depth, body)
+                    yield from _walk_command(stage, piped or k > 0, into, context, depth,
+                                             body, pl.stages[k - 1] if k else None, templated)
         return
     fed = _feed(cmd, piped)
     head = cmd.head()
     dynamic = head is not None and head.value() is None
-    yield Site(cmd, context, depth, fed, dynamic, script)
+    yield Site(cmd, context, depth, fed, dynamic, script, templated)
     for w in _site_words(cmd):
-        yield from _walk_word(w, into, context)
+        yield from _walk_word(w, into, context, templated)
     for r in cmd.redirects:
         if r.hd is not None and not r.hd.quoted:
             for p in r.hd.expansions:
                 if p.kind in into and p.body is not None:
-                    yield from walk(p.body, into=into, _context=context + (p.kind,))
+                    yield from walk(p.body, into=into, _context=context + (p.kind,),
+                                    _templated=templated)
     res = resolve(cmd)
     if res.payload is not None and res.payload_kind in into:
-        yield from walk(res.payload, into=into, _context=context + (res.payload_kind,))
+        yield from walk(res.payload, into=into, _context=context + (res.payload_kind,),
+                        _templated=templated or res.unresolved is not None)
+    elif res.payload is None and res.stdin_shell and piped and "pipe_shell" in into:
+        text = _stage_output(prev)
+        if text is not None:
+            body = parse_src(text, depth + 1) if isinstance(text, Src) else parse(text)
+            yield from walk(body, into=into, _context=context + ("pipe_shell",),
+                            _templated=templated)
 
 
-def _walk_word(w, into, context):
+def _walk_word(w, into, context, templated=False):
     for p in w.parts:
         kind = "procsub" if p.kind.startswith("procsub") else p.kind
         if kind in into and p.body is not None:
-            yield from walk(p.body, into=into, _context=context + (kind,))
+            yield from walk(p.body, into=into, _context=context + (kind,), _templated=templated)
 
 
-def _walk_redirect(r, into, context):
+def _walk_redirect(r, into, context, templated=False):
     if r.target is not None:
-        yield from _walk_word(r.target, into, context)
+        yield from _walk_word(r.target, into, context, templated)
 
 
 def iter_commands(script, **kw):
@@ -1778,7 +1823,7 @@ def iter_commands(script, **kw):
 # ---------------------------------------------------------------------------
 
 # Prefix wrappers: (option spec, fixed operands before the command). None marks
-# a wrapper with its own reading (in ``_SPECIAL``). The removal analyzer reads
+# a wrapper read by its own branch of ``resolve``. The removal analyzer reads
 # the same table.
 WRAPPERS = {
     "command": None,
@@ -1952,9 +1997,10 @@ class Resolved:
     """
 
     __slots__ = ("head", "args", "wrappers", "payload", "payload_kind", "unresolved",
-                 "assignments")
+                 "assignments", "stdin_shell")
 
     def __init__(self):
+        self.stdin_shell = False
         self.head = None
         self.args = ()
         self.wrappers = []
@@ -1979,7 +2025,12 @@ class Resolved:
 
 
 def _payload_from_words(words, depth):
-    """Parse the payload words of a shell ``-c`` or ``eval``: each must be static."""
+    """Parse the payload words of a shell ``-c`` or ``eval``.
+
+    Static words give the exact code. A computed word gives its template (the
+    text with each expansion left in place), which callers must treat as
+    unresolved: see ``_payload_template``.
+    """
     vals = [w.value() for w in words]
     if any(v is None for v in vals):
         return None
@@ -1989,6 +2040,26 @@ def _payload_from_words(words, depth):
             return parse_src(w.content(), depth + 1)
         return parse(vals[0])
     return parse(" ".join(vals))
+
+
+def _payload_template(words, depth):
+    """The code of computed payload words with every expansion kept as written."""
+    if len(words) == 1:
+        raw = words[0].raw
+        t = raw.text
+        if len(t) >= 2 and t[0] == '"' and t[-1] == '"':
+            return parse_src(raw.slice(1, len(t) - 1), depth + 1)
+        if len(t) >= 2 and t[0] == "'" and t[-1] == "'":
+            return parse_src(raw.slice(1, len(t) - 1), depth + 1)
+    return parse(" ".join(w.text for w in words))
+
+
+def _set_payload(r, words, kind, depth, why):
+    r.payload = _payload_from_words(words, depth)
+    r.payload_kind = kind
+    if r.payload is None:
+        r.payload = _payload_template(words, depth)
+        r.unresolved = why
 
 
 def resolve(cmd, depth=None):
@@ -2041,13 +2112,18 @@ def resolve(cmd, depth=None):
         if name in ("eval",):
             r.head = head
             r.args = tuple(words[1:])
-            r.payload = _payload_from_words(words[1:], depth) if len(words) > 1 else None
-            r.payload_kind = "eval"
-            if len(words) > 1 and r.payload is None:
-                r.unresolved = "eval_dynamic"
+            if len(words) > 1:
+                _set_payload(r, words[1:], "eval", depth, "eval_dynamic")
             return r
         if name in SHELLS:
             return _resolve_shell(r, head, words, cmd, depth)
+        if name == "find":
+            return _resolve_find(r, head, words, cmd, depth)
+        if name in ("su", "runuser", "sg") and not _has_c(words):
+            r.head = head
+            r.args = tuple(words[1:])
+            _stdin_payload(r, cmd, depth)
+            return r
         if name in ("su", "runuser") and _has_c(words):
             spec = _SU_SPEC if name == "su" else PEEL["runuser"][0]
             opts, rest, err = split_options(words, spec, 1, permute=True)
@@ -2055,10 +2131,7 @@ def resolve(cmd, depth=None):
             r.args = tuple(words[1:])
             code = [v for o, v in opts if o in ("-c", "--command")]
             if code:
-                r.payload = _payload_from_words([code[-1]], depth)
-                r.payload_kind = "shell_c"
-                if r.payload is None:
-                    r.unresolved = name + "_c_dynamic"
+                _set_payload(r, [code[-1]], "shell_c", depth, name + "_c_dynamic")
             return r
         if name == "ssh":
             opts, rest, err = split_options(words, _SSH_SPEC, 1)
@@ -2067,10 +2140,9 @@ def resolve(cmd, depth=None):
             if err:
                 r.unresolved = "ssh:" + err
             elif len(rest) > 1:
-                r.payload = _payload_from_words(rest[1:], depth)
-                r.payload_kind = "shell_c"
-                if r.payload is None:
-                    r.unresolved = "ssh_dynamic"
+                _set_payload(r, rest[1:], "shell_c", depth, "ssh_dynamic")
+            elif rest:
+                _stdin_payload(r, cmd, depth)
             return r
         if name == "flock":
             opts, rest, err = split_options(words, PEEL["flock"][0], 1, permute=False)
@@ -2083,11 +2155,8 @@ def resolve(cmd, depth=None):
             if code:
                 r.head = head
                 r.args = tuple(words[1:])
-                r.payload = _payload_from_words([code[-1]], depth)
-                r.payload_kind = "shell_c"
+                _set_payload(r, [code[-1]], "shell_c", depth, "flock_c_dynamic")
                 r.wrappers.append((name, opts))
-                if r.payload is None:
-                    r.unresolved = "flock_c_dynamic"
                 return r
             r.wrappers.append((name, opts))
             if err:
@@ -2115,6 +2184,11 @@ def resolve(cmd, depth=None):
                 r.unresolved = name + ":missing_operand"
                 return r
             words = rest[fixed:]
+            if not words and name in ("sudo", "doas", "run0") and any(
+                    o in ("-i", "--login", "-s", "--shell") for o, _v in opts):
+                r.head = head
+                _stdin_payload(r, cmd, depth)
+                return r
             if name == "xargs" and not words:
                 r.head = None
                 return r
@@ -2125,6 +2199,37 @@ def resolve(cmd, depth=None):
     r.head = words[0]
     r.args = tuple(words[1:])
     return r
+
+
+_FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+
+
+def _resolve_find(r, head, words, cmd, depth):
+    """find's -exec/-execdir/-ok/-okdir run the words up to `;` or `+` as a command."""
+    r.head = head
+    r.args = tuple(words[1:])
+    items = []
+    k = 1
+    while k < len(words):
+        if words[k].value() in _FIND_EXEC:
+            j = k + 1
+            while j < len(words) and words[j].value() not in (";", "+"):
+                j += 1
+            argv_words = words[k + 1:j]
+            if argv_words:
+                span = (argv_words[0].span[0], argv_words[-1].span[1])
+                items.append((Pipeline((SimpleCommand((), argv_words, (), span),), ()), ";"))
+            k = j + 1
+            continue
+        k += 1
+    if items:
+        r.payload = Script(items, cmd_source(cmd), cmd.span, None, depth + 1)
+        r.payload_kind = "exec_argv"
+    return r
+
+
+def cmd_source(cmd):
+    return " ".join(w.text for w in cmd.words)
 
 
 def _merge(outer, inner):
@@ -2172,15 +2277,19 @@ def _resolve_shell(r, head, words, cmd, depth):
         break
     if has_c:
         if k < len(words):
-            r.payload = _payload_from_words([words[k]], depth)
-            r.payload_kind = "shell_c"
-            if r.payload is None:
-                r.unresolved = "shell_c_dynamic"
+            _set_payload(r, [words[k]], "shell_c", depth, "shell_c_dynamic")
         else:
             r.unresolved = "shell_c_missing"
         return r
     if k < len(words):
         return r
+    _stdin_payload(r, cmd, depth)
+    return r
+
+
+def _stdin_payload(r, cmd, depth):
+    """The code a shell reading its stdin gets from a heredoc or here-string."""
+    r.stdin_shell = True
     for red in cmd.redirects:
         if red.fd != 0:
             continue
@@ -2193,10 +2302,7 @@ def _resolve_shell(r, head, words, cmd, depth):
                     r.unresolved = "heredoc_expansion"
             r.payload_kind = "heredoc_shell"
         elif red.op == "<<<" and red.target is not None:
-            r.payload = _payload_from_words([red.target], depth)
-            r.payload_kind = "heredoc_shell"
-            if r.payload is None:
-                r.unresolved = "herestring_dynamic"
+            _set_payload(r, [red.target], "heredoc_shell", depth, "herestring_dynamic")
     return r
 
 
@@ -2253,16 +2359,24 @@ def executable_view(text):
             for w in res.args:
                 _blank_quotes(text, out, w)
             continue
-        script_interp = bool(_SCRIPT_INTERP_RE.match(name))
+        # An interpreter's plain arguments are data only where its own word is
+        # the command word: behind a wrapper the view keeps them.
+        script_interp = bool(_SCRIPT_INTERP_RE.match(name)) and not res.wrappers and \
+            res.head is cmd.head()
         for w in res.args:
-            if any(p.kind != "lit" and p.kind != "glob" and p.kind != "brace" for p in w.parts):
+            opens_quoted = w.text[:1] in ("'", '"')
+            if script_interp and not opens_quoted and all(
+                    p.kind == "lit" for p in w.parts) and not any(c in w.text for c in "<>()`"):
+                _blank(out, *w.span)
+                continue
+            if not opens_quoted:
+                continue
+            if any(p.kind != "lit" for p in w.parts):
                 for p in w.parts:
-                    if p.kind == "lit" and p.quote in (SINGLE, DOUBLE, ANSI_C, LOCALE):
+                    if p.kind == "lit" and p.quote in (SINGLE, DOUBLE):
                         _blank(out, *p.span)
                 continue
-            if w.quoted() or script_interp:
-                a, b = w.span
-                _blank(out, a, b)
+            _blank(out, *w.span)
     return "".join(out)
 
 
@@ -2304,67 +2418,14 @@ def _blank_quotes(text, out, w):
 
 
 def _blank_comments(text, out):
-    """Blank every comment, using the lexer's own rule for where one starts."""
-    src = Src.from_raw(text)
-    t = src.text
-    n = len(t)
-    i = 0
-    toks = []
+    """Blank every comment, by the lexer's own rule for where one starts."""
+    spans = []
     try:
-        _lex_comment_spans(src, toks)
+        _lex_into(Src.from_raw(text), [], 0, spans)
     except LexError:
         return
-    for a, b in toks:
+    for a, b in spans:
         _blank(out, a, b)
-
-
-def _lex_comment_spans(src, spans):
-    """Collect the raw spans of comments by replaying the lexer's comment rule."""
-    t = src.text
-    toks = []
-    pos = [0]
-    # Re-lex, recording each comment the lexer skips.
-    n = len(t)
-    i = 0
-    pending = []
-    while i < n:
-        c = t[i]
-        if c in " \t":
-            i += 1
-            continue
-        if c == "#" and _word_start(t, i):
-            j = t.find("\n", i)
-            j = n if j < 0 else j
-            spans.append((src.off(i), src.off(j - 1) + 1))
-            i = j
-            continue
-        if c == "\n":
-            i += 1
-            if pending:
-                for strip_tabs, delim in pending:
-                    while i < n:
-                        e = t.find("\n", i)
-                        e = n if e < 0 else e
-                        line = t[i:e]
-                        i = e + 1
-                        if _heredoc_line_ends(line, delim, strip_tabs):
-                            break
-                pending = []
-            continue
-        if t.startswith("<<", i) and not t.startswith("<<<", i):
-            strip = t.startswith("<<-", i)
-            j = i + (3 if strip else 2)
-            while j < n and t[j] in " \t":
-                j += 1
-            delim, _q, j = _read_heredoc_delim(t, j)
-            pending.append((strip, delim))
-            i = j
-            continue
-        if c in _OP_CHARS or c in "<>":
-            i += 1
-            continue
-        _w, i2 = _lex_word(src, i)
-        i = i2 if i2 > i else i + 1
 
 
 # ---------------------------------------------------------------------------
@@ -2470,6 +2531,10 @@ VERBS = {
                   "--preserve-root"), ("--interactive",)), "all", DELETE),
     "rmdir": (_spec(("-p", "--parents", "-v", "--verbose", "--ignore-fail-on-non-empty")),
               "all", DELETE),
+    "srm": (_spec(("-d", "--dod", "-D", "--doe", "-E", "--rcmp", "-f", "--force", "-i",
+                   "--interactive", "-l", "--lessmode", "-r", "-R", "--recursive", "-s",
+                   "--simple", "-P", "--openbsd", "-v", "--verbose", "-x",
+                   "--one-file-system", "-z", "--zero")), "all", DELETE),
     "shred": (_spec(("-f", "--force", "-u", "--remove", "-v", "--verbose", "-x", "--exact",
                      "-z", "--zero"), ("-n", "--iterations", "-s", "--size")), "all", DELETE),
     "sed": (_spec(("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-s",
@@ -2541,7 +2606,7 @@ _PKG_MANAGERS = frozenset({
 
 
 def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_shell",
-                                   "shell_c", "eval"), env=None):
+                                   "pipe_shell", "shell_c", "eval", "exec_argv"), env=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
 
     An assignment earlier in the same list (`X=/p; ... > $X`) projects into a
@@ -2557,8 +2622,10 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
     envs = {}
     for site in walk(script, into=into):
         cmd = site.cmd
-        # A shell started with -c or fed code sees only the caller's (exported) variables.
-        fresh = max((k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell")), default=0)
+        # A shell started with -c or fed code sees only the caller's (exported) variables; a
+        # templated payload's expansions are the outer shell's.
+        fresh = 0 if site.templated else max(
+            (k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell", "pipe_shell")), default=0)
         env = envs.setdefault(site.context[:fresh + 1], dict(seed))
         if not cmd.words and cmd.assignments:
             for a in cmd.assignments:
@@ -2703,6 +2770,12 @@ def _verb_targets(name, verb, args, env, context):
             out.append(WriteTarget(path, IN_PLACE, "sed-in-place", None, dec, w, None, context))
         return out
     opts, operands, err = split_options(list(args), spec, 0, permute=True)
+    if err:
+        # An option this table does not know: every non-option word may be a
+        # target, and none of them is decidable.
+        out.extend(WriteTarget(_project(w, env)[0], mode, name, None, False, w, None, context)
+                   for w in args if not (w.value() or "").startswith("-"))
+        return out
     target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
     if name == "tee":
         append = any(o in ("-a", "--append") for o, _v in opts)
@@ -2984,8 +3057,18 @@ def resolve_long_option(sub, opt):
     return opt
 
 
-def git_invocations(script, *, into=_DEFAULT_INTO):
-    """Every git invocation ``script`` runs, in walk order."""
+_QUOTED_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"")
+
+
+def git_invocations(script, *, into=_DEFAULT_INTO, strings=False, _depth=0):
+    """Every git invocation ``script`` runs, in walk order.
+
+    ``strings`` also reads the static string arguments of every command whose
+    code is not otherwise known (an interpreter's ``-c``, an unknown launcher)
+    as shell text, and yields what they would run with context ``string`` and
+    unresolved ``in_string``: a reading for callers that fail closed on text
+    they cannot prove is data.
+    """
     if isinstance(script, str):
         script = parse(script)
     out = []
@@ -2993,9 +3076,24 @@ def git_invocations(script, *, into=_DEFAULT_INTO):
         res = resolve(site.cmd)
         for inv in _git_from_resolved(res, site.context):
             inv.cmd = site.cmd
+            if site.templated and inv.unresolved is None:
+                inv.unresolved = "templated_payload"
             out.append(inv)
             if "alias" in into and inv.alias_body is not None:
-                out.extend(git_invocations(inv.alias_body, into=into))
+                out.extend(git_invocations(inv.alias_body, into=into, strings=strings,
+                                           _depth=_depth + 1))
+        if strings and res.payload is None and _depth < 4:
+            for w in res.args:
+                v = w.value()
+                if v is None or "git" not in v or v == "git":
+                    continue
+                texts = [v] + [a or b for a, b in _QUOTED_RE.findall(v) if "git" in (a or b)]
+                for text in texts:
+                    for inv in git_invocations(parse(text), into=into, strings=True,
+                                               _depth=_depth + 1):
+                        inv.context = site.context + ("string",) + inv.context[1:]
+                        inv.unresolved = inv.unresolved or "in_string"
+                        out.append(inv)
     return out
 
 
@@ -3058,6 +3156,8 @@ def _git_from_resolved(res, context):
     if k < len(args) and inv.unresolved is None:
         sub = args[k].value()
         inv.subcommand = sub
+        if sub is None:
+            inv.unresolved = "dynamic_subcommand"
         rest = args[k + 1:]
         inv.arg_words = tuple(rest)
         inv.args = tuple(resolve_long_option(sub, w.value()) if w.value() is not None else None
