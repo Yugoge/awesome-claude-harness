@@ -64,10 +64,10 @@ def _read_stdin():
 def _spells(text, word):
     """True when `word` (lower case) can be read in text with, between two of its
     letters, only text the hook's reading may delete: white space, a backslash,
-    a quote, a quoted span and a comment up to a newline (`gi'a b't` reads as
-    `git`). Any letter case. A quoted span may end at any later same quote and a
-    comment at any later newline, which covers every way of pairing them. One
-    right-to-left pass, linear in len(text) * len(word)."""
+    a quote (with its `$` prefix), a quoted span and a comment up to a newline
+    (`gi'a b't` reads as `git`). Any letter case. A quoted span may end at any
+    later same quote and a comment at any later newline, which covers every way
+    of pairing them. One right-to-left pass, linear in len(text) * len(word)."""
     n, m = len(text), len(word)
     # reach[k][p]: from p, past deletable text only, word[k:] follows.
     reach = [[False] * (n + 1) for _ in range(m)]
@@ -80,6 +80,7 @@ def _spells(text, word):
             own = low == word[k] and (k == m - 1 or reach[k + 1][p + 1])
             reach[k][p] = (own
                            or ((ch.isspace() or ch in '\\\'"') and reach[k][p + 1])
+                           or (ch == '$' and text[p + 1:p + 2] in ('\'', '"') and reach[k][p + 1])
                            or (ch in '\'"' and later[ch][k])
                            or (ch == '#' and later['\n'][k]))
         if ch in '\'"':
@@ -92,7 +93,10 @@ def _spells(text, word):
 def _may_create(text):
     """False only when text cannot run `git worktree` as this hook reads a
     command: the hook refuses only a command whose name is `git` with the
-    subcommand `worktree`, and a run-time value spells neither word."""
+    subcommand `worktree`, and a run-time value spells neither word. An ANSI-C
+    escape (`$'\\147'`) may spell any letter, so text holding one may create."""
+    if "$'" in text and '\\' in text:
+        return True
     return _spells(text, 'git') and _spells(text, 'worktree')
 
 
@@ -199,39 +203,20 @@ if __name__ == '__main__':
     sys.excepthook = _refuse_on_load_failure
 
 sys.path.insert(0, str(Path(__file__).parent))
-try:
-    from lib.bash_context_strip import strip_non_executable_contexts
-except Exception:  # pragma: no cover - lib always present in repo
-    strip_non_executable_contexts = None
 from lib.allowlist import (  # noqa: E402
     has_do_consent,
     match_sentinel_grant_for_bash_command,
 )
 from lib.overnight import is_overnight_active  # noqa: E402
-from lib.git_command_classifier import (  # noqa: E402
-    _segments, _basename, _command_token_index, _git_subcommand, iter_shell_texts,
-)
-
-
-def _norm(command):
-    if strip_non_executable_contexts:
-        try:
-            return strip_non_executable_contexts(command)
-        except Exception:
-            return command
-    return command
+from lib.shell_parse import git_invocations  # noqa: E402
 
 
 def _detect(command):
-    """True when command runs `git worktree add`."""
-    for text in iter_shell_texts(command):  # the command, then each shell -c string it runs
-        for seg in _segments(_norm(text)):
-            toks = seg.split()
-            idx = _command_token_index(toks)
-            if idx is None or _basename(toks[idx]) != 'git':
-                continue
-            sub, args = _git_subcommand(toks[idx + 1:])
-            if sub == 'worktree' and next((a for a in args if not a.startswith('-')), None) == 'add':
+    """True when command runs `git worktree add`, read by the shared parser."""
+    for inv in git_invocations(command):
+        if inv.subcommand == 'worktree':
+            first = next((a for a in inv.args if a is None or not a.startswith('-')), None)
+            if first == 'add':
                 return True
     return False
 
