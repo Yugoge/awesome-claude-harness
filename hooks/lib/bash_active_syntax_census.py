@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Over-approximating census of ACTIVE shell syntax in a raw command string.
 
-WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
-obligation").  Six prior iterations of the removal policy failed because the
-authorization algebra treated *analyzer silence* as *permission*: if no adapter
-recognised a construct, no finding was produced, and no finding meant allow.
-Adding more adapters can lower a sample mismatch count but can never prove that
-the analyzer looked everywhere.
+WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
+authorization algebra treats *analyzer silence* as *permission* fails open: if
+no adapter recognises a construct, no finding is produced, and no finding means
+allow.  Adding more adapters can never prove that the analyzer looked
+everywhere.
 
 This module is the independent half of the proof.  It scans the RAW command
 bytes with its own minimal quote/escape state machine and emits one OBLIGATION
@@ -122,14 +121,14 @@ def _scan_removal_references(text: str, emit) -> None:
     Wherever it sits: argument position, wrapper payload, quoted `-c` string,
     heredoc body, git alias body. The analyzer discharges an obligation only by
     positively consuming the text that raised it on a route whose every
-    boundary was terminal-safe. Analyzer SILENCE therefore no longer authorizes
-    anything — a payload nothing ever looked at leaves its obligation standing
-    and the command resolves UNRESOLVED.
+    boundary was terminal-safe. Analyzer SILENCE therefore authorizes nothing —
+    a payload nothing ever looked at leaves its obligation standing and the
+    command resolves UNRESOLVED.
 
-    This is the Must-2 half of the contract and it is deliberately independent
-    of the analyzer's wrapper/handler tables: it needs no model of `taskset`,
-    `chrt`, `numactl` or any other exec wrapper to notice that a removal binary
-    was named and never accounted for.
+    This is the completeness half of the contract and it is deliberately
+    independent of the analyzer's wrapper/handler tables: it needs no model of
+    `taskset`, `chrt`, `numactl` or any other exec wrapper to notice that a
+    removal binary was named and never accounted for.
     """
     n = len(text)
     i = 0
