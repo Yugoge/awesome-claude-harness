@@ -157,7 +157,7 @@ These hooks keep the main session's context lean, so real work happens in the ag
 | Once per turn | A second call of the same non-whitelisted tool (`Edit`, `Write`, `WebFetch`, ...) by the main agent in one turn | Real edits belong in an agent's clean context | `hooks/pretool-orchestrator-gate.py` |
 | Read-size cap | The main agent reading a large file whole instead of a slice | One file must not swamp the context; delegate a summary | `hooks/pretool-read-size-guard.py` |
 | Write over existing | `Write` onto a file that already exists, so the change goes through `Edit` | A whole-file rewrite from memory loses content with no diff to catch it | `hooks/lib/write_gate/overwrite.py` (in the write gate) |
-| No background dispatch | An agent dispatch without `run_in_background: false`, and every ordinary `SendMessage` | A background agent escapes the pipeline's checks; only `/restart`'s recovery message may resume one | `hooks/pretool-block-background-tasks.py` |
+| No background dispatch | An agent dispatch without `run_in_background: false`, and a `SendMessage` to anyone but this session's own finished subagent dispatched with no obligation outside a gated command | A background agent escapes the pipeline's checks; only `/restart`'s recovery message may resume a cut one | `hooks/pretool-block-background-tasks.py` |
 | Gitignored deliverable | A dispatch whose dev report names a deliverable that `.gitignore` matches | A cycle that passes QA but can never ship through git | `hooks/pretool-gitignore-preflight.py` (in the dispatch gate) |
 | Todo sequence | A `TodoWrite` that skips, reorders, edits or bulk-completes steps | The plan stays an auditable, one-step-at-a-time record | `hooks/pretool-todo-validate.py` |
 

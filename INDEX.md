@@ -164,6 +164,7 @@ dot-claude/
 │   │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   │   ├── `score_view.py` - What a score shows at a dispatch and what a low one costs (D29, D32): the readers of the score log that hooks call. They read the log and the
 │   │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
+│   │   ├── `send_policy.py` - The main agent's SendMessage policy (CLAUDE.md lesson 16, Orchestrator-Only Rule).
 │   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   │   ├── `specialist_yield.py` - Public API:
@@ -354,7 +355,7 @@ dot-claude/
 │   ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 │   ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 │   ├── `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-│   ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
+│   ├── `posttool-restart-sendmessage.py` - PostToolUse: journal every SendMessage call that ran.
 │   ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 │   ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 │   ├── `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's
@@ -827,6 +828,7 @@ dot-claude/
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 │   ├── `test_score_events.py` - escaped and close_catch, and the observer
 │   ├── `test_score_log.py` - two renderers (owner summary, /rating view); and the reader's two callers
+│   ├── `test_sendmessage_policy.py` - The main agent's SendMessage policy (lib/send_policy, CLAUDE.md lesson 16) and its journal.
 │   ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 │   ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 │   ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two

@@ -83,6 +83,7 @@ hooks/
 │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   ├── `score_view.py` - What a score shows at a dispatch and what a low one costs (D29, D32): the readers of the score log that hooks call. They read the log and the
 │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
+│   ├── `send_policy.py` - The main agent's SendMessage policy (CLAUDE.md lesson 16, Orchestrator-Only Rule).
 │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   ├── `specialist_yield.py` - Public API:
@@ -279,7 +280,7 @@ hooks/
 ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 ├── `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
+├── `posttool-restart-sendmessage.py` - PostToolUse: journal every SendMessage call that ran.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 ├── `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's

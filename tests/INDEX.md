@@ -197,6 +197,7 @@ tests/
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 ├── `test_score_events.py` - escaped and close_catch, and the observer
 ├── `test_score_log.py` - two renderers (owner summary, /rating view); and the reader's two callers
+├── `test_sendmessage_policy.py` - The main agent's SendMessage policy (lib/send_policy, CLAUDE.md lesson 16) and its journal.
 ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
