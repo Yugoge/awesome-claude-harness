@@ -22,7 +22,17 @@ Checked per case and settings file:
     (toy/__init__.py where the /do left part of the change, none where it left none);
   - Step 0 again: chain_pass (the G2-verified dev-report concludes the task, Q7); one close-QA round;
     `CLOSE: YES` as the close report's last line; the only question is Step 4's rating;
-  - no hook error, no network attempt; no block other than the case's own.
+  - no hook error, no network attempt; no block other than the case's own and the host's below.
+The host's block: the session starts on the base, so its SessionStart runs a7d3a9f's
+scripts/canary-verify.sh, which reads the host's own /etc and /usr/local/sbin (the sandbox's namespace
+gives a replay its own HOME and temp dirs only, and this tree's hooks read the host's /etc in every
+replay). That canary fails (exit 2) on any file at a cleanup artifact's deploy path that differs from
+the tree's copy, the host's own file included (#54 since: a file lacking the copy's line naming its deploy
+target is the host's, an advisory), as the CI runner image's /etc/tmpfiles.d/tmp.conf has been since
+2026-11-16. Where this host holds such a file (_host_own, read from the host and the base tree, not from
+the replay), the blocks expected are that canary's one block at `SessionStart startup`, before the
+landing, its failure lines exactly one per such file, then the case's own; elsewhere none. The harness's
+own copy drifted (the line present) is never the host's: its failure line fails the case.
 The cases (left= of drivers/do.py; every one is a /do ending a compliant /do of a7d3a9f's text produces):
   plain  left=half: toy.add checks argument a only, the user stops the task; dev adds b. No block.
   g2     left=half, and the routed dev's first stop, its dev-report written with dev.status short of
@@ -65,9 +75,38 @@ CASES = {"plain": (("left", "half"),), "g2": (("left", "half"), ("dev_stop", "un
 DEV_FILES = {"plain": ["toy/__init__.py"], "g2": ["toy/__init__.py"], "none": ["toy/__init__.py"], "all": []}
 # (case, cost: the wall seconds of its two replays side by side, for conftest.py's CI split)
 COSTS = {"plain": 70, "g2": 80, "none": 70, "all": 70}
+CANARY = "scripts/canary-verify.sh"
+# a7d3a9f's verify_cleanup_drift: (deploy path, the tree's copy under scripts/install/)
+CLEANUP = (("/usr/local/sbin/tmp-cleanup.sh", "tmp-cleanup-install.sh"),
+           ("/etc/tmpfiles.d/claude-scratch.conf", "tmpfiles-claude-scratch.conf"),
+           ("/etc/tmpfiles.d/tmp.conf", "tmpfiles-tmp-override.conf"),
+           ("/etc/tmpfiles.d/var-tmp-claude.conf", "tmpfiles-var-tmp-override.conf"))
 
 _LOCK = threading.Lock()
 _STATE: dict = {}
+
+
+def _host_own(base: str) -> list[str]:
+    """The failure lines a7d3a9f's canary prints at this host's own files (the module text): one per
+    deploy path in CLEANUP whose file differs from the base tree's copy and lacks the copy's first line
+    naming that path, the line #54's canary reads as the harness's own. A differing file with that line
+    is the harness's copy drifted and is left out, so its failure line is never expected."""
+    lines = []
+    for deployed, name in CLEANUP:
+        copy = os.path.join(base, "scripts", "install", name)
+        if not (os.path.isfile(copy) and os.path.isfile(deployed)):
+            continue  # the base canary skips the pair, or prints an advisory only
+        with open(copy, "rb") as fh:
+            ours = fh.read()
+        with open(deployed, "rb") as fh:
+            theirs = fh.read()
+        if ours == theirs:
+            continue
+        marker = next((ln for ln in ours.decode(errors="replace").splitlines() if deployed in ln), "")
+        if marker and marker not in theirs.decode(errors="replace").splitlines():
+            lines.append(f"canary-verify[FAIL]: cleanup artifact drift: {deployed} differs from "
+                         f"<harness>/scripts/install/{name}")
+    return lines
 
 
 def _results(request, tmp_path_factory, case: str) -> dict:
@@ -84,7 +123,7 @@ def _results(request, tmp_path_factory, case: str) -> dict:
             r = LiveRunner(os.path.join(root, "do-inflight-blocked"), OLD, env={}, workers=2,
                            log=lambda *a: print(*a, flush=True))
             request.session.addfinalizer(r.guard.close)
-            _STATE["runner"] = r
+            _STATE["runner"], _STATE["host"] = r, _host_own(r.tree)
         scn = suite.Scenario(f"A4 (g) in-flight blocked do-report, {case}", "do",
                              (("variant", "blocked"),) + CASES[case], ("do", "close"), COSTS[case])
         extra = {"kept": (), "landed": (("hooklist", "landed"),)}
@@ -141,7 +180,8 @@ def _final(uses: list, suffix: str) -> dict:
     return json.loads(text) if text else {}
 
 
-def _verdict(case: str, r: suite.Result, settings: str) -> list[str]:
+def _verdict(case: str, r: suite.Result, settings: str, host: list[str]) -> list[str]:
+    """Every way the replay departs from what the module text checks; `host`: _host_own's lines."""
     bad = []
     if r.error:
         return [r.error]
@@ -202,9 +242,21 @@ def _verdict(case: str, r: suite.Result, settings: str) -> list[str]:
         bad.append(f"{r.connections} network attempt(s)")
     blocks = [(b["hook"], b["step"]) for b in r.blocks]
     g2 = G2_REPORTER[settings]
-    want = [(g2, "/close Step 0 round 1 Agent(dev) stop")] if case == "g2" else []
+    want = [(CANARY, "SessionStart startup")] if host else []
+    want += [(g2, "/close Step 0 round 1 Agent(dev) stop")] if case == "g2" else []
     if blocks != want:
         bad.append(f"blocks {blocks}, expected {want}")
+    elif host:  # the host's block: the base canary's at the session's start, failing on the host's files only
+        b = r.blocks[0]
+        fails = [ln for ln in b["text"].splitlines() if ln.startswith("canary-verify[FAIL]")]
+        expected = host + [f"canary-verify[FAIL]: {len(host)} hook(s) broken — see preceding lines"]
+        if b["event"] != "SessionStart" or b["how"] != "exit2" or fails != expected:
+            bad.append(f"the host's block {(b['event'], b['how'])}: failure lines {fails}, expected {expected}")
+        before = [ev for ev in r.hook_events()[:land.get("event", 0)] if ev["event"] == "SessionStart"
+                  and any(h["hook"] == CANARY and h["verdict"] == "block" for h in ev["hooks"])]
+        if [ev["label"] for ev in before] != ["SessionStart startup"]:
+            bad.append(f"the base canary's refusal is not the one SessionStart before the landing: "
+                       f"{[ev['label'] for ev in before]}")
     if case == "g2" and not any(f.get("key") == "routed dev stop blocked" and g2 in f["value"].get("hooks", [])
                                 for f in r.facts):
         bad.append("G2 did not refuse the routed dev's first stop")
@@ -216,7 +268,7 @@ def _verdict(case: str, r: suite.Result, settings: str) -> list[str]:
                                   for c in CASES])
 def test_inflight_blocked_do_report_lands_through_dev(request, tmp_path_factory, case, settings):
     r = _results(request, tmp_path_factory, case)[settings]
-    bad = _verdict(case, r, settings)
+    bad = _verdict(case, r, settings, _STATE["host"])
     assert not bad, f"{case} ({settings} settings), {r.out}:\n  " + "\n  ".join(bad) + "\n" + r.explain()
 
 
