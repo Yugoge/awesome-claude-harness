@@ -72,10 +72,11 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
 
     A move whose words are all plain and whose destination is decidable writes the destination and
     removes ``<dest>/<basename(source)>``, the entry a directory destination loses; any other move
-    may remove its destination too.
+    may remove its destination too. A command whose name is computed may do anything to each of its
+    static path operands (`"$RM" f`), so each is touched and may be removed.
     """
     found = _targets(command)
-    out: List[Tuple[str, bool]] = []
+    out: List[Tuple[str, bool]] = _computed_command_operands(command)
     for k, t in enumerate(found):
         path = _render(t, command)
         if not path:
@@ -93,6 +94,21 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
         if plain:
             out.extend((os.path.join(path, os.path.basename(_render(s, command).rstrip("/"))), True)
                        for s in sources)
+    return out
+
+
+def _computed_command_operands(command: str) -> List[Tuple[str, bool]]:
+    if not isinstance(command, str) or not command.strip():
+        return []
+    out = []
+    for site in _sp.walk(_sp.parse(command)):
+        res = _sp.resolve(site.cmd)
+        if res.head is None or res.name is not None:
+            continue
+        for w in res.args:
+            v = w.value()
+            if v and not v.startswith("-"):
+                out.append((os.path.expanduser(v) if v.startswith("~") else v, True))
     return out
 
 

@@ -181,6 +181,19 @@ def test_ac10_touched_paths_mark_what_is_removed(command, expected):
     assert set(bwt.extract_bash_touched_paths(command)) == expected
 
 
+@pytest.mark.parametrize("command, written, touched", [
+    ('"$PY" scripts/x.py', [], {("scripts/x.py", True)}),
+    ('"$RM" .claude/hooks/x', [], {(".claude/hooks/x", True)}),
+    ('"$CP" cp-01 /tmp/d', ["/tmp/d"], {("cp-01", True), ("/tmp/d", True), ("/tmp/d", False)}),
+    ('"$X" "$Y"', [], set()),
+])
+def test_ac10_a_computed_command_touches_each_static_operand(command, written, touched):
+    """Its name is computed: each static path operand may be written or removed, and only the old
+    copy reading (an operand spelled after cp or mv) names a written destination."""
+    assert bwt.extract_bash_write_paths(command) == written
+    assert set(bwt.extract_bash_touched_paths(command)) == touched
+
+
 def test_ac10_shim_signature_and_return_shape():
     signature = inspect.signature(bwt.extract_bash_write_paths)
     assert list(signature.parameters) == ["command"]
