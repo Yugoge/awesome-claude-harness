@@ -225,7 +225,7 @@ After identifying `files_to_modify` in `development_approach`, run the blast-rad
 ```
 python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/blast-radius-tool.py" \
   --files <comma-separated files_to_modify> \
-  --output .claude/dev-registry/dev-<task_id>/blast-radius-map.json \
+  --output .claude/dev-registry/<DEV_SESSION_ID>/blast-radius-map-<task_id>.json \
   --task-id <task_id>
 ```
 
@@ -313,7 +313,7 @@ The schema is `schemas/context.v1.json`, checked at your stop; `requirement`, `r
   "development_approach": {"strategy": "", "files_to_create": [], "files_to_modify": [], "validation_approach": ""},
   "complexity_tier": "MICRO | SMALL | STANDARD | COMPLEX", "risk_level": "low | medium | high", "test_writer_expected": true,
   "acceptance_criteria_path": "docs/dev/acceptance-criteria-<task_id>.json",
-  "blast_radius_map_path": ".claude/dev-registry/dev-<task_id>/blast-radius-map.json"
+  "blast_radius_map_path": ".claude/dev-registry/<DEV_SESSION_ID>/blast-radius-map-<task_id>.json"
 }
 ```
 
