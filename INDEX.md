@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 962
+*Last updated: 2026-11-16T10:20:42Z*
+**Total entries**: 979
 **Convention**: kebab
 
 ## Tree
@@ -232,6 +232,7 @@ dot-claude/
 │   │   ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 │   │   ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+│   │   ├── `test_cp_checkin_own_role_sentinel.py` - cc3077f1's rule in hooks/pretool-cp-checkin.py (_handle_dev_sentinel): a PreToolUse
 │   │   ├── `test_cp_enforce_own_slot.py` - cp-state slot's pending checkpoints (P1c X6)
 │   │   ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 │   │   ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
@@ -328,6 +329,7 @@ dot-claude/
 │   │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 │   │   ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 │   │   ├── `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
+│   │   ├── `test_start_launchers.py` - and SubagentStart (P2-3), in the one Python process each event registers (P12-L7, lib/hook_launch...
 │   │   ├── `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 │   │   ├── `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 │   │   ├── `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
@@ -453,6 +455,7 @@ dot-claude/
 │   ├── `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
+│   ├── `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, in its old registration order, each as
 │   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 │   ├── `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
@@ -466,6 +469,7 @@ dot-claude/
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 │   ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+│   ├── `subagentstart-launch.py` - Every Python hook registered on SubagentStart runs here, in its old registration order, each as
 │   ├── `subagentstart-record.py` - rank's reminder (hooks/lib/score_log.py), as additionalContext of at most 3 lines and 400 bytes; ...
 │   ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 │   ├── `subagentstop-codex-enforce.py` - Activation logic:
@@ -760,6 +764,7 @@ dot-claude/
 │   │   ├── `test_lint_tree.py` - Collected only under HARNESS_LINT=1, which the baseline workflow's lint step sets; the
 │   │   └── `tree.py` - The settings and ledger parsing is scripts/check-enforcement-evidence.py's own (the gate
 │   ├── replay/
+│   │   ├── base_driver/
 │   │   ├── bin/
 │   │   ├── drivers/
 │   │   ├── `__main__.py` - `python -m tests.replay ...`: see cli.py.
@@ -768,6 +773,7 @@ dot-claude/
 │   │   ├── `cmdtext.py` - Drivers never hard-code a block's text: they take it, at run time, from the
 │   │   ├── `conftest.py` - Every test that replays asks for the `replays` fixture with a marker naming what it needs:
 │   │   ├── `differential.py` - A reader decides on an artifact when re-running its recorded invocation with
+│   │   ├── `endstate.py` - pipelines; R8, the A11 checks), read once the driver has ended, before the sandbox goes
 │   │   ├── `faults.py` - --arg fault=<kind>@<label glob>[=<what>][;<kind>@<label glob>[=<what>]...]
 │   │   ├── `hookrun.py` - Selection follows the planning kit's runhook.py: a matcher that is empty or "*"
 │   │   ├── `inner.py` - cli.py starts it as `python -m replay.inner <config.json>` from the sandbox's
@@ -777,6 +783,7 @@ dot-claude/
 │   │   ├── `norm.py` - A replay's own values (session ids, agent ids, tool-use ids, task ids, lanes,
 │   │   ├── `pipeline.py` - An Orchestrator plays the main agent of one typed command, following the
 │   │   ├── `recovery.py` - --arg fault=cut@<label glob>     F5, F5f: after the first step of a subagent whose label matches
+│   │   ├── `removal.py` - with `git rm`, recoverably, or tries a forced removal that the registered hooks refuse
 │   │   ├── `replay.py` - A driver gets a Replay and works through Sessions and Actors (the main agent,
 │   │   ├── `roles.py` - Each helper returns an Act.work callable, work(sub, brief, player) -> content,
 │   │   ├── `routing.py` - No hook blocks here: the gap is what /close's disposition call (Step 0) or /commit's (Step 3) pri...
@@ -786,16 +793,25 @@ dot-claude/
 │   │   ├── `sites.py` - Nothing here lists a site, a hook or a class. Enumerator reads settings.json and follows each
 │   │   ├── `suite.py` - A scenario names one of P1b's drivers (tests/replay/drivers/) and its arguments. run() replays it
 │   │   ├── `test_a20.py` - Every compliant scenario runs with the gate blocking: test_pipelines.py's armed settings set
+│   │   ├── `test_a21_old_bookmarks.py` - A21 (prompts/short/P5.md): a session that loaded origin/master's hook list meets this tree's files,
 │   │   ├── `test_bwrap_stand_in.py` - An in-place /dev-overnight launch refuses where `bwrap --ro-bind / / -- true` cannot run
 │   │   ├── `test_codex_loop.py` - Each replay plays QA's `--codex` path against a stub Codex (tests/replay/drivers/_codex.py). The ...
+│   │   ├── `test_commit_hook_refusal.py` - drivers/commit.py variant `waits` (the owner's world: settings_filter_world). The tree's own refu...
+│   │   ├── `test_do_inflight_blocked.py` - Since P5 a /do has one terminal (commands/do.md Step 5): the Stop gate holds a /do until its do-r...
 │   │   ├── `test_faults.py` - is repaired at that producer's next round with no human action; the pipeline reaches its terminal
 │   │   ├── `test_kept_first_line.py` - hookrun keeps a hook's output tail; for a long refusal that tail is the echoed
 │   │   ├── `test_live_arming.py` - this tree's files
 │   │   ├── `test_live_landing.py` - keep running with the hook list they loaded; nothing new may block a running session or an in-fli...
+│   │   ├── `test_live_landing_p6.py` - against a toy project holding what the base master's own /dev left there (agent-index.json, the
 │   │   ├── `test_no_dead_end.py` - (i) The blocking sites are enumerated when the test runs (tests/replay/sites.py), never read from a
+│   │   ├── `test_obligation_role.py` - The role a template dispatches is its subagent_type, else the role of the obligation block it
+│   │   ├── `test_overnight_one_pipeline.py` - A16's bar for "arm-overnight, 1 pipeline": a compliant replay with the tree's settings and armed ...
+│   │   ├── `test_p10_faults.py` - the compliant pipelines leave
+│   │   ├── `test_p2_a20_overnight.py` - * the AskUserQuestion deny (hooks/pretool-overnight-hook-guard.py's AskUserQuestion branch, R10; ...
 │   │   ├── `test_pipeline_render.py` - Dispatches loaded before P13-3 still bind master's score headers after landing.
 │   │   ├── `test_pipelines.py` - reaches its terminal, with the tree's settings ("shipped") and armed (G1-G3 block)
 │   │   ├── `test_push_holds.py` - Each replay types /push after the owner's commit and the token its one writer wrote for it
+│   │   ├── `test_r14_faults.py` - Each replay (drivers/_r14.py) injects one fault at the step it names and plays commands/merge.md or
 │   │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...

@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 182
+- **Total files**: 184
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -56,6 +56,7 @@
 - `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 - `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 - `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+- `test_cp_checkin_own_role_sentinel.py` - cc3077f1's rule in hooks/pretool-cp-checkin.py (_handle_dev_sentinel): a PreToolUse
 - `test_cp_enforce_own_slot.py` - cp-state slot's pending checkpoints (P1c X6)
 - `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 - `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
@@ -152,6 +153,7 @@
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 - `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
+- `test_start_launchers.py` - and SubagentStart (P2-3), in the one Python process each event registers (P12-L7, lib/hook_launch...
 - `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 - `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 - `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default

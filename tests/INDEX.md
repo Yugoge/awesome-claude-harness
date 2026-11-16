@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 254
+*Last updated: 2026-11-16T10:20:43Z*
+**Total entries**: 270
 **Convention**: kebab
 
 ## Tree
@@ -58,13 +58,17 @@ tests/
 │   ├── `test_lint_tree.py` - Collected only under HARNESS_LINT=1, which the baseline workflow's lint step sets; the
 │   └── `tree.py` - The settings and ledger parsing is scripts/check-enforcement-evidence.py's own (the gate
 ├── replay/
+│   ├── base_driver/
+│   │   └── `_p6_grant.py` - A driver for the BASE master's own replay framework, not for this tree's: the drivers here play t...
 │   ├── bin/
 │   │   └── `bwrap` - bwrap file
 │   ├── drivers/
 │   │   ├── `_codex.py` - A driver variant that runs QA's `--codex` path (drivers/close.py `codex-flip-items`, `codex-endle...
 │   │   ├── `_deadend.py` - then take the same actor's next action, the one the gate's own text names
 │   │   ├── `_home.py` - The owner's own session in ~/.claude: SessionStart, a read-only question about the harness, the m...
+│   │   ├── `_p6_landing.py` - The session runs on the base tree (tests/replay/landing.py: the sandbox is built from it, the ses...
 │   │   ├── `_pathrule.py` - replayed at the hooks that read them, in the kit of the tree under test (`--driver _pathrule`)
+│   │   ├── `_r14.py` - test_refusals.py does not reach, each played by drivers/merge.py (MergeRun) or drivers/push.py (P...
 │   │   ├── `_round.py` - one AskUserQuestion per round file, and what BA analysis maps from the owner's answers
 │   │   ├── `clean.py` - test, read at run time, up to the cleaner's commit and the completion report
 │   │   ├── `close.py` - (drivers/dev.py), after /do (drivers/do.py) or after /dev-command (drivers/dev_command.py, when
@@ -85,6 +89,7 @@ tests/
 │   ├── `cmdtext.py` - Drivers never hard-code a block's text: they take it, at run time, from the
 │   ├── `conftest.py` - Every test that replays asks for the `replays` fixture with a marker naming what it needs:
 │   ├── `differential.py` - A reader decides on an artifact when re-running its recorded invocation with
+│   ├── `endstate.py` - pipelines; R8, the A11 checks), read once the driver has ended, before the sandbox goes
 │   ├── `faults.py` - --arg fault=<kind>@<label glob>[=<what>][;<kind>@<label glob>[=<what>]...]
 │   ├── `hookrun.py` - Selection follows the planning kit's runhook.py: a matcher that is empty or "*"
 │   ├── `inner.py` - cli.py starts it as `python -m replay.inner <config.json>` from the sandbox's
@@ -94,6 +99,7 @@ tests/
 │   ├── `norm.py` - A replay's own values (session ids, agent ids, tool-use ids, task ids, lanes,
 │   ├── `pipeline.py` - An Orchestrator plays the main agent of one typed command, following the
 │   ├── `recovery.py` - --arg fault=cut@<label glob>     F5, F5f: after the first step of a subagent whose label matches
+│   ├── `removal.py` - with `git rm`, recoverably, or tries a forced removal that the registered hooks refuse
 │   ├── `replay.py` - A driver gets a Replay and works through Sessions and Actors (the main agent,
 │   ├── `roles.py` - Each helper returns an Act.work callable, work(sub, brief, player) -> content,
 │   ├── `routing.py` - No hook blocks here: the gap is what /close's disposition call (Step 0) or /commit's (Step 3) pri...
@@ -103,16 +109,25 @@ tests/
 │   ├── `sites.py` - Nothing here lists a site, a hook or a class. Enumerator reads settings.json and follows each
 │   ├── `suite.py` - A scenario names one of P1b's drivers (tests/replay/drivers/) and its arguments. run() replays it
 │   ├── `test_a20.py` - Every compliant scenario runs with the gate blocking: test_pipelines.py's armed settings set
+│   ├── `test_a21_old_bookmarks.py` - A21 (prompts/short/P5.md): a session that loaded origin/master's hook list meets this tree's files,
 │   ├── `test_bwrap_stand_in.py` - An in-place /dev-overnight launch refuses where `bwrap --ro-bind / / -- true` cannot run
 │   ├── `test_codex_loop.py` - Each replay plays QA's `--codex` path against a stub Codex (tests/replay/drivers/_codex.py). The ...
+│   ├── `test_commit_hook_refusal.py` - drivers/commit.py variant `waits` (the owner's world: settings_filter_world). The tree's own refu...
+│   ├── `test_do_inflight_blocked.py` - Since P5 a /do has one terminal (commands/do.md Step 5): the Stop gate holds a /do until its do-r...
 │   ├── `test_faults.py` - is repaired at that producer's next round with no human action; the pipeline reaches its terminal
 │   ├── `test_kept_first_line.py` - hookrun keeps a hook's output tail; for a long refusal that tail is the echoed
 │   ├── `test_live_arming.py` - this tree's files
 │   ├── `test_live_landing.py` - keep running with the hook list they loaded; nothing new may block a running session or an in-fli...
+│   ├── `test_live_landing_p6.py` - against a toy project holding what the base master's own /dev left there (agent-index.json, the
 │   ├── `test_no_dead_end.py` - (i) The blocking sites are enumerated when the test runs (tests/replay/sites.py), never read from a
+│   ├── `test_obligation_role.py` - The role a template dispatches is its subagent_type, else the role of the obligation block it
+│   ├── `test_overnight_one_pipeline.py` - A16's bar for "arm-overnight, 1 pipeline": a compliant replay with the tree's settings and armed ...
+│   ├── `test_p10_faults.py` - the compliant pipelines leave
+│   ├── `test_p2_a20_overnight.py` - * the AskUserQuestion deny (hooks/pretool-overnight-hook-guard.py's AskUserQuestion branch, R10; ...
 │   ├── `test_pipeline_render.py` - Dispatches loaded before P13-3 still bind master's score headers after landing.
 │   ├── `test_pipelines.py` - reaches its terminal, with the tree's settings ("shipped") and armed (G1-G3 block)
 │   ├── `test_push_holds.py` - Each replay types /push after the owner's commit and the token its one writer wrote for it
+│   ├── `test_r14_faults.py` - Each replay (drivers/_r14.py) injects one fault at the step it names and plays commands/merge.md or
 │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...
