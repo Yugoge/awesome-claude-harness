@@ -29,8 +29,10 @@ launch); a --settings file can be anywhere and is not seen. The home's own setti
 the rule above's.
   Write / Edit / MultiEdit
                         refused when one of those keys' value in the document the call leaves
-                        differs from the file's now (added, changed or removed), or the document
-                        cannot be computed, or is no JSON object while the file holds one of them
+                        differs from the file's now (added, changed or removed; the file read
+                        by hooks/lib/claude_home.py's load_settings, an unusable one refused), or
+                        the document cannot be computed, or is no JSON object while the file holds
+                        one of them
   NotebookEdit          refused on a settings file (no notebook, its result is not computed)
   Bash                  refused when a command writes, moves or removes a settings file (a
                         redirect, tee, cp or mv onto it, sed -i, rm, mv away, any command but a
@@ -56,6 +58,10 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
+sys.path.pop(0)
+
 HOME = harness_switch.harness_home()
 STATE_DIR = os.path.join(HOME, harness_switch.DIR_NAME)
 SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json")
@@ -76,7 +82,6 @@ MESSAGE = re.compile(r"\bgit\b[^\n]*\b(?:commit|tag|notes|merge|revert)\b|\bgh\b
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
 CLAUDE_SETTINGS = re.compile(r"(?:^|/)(?:\.claude/settings(?:\.local)?\.json|\.claude\.json|managed-settings\.json"
                              r"|managed-settings\.d/[^/]+\.json)\Z")  # the CLI's sources, by path
-SETTINGS_DIRS = (".claude", "managed-settings.d")  # removing or replacing one removes its settings files
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh)\Z")
 LITERAL_ECHO = re.compile(r"echo((?:\s+-[nE]+)*)\s+'([^']*)'\s*(>>?|>\|)\s*([\w./~+-]+)")
 SHELL_FED = re.compile(r"(?:^|[\s;|&(/])(?:bash|sh|dash|zsh|ksh)(?:\s|<|$)")  # a shell reads the heredoc
@@ -230,11 +235,19 @@ def _named_settings(word: str, dirs: list, dirs_too=False) -> list:
         for d in dirs:
             lexical = os.path.normpath(os.path.join(d, os.path.expanduser(os.path.expandvars(token))))
             for p in (lexical, os.path.realpath(lexical)):
-                as_dir = dirs_too or (dirs_too is None and not os.path.isdir(p))
-                if os.path.realpath(p) not in home and (
-                        CLAUDE_SETTINGS.search(p) or (as_dir and os.path.basename(p) in SETTINGS_DIRS)):
+                if os.path.realpath(p) not in home and (CLAUDE_SETTINGS.search(p) or _settings_dir(p, dirs_too)):
                     out.append(p)
     return out
+
+
+def _settings_dir(path: str, dirs_too) -> bool:
+    """`path` is a .claude or managed-settings.d directory a command removes or replaces."""
+    head, name = os.path.split(path)
+    if name == ".claude":
+        return bool(dirs_too) or (dirs_too is None and not os.path.isdir(os.path.join(head, ".claude")))
+    if name == "managed-settings.d":
+        return bool(dirs_too) or (dirs_too is None and not os.path.isdir(os.path.join(head, "managed-settings.d")))
+    return False
 
 
 def _message(plain: list) -> bool:
@@ -288,10 +301,40 @@ def settings_writes(command: str, cwd: str) -> list:
     return out
 
 
+def _settings_path(path: str):
+    """`path` spelled by its settings kind's own name; None for a directory or any other file."""
+    head, name = os.path.split(path)
+    parent, folder = os.path.split(head)
+    if folder == ".claude" and name == "settings.json":
+        return os.path.join(parent, ".claude", "settings.json")
+    if folder == ".claude" and name == "settings.local.json":
+        return os.path.join(parent, ".claude", "settings.local.json")
+    if name == ".claude.json":
+        return os.path.join(head, ".claude.json")
+    if name == "managed-settings.json":
+        return os.path.join(head, "managed-settings.json")
+    if folder == "managed-settings.d" and name.endswith(".json"):
+        return os.path.join(parent, "managed-settings.d", name)
+    return None
+
+
+def _held(path: str):
+    """{key: canonical value} of the protected keys the file holds now ({} when there is none);
+    None when hooks/lib/claude_home.py's load finds it unusable, or `path` is no settings file."""
+    p = _settings_path(path)
+    settings, problem = load_settings(p) if p else (None, "no settings file")
+    if problem:
+        return None
+    return {k: json.dumps(settings[k], sort_keys=True) for k in PROTECTED if k in (settings or {})}
+
+
 def _current(path: str):
-    """(the file's text, or None when there is none; False when it cannot be read)."""
+    """The file's text, for an edit to apply to (None: there is none; False: it cannot be read)."""
+    p = _settings_path(path)
+    if p is None:
+        return False
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(p, encoding="utf-8") as fh:
             return fh.read()
     except (FileNotFoundError, NotADirectoryError):
         return None
@@ -315,13 +358,12 @@ def _protected(text: str):
     return {k: json.dumps(doc[k], sort_keys=True) for k in PROTECTED if k in doc}
 
 
-def _settings_change(before, after) -> str:
+def _settings_change(old, after) -> str:
     """What a call does to the protected keys, as a verb phrase; "" when it leaves them as they are.
-    `before`: the file's text (None: no file; False: unreadable); `after`: the text it leaves
+    `old`: the keys the file holds now (_held; None: unusable); `after`: the text the call leaves
     (None: not computed)."""
-    if before is False or after is None:
+    if old is None or after is None:
         return "may change env, hooks, disableAllHooks or permissions in"
-    old = (_protected(before) if before is not None else None) or {}
     new = _protected(after)
     if new is None:
         return "drops %s from" % ", ".join(old) if old else ""
@@ -368,16 +410,17 @@ def _granted(tool: str, ti: dict, data: dict) -> bool:
     hooks/posttool-allowlist-consume.py spends it once the call ends."""
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     try:
-        from lib import allowlist
+        from lib.allowlist import (match_sentinel_grant_for_bash_command, match_sentinel_grant_for_tool,
+                                   match_sentinel_grant_for_write)
         sid = str(data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or "default")
         key = os.environ.get("CLAUDE_TASK_ID") or sid
         if tool == "Bash":
-            return allowlist.match_sentinel_grant_for_bash_command(key, str(ti.get("command") or "")) is not None
-        if allowlist.is_subagent_context(data):
+            return match_sentinel_grant_for_bash_command(key, str(ti.get("command") or "")) is not None
+        if data.get("agent_id"):
             return False
-        if tool == "Write" and allowlist.match_sentinel_grant_for_write(key, sid, str(ti.get("file_path") or "")):
+        if tool == "Write" and match_sentinel_grant_for_write(key, sid, str(ti.get("file_path") or "")):
             return True
-        return allowlist.match_sentinel_grant_for_tool(sid, tool) is not None
+        return match_sentinel_grant_for_tool(sid, tool) is not None
     except Exception:
         return False
     finally:
@@ -411,7 +454,7 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                     return refuse("this Bash command writes the harness home's %s" % os.path.basename(token))
     for path in settings_writes(command, cwd):
         before = _current(path)
-        change = _settings_change(before, _echo_result(command, path, cwd, before))
+        change = _settings_change(_held(path), _echo_result(command, path, cwd, before))
         if change and not _granted("Bash", {"command": command}, data or {}):
             return _refuse_settings("Bash command", change, path)
     return 0
@@ -440,9 +483,10 @@ def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
         return refuse("this %s sets disableAllHooks in %s, which would switch every hook off" % (tool, raw))
     if path in _settings_files() and not _allow_settings(cwd):
         return refuse("this %s writes the harness home's %s" % (tool, name))
-    if _named_settings(raw, [cwd]):
-        before = _current(path)
-        change = _settings_change(before, _edit_result(tool, ti, before))
+    named = _named_settings(raw, [cwd])
+    if named:
+        before = _current(named[0])
+        change = _settings_change(_held(named[0]), _edit_result(tool, ti, before))
         if change and not _granted(tool, ti, data or {}):
             return _refuse_settings(tool, change, raw)
     if harness_switch.DIR_NAME in text and not _in_harness_checkout(path):

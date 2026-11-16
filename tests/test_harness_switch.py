@@ -677,6 +677,8 @@ def test_disable_all_hooks_stays_refused_in_a_projects_settings_file(guard_home,
      {"old_string": ', "hooks": {"Stop": []}', "new_string": ""}),
     ("Edit an old_string the file lacks", '{"env": {"A": "1"}}', "Edit", {"old_string": "nowhere", "new_string": "x"}),
     ("NotebookEdit", '{"env": {"A": "1"}}', "NotebookEdit", {"new_source": "{}"}),
+    ("Edit a file load_settings finds unusable", '{"model": "opus", "env": []}', "Edit",
+     {"old_string": '"opus"', "new_string": '"sonnet"'}),
     ("Write with NaN", None, "Write", {"content": '{"model": NaN}'}),
 ])
 def test_a_settings_change_the_rule_cannot_prove_harmless_is_refused(guard_home, proj, name, setup, tool, tool_input):
