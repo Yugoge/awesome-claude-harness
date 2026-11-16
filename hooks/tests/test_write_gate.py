@@ -13,6 +13,13 @@
 - pretool-subagent-code-block.py is not a rule: tool-policy refuses every non-dev role's code write
   (its lesson's home), and the shim only printed a warning nobody saw.
 - Each rule's measured time stays well inside its budget.
+- The rules a call matches run at the same time, one fork of the gate each (lib/rule_fork), in the
+  gate's own process and inside a launcher's fork: the answer combines in rule order whatever order
+  the rules end in, byte for byte what the one-after-another run prints (on the corpus too); a
+  fail-closed rule that raises, overruns, swallows its overrun or dies still refuses next to allows,
+  and a refusal stands next to a rule that crashes, calls os._exit, overruns or dies, in either
+  order; with another thread alive, inside a run with a watchdog thread, or for a tool the gate
+  names one after another (Bash), they run one after another in the gate's process.
 """
 from __future__ import annotations
 
@@ -484,3 +491,220 @@ def test_a_rule_module_that_cannot_be_imported_leaves_the_other_rules_deciding(l
     got = subprocess.run([sys.executable, "-c", probe], input=refused, capture_output=True, text=True,
                          env=lab.env(), cwd=lab.proj, timeout=120)
     assert got.returncode == 2 and "BLOCKED by tool-policy" in got.stderr, (got.returncode, got.stderr)
+
+
+# ------------------------------------------------------------------ the rules at the same time
+
+GATE = HOOKS / "pretool-write-gate.py"
+ONE_THREAD_MORE = """
+import threading, time
+threading.Thread(target=time.sleep, args=(60,), daemon=True).start()  # another thread: no fork
+"""
+
+
+def _timed(tmp_path: Path, name: str, body: str) -> str:
+    """A rule file that notes its pid and its start and end (time.monotonic()) in <name>.ran."""
+    note = tmp_path / f"{name}.ran"
+    return _rule_file(tmp_path, name, textwrap.dedent(f"""
+        _t0 = time.monotonic()
+        import atexit
+        atexit.register(lambda: open({str(note)!r}, 'w').write(json.dumps([os.getpid(), _t0, time.monotonic()])))
+        """) + textwrap.dedent(body))
+
+
+def _ran(tmp_path: Path, name: str):
+    """(pid, start, end) a _timed rule noted, or None when it noted nothing."""
+    note = tmp_path / f"{name}.ran"
+    return tuple(json.loads(note.read_text())) if note.exists() else None
+
+
+def _gate_runs(tmp_path: Path, rules, raw: bytes = b"{}", tool=None, prelude: str = "", runner=None):
+    """The gate's own run of ``rules`` (name, file, fail, budget) and its answer, in a new interpreter
+    (pretool-write-gate.py _runs, then combine and _emit, as main() does): (exit status, stdout,
+    stderr, the interpreter's pid, seconds). ``runner``: the Python, given ``probe`` (a file that
+    runs the probe), that runs it, its stdout the probe's own."""
+    probe = tmp_path / "gate-probe.py"
+    probe.write_text(f"import importlib.util, json, os, sys\nsys.path.insert(0, {str(HOOKS)!r})\n"
+                     f"{prelude}\n" + textwrap.dedent(f"""
+        spec = importlib.util.spec_from_file_location('gate', {str(GATE)!r})
+        gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+        from lib import write_gate
+        rules = [write_gate.Rule(n, p, None, 'both', fail, (), budget) for n, p, fail, budget in {list(rules)!r}]
+        raw = sys.stdin.buffer.read()
+        open({str(tmp_path / 'gate.pid')!r}, 'w').write(str(os.getpid()))
+        code = gate._emit(write_gate.combine(gate._runs(rules, raw, {tool!r})))
+        sys.stdout.flush(); sys.stderr.flush()
+        os._exit(code)
+        """))
+    argv = [sys.executable, str(probe)]
+    if runner is not None:
+        script = tmp_path / "gate-runner.py"
+        script.write_text(f"import json, os, sys\nsys.path.insert(0, {str(HOOKS)!r})\nprobe = {str(probe)!r}\n"
+                          + textwrap.dedent(runner))
+        argv = [sys.executable, str(script)]
+    start = time.monotonic()
+    p = subprocess.run(argv, input=raw, capture_output=True, timeout=60)
+    took = time.monotonic() - start
+    pid = int((tmp_path / "gate.pid").read_text())
+    return p.returncode, p.stdout.decode(), p.stderr.decode(), pid, took
+
+
+def test_the_gates_rules_run_at_the_same_time(tmp_path):
+    rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.8)\n"), "open", 5.0) for i in range(3)]
+    code, out, err, pid, took = _gate_runs(tmp_path, rules)
+    assert (code, out, err) == (0, "", "")
+    ran = [_ran(tmp_path, f"s{i}") for i in range(3)]
+    assert all(r is not None and r[0] != pid for r in ran), (pid, ran)  # each in a process of its own
+    assert len({r[0] for r in ran}) == 3
+    assert max(r[1] for r in ran) < min(r[2] for r in ran), ran  # every run overlaps every other
+    assert took < 2.0, took  # one sleep, not three
+
+
+def test_with_another_thread_alive_the_gates_rules_run_one_after_another(tmp_path):
+    rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(3)]
+    code, out, err, pid, took = _gate_runs(tmp_path, rules, prelude=ONE_THREAD_MORE)
+    assert (code, out, err) == (0, "", "")
+    ran = [_ran(tmp_path, f"s{i}") for i in range(3)]
+    assert [r[0] for r in ran] == [pid] * 3, (pid, ran)  # in the gate's own process
+    assert all(a[2] <= b[1] for a, b in zip(ran, ran[1:])), ran  # each after the one before
+    assert took >= 0.9, took
+
+
+def test_the_tools_named_one_after_another_run_their_rules_in_the_gates_process(tmp_path):
+    """Bash's rules run one after another (its call waits for a slower shell hook anyway); the data
+    is the gate's ONE_AFTER_ANOTHER, never a rule's own code."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("write_gate_hook", GATE)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    assert gate.ONE_AFTER_ANOTHER == frozenset({"Bash"})
+    from lib import hook_launch
+    assert gate.WARM == hook_launch.WARM
+    rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(2)]
+    for tool, forked in (("Bash", False), ("Write", True), ("Edit", True), (None, True)):
+        code, out, err, pid, _ = _gate_runs(tmp_path, rules, tool=tool)
+        assert (code, out, err) == (0, "", "")
+        pids = [_ran(tmp_path, f"s{i}")[0] for i in range(2)]
+        assert (pid not in pids) is forked and (len(set(pids)) == 2) is forked, (tool, pid, pids)
+
+
+def test_inside_a_launchers_fork_the_gates_rules_run_at_once_and_not_inside_a_watched_run(tmp_path):
+    """The launcher runs the gate in a fork of its own (lib/rule_fork, no thread): the gate forks
+    its rules there too. Run by the runner with its watchdog thread, the gate runs them in order."""
+    rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(2)]
+    forked = """
+        from lib import rule_fork
+        other = os.path.join(os.path.dirname(probe), 'other.py')
+        open(other, 'w').write('pass\\n')
+        raw = sys.stdin.buffer.read()
+        runs = rule_fork.run_at_once([rule_fork.Job(probe, raw, 20.0), rule_fork.Job(other, raw, 20.0)])
+        sys.stdout.write(runs[0].stdout); sys.stderr.write(runs[0].stderr); sys.exit(runs[0].code)
+        """
+    code, out, err, pid, _ = _gate_runs(tmp_path, rules, runner=forked)
+    assert (code, out, err) == (0, "", "")
+    ran = [_ran(tmp_path, f"s{i}") for i in range(2)]
+    assert pid not in (r[0] for r in ran) and ran[0][1] < ran[1][2] and ran[1][1] < ran[0][2], (pid, ran)
+    watched = """
+        from lib.rule_runner import run_rule
+        run = run_rule(probe, sys.stdin.buffer.read(), 20.0)
+        sys.stdout.write(run.stdout); sys.stderr.write(run.stderr); sys.exit(run.code)
+        """
+    code, out, err, pid, _ = _gate_runs(tmp_path, rules, runner=watched)
+    assert (code, out, err) == (0, "", "")
+    assert [_ran(tmp_path, f"s{i}")[0] for i in range(2)] == [pid, pid]
+
+
+def _ends_in_reverse(tmp_path: Path, refuse: bool):
+    """Rules whose runs end in the reverse of their order, each with something combine() keeps."""
+    bodies = [
+        "time.sleep(0.6)\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', "
+        "'additionalContext': 'first', 'updatedInput': {'command': 'one'}}}))\n",
+        "time.sleep(0.45)\nsys.stderr.write('warned\\n'); sys.exit(1)\n",
+        "time.sleep(0.3)\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', "
+        "'additionalContext': 'third', 'updatedInput': {'command': 'three'}, 'permissionDecision': 'ask', "
+        "'permissionDecisionReason': 'r3'}}))\n",
+        "time.sleep(0.15)\nraise RuntimeError('crashed')\n",
+        ("sys.stderr.write('refused last\\n'); sys.exit(2)\n" if refuse else
+         "print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': 'fifth'}}))\n"),
+    ]
+    if refuse:
+        bodies[0] = "time.sleep(0.6)\nsys.stderr.write('refused first\\n'); sys.exit(2)\n"
+    return [(f"m{i}", _timed(tmp_path, f"m{i}", b), "open", 5.0) for i, b in enumerate(bodies)]
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_the_answer_combines_in_rule_order_byte_for_byte_as_one_after_another(tmp_path, refuse):
+    rules = _ends_in_reverse(tmp_path, refuse)
+    at_once = _gate_runs(tmp_path, rules)
+    ends = [_ran(tmp_path, f"m{i}")[2] for i in range(len(rules))]
+    assert ends == sorted(ends, reverse=True), ends  # the last rule ended first
+    in_order = _gate_runs(tmp_path, rules, prelude=ONE_THREAD_MORE)
+    assert _ran(tmp_path, "m0")[0] == in_order[3]  # that run was one after another, in the gate
+    assert at_once[:3] == in_order[:3]
+    code, out, err = at_once[:3]
+    if refuse:
+        assert (code, out, err) == (2, "", "refused first\nrefused last\n")
+    else:
+        hso = json.loads(out)["hookSpecificOutput"]
+        assert code == 0 and hso["additionalContext"] == "first\nthird\nfifth"
+        assert hso["updatedInput"] == {"command": "one"} and hso["permissionDecision"] == "ask"
+        assert err.startswith("warned\nwrite gate: rule m3 RuntimeError: crashed; this rule fails open")
+
+
+ALLOW = "print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow'}}))\n"
+CLOSED_FAILURES = {
+    "raises": "raise RuntimeError('cannot load its policy')\n",
+    "overruns its budget": "time.sleep(30)\n",
+    "swallows its overrun": "while True:\n    try:\n        time.sleep(30)\n    except BaseException:\n        pass\n",
+    "dies by a signal": "import signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(CLOSED_FAILURES))
+def test_a_fail_closed_rule_that_cannot_decide_still_refuses_next_to_allows(tmp_path, name):
+    """tool-policy's direction: an error or an overrun of its budget refuses the call, whatever
+    the rules beside it allowed, in either order."""
+    bad = ("tool-policy", _rule_file(tmp_path, "bad", CLOSED_FAILURES[name]), "closed", 0.5)
+    allows = [(f"a{i}", _rule_file(tmp_path, f"a{i}", ALLOW), "open", 5.0) for i in range(2)]
+    for rules in ([bad, *allows], [*allows, bad]):
+        code, out, err, _, took = _gate_runs(tmp_path, rules)
+        assert (code, out) == (2, ""), (name, code, out, err)
+        assert err.startswith("write gate: rule tool-policy ") and "fails closed, so the call is refused" in err
+        assert took < 8, took
+
+
+OPEN_FAILURES = {
+    "raises": "raise RuntimeError('crash')\n",
+    "os._exit(0)": "sys.stdout.write('partial'); sys.stdout.flush(); os._exit(0)\n",
+    "os._exit(3)": "os._exit(3)\n",
+    "overruns its budget": "time.sleep(30)\n",
+    "swallows its overrun": "while True:\n    try:\n        time.sleep(30)\n    except BaseException:\n        pass\n",
+    "dies by a signal": "import signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(OPEN_FAILURES))
+def test_a_refusal_stands_next_to_a_failing_rule_run_at_once_in_either_order(tmp_path, name):
+    bad = ("bad", _rule_file(tmp_path, "bad", OPEN_FAILURES[name]), "open", 0.5)
+    refuse = ("refuse", _rule_file(tmp_path, "refuse", "time.sleep(0.2); sys.stderr.write('no: refused\\n'); sys.exit(2)\n"),
+              "open", 5.0)
+    allow = ("allow", _rule_file(tmp_path, "allow", ALLOW), "open", 5.0)
+    for rules in ([bad, refuse, allow], [refuse, bad, allow]):
+        code, out, err, _, took = _gate_runs(tmp_path, rules)
+        assert (code, out, err) == (2, "", "no: refused\n"), (name, rules, code, out, err)
+        assert took < 8, took
+
+
+def test_the_gate_answers_the_corpus_byte_for_byte_as_one_after_another(lab):
+    """The real gate on the differential corpus: at once (its own process, no thread) and one after
+    another (another thread alive) print the same bytes and exit with the same status."""
+    probe = lab.tmp / "in-order.py"
+    probe.write_text(ONE_THREAD_MORE + f"import runpy\nrunpy.run_path({str(GATE)!r}, run_name='__main__')\n")
+    lab.consent(False)
+    seen = set()
+    for raw in _corpus(lab):
+        at_once = lab.run(write_gate_settings.GATE_COMMAND, raw)
+        in_order = lab.run(f'python3 "{probe}"', raw)
+        assert at_once == in_order, raw
+        seen.add(at_once[0])
+    assert {0, 2} <= seen, seen
