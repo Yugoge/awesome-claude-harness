@@ -728,6 +728,40 @@ def test_bash_writes_the_rule_refuses(guard_home, proj, command):
     assert proc.returncode == 2 and "Claude Code settings file" in proc.stderr, (command, proc.stderr)
 
 
+@pytest.mark.parametrize("command", [
+    "(echo '{\"env\": {}}' > .claude/settings.json)",
+    "{ echo '{\"env\": {}}'; } > .claude/settings.json",
+    "for f in a; do echo x; done > .claude/settings.json",
+    "X=.claude; echo '{}' > $X/settings.json",
+    "echo $(rm .claude/settings.local.json)",
+    "echo `rm .claude/settings.local.json`",
+    "bash <<< 'rm .claude/settings.local.json'",
+    "echo \"unterminated > .claude/settings.json",
+])
+def test_bash_writes_the_parser_reads_are_refused(guard_home, proj, command):
+    """A subshell, a group, a loop's redirection, an assigned name, a substitution, a here-string fed
+    to a shell: each writes the file as the plain redirect does. Text bash cannot read stays refused."""
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    (proj / ".claude" / "settings.json").write_text('{"permissions": {"deny": ["Bash(rm:*)"]}}')
+    proc = gate(guard_home, proj, "Bash", {"command": command})
+    assert proc.returncode == 2 and "Claude Code settings file" in proc.stderr, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("spaced, attached", [
+    ("echo '{\"disableAllHooks\":true}' > settings.local.json", "echo '{\"disableAllHooks\":true}'>settings.local.json"),
+    ("echo disableAllHooks > settings.json", "echo disableAllHooks>settings.json"),
+    ("echo x > settings.json", "echo x>settings.json"),
+    ("grep -c env settings.json > /tmp/n", "grep -c env settings.json>/tmp/n"),
+])
+def test_an_attached_redirect_reads_as_the_spaced_one(guard_home, spaced, attached):
+    """From the harness home: `x>settings.json` is the write `x > settings.json` is."""
+    decisions = []
+    for command in (spaced, attached):
+        proc = guard_home.hook("hooks/pretool-write-gate.py", {"tool_name": "Bash", "tool_input": {"command": command}})
+        decisions.append((proc.returncode, "harness-switch:" in proc.stderr))
+    assert decisions[0] == decisions[1] == (2, True), (spaced, attached, decisions)
+
+
 def test_a_settings_file_reached_through_a_link_is_one(guard_home, proj):
     real = proj / "real.json"
     real.write_text('{"model": "opus"}')
