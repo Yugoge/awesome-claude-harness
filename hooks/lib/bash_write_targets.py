@@ -9,6 +9,7 @@ expanded, and any other expansion kept as written so a caller sees it is unresol
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Tuple
 
 try:
@@ -25,10 +26,24 @@ def _known() -> dict:
     return known
 
 
+# A command whose name is computed counts as a copy only when an operand is spelled after cp or mv
+# (`"$CP" cp-01 dest`); otherwise its last operand (`"$PY" script.py`) is no write.
+_COPY_MOVE_WORD = re.compile(r"(?:cp|mv)(?!\w)")
+
+
 def _targets(command: str) -> list:
     if not isinstance(command, str) or not command.strip():
         return []
-    return _sp.write_targets(command, env=_known())
+    script = _sp.parse(command)
+    found = _sp.write_targets(script, env=_known())
+    if not any(t.mechanism == "computed-command" for t in found):
+        return found
+    copies = set()
+    for site in _sp.walk(script):
+        words = site.cmd.words
+        if any(_COPY_MOVE_WORD.match(w.value() or "") for w in words[1:]):
+            copies.update(id(w) for w in words)
+    return [t for t in found if t.mechanism != "computed-command" or id(t.word) in copies]
 
 
 def _render(t, command: str) -> str:
