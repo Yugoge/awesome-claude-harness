@@ -1,8 +1,8 @@
 # doc_sync
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 12
+*Last updated: 2026-11-16T02:46:58Z*
+**Total entries**: 11
 **Convention**: kebab
 
 ## Tree
