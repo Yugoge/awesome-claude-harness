@@ -715,6 +715,8 @@ def test_every_settings_source_the_cli_reads_is_covered(guard_home, proj, rel):
     "bash -c \"sed -i 's/on/off/' .claude/settings.local.json\"",
     "git checkout HEAD~1 -- .claude/settings.local.json",
     "dd if=/tmp/p.json of=.claude/settings.local.json",
+    "cat > .claude/settings.json <<'EOF'\n{\"model\": \"opus\"}\nEOF",
+    "bash <<'EOF'\nrm .claude/settings.local.json\nEOF",
     "echo '{\"model\": \"opus\"}' > .claude/settings.local.json",  # the literal echo, onto a file with env
 ])
 def test_bash_writes_the_rule_refuses(guard_home, proj, command):
@@ -745,6 +747,7 @@ SETTINGS_FREE = [  # reads of settings files, other JSON files, messages, other 
     ("Bash", {"command": "cp .claude/settings.json /tmp/settings-backup.json"}),
     ("Bash", {"command": "echo '{\"env\": {\"A\": \"1\"}, \"hooks\": {}}' > config/settings.json"}),
     ("Bash", {"command": "sed -i 's/on/off/' config/settings.json package.json"}),
+    ("Bash", {"command": "cat > notes.md <<'EOF'\nrm .claude/settings.json; cp x .claude/settings.local.json\nEOF"}),
     ("Bash", {"command": "git commit -m \"Refuse env CLAUDE_COMMAND_GATE=off in /p/.claude/settings.local.json\""}),
     ("Bash", {"command": "git commit -m \"$(cat <<'EOF'\nGuard the settings files\n\necho '{\"env\": {\"CLAUDE_COMPAT_RUNTIME\": \"codex\"}}' > .claude/settings.json, cp x .claude/settings.local.json, sed -i, rm .claude/settings.json: refused.\nEOF\n)\""}),
     ("Bash", {"command": "gh pr create --title t --body \"hooks and permissions of .claude/settings.json; tee /p/.claude/settings.local.json\""}),

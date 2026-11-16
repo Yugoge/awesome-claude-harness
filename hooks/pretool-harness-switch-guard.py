@@ -22,10 +22,11 @@ subagent, each other path by which an agent call could switch the harness or fak
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
-owner's too, by key, whatever variable an env names. A settings file is what the CLI loads one from: .claude/settings.json
-and .claude/settings.local.json in any directory, managed-settings.json and a managed-settings.d/
-*.json, and .claude.json (the global config, whose env the CLI applies at launch); a --settings
-file can be anywhere and is not seen. The home's own settings files stay the rule above's.
+owner's too, by key, whatever variable an env names. A settings file is what the CLI loads one
+from: .claude/settings.json and .claude/settings.local.json in any directory, managed-settings.json
+and a managed-settings.d/*.json, and .claude.json (the global config, whose env the CLI applies at
+launch); a --settings file can be anywhere and is not seen. The home's own settings files stay
+the rule above's.
   Write / Edit / MultiEdit
                         refused when one of those keys' value in the document the call leaves
                         differs from the file's now (added, changed or removed), or the document
@@ -33,9 +34,10 @@ file can be anywhere and is not seen. The home's own settings files stay the rul
   NotebookEdit          refused on a settings file (no notebook, its result is not computed)
   Bash                  refused when a command writes, moves or removes a settings file (a
                         redirect, tee, cp or mv onto it, sed -i, rm, mv away, any command but a
-                        reader, an interpreter or a commit or PR message naming it), unless the
-                        whole command is `echo '<literal>' > or >> <file>` whose result the
-                        Write rule passes; an interpreter's own writes are not seen
+                        reader, an interpreter or a commit or PR message naming it; a heredoc
+                        body is commands only where a shell reads it), unless the whole command
+                        is `echo '<literal>' > or >> <file>` whose result the Write rule passes;
+                        an interpreter's own writes are not seen
 The owner edits the file, or grants the one call with /allow (hooks/lib/allowlist.py; spent after
 the call by hooks/posttool-allowlist-consume.py): a Bash grant naming the command, for any actor,
 as every Bash grant is; `/allow Write <path>`, or `/allow <tool>`, for the main agent, as the
@@ -77,6 +79,7 @@ CLAUDE_SETTINGS = re.compile(r"(?:^|/)(?:\.claude/settings(?:\.local)?\.json|\.c
 SETTINGS_DIRS = (".claude", "managed-settings.d")  # removing or replacing one removes its settings files
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh)\Z")
 LITERAL_ECHO = re.compile(r"echo((?:\s+-[nE]+)*)\s+'([^']*)'\s*(>>?|>\|)\s*([\w./~+-]+)")
+SHELL_FED = re.compile(r"(?:^|[\s;|&(/])(?:bash|sh|dash|zsh|ksh)(?:\s|<|$)")  # a shell reads the heredoc
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 OWNER_SWITCHES = ("Only the owner switches the harness, by typing /harness off or /harness on; nothing an "
                   "agent runs, writes or schedules does")
@@ -166,9 +169,10 @@ def _read_only(words: list) -> bool:
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 
 
-def _without_message_bodies(command: str) -> str:
+def _without_message_bodies(command: str, data_too: bool = False) -> str:
     """`command` minus the bodies of heredocs that feed a commit, tag or PR message: prose, not
-    code. Every other heredoc body stays: a script a command writes, or an interpreter reads."""
+    code. Every other heredoc body stays: a script a command writes, or an interpreter reads.
+    With `data_too` only a body a shell reads stays (its lines are commands; any other is data)."""
     out, end, keep = [], None, True
     for line in command.splitlines():
         if end is not None:
@@ -180,7 +184,7 @@ def _without_message_bodies(command: str) -> str:
         out.append(line)
         m = HEREDOC.search(line)
         if m:
-            end, keep = m.group(2), not MESSAGE.search(line)
+            end, keep = m.group(2), bool(SHELL_FED.search(line)) if data_too else not MESSAGE.search(line)
     return "\n".join(out)
 
 
@@ -264,7 +268,7 @@ def settings_writes(command: str, cwd: str) -> list:
     removes: a redirect onto one (spaced or attached), and every word of a command that is not a
     reader, an interpreter or a commit or PR message (tee, sed -i, rm, ...); cp's and mv's
     destination, and mv's sources. A path is read from the call's directory and every `cd`'s."""
-    segments = _segments(_without_message_bodies(command), shell_text_only=True)
+    segments = _segments(_without_message_bodies(command, data_too=True), shell_text_only=True)
     dirs = [cwd] + [_resolve(w[1], cwd) for w in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd")]
     out = []
     for words in segments:
