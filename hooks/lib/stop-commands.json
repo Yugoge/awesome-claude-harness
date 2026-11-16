@@ -1,4 +1,5 @@
 {
   "GATED_COMMANDS": ["do", "dev", "redev", "dev-command", "dev-overnight", "close", "commit", "merge", "push"],
-  "CONTROL_COMMANDS": ["allow", "restart", "checkpoint", "tickets", "rating"]
+  "CONTROL_COMMANDS": ["allow", "restart", "checkpoint", "tickets", "rating"],
+  "ASK_COMMANDS": ["spec", "dev", "redev", "dev-command"]
 }

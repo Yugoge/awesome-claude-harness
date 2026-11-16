@@ -577,6 +577,8 @@ Agent(subagent_type: "qa")
 
 **Wait for ALL BA-validation QA subagents to complete.** Per pipeline, read `docs/dev/ba-qa-report-{pipeline.timestamp_suffix}.json`: verdict `pass` validates BA's conclusions and the pipeline proceeds to Step 12; verdict `fail` goes to Step 11.
 
+**Extra independent QA round (D32).** When the opener's `Low record:` line names `ba`, each pipeline's BA-validation QA runs twice. After the first pass, dispatch Step 10's QA once more with the same obligation template, a fresh `dispatched_at`, file paths only and nothing of the first round in its prompt. Proceed to Step 12 only after both pass. A fail of either enters Step 11; after BA returns both rounds run again. The cycle's Stop check holds each pipeline's extra round.
+
 ### Step 11: BA-QA Iteration Loop (if QA rejects BA)
 
 The only exit is QA's BA-validation verdict `pass`. A `fail` is a process step: it sends the pipeline back to BA with QA's objections, and Steps 9-10 run again, with no iteration cap. Every BA invocation is followed by QA validation. Each pipeline iterates independently; track the BA-QA iteration per pipeline (from 1) in TodoWrite and the cycle log. Announce `BA-QA iteration <N> for pipeline <pipeline_id>: QA found <count> objections in BA analysis. Re-invoking BA to address objections.` and re-invoke BA:
@@ -747,6 +749,8 @@ Agent(subagent_type: "qa")
 ```
 
 **Wait for ALL QA subagents to complete.**
+
+**Extra independent QA round (D32).** When the opener's `Low record:` line names `dev`, each pipeline's final-verification QA runs twice. After the first pass, dispatch Step 15's QA once more with the same obligation template, a fresh `dispatched_at`, file paths only and nothing of the first round in its prompt. Step 16 marks it done only after both pass. A fail of either enters Step 17; after dev returns both rounds run again. The cycle's Stop check holds each pipeline's extra round. When the line names `qa`, every QA round (BA-validation included) holds a Codex debate whether or not `--codex` was given; its SubagentStart text says so and the dispatch template stays unchanged.
 
 ### Step 16: Process All QA Results
 

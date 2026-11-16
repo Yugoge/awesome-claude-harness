@@ -397,14 +397,18 @@ _snap "AC6 BOM removed" "$H_LIB" "$H"
 _written AC6 "the machine form again, byte order mark removed"
 
 # ============================================================================
-# AC7: the pre-push gate runs the engine's private-literal rule over the new
-# blobs, so a snapshot written before its literal was listed is not pushed.
+# AC7: a snapshot written before its literal was listed is not pushed: the checkpoint
+# push passes through the installed pre-push guard (scripts/install/push-guard), whose
+# refusal the push log keeps, naming the object and never the literal.
 # ============================================================================
 REPO5="$WORKDIR/repo5"; ORIGIN5="$WORKDIR/origin5.git"
 git init -q "$REPO5"; git init -q --bare "$ORIGIN5"
 git -C "$REPO5" config user.name "Test"
 git -C "$REPO5" config user.email "test@example.invalid"
-printf '/private-literals.txt\n' > "$REPO5/.gitignore"
+printf '/private-literals.txt\n/scripts/\n' > "$REPO5/.gitignore"
+mkdir -p "$REPO5/scripts/install" && cp "$REPO_ROOT/scripts/check-public-core.sh" "$REPO5/scripts/" \
+  && cp "$REPO_ROOT/scripts/install/push-guard" "$REPO5/scripts/install/" \
+  && cp "$REPO_ROOT/hooks/git-hooks/pre-push" "$REPO5/.git/hooks/pre-push"
 git -C "$REPO5" add -A && git -C "$REPO5" commit -q -m "init"
 printf 'ticket for %s, demo only\n' "$STANDIN" > "$REPO5/early.txt"
 _snap "AC7 before listing" "$CORE_LIB" "$REPO5"
@@ -415,10 +419,12 @@ ref5="refs/checkpoints/$(git -C "$REPO5" branch --show-current)"
 lines=$(wc -l < "$push_log" 2>/dev/null | tr -d ' ')
 _checkpoint_push_worker "$REPO5" "$ref5" "$snap_after"
 alert=$(tail -n "+$((${lines:-0} + 1))" "$push_log" 2>/dev/null)
+blob5=$(git -C "$REPO5" rev-parse "$snap_after:early.txt")
 if [ -z "$(git --git-dir="$ORIGIN5" rev-parse -q --verify "$ref5")" ] \
-  && printf '%s' "$alert" | grep -q "ALERT.*the private-literal rule.*early.txt:1" \
+  && printf '%s' "$alert" | grep -qF "blob $blob5:1" \
+  && printf '%s' "$alert" | grep -qF "push REFUSED by the private-literal guard" \
   && ! printf '%s' "$alert" | grep -qF -- "$STANDIN"; then
-  _ok "AC7: push refused naming the private-literal rule and early.txt:1, literal not logged"
+  _ok "AC7: the installed pre-push guard refused the push naming blob $blob5, literal not logged"
 else
   _fail "AC7: snapshot holding a since-listed literal was pushed or misreported (log: $alert)"
 fi

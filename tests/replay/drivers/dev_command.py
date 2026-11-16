@@ -38,8 +38,8 @@ from their obligation, the schemas and their agent files.
 commands/dev-command.md keeps only its difference from commands/dev.md (its step map: this file's
 Steps 11-16 are /dev's 12-17). What it does not repeat is read from the mapped /dev step: the hook
 lines and the Spec line of Step 1, the Pre-BA retry signals, the dispatch templates (with this
-file's obligation block in place of /dev's and without the lines the file leaves out: score
-headers, baseline, generated tests), the Read paths of Steps 6, 11 and 13, and Step 16's resolver.
+file's obligation block in place of /dev's and without the lines the file leaves out:
+baseline, generated tests), the Read paths of Steps 6, 11 and 13, and Step 16's resolver.
 
 Driver arguments (cli.py --arg K=V):
   variant=plain     BA ready, BA-QA pass, dev writes the command, QA pass (default)
@@ -92,9 +92,8 @@ KEYWORD = "test"  # the retry-signal keyword the orchestrator takes from the req
 # The step map of commands/dev-command.md: this file's step -> the /dev step it follows.
 DEV_STEP = {**{n: n for n in range(1, 11)}, 11: 12, 12: 13, 13: 14, 14: 15, 15: 16, 16: 17,
             "4a": "4a", "4b": "4b", "4c": "4c"}
-# The lines of /dev's templates that commands/dev-command.md says to leave out (no score header, test-writer
-# or baseline here).
-OMITTED = (r"_SCORE_HEADER prepended here", r"^\s*baseline_(?:head_sha|dirty_snapshot):",
+# The lines of /dev's templates that commands/dev-command.md says to leave out (no test-writer or baseline here).
+OMITTED = (r"^\s*baseline_(?:head_sha|dirty_snapshot):",
            r"^\s*Generated tests \(when test-writer ran\)", r"^\s*Per-task active test manifest")
 
 PROJECT_ROOT_PREFIX = 'CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" '

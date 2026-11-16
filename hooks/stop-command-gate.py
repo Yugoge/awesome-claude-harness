@@ -373,10 +373,14 @@ def _resolves(root, arg: str, task: str) -> bool:
 
 def p_dev(span, root, payload) -> list[str]:
     """/dev, /redev, /dev-command: --stage dev chain_pass for each family the
-    span dispatched and the opener's hook-minted id (D22: one predicate). A
+    span dispatched and the opener's hook-minted id (D22: one predicate), and the extra QA round a low dev or BA owes (D32). A
     cycle on a text that predates this tree's (COMPATIBILITY, above) is asked
     under the name its text gives it, and not for a completion identity or
     reference its template never writes."""
+    return _chain_gaps(span, root, payload) + importlib.import_module("lib.score_view").extra_round_gaps(span, root)
+
+
+def _chain_gaps(span, root, payload) -> list[str]:
     families = span.session_families()
     if not families:
         return ["no pipeline dispatched"]
@@ -421,7 +425,7 @@ def p_overnight(span, root, payload) -> list[str]:
         return [f"dev-overnight: no overnight state record for session {payload.get('session_id')}"]
     working = overnight.working_root(record)
     gaps = [g for family in sorted(span.session_families()) for g in disposition(working, family, "dev")]
-    return gaps + list(overnight.closeout_gaps(record, working))
+    return gaps + list(overnight.closeout_gaps(record, working)) + importlib.import_module("lib.score_view").extra_round_gaps(span, working)
 
 
 def p_close(span, root, payload) -> list[str]:

@@ -251,7 +251,12 @@ def test_ac5_forbidden_files_untouched():
     there is nothing yet in git history that could violate the invariant,
     so the loop below has nothing to find; the check activates for real
     the moment this cycle's own commit is created, and stays correct on
-    every future checkout of it."""
+    every future checkout of it. If the commit that added this file has
+    no parent -- a root commit, such as a public copy's first publish
+    under D30, which adds every file at once, these four included -- its
+    diff says nothing about the original landing commit in the private
+    history, so the test skips rather than diffing against the empty
+    tree."""
     this_file = str(Path(__file__).resolve().relative_to(_REPO_ROOT))
     log = subprocess.run(
         ["git", "log", "--format=%H", "--diff-filter=A", "--", this_file],
@@ -261,6 +266,16 @@ def test_ac5_forbidden_files_untouched():
     if not commits:
         return  # this cycle has not landed a commit yet -- nothing to check
     landing_commit = commits[-1]  # oldest hit: the commit that added this file
+    parents = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", landing_commit],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()[1:]
+    if not parents:
+        pytest.skip(
+            f"{landing_commit}, the commit that added this file, is a root "
+            "commit (e.g. a public copy's first publish under D30, which adds "
+            "every file): its diff says nothing about the original landing commit"
+        )
     for rel_path in _FORBIDDEN_PATHS:
         diff = subprocess.run(
             ["git", "diff", "--name-only", f"{landing_commit}^", landing_commit, "--", rel_path],

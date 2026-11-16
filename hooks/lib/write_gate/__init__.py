@@ -86,6 +86,12 @@ RULES: tuple[Rule, ...] = (
          "both", "open",
          ("the project's .claude/.hook-refactor-allow sentinel, made by hand",
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
+    Rule("harness-switch", "pretool-harness-switch-guard.py",
+         WRITE_TOOLS | {"Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"},
+         "both", "open",
+         ("reading the switch's state or settings files",
+          "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files"),
+         5.0),
 )
 
 

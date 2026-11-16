@@ -37,12 +37,24 @@ jobs:
   # the release instead of being discovered after the fact.
   hygiene:
     name: hygiene gates (clean install + boundary) on the tagged commit
+    # D30 visibility gate: releases publish from the public repository only. The
+    # private repository carries this same file and a tag trigger cannot test
+    # visibility, so each job runs only where the event payload says the repository
+    # is public. toJSON() renders a missing flag as 'null', which never matches. With
+    # no dispatch trigger here, nothing in this file runs on the private repository,
+    # and a skipped job takes no runner.
+    if: toJSON(github.event.repository.private) == 'false'
     uses: ./.github/workflows/baseline.yml
     permissions:
       contents: read
 
   release:
     name: build, attest and publish
+    # D30: the same public-only gate on this job itself, so that publishing never
+    # depends on how a skipped called workflow is reported to `needs:`. An `if:`
+    # without a status function keeps the implicit success(), so this job still
+    # requires the hygiene job to pass.
+    if: toJSON(github.event.repository.private) == 'false'
     needs: hygiene
     runs-on: ubuntu-latest
     permissions:

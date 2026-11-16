@@ -27,6 +27,15 @@ compaction drops the command start's (SessionStart runs again on it, P2-4).
 State: workflow-{sid}.json + overnight-state-{sid}.json. The checklist itself is
 the CLI's: every TodoWrite is in the transcript, which its readers read (P1b E7).
 """
+import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+try:  # a hook copied without its lib/ (an old install) is on
+    import harness_switch  # noqa: E402
+    harness_switch.exit_if_off()
+except ImportError:
+    pass
+finally:
+    sys.path.pop(0)
 
 import json
 import os
@@ -1832,6 +1841,13 @@ def main():
                 print(recovery)
         else:
             handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
+            try:  # an ask span opens with the main agent's own record, and the roles on notice (D29, D32): context, never a verdict
+                import score_view  # hooks/lib is on sys.path (see the WS1 block above)
+                line = score_view.main_line(cmd_name, str(PROJECT_DIR))
+                if line:
+                    print(line)
+            except Exception:
+                pass
     except SystemExit:
         # M5/AC4: a /dev-overnight launch failure raises SystemExit(2) to fail
         # CLOSED. Do NOT swallow it into exit(0); propagate the failure code.

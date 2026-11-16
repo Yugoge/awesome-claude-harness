@@ -98,9 +98,19 @@ def git(repo, *args, input_bytes=None, check=True):
     return result
 
 
+def _require_commit(commit):
+    """Skip the calling test unless the pinned historical `commit` is in this
+    clone. The public repository receives the clean tree as one parentless
+    commit per publish (D30), so a clone of it holds none of this history."""
+    if git(ROOT, "cat-file", "-e", "%s^{commit}" % commit, check=False).returncode:
+        pytest.skip("pinned commit %s is not in this clone: a public copy "
+                    "holds only its publish commits (D30)" % commit[:8])
+
+
 def _real_pre_edit_snapshot():
     """The real pre-edit commands/close.md bytes, fetched from this repo's
     own git history -- a committed object, immune to docs/dev/'s gitignore."""
+    _require_commit(REAL_SNAPSHOT_COMMIT)
     result = subprocess.run(
         ["git", "-C", str(ROOT), "show", "%s:%s" % (REAL_SNAPSHOT_COMMIT, REAL_REL)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -200,6 +210,7 @@ def test_pre_fix_baseline_reproduces_the_boundary_defect(tmp_path):
     fixes, pinned against history so this baseline stays meaningful
     regardless of future edits to the live consumer.
     """
+    _require_commit(PRE_FIX_COMMIT)
     pre_fix_source = subprocess.run(
         ["git", "-C", str(ROOT), "show", "%s:scripts/stage-owned-hunks.py" % PRE_FIX_COMMIT],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,

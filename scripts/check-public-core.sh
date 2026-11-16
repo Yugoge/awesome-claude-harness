@@ -49,6 +49,13 @@ command -v awk  >/dev/null 2>&1 || { echo "ERROR: awk is required"  >&2; exit 1;
 rc=0
 fail() { echo "FAIL: $*"; rc=1; }
 pass() { echo "PASS: $*"; }
+# A step that cannot run (a failed listing) stops the run: nothing after it reads as clean.
+stop_run() {
+  fail "$*"
+  echo "----------------------------------------------------------------------"
+  echo "check-public-core: FAILURES DETECTED — see FAIL lines above"
+  exit 1
+}
 
 # Private-literal rule (R7b). The list is private-literals.txt in the MAIN working tree (no
 # override): one literal per line, trimmed, blank and #-lines ignored, fixed-string match.
@@ -93,7 +100,7 @@ if [ "$LITERALS_ONLY" -eq 1 ]; then private_literal_rule staged; exit "$rc"; fi
 #   $1    : root directory the scanned paths are relative to
 #   $2    : allowlist JSON path (relative to that root)
 #   $3    : "git" (every file git ls-files lists) | "tree" (walk the root)
-#   return: 0 clean, 1 residue/allowlist failure
+#   return: 0 clean, 1 residue/allowlist failure or a listing/read that failed (stops the audit)
 #
 # The file set is enumerated INSIDE this engine rather than piped in: the python
 # program arrives on stdin via the heredoc, so stdin is not available for data.
@@ -112,12 +119,24 @@ import ast, hashlib, io, json, os, re, subprocess, sys, tokenize
 
 root, allowlist_rel, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 INDEX_READ = set(os.environ.get("PC_FILTERED", "").splitlines()) if mode == "git" else set()
+
+def stop(step):
+    """A failure while listing, reading or scanning: the audit stops, so nothing after it
+    reads as clean. The line names the step or the file, never a value (no error text)."""
+    print(f"FAIL: residue audit stopped: {step}")
+    sys.exit(1)
+
 if mode == "git":
-    scan_paths = subprocess.run(["git", "-C", root, "ls-files", "-z"],
-                                capture_output=True, text=True).stdout.split("\0")
+    try:
+        listed = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, text=True)
+    except (OSError, UnicodeDecodeError):
+        listed = None
+    if listed is None or listed.returncode:
+        stop("cannot list the tracked files (git ls-files)")
+    scan_paths = listed.stdout.split("\0")
 else:
     scan_paths = []
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, _dirs, files in os.walk(root, onerror=lambda _err: stop("cannot list the files under the scan root")):
         for f in files:
             scan_paths.append(os.path.relpath(os.path.join(dirpath, f), root))
     scan_paths.sort()
@@ -327,16 +346,26 @@ for rel in scan_paths:
     if not rel:
         continue
     full = os.path.join(root, rel)
-    try:   # a filtered file: its index blob (the checkout only if it has no stage-0 entry)
-        blob = rel in INDEX_READ and subprocess.run(["git", "-C", root, "cat-file", "blob", ":" + rel], capture_output=True)
-        text = blob.stdout.decode("utf8") if blob and not blob.returncode else open(full, encoding="utf8").read()
-    except UnicodeDecodeError:   # not UTF-8: other 8-bit text (Latin-1, say) is still scanned
-        data = blob.stdout if blob and not blob.returncode else open(full, "rb").read()
-        if b"\0" in data:
-            continue      # binary (git's NUL test): no textual residue to gate
-        text = data.decode("latin-1")
+    blob = None
+    try:
+        if rel in INDEX_READ:   # a filtered file: its index blob, never the checkout (the machine form)
+            read = subprocess.run(["git", "-C", root, "cat-file", "blob", ":" + rel], capture_output=True)
+            if read.returncode:
+                stop(f"cannot read its index blob -> {rel}")
+            blob = read.stdout
+        elif os.path.islink(full) and not os.path.isfile(full):
+            # A symlink is read through, its target's text, as ever; one naming no file (dangling,
+            # or a directory) is read as its link text, what git tracks for it: not a failure.
+            blob = os.fsencode(os.readlink(full))
+        try:
+            text = blob.decode("utf8") if blob is not None else open(full, encoding="utf8").read()
+        except UnicodeDecodeError:   # not UTF-8: other 8-bit text (Latin-1, say) is still scanned
+            data = blob if blob is not None else open(full, "rb").read()
+            if b"\0" in data:
+                continue      # binary (git's NUL test): no textual residue to gate
+            text = data.decode("latin-1")
     except OSError:
-        continue          # unreadable: no textual residue to gate
+        stop(f"cannot read -> {rel}")
     scanned.add(rel)
     lang = lang_of(rel, text)
     lines = text.splitlines()
@@ -505,7 +534,8 @@ fi
 # 2. Completeness — every git-tracked top-level path must be classified.
 #    Top-level set = first path segment of every tracked file, unique.
 # ---------------------------------------------------------------------------
-TOPLEVEL="$(git ls-files | sed 's#/.*##' | sort -u)"
+TOPLEVEL="$(git ls-files 2>/dev/null | sed 's#/.*##' | sort -u)" \
+  || stop_run "cannot list the tracked files (git ls-files): the top-level path set is unknown"
 
 UNCLASSIFIED=""
 while IFS= read -r p; do
@@ -538,7 +568,9 @@ fi
 
 # A file git filters (settings.json: init smudges its checkout into the machine form) is
 # read from its index blob, the tracked content, in section 5; others as checked out.
-FILTERED="$(git ls-files | git check-attr --stdin filter | awk -F': filter: ' '$2 != "unspecified" && $2 != "unset" { print $1 }')"
+FILTERED="$(git ls-files 2>/dev/null | git check-attr --stdin filter 2>/dev/null \
+  | awk -F': filter: ' '$2 != "unspecified" && $2 != "unset" { print $1 }')" \
+  || stop_run "cannot list the files git filters (git ls-files | git check-attr): which to read from the index is unknown"
 
 # ---------------------------------------------------------------------------
 # 4. Private-literal rule — HARD GATE over the committed content of EVERY tracked file.

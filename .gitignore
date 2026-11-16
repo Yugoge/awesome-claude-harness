@@ -69,6 +69,9 @@ mcp-needs-auth-cache.json
 # Claude Code's live session records
 sessions/
 
+# The harness switch's state (/harness off|on, scripts/harness-switch): per home, never tracked
+/.harness-switch/
+
 # Claude Code's cleanup stamp, and the browser cookie file of a Playwright MCP run with a storage-state file
 .last-cleanup
 playwright-storage-state.json

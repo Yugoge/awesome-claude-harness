@@ -92,9 +92,11 @@ def read_state(sf):
 
 
 def state_verdicts(record):
-    """The one decision on an overnight-state record (see the module docstring)."""
-    if not isinstance(record, dict):
-        return Verdicts(False, False, False, None, {})
+    """The one decision on an overnight-state record (see the module docstring). A run the
+    owner's /harness off ended (its `harness_off_at`, scripts/harness-switch) is over: every
+    verdict is False, so after /harness on it arms nothing."""
+    if not isinstance(record, dict) or record.get('harness_off_at'):
+        return Verdicts(False, False, False, None, record if isinstance(record, dict) else {})
     end = parse_end_time(record.get('end_time'))
     before_end = end is not None and datetime.now(timezone.utc) < end
     window_live = before_end and record.get('current_phase', '') not in ('complete', 'completed')

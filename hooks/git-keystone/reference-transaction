@@ -41,6 +41,9 @@ PHASE="${1:-}"
 # ---- actor gate: only overnight actors are subject to the keystone deny ----
 [ "${CLAUDE_OVERNIGHT_ACTOR:-}" = "1" ] || exit 0
 
+# ---- the harness switch: inert while /harness off holds (hooks/lib/harness_switch.sh) ----
+[ -e "${CLAUDE_HOME:-$HOME/.claude}/.harness-switch/off" ] && exit 0
+
 # ---- blessed-token exemption (sanctioned harness wrappers) ----------------
 # CLAUDE_GIT_BLESSED_TOKEN must match the single-operation grant file that the
 # minting wrapper wrote. Absent/mismatched => not exempt. The overnight launch

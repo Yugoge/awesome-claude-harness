@@ -12,7 +12,10 @@
 #   --verbose      With --strict: print the full per-check detail instead of the
 #                  short report. The short report is the default so it stays short.
 # Exit codes: 0 = all required deps present (and, under --strict, the fresh
-#             handshake passed); 1 = one or more required checks failed.
+#             handshake passed); 1 = one or more required checks failed;
+#             3 = the harness is switched off (/harness off), or a switch was cut
+#             halfway: the switch's status is printed and nothing else is checked,
+#             since every hook is meant to be silent then. /harness on, then re-run.
 #
 # Required checks:
 #   - python3 + git           (base prerequisites, on PATH)
@@ -35,6 +38,16 @@ else
   HOME_DIR=""
 fi
 [ -n "$HOME_DIR" ] || HOME_DIR="$(cd "$SELF_DIR/.." && pwd -P)"
+
+# The harness switch (scripts/harness-switch): while the harness is off, or a switch was cut
+# halfway, say so plainly instead of reporting each silent hook as a failure.
+if [ -e "$HOME_DIR/.harness-switch/off" ] || [ -e "$HOME_DIR/.harness-switch/journal.json" ]; then
+  echo "doctor: the harness is switched off (/harness off), or a switch was cut halfway;"
+  echo "doctor: its checks need the harness on. The switch's own report:"
+  python3 "$HOME_DIR/scripts/harness-switch" status | sed 's/^/  /'
+  echo "doctor: type /harness on in Claude Code (it also finishes a cut switch), then re-run scripts/doctor."
+  exit 3
+fi
 
 VENV_DIR="$HOME_DIR/venv"
 STRICT=0

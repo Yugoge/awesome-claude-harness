@@ -103,10 +103,15 @@ missing) is a failure, not a refusal: the snapshot fails, the failure is logged,
 proceeds, and doctor names what is missing.
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
-init creates it empty and you fill it; on a home upgraded from code before the filter, the
-landing seeds it once, while it is absent or empty, from values the machine already holds (the
-overlay's personal keys, its personal-path permissions, the git e-mail, the previous revision's
-marker lists), and never rewrites a list that has lines. One literal per line — account names, e-mail
+init creates it empty and you fill it; the landing seeds it when landing a home upgraded from
+code before the filter, and before reinstalling git hooks that differ from `hooks/git-hooks/`:
+an absent or empty list gets at once values the machine already holds (the overlay's personal
+keys, its personal-path permissions, the git e-mail, the previous revision's marker lists) and
+values from the home's own git history (author and committer identities, and e-mail addresses in
+commit and tag messages and in files, unless the address is a noreply one or at an RFC 2606
+reserved domain); a list that has lines keeps every line byte for byte and gets appended only
+the history values it lacks.
+One literal per line — account names, e-mail
 addresses, private host, product or container names, personal home paths; blank lines and lines
 whose first non-blank character is `#` are ignored; matching is case-sensitive, fixed-string and
 byte-wise, so the same text in another encoding (UTF-16, say) is not matched. No setting or

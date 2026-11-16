@@ -5,6 +5,7 @@
 # (`git rev-parse --git-path info/exclude`; a worktree resolves its own) does not list yet.
 # Never writes a tracked file or the tracked .gitignore, never lists a docs/dev artifact
 # /commit stages; a project that is not a git repository is left alone. Exits 0.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
 

@@ -327,3 +327,21 @@ def test_overnight_dev_child_resolves_its_sessions_state(tmp_path, monkeypatch):
     assert guard._resolve_child_session(child)["session_id"] == cycle.session
     # A payload whose own dispatch cannot be read keeps the pre-pull binding.
     assert guard._resolve_child_session({**child, "session_id": ""})["session_id"] == "p6-r4-other"
+
+
+@pytest.mark.parametrize("event,extra,status", [
+    ("PostToolUse", {"tool_response": {"output": "ok"}}, "called"),
+    ("PostToolUse", {"tool_response": {"output": "quota exceeded"}}, "quota_error"),
+    ("PostToolUseFailure", {"error": "Unknown skill: codex"}, "failed"),
+    ("PostToolUseFailure", {"error": "timeout", "is_interrupt": True}, "failed"),
+])
+def test_a_codex_attempt_even_a_failed_skill_call_releases_a_bound_qa(tmp_path, event, extra, status):
+    cycle = Cycle(tmp_path)
+    registry = cycle.arm()
+    transcript = cycle.dispatch("a-qa-failed", "qa", _qa_prompt() + "\ncodex_required: true\n")
+    blocked = cycle.stop("subagentstop-codex-enforce.py", "a-qa-failed", "qa", transcript)
+    assert blocked.returncode == 2, blocked.stderr
+    assert cycle.codex_call("a-qa-failed", "qa", hook_event_name=event, **extra).returncode == 0
+    entry = json.loads((registry / "codex-ledger" / "a-qa-failed.json").read_text())
+    assert entry["status"] == status
+    assert cycle.stop("subagentstop-codex-enforce.py", "a-qa-failed", "qa", transcript).returncode == 0

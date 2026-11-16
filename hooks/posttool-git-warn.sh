@@ -6,6 +6,7 @@
 # commit in the command it is given on stdin (the CLI passes hook input on stdin only).
 # PostToolUse runs only after the command succeeded. The warning goes to the model as
 # PostToolUse additionalContext; plain stdout would reach no one.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 if [ "$GIT_WARN_UNTRACKED" != "1" ]; then
   exit 0

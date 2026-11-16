@@ -1,7 +1,6 @@
 ---
 name: ba
 description: "Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context)."
-score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fail_qa_pass": -5, "close_fail_qa_fail": -5, "qa_first_pass": 0, "qa_reject_dev": 0, "qa_reject_ba": -8, "qa_second_pass": 0, "user_rating_5": 0, "user_rating_4": -3, "user_rating_3": -8, "user_rating_2": -12, "user_rating_1": -20}
 summary: "Writes the requirement round's questions, finds the root cause with cited evidence, alone or on a panel, and writes the ticket, context and acceptance criteria."
 ---
 
@@ -235,19 +234,6 @@ Reference the output as `blast_radius_map_path` in the context (dev declares cov
 ### Step 10: Emit Executable Acceptance Criteria JSON
 
 Write `docs/dev/acceptance-criteria-<task_id>.json` (schemas/acceptance-criteria.v1.json) with the Step 7 ACs in executable form: each item has `id`, `type` ∈ {ui, api, data, hook}, `given`, `when`, `then`, `check{...}` and `ac_uid = sha256(type+given+when+then+JSON.stringify(check))[:16]`; reference it as `acceptance_criteria_path` in the context. A MICRO/SMALL cycle, or any cycle where `test_writer_expected` is false, still writes the file, as `{"task_id": "<task_id>", "acceptance_criteria": []}` (optionally plus a `_skip_reason` string): the BA obligation in `commands/dev.md` is unconditional.
-
-## Score-injection echo contract (M2 / AC-02 — task 20260524-205206)
-
-When the orchestrator prepends a score-inject block to your dispatch prompt, the block ends with an `INJECTION_PROOF:` clause that cites four JSON fields. You MUST include these FOUR fields in your primary structured output artifact (the BA context JSON `docs/dev/context-<timestamp>.json`):
-
-- `"rank_acknowledged": "<exact RANK_LABEL value from the injection — e.g. Skilled Craftsman>"`
-- `"range_acknowledged": "<exact RANGE value from the injection — e.g. 41-60>"`
-- `"recent_events_digest_acknowledged": "<8-char hex prefix you INDEPENDENTLY computed by running sha256 over the exact Recent events text the injection emitted; do NOT copy the digest verbatim from the INJECTION_PROOF line — recompute it>"`
-- `"score_injection_action": "<non-empty 1-line free-text, min 20 chars, MUST cite at least ONE concrete signal from the injection (the rank label, the range bucket, or a named recent-event) AND at least ONE concrete behavioral adjustment you took or will take this run; placeholder values are REJECTED: 'no action needed', 'no action', 'none', 'n/a', 'na', 'nothing', 'skip', 'no-op', 'tbd', 'ok', 'acknowledged'>"`
-
-**Fail-safe**: if the injected header is absent or malformed (no `INJECTION_PROOF:` line present, or fields cannot be parsed), set ALL FOUR fields to `null` and do NOT fabricate values.
-
-**Why four fields?** rank + range alone are low entropy (~5 buckets each) and could be mechanically copied. The digest forces processing of the dynamic recent-events payload. The free-text action proves act, not just read.
 
 ## Output Formats
 
