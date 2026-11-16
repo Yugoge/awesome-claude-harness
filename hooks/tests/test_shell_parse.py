@@ -476,3 +476,22 @@ class TestConsumerDefects:
         sites = list(sp.walk(sp.parse("{ echo x; } > a")))
         assert [s.cmd.argv() for s in sites] == [[], ["echo", "x"]]
         assert [r.target.value() for r in sites[0].cmd.redirects] == ["a"]
+
+    @pytest.mark.parametrize("text,expected", [
+        ('T=/x; bash -c "echo x | tee $T"', [("/x", True)]),
+        ("T=/x; bash -c 'echo x | tee $T'", [(None, False)]),
+    ])
+    def test_c_string_is_expanded_by_its_outer_quoting(self, text, expected):
+        assert [(t.path, t.decidable) for t in sp.write_targets(text)] == expected
+
+    def test_every_operand_of_an_xargs_run_move_is_undecidable(self):
+        t = sp.write_targets("echo y | xargs mv /elsewhere/a d/sid")
+        assert {(x.path, x.mode) for x in t} == {("d/sid", "move-dest"), ("/elsewhere/a", "delete"),
+                                                 ("d/sid", "delete")}
+        assert not any(x.decidable for x in t)
+
+    @pytest.mark.parametrize("text", ["T=$HOME/settings.json; echo x | tee $T",
+                                      "T=$HOME/settings.json; echo x > ${T}"])
+    def test_a_computed_assignment_keeps_its_word(self, text):
+        t = sp.write_targets(text)
+        assert [(x.path, x.decidable, x.word.text) for x in t] == [(None, False, "$HOME/settings.json")]

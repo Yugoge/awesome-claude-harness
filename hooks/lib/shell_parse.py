@@ -2752,67 +2752,78 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
     envs, exported, prefix = {}, set(), {}
     scope = _AssignScope(script)
     for site in walk(script, into=into):
-        cmd = site.cmd
-        # A shell started with -c or fed code sees the caller's variables, the ones exported before
-        # it and its own command's prefix assignments; a templated payload's expansions are the
-        # outer shell's.
-        fresh = 0 if site.templated else max(
-            (k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell", "pipe_shell")), default=0)
-        key = site.context[:fresh + 1]
-        if key not in envs:
-            envs[key] = dict(seed)
-            if fresh:
-                outer = envs.get(site.context[:fresh], {})
-                envs[key].update((k, v) for k, v in outer.items() if k in exported)
-                envs[key].update(prefix.get(site.context[:fresh], {}))
-        env = envs[key]
-        if cmd.words:
-            for k in [k for k in envs if len(k) > len(site.context) and k[:len(site.context)] == site.context]:
-                del envs[k]
-            prefix[site.context] = {a.name: v for a in cmd.assignments
-                                    for v in [_assigned(a, env)] if v is not None}
-        _track_assignments(site, cmd, env, seed, exported, scope)
-        for red in cmd.redirects:
-            if red.target is None or not red.writes():
+        first = len(out)
+        env = None
+        try:
+            cmd = site.cmd
+            # A shell started with -c or fed code sees the caller's variables, the ones exported before
+            # it and its own command's prefix assignments; a templated payload's expansions are the
+            # outer shell's.
+            fresh = 0 if site.templated else max(
+                (k for k, c in enumerate(site.context) if c in ("shell_c", "heredoc_shell", "pipe_shell")), default=0)
+            key = site.context[:fresh + 1]
+            if key not in envs:
+                envs[key] = dict(seed)
+                if fresh:
+                    outer = envs.get(site.context[:fresh], {})
+                    envs[key].update((k, v) for k, v in outer.items() if k in exported)
+                    envs[key].update(prefix.get(site.context[:fresh], {}))
+            env = envs[key]
+            if cmd.words:
+                for k in [k for k in envs if len(k) > len(site.context) and k[:len(site.context)] == site.context]:
+                    del envs[k]
+                prefix[site.context] = {a.name: v for a in cmd.assignments
+                                        for v in [_assigned(a, env)] if v is not None}
+            _track_assignments(site, cmd, env, seed, exported, scope)
+            for red in cmd.redirects:
+                if red.target is None or not red.writes():
+                    continue
+                if any(p.kind.startswith("procsub") for p in red.target.parts):
+                    continue
+                path, decidable = _project(red.target, env)
+                if red.op == ">&" and path is not None and path.isdigit():
+                    continue
+                mode = _REDIR_MODE.get(red.op, TRUNCATE)
+                out.append(WriteTarget(path, mode, "redirect" + red.op, red.fd, decidable,
+                                       red.target, None, site.context))
+            res = resolve(cmd)
+            name = res.name
+            if name is None:
+                if res.unresolved == "dynamic_head" and len(res.args) > 1 and any(
+                        _COPY_MOVE_WORD_RE.match(w.value() or "") for w in res.args):
+                    for t in _verb_targets("cp", VERBS["cp"], res.args, env, site.context):
+                        t.decidable = False
+                        out.append(t)
+                elif res.head is not None:
+                    last = [w for w in res.args if not (w.value() or "").startswith("-")]
+                    word = last[-1] if last else res.head
+                    path = _project(word, env)[0] if last else None
+                    out.append(WriteTarget(path, TRUNCATE, "computed-command", None, False,
+                                           word, None, site.context))
                 continue
-            if any(p.kind.startswith("procsub") for p in red.target.parts):
+            if name == "git":
+                out.extend(_git_write_targets(res, env, site.context))
                 continue
-            path, decidable = _project(red.target, env)
-            if red.op == ">&" and path is not None and path.isdigit():
+            verb = VERBS.get(name)
+            if verb is None:
                 continue
-            mode = _REDIR_MODE.get(red.op, TRUNCATE)
-            out.append(WriteTarget(path, mode, "redirect" + red.op, red.fd, decidable,
-                                   red.target, None, site.context))
-        res = resolve(cmd)
-        name = res.name
-        if name is None:
-            if res.unresolved == "dynamic_head" and len(res.args) > 1 and any(
-                    _COPY_MOVE_WORD_RE.match(w.value() or "") for w in res.args):
-                for t in _verb_targets("cp", VERBS["cp"], res.args, env, site.context):
+            if name == "install" and _preceded_by_pkg_manager(cmd, res):
+                continue
+            found = [t for t in _verb_targets(name, verb, res.args, env, site.context)
+                     if not any(p.kind.startswith("procsub") for p in t.word.parts)]
+            if verb[1] == "last" and _appends_args(res):
+                # xargs appends words: any operand may be a source or the
+                # destination, so every role is undecidable, and a move may remove
+                # what reads as its destination.
+                for t in found:
                     t.decidable = False
-                    out.append(t)
-            elif res.head is not None:
-                last = [w for w in res.args if not (w.value() or "").startswith("-")]
-                word = last[-1] if last else res.head
-                path = _project(word, env)[0] if last else None
-                out.append(WriteTarget(path, TRUNCATE, "computed-command", None, False,
-                                       word, None, site.context))
-            continue
-        if name == "git":
-            out.extend(_git_write_targets(res, env, site.context))
-            continue
-        verb = VERBS.get(name)
-        if verb is None:
-            continue
-        if name == "install" and _preceded_by_pkg_manager(cmd, res):
-            continue
-        found = [t for t in _verb_targets(name, verb, res.args, env, site.context)
-                 if not any(p.kind.startswith("procsub") for p in t.word.parts)]
-        if verb[1] == "last" and _appends_args(res):
-            for t in found:
-                if t.mode in (COPY_DEST, MOVE_DEST, LINK):
-                    t.decidable = False
-        out.extend(found)
+                if name == "mv":
+                    found += [WriteTarget(t.path, DELETE, "mv-source", None, False, t.word, None,
+                                          site.context) for t in found if t.mode == MOVE_DEST]
+            out.extend(found)
+        finally:
+            for t in out[first:] if env is not None else ():
+                _carry_word(t, env)
     return out
 
 
@@ -2867,10 +2878,12 @@ class _AssignScope:
 
 
 def _assigned(a, env):
+    """The value an assignment gives: static text, or the value Word itself
+    when it is computed (`T=$HOME/x`), so a projected `$T` carries its parts."""
     v = a.static_value()
     if v is None and a.value is not None:
         v, dec = _project(a.value, env)
-        v = v if dec else None
+        v = v if dec else a.value
     return None if a.append else v
 
 
@@ -2926,11 +2939,20 @@ def _project(word, env):
         if p.kind == "lit":
             out.append(p.text)
             continue
-        if p.kind == "param" and _NAME_RE.match(p.text) and p.text in env:
+        if p.kind == "param" and _NAME_RE.match(p.text) and isinstance(env.get(p.text), str):
             out.append(env[p.text])
             continue
         return None, False
     return "".join(out), True
+
+
+def _carry_word(t, env):
+    """A target written as `$T` / `${T}` where T holds a computed Word takes that Word."""
+    w = t.word
+    if t.path is None and w is not None and len(w.parts) == 1 and w.parts[0].kind == "param":
+        v = env.get(w.parts[0].text)
+        if isinstance(v, Word):
+            t.word = v
 
 
 def _verb_targets(name, verb, args, env, context):
