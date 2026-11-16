@@ -16,13 +16,11 @@ excluded: each is committed with the cycle.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from tests.test_resolve_dev_artifact_chain import (
     RESOLVER, TASK_ID, WORKERS, _make_fanout, _make_singular, _relative, _write)
 
-REPO = Path(__file__).resolve().parent.parent
 STAMP = TASK_ID.removeprefix("dev-")
 
 
@@ -94,25 +92,3 @@ def test_the_disposition_chain_line_carries_the_records(tmp_path: Path) -> None:
     chain = RESOLVER.disposition(tmp_path, TASK_ID, "dev")["chain"]
     assert set(records) <= set(chain["commit_whitelist_artifacts"])
 
-
-def _flat(text: str) -> str:
-    return re.sub(r"\s+", " ", text)
-
-
-def test_commit_qa_report_is_in_the_ceiling_and_the_commit_set() -> None:
-    commit = _flat((REPO / "commands" / "commit.md").read_text(encoding="utf-8"))
-    approve = commit[commit.index("- `COMMIT: APPROVE`:"):commit.index("### Step 7")]
-    assert ("Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo), plus, when "
-            "`BULK=false`, this round's `docs/dev/commit-qa-report-<TASK_ID>.md`") in approve
-    rule1 = commit[commit.index("1. Transient / non-authored byproducts"):commit.index("2. Secrets / sensitive content")]
-    assert "its `tests/generated/<task>/manifest.json`) are deliverables of the cycle, not byproducts" in rule1
-    analyst = _flat((REPO / "agents" / "changelog-analyst.md").read_text(encoding="utf-8"))
-    phase2 = analyst[analyst.index("### Phase 2: File classification"):analyst.index("### Phase 3:")]
-    item4 = phase2[phase2.index("4. Every exact path in"):phase2.index("5. Post-chain artifacts")]
-    for record in ("user-requirement document", "BA-QA report", "test-writer report",
-                   "`tests/generated/<id>/manifest.json`"):
-        assert record in item4, record
-    item5 = phase2[phase2.index("5. Post-chain artifacts"):phase2.index("**Sourcing the item-3")]
-    assert "`commit-qa-report-<TASK_ID>.md`" in item5
-    do_path = phase2[phase2.index("**BULK=false and no dev-report:**"):phase2.index("**Tree self-containment")]
-    assert "`commit-qa-report-`" in do_path

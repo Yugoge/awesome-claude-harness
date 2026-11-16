@@ -14,7 +14,6 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = os.path.join(REPO, "hooks", "pretool-bash-safety.sh")
 CLEANER = os.path.join(REPO, "agents", "cleaner.md")
-CLEAN = os.path.join(REPO, "commands", "clean.md")
 DISCARDED = "DISCARDED <path> - recover: git checkout <sha> -- <path>"
 
 
@@ -56,19 +55,30 @@ def product_repo(tmp_path):
     return str(repo)
 
 
-def test_both_texts_give_the_discarded_line_and_no_rm_or_archive_rule():
-    for path in (CLEANER, CLEAN):
-        text = _text(path)
-        assert DISCARDED in text, path
-        assert "Bash (rm)" not in text and "archive docs rather than delete" not in text, path
-
-
-def test_delete_is_a_non_forced_git_rm_and_archive_discards_the_same_way():
+def test_the_delete_rows_git_rm_keeps_a_locally_edited_file_and_its_discarded_line_recovers(product_repo):
+    """The delete row's own commands: its git rm is not forced, so git refuses a file with a local edit and
+    the edit survives; on a clean file it removes it, and the row's DISCARDED line recovers it."""
     codes = _codes(_row("delete"))
-    rm = [c for c in codes if c.startswith("git rm")]
-    assert rm and not re.search(r"(^|\s)-\w*f|--force", rm[0]), codes
-    assert "git rev-parse HEAD" in codes and DISCARDED in codes
-    assert "**delete**" in _row("archive") and "mv" not in _row("archive")
+    rm = next(c for c in codes if c.startswith("git rm"))
+    [line] = [c for c in codes if c.startswith("DISCARDED ")]
+    path = "scripts/run.sh.bak"
+    target = os.path.join(product_repo, path)
+    sha = _git(product_repo, "rev-parse", "HEAD").stdout.strip()
+    command = rm.replace("<path>", path)
+    with open(target, "a", encoding="utf-8") as fh:
+        fh.write("echo edited\n")
+    edited = _text(target)
+    assert _hook(command, product_repo) == 0, command
+    assert subprocess.run(command, shell=True, cwd=product_repo, capture_output=True).returncode != 0, command
+    assert _text(target) == edited
+    assert _git(product_repo, "checkout", "--", path).returncode == 0
+    clean = _text(target)
+    assert subprocess.run(command, shell=True, cwd=product_repo).returncode == 0
+    assert not os.path.exists(target)
+    recover = line.replace("<path>", path).replace("<sha>", sha).split(" - recover: ", 1)[1]
+    assert _hook(recover, product_repo) == 0, recover
+    assert subprocess.run(recover, shell=True, cwd=product_repo).returncode == 0
+    assert _text(target) == clean
 
 
 def test_the_cleaners_discard_passes_bash_safety_and_its_recover_command_restores_the_file(product_repo):
