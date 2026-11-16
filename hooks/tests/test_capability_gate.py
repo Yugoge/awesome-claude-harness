@@ -1450,9 +1450,9 @@ def test_classify_reaches_pass_only_when_everything_was_measured(home: Path):
     failed = json.loads(json.dumps(st))
     failed["deep_checks"]["permission_deny"]["status"] = "fail"
     assert mod.overall_result(mod.classify(failed, wired, True, "cl1"), failed)[0] == "FAIL"
-    # A receipt that failed its cross-checks is a measurement, so FAIL.
+    # A receipt that failed an identity or session cross-check is a measurement, so FAIL.
     bad = json.loads(json.dumps(st))
-    bad["events"][2].update(outcome="FAIL", failure_reason="transcript_missing_run_nonce")
+    bad["events"][2].update(outcome="FAIL", failure_reason="session_id_not_ambient")
     res = {c["check"]: c for c in mod.classify(bad, wired, True, "cl1")}
     assert res["PreToolUse"]["result"] == "FAIL"
     # Registration under the wrong event key does not count as wired.
@@ -1505,3 +1505,127 @@ def test_route_decisions_are_pinned_over_every_route(home: Path, statedir: Path,
         rec = json.loads(r.stdout)
         assert (r.returncode, rec["decision"]) == (code, decision), (route, state_kind, rec)
     assert set(routes_checked) == set(_ROUTE_EXPECTED_NO_PASS)
+
+
+# --------------------------------------------------------------------------- #
+# Review findings on 186dc8fb (F1, F2, F3, empty --route)
+# --------------------------------------------------------------------------- #
+def _fire_canaries(statedir: Path, sid: str, transcript: Path, cwd: Path, env: dict,
+                   with_nonce: bool) -> None:
+    import time
+    probe = statedir / f"probe-{cs.state_path(sid).stem}.json"
+    deadline = time.time() + 60
+    while not probe.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    nonce = json.loads(probe.read_text(encoding="utf-8"))["nonce"]
+    with open(transcript, "a", encoding="utf-8") as fh:
+        text = f"probe open nonce={nonce}" if with_nonce else "a parallel lane's tool call"
+        fh.write(json.dumps({"sessionId": sid, "content": text}) + "\n")
+    for ev in cs.RELIED_UPON_EVENTS:
+        envelope = {"session_id": sid, "transcript_path": str(transcript), "cwd": str(cwd),
+                    "hook_event_name": ev, "permission_mode": "default"}
+        subprocess.run([sys.executable, str(CANARY_PATH), ev], input=json.dumps(envelope),
+                       text=True, env=env, timeout=60, check=False)
+
+
+def _strict_with_receipts(home: Path, statedir: Path, tmp_path: Path, sid: str,
+                          with_nonce: bool):
+    import threading
+    cfg = tmp_path / "cfg"
+    transcript = cfg / "projects" / "p" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"sessionId": sid}) + "\n", encoding="utf-8")
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID=sid, CLAUDE_CONFIG_DIR=str(cfg),
+                      CLAUDE_PROJECT_DIR=str(tmp_path / "no-project"))
+    proc = subprocess.Popen([sys.executable, str(STRICT), "--home", str(home), "--timeout", "20"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                            cwd=str(tmp_path))
+    t = threading.Thread(target=_fire_canaries,
+                         args=(statedir, sid, transcript, home, env, with_nonce))
+    t.start()
+    out, err = proc.communicate(timeout=300)
+    t.join()
+    return proc.returncode, out, err
+
+
+def test_f1_receipts_not_tied_to_the_window_are_not_provable_not_fail(home: Path, statedir: Path,
+                                                                       tmp_path: Path):
+    """F1: a busy session's own canary events land in the window, but the run's nonce
+    never reaches its transcript. That is no measurement: NOT_PROVABLE_HERE, not FAIL."""
+    _wire_canary(home)
+    rc, out, err = _strict_with_receipts(home, statedir, tmp_path,
+                                         "44444444-5555-6666-7777-888888888888", with_nonce=False)
+    assert rc == 4, out + err
+    for ev in cs.RELIED_UPON_EVENTS:
+        line = next(ln for ln in out.splitlines() if ln.startswith(ev + " "))
+        assert line.split()[1] == "NOT_PROVABLE_HERE", line
+        action = line.split("proves it:")[1]
+        assert "transcript_missing_run_nonce" in line
+        assert "probe-open line" in action or "read its output" in action, line
+
+
+def test_f1_every_event_action_says_the_nonce_must_reach_the_transcript():
+    mod = _strict_mod()
+    for in_session in (True, False):
+        for label, action in mod._event_actions(in_session, "sid-1").items():
+            assert "probe-open line" in action or "read its output" in action, (label, action)
+
+
+def test_f1_identity_and_session_mismatch_stay_fail(home: Path):
+    mod = _strict_mod()
+    wired = {ev: ["fixture"] for ev in cs.RELIED_UPON_EVENTS}
+    for reason in ("session_id_not_ambient", "event_identity_unsupported",
+                   "transcript_session_mismatch", "transcript_stem_mismatch"):
+        st = json.loads(json.dumps(_passing_state(home, "f1")))
+        st["events"][2].update(outcome="FAIL", failure_reason=reason)
+        res = {c["check"]: c for c in mod.classify(st, wired, True, "f1")}
+        assert res["PreToolUse"]["result"] == "FAIL", reason
+
+
+def test_f2_canary_wired_in_the_homes_claude_settings_with_live_receipts(home: Path,
+                                                                          statedir: Path,
+                                                                          tmp_path: Path):
+    """F2: the canary is registered only in <home>/.claude/settings.json; the live
+    receipts pass every cross-check, so the events PASS, never not_wired."""
+    hooks = {ev: [{"hooks": [{"type": "command", "command": f'python3 "{CANARY_PATH}" {ev}'}]}]
+             for ev in cs.RELIED_UPON_EVENTS}
+    _write(home / ".claude" / "settings.json", {"hooks": hooks})
+    rc, out, err = _strict_with_receipts(home, statedir, tmp_path,
+                                         "55555555-6666-7777-8888-999999999999", with_nonce=True)
+    assert rc == 4, out + err
+    for ev in cs.RELIED_UPON_EVENTS:
+        line = next(ln for ln in out.splitlines() if ln.startswith(ev + " "))
+        assert line.split()[1] == "PASS", line
+    assert "not_wired" not in out
+
+
+def test_f2_a_passing_receipt_wins_over_an_unread_registration(home: Path):
+    """Wired in a layer no reader covers (managed settings, a plugin): the receipt proves it."""
+    mod = _strict_mod()
+    st = _passing_state(home, "f2")
+    res = {c["check"]: c["result"] for c in mod.classify(st, {}, True, "f2")}
+    assert all(res[ev] == "PASS" for ev in cs.RELIED_UPON_EVENTS), res
+
+
+def test_f3_a_terminal_run_never_prints_a_synthetic_session_id(home: Path, statedir: Path):
+    """F3: no session and no --session-id: the actions say to rerun in a session or with a
+    running session's id, and the synthetic noninteractive-<pid> appears nowhere."""
+    _wire_canary(home)
+    r = _strict_run(home, statedir)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "noninteractive-" not in r.stdout + r.stderr
+    for ev in cs.RELIED_UPON_EVENTS:
+        line = next(ln for ln in r.stdout.splitlines() if ln.startswith(ev + " "))
+        assert "inside a session" in line and "--session-id <a running session's id>" in line, line
+    assert "probe window: scripts/doctor --strict --session-id <a running session's id>" in r.stdout
+
+
+def test_empty_route_is_a_route_not_a_handshake(home: Path, statedir: Path):
+    sid = "empty-route"
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--route", ""],
+                       capture_output=True, text=True,
+                       env=_strict_env(home, statedir, CLAUDE_CODE_SESSION_ID=sid),
+                       timeout=60, check=False)
+    rec = json.loads(r.stdout)
+    assert (r.returncode, rec["decision"]) == (3, "NOT_PROTECTED")
+    assert not cs.state_path(sid, statedir).exists(), "an empty --route ran a handshake"
