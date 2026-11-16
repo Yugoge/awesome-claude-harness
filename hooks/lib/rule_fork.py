@@ -22,6 +22,15 @@ is ended with SIGKILL, that child alone (never its process group or session: a h
 started in a session of its own lives on), and answered as an overrun. A child that ends
 without handing back a result failed as that file would have failed as its own process: a
 non-blocking error (its status, never 0 or 2, so never an answer or a refusal it did not make).
+A child that handed back its result is answered by it, however late the parent reads it (a
+fallback it ran meanwhile, or a late wake, never makes an answer an error).
+
+No child outlives the run that keeps its deadlines: when ``run_at_once`` ends early (SIGTERM or
+SIGHUP, whose default action ends this process: the CLI ending the hook; an overrun of the run
+around it, a merged gate's in a launcher's fork; a fault), each child still running is sent
+SIGTERM, and SIGKILL ``ENDING`` seconds later, each alone, before the run ends (by that signal,
+as this process ended before it forked). A child closes the pipe its own parent's result goes
+back on, so a fork it makes never holds it open.
 
 ``can_fork`` says when forking is safe: ``os.fork`` and ``select.poll`` exist (POSIX), this is
 the main thread, no other thread is alive (the threading module's count and, where /proc gives
@@ -46,6 +55,19 @@ from lib import rule_runner
 from lib.rule_runner import RuleOverrun, RuleRun
 
 GRACE = 2.0  # seconds a child may run past its overrun signal before it is ended
+ENDING = 0.5  # seconds the children of a run that ends early (below) have between SIGTERM and SIGKILL
+# The signals that end this process while its children run (their default action ends it): the
+# children are ended first, then this process ends by the same signal, as it did before it forked.
+ENDING_SIGNALS = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n))
+_HAND_BACK = None  # in a child: the pipe its result goes back on (a fork of its own must not hold it)
+
+
+class _Ended(BaseException):
+    """One of ENDING_SIGNALS arrived while this process ran its children."""
+
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
 
 
 @dataclass(frozen=True)
@@ -83,13 +105,17 @@ def _write_all(fd: int, data: bytes) -> None:
         data = data[os.write(fd, data):]
 
 
-def _child(job: Job, deadline: float, wfd: int, inherited, mark) -> None:
+def _child(job: Job, deadline: float, wfd: int, inherited, mark, dispositions=None) -> None:
     """In the forked child: run the file, hand back its result, end. Never returns."""
+    global _HAND_BACK
     me = os.getpid()
     try:
         try:
-            for fd in inherited:  # the other children's pipes: they end with their own children
-                os.close(fd)
+            for sig, handler in (dispositions or {}).items():  # the parent's, from before its run
+                signal.signal(sig, handler)
+            for fd in inherited:  # the other children's pipes, and the one this process's parent
+                os.close(fd)      # hands back on (a merged gate run as a job): they end with their own
+            _HAND_BACK = wfd
             del rule_runner._STACK[:]  # an enclosing run's frames belong to the parent process
             if mark is not None:
                 mark(True)
@@ -177,6 +203,37 @@ def _overran(job: Job, seconds: float) -> RuleRun:
                    seconds=seconds)
 
 
+def _put_back(dispositions: dict) -> None:
+    for sig, handler in dispositions.items():
+        try:
+            signal.signal(sig, handler)
+        except (OSError, ValueError):
+            pass
+
+
+def _end_all(pids, wait: float = ENDING) -> None:
+    """End each child (SIGTERM, as the CLI ended a hook; SIGKILL past ``wait``), each alone."""
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    end = time.monotonic() + wait
+    left = list(pids)
+    while left:
+        left = [pid for pid in left if _reap(pid, 0) is None]
+        if left and time.monotonic() >= end:
+            for pid in left:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                _reap(pid, 1.0)
+            return
+        if left:
+            time.sleep(0.005)
+
+
 def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE) -> list:
     """Run every job at once (each after its ``after`` jobs), each in a fork of this process; their
     results (lib/rule_runner.RuleRun, or what ``fallback(index)`` gave) in the jobs' order.
@@ -222,8 +279,9 @@ def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE) -> list
             return
         if pid == 0:
             os.close(rfd)
-            _child(job, deadline, wfd, [r.rfd for r in running if r.rfd is not None],
-                   None if mark is None else (lambda on: mark(i, on)))
+            _child(job, deadline, wfd, [r.rfd for r in running if r.rfd is not None]
+                   + ([_HAND_BACK] if _HAND_BACK is not None else []),
+                   None if mark is None else (lambda on: mark(i, on)), dispositions)
         os.close(wfd)
         os.set_blocking(rfd, False)
         running.append(_Running(i, pid, rfd, begun, deadline))
@@ -244,7 +302,23 @@ def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE) -> list
             os.close(run.rfd)
             run.rfd = None
 
+    def drain(run: _Running):
+        """What the child wrote that this process has not read yet (it may have handed back its
+        result, and ended, while this process was busy: a fallback, or a late wake)."""
+        while run.rfd is not None and run.frame() is None:
+            try:
+                chunk = os.read(run.rfd, 1 << 16)
+            except BlockingIOError:
+                return
+            except OSError:
+                chunk = b""
+            if not chunk:
+                return
+            run.buf += chunk
+
     def end(run: _Running, result=None, status=None):
+        if result is None:
+            drain(run)
         close(run)
         running.remove(run)
         i, job = run.index, jobs[run.index]
@@ -263,59 +337,96 @@ def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE) -> list
         finish(i, result)
         start_ready()
 
-    start_ready()
-    while running:
-        now = time.monotonic()
-        wake = None
-        for run in list(running):
-            if run.rfd is None:  # its pipe closed without a whole result: it ends, or is ended
-                status = _reap(run.pid, 0)
-                if status is not None:
-                    end(run, status=status)
+    def ending(signum, frame):  # pragma: no cover - needs a signal from outside
+        if os.getpid() != owner:  # a child that has not yet put back its parent's dispositions
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return
+        raise _Ended(signum)
+
+    def loop():
+        start_ready()
+        while running:
+            now = time.monotonic()
+            wake = None
+            for run in list(running):
+                if run.rfd is None:  # its pipe closed without a whole result: it ends, or is ended
+                    status = _reap(run.pid, 0)
+                    if status is not None:
+                        end(run, status=status)
+                        continue
+                if not run.signalled and now >= run.deadline:
+                    status = _reap(run.pid, 0)
+                    if status is not None:  # it already ended (its pipe is held by a process it forked)
+                        end(run, status=status)
+                        continue
+                    run.signalled, run.kill_at = True, now + max(grace, 0.001)
+                    try:
+                        os.kill(run.pid, signal.SIGUSR2)
+                    except OSError:
+                        pass
+                if run.signalled and now >= run.kill_at:
+                    try:
+                        os.kill(run.pid, signal.SIGKILL)  # this child alone, not its group or session
+                    except OSError:
+                        pass
+                    _reap(run.pid, 1.0)
+                    end(run)  # what it handed back before it was ended, else an overrun (signalled)
                     continue
-            if not run.signalled and now >= run.deadline:
-                status = _reap(run.pid, 0)
-                if status is not None:  # it already ended (its pipe is held by a process it forked)
-                    end(run, status=status)
+                due = run.kill_at if run.signalled else run.deadline
+                if run.rfd is None:
+                    due = min(due, now + 0.01)  # no pipe to wake on: look again soon
+                wake = due if wake is None else min(wake, due)
+            if not running:
+                break
+            timeout = None if wake is None else max(0, int((wake - time.monotonic()) * 1000) + 1)
+            for fd, _ in poller.poll(timeout):
+                run = next((r for r in running if r.rfd == fd), None)
+                if run is None:
                     continue
-                run.signalled, run.kill_at = True, now + max(grace, 0.001)
                 try:
-                    os.kill(run.pid, signal.SIGUSR2)
+                    chunk = os.read(fd, 1 << 16)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    run.buf += chunk
+                    if run.frame() is not None:
+                        _reap(run.pid, None)  # it has handed back its result: it is ending
+                        end(run)
+                    continue
+                close(run)  # end of its pipe
+                status = _reap(run.pid, 0)
+                if status is not None or run.frame() is not None:
+                    end(run, status=status)
+
+    owner = os.getpid()
+    dispositions = {}  # each ending signal's disposition before this run: a child puts it back
+    for sig in ENDING_SIGNALS:
+        try:
+            if signal.getsignal(sig) is signal.SIG_DFL:
+                dispositions[sig] = signal.SIG_DFL
+                signal.signal(sig, ending)
+        except (OSError, ValueError):
+            pass
+    try:
+        loop()
+    except BaseException as exc:  # ended early (a signal, an overrun of the enclosing run, a fault):
+        pending = []              # no child outlives the run whose deadlines it kept
+        for sig in dispositions:
+            signal.signal(sig, lambda signum, frame: pending.append(signum))
+        _end_all([r.pid for r in running])
+        for run in running:
+            if run.rfd is not None:
+                try:
+                    os.close(run.rfd)
                 except OSError:
                     pass
-            if run.signalled and now >= run.kill_at:
-                try:
-                    os.kill(run.pid, signal.SIGKILL)  # this child alone, not its group or session
-                except OSError:
-                    pass
-                _reap(run.pid, 1.0)
-                end(run, _overran(jobs[run.index], now - run.start))
-                continue
-            due = run.kill_at if run.signalled else run.deadline
-            if run.rfd is None:
-                due = min(due, now + 0.01)  # no pipe to wake on: look again soon
-            wake = due if wake is None else min(wake, due)
-        if not running:
-            break
-        timeout = None if wake is None else max(0, int((wake - time.monotonic()) * 1000) + 1)
-        for fd, _ in poller.poll(timeout):
-            run = next((r for r in running if r.rfd == fd), None)
-            if run is None:
-                continue
-            try:
-                chunk = os.read(fd, 1 << 16)
-            except BlockingIOError:
-                continue
-            except OSError:
-                chunk = b""
-            if chunk:
-                run.buf += chunk
-                if run.frame() is not None:
-                    _reap(run.pid, None)  # it has handed back its result: it is ending
-                    end(run)
-                continue
-            close(run)  # end of its pipe
-            status = _reap(run.pid, 0)
-            if status is not None or run.frame() is not None:
-                end(run, status=status)
+        _put_back(dispositions)
+        signum = exc.signum if isinstance(exc, _Ended) else (pending[0] if pending else None)
+        if signum is not None:  # end as that signal ended this process before it forked
+            os.kill(os.getpid(), signum)
+        raise
+    _put_back(dispositions)
     return results

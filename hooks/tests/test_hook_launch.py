@@ -757,3 +757,90 @@ def test_a_process_a_forked_hook_forks_ends_at_its_own_exit(tmp_path):
     code, out, err, recs, _ = _recorded(launcher, {})
     assert recs[0]["how"] == "fork" and len(recs) == 2
     assert (recs[0]["rc"], recs[0]["stdout"], recs[0]["stderr"]) == _alone(forks) == (0, "child\nparent 3\nparent 4\n", "")
+
+
+def test_an_answer_handed_back_while_the_launcher_was_busy_still_answers(tmp_path):
+    """A fork that answered within its budget, and ended, while the launcher ran another hook as
+    its own process past that budget: its answer stands (read from its pipe), never an error."""
+    refuse = _hook(tmp_path, "refuse", "time.sleep(0.4); sys.stderr.write('no: refused\\n'); sys.exit(2)\n")
+    slow = _hook(tmp_path, "slow", "time.sleep(1.5)\n" + _ctx("slow"))
+    launcher = _launcher(tmp_path, "PreToolUse", [("refuse", refuse, None, 1), ("slow", slow, None, 5)])
+    probe = """
+        import os
+        real, calls = os.fork, []
+        def fork():
+            calls.append(1)
+            if len(calls) == 2:  # `slow` runs as its own process, in the launcher, for 1.5 s
+                raise OSError(11, "Resource temporarily unavailable")
+            return real()
+        os.fork = fork
+        """
+    code, out, err, recs, _ = _recorded(launcher, PRE, probe=probe)
+    assert [r["how"] for r in recs] == ["fork", "process"]
+    assert (recs[0]["rc"], recs[0]["stderr"]) == (2, "no: refused\n"), recs[0]
+    assert (code, out, err) == (2, "", "no: refused\n")
+
+
+def _gate(tmp_path, name, job_body, budget=20.0) -> str:
+    """A hook that runs two jobs of `job_body` at once through lib/rule_fork, as the write gate does."""
+    job = _hook(tmp_path, name + "-job", job_body)
+    return _hook(tmp_path, name, f"""
+        sys.path.insert(0, {str(HOOKS)!r})
+        from lib import rule_fork
+        assert rule_fork.can_fork()
+        rule_fork.run_at_once([rule_fork.Job({job!r}, b"{{}}", {budget!r})] * 2)
+        print('gate done')
+        """)
+
+
+def test_a_gates_forks_end_with_the_gate_when_its_launcher_ends_it(tmp_path):
+    """The launcher's overrun signal ends a gate that forks its own rules: the gate's forks end with
+    it, so none runs past the call or holds the launcher's stdout open."""
+    late = tmp_path / "late"
+    gate = _gate(tmp_path, "gate", f"time.sleep(4)\nopen({str(late)!r}, 'w').write('ran past the call')\n")
+    other = _hook(tmp_path, "other", _ctx("other"))
+    launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 1), ("other", other, None, 5)])
+    code, out, err, recs, took = _recorded(launcher, PRE)
+    assert took < 3, took  # its stdout closed when it ended, not when the gate's forks did
+    assert code == 0 and [r["rc"] for r in recs] == ["timeout", 0]
+    time.sleep(4.5)
+    assert not late.exists(), "a gate's fork ran on past the call"
+
+
+def test_a_fork_a_forked_gate_makes_does_not_hold_the_launchers_pipe(tmp_path):
+    """A gate that dies (here its own fork ends it, as a kill from outside would) is answered for at
+    once: its forks do not hold the pipe it hands back on to the launcher."""
+    gate = _gate(tmp_path, "gate", "import signal\nos.kill(os.getppid(), signal.SIGKILL)\ntime.sleep(4)\n")
+    other = _hook(tmp_path, "other", _ctx("other"))
+    launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 30), ("other", other, None, 5)])
+    out = tmp_path / "out"
+    with open(out, "wb") as fh:  # a file, not a pipe: the gate's orphaned forks still hold it a while
+        p = subprocess.Popen([sys.executable, launcher], stdin=subprocess.PIPE, stdout=fh, stderr=fh)
+        p.stdin.write(json.dumps(PRE).encode())
+        p.stdin.close()
+        start = time.monotonic()
+        assert p.wait(timeout=30) == 0
+    assert time.monotonic() - start < 3  # not when the gate's forks ended (4 s), nor at its deadline
+    assert "gate.py: ended without an answer (signal 9)" in json.loads(out.read_text())["systemMessage"]
+
+
+def test_a_launcher_ended_by_sigterm_ends_its_forks_first(tmp_path):
+    """The CLI ends a hook with SIGTERM: the launcher's forks end with it (no hook runs on after the
+    launcher, with no one keeping its deadline), and the launcher ends by that signal, as before."""
+    import signal
+    late = tmp_path / "late"
+    slow = _hook(tmp_path, "slow", f"time.sleep(3)\nopen({str(late)!r}, 'w').write('after the launcher')\n")
+    other = _hook(tmp_path, "other", "time.sleep(3)\n")
+    launcher = _launcher(tmp_path, "PreToolUse", [("slow", slow, None, 30), ("other", other, None, 30)])
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps(PRE))
+    with open(payload, "rb") as fh:
+        p = subprocess.Popen([sys.executable, launcher], stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(0.8)
+    p.send_signal(signal.SIGTERM)
+    start = time.monotonic()
+    out, err = p.communicate(timeout=10)
+    assert p.returncode == -signal.SIGTERM, (p.returncode, err)
+    assert time.monotonic() - start < 2  # its stdout closed: no fork holds it
+    time.sleep(3)
+    assert not late.exists(), "a fork ran on after its launcher was ended"
