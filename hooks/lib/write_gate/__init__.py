@@ -70,8 +70,12 @@ class Rule:
 RULES: tuple[Rule, ...] = (
     Rule("bash-views", "pretool-bash-views-guard.py", frozenset({"Bash"}), "both", "open",
          ("a command that runs scripts/spec-check.py, the cp-state writer",), 5.0),
+    # Fails closed: for an overnight actor its answer is a refusal or the bwrap rewrite, and an overrun
+    # that failed open dropped both (on d5eb015f a padded `chmod -x ... <keystone hook>` overran and
+    # ran, unrefused and outside bwrap). An error it raises before it knows the caller is an overnight
+    # actor is its own exit 1 (main()), so another session still goes on as it did when this failed open.
     Rule("overnight-boundary", "pretool-overnight-hook-guard.py",
-         frozenset({"Write", "Edit", "MultiEdit", "Bash", "AskUserQuestion"}), "both", "open",
+         frozenset({"Write", "Edit", "MultiEdit", "Bash", "AskUserQuestion"}), "both", "closed",
          ("outside a live /dev-overnight session the rule allows everything",
           "no /do and no /allow exemption: the overnight self-repair boundary holds for both"), 20.0),
     Rule("tool-policy", "pretool-tool-policy.py", None, "both", "closed",
