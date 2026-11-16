@@ -125,7 +125,7 @@ def main() -> int:
         return 2
 
     tool_name = str(payload.get("tool_name") or "")
-    session_id = str(payload.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or "")
+    session_id = str(payload.get("session_id") or cs.ambient_session_id())
     route = cs.classify_route(tool_name, payload.get("tool_input") or {})
 
     record = cs.evaluate_activation(

@@ -151,6 +151,13 @@ jobs:
           echo "size at HEAD:"
           python3 scripts/size-ratchet.py --measure
 
+      - name: Generated folder docs match the generator (regen-folder-docs.py --check)
+        # doc-sync rewrites a folder's INDEX.md / README.md AUTO regions only when a live harness
+        # session writes in that folder, so nothing else kept them current. This re-renders every
+        # tracked one with the same writer and fails, naming each file, when one differs or has a
+        # doc-sync region the writer refuses. Runs before the tests, on the clean checkout.
+        run: python3 scripts/regen-folder-docs.py --check
+
       - name: Run tests
         # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
         # the artifact-graph jobs below run it: shards with strace and a mount

@@ -30,7 +30,7 @@ try:
     env = json.loads(os.environ.get("SL_PAYLOAD") or "{}")
 except ValueError:
     env = {}
-sid = (env.get("session_id") if isinstance(env, dict) else None) or os.environ.get("CLAUDE_SESSION_ID") or ""
+sid = (env.get("session_id") if isinstance(env, dict) else None) or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or ""
 state, err = cs.load_state(cs.state_path(sid), expected_session_id=sid or None)
 if err:
     print("UNPROTECTED\t" + err)
