@@ -62,7 +62,7 @@ Classes:
 | `pretool-block-branch-pr-worktree.py` | 8 | 1 | 0 | 0 | 0 (7 DELETE, owner decision) |
 | **Total** | **145** | **111** | **19** | **0** | **8**, plus **7 DELETE** |
 
-The 109 KEEP rules collapse further:
+The 111 KEEP rules collapse further:
 - bash-safety pairs fold into one rule each: BS-20+21, BS-29+35, BS-36+37, BS-38+39;
 - BS-13 dies with BS-09;
 - GP-22 exists only because two readers disagree, so it disappears with one parser.
