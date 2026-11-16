@@ -2,7 +2,7 @@
 #
 # Each PR's CI judges its own head. Two PRs can each be green and still break each other: #44
 # required every registered hook to ask the harness switch first and #45 registered two hooks that
-# did not, and only the merge train showed it. This workflow, daily and when a PR gets the label
+# did not, and only the merge train showed it. This workflow, on a dispatch and when a PR gets the label
 # `pair-check`, takes each pair of open, green, non-draft PRs to master, builds their mechanical
 # merge inside the runner (scripts/ci/pair-check.sh: `git merge-tree`, an object in the runner's
 # own clone; no ref is pushed, no commit published), runs the union of both PRs' changed test
@@ -21,15 +21,14 @@
 #
 # D30 visibility gate, as in baseline.yml and required of every job by
 # tests/test_ci_visibility_gate.py: a job runs on a manual dispatch anywhere, otherwise only where
-# the event payload says the repository is public. A schedule payload carries no repository
-# object, so under that gate the daily trigger starts no job on either repository: today the pair
-# check runs on dispatch, and on the label on a public repository. The schedule is kept so the
-# daily run starts the day D30's gate admits it; no other line here changes then.
+# the event payload says the repository is public.
+#
+# No schedule: a schedule payload carries no repository object, so under that gate a scheduled run
+# could never start a job, and a trigger that never fires would mislead. The pair check runs on
+# dispatch and on the `pair-check` label.
 name: pair-check
 
 on:
-  schedule:
-    - cron: "41 4 * * *"
   pull_request:
     types: [labeled]
   workflow_dispatch:

@@ -158,10 +158,10 @@ def _workflow():
     return doc, doc.get("on", doc.get(True))
 
 
-def test_the_workflow_runs_daily_and_on_a_label_never_on_push():
+def test_the_workflow_runs_on_dispatch_and_on_a_label_never_on_push():
+    # No schedule: a schedule payload has no repository object, so D30's gate would skip it always.
     doc, on = _workflow()
-    assert set(on) == {"schedule", "pull_request", "workflow_dispatch"}, on
-    assert on["schedule"][0]["cron"].split()[2:] == ["*", "*", "*"], "daily"
+    assert set(on) == {"pull_request", "workflow_dispatch"}, on
     assert on["pull_request"]["types"] == ["labeled"]
     assert doc["permissions"] == {}, "no token rights unless a job asks"
 
