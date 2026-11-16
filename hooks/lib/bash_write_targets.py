@@ -35,7 +35,9 @@ def _render(t, command: str) -> str:
     if t.path is not None:
         text = t.path
     else:
-        text = "".join(p.text if p.kind == "lit" else command[p.span[0]:p.span[1]] for p in t.word.parts)
+        w = t.word
+        text = "".join(p.text if p.kind == "lit" else w.raw.text[p.span[0] - w.start:p.span[1] - w.start]
+                       for p in w.parts)
     for name, value in _known().items():
         text = text.replace("${%s}" % name, value).replace("$" + name, value)
     return os.path.expanduser(text) if text.startswith("~") else text
