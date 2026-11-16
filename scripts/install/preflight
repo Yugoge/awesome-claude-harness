@@ -19,7 +19,7 @@
 #      Checks that plain `scripts/doctor` does NOT make, each bound to a host
 #      requirement documented IN THIS REPOSITORY and cited by file:line. Plain
 #      doctor checks that python3 is PRESENT; it never checks that it is NEW
-#      ENOUGH. `.github/workflows/baseline.yml:24-28` documents the floor as 3.10
+#      ENOUGH. `.github/workflows/baseline.yml` (the python-version matrix) documents the floor as 3.10
 #      ("hooks/ and scripts/ use match/case statements and PEP 604 `X | None`
 #      annotations, both of which require 3.10+"). A 3.9 host therefore passes
 #      plain doctor and fails this preflight — that difference is the whole point
@@ -57,7 +57,7 @@ SKIP_DEEP=0
 QUIET=0
 PYTHON_FLOOR_MAJOR=3
 PYTHON_FLOOR_MINOR=10
-PYTHON_FLOOR_CITATION=".github/workflows/baseline.yml:24-28"
+PYTHON_FLOOR_CITATION=".github/workflows/baseline.yml (the baseline job's python-version matrix)"
 
 while [ $# -gt 0 ]; do
   case "$1" in

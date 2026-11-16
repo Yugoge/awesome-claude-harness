@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `--temp` are mutually exclusive.
 
 ### Changed
+- The harness-switch rule (`hooks/pretool-harness-switch-guard.py`) refuses an agent's change to
+  the `env`, `hooks`, `disableAllHooks` or `permissions` of a Claude Code settings file: a
+  project's `.claude/settings.json` or `.claude/settings.local.json`, `managed-settings.json` and
+  its `managed-settings.d/`, and `.claude.json`. Write, Edit and MultiEdit are judged by the
+  keys' resulting values; a Bash write, move or removal of such a file is refused unless it is a
+  literal `echo` the Write rule passes. Other keys, other JSON files and reads stay free; the
+  owner edits the file or grants one call with `/allow`.
 - Moved `/spec-update`'s inline rename-history note out of the live command
   body and frontmatter into this changelog entry: the command was previously
   `/update` at `~/.claude/commands/update.md`, then renamed to

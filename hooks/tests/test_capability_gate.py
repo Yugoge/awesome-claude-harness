@@ -82,6 +82,10 @@ def _standin_claude(tmp_path_factory, monkeypatch) -> None:
     # creates its socket dir (tmux-<uid>) under TMUX_TMPDIR, else /tmp. Point it
     # at pytest's own temp dir so a run leaves nothing in /tmp.
     monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path_factory.getbasetemp()))
+    # Claude Code exports CLAUDE_CODE_SESSION_ID to every process a session starts,
+    # and it now takes precedence over CLAUDE_SESSION_ID. Drop it so a run of this
+    # suite from inside a session addresses the test's own session ids.
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture()
@@ -1265,3 +1269,239 @@ def test_unobservable_surface_classifies_unsupported_not_pass(home: Path):
     st = _passing_state(home, "sl2")
     st["status_surface"] = {"status": "unsupported", "reason": "no attached pane"}
     assert cs.aggregate_verdict(st, home) == ("UNPROTECTED", "status_surface_unobservable")
+
+
+# --------------------------------------------------------------------------- #
+# doctor --strict gives a true answer wherever it runs: PASS / FAIL /
+# NOT_PROVABLE_HERE (exit 0 / 1 / 4), and --route decisions do not move.
+# --------------------------------------------------------------------------- #
+STRICT = REPO / "scripts" / "capability-doctor-strict.py"
+CANARY_PATH = REPO / "hooks" / "capability-canary.py"
+
+
+def _strict_mod():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("capdoctor_strict", STRICT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _wire_canary(home: Path, skip: tuple[str, ...] = ()) -> None:
+    """A fixture settings layer registering the canary per event, as an owner would."""
+    hooks = {}
+    for ev in cs.RELIED_UPON_EVENTS:
+        if ev in skip:
+            continue
+        group = {"hooks": [{"type": "command", "command": f'python3 "{CANARY_PATH}" {ev}'}]}
+        if ev in ("PreToolUse", "PostToolUse"):
+            group["matcher"] = ""
+        hooks[ev] = [group]
+    _write(home / ".claude" / "settings.local.json", {"hooks": hooks})
+
+
+def _strict_env(home: Path, statedir: Path, **extra) -> dict:
+    env = dict(os.environ, CLAUDE_HOME=str(home), CLAUDE_CAPABILITY_STATE_DIR=str(statedir))
+    env.pop("CLAUDE_SESSION_ID", None)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.update(extra)
+    return env
+
+
+def _strict_run(home: Path, statedir: Path, **extra):
+    """`scripts/doctor --strict` execs exactly this command with its own home;
+    the wrapper resolves that home from its own location, so a fixture home is
+    addressed through the script it runs."""
+    return subprocess.run([sys.executable, str(STRICT), "--home", str(home)], capture_output=True,
+                          text=True, env=_strict_env(home, statedir, **extra), timeout=300,
+                          check=False)
+
+
+def _result_line(stdout: str) -> str:
+    lines = [ln for ln in stdout.splitlines() if ln.startswith("RESULT ")]
+    assert len(lines) == 1, stdout
+    return lines[0]
+
+
+def test_ambient_session_id_prefers_the_claude_code_name(monkeypatch):
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "old-name")
+    assert cs.ambient_session_id() == "old-name"
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "new-name")
+    assert cs.ambient_session_id() == "new-name"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+    monkeypatch.delenv("CLAUDE_SESSION_ID")
+    assert cs.ambient_session_id() == ""
+
+
+@pytest.mark.parametrize("where", ["session", "terminal"])
+def test_doctor_strict_unwired_event_fails_and_names_it(home: Path, statedir: Path, where):
+    _wire_canary(home, skip=("Notification",))
+    extra = {"CLAUDE_CODE_SESSION_ID": "sess-a2"} if where == "session" else {}
+    r = _strict_run(home, statedir, **extra)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _result_line(r.stdout) == "RESULT FAIL (exit 1): Notification"
+    note = [ln for ln in r.stdout.splitlines() if ln.startswith("Notification ")]
+    assert note and "FAIL" in note[0] and "not_wired" in note[0]
+
+
+@pytest.mark.parametrize("where", ["session", "terminal"])
+def test_doctor_strict_wired_but_unmeasurable_is_its_own_result(home: Path, statedir: Path, where):
+    """Nothing fires inside the window, so nothing is measured: never PASS, never FAIL."""
+    _wire_canary(home)
+    extra = {"CLAUDE_CODE_SESSION_ID": "sess-a1"} if where == "session" else {}
+    r = _strict_run(home, statedir, **extra)
+    assert r.returncode == 4, r.stdout + r.stderr
+    result = _result_line(r.stdout)
+    assert result.startswith("RESULT NOT_PROVABLE_HERE (exit 4): ")
+    named = result.split(": ", 1)[1].split(", ")
+    for ev in cs.RELIED_UPON_EVENTS:
+        assert ev in named
+    for check in ("blocking", *cs.DEEP_CHECKS, "status-surface"):
+        assert check in named
+    for ln in r.stdout.splitlines():
+        if ln.split() and ln.split()[0] in named:
+            assert "NOT_PROVABLE_HERE" in ln and "proves it: " in ln, ln
+    assert len([ln for ln in r.stdout.splitlines() if ln.strip()]) <= 20
+    assert "probe open: " in r.stderr
+    # The state the run publishes is the handshake's own, unchanged: not a PASS.
+    sid = "sess-a1" if where == "session" else None
+    if sid:
+        state, _ = cs.load_state(cs.state_path(sid, statedir))
+        assert state["overall"] == "UNPROTECTED" and state["status"] == "FAIL"
+
+
+def test_doctor_strict_measured_events_pass_but_result_stays_unproven(home: Path, statedir: Path,
+                                                                       tmp_path: Path):
+    """Live receipts for every event make each EVENT line PASS; the unmeasured
+    checks still keep the result at NOT_PROVABLE_HERE, never PASS."""
+    import threading
+    _wire_canary(home)
+    sid = "33333333-4444-5555-6666-777777777777"
+    cfg = tmp_path / "cfg"
+    transcript = cfg / "projects" / "p" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"sessionId": sid}) + "\n", encoding="utf-8")
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID=sid, CLAUDE_CONFIG_DIR=str(cfg))
+    proc = subprocess.Popen([sys.executable, str(STRICT), "--home", str(home), "--timeout", "20"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    probe = statedir / f"probe-{cs.state_path(sid).stem}.json"
+
+    def fire():
+        import time
+        deadline = time.time() + 60
+        while not probe.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        nonce = json.loads(probe.read_text(encoding="utf-8"))["nonce"]
+        with open(transcript, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"sessionId": sid, "content": f"probe open nonce={nonce}"}) + "\n")
+        for ev in cs.RELIED_UPON_EVENTS:
+            envelope = {"session_id": sid, "transcript_path": str(transcript), "cwd": str(home),
+                        "hook_event_name": ev, "permission_mode": "default"}
+            subprocess.run([sys.executable, str(CANARY_PATH), ev], input=json.dumps(envelope),
+                           text=True, env=env, timeout=60, check=False)
+
+    t = threading.Thread(target=fire)
+    t.start()
+    out, err = proc.communicate(timeout=300)
+    t.join()
+    assert proc.returncode == 4, out + err
+    for ev in cs.RELIED_UPON_EVENTS:
+        line = next(ln for ln in out.splitlines() if ln.startswith(ev + " "))
+        assert line.split()[1] == "PASS", line
+    named = _result_line(out).split(": ", 1)[1].split(", ")
+    assert not set(named) & set(cs.RELIED_UPON_EVENTS)
+    assert "blocking" in named
+
+
+def test_doctor_strict_preseeded_pass_is_overwritten_by_pending(home: Path, statedir: Path):
+    """A3: the fresh run's PENDING lands before any probe, over a preseeded PASS."""
+    sid = "a3"
+    _publish(statedir, sid, _passing_state(home, sid))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("caphs_a3", HANDSHAKE)
+    hs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hs)
+    seen = {}
+
+    def on_open(_st):
+        seen["state"], _ = cs.load_state(cs.state_path(sid, statedir))
+
+    os.environ["CLAUDE_CAPABILITY_STATE_DIR"] = str(statedir)
+    try:
+        hs.run_handshake(sid, home, cs.state_path(sid, statedir), 1, on_open=on_open)
+    finally:
+        os.environ.pop("CLAUDE_CAPABILITY_STATE_DIR", None)
+    assert seen["state"]["status"] == "PENDING"
+    assert seen["state"]["run_id"] != _passing_state(home, sid)["run_id"]
+
+
+def test_classify_reaches_pass_only_when_everything_was_measured(home: Path):
+    mod = _strict_mod()
+    st = _passing_state(home, "cl1")
+    wired = {ev: ["fixture"] for ev in cs.RELIED_UPON_EVENTS}
+    checks = mod.classify(st, wired, True, "cl1")
+    assert all(c["result"] == "PASS" for c in checks), checks
+    assert mod.overall_result(checks, st) == ("PASS", None)
+    # Every check passing is not enough: the handshake's aggregate must agree.
+    expired = dict(st, overall="UNPROTECTED", failure_reason="pass_expired")
+    assert mod.overall_result(mod.classify(expired, wired, True, "cl1"), expired) == \
+        ("FAIL", "pass_expired")
+    # A measured deep-check failure is FAIL, not "not provable".
+    failed = json.loads(json.dumps(st))
+    failed["deep_checks"]["permission_deny"]["status"] = "fail"
+    assert mod.overall_result(mod.classify(failed, wired, True, "cl1"), failed)[0] == "FAIL"
+    # A receipt that failed its cross-checks is a measurement, so FAIL.
+    bad = json.loads(json.dumps(st))
+    bad["events"][2].update(outcome="FAIL", failure_reason="transcript_missing_run_nonce")
+    res = {c["check"]: c for c in mod.classify(bad, wired, True, "cl1")}
+    assert res["PreToolUse"]["result"] == "FAIL"
+    # Registration under the wrong event key does not count as wired.
+    _write(home / ".claude" / "settings.local.json",
+           {"hooks": {"Stop": [{"hooks": [{"type": "command",
+                                           "command": f"python3 {CANARY_PATH} PreToolUse"}]}]}})
+    assert "PreToolUse" not in mod.canary_registrations(home)
+    assert "Stop" not in mod.canary_registrations(home)
+
+
+# Pinned --route decisions. Identical on 1ace5ee4: this PR adds a reading of the
+# state, never an input to evaluate_activation.
+_ROUTE_EXPECTED_NO_PASS = {
+    "slashcommand:/dev": (1, "REFUSE"), "slashcommand:/dev-command": (1, "REFUSE"),
+    "slashcommand:/dev-overnight": (1, "REFUSE"), "slashcommand:/close": (1, "REFUSE"),
+    "slashcommand:/commit": (1, "REFUSE"), "slashcommand:/push": (1, "REFUSE"),
+    "slashcommand:/merge": (1, "REFUSE"), "slashcommand:/restart": (1, "REFUSE"),
+    "slashcommand:/allow": (0, "PERMIT"), "slashcommand:/do": (0, "PERMIT"),
+    "slashcommand:/spec": (1, "REFUSE"), "skill:codex": (1, "REFUSE"),
+    "tool:Agent": (3, "NOT_PROTECTED"),
+    **{r: (3, "NOT_PROTECTED") for r in cs.REPAIR_FLOOR_ROUTES},
+}
+
+
+@pytest.mark.parametrize("state_kind", ["absent", "doctor_run", "pass"])
+def test_route_decisions_are_pinned_over_every_route(home: Path, statedir: Path, state_kind):
+    manifest, err = cs.load_manifest(home)
+    assert err is None
+    manifested = {e["route"] for e in manifest["routes"]}
+    assert manifested <= set(_ROUTE_EXPECTED_NO_PASS), manifested - set(_ROUTE_EXPECTED_NO_PASS)
+    sid = f"route-{state_kind}"
+    env = _strict_env(home, statedir, CLAUDE_CODE_SESSION_ID=sid)
+    if state_kind == "doctor_run":
+        _wire_canary(home)
+        assert _strict_run(home, statedir, CLAUDE_CODE_SESSION_ID=sid).returncode == 4
+    elif state_kind == "pass":
+        _publish(statedir, sid, _passing_state(home, sid))
+    routes_checked: list[str] = []
+    # An in-surface route the manifest does not list is refused in every state.
+    r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--route",
+                        "slashcommand:/unmanifested"], capture_output=True, text=True, env=env,
+                       timeout=60, check=False)
+    assert (r.returncode, json.loads(r.stdout)["decision"]) == (1, "REFUSE")
+    for route, (code, decision) in _ROUTE_EXPECTED_NO_PASS.items():
+        if state_kind == "pass" and decision == "REFUSE":
+            code, decision = 0, "PERMIT"
+        routes_checked.append(route)
+        r = subprocess.run([sys.executable, str(STRICT), "--home", str(home), "--route", route],
+                           capture_output=True, text=True, env=env, timeout=60, check=False)
+        rec = json.loads(r.stdout)
+        assert (r.returncode, rec["decision"]) == (code, decision), (route, state_kind, rec)
+    assert set(routes_checked) == set(_ROUTE_EXPECTED_NO_PASS)

@@ -1,14 +1,25 @@
-"""One process per hook event: run the event's Python hooks in order and answer as the CLI would.
+"""One process per hook event: run the event's Python hooks at once and answer as the CLI would.
 
 Claude Code starts every hook registered on an event as its own process, so one
 Bash call started a dozen Python interpreters before it ran. A dispatcher
 (hooks/<event>-launch.py) is the event's one Python registration: it holds the
 event's Python hooks in a module-level ``RULES`` table, in the order settings.json
-registered them, and runs each one the call matches in its own process
-(lib/rule_runner: each file as ``__main__``, its stdin, exit status, output, atexit
-handlers and excepthook as when it ran alone, the environment, working directory,
-signal handlers and harness modules put back after it). The shell hooks keep their
-own registrations.
+registered them, and runs those the call matches, each as it ran alone (lib/rule_runner:
+each file as ``__main__``, its stdin, exit status, output, atexit handlers and
+excepthook as when it ran alone). The shell hooks keep their own registrations.
+
+At the same time, as the CLI ran them: once the dispatcher's interpreter has started, each
+selected hook runs in a fork of it (lib/rule_fork), so no interpreter starts again and no two
+hook files share one; whatever a hook changes (environment, working directory, umask, signal
+handlers, file descriptors, modules) ends with its fork. The call waits for its slowest hook,
+not for their sum. A rule whose hook reads what an earlier rule's hook writes in the same call
+(or writes what it reads) names that rule in ``after`` and starts once it has ended; a rule
+whose ``after`` rule is not selected for the call starts at once. Each fork's budget is kept by
+the dispatcher (the overrun signal at the rule's timeout, then the fork alone ended after a
+grace), never by a thread in the fork. Where forking is unavailable or unsafe (no ``os.fork``,
+another thread alive, a runner's watchdog thread running) or only one rule is selected, the
+hooks run one after another in the dispatcher itself, in order, the environment, working
+directory, signal handlers and harness modules put back after each, as before.
 
 Each rule keeps what its registration said:
 - ``tools``: the tool names of its old matcher (None: every call of the event). The
@@ -16,8 +27,10 @@ Each rule keeps what its registration said:
   matching as the CLI matched;
 - ``timeout``: its old timeout (the CLI's default, 60 s, when it had none). A hook
   that runs past it ends as a timed-out hook ended: a non-blocking error, and the
-  later hooks still run. The dispatcher's own registered timeout is the sum of its
-  rules' (hooks/tests/test_hook_launch.py), so the CLI never kills it first.
+  other hooks' answers stand. The dispatcher's own registered timeout is the sum of its
+  rules' (hooks/tests/test_hook_launch.py), so the CLI never kills it first;
+- ``after``: the names of earlier rules of the same table it starts after (the same-call
+  read-after-write pairs); the test checks each names an earlier rule.
 
 Failure direction. A hook ran alone fails as the CLI let it fail: an uncaught error
 is exit 1 and a timeout a non-blocking error, both letting the call go on; a hook
@@ -26,8 +39,11 @@ in its own code, and still does here. One hook's error never changes another's
 answer: a refusal stands whatever the other hooks did. If the dispatcher's own code
 fails (this module cannot load, or the runner around a hook raises), the hooks run
 as separate processes instead, as the CLI ran them (``fallback``), so a fault here
-skips no hook; a hook still running long after its timeout is answered for by the
-watchdog the same way (``emergency``).
+skips no hook; a fork that cannot be made runs its hook as its own process, the others
+still at once. A fork that ends without handing back its hook's result fails as that hook
+would have failed as its own process (a non-blocking error), never as an answer or a
+refusal. In the one-after-another run, a hook still running long after its timeout is
+answered for by the watchdog the same way (``emergency``).
 
 The answer (``combine``) is what the CLI makes of the hooks' answers together:
 - a refusal (exit 2, a ``deny``, or a ``block`` decision) from any hook: exit 2, the
@@ -48,9 +64,11 @@ process. hooks/lib/launch_settings.py expands the dispatchers back into one
 registration per hook (the old shape) for the readers that need it.
 
 The replay suite asks for each hook's own result (env ``RECORD_ENV``, a file
-descriptor to write them to), so its records keep naming the hook files, and a
-traced replay asks the launcher to mark which hook it runs (env ``MARK_ENV``), so the
-trace names the hook as the component; the hooks never see either variable.
+descriptor to write them to: one line per hook, in rule order, with its own ms and
+``how`` it ran), so its records keep naming the hook files, and a traced replay asks the
+launcher to mark which hook it runs (env ``MARK_ENV``): each fork marks its hook as soon
+as it starts and the launcher's own process stays the launcher, so the trace names the
+hook as the component of what its fork does; the hooks never see either variable.
 """
 from __future__ import annotations
 
@@ -69,6 +87,14 @@ MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # a traced replay's marker directory (tes
 TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"})
 PLAIN_CONTEXT_EVENTS = frozenset({"UserPromptSubmit", "SessionStart"})
 TIMEOUT = "timeout"             # a hook's status when it ran past its timeout
+# Standard-library modules imported once before the forks, so each fork does not import them again:
+# pkgutil is the runner's own (runpy.run_path imports it for every file); pathlib (most hooks, through
+# their libraries), datetime and shlex are what the hooks import most. Their import runs only their own
+# definitions (no file, environment, working directory, signal or other module of the process changes),
+# and the one-after-another run already gave every hook after the first that imports one the module
+# loaded, so a fork that finds one loaded decides and prints as the hook did alone. Never a harness
+# module (hooks/, scripts/): a hook's library must load in the hook's own fork.
+WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 
 
 @dataclass(frozen=True)
@@ -78,6 +104,7 @@ class Rule:
     tools: tuple | None = None         # its old matcher's tool names, in its order; None: every call
     timeout: float = DEFAULT_TIMEOUT
     matcher_spelling: str | None = None   # how its registration spelled "every tool" ("*"), for readers
+    after: tuple = ()                  # names of earlier rules of its table it starts after (when selected)
 
     def applies(self, tool) -> bool:
         return self.tools is None or tool in self.tools
@@ -100,7 +127,8 @@ class Result:
     stdout: str = ""
     stderr: str = ""
     seconds: float = 0.0
-    how: str = "in-process"   # or "process": run as its own process (the fallback)
+    how: str = "in-process"   # "fork": in a fork of the launcher (lib/rule_fork); "process": as its own
+    #                           process (the fallback); "in-process": in the launcher, one after another
 
 
 def _json(text: str):
@@ -235,12 +263,16 @@ class Dispatch:
         self.real = (os.dup(1), os.dup(2))
 
     def run(self) -> None:
-        """Run every selected hook, in order; their results are in ``self.results``. Where the
-        runner cannot load or fails around a hook, that hook runs as its own process."""
+        """Run every selected hook; their results are in ``self.results``, in rule order. Several
+        run at once, each in a fork of this process (``run_at_once``), where that is safe; else
+        one after another in this process. Where the runner cannot load or fails around a hook,
+        that hook runs as its own process."""
         try:
             from lib.rule_runner import run_rule
         except Exception:
             run_rule = None
+        if run_rule is not None and len(self.rules) > 1 and self.run_at_once():
+            return
         for rule in self.rules:
             if self.finished:
                 break
@@ -258,6 +290,30 @@ class Dispatch:
                 if self.finished:
                     break
                 self.results.append(res)
+
+    def run_at_once(self) -> bool:
+        """The selected hooks at the same time, one fork of this process each (lib/rule_fork), a
+        rule naming earlier rules (``after``) started once those have ended. False, with no hook
+        run, when this process cannot fork safely (lib/rule_fork.can_fork)."""
+        try:
+            from lib import rule_fork
+            if not rule_fork.can_fork():
+                return False
+            for name in WARM:
+                __import__(name)
+            index = {r.name: i for i, r in enumerate(self.rules)}
+            jobs = [rule_fork.Job(r.file, self.raw, r.timeout,
+                                  tuple(index[a] for a in r.after if index.get(a, i) < i))
+                    for i, r in enumerate(self.rules)]
+        except Exception:
+            return False
+        runs = rule_fork.run_at_once(
+            jobs, fallback=lambda i: run_process(self.rules[i], self.raw),
+            mark=(lambda i, on: self.mark(self.rules[i].path if on else None)) if self.marks else None)
+        self.results = [rr if isinstance(rr, Result) else
+                        Result(rule, TIMEOUT if rr.overrun else rr.code, rr.stdout, rr.stderr, rr.seconds, "fork")
+                        for rule, rr in zip(self.rules, runs)]
+        return True
 
     def emergency(self, stuck: Rule) -> None:  # pragma: no cover - needs a hook that ignores its timeout
         """From the watchdog: `stuck` ran past its timeout and did not stop. Answer for the event

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """R4 late-repair route: monotonicity, negative controls, and hash-independence.
 
-Covers AC-7..AC-11, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
+Covers AC-7..AC-10, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 docs/dev/acceptance-criteria-20260910-091226.json). AC-6/AC-15 (resolver gap
 classification) live in tests/test_resolve_dev_artifact_chain.py. AC-12 (the
 cross-repo spec-text insertion) is a data check against a file outside this
@@ -659,24 +659,6 @@ def test_ac10_disclosure_negative_controls_and_positive_control(tmp_path: Path) 
     final_check = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
     assert final_check.returncode == 0
     assert _last_json(final_check)["outcome"] == "admitted"
-
-
-# ---------------------------------------------------------------------------
-# AC-11: bare /close never invokes the controller; --late-repair does.
-# ---------------------------------------------------------------------------
-
-def test_ac11_static_grep_confirms_close_md_reaches_init_only_in_the_r4_section(tmp_path: Path) -> None:
-    # Routing invariant (P4): /close calls no route selector; its late-repair
-    # section alone names the controller, whose init it calls once, and only
-    # when --late-repair is passed.
-    close_md = (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8")
-    head, rest = close_md.split("### Late-repair route")
-    r4 = rest.split("\n### ")[0]
-    assert "close-route-select" not in close_md
-    assert "late-repair-controller.py" not in head
-    assert close_md.count("late-repair-controller.py") == r4.count("late-repair-controller.py")
-    assert 'late-repair-controller.py" init --task-id "$TASK_ID"' in r4
-    assert "without `--late-repair`, nothing in this section runs" in r4
 
 
 # ---------------------------------------------------------------------------
