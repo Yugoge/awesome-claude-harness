@@ -115,19 +115,18 @@ def test_unset_grant_helper_guidance_reads_sensibly(sandbox):
 
 def test_process_family_rules(sandbox):
     _, env = sandbox
-    r = hook(env, "docker restart demo-prod")
-    assert "containers is refused" not in r.stderr  # no family configured: inert
+    assert hook(env, "docker restart demo-prod").returncode == 0
     r = hook(env, "killall claude")
     assert r.returncode == 2 and "Killing claude/docker processes" in r.stderr
     r = hook(env, "pkill -f demo-daemon")
     assert "Killing" not in r.stderr
 
     env = {**env, **STAND_INS}
-    assert hook(env, "docker restart demo-web-dev").returncode == 0
-    r = hook(env, "docker restart demo-prod")
-    assert r.returncode == 2
-    assert "Stopping/restarting production demo containers is refused" in r.stderr
-    assert "Hint: only demo-web-dev is allowed." in r.stderr
+    # The family's docker stop/restart/rm rule is deleted (owner decision): a family container is not refused
+    # here; `docker rm` is settings.json's deny and `docker kill` of the family the runtime guard's.
+    for command in ("docker restart demo-web-dev", "docker restart demo-prod", "docker stop demo-prod"):
+        assert hook(env, command).returncode == 0, command
+    assert "Bash(docker rm:*)" in json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
     r = hook(env, "killall demo-daemon")
     assert r.returncode == 2 and "Killing demo/claude/docker processes" in r.stderr
 

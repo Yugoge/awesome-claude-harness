@@ -868,7 +868,7 @@ def sensitive_redirect(command):
 
 
 def all_targets_whitelisted(command, verb_re, whitelist, strip_service=False):
-    """False when a docker/systemctl target in any && || ; part of the command is not on the whitelist."""
+    """False when a systemctl target in any && || ; part of the command is not on the whitelist."""
     allowed = whitelist.split()
     for sub in _subcommands(command):
         if not re.search(verb_re + r"\s", sub):
@@ -894,11 +894,6 @@ def service_rules(command, stripped, env):
                "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
     if grep(r"(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.json", command):
         refuse("BLOCKED: Modifying Docker daemon config is refused", f"Command: {command}", released_line())
-    if family and grep(r"docker\s+(stop|restart|rm|kill)\s+.*" + re.escape(family), command) \
-            and not all_targets_whitelisted(command, r"docker\s+(stop|restart|rm|kill)", env["dev_containers"]):
-        refuse(f"BLOCKED: Stopping/restarting production {family} containers is refused", f"Command: {command}",
-                   f"Hint: only {env['dev_containers'] or '<no container: CLAUDE_DEV_CONTAINERS is empty>'} is allowed.",
-                   released_line())
     if grep(r"docker.compose\s+(down|restart|stop)", command):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
     if grep(r"docker\s+system\s+prune\s+-a", command):
@@ -1177,7 +1172,6 @@ def environment():
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),
         "targets": os.environ.get("CLAUDE_PROTECTED_DAEMON_TARGETS", ""),
         "family": os.environ.get("CLAUDE_PROTECTED_PROCESS_FAMILY", ""),
-        "dev_containers": os.environ.get("CLAUDE_DEV_CONTAINERS", ""),
         "dev_systemd": os.environ.get("CLAUDE_DEV_SYSTEMD", ""),
         "grant_dir": os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_DIR") or tmp,
         "grant_hint": helper or "<daemon-restart grant helper>",
