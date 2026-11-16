@@ -468,12 +468,20 @@ def test_each_measured_agent_line_is_in_the_texts():
     assert not [entry for entry in ASKS_SINCE_P2 if _key(*entry) not in keys]
 
 
-@pytest.mark.xfail(strict=True, reason="P2-3, integration: settings.json registers prompt-workflow.py at "
-                                       "SubagentStart, then remove this marker")
+def _expanded_settings() -> dict:
+    """settings.json with each launcher read as the hooks it runs (hooks/lib/launch_settings.py): prompt-workflow.py
+    runs at SessionStart and SubagentStart as a rule of the event's one Python registration (P12-L7)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_launch_settings", REPO / "hooks" / "lib" / "launch_settings.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.expand(json.loads((REPO / "settings.json").read_text(encoding="utf-8")), str(REPO))
+
+
 def test_a_subagent_starts_with_the_printed_root():
     """The agent lines' `<HARNESS_ROOT>` reaches a subagent only through prompt-workflow.py's SubagentStart answer
     (hooks/tests/test_prompt_workflow_subagent_roots.py), registered for every agent type."""
-    groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SubagentStart", [])
+    groups = _expanded_settings()["hooks"].get("SubagentStart", [])
     assert any(group.get("matcher", "") in ("", "*")
                and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
                for group in groups)
@@ -518,12 +526,10 @@ def test_each_l1_line_is_in_the_texts():
     assert FALLBACK_KEYS <= keys and len(FALLBACK_KEYS) == len(START_FALLBACK_LINES)
 
 
-@pytest.mark.xfail(strict=True, reason="P2-4, integration: settings.json registers prompt-workflow.py at "
-                                       "SessionStart, then remove this marker")
 def test_a_session_starts_and_compacts_with_the_printed_root():
     """The fallback's `<HARNESS_ROOT>` is in the main agent's context after a compaction only through
     prompt-workflow.py's SessionStart answer, registered for every source (startup, resume, clear, compact)."""
-    groups = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["hooks"].get("SessionStart", [])
+    groups = _expanded_settings()["hooks"].get("SessionStart", [])
     assert any(group.get("matcher", "") in ("", "*")
                and any(h.get("command", "").endswith('/hooks/prompt-workflow.py"') for h in group["hooks"])
                for group in groups)
