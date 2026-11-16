@@ -313,7 +313,7 @@ def test_ac9_command_doc_bootstrap_and_fleet_drain_run_as_written(tmp_path):
     text = COMMAND_DOC.read_text()
     [start] = re.findall(r'^python3 "<HARNESS_ROOT>/scripts/steps/paseo-bootstrap\.py" start .*$',
                          doc_section(text, "## Bootstrap"), re.M)
-    [drain] = re.findall(r'`(python3 "<HARNESS_ROOT>/scripts/paseo-daemon-timers\.py" drain [^`]*)`',
+    [drain] = re.findall(r'`(python3 "<HARNESS_ROOT>/scripts/paseo-daemon-timers\.py" [^`]*\bdrain\b[^`]*)`',
                          doc_section(text, "## Timer fleet stop/drain"))
     registry, ledger_root = tmp_path / "registry", tmp_path / "ledger"
     registry.mkdir()
@@ -336,15 +336,7 @@ def test_ac9_command_doc_bootstrap_and_fleet_drain_run_as_written(tmp_path):
     assert sorted(facts["timers_created"].split(",")) == sorted(FOUR_KEYS)
     assert sorted(NAME_TO_KEY[name] for name in by_name(registry)) == sorted(FOUR_KEYS)
 
-    # The doc writes --registry-dir after `drain`; the script takes it only before the subcommand
-    # (exit 2, "unrecognized arguments"). The fix belongs to commands/paseo-daemon.md, so this call
-    # moves that one global option ahead of the subcommand and runs the rest as written.
-    argv = doc_argv(drain, fill)
-    at = argv.index("--registry-dir")
-    global_option = argv[at:at + 2]
-    del argv[at:at + 2]
-    argv[2:2] = global_option
-    r = subprocess.run(argv, capture_output=True, text=True, cwd=REPO, timeout=120)
+    r = subprocess.run(doc_argv(drain, fill), capture_output=True, text=True, cwd=REPO, timeout=120)
     assert r.returncode == 0, r.stderr
     status = ok(registry, "status")
     assert {key: status["timers"][key]["status"] for key in FOUR_KEYS} == dict.fromkeys(FOUR_KEYS, "paused")
