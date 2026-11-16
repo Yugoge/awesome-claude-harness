@@ -1363,7 +1363,9 @@ def classify(e: "Enumerator", s: Site) -> tuple[str, str]:
         tools = _site_tools(s)
         if tools and tools <= OBLIGATION_TOOLS:
             return "G", f"refuses the actor's own {'/'.join(sorted(tools))} (its todo record or its dispatch); its next compliant call clears it"
-        named = sorted(t for t in OBLIGATION_TOOLS if re.search(r"\b" + t + r"\b", text))
+        # a tool named as an event's matcher (`PreToolUse:Agent`, the event a hook runs on) is no call the
+        # message names as the actor's release
+        named = sorted(t for t in OBLIGATION_TOOLS if re.search(r"(?<!:)\b" + t + r"\b", text))
         if named and re.search(r"\b(?:Call|call|initiali[sz]e|fix|re-?run)\b", text):
             return "G", f"a lock on every call whose message names the actor's next {'/'.join(named)} call as its release"
         if not s.dynamic and re.search(r"(?m)^\s+(?:git|python3?|bash)\s+\S", text):
