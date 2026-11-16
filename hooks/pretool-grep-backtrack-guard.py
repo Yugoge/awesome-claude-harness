@@ -204,10 +204,11 @@ def _extract_patterns(tokens):
 
     Honours -e/--regexp / --regexp=... (explicit, repeatable), -f/--file
     (pattern from a file => cannot statically inspect => contributes nothing),
-    value-consuming flags, the `--` separator, and otherwise the first non-flag
-    positional ONLY when no explicit -e/--regexp pattern was given.
+    value-consuming flags, the `--` that ends the options, and otherwise the
+    first operand ONLY when no -e/--regexp/-f/--file pattern source was given.
     """
     explicit = []
+    from_file = False
     positional = None
     i = 1
     n = len(tokens)
@@ -220,6 +221,10 @@ def _extract_patterns(tokens):
                 positional = t
             i += 1
             continue
+        if t == "--":  # ends the options: the next operand is the pattern
+            saw_double_dash = True
+            i += 1
+            continue
         # attached long form: --regexp=PAT / --file=...
         if t.startswith("--regexp="):
             explicit.append(t.split("=", 1)[1])
@@ -227,6 +232,7 @@ def _extract_patterns(tokens):
             continue
         if t.startswith("--file=") or t == "-f" or t == "--file":
             # pattern read from a file: cannot statically inspect -> skip this one
+            from_file = True
             if t == "-f" or t == "--file":
                 i += 2
             else:
@@ -258,6 +264,8 @@ def _extract_patterns(tokens):
                 ch = tk[k]
                 if ch in _SHORT_VALUE_LETTERS:
                     rest = tk[k + 1:]
+                    if ch == "f":
+                        from_file = True
                     if rest:  # value attached in the same token
                         if ch == "e":
                             explicit.append(rest)
@@ -276,9 +284,10 @@ def _extract_patterns(tokens):
         if positional is None:
             positional = t
         i += 1
-    # If any explicit -e/--regexp pattern was given, grep IGNORES the positional
-    # operand (it becomes a file argument), so the patterns are exactly explicit.
-    if explicit:
+    # If any -e/--regexp or -f/--file pattern source was given, grep IGNORES the
+    # positional operand (it becomes a file argument), so the patterns are exactly
+    # the explicit ones.
+    if explicit or from_file:
         return explicit
     if positional is not None:
         return [positional]

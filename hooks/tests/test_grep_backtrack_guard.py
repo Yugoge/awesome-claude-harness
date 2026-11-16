@@ -90,7 +90,7 @@ def _shape_probe(monkeypatch):
         "grep -Ee'a.*b.*c' f",
         "grep --regexp='a.*b.*c' f",
         "grep -A 3 -E 'a.*b.*c' f",
-        "grep -f pats -E 'a.*b.*c' f",
+        "grep -f pats -e 'a.*b.*c' f",
         "grep -E $'a.\\x2a b.*c' f",
         "grep -E \"a.*b.*c\" f",
         "grep -E a.\\*b.\\*c f",
@@ -195,3 +195,33 @@ def test_eval_is_read_as_bash_joins_it_and_word_by_word(monkeypatch):
     _shape_probe(monkeypatch)
     assert _run(monkeypatch, "eval ! egrep \"a.*b.*c\" f") == 2
     assert _run(monkeypatch, "eval grep -E $'a.\\x2a b.*c' f") == 2
+
+
+@pytest.mark.parametrize(
+    "command, patterns",
+    (
+        ("grep -E -- 'a.*b.*c' f", ["a.*b.*c"]),
+        ("grep -E -- -- f", ["--"]),
+        ("grep -E -- -x.*y.*z f", ["-x.*y.*z"]),
+        ("grep -e 'a.*b.*c' -- f", ["a.*b.*c"]),
+        ("grep -E -e 'a.*b.*c' f", ["a.*b.*c"]),
+        ("grep -E --regexp='a.*b.*c' f", ["a.*b.*c"]),
+        ("grep -E -f pats 'a.*b.*c' f", []),
+        ("grep -E -fpats -e 'a.*b.*c' f", ["a.*b.*c"]),
+        ("grep -E --file=pats 'a.*b.*c' f", []),
+    ),
+)
+def test_options_are_read_as_grep_reads_them(monkeypatch, command, patterns):
+    seen = []
+    monkeypatch.setattr(GUARD, "probe_explodes", lambda pattern, mode: seen.append(pattern) or False)
+    monkeypatch.setattr(GUARD, "is_catastrophic_shape", lambda pattern, mode: True)
+    assert _run(monkeypatch, command) == 0
+    assert seen == patterns
+
+
+def test_argv0_ugrep_reads_the_first_operand_as_the_pattern(monkeypatch):
+    seen = []
+    monkeypatch.setattr(GUARD, "probe_explodes", lambda pattern, mode: seen.append(pattern) or False)
+    monkeypatch.setattr(GUARD, "is_catastrophic_shape", lambda pattern, mode: True)
+    _run(monkeypatch, "ARGV0=ugrep /bin/x grep -E 'a.*b.*c' f")
+    assert seen == ["grep"]
