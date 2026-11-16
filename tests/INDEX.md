@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T02:46:59Z*
-**Total entries**: 250
+*Last updated: 2026-11-16T05:48:42Z*
+**Total entries**: 251
 **Convention**: kebab
 
 ## Tree
@@ -147,6 +147,7 @@ tests/
 ├── `test_ba_blast_radius_map_registry.py` - ba.md spelled the map's path `.claude/dev-registry/dev-<task_id>/blast-radius-map.json`. A /dev c...
 ├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 ├── `test_bootstrap_init.py` - Every case runs in its own temporary clone of this repository, synced to the
+├── `test_canary_cleanup_drift.py` - The SessionStart canary compares each deployed cleanup artifact with its repo copy. A host file a...
 ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
 ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
 ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
