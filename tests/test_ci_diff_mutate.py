@@ -97,9 +97,13 @@ def test_ok():
 
 
 def test_survivors_are_reported_by_line_and_operator_and_the_file_is_restored(tmp_path):
-    repo = _repo(tmp_path, {"hooks/lib/widget.py": "", "tests/test_widget.py": WIDGET_TEST}, {"hooks/lib/widget.py": WIDGET})
+    # a test that uses the word only, without naming the file or importing it, is not run
+    prose = "# a widget, in prose only\n\n\ndef test_unrelated():\n    assert False\n"
+    repo = _repo(tmp_path, {"hooks/lib/widget.py": "", "tests/test_widget.py": WIDGET_TEST, "tests/test_prose.py": prose},
+                 {"hooks/lib/widget.py": WIDGET})
     done = _run(repo)
     assert done.returncode == 0, done.stdout + done.stderr
+    assert "1 test file(s) for hooks/lib/widget.py" in done.stdout
     found = _mutants(done.stdout)
     survived = {(line, op) for line, op in re.findall(r"^SURVIVED +hooks/lib/widget.py:(\d+) (\S+)", done.stdout, re.M)}
     assert survived == {("6", "compare"), ("6", "return-value"), ("6", "constant")}

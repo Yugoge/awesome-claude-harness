@@ -4,8 +4,8 @@
 Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
 ``hooks/**/*.py`` and ``scripts/**/*.py``, one mutant at a time, spliced in place and restored
 after each run. Each mutant runs the change's own changed tests plus every test file that names
-the mutated file's stem. A mutant the tests do not fail is a survivor: a changed line no test
-checks. Report-only: survivors are printed as ``SURVIVED <file>:<line> <operator>`` and the exit
+the mutated file (``<stem>.py``, a ``lib.<stem>``-style path or module, an import of ``<stem>``).
+A mutant the tests do not fail is a survivor: a changed line no test checks. Report-only: survivors are printed as ``SURVIVED <file>:<line> <operator>`` and the exit
 status is 0; it is 2 only when the script cannot judge (git error, the unmutated run is red).
 
 Operators: ``compare`` (== != < <= > >= in is swapped for their negation), ``boolean`` (and/or
@@ -80,11 +80,16 @@ def changed_tests(base: str) -> list[str]:
 
 
 def tests_naming(stem: str) -> list[str]:
-    pattern = re.compile(r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])")
+    """Test files that name the file: as ``<stem>.py``, as a ``lib.``/``hooks/``/``scripts/`` path or module, or in an import."""
+    s = re.escape(stem)
+    patterns = [re.compile(r"(?<![\w-])" + s + r"\.py\b"),
+                re.compile(r"(?<![\w-])(?:lib|hooks|scripts)[./]" + s + r"(?![\w-])"),
+                re.compile(r"^\s*(?:from\s+\S+\s+)?import\s+[^\n#]*(?<![\w-])" + s + r"(?![\w-])", re.M)]
     found = []
     for root in TEST_ROOTS:
         for test in sorted(Path(root).rglob("test_*.py")):
-            if "generated" not in test.parts and pattern.search(test.read_text(encoding="utf-8", errors="replace")):
+            text = test.read_text(encoding="utf-8", errors="replace")
+            if "generated" not in test.parts and any(p.search(text) for p in patterns):
                 found.append(test.as_posix())
     return found
 
