@@ -101,7 +101,7 @@ def new_facts(c):
         "view": sp.executable_view(c),
         "targets": [t.path for t in targets if t.path],
         "resolved_targets": [WT._resolve_path(t.path) for t in targets if t.path],
-        "undecidable": any(not t.decidable for t in targets),
+        "undecidable": [(t.path, t.word.text if t.word is not None else "") for t in targets if not t.decidable],
         "dynamic": any(site.dynamic or site.templated for site in sites),
         "git": [[g.subcommand, g.unresolved] for g in sp.git_invocations(s, strings=True)],
         "grep": grep_words,
@@ -189,6 +189,18 @@ def _operand_site_names(item, c):
     return names
 
 
+def _copy_source(item, c):
+    """``item`` is an operand of cp/mv/install/ln/rsync other than its last."""
+    for site in sp.walk(sp.parse(c)):
+        res = sp.resolve(site.cmd)
+        if res.name in ("cp", "mv", "install", "ln", "rsync"):
+            ops = [w.value() if w.value() is not None else w.text for w in res.args
+                   if not (w.value() or "").startswith("-")]
+            if item in ops[:-1]:
+                return True
+    return False
+
+
 def _value_option_before(item, c):
     m = re.search(r"\s(-[\w-]+)\s+" + re.escape(item) + r"(\s|$)", c)
     return bool(m) and any(m.group(1) in v[0]["val"] for v in sp.VERBS.values())
@@ -231,7 +243,9 @@ def _label_items(reader, c, n, items):
             return "O6:old reads a copy/move source as its destination (-t names it)"
         if re.search(r"git(\s+\S+)*?\s+rm\s.*--cached", c):
             return "O6:old misses `git rm --cached` behind a git global option"
-    if all(_in_data(x, c) for x in items):
+    if reader.startswith("wt_") and all(_copy_source(x, c) for x in items):
+        return "O6:old reads a copy/move source as a written target"
+    if all(_in_data(x, c) or not x.strip("'\"()\\ ") for x in items):
         return "O6:old reads quoted/option/heredoc data as code"
     return None
 
@@ -274,16 +288,18 @@ def differences(c, m, n):
         lost = {p for p in m[key] if p and p not in newp}
         if not lost:
             continue
-        if all(any(q.startswith(p) for q in newp) for p in lost):
+        undecidable = n["undecidable"]
+        if all(any(q.startswith(p.rstrip("`)")) for q in newp) for p in lost):
             label = "covered:the new path is the whole quoted word"
-        elif n["undecidable"]:
+        elif undecidable and all(re.search(r"[$`*?\[]", p) or any(
+                p == u[0] or p in u[1] or (u[0] and WT._resolve_path(u[0]) == p)
+                or WT._resolve_path(os.path.expandvars(u[1].strip("'\""))) == p for u in undecidable)
+                for p in lost):
             label = "covered:an undecidable target"
         elif all(any(q.startswith("~") and p.endswith(q[1:]) for q in n["targets"]) for p in lost):
             label = "covered:the same path under another HOME"
         elif re.search(r"\$\w+", c) and re.search(r"(^|[;&|\s])\w+=", c):
             label = "covered:assignment projected into $X"
-        elif n["dynamic"]:
-            label = "covered:a computed command word (Site.dynamic)"
         elif key == "wt_touched" and " mv " in " " + c and all(
                 any(p.startswith(q.rstrip("/") + "/") for q in newp) for p in lost):
             label = "derived:<dest>/<basename(source)> from WriteTarget.source"
@@ -302,7 +318,9 @@ def differences(c, m, n):
                 subs[s_] -= 1
                 continue
             label = None
-            if ("$" in s_ or s_ == "") and unresolved:
+            if any((g[1] or "").startswith("invalid_global_option") for g in n["git"]):
+                label = "git rejects an attached -c/-C (it runs nothing)"
+            elif ("$" in s_ or s_ == "") and unresolved:
                 label = "covered:an unresolved invocation"
             elif re.search(r"-C\s+" + re.escape(tok), c):
                 label = "O6:old reads a wrapper option value as the command word"
