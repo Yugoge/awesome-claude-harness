@@ -34,9 +34,9 @@ no more:
   sets declared in `DECLARED_SCHEMA`;
 - `citation` is validated for the presence of an `@<sha8>` revision pin.
 
-**On falsifiability.** 50 of the 53 registered-hook rows carry `proof_layer: source-level`, which
+**On falsifiability.** 51 of the 57 registered-hook rows carry `proof_layer: source-level`, which
 as section 1.3 defines it means those rows rest on **reading the code rather than running it**;
-the remaining 3 carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
+the remaining 6 carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
 proof-layer membership and a non-blank `verifying_test`, and it does **not** execute the
 verifying test or establish one-command falsifiability for any row. No row's falsifier has been
 run by any check in this repository.
@@ -171,9 +171,10 @@ be reconciled rather than argued.
 
 ## 3. Registered-hook rows
 
-The tracked `settings.json` wires 9 event classes / **55 hook commands** over
+The tracked `settings.json` wires 9 event classes / **57 hook commands** over
 53 hook files (`posttool-allowlist-consume.py` and `posttool-codex-skill-ledger.py` are each registered on
-`PostToolUse` and `PostToolUseFailure`), and the table below has exactly 55 rows. Of the ten lifecycle event classes,
+`PostToolUse` and `PostToolUseFailure`, and `prompt-workflow.py` on `UserPromptSubmit`, `SessionStart` and
+`SubagentStart`), and the table below has exactly 57 rows. Of the ten lifecycle event classes,
 `Notification` alone has no registration since P12 (its one hook was an exit-0 stub), so it has no
 row; this sentence records that its absence is deliberate.
 
@@ -276,6 +277,8 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-092 | SubagentStop | * | subagentstop-producer-gate.py | block; switch: none at the gate (each rule keeps its own). It runs R-022 – R-026 in order, each as its own hook would run alone, and exits 2 when any refuse rule (R-022 – R-025) exits 2, with every refusing rule's reasons reported together once to the stopping producer; where R-024 (G2) states a QA's declared report absent, R-023's line for that path is left out and both still refuse; R-026 runs whatever they decided; a main-agent stop (no agent_id) passes every rule; an error that escapes a rule is that rule's exit 1. No timeout is registered | advisory | unexercised | source-level | hooks/subagentstop-producer-gate.py:1 @4ffb9279 | hooks/tests/test_one_process_gates.py |
 | H-093 | UserPromptSubmit | (universal) | userprompt-harness-switch.sh | block; switch: none. The harness switch itself, the one registered hook that runs while the harness is off: a typed `/harness off`, `/harness on` or `/harness status` (no agent_id) runs scripts/harness-switch, which switches the home (the marker `<home>/.harness-switch/off`, settings.json's off form, the sparse checkout) and hands the report to the context and the owner; while the harness is off it refuses the /dev-overnight wake's prompt (decision block); a typed `/harness off` or `/harness on` in a session started from inside another Claude Code session (a Claude Code process above the session's own in the hook's process ancestry) is refused with a block decision and changes nothing; a subagent payload and every other prompt exit 0 with no output | advisory | unexercised | source-level | hooks/userprompt-harness-switch.sh:1 @ac3c149c | tests/test_harness_switch.py |
 | H-095 | SubagentStart | (universal) | subagentstart-record.py | advisory; switch: none. It never blocks (a SubagentStart exit 2 is no refusal of the agent) and exits 0 on every path: prints, as `hookSpecificOutput.additionalContext` (which the CLI puts in the starting subagent's context), the agent's own record in at most 3 lines and 400 bytes: its score, rank and trend from the score log `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/lifecycle.jsonl` as of the span opener's time, its newest good event and newest miss as facts (an event's why, no task id), and the rank's reminder, with the role's consequence when its record is low (the two lowest ranks: a second independent QA round for dev and ba, a Codex debate for qa; the Stop gate and R-022 hold them, so this text only says so). An agent with no rows gets one line. It prints nothing for an agent outside `agents/`, in a /close, /commit, /merge or /push span, and on any error. It reads the log and writes nothing | advisory | exercised | component-tested | hooks/subagentstart-record.py:1 @a959bcec | hooks/tests/test_score_view.py |
+| H-096 | SessionStart | (universal) | prompt-workflow.py | advisory; switch: none (CLAUDE_COMPAT_RUNTIME=codex, set only by the Codex wrapper, makes it exit 0 at once). Run by `sessionstart-launch.py`, the event's one Python registration (after check-todo-md-sync.py, H-002), for every source (startup, resume, clear, compact): prints `PROJECT_ROOT=<abs>` (the session's overnight record's worktree_path when it has one, else the project) and `HARNESS_ROOT=<abs>` (the hook's own install) as `hookSpecificOutput.additionalContext`, so the start-function fallback of dev.md and dev-command.md writes `<HARNESS_ROOT>` as the literal path after a compaction (P2-4); it writes nothing, never blocks and exits 0 | detected | unexercised | component-tested | hooks/prompt-workflow.py:1757 @414c40d6 | hooks/tests/test_prompt_workflow_session_roots.py, hooks/tests/test_start_launchers.py |
+| H-097 | SubagentStart | (universal) | prompt-workflow.py | advisory; switch: none (CLAUDE_COMPAT_RUNTIME=codex, set only by the Codex wrapper, makes it exit 0 at once). It never blocks (a SubagentStart exit 2 is no refusal of the agent). Run by `subagentstart-launch.py`, the event's one Python registration (after subagentstart-record.py, H-095), for every agent type: prints the same `PROJECT_ROOT` and `HARNESS_ROOT` lines as H-096 as `hookSpecificOutput.additionalContext`, which the CLI puts in the starting subagent's context, so an agent text's `<HARNESS_ROOT>` is written as the literal path (P2-3); the launcher joins it with H-095's record into one additionalContext; it writes nothing and exits 0 | advisory | unexercised | component-tested | hooks/prompt-workflow.py:1757 @414c40d6 | hooks/tests/test_prompt_workflow_subagent_roots.py, hooks/tests/test_start_launchers.py |
 
 ### 3.1 Rules a merged gate runs
 
