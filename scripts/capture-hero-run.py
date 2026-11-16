@@ -221,7 +221,9 @@ class GrantWatcher(threading.Thread):
             # moment the state it reports was actually true. Stamping first makes the
             # recorded time a lower bound on the observation window -- the sample can lag
             # reality, but it can never claim to be newer than the evidence it carries.
-            t_sample = round(time.monotonic() - self.t0, 4)
+            # Kept raw: it is compared with the marker's raw stamp, never with a display
+            # rounding of either (see correlate_consumption).
+            t_sample = time.monotonic() - self.t0
             try:
                 present = GRANT_PATH.is_file()
                 digest = sha256_file(GRANT_PATH) if present else None
@@ -237,8 +239,12 @@ class GrantWatcher(threading.Thread):
 
 
 def capture_run(fixture: Path, capture_path: Path, watcher: GrantWatcher,
-                t0: float) -> tuple[int, list[str]]:
-    """Run the demo through a PIPE and timestamp every line as it arrives."""
+                t0: float) -> tuple[int, list[str], list[float]]:
+    """Run the demo through a PIPE and timestamp every line as it arrives.
+
+    Returns the exit code, the displayed lines, and each line's raw stamp (seconds since
+    t0, full float resolution). The "[%8.3f]" column is display only: read back it is up
+    to 0.5 ms off, too coarse to order a line against the watcher's samples."""
     runner = REPO_ROOT / "examples/guard-demo/run-hero-demo.sh"
     env = hermetic_git_env(fixture)
     proc = subprocess.Popen(
@@ -263,11 +269,38 @@ def capture_run(fixture: Path, capture_path: Path, watcher: GrantWatcher,
     lines = [f"[{t:8.3f}] {txt}" for t, txt in events]
     capture_path.parent.mkdir(parents=True, exist_ok=True)
     capture_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return rc, lines
+    return rc, lines, [t for t, _ in events]
 
 
 def parse_ts(line: str) -> float:
     return float(line[1:line.index("]")])
+
+
+def correlate_consumption(samples: list[dict], t_marker: float,
+                          install_hash: str | None) -> tuple[list[str], list[dict], list[dict]]:
+    """Present immediately BEFORE consumption, absent immediately AFTER.
+
+    t_marker and every sample's "t" are raw stamps on the same clock and resolution.
+    No tolerance: a sample is stamped before its observation and the marker after its
+    line is read, so a present sample stamped later than the marker is a real failure.
+    Returns (failures, present samples before the marker, samples after it)."""
+    failures: list[str] = []
+    pre = [s for s in samples if s["t"] < t_marker]
+    post = [s for s in samples if s["t"] > t_marker]
+    # The marker is stamped when its line is read from the demo's pipe, after
+    # the consumer has unlinked the grant and printed the line, so a sample
+    # taken between that unlink and that read is absent and still precedes the
+    # marker. The grant's last observed presence is what must precede the
+    # marker, with the installed content; the samples after it are absent (up
+    # to the marker by definition, after it by the check below).
+    present_pre = [s for s in pre if s["present"]]
+    if not present_pre:
+        failures.append("grant was NOT present immediately before consumption")
+    elif present_pre[-1]["sha256"] != install_hash:
+        failures.append("grant content changed before consumption")
+    if not post or any(s["present"] for s in post):
+        failures.append("grant was NOT absent immediately after consumption")
+    return failures, present_pre, post
 
 
 def main() -> int:
@@ -307,7 +340,7 @@ def main() -> int:
         watcher.t0 = t0
         watcher.fixture = fixture
         watcher.start()
-        rc, lines = capture_run(fixture, capture_path, watcher, t0)
+        rc, lines, stamps = capture_run(fixture, capture_path, watcher, t0)
         watcher.halt()
         watcher.join(timeout=2.0)
 
@@ -321,26 +354,18 @@ def main() -> int:
 
         # Causal correlation: present immediately BEFORE consumption, absent immediately
         # AFTER. Established from verifier-owned samples, never from demo self-report.
-        marker_line = next((l for l in lines if CONSUMPTION_MARKER in l), None)
+        marker_idx = next(
+            (i for i, l in enumerate(lines) if CONSUMPTION_MARKER in l), None)
+        marker_line = lines[marker_idx] if marker_idx is not None else None
+        present_pre: list[dict] = []
+        post: list[dict] = []
         if marker_line is None:
             failures.append("cannot correlate: no marker line")
         else:
-            t_marker = parse_ts(marker_line)
-            pre = [s for s in watcher.samples if s["t"] < t_marker]
-            post = [s for s in watcher.samples if s["t"] > t_marker]
-            # The marker is stamped when its line is read from the demo's pipe, after
-            # the consumer has unlinked the grant and printed the line, so a sample
-            # taken between that unlink and that read is absent and still precedes the
-            # marker. The grant's last observed presence is what must precede the
-            # marker, with the installed content; the samples after it are absent (up
-            # to the marker by definition, after it by the check below).
-            present_pre = [s for s in pre if s["present"]]
-            if not present_pre:
-                failures.append("grant was NOT present immediately before consumption")
-            elif present_pre[-1]["sha256"] != watcher.grant_hash_at_install:
-                failures.append("grant content changed before consumption")
-            if not post or any(s["present"] for s in post):
-                failures.append("grant was NOT absent immediately after consumption")
+            # The marker's raw stamp, not its displayed column read back.
+            corr_failures, present_pre, post = correlate_consumption(
+                watcher.samples, stamps[marker_idx], watcher.grant_hash_at_install)
+            failures.extend(corr_failures)
 
         # Duration measured from the raw capture (never from the SVG's dur attribute).
         duration = parse_ts(lines[-1]) - parse_ts(lines[0]) if len(lines) >= 2 else 0.0
