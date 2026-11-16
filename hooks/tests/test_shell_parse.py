@@ -375,3 +375,82 @@ class TestCli:
         assert facts["error"] is None
         assert facts["git_invocations"][0]["subcommand"] == "push"
         assert facts["write_targets"][0]["path"] == "/tmp/x"
+
+
+class TestConsumerDefects:
+    """Each row is a reading a consumer lane found missing; the commands bash runs are all reached."""
+
+    @pytest.mark.parametrize("text,inner", [
+        ("echo ${X:-$(rm t)}", ["rm", "t"]),
+        ("cat <<E\n${X:-$(rm x)}\nE\n", ["rm", "x"]),
+        ("echo $(( $(rm q) + 1 ))", ["rm", "q"]),
+        ("cat <<E\n$(( $(rm q) + 1 ))\nE\n", ["rm", "q"]),
+        ("(( $(rm n) + 1 ))", ["rm", "n"]),
+        ("A=($(rm z)) ls", ["rm", "z"]),
+        ("echo ${X:-${Y:-`rm b`}}", ["rm", "b"]),
+    ])
+    def test_substitution_nested_in_expansion_or_arithmetic(self, text, inner):
+        assert inner in argvs(text)
+
+    def test_brace_group_whose_first_word_is_a_path(self):
+        s = sp.parse("{ ../sbin/rm qa-target-4.txt; }")
+        assert s.items[0][0].stages[0].kind == "group"
+        assert argvs("{ ../sbin/rm qa-target-4.txt; }") == [["../sbin/rm", "qa-target-4.txt"]]
+        assert any(p.kind == "brace" for p in sp.parse("echo {a,b}").items[0][0].stages[0].words[1].parts)
+
+    def test_shell_fed_through_an_fd_dup(self):
+        assert ["rm", "x"] in argvs("bash 3<<'EOF' <&3\nrm x\nEOF\n")
+
+    @pytest.mark.parametrize("text,count", [
+        ("a \\\\\nb", 2), ("a \\\nb", 1), ("echo 'a\\\nb'", 1), ("echo a # c \\\nls", 2),
+        ("cat <<'E'\nx\\\nE\nls", 2),
+    ])
+    def test_continuation_only_where_the_backslash_is_bare(self, text, count):
+        assert len(cmds(text)) == count
+
+    @pytest.mark.parametrize("text", ["a &&", "a||", "-m|&||", "a && )", "if a &&; then b; fi"])
+    def test_list_ending_in_and_or_is_an_error(self, text):
+        assert sp.parse(text).error is not None
+
+    @pytest.mark.parametrize("text,path", [
+        ("{ echo x; } > a", "a"), ("( echo x ) > b", "b"), ("for i in 1; do :; done > c", "c"),
+        ("while false; do :; done >> c2", "c2"), ("until true; do :; done > c3", "c3"),
+        ("if true; then :; fi > c4", "c4"), ("case x in x) :;; esac > c5", "c5"),
+        ("f() { :; } > e", "e"), ("bash -c \"{ :; } > d\"", "d"), ("echo $( { :; } > g )", "g"),
+        ("bash <<'E'\n( : ) > h\nE\n", "h"), ("[[ -n x ]] > i", "i"),
+    ])
+    def test_redirection_on_a_compound(self, text, path):
+        assert path in [t.path for t in sp.write_targets(text)]
+
+    @pytest.mark.parametrize("text", [
+        '"$CP" cp-01 /srv/data/out', "$CP -r mv-tool /srv/data/out", "c$X -- mv-tool /srv/data/out",
+        'case x in y) "$MV" mv-tool /srv/data/out ;; esac',
+    ])
+    def test_computed_command_word_names_its_last_operand_undecidably(self, text):
+        t = [t for t in sp.write_targets(text) if t.mechanism == "computed-command"]
+        assert [(x.path, x.decidable) for x in t] == [("/srv/data/out", False)]
+
+    @pytest.mark.parametrize("text", ["taskset -c 0 git push", "taskset 0x1 git push",
+                                      "taskset -a 0x3 git push", "numactl -N 0 git push",
+                                      "chrt -f 10 git push"])
+    def test_wrappers_with_a_mandatory_operand_reach_git(self, text):
+        assert [g.subcommand for g in sp.git_invocations(text)] == ["push"]
+
+    def test_wrapper_option_it_cannot_read_is_unresolved_not_skipped(self):
+        g = sp.git_invocations("nice -10 git push")
+        assert [x.subcommand for x in g] == ["push"] and g[0].unresolved.startswith("wrapper:")
+
+    @pytest.mark.parametrize("text", ["git -C/p status", "git -cuser.name=x commit"])
+    def test_attached_c_options_are_not_git_options(self, text):
+        g = sp.git_invocations(text)[0]
+        assert g.unresolved.startswith("invalid_global_option") and g.subcommand is None
+
+    @pytest.mark.parametrize("text,paths", [
+        ("chmod -x hooks/h.py", ["hooks/h.py"]), ("chmod u+x,go-w a b", ["a", "b"]),
+        ("chmod --reference=r a", ["a"]), ("chown -R u:g d", ["d"]), ("chgrp g f", ["f"]),
+        ("chattr +i -R f", ["f"]), ("chattr -i f g", ["f", "g"]),
+        ("setfacl -m u:x:r f", ["f"]), ("setfacl -b a b", ["a", "b"]),
+    ])
+    def test_permission_verbs(self, text, paths):
+        t = sp.write_targets(text)
+        assert [x.path for x in t] == paths and {x.mode for x in t} == {"in-place"}
