@@ -844,3 +844,85 @@ def test_a_launcher_ended_by_sigterm_ends_its_forks_first(tmp_path):
     assert time.monotonic() - start < 2  # its stdout closed: no fork holds it
     time.sleep(3)
     assert not late.exists(), "a fork ran on after its launcher was ended"
+
+
+AT_ONCE_FAULTS = {
+    # before any fork: the run's poller cannot be made
+    "before any fork": """
+        import select
+        from lib import rule_fork
+        def poll():
+            raise OSError(24, "Too many open files")
+        rule_fork.select = type("select", (), {"poll": staticmethod(poll), "POLLIN": 1, "POLLHUP": 16,
+                                                "POLLERR": 8})
+        rule_fork.can_fork = lambda: True
+        """,
+    # mid-run: the refusing job's hand-back cannot be read (the rule before it has ended)
+    "mid-run": """
+        from lib import rule_fork
+        real = rule_fork._Running.frame
+        def frame(self):
+            if self.index == 1:
+                raise RuntimeError("injected fault in run_at_once")
+            return real(self)
+        rule_fork._Running.frame = frame
+        """,
+}
+
+
+@pytest.mark.parametrize("where", sorted(AT_ONCE_FAULTS))
+def test_a_fault_in_the_at_once_run_answers_as_the_one_after_another_run(tmp_path, where):
+    """A fault inside lib/rule_fork.run_at_once (its own code, not a hook's) ends every child, keeps
+    the results of the rules that ended, and runs the rest one after another: the launcher answers
+    byte for byte as the one-after-another run, never exit 1 (which the CLI lets through), and no rule
+    that ended runs twice."""
+    ran = tmp_path / "ran"
+    count = _hook(tmp_path, "count", f"open({str(ran)!r}, 'a').write('x')\n")
+    refuse = _hook(tmp_path, "refuse", "time.sleep(0.2); sys.stderr.write('no: refused\\n'); sys.exit(2)\n")
+    say = _hook(tmp_path, "say", _ctx("said"))
+    launcher = _launcher(tmp_path, "PreToolUse", [("count", count, None, 5),
+                                                  ("refuse", refuse, None, 5, {"after": ("count",)}),
+                                                  ("say", say, None, 5)])
+    want = _recorded(launcher, PRE, probe=SEQUENTIAL)
+    assert want[:3] == (2, "", "no: refused\n") and ran.read_text() == "x"
+    ran.unlink()
+    code, out, err, recs, _ = _recorded(launcher, PRE, probe=AT_ONCE_FAULTS[where])
+    assert (code, out, err) == want[:3], (where, code, out, err)
+    assert ran.read_text() == "x", "a rule that had ended ran again"
+    assert [(r["rc"], r["stdout"], r["stderr"]) for r in recs] == [(r["rc"], r["stdout"], r["stderr"])
+                                                                     for r in want[3]]
+
+
+def test_a_launcher_ended_by_sigterm_ends_a_gates_forks_that_ignore_sigterm(tmp_path):
+    """A gate run as a launcher's fork forks its own rules (as the write gate does). When the CLI
+    ends the launcher with SIGTERM, a gate's fork that ignores SIGTERM is ended too: the gate ends
+    its forks before the launcher ends the gate, so none outlives the run as an orphan."""
+    import signal
+    for attempt in range(3):  # the orphan of the old timing was a race: look at it more than once
+        late = tmp_path / f"late{attempt}"
+        started = tmp_path / f"started{attempt}"
+        gate = _gate(tmp_path, f"gate{attempt}", f"""
+            import signal
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            open({str(started)!r}, 'a').write('x')
+            end = time.monotonic() + 2.5
+            while time.monotonic() < end:
+                time.sleep(0.05)
+            open({str(late)!r}, 'w').write('outlived the run')
+            """)
+        other = _hook(tmp_path, f"other{attempt}", "time.sleep(3)\n")
+        launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 30), ("other", other, None, 30)])
+        payload = tmp_path / "payload.json"
+        payload.write_text(json.dumps(PRE))
+        with open(payload, "rb") as fh:
+            p = subprocess.Popen([sys.executable, launcher], stdin=fh, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        deadline = time.monotonic() + 10
+        while (not started.exists() or len(started.read_text()) < 2) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert started.exists() and len(started.read_text()) == 2, "the gate's forks did not start"
+        p.send_signal(signal.SIGTERM)
+        out, err = p.communicate(timeout=10)
+        assert p.returncode == -signal.SIGTERM, (p.returncode, err)
+        time.sleep(3)
+        assert not late.exists(), f"attempt {attempt}: a gate's fork that ignores SIGTERM outlived the run"
