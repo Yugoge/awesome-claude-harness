@@ -1329,6 +1329,9 @@ def _command_writes_keystone_config(command: str) -> bool:
 # `<common>/config` and `<common>/hooks` only; the file sits in the per-worktree git dir, which
 # stays writable for commits.
 _WORKTREE_CONFIG_LEAF = 'config.worktree'
+# The keystone hook dir, `<common>/<leaf>` (scripts/install-git-keystone.sh creates it and points
+# core.hooksPath at it): `chmod -x` or a copy onto its reference-transaction turns the keystone off.
+_KEYSTONE_HOOKS_LEAF = 'keystone-hooks'
 _WRITE_VERBS = {'tee', 'cp', 'mv', 'sed', 'perl', 'ln', 'dd', 'install', 'truncate', 'rm', 'unlink',
                 'shred', 'touch', 'chmod', 'chown', 'rsync', 'ed', 'ex', 'vi', 'vim', 'nano', 'emacs',
                 'awk', 'gawk', 'python', 'python3', 'ruby', 'node', 'nodejs', 'php', 'xargs'}
@@ -1763,6 +1766,13 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             '--git-dir` is forbidden for overnight actors; with extensions.worktreeConfig on, '
             'that file can redirect core.hooksPath for the worktree. Reading it is allowed.\n'
         )
+    payload_cwd = _payload_cwd(_REQUEST_CTX.get('payload') or {})
+    # The Write/Edit check's paths, for each write target the shared parser reads in the command (a
+    # relative one against the payload cwd); bubblewrap's read-only rebinds keep the rest off them.
+    for t in _extract_bash_write_paths(command):
+        path = os.path.join(payload_cwd or os.getcwd(), t)
+        if not path.startswith('/dev/') and _targets_git_config(path):
+            _block_git_config('Bash', path)
     # fix-3/codex#6: --git-dir / GIT_DIR / GIT_COMMON_DIR into the main repo.
     if _gitdir_into_main(command, main_real, main_git_dir):
         _block(
@@ -1790,7 +1800,6 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             'cannot catch a symref branch-switch, so it is blocked here before '
             'execution. Run git ops INSIDE the isolated worktree instead.\n'
         )
-    payload_cwd = _payload_cwd(_REQUEST_CTX.get('payload') or {})
     # VECTOR-1 (Cycle-3): shell-aware iteration — leading env-assignment /
     # command-wrapper stripping + cd/pushd effective-cwd tracking.
     for subtoks, cwd_override, cwd_ambiguous in _iter_git_invocations(command):
@@ -2109,9 +2118,10 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
     `<common>/config` and `<common>/hooks` READ-WRITE, letting an overnight actor
     run `git config --unset core.hooksPath` (writes `<common>/config`) to DISABLE
     the reference-transaction keystone, or drop a malicious default hook, and THEN
-    move main HEAD off the protected branch. Return `--ro-bind` args for the shared common-dir's
-    `config` FILE and `hooks/` DIR (only those that exist) so the caller can nest
-    them OVER the RW common-dir bind: those two paths become EROFS while
+    move main HEAD off the protected branch, or `chmod -x` the keystone hook itself. Return
+    `--ro-bind` args for the shared common-dir's `config` FILE, `hooks/` DIR and keystone hook DIR
+    (`_KEYSTONE_HOOKS_LEAF`; only those that exist) so the caller can nest
+    them OVER the RW common-dir bind: those three paths become EROFS while
     `<common>/objects`, `<common>/refs`, `<common>/logs` (which a commit / ref
     update actually writes) stay READ-WRITE. Only the SHARED common-dir is treated
     this way; the per-worktree gitdir is untouched. `git rev-parse --git-common-dir`
@@ -2122,7 +2132,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
         return []
     common_real = os.path.realpath(gcd)
     args: list[str] = []
-    for leaf in ('config', 'hooks'):
+    for leaf in ('config', 'hooks', _KEYSTONE_HOOKS_LEAF):
         p = os.path.join(common_real, leaf)
         if os.path.exists(p):
             args += ['--ro-bind', p, p]
@@ -2146,8 +2156,9 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
       5. --bind <worktree_path>   the ONLY RW path under main (nested over RO)
       6. --bind <git-dir>, <common-dir>   (LINKED worktree only) git-derived RW
                                   exceptions for the supported add/commit surface
-      7. --ro-bind <common>/config, <common>/hooks   (LINKED worktree only) RE-bind
-                                  the shared config file + default-hooks dir READ-
+      7. --ro-bind <common>/config, <common>/hooks, the keystone hook dir
+                                  (LINKED worktree only) RE-bind the shared config
+                                  file + default-hooks dir + keystone hook dir READ-
                                   ONLY, nested OVER step 6's RW common-dir bind, so
                                   a keystone-disabling `git config --unset
                                   core.hooksPath` / hook drop hits EROFS while
@@ -2197,7 +2208,7 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
             if not _path_under_prefix(p, wt_real):
                 argv += ['--bind', p, p]
         # (7) SHARED-.git RESIDUAL CLOSURE (ARCHITECTURE §8): nest RO binds for
-        # <common>/config + <common>/hooks OVER the RW common-dir bind above, so a
+        # <common>/config + <common>/hooks + the keystone hook dir OVER the RW common-dir bind above, so a
         # keystone-disabling `git config --unset core.hooksPath` and default-hook
         # drops hit EROFS, while <common>/objects + <common>/refs + logs stay RW so
         # the legitimate keystone-guarded commit / ref-update path is unaffected.
@@ -2269,7 +2280,9 @@ def _without_harness_launches(command: str, worktree_path: str, main_root: str =
 
 def _targets_git_config(file_path: str) -> bool:
     """R13: file_path is the config or config.worktree of the git dir or common dir of the
-    checkout it lies in, which the bwrap rebind keeps Bash off; an Edit runs outside bwrap."""
+    checkout it lies in, or the keystone hook dir of that common dir or a file in it, which the
+    bwrap rebind keeps Bash off; an Edit runs outside bwrap. Read for a Write or Edit target and
+    for each write target of an actor's Bash command."""
     real = os.path.realpath(os.path.abspath(file_path))
     parts = real.lower().split(os.sep)
     # P2-8: whatever the git dir is (also one that does not exist yet), a file of this name inside a
@@ -2280,8 +2293,16 @@ def _targets_git_config(file_path: str) -> bool:
     while not os.path.isdir(probe):
         probe = os.path.dirname(probe)
     dirs = _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probe)
+    *_, common = dirs.splitlines() or ['']
     return any(real == os.path.join(os.path.realpath(d), leaf)
-               for d in dirs.splitlines() for leaf in ('config', 'config.worktree'))
+               for d in dirs.splitlines() for leaf in ('config', 'config.worktree')) or (
+        bool(common) and _path_under_prefix(real, os.path.join(os.path.realpath(common), _KEYSTONE_HOOKS_LEAF)))
+
+
+def _block_git_config(tool_name: str, target: str) -> None:
+    _block('\nOVERNIGHT GIT CONFIG PROTECTION: the repository\'s git config holds the keystone '
+           '(core.hooksPath) and its keystone hook dir holds the keystone hook; an overnight actor '
+           f'leaves both as they are.\nBlocked: {tool_name} to {target}\n')
 
 
 def _emit_command_rewrite(new_command: str) -> None:
@@ -2501,8 +2522,7 @@ def main():
     target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
     if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
             and target and _targets_git_config(target):
-        _block('\nOVERNIGHT GIT CONFIG PROTECTION: the repository\'s git config holds the keystone '
-               f'(core.hooksPath); an overnight actor leaves it as it is.\nBlocked: {tool_name} to {target}\n')
+        _block_git_config(tool_name, target)
 
     if wt_paths:
         apply_global_worktree_enforcement(tool_name, tool_input, wt_paths)

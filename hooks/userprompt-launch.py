@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """UserPromptSubmit: the event's Python hooks in one process (lib/hook_launch.py).
 
-Every Python hook registered on UserPromptSubmit runs here, in its old registration order, each as
-`python3 <file>` would have run it (its own timeout and failure direction), and the answer is
-the one the CLI gave for those hooks together. A new UserPromptSubmit Python hook is one Rule line below,
-at the place its registration would have had: its file, its matcher's tool names, its timeout
-(default 60 s); this file's registered timeout in settings.json is the sum of the rules'.
+Every Python hook registered on UserPromptSubmit runs here, each as `python3 <file>` would have run it
+(its own timeout and failure direction), those a call matches at the same time, each in a fork
+of this process (a rule with ``after`` starts once the earlier rules it names have ended), and
+the answer is the one the CLI gave for those hooks together, read in the table's order (their
+old registration order). A new UserPromptSubmit Python hook is one Rule line below, at the place its
+registration would have had: its file, its matcher's tool names, its timeout (default 60 s),
+and ``after`` when it reads what an earlier rule of the same call writes (or writes what one
+reads); this file's registered timeout in settings.json is the sum of the rules'.
 """
 from __future__ import annotations
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds

@@ -10,7 +10,39 @@ and callers fall back to their existing hand-denylist behaviour.
 
 import os
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path, PurePath
+
+# Files a PostToolUse event just wrote and that are not yet in the index: counted as published
+# for the duration of that one regeneration, so the session writes what the tree-wide
+# --check (scripts/regen-folder-docs.py) renders once the file is committed. Set only by
+# counting_written; empty everywhere else, so every other caller sees git-tracked files only.
+_WRITTEN: frozenset = frozenset()
+
+
+def _is_ignored(path: Path) -> bool:
+    try:
+        proc = subprocess.run(['git', '-C', str(path.parent), 'check-ignore', '-q', '--', path.name],
+                              capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return proc.returncode != 1
+
+
+@contextmanager
+def counting_written(paths):
+    """Count each existing, not-gitignored file in `paths` as published while the block runs.
+
+    A gitignored file stays out, as it does once committed; a file git cannot classify is
+    left out too, so nothing the tracked filter exists to hide can be listed by it."""
+    global _WRITTEN
+    previous = _WRITTEN
+    _WRITTEN = frozenset(Path(os.path.abspath(p)) for p in paths
+                         if Path(p).is_file() and not _is_ignored(Path(p)))
+    try:
+        yield
+    finally:
+        _WRITTEN = previous
 
 # GitHub-reserved directory name. A generated README.md anywhere under .github/
 # can hijack the repo landing page (GitHub precedence: .github/README.md >
@@ -103,6 +135,13 @@ def _tracked_relpaths(dir_path: Path) -> set[str] | None:
         return None
     out = proc.stdout.decode('utf-8', errors='replace')
     relpaths = {entry.replace('\\', '/') for entry in out.split('\0') if entry}
+    if relpaths:
+        base = Path(os.path.abspath(dir_path))
+        for written in _WRITTEN:
+            try:
+                relpaths.add(written.relative_to(base).as_posix())
+            except ValueError:
+                pass
     return relpaths or None
 
 

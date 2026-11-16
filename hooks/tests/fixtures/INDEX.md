@@ -1,14 +1,18 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-08-07T06:15:36Z*
-**Total entries**: 2
+*Last updated: 2026-11-16T02:46:58Z*
+**Total entries**: 6
 **Convention**: kebab
 
 ## Tree
 ```
 fixtures/
 ├── `adversarial_corpus.json` - json config
+├── `pol_benign_strictness_exceptions.json` - JSON config: schema, criterion, task_id, iteration, _doc
+├── `pol_installed_program_allow_set.json` - JSON config: allowing, allowing_count, criterion, probe_shape, program_set_size
+├── `pol_iteration5_qa_matrix.v1.json` - JSON config: schema, schema_descriptor, provenance_key, digests, counts
+├── `pol_primary_laxity_ledger.json` - JSON config: schema, criterion, task_id, iteration, _doc
 └── `protected-runtime.json` - JSON config: schema_version, protected_cmds, protected_launch_paths, protected_services, protected_hotfiles
 ```
 <!-- /AUTO:index-stats -->
