@@ -257,6 +257,17 @@ def case_codex(rp) -> None:
     rp.terminal(PIPELINE, d.ok, d.stop, case="codex")
 
 
+def _score_header(cyc, step: int, agent: str) -> None:
+    """Step <step>'s score header where the text played still has one (the base's: run score-inject.sh,
+    its stdout is <AGENT>_SCORE_HEADER, which the dispatch binds); since P13-3 drivers/dev.py has no
+    score_header, as this tree's text names none."""
+    if "score-inject.sh" not in cyc.o.section(f"Step {step}"):
+        return
+    cmd = cyc.o.inline(f"Step {step}", "score-inject.sh", startswith="bash ")
+    call = cyc.o.run(cmd, f"Mascot score header for {agent}", f"Step {step} Bash score-inject {agent}")
+    cyc.o.values[f"{agent.upper()}_SCORE_HEADER"] = call.response.get("stdout", "").rstrip("\n") if call.ok else ""
+
+
 def case_qa(rp) -> None:
     cyc = devdrv.DevCycle(rp, "plain", "STANDARD")
     _through(cyc, 10)
@@ -267,7 +278,7 @@ def case_qa(rp) -> None:
     cyc.step12()
     cyc.to(13)
     cyc.step13_blocks()
-    cyc.score_header(13, "qa")
+    _score_header(cyc, 13, "qa")
     project, sc = rp.layout.project, cyc.sc
     rounds = {"n": 0}
 
