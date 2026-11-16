@@ -59,7 +59,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 - `pretool-commit-dispatch-attest.py` - Writes `<state-dir>/claude-commit-dispatch-<sid>-<nonce>.json` when, and only
 - `pretool-cp-checkin.py` - cp-state file read (the write is scripts/spec-check.py's `register`)
-- `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
+- `pretool-cp-state-write-guard.py` - Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2;
 - `pretool-dispatch-gate.py` - The rules run in this order, each as its own hook would run alone (its switch, its
 - `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
@@ -84,7 +84,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-tool-policy.py` - tool-policy.v1.json for all subagents
 - `pretool-workflow-gate.py` - PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools
 - `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
-- `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
+- `pretool-wrapper-userintent.py` - The /stop slash command releases overnight isolation by running
 - `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
 - `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 - `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands

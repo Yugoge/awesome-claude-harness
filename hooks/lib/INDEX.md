@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T08:01:14Z*
-**Total entries**: 73
+*Last updated: 2026-11-16T09:28:28Z*
+**Total entries**: 74
 **Convention**: kebab
 
 ## Tree
@@ -25,10 +25,10 @@ lib/
 ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
-├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
+├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
-├── `bash_execution_boundary.py` - THE ALGEBRA (spec-20260808-035658 LANE-POL, Must-1).  Every execution-bearing
-├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
+├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
+├── `bash_write_targets.py` - An import shim for the hooks that read paths rather than parse trees. Every reading is
 ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
@@ -74,6 +74,7 @@ lib/
 ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 ├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
+├── `shell_parse.py` - Stdlib only. Nothing here executes, expands or evaluates the text it reads, and
 ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 ├── `specialist_yield.py` - Public API:
 ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
