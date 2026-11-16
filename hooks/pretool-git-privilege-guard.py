@@ -352,7 +352,7 @@ def _enforce_commit_grant_binding(grant, command):
             'binding while these are set. Unset them and re-run /commit.\n'
         )
     records = _commit_records(command)
-    if not records:
+    if not records or any(rec['unresolved'] for rec in records):
         _block(
             '\nBLOCKED: agent git commit - a commit was detected but its '
             'effective target repository could not be resolved for grant '
@@ -449,7 +449,7 @@ def _grant_matches_commit_target(grant, command):
     if not grant_repo or not grant_branch or not grant_head:
         return False
     records = _commit_records(command)
-    if not records:
+    if not records or any(rec['unresolved'] for rec in records):
         return False
     for rec in records:
         target_dir = _commit_target_dir(rec)
@@ -562,7 +562,8 @@ def _commit_records(command):
     values), env_redirect (a GIT_DIR-style assignment on it or on any command of
     the call), flag_redirect (--git-dir, --work-tree, --namespace) and
     cwd_changed (a cd, pushd or popd runs before it, so the guard's probes would
-    not look where it lands). A command the parser cannot read yields none."""
+    not look where it lands), unresolved (why the parser cannot read the
+    invocation statically). A command the parser cannot read yields none."""
     sites, invocations = _git_view(command)
     moves = [k for k, site in enumerate(sites)
              if shell_parse.resolve(site.cmd).name in _CWD_CHANGE_CMDS]
@@ -577,6 +578,7 @@ def _commit_records(command):
             'flag_redirect': any(opt in _GIT_REDIRECT_FLAGS for opt, _v in inv.global_opts),
             'env_redirect': assigned or any(k in _GIT_REDIRECT_ENV_VARS for k in inv.env),
             'cwd_changed': any(m < at for m in moves),
+            'unresolved': inv.unresolved,
         })
     return records
 
