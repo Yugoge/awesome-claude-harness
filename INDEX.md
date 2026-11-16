@@ -257,6 +257,7 @@ dot-claude/
 │   │   ├── `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
 │   │   ├── `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
 │   │   ├── `test_overnight_inplace_bubblewrap.py` - Replayed in a bwrap-less in-place toy session, every removal of the git
+│   │   ├── `test_overnight_keystone_hook_dir.py` - An overnight actor leaves the keystone hook dir as it is, in both modes (#27, High).
 │   │   ├── `test_overnight_one_state_reader.py` - cycle contract's one writer (P1b row 13, E13)
 │   │   ├── `test_overnight_operand_scan_channel.py` - The commands run harness scripts as `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/x.sh"`. For an
 │   │   ├── `test_overnight_qa_sentinel_bind.py` - P1b E7 removed the one RW exception the boundary had under main's
@@ -777,6 +778,7 @@ dot-claude/
 │   ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 │   ├── `test_close_route_select_compat.py` - It answers the two calls origin/master's /close Step 0 makes (commands/close.md:296 on a7d3a9f, :...
 │   ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
+│   ├── `test_command_step_citations.py` - A command text that cites another command's numbered step or rule cites one that exists.
 │   ├── `test_commit_multi_repo_plan.py` - Python script
 │   ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 │   ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
