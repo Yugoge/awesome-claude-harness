@@ -1,8 +1,8 @@
 """Unit tests for hooks/pretool-block-branch-pr-worktree.py.
 
-The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
-bypasses (in order): a live /dev-overnight session, /do consent (main agent),
-and a /allow grant. The EnterWorktree tool is governed by a separate hook
+The hook refuses worktree CREATION on the Bash surface, with three bypasses (in
+order): a live /dev-overnight session, /do consent (main agent), and a /allow
+grant. Branch and PR creation are allowed. The EnterWorktree tool is governed by a separate hook
 (pretool-block-enterworktree.sh) and is intentionally ignored here.
 
 Tests invoke the hook as a subprocess (the way the harness does) and assert the
@@ -53,7 +53,7 @@ def _bash(cmd, **extra):
     return p
 
 
-# ── Blocked: branch creation (incl. attached / path-qualified / clustered) ───
+# ── Allowed: branch creation (incl. attached / path-qualified / clustered) ───
 
 @pytest.mark.parametrize('cmd', [
     'git checkout -b feature/x',
@@ -74,11 +74,8 @@ def _bash(cmd, **extra):
     'git branch -f forced start',        # force create/reset
     'git -C /some/repo branch newbr',    # git global-option prefix
     '/usr/bin/git checkout -b bypass',   # path-qualified git
-    'git worktree add -b br ../wt HEAD',
     'true && git checkout -b chained',
     'sudo git checkout -b withsudo',
-    # ── BUG 1 regressions: display/formatting flags are ORTHOGONAL to creation;
-    #    a positional branch name after them still creates → must BLOCK ────────
     'git branch -v newbranch HEAD',      # -v is display, not a veto
     'git branch -vv newbranch',          # -vv display cluster
     'git branch --verbose newbranch',
@@ -87,34 +84,23 @@ def _bash(cmd, **extra):
     'git branch --format=%(refname) nb',
     'git branch --abbrev=7 nb',
     'git branch --format %(refname) nb',  # space value THEN positional name
-    # ── BUG 3 regressions: --color/--column/--abbrev are OPTIONAL-attached-value
-    #    flags (`--flag[=v]`); a SPACE-separated token is the next POSITIONAL, not
-    #    the flag value, so git CREATES a branch from it. Live-git confirmed
-    #    (2026-06-05): `git branch --color always` makes branch `always`, etc. ──
     'git branch --color always',
     'git branch --column always',
     'git branch --abbrev 7',
     'git branch --color always extra',    # two positionals after boolean flag
-    # ── BUG 2 regressions: -t/--track create a local tracking branch; switch
-    #    --guess is explicit guess-create → must BLOCK ─────────────────────────
     'git checkout -t origin/foo',
     'git checkout --track origin/foo',
     'git switch -t origin/foo',
     'git switch --track origin/foo',
     'git switch --guess remotebranch',
-    # ── VECTOR B: unambiguous unique-prefix abbreviations of CREATE long-opts
-    #    create branches → must BLOCK ──────────────────────────────────────────
     'git switch --cr foo',               # --cr -> --create
     'git checkout --or foo',             # --or -> --orphan
     'git checkout --tr origin/x',        # --tr -> --track
     'git switch --g foo',                # --g  -> --guess
     'git switch --force-c foo',          # --force-c -> --force-create
-    # ── VECTOR C: git stash branch creates a branch from a stash → must BLOCK ──
     'git stash branch foo',
-    # ── VECTOR D: fetch/pull refspec into refs/heads creates a branch → BLOCK ──
     'git fetch . HEAD:refs/heads/foo',
     'git pull origin x:refs/heads/foo',
-    # ── VECTOR D2: bare-destination refspec also lands under refs/heads/ → BLOCK
     'git fetch origin main:newbranch',
     'git fetch . HEAD:newbranch',
     'git fetch origin main:heads/nb',
@@ -122,58 +108,58 @@ def _bash(cmd, **extra):
     'git pull origin main:topic',
     'git pull . HEAD:newbranch',
     'git fetch origin +main:newbranch',  # leading '+' force marker stripped
-    # ── VECTOR E: update-ref plumbing creates a branch → must BLOCK ────────────
     'git update-ref refs/heads/foo HEAD',
-    # ── VECTOR F: command/process substitution exposes an inner creation → BLOCK
     'echo $(git checkout -b foo)',
     'x=$(git switch -c foo)',
-    # ── FIX 5: EXPLICIT checkout --guess (and unique-prefix --g) creates → BLOCK
     'git checkout --guess ro_branch',
     'git checkout --g ro_branch',        # --g -> --guess (unique prefix)
-    # ── FIX 1: command-position — git preceded only by a wrapper / env-assign /
-    #    path qualifier is still in command position → BLOCK ────────────────────
     'sudo git checkout -b x',
     'FOO=bar git checkout -b x',
     '/usr/bin/git checkout -b x',
     'git -C /repo branch new',           # git global option, git is command tok
 ])
-def test_branch_creation_blocked(cmd, tmp_path):
+def test_branch_creation_allowed(cmd, tmp_path):
     rc, _ = _run(_bash(cmd), tmp_path)
-    assert rc == 2, f'expected block for: {cmd}'
+    assert rc == 0, f'expected allow for: {cmd}'
 
 
-def test_backtick_substitution_inner_creation_blocked(tmp_path):
-    # VECTOR F: backtick command substitution is split (already today); the inner
-    # `git checkout -b foo` must classify as branch creation → BLOCK.
+def test_backtick_substitution_inner_creation_allowed(tmp_path):
     cmd = 'result=`git checkout -b foo`'
     rc, _ = _run(_bash(cmd), tmp_path)
-    assert rc == 2, f'expected block for: {cmd}'
+    assert rc == 0, f'expected allow for: {cmd}'
 
 
-# ── Blocked: worktree / PR creation (incl. interspersed gh flags) ────────────
+# ── Blocked: worktree creation ───────────────────────────────────────────────
 
 @pytest.mark.parametrize('cmd', [
     'git worktree add ../wt feature',
     '/usr/bin/git worktree add ../wt HEAD',
+    'git worktree add -b br ../wt HEAD',
+])
+def test_worktree_creation_blocked(cmd, tmp_path):
+    rc, _ = _run(_bash(cmd), tmp_path)
+    assert rc == 2, f'expected block for: {cmd}'
+
+
+# ── Allowed: PR creation (incl. interspersed gh flags) ───────────────────────
+
+@pytest.mark.parametrize('cmd', [
     'gh pr create --fill',
     'gh pr create --title x --body y',
     'gh -R cli/cli pr create --fill',    # global flag before pr
     'gh pr -R cli/cli create --fill',    # global flag between pr and create
     '/usr/bin/gh pr create --fill',      # path-qualified gh
-    # ── VECTOR A: `gh pr new` is the official alias of `gh pr create` → BLOCK ──
     'gh pr new --fill',
     'gh -R o/r pr new',                  # global flag before pr, `new` alias
-    # ── FIX 6: `gh pr checkout <N>` creates a local PR branch → BLOCK ──────────
     'gh pr checkout 12',
     'gh -R cli/cli pr checkout 12',
-    # ── FIX 7: PR creation via the REST API (POST to .../pulls) → BLOCK ────────
     'gh api repos/o/r/pulls -f title=x -f head=f -f base=main',
     'gh api -X POST repos/o/r/pulls -f title=x',
     'gh api --method POST repos/o/r/pulls',
 ])
-def test_worktree_and_pr_creation_blocked(cmd, tmp_path):
+def test_pr_creation_allowed(cmd, tmp_path):
     rc, _ = _run(_bash(cmd), tmp_path)
-    assert rc == 2, f'expected block for: {cmd}'
+    assert rc == 0, f'expected allow for: {cmd}'
 
 
 # ── Allowed: non-creation git/gh forms ───────────────────────────────────────
@@ -193,19 +179,12 @@ def test_worktree_and_pr_creation_blocked(cmd, tmp_path):
     'git branch -m old new',           # rename
     'git branch -u origin/x',          # set upstream (-u veto, value not a name)
     'git branch --merged',
-    # ── BUG 1 regressions: display/formatting flags WITHOUT a positional name
-    #    are list/display-only → must ALLOW ────────────────────────────────────
     'git branch -vv',                  # verbose list, no positional
     'git branch --sort=refname',       # no positional
     "git branch --format='%(refname)'",  # attached value, no positional
     'git branch --format %(refname)',  # space value, no positional
     'git branch --points-at HEAD',     # query, value not a positional
     'git branch --merged main',        # query, value not a positional
-    # ── BUG 3 regressions: optional-attached-value flags WITHOUT a positional
-    #    branch name stay list-mode → ALLOW. Bare (`--color`) leaves no
-    #    positional; attached (`--color=always`) is a single token. The REQUIRED-
-    #    value flags (`--sort`/`--format`) still consume their space-separated
-    #    value, so `--sort refname` is a LIST with no positional → ALLOW. ────────
     'git branch --color',              # bare boolean flag, no positional
     'git branch --color=always',       # attached value, single token
     'git branch --column=always',      # attached value, single token
@@ -225,24 +204,20 @@ def test_worktree_and_pr_creation_blocked(cmd, tmp_path):
     'gh pr status',
     'gh pr diff 7',
     'gh pr checkout --detach 12',       # detached HEAD: no branch ref → allow
-    # ── VECTOR B: NON-create long-opts (and their abbreviations) must ALLOW ────
     'git switch --detach',
     'git switch --force',
     'git switch --no-track',
     'git checkout --force',
     'git checkout --ours x',
     'git checkout --theirs x',
-    # ── VECTOR C: non-branch stash subcommands must ALLOW ─────────────────────
     'git stash',
     'git stash list',
     'git stash pop',
-    # ── VECTOR D: fetch/pull without a creating refspec must ALLOW ────────────
     'git fetch',
     'git fetch origin',
     'git fetch --all',
     'git pull origin main',
     'git fetch origin main',             # space-separated src, no refspec colon
-    # ── VECTOR D2: refspecs that do NOT write a local branch must ALLOW ────────
     'git fetch origin main:refs/remotes/foo',  # remote-tracking, not local
     'git fetch origin main:refs/tags/v1',      # tag, not a local branch
     'git fetch origin main:',                  # empty dst → FETCH_HEAD only
@@ -251,26 +226,18 @@ def test_worktree_and_pr_creation_blocked(cmd, tmp_path):
     'git fetch git@github.com:o/r.git',        # scp-like remote, not a refspec
     'git clone git@github.com:o/r.git',        # clone is not fetch/pull anyway
     'git fetch --dry-run origin main:newbranch',  # dry-run writes nothing
-    # ── VECTOR E: update-ref delete must ALLOW ────────────────────────────────
     'git update-ref -d refs/heads/foo',
-    # ── VECTOR F: harmless command substitution / %(refname) format must ALLOW ─
     'echo $(git status)',
     'git log --format %(refname)',
     'git branch --format %(refname)',
-    # ── FIX 1: git/gh in ARGUMENT position (merely mentioned) must ALLOW ───────
     'echo gh pr new',
     'echo git checkout -b x',
-    # ── FIX 2: `--` makes a following `branch` token a pathspec → ALLOW ────────
     'git stash -- branch',
-    # ── FIX 3: --dry-run writes nothing, so a refs/heads refspec → ALLOW ───────
     'git fetch --dry-run . HEAD:refs/heads/d',
     'git pull --dry-run origin x:refs/heads/d',
-    # ── FIX 4: -m value (a reflog message) is not the target ref → ALLOW ───────
     'git update-ref -m refs/heads/msg refs/tags/v1 HEAD',
-    # ── FIX 5: BARE checkout/switch (no --guess) stays ALLOW ──────────────────
     'git checkout somebranch',
     'git switch somebranch',
-    # ── FIX 7: GET to .../pulls is a LIST → ALLOW ─────────────────────────────
     'gh api repos/o/r/pulls',
     'gh api -X GET repos/o/r/pulls',
     'gh api --method GET repos/o/r/pulls -f x=y',  # explicit GET overrides field
@@ -341,36 +308,45 @@ def test_creation_allowed_during_live_overnight(cmd, tmp_path):
     assert rc == 0, f'expected allow during live overnight for: {cmd}'
 
 
-def test_creation_blocked_when_overnight_completed(tmp_path):
+@pytest.mark.parametrize('cmd, rc_expected', [
+    ('git checkout -b feature/x', 0),
+    ('git worktree add ../wt feature', 2),
+])
+def test_creation_when_overnight_completed(cmd, rc_expected, tmp_path):
     # A completed/expired overnight state is NOT a live session.
     _write_overnight_state(tmp_path, live=False)
-    rc, _ = _run(_bash('git checkout -b feature/x'), tmp_path)
-    assert rc == 2
+    rc, _ = _run(_bash(cmd), tmp_path)
+    assert rc == rc_expected
 
 
 # ── Bypass 2: /do consent (main agent only) ──────────────────────────────────
 
-def test_do_consent_allows_main_agent(tmp_path):
+@pytest.mark.parametrize('cmd', ['git checkout -b feature/x', 'git worktree add ../wt'])
+def test_do_consent_allows_main_agent(cmd, tmp_path):
     sid = f'test-do-{os.getpid()}'
     flag = os.path.join(harness_state_dir(), f'claude-orchestrator-consent-{sid}.flag')
     with open(flag, 'w') as fh:
         fh.write('true')
     try:
-        rc, _ = _run(_bash('git checkout -b feature/x', session_id=sid), tmp_path)
+        rc, _ = _run(_bash(cmd, session_id=sid), tmp_path)
         assert rc == 0
     finally:
         os.unlink(flag)
 
 
-def test_do_consent_does_not_help_subagent(tmp_path):
+@pytest.mark.parametrize('cmd, rc_expected', [
+    ('git checkout -b feature/x', 0),
+    ('git worktree add ../wt', 2),
+])
+def test_do_consent_does_not_help_subagent(cmd, rc_expected, tmp_path):
     sid = f'test-do-sub-{os.getpid()}'
     flag = os.path.join(harness_state_dir(), f'claude-orchestrator-consent-{sid}.flag')
     with open(flag, 'w') as fh:
         fh.write('true')
     try:
-        payload = _bash('git checkout -b feature/x', session_id=sid, agent_id='sub-1')
+        payload = _bash(cmd, session_id=sid, agent_id='sub-1')
         rc, _ = _run(payload, tmp_path)
-        assert rc == 2  # subagents never qualify for /do
+        assert rc == rc_expected  # subagents never qualify for /do
     finally:
         os.unlink(flag)
 
@@ -383,7 +359,11 @@ def test_subagent_blocked_without_bypass(tmp_path):
 
 # ── Bypass 3: /allow sentinel grant (reaches subagents) ──────────────────────
 
-def test_allow_sentinel_grant_allows(tmp_path):
+@pytest.mark.parametrize('cmd, target', [
+    ('git checkout -b feature/x', 'checkout'),
+    ('git worktree add ../wt', 'worktree'),
+])
+def test_allow_sentinel_grant_allows(cmd, target, tmp_path):
     grant_dir = os.path.join(harness_state_dir(), 'claude-grants')
     os.makedirs(grant_dir, exist_ok=True)
     task_id = f'test-grant-{os.getpid()}'
@@ -391,16 +371,70 @@ def test_allow_sentinel_grant_allows(tmp_path):
     grant = {
         'task_id': task_id,
         'session_id': 'sess-x',
-        'allowed_operations': [{'op': 'git', 'target': 'checkout'}],
+        'allowed_operations': [{'op': 'git', 'target': target}],
         'created_at': '2000-01-01T00:00:00Z',
         'expires_at': '2099-01-01T00:00:00Z',
     }
     with open(grant_path, 'w') as fh:
         json.dump(grant, fh)
     try:
-        payload = _bash('git checkout -b feature/x', session_id='sess-x', agent_id='sub-2')
+        payload = _bash(cmd, session_id='sess-x', agent_id='sub-2')
         rc, _ = _run(payload, tmp_path, env_extra={'CLAUDE_TASK_ID': task_id})
         assert rc == 0
     finally:
         if os.path.exists(grant_path):
             os.unlink(grant_path)
+
+
+# ── Bash is the oracle: obfuscated words that are not git ───────────────────
+
+NOT_GIT = [
+    "gi'a b't worktree add ../w",        # one word: `gia bt`
+    "g\\ \nit worktree add x",           # words `g ` then `it`
+    "g\\#x\nit worktree add x",          # words `g#x` then `it`
+]
+IS_GIT = "gi\\\nt worktree add x"        # a line continuation joins `git`
+
+
+def _bash_runs_git(cmd, tmp_path):
+    """True when bash, given cmd, runs the stub `git` placed first on PATH."""
+    stub = tmp_path / 'bin'
+    stub.mkdir(exist_ok=True)
+    marker = tmp_path / 'git-ran'
+    (stub / 'git').write_text(f'#!/bin/sh\ntouch {marker}\n')
+    (stub / 'git').chmod(0o755)
+    env = dict(os.environ, PATH=f'{stub}:{os.environ.get("PATH", "")}')
+    subprocess.run(['bash', '-c', cmd], cwd=str(tmp_path), env=env,
+                   capture_output=True, timeout=30)
+    return marker.exists()
+
+
+@pytest.mark.parametrize('cmd', NOT_GIT)
+def test_a_word_bash_does_not_read_as_git_is_not_git(cmd, tmp_path):
+    from lib.shell_parse import git_invocations
+    assert git_invocations(cmd) == [], cmd
+    assert not _bash_runs_git(cmd, tmp_path), cmd
+    rc, _ = _run(_bash(cmd), tmp_path)
+    assert rc == 0, cmd
+
+
+def test_the_oracle_sees_git_where_bash_runs_it(tmp_path):
+    from lib.shell_parse import git_invocations
+    assert [i.subcommand for i in git_invocations(IS_GIT)] == ['worktree']
+    assert _bash_runs_git(IS_GIT, tmp_path)
+    rc, _ = _run(_bash(IS_GIT), tmp_path)
+    assert rc == 2
+
+
+@pytest.mark.parametrize('cmd', [
+    'env git worktree add ../w',
+    'bash -c "git worktree add ../w"',
+    'eval "git worktree add ../w"',
+    'command git worktree add ../w',
+    'echo $(git worktree add ../w)',
+    'git -C x worktree add ../w',
+])
+def test_worktree_creation_through_a_wrapper_is_refused(cmd, tmp_path):
+    for extra in ({}, {'agent_id': 'sub-1', 'session_id': 's'}):
+        rc, _ = _run(_bash(cmd, **extra), tmp_path)
+        assert rc == 2, (cmd, extra)
