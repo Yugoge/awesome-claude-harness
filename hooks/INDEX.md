@@ -1,7 +1,7 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:38:26Z*
+*Last updated: 2026-11-17T03:15:40Z*
 **Total entries**: 401
 **Convention**: kebab
 
@@ -30,13 +30,12 @@ hooks/
 │   ├── runtime_guard/
 │   │   ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 │   │   ├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
-│   │   ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
+│   │   ├── `config.py` - Depends on pathmatch (`_normalize_path`, `_strip_quotes`) + stdlib; references nothing from _core...
 │   │   ├── `constants.py` - Dependency LEAF: defines only literal frozenset/dict constants, imports nothing,
 │   │   ├── `context.py` - `_core.evaluate` computes a small set of per-EVALUATION inputs ONCE — the
-│   │   ├── `find_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
-│   │   ├── `git_cmds.py` - Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
-│   │   ├── `pathmatch.py` - Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
-│   │   └── `shell_lex.py` - Dependency LEAF: imports only the stdlib, references nothing from _core
+│   │   ├── `find_cmds.py` - Depends on pathmatch (`_strip_quotes`, `_glob_to_segment_regex`,
+│   │   ├── `git_cmds.py` - Depends on pathmatch (`_strip_quotes`, `_expand_leading_home`) +
+│   │   └── `pathmatch.py` - Depends only on the stdlib and owns `_strip_quotes`; references nothing from
 │   ├── write_gate/
 │   │   └── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
 │   ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
@@ -67,7 +66,6 @@ hooks/
 │   ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 │   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
-│   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 │   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
@@ -114,9 +112,9 @@ hooks/
 │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
 │   ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
-│   ├── `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a
+│   ├── `test_allow_grant_quoted_separators.py` - A grant authorizes exactly one command. pretool-git-privilege-guard, pretool-bash-safety.sh and
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
-│   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
+│   ├── `test_allowlist_git_global_opts.py` - args_contain is a positional prefix anchored right after the head token, so
 │   ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 │   ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 │   ├── `test_ba_qa_routing_record.py` - A BA or QA handed several issues stops before any analysis and replies `multi_issue_fanout_reques...
@@ -130,9 +128,9 @@ hooks/
 │   ├── `test_bash_views_guard.py` - the quoted CLAUDE_HOME channel spelling P2 R6 gave every command line, as it
 │   ├── `test_bash_write_targets_policy.py` - Execution-semantic write-target resolution at the exact sink use site.
 │   ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
-│   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
-│   ├── `test_block_branch_pr_worktree_fails_closed.py` - hooks/pretool-block-branch-pr-worktree.py used to exit 0 on any error it did not
-│   ├── `test_block_branch_pr_worktree_gh_checkout.py` - `gh pr checkout` creates a local branch for the pull request unless it is told to
+│   ├── `test_block_branch_pr_worktree.py` - The hook refuses worktree CREATION on the Bash surface, with three bypasses (in
+│   ├── `test_block_branch_pr_worktree_fails_closed.py` - On an error it does not expect, a payload it cannot read or an import that fails
+│   ├── `test_block_branch_pr_worktree_gh_checkout.py` - Creating a branch is allowed, so the hook lets every `gh pr checkout` through,
 │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   ├── `test_c_layer_protected_targets.py` - d1b244f0 made a shell `-c` layer fail closed: run-time text given to a program outside
 │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
@@ -229,6 +227,8 @@ hooks/
 │   ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 │   ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
 │   ├── `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
+│   ├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
+│   ├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
 │   ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 │   ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
 │   ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the
@@ -281,7 +281,7 @@ hooks/
 │   ├── `test_unit_find_cmds.py` - Imports the find_cmds sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
-│   ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
+│   ├── `test_unit_shell_lex.py` - The guard splits a command into pipeline groups of simple commands, tokenizes each
 │   ├── `test_userprompt_bulk_commit_capability.py` - These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
 │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   ├── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
@@ -334,7 +334,7 @@ hooks/
 ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 ├── `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 ├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
-├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
+├── `pretool-block-branch-pr-worktree.py` - Refused: every `git worktree add` the command runs, in command position, inside
 ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector (advisory: exit 0 always)
 ├── `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
@@ -346,7 +346,7 @@ hooks/
 ├── `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
-├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
+├── `pretool-grep-backtrack-guard.py` - Why
 ├── `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
 ├── `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 ├── `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its

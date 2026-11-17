@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:38:26Z*
-**Total entries**: 190
+*Last updated: 2026-11-17T03:15:40Z*
+**Total entries**: 192
 **Convention**: kebab
 
 ## Tree
@@ -20,9 +20,9 @@ tests/
 ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
 ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
-├── `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a
+├── `test_allow_grant_quoted_separators.py` - A grant authorizes exactly one command. pretool-git-privilege-guard, pretool-bash-safety.sh and
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
-├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
+├── `test_allowlist_git_global_opts.py` - args_contain is a positional prefix anchored right after the head token, so
 ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 ├── `test_ba_qa_routing_record.py` - A BA or QA handed several issues stops before any analysis and replies `multi_issue_fanout_reques...
@@ -36,9 +36,9 @@ tests/
 ├── `test_bash_views_guard.py` - the quoted CLAUDE_HOME channel spelling P2 R6 gave every command line, as it
 ├── `test_bash_write_targets_policy.py` - Execution-semantic write-target resolution at the exact sink use site.
 ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
-├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
-├── `test_block_branch_pr_worktree_fails_closed.py` - hooks/pretool-block-branch-pr-worktree.py used to exit 0 on any error it did not
-├── `test_block_branch_pr_worktree_gh_checkout.py` - `gh pr checkout` creates a local branch for the pull request unless it is told to
+├── `test_block_branch_pr_worktree.py` - The hook refuses worktree CREATION on the Bash surface, with three bypasses (in
+├── `test_block_branch_pr_worktree_fails_closed.py` - On an error it does not expect, a payload it cannot read or an import that fails
+├── `test_block_branch_pr_worktree_gh_checkout.py` - Creating a branch is allowed, so the hook lets every `gh pr checkout` through,
 ├── `test_bulk_commit_sentinel.py` - Covers:
 ├── `test_c_layer_protected_targets.py` - d1b244f0 made a shell `-c` layer fail closed: run-time text given to a program outside
 ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
@@ -135,6 +135,8 @@ tests/
 ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
 ├── `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
+├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
+├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
 ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
 ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the
@@ -187,7 +189,7 @@ tests/
 ├── `test_unit_find_cmds.py` - Imports the find_cmds sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
-├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
+├── `test_unit_shell_lex.py` - The guard splits a command into pipeline groups of simple commands, tokenizes each
 ├── `test_userprompt_bulk_commit_capability.py` - These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
 ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 ├── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired

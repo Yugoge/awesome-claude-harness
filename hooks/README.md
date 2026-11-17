@@ -52,7 +52,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 - `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
-- `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
+- `pretool-block-branch-pr-worktree.py` - Refused: every `git worktree add` the command runs, in command position, inside
 - `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 - `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector (advisory: exit 0 always)
 - `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
@@ -64,7 +64,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 - `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
-- `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
+- `pretool-grep-backtrack-guard.py` - Why
 - `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
 - `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 - `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its

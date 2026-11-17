@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 64
+- **Total files**: 63
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
@@ -35,7 +35,6 @@
 - `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 - `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 - `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
-- `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 - `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 - `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 - `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
