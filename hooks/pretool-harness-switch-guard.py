@@ -570,6 +570,31 @@ def _config_sets_program(rest: list, ran_in: list, in_home: bool, settings: set,
     return in_home and len(pos) >= 2 and _program_setting("-c", pos[0] + "=" + pos[1], less_env)
 
 
+def _config_attached_files(words: list, git) -> list:
+    """The <file> values `git config` takes attached in a short-option cluster (`-fsettings.json`,
+    `-zf<file>`), as git reads them: before `--`, past the values long options and -t take. They
+    are written words, judged as the spaced `-f <file>` and `--file=<file>` forms are."""
+    if git is None or git.sub is None or words[git.sub] != "config":
+        return []
+    out, it = [], iter(words[git.sub + 1:])
+    for w in it:
+        if w == "--":
+            break
+        if w.startswith("--"):
+            name = _long_option(w, GIT_CONFIG_LONG)
+            if name and "--" + name in GIT_CONFIG_VALUE_OPTS and "=" not in w:
+                next(it, None)
+        elif w.startswith("-") and w != "-":
+            for j, c in enumerate(w[1:], 1):
+                if c in GIT_CONFIG_SHORT_VALUE:
+                    if w[j + 1:] and c == "f":
+                        out.append(w[j + 1:])
+                    elif not w[j + 1:]:
+                        next(it, None)
+                    break
+    return out
+
+
 def _init_template(rest: list, ran_in: list, settings: set, env_template: bool) -> bool:
     """Whether `git init <rest>`, run from each of `ran_in`, copies a template directory the
     command chooses (--template=<dir> by any unique prefix, or GIT_TEMPLATE_DIR, `env_template`)
@@ -713,7 +738,9 @@ def settings_writes(command: str, cwd: str) -> list:
         plain = [w for w in words if not ASSIGNMENT.match(w)]
         if not plain:
             continue
-        written = written + list((_git(words) or GitCall(None, (), False, False, False, [], [])).traces)
+        git = _git(words)
+        written = written + list((git or GitCall(None, (), False, False, False, [], [])).traces)
+        written += _config_attached_files(words, git)  # `-f<file>`: git config writes that file
         head = os.path.basename(plain[0])
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
@@ -1018,7 +1045,8 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                 if git.sub is not None and _in_home([_resolve(w.split("=", 1)[-1] if w.startswith("-") else w, r)
                                                      for w in words[git.sub + 1:] for r in ran_in], settings):
                     writes = True  # git reads a harness-home path under config the command chooses
-        for word, writes_word in [(w, writes) for w in words] + [(w, True) for w in written]:  # every redirect
+        attached = _config_attached_files(words, git)  # `git config -f<file>`, judged as `-f <file>`
+        for word, writes_word in [(w, writes) for w in words + attached] + [(w, True) for w in written]:  # every redirect
             token = word.split("=", 1)[-1]  # target is written, whatever its fd (1>, 2>>, &>, >|)
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):
                 return refuse("this Bash command runs the switch (%s)" % os.path.basename(token))

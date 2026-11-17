@@ -1030,3 +1030,62 @@ def test_round6_away_from_home_passes(box, command):
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 0, (command, cwd, err)
+
+
+ROUND7_REFUSED = [
+    # git config's -f takes the rest of a short-option cluster as its file: judged as `-f <file>`
+    "git -C ~/.claude config -fsettings.local.json a.b c",
+    "git -C ~/.claude config -zfsettings.local.json a.b c",
+    "git -C ~/.claude config -fsettings.machine.json a.b c",
+    "git -C ~/.claude config -fsettings.json a.b c",
+    "git -C ~/.claude config -t bool -fsettings.local.json a.b true",
+    "git -C ~/.claude config -tbool -zfsettings.local.json a.b true",
+    "git -C ~/.claude config --type bool -fsettings.local.json a.b true",
+    "cd ~/.claude && git config -fsettings.local.json a.b c",
+    "cd ~ && git -C .claude config -fsettings.local.json a.b c",
+    "git -C /tmp/x config -f~/.claude/settings.local.json a.b c",
+    "git -C ~ config -f.claude/settings.json a.b c",
+    "env git -C ~/.claude config -fsettings.local.json a.b c",
+    "nice -n 5 git -C ~/.claude config -fsettings.local.json a.b c",
+    "bash -c 'git -C ~/.claude config -fsettings.local.json a.b c'",
+    "git -C ~/.claude config -f.harness-switch/off a.b c",
+    "git -C ~/.claude config -zf.harness-switch/off a.b c",
+    "git -C {proj} config -f.claude/settings.json env.A 2",
+    "git -C {proj} config -f.claude/settings.local.json env.A 2",
+]
+
+
+@pytest.mark.parametrize("command", ROUND7_REFUSED)
+def test_round7_attached_config_file_refused(box, command):
+    command = command.format(proj=box["proj"])
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+        assert "BLOCKED: harness-switch" in err
+
+
+ROUND7_PASS = [
+    "git -C ~/.claude config -f/tmp/x.cfg a.b c",
+    "git -C ~/.claude config -zf/tmp/x.cfg a.b c",
+    "git -C ~/.claude config -t bool -f/tmp/x.cfg a.b true",
+    "git -C ~/.claude config -f/tmp/x.cfg --get a.b",
+    "git -C {proj} config -f/tmp/x.cfg a.b c",
+]
+
+
+@pytest.mark.parametrize("command", ROUND7_PASS)
+def test_round7_attached_config_file_elsewhere_passes(box, command):
+    command = command.format(proj=box["proj"])
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+def test_round7_attached_file_really_writes_there(box, tmp_path):
+    """Real git writes the attached -f<file>: the form the guard now judges is a real write."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = dict(box["env"], GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "-zfsettings.local.json", "a.b", "c"], check=True, env=env)
+    assert (repo / "settings.local.json").exists()
