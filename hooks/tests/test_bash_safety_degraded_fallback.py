@@ -86,6 +86,18 @@ ANALYZER_REFUSED_EXEC_OPTIONS = [
     "git -c", "git -C", "docker run -v", "watch -n", "flock -w", "nice -n", "timeout -s", "sudo -u", "env -u",
 ]
 
+# A quoted or escaped word holding a space (a head that is a command line, or an argument some program runs as one),
+# and an option that ends a command before a redirection, a comment or a parenthesis.
+SHELL_STRING_WORDS = [
+    "docker create -l 2>/dev/null", "xargs -d >x", "/usr/bin/docker --host # c", "(xargs -d)", "rg x --max-count''",
+    "hyperfine 'grep -f' -N 2>/dev/null",
+    "hyperfine 'bash -c' -N", "tmux new -d 'sh -c' -x", "fzf --preview 'bash -c' -m", "nodemon --exec 'env -S' -q",
+    "foo --pager 'sh -c' -x", "ssh-agent 'bash -c' -x", "bash\\ -c", "\"bash -c\" -x", "env\\ -S", "'sh -c' -s",
+    "sh\\ -c -x", "\"git -C\" . difftool x -n -x", "\"/usr/bin/sudo --close-from\" -x", "nsenter\\ -t", "\"rg -r\" -x",
+    "\"xargs -0\" -x", "x 'a \"bash -c\"' -x", "x -d 'ls; sh -c' -x", "PAGER='sh -c' man ls -a", "PAGER=/bin/sh man ls -a",
+]
+
+
 # Degraded-only refusals the live analyzer does not make: unmodelled shells, interpreters and wrappers, a `-c
 # key=value` or `--to-command=` naming a shell, g-prefixed removal programs, and python -m on a code-running package.
 DEGRADED_ONLY_REFUSED = [
@@ -128,6 +140,15 @@ def analyzer_corpus():
     for p, opts in progs.items():
         for o in opts | set(common):
             cmds.update((f"{p} {o}", f"{p} x {o}", f"/usr/bin/{p} {o}", f"ls -la; {p} {o}", f"FOO=1 {p} x {o}"))
+    # A quoted or escaped head holding a space, and an argument that is a shell string another program may run.
+    for p, opts in progs.items():
+        for o in sorted(opts | {"-c", "-e", "-S", "-x"}):
+            cmds.update((f"'{p} {o}' -x", f"{p}\\ {o}", f"\"/usr/bin/{p} {o}\" -x", f"hyperfine '{p} {o}' -N",
+                         f"x --pager '{p} {o}' -x", f"x -d 'y; {p} {o}' -x", f"X='{p} {o}' ls -l"))
+        # The option ends the command, not the line: before a redirection, a comment or a parenthesis, or quoted.
+        for o in opts | {"-c", "-e", "-S"}:
+            cmds.update((f"{p} {o} 2>/dev/null", f"{p} {o} >x", f"{p} {o} # c", f"({p} {o})", f"{p} {o}''",
+                         f"{p} '{o}'"))
     for sub in eb.GIT_SUBCOMMANDS:
         for o in set(common) | set(eb.GIT_DATA_OPTIONS):
             cmds.update((f"git {sub} {o}", f"git -C . {sub} x {o}"))
@@ -149,12 +170,12 @@ def test_degraded_fallback_is_never_laxer_than_the_live_analyzer():
     rmref = _rmref()
     corpus = analyzer_corpus()
     refused = [c for c in corpus if not eb.analyze(c)["allowed"]]
-    assert len(corpus) > 20000 and len(refused) > 1000, (len(corpus), len(refused))
+    assert len(corpus) > 80000 and len(refused) > 1000, (len(corpus), len(refused))
     laxer = [c for c in refused if not R.degraded_refuses(c, rmref)]
     assert not laxer, "%d analyzer-refused forms pass the degraded fallback: %r" % (len(laxer), laxer[:20])
 
 
-@pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED)
+@pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED + SHELL_STRING_WORDS)
 def test_exec_option_and_unmodelled_program_forms_refuse_in_degraded_mode(command):
     assert R.degraded_refuses(command, _rmref()), command
 
@@ -162,7 +183,8 @@ def test_exec_option_and_unmodelled_program_forms_refuse_in_degraded_mode(comman
 @pytest.mark.parametrize("mode", sorted(MODES))
 def test_analyzer_refused_exec_options_refuse_end_to_end(mode):
     with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])), ANALYZER_REFUSED_EXEC_OPTIONS))
+        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])),
+                              ANALYZER_REFUSED_EXEC_OPTIONS + SHELL_STRING_WORDS))
     allowed = [c for c, code, _err in results if code != 2]
     assert not allowed, (mode, allowed)
 
@@ -226,7 +248,7 @@ def test_predicate_refuses_sensitive_lines(line):
 
 
 @pytest.mark.parametrize("line", [
-    "bash --version", "python3 -V", "python3 -m pytest -q", "git status --short", "ls -la | grep x -i",
+    "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version", "python3 -V", "python3 -m pytest -q", "git status --short", "ls -la | grep x -i",
     "FOO=1 make -n", "make 2>&1 -j4",
 ])
 def test_predicate_admits_plain_lines(line):

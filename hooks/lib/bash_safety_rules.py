@@ -921,10 +921,11 @@ def service_rules(command, stripped, env):
 
 # ── Removal policy (BS-32, BS-33) ────────────────────────────────────────────
 
-# Degraded question 3: a line that ends on an option is plain only when every command on it is one the analyzer's
-# own tables (lib/bash_execution_boundary.py: SHELLS, INTERPRETERS, AWKS, WRAPPERS, REMOVAL_EXES, its `_h_*`
-# handlers, INERT_ARGV_CONSUMERS and SELECTOR_DATA_OPTIONS) prove cannot be missing an operand that is code, a
-# command or a value, and no word on it names a program from those tables or the degraded-only extras below. The
+# Degraded question 3: a line on which a command ends on an option is plain only when every command on it, and every
+# shell string inside a quoted argument, is one the analyzer's own tables (lib/bash_execution_boundary.py: SHELLS,
+# INTERPRETERS, AWKS, WRAPPERS, REMOVAL_EXES, its `_h_*` handlers, INERT_ARGV_CONSUMERS and SELECTOR_DATA_OPTIONS)
+# prove cannot be missing an operand that is code, a command or a value, and no word on it names a program from
+# those tables or the degraded-only extras below. The
 # tables are read by importing the module, which runs no analysis; if the import fails or hangs, every such line
 # refuses. The degraded path may be stricter than the analyzer, never laxer.
 DEGRADED_TRAILING_OPTION = re.compile(r"(^|[ \t])[-+][A-Za-z0-9=_-]*[ \t]*$")
@@ -1070,14 +1071,42 @@ def _dg_read_handler(t, base, words):
     return len(words) == 2 and words[1] == "-V"  # ssh: only its version query
 
 
-def _degraded_command_is_plain(t, words):
-    """One simple command, assignments and reserved words stripped."""
-    while words and words[0] in t["drop"]:
+_DG_META = re.compile(r"""[\s;&|()<>'"\\]""")
+_DG_MAX_NESTING = 8
+
+
+def _dg_value_is_plain(t, value, depth):
+    """A word's embedded text (a quoted shell string, an assignment or `--opt=` value): plain as a command line."""
+    if _DG_META.search(value):
+        parsed = _dg_commands(value)
+        return parsed is not None and depth < _DG_MAX_NESTING and all(
+            _degraded_command_is_plain(t, words, depth + 1) for words in parsed[0])
+    return not _dg_sensitive(t, value.rsplit("/", 1)[-1])
+
+
+def _dg_last_words(words):
+    """The words that may end a command: its last word, and the one before a `#` word (a possible comment)."""
+    lasts = [words[-1]] if words else []
+    hashed = next((i for i, w in enumerate(words) if w.startswith("#")), 0)
+    return lasts + ([words[hashed - 1]] if hashed > 0 else [])
+
+
+def _degraded_command_is_plain(t, words, depth=0):
+    """One simple command. A word holding whitespace or shell syntax is a string some program may run as a command
+    line, so it is read again as one; a head holding either refuses. Assignment values are read the same way."""
+    while words and (words[0] in t["drop"] or re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0])):
+        if words[0] not in t["drop"] and not _dg_value_is_plain(t, words[0].split("=", 1)[1], depth):
+            return False
         words = words[1:]
     if not words:
         return True
-    if words[0] in t["header"] or words[0] == ".":
+    if words[0] in t["header"] or words[0] == "." or _DG_META.search(words[0]):
         return False
+    for w in words[1:]:
+        if _DG_META.search(w) and not _dg_value_is_plain(t, w, depth):
+            return False
+        if "=" in w and not _dg_value_is_plain(t, w.split("=", 1)[1], depth):
+            return False  # `-c core.pager=sh`, `--to-command=sh`: a value naming a program
     base = [w.rsplit("/", 1)[-1] for w in words]
     head = base[0]
     if len(words) == 2 and words[1] in _DG_INFO and not (head in t["wrappers"] or _dg_handler(t, head)
@@ -1091,7 +1120,8 @@ def _degraded_command_is_plain(t, words):
             and words[2].split(".", 1)[0] not in _DG_CODE_MODULES:
         rest = base[3:]
     elif head in _DG_READ_HANDLERS:
-        if not _dg_read_handler(t, head, words):
+        hashed = next((i for i, w in enumerate(words) if w.startswith("#")), len(words))
+        if not (_dg_read_handler(t, head, words) and _dg_read_handler(t, head, words[:hashed])):
             return False
     elif _dg_sensitive(t, head):
         return False
@@ -1099,35 +1129,24 @@ def _degraded_command_is_plain(t, words):
         return False
     elif head in t["consumers"]:
         model = t["consumers"][head]
-        if _dg_missing_value(model, words[-1]) or any(_dg_names_exec_option(model, w) for w in words[1:]):
+        if any(_dg_missing_value(model, w) for w in _dg_last_words(words[1:])) \
+                or any(_dg_names_exec_option(model, w) for w in words[1:]):
             return False
-    if words[-1] in t["selectors"].get(head, ()):
+    if set(_dg_last_words(words[1:])) & set(t["selectors"].get(head, ())):
         return False
-    for w in rest:
-        if _dg_sensitive(t, w) and w not in _DG_READ_HANDLERS:
-            return False
-        if "=" in w:  # `-c core.pager=sh`, `--to-command=sh`: a value naming a program
-            value = w.split("=", 1)[1].split()
-            if value and _dg_sensitive(t, value[0].rsplit("/", 1)[-1]):
-                return False
-    return True
+    return not any(_dg_sensitive(t, w) and w not in _DG_READ_HANDLERS for w in rest)
 
 
-def degraded_trailing_option_is_plain(line):
-    """True when a line that ends on an option is provably plain (see _degraded_command_is_plain)."""
+def _dg_commands(text):
+    """`text` as simple commands (redirections dropped), or None when it does not tokenize."""
     import shlex
-    t = _degraded_tables()
-    if t is None:
-        return False
     try:
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
     except ValueError:
-        return False
-    if not tokens or not DEGRADED_TRAILING_OPTION.search(" " + tokens[-1]):
-        return False
+        return None
     commands, words, skip = [], [], False
     for tok in tokens:
         if tok and set(tok) <= set(";&|()"):
@@ -1141,20 +1160,66 @@ def degraded_trailing_option_is_plain(line):
             skip = False  # the redirection's target is not an argument either
         else:
             words.append(tok)
+    if skip:
+        return None  # a redirection with no target
     commands.append(words)
-    for words in commands:
-        while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0]):
-            words = words[1:]
-        if words and not _degraded_command_is_plain(t, words):
+    return [words for words in commands if words], tokens
+
+
+def _dg_ends_on_option(line):
+    """The line, or any command on it, ends on an option-like word: as written, once quotes are removed (`-x''`,
+    `"-c''"`), or before a redirection, a comment or a closing parenthesis (`docker create -l 2>/dev/null`)."""
+    if DEGRADED_TRAILING_OPTION.search(line):
+        return True
+    parsed = _dg_commands(line)
+    return bool(parsed) and any(w[:1] in ("-", "+") for words in parsed[0] for w in _dg_last_words(words))
+
+
+_DG_RESERVED = frozenset(("if", "then", "else", "elif", "while", "until", "do", "!", "{", "time"))
+
+
+def _dg_quoted_head(line):
+    """A command head that, quotes removed, holds whitespace or shell syntax (`'bash -c' x`, `env\\ -S x`)."""
+    parsed = _dg_commands(line)
+    for words in (parsed[0] if parsed else ()):
+        for w in words:
+            if re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", w) or w in _DG_RESERVED:
+                continue
+            if _DG_META.search(w):
+                return True
+            break
+    return False
+
+
+def degraded_trailing_option_is_plain(line):
+    """True when every command on a line that ends on an option (_dg_ends_on_option) is provably plain."""
+    t = _degraded_tables()
+    parsed = _dg_commands(line) if t is not None else None
+    if parsed is None:
+        return False
+    return all(_degraded_command_is_plain(t, words) for words in parsed[0])
+
+
+def _dg_unbalanced(command):
+    """The command's quoting does not close (a shell syntax error), unless the open quote sits in a `#` comment."""
+    import shlex
+    for commenters in ("", "#"):
+        try:
+            lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            lexer.commenters = commenters
+            list(lexer)
             return False
+        except ValueError:
+            continue
     return True
 
 
 def degraded_refuses(command, rmref):
     """The degraded fallback's verdict: True unless the command is provably plain (see removal_policy)."""
     return bool(grep(rmref, command) or grep(r"[\]$`\[?*{}!]|<<", command) or grep(r"\\$", command)
-                or any(DEGRADED_TRAILING_OPTION.search(ln) and not degraded_trailing_option_is_plain(ln)
-                       for ln in lines_of(command)) or grep(r"[<>|&;][ \t]*$", command))
+                or any(_dg_ends_on_option(ln) and not degraded_trailing_option_is_plain(ln) or _dg_quoted_head(ln)
+                       for ln in lines_of(command)) or grep(r"[<>|&;][ \t]*$", command) or _dg_unbalanced(command))
 
 
 def removal_policy(payload_text, command):
@@ -1163,8 +1228,9 @@ def removal_policy(payload_text, command):
     The analyzer runs in its own process under a time and memory limit. When it gives no usable verdict the
     command passes only if it is provably plain: no removal reference (lib/pol_degraded_removal_reference.ere), no
     assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), no line ending on a
-    dangling operator or redirect, and no line ending on an option unless degraded_trailing_option_is_plain()
-    proves it plain from the analyzer's own tables.
+    dangling operator or redirect, balanced quoting, no command head holding whitespace or shell syntax, and no
+    command ending on an option-like word unless degraded_trailing_option_is_plain() proves its line plain from the
+    analyzer's own tables (degraded_refuses).
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
     decision = ""
