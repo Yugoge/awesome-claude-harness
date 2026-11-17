@@ -25,7 +25,7 @@ State in one sentence what `TASK` changes and what the end state looks like.
 
 ### Step 2: Develop
 
-Do the work yourself: dispatching a subagent exits 2 this turn (`hooks/pretool-do-block-subagents.py`), and the orchestrator gate passes every other tool except EnterPlanMode and ExitPlanMode. Every other hook still applies.
+Do the work yourself: dispatching a subagent exits 2 this turn (`hooks/pretool-do-block-subagents.py`), except a built-in role with no Write/Edit/NotebookEdit tool and no dev-report duty (`Explore`, `Plan`, `claude-code-guide`, unless an agent definition shadows the name) or a `policies/tool-policy.v1.json` role with no write tool and no Bash, which may research for you. Only a role whose contract writes `docs/dev/dev-report-<TASK_ID>.json` (dev, qa, ba, changelog-analyst) causes the collision the block prevents. The orchestrator gate passes every other tool except EnterPlanMode and ExitPlanMode (ExitPlanMode passes, with or without /do, only while the user has the session in plan mode). Every other hook still applies.
 
 The whole `TASK` is done this turn, with nothing left for later: `do.status` `"completed"` (Step 5) means exactly that, and unfinished work is never reported as completed.
 
