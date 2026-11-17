@@ -20,7 +20,18 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*"
+        "mcp__playwright__*",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "denied_path_prefixes": [
         "/src/",
@@ -63,7 +74,18 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*"
+        "mcp__playwright__*",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -100,7 +122,18 @@
         "MultiEdit",
         "Skill",
         "WebSearch",
-        "WebFetch"
+        "WebFetch",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -137,7 +170,18 @@
         "Edit",
         "MultiEdit",
         "NotebookEdit",
-        "Skill"
+        "Skill",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*",
@@ -156,7 +200,18 @@
         "Edit",
         "MultiEdit",
         "mcp__playwright__*",
-        "Skill"
+        "Skill",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -193,7 +248,18 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*"
+        "mcp__playwright__*",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -227,7 +293,18 @@
         "Grep",
         "Read",
         "Skill",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -260,7 +337,18 @@
         "Grep",
         "Read",
         "Skill",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -294,7 +382,18 @@
         "Bash",
         "Write",
         "Edit",
-        "MultiEdit"
+        "MultiEdit",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -329,7 +428,18 @@
         "MultiEdit",
         "Read",
         "Skill",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -364,7 +474,18 @@
         "Bash",
         "Write",
         "Edit",
-        "MultiEdit"
+        "MultiEdit",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -399,7 +520,18 @@
         "MultiEdit",
         "Read",
         "Skill",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -434,7 +566,18 @@
         "Bash",
         "Write",
         "Edit",
-        "MultiEdit"
+        "MultiEdit",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -469,7 +612,18 @@
         "MultiEdit",
         "Read",
         "Skill",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -505,7 +659,18 @@
         "Write",
         "Edit",
         "MultiEdit",
-        "Skill"
+        "Skill",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/tests/generated/",
@@ -538,7 +703,18 @@
         "Bash",
         "Write",
         "Edit",
-        "MultiEdit"
+        "MultiEdit",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -572,7 +748,18 @@
         "Bash",
         "Write",
         "Edit",
-        "MultiEdit"
+        "MultiEdit",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -607,7 +794,18 @@
         "MultiEdit",
         "Read",
         "Skill",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/.claude/specs/",
@@ -641,7 +839,18 @@
         "Glob",
         "Grep",
         "Bash",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -669,7 +878,18 @@
         "Glob",
         "Grep",
         "Bash",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -697,7 +917,18 @@
         "Glob",
         "Grep",
         "Bash",
-        "Write"
+        "Write",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -724,7 +955,18 @@
         "Read",
         "Glob",
         "Grep",
-        "Bash"
+        "Bash",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/.claude/scratch/"
@@ -744,7 +986,20 @@
       "allowed_tools": [
         "Read",
         "Bash",
-        "Write"
+        "Write",
+        "Grep",
+        "Glob",
+        "TodoWrite",
+        "TodoRead",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "BashOutput",
+        "TaskStop",
+        "KillShell",
+        "ToolSearch"
       ],
       "allowed_write_path_prefixes": [
         "*/.claude/dev-registry/*/graphify/",
@@ -765,5 +1020,6 @@
       ],
       "rationale": "graphify: /dev Step 9 enrichment subagent; runs graphify-enrich.py via Bash, which writes the task's run record and focused subgraph under .claude/dev-registry/<task_id>/graphify/ and never the context (the graph cache is graphify-maintain.py's). Its Write grant is scoped to that graphify sub-directory, not the whole dev-registry, so it cannot author peer artifacts. No Skill/Edit (graphify.md uses neither). No write access to protected infra."
     }
-  }
+  },
+  "_read_only_and_bookkeeping_tools_note": "Every role's allowed_tools names the CLI's read-only and bookkeeping tools (OB-L22): Read, Grep and Glob (search, read-only); TodoWrite and its older read-only TodoRead, and TaskCreate, TaskGet, TaskList and TaskUpdate, which the CLI offers in TodoWrite's place while CLAUDE_CODE_ENABLE_TASKS is on (the agent's own task list); TaskOutput and its older name BashOutput (read the caller's own background task's output); TaskStop and its older name KillShell (stop the caller's own background task, starting none); ToolSearch (loads a deferred tool's schema; that tool's own call is still judged by these rows). None writes a file, runs a command, reaches the network or dispatches an agent; Grep and Glob take no target here, so denied_path_prefixes binds Read only, as before (hooks/tests/test_tool_policy_readonly_bookkeeping.py)."
 }

@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 192
+*Last updated: 2026-11-17T06:57:38Z*
+**Total entries**: 194
 **Convention**: kebab
 
 ## Tree
@@ -93,6 +93,7 @@ tests/
 ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+├── `test_harness_temp_state.py` - Each inventoried temp location classifies, symlink-safely, under every root spelling
 ├── `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
 ├── `test_hook_output_reaches_model.py` - The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 ├── `test_inflight_push_route.py` - COMPATIBILITY TESTS, kept only as long as hooks/pretool-tool-policy.py's _note_inflight_token_rou...
@@ -183,6 +184,7 @@ tests/
 ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 ├── `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
 ├── `test_tool_policy_protected_paths.py` - hooks/pretool-tool-policy.py refuses, before every other rule and for the main agent and every
+├── `test_tool_policy_readonly_bookkeeping.py` - policies/tool-policy.v1.json is default-deny per role: lib/policy_registry._check_tool_lists refu...
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
