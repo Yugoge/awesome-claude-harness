@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SBOM and provenance and verified against the PUBLISHED artifact. Re-promoting the
   marker to a stable version is a separate, later decision and is deliberately not
   gated here.
+- **No recorded CLI fixture keeps the account's usage.** `scripts/cli-fixture-record.sh`'s account
+  rule (token, request and cost counts and a clock time kept as a number become 0; a model id its
+  stand-in) now also covers rate limits: every value of a rate-limit reading (stream-json's
+  `rate_limit_event`: utilization, thresholds, reset time, status, window, overage fields) and every
+  utilization or overage value becomes 0, false or `<redacted>`, and `costUSD`, `...Requests` and
+  `resetsAt` numbers become 0. `--redact <file>...` runs the rule alone, in place, in the file's own
+  JSON layout, on a recording made by hand; `tests/fixtures/cli-todowrite-oldtodos/stream-2.1.326.jsonl`
+  is redacted with it (51 values), and the 2.1.325 and 2.1.326 recordings were already under it.
+  Covered by `tests/test_cli_fixture_redaction.py`.
 
 ### Fixed
 - **G1's order rule (R17) reads every way an agent's end comes back.** `hooks/pretool-obligation-gate.py`

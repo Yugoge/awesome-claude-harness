@@ -17,7 +17,9 @@ simulation (`tests/replay/replay.py` `_default_perform`) to this sequence.
 
 ## Redactions
 
-Plain string substitutions on the raw output; nothing else was changed.
+Plain string substitutions on the raw output, then the recorder's account rule
+(`bash scripts/cli-fixture-record.sh --redact stream-2.1.326.jsonl`); nothing
+else was changed.
 
 | Placeholder | Replaced |
 |---|---|
@@ -26,6 +28,8 @@ Plain string substitutions on the raw output; nothing else was changed.
 | `<WORKDIR-SLUG>` | that path as the CLI's project-dir slug (in `memory_paths`) |
 | `<SOCKET>` | the absolute path of the CLI's messaging socket |
 | `<MODEL>` | the model ID (every occurrence, including `modelUsage` keys) |
+| `0` | every token, request and cost count (`usage`, `modelUsage`, `total_cost_usd`, `costUSD`) |
+| `0`, `false`, `<redacted>` | every value of the `rate_limit_event` (utilization, thresholds, reset time, status, window, overage fields) |
 
 Session, message, request and tool-use ids are kept.
 
@@ -47,5 +51,7 @@ env -i PATH="$PATH" HOME="$H" ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
   < /dev/null > stream.jsonl
 ```
 
-Then apply the redactions above and confirm with `claude --version` which CLI
-version recorded it; name the file after that version.
+Then apply the string substitutions above, run
+`bash scripts/cli-fixture-record.sh --redact stream.jsonl` for the account rule,
+and confirm with `claude --version` which CLI version recorded it; name the file
+after that version.

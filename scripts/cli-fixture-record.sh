@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 # Usage: bash scripts/cli-fixture-record.sh [--out <dir>] [--keep-raw <dir>]
+#        bash scripts/cli-fixture-record.sh --redact <file>...
 #   Runs the installed CLI headless, ten times in one session, in a throwaway HOME whose minimal
 #   settings.json registers trivial hooks (SessionStart; UserPromptSubmit plain stdout;
 #   UserPromptSubmit JSON additionalContext; PreToolUse; Stop; SubagentStart plain stdout and JSON
@@ -25,26 +26,137 @@
 #   hook stdin and the first subagent's meta file. Home, cwd, uuids, agent ids and timestamps
 #   become placeholders; every other string becomes "<redacted>" unless its key is a structural one
 #   (type, hookEvent, ...) or it is a marker this script's own hooks print; a task-notification
-#   keeps its tags, its ids (as placeholders) and its status, its text redacted. Token, request
-#   and cost counts and a clock time kept as a number become 0. A model id becomes <MODEL> (one
-#   stand-in per distinct model: <MODEL_2>, ...). No prompt or system-prompt text is kept.
+#   keeps its tags, its ids (as placeholders) and its status, its text redacted. The account rule
+#   (account_rule below): token, request and cost counts and a clock time kept as a number become 0;
+#   every rate-limit value (stream-json's rate_limit_event: utilization, thresholds, status, reset
+#   time) and every utilization or overage value becomes 0, false or "<redacted>"; a model id
+#   becomes <MODEL> (one stand-in per distinct model: <MODEL_2>, ...). No prompt or system-prompt
+#   text is kept.
+# --redact applies the account rule alone, in place, to recordings made outside this script (a
+#   .jsonl or .json file of the CLI's output, such as tests/fixtures/cli-todowrite-oldtodos): each
+#   line or file keeps its own JSON layout and every other value; it needs no CLI.
 # Cost: about $3.50 and 5 min for the ten runs on CLI 2.1.326 (the two cut runs wait for their
 #   agent to be busy); it needs the CLI's model access. Run it on a CLI upgrade,
 #   when scripts/canary-verify.sh prints its re-record advisory. Never in CI (owner decision O1).
-# Exit codes: 0 = recorded; 1 = the CLI is missing or recorded no hook record; 2 = bad usage.
+# Exit codes: 0 = recorded (redacted); 1 = the CLI is missing or recorded no hook record (--redact:
+#   a file in a JSON layout it cannot write back unchanged, left as it was); 2 = bad usage.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 OUT_ROOT="$REPO/tests/fixtures/cli"
 KEEP_RAW=""
+REDACT=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out) OUT_ROOT="${2:?--out needs a directory}"; shift 2 ;;
     --keep-raw) KEEP_RAW="${2:?--keep-raw needs a directory}"; shift 2 ;;
+    --redact) shift; [[ $# -gt 0 ]] || { echo "cli-fixture-record: --redact needs a file" >&2; exit 2; }
+      REDACT=("$@"); break ;;
     -h|--help) sed -n '2,17p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "cli-fixture-record: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
+
+# The account rule: what tells an account's usage or the model it ran. The recording below and
+# --redact both run it, so a fixture recorded by hand is redacted exactly as a recorded one.
+account_rule() {
+  cat <<'PY'
+import re
+
+# Numbers that tell an account's usage (token, request and cost counts) or the recording's clock.
+USAGE_COUNT = re.compile(r"(tokens|Tokens|_usd|USD|_requests|Requests)$")
+TIME_NUMBERS = {"nextFireAt", "resetsAt"}
+# A rate-limit reading tells the account's usage and its plan's limits: every value under a key that
+# names a rate limit (stream-json's rate_limit_event, rate_limit_info: its utilization, thresholds,
+# window, status and reset time), and every value whose key names utilization, overage or a surpassed
+# threshold, is account state.
+ACCOUNT_STATE = re.compile(r"rate_?[lL]imit|[uU]tilization|[oO]verage|surpassedThreshold")
+# A model id, as a model key's value or inside any string, becomes one stand-in per distinct model
+# (<MODEL>, then <MODEL_2>, ...); a CLI marker such as "<synthetic>" stays.
+MODEL_KEYS = {"model", "requestedModel", "resolvedModel"}
+MODEL_ID = re.compile(r"\bclaude-(?:\d[\w.-]*?-)?(?:opus|sonnet|haiku|instant)[\w.\[\]-]*")
+MODELS = {}
+
+def model_standin(model):
+    if model not in MODELS:
+        MODELS[model] = "<MODEL>" if not MODELS else f"<MODEL_{len(MODELS) + 1}>"
+    return MODELS[model]
+
+def models(s):
+    """s with every model id in it replaced by its stand-in."""
+    return MODEL_ID.sub(lambda m: model_standin(m.group(0)), s)
+
+def held(key, state=False):
+    """Whether a value under key is account state: inside a rate-limit reading, or named for one."""
+    return state or (isinstance(key, str) and bool(ACCOUNT_STATE.search(key)))
+
+def account(value, key, state=False):
+    """One scalar under the account rule (a string's model ids already replaced): account state
+    becomes 0, false or "<redacted>" by its type; a usage or cost count, or a clock time as a number,
+    0; a model key's value its stand-in. A value already in angle brackets stays; the type is kept,
+    and so shapes.json."""
+    if isinstance(value, str):
+        if not value or (value.startswith("<") and value.endswith(">")):
+            return value
+        if state:
+            return "<redacted>"
+        return model_standin(value) if key in MODEL_KEYS else value  # an alias or an id MODEL_ID misses
+    if isinstance(value, bool):
+        return False if state else value
+    if isinstance(value, (int, float)) and key is not None \
+            and (state or USAGE_COUNT.search(key) or key in TIME_NUMBERS):
+        return 0
+    return value
+PY
+}
+
+if (( ${#REDACT[@]} )); then
+  python3 - "${REDACT[@]}" < <(account_rule; cat <<'PY'
+import json, pathlib, sys
+
+def redact(value, key=None, state=False):
+    state = held(key, state)
+    if isinstance(value, dict):
+        return {models(k): redact(v, k, state) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v, key, state) for v in value]
+    return account(models(value) if isinstance(value, str) else value, key, state)
+
+# The layouts a recording is written in: this script's own (sorted keys; indent 2 for a .json file)
+# and the CLI's stream-json (compact, in the CLI's key order).
+LAYOUTS = ({"sort_keys": True}, {"separators": (",", ":"), "ensure_ascii": False}, {"ensure_ascii": False},
+           {"indent": 2, "sort_keys": True}, {"indent": 2, "ensure_ascii": False})
+
+def rewrite(text):
+    """text (one JSON document) under the account rule, in its own layout; None if no layout
+    writes it back unchanged."""
+    data = json.loads(text)
+    body = text.rstrip("\n")
+    for layout in LAYOUTS:
+        if json.dumps(data, **layout) == body:
+            return json.dumps(redact(data), **layout) + text[len(body):]
+    return None
+
+failed = 0
+for name in sys.argv[1:]:
+    path = pathlib.Path(name)
+    text = path.read_text(encoding="utf-8")
+    units = text.splitlines(keepends=True) if path.suffix == ".jsonl" else [text]
+    out = [u if not u.strip() else rewrite(u) for u in units]
+    if any(u is None for u in out):
+        print(f"cli-fixture-record: {name}: a JSON layout this script does not write; left as it was",
+              file=sys.stderr)
+        failed = 1
+        continue
+    new = "".join(out)
+    if new != text:
+        path.write_text(new, encoding="utf-8")
+    print(f"cli-fixture-record: {name}: {'redacted' if new != text else 'unchanged'}", file=sys.stderr)
+sys.exit(failed)
+PY
+)
+  exit $?
+fi
 
 CLI="${CLAUDE_CLI_BIN:-claude}"
 command -v "$CLI" >/dev/null 2>&1 || { echo "cli-fixture-record: '$CLI' not found on PATH" >&2; exit 1; }
@@ -165,7 +277,7 @@ if [[ -n "$KEEP_RAW" ]]; then
 fi
 
 DEST="$OUT_ROOT/$VERSION"
-python3 - "$HOME_DIR" "$WORK_DIR" "$SESSION" "$RAW" "$DEST" <<'PY'
+python3 - "$HOME_DIR" "$WORK_DIR" "$SESSION" "$RAW" "$DEST" < <(account_rule; cat <<'PY'
 import json, os, pathlib, re, sys
 
 home, cwd, session, raw, dest = sys.argv[1:6]
@@ -189,19 +301,6 @@ KEEP = {"type", "subtype", "role", "hookEvent", "hookName", "hook_event_name", "
         "resolvedModel", "promptCacheRequested", "speed", "status", "decision", "reasonType", "ruleSource",
         "kind", "commandMode", "requestShape"}
 MARKERS = re.compile(r"^(fixture-plain-stdout|fixture-additional-context)-[A-Za-z]+\n?$")
-# Numbers that tell an account's usage (token, request and cost counts) or the recording's clock.
-USAGE_COUNT = re.compile(r"(tokens|Tokens|_usd|_requests)$")
-TIME_NUMBERS = {"nextFireAt"}
-# A model id, as a model key's value or inside any string, becomes one stand-in per distinct model
-# (<MODEL>, then <MODEL_2>, ...); a CLI marker such as "<synthetic>" stays.
-MODEL_KEYS = {"model", "requestedModel", "resolvedModel"}
-MODEL_ID = re.compile(r"\bclaude-(?:\d[\w.-]*?-)?(?:opus|sonnet|haiku|instant)[\w.\[\]-]*")
-MODELS = {}
-
-def model_standin(model):
-    if model not in MODELS:
-        MODELS[model] = "<MODEL>" if not MODELS else f"<MODEL_{len(MODELS) + 1}>"
-    return MODELS[model]
 
 CWD_SLUG = re.sub(r"[^A-Za-z0-9]", "-", cwd)
 AGENT_IDS = sorted({p.stem[len("agent-"):] for p in projects.glob("**/agent-*.jsonl")}, key=len, reverse=True)
@@ -214,7 +313,7 @@ def scrub(s):
     s = UUID.sub("<UUID>", s)
     s = TS.sub("<TIMESTAMP>", s)
     s = API_ID.sub("<ID>", s)
-    return MODEL_ID.sub(lambda m: model_standin(m.group(0)), s)
+    return models(s)
 
 # A task-notification keeps its tags, its ids (placeholders), its status and a scrubbed output-file
 # path; the text of every other tag is redacted.
@@ -233,26 +332,24 @@ def notification(s):
     inner = s[len("<task-notification>"):s.rindex("</task-notification>")]
     return "<task-notification>" + NOTIFICATION_TAG.sub(tag, inner) + "</task-notification>"
 
-def clean(value, key=None):
+def clean(value, key=None, state=False):
+    state = held(key, state)
     if isinstance(value, dict):
-        return {scrub(k): clean(v, k) for k, v in value.items()}
+        return {scrub(k): clean(v, k, state) for k, v in value.items()}
     if isinstance(value, list):
-        return [clean(v, key) for v in value]
+        return [clean(v, key, state) for v in value]
     if isinstance(value, str):
         s = scrub(value)
         if s.startswith("<task-notification>") and s.rstrip().endswith("</task-notification>"):
             return notification(s)
-        if key in MODEL_KEYS and s and not s.startswith("<"):  # an alias or an id MODEL_ID misses
-            return model_standin(s)
+        if state or key in MODEL_KEYS:  # account state, or a model key's value: the account rule
+            return account(s, key, state)
         if not s or key in KEEP or MARKERS.match(s) or (key == "command" and CLI_COMMAND_LABEL.match(s)):
             return s
         if s != value and not re.search(r"\s", s):  # an id or a path, its machine parts replaced
             return s
         return "<redacted>"
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and key is not None \
-            and (USAGE_COUNT.search(key) or key in TIME_NUMBERS):
-        return 0  # a usage or cost count, or a clock time as a number: 0 keeps its shape
-    return value
+    return account(value, key, state)  # a usage or cost count, or a clock time as a number: 0
 
 def wanted(rec):
     t = rec.get("type")
@@ -307,6 +404,7 @@ print(f"cli-fixture-record: transcript {n_main} records, subagent {n_sub} record
 if not n_main and not events:
     sys.exit(1)
 PY
+)
 
 python3 "$REPO/tests/cli_shapes.py" shape "$DEST" > "$DEST/shapes.json"
 printf '%s\n' "$VERSION" > "$OUT_ROOT/CURRENT"
