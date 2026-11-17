@@ -23,6 +23,8 @@ source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HO
 
 Failures are advisory and never block DEV. No blast-radius-map (BA ran MICRO/SMALL tier): the script exits `status=skipped`; report it and stop. Non-zero exit: report `{"status": "failed", "task_id": "<task_id>", "error_detail": "<stderr>"}`.
 
+**Tools (`policies/tool-policy.v1.json`).** Beside your row's file and command tools you may use the read-only and bookkeeping tools every role's row names: Read, Grep and Glob; your own task list (TodoWrite, or TaskCreate, TaskGet, TaskList and TaskUpdate where the CLI offers those); and, on your own background jobs, TaskOutput (BashOutput) and TaskStop (KillShell). ToolSearch loads a deferred tool's schema only; that tool's call is judged by your row.
+
 ## Output Artifacts
 
 Under `.claude/dev-registry/{task_id}/graphify/`: `graphify-run.json` on every path (schemas/graphify-run.v1.json) and, only when the status is ok or degraded, `focused-subgraph.json` (schemas/graphify-focused-subgraph.v1.json). The context file is read, never written.

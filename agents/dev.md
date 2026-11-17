@@ -24,6 +24,8 @@ The orchestrator's instructions, the context JSON and the BA spec are absolute t
 
 ---
 
+**Tools (`policies/tool-policy.v1.json`).** Beside your row's file and command tools you may use the read-only and bookkeeping tools every role's row names: Read, Grep and Glob; your own task list (TodoWrite, or TaskCreate, TaskGet, TaskList and TaskUpdate where the CLI offers those); and, on your own background jobs, TaskOutput (BashOutput) and TaskStop (KillShell). ToolSearch loads a deferred tool's schema only; that tool's call is judged by your row.
+
 ## Input Format
 
 Read your inputs from the file paths the orchestrator provides; do not expect inline context. **First action**: read all of these completely before implementing anything:
