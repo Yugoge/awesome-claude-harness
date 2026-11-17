@@ -23,6 +23,10 @@ source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HO
 
 Failures are advisory and never block DEV. No blast-radius-map (BA ran MICRO/SMALL tier): the script exits `status=skipped`; report it and stop. Non-zero exit: report `{"status": "failed", "task_id": "<task_id>", "error_detail": "<stderr>"}`.
 
+**Tools (`policies/tool-policy.v1.json`).** Beside your row's file and command tools you may use the read-only and bookkeeping tools every role's row names: Read, Grep and Glob; your own task list (TodoWrite, or TaskCreate, TaskGet, TaskList and TaskUpdate where the CLI offers those); and, on your own background jobs, TaskOutput (BashOutput) and TaskStop (KillShell). ToolSearch loads a deferred tool's schema only; that tool's call is judged by your row.
+
 ## Output Artifacts
 
 Under `.claude/dev-registry/{task_id}/graphify/`: `graphify-run.json` on every path (schemas/graphify-run.v1.json) and, only when the status is ok or degraded, `focused-subgraph.json` (schemas/graphify-focused-subgraph.v1.json). The context file is read, never written.
+
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace drafts in `/tmp/claude-scratch/graphify/` and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): `graphify-run.json` and `focused-subgraph.json` under `.claude/dev-registry/` (gates read them); any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.

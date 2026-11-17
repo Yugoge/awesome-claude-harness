@@ -370,6 +370,8 @@ Every message is surfaced under CP-1 (Phase 8).
 - The push-gate write fails: log a warning. The commit stands, but `/commit` must be re-run to regenerate the token before `/push` succeeds.
 - No files remain after exclusions: print `Nothing to commit after exclusions.` and exit 0.
 
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace drafts in `/tmp/claude-scratch/changelog-analyst/` and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): the artifacts you write under `docs/dev/` (`commit-qa-report-*.md`, `close-report-*.md` annotations, every JSON report; a top-level `docs/dev/` markdown draft outside the artifact name families is rewritable) and the `/tmp/agentic-commit/` locks; any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
+
 ---
 
 ## Structured Final Status Output
