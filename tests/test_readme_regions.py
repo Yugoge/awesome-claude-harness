@@ -55,14 +55,18 @@ gen = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = gen
 _spec.loader.exec_module(gen)
 
-(FIGURE_A, URL), (FIGURE_B, _URL_B) = gen.CITED_FIGURES[:2]
+# The README cites no outside figure today (gen.CITED_FIGURES is empty), so the cited-figure rule is exercised
+# with a sample declaration of the test's own: `cited_readme` declares it and puts the citation into the prose.
+FIGURE_A, FIGURE_B, URL = "37,623", "12.6", "https://example.org/pdf/a-study"
+SAMPLE_CITED = ((FIGURE_A, URL), (FIGURE_B, URL))
+NO_CITATION = "It cites no outside figure, so it\nhas no source link."
+CITATION = f"A study of {FIGURE_A} pull requests waited a median of {FIGURE_B}\nhours ([source]({URL}))."
 GLYPH_IMG = ('<p align="center"><a href="x.txt"><img src=".github/assets/guard-hero.svg" width="720" '
              'alt="the hero"></a></p>')
 
 README_SKELETON = f"""# A harness
 
-Intro paragraph with no number in it. A study of {FIGURE_A} pull requests waited a median of {FIGURE_B}
-hours ([source]({URL})).
+Intro paragraph with no number in it. {NO_CITATION}
 
 1. First step.
 2. Second step.
@@ -1058,10 +1062,33 @@ def numbers(text: str, doc: str = "readme") -> list[str]:
     return gen.assert_no_hand_typed_numbers(text, doc)
 
 
-def test_the_declared_figures_and_their_source(readme_text, status_text):
-    assert dict(gen.CITED_FIGURES) == {"37,623": "https://arxiv.org/pdf/2609.17598", "12.6": "https://arxiv.org/pdf/2609.17598"}
-    assert numbers(readme_text) == []  # the cited figures pass, the regions' own numbers are not read
+@pytest.fixture
+def cited_readme(readme_text, monkeypatch):
+    """The scratch README with the sample citation in its prose, and the sample declared for the test's duration."""
+    monkeypatch.setattr(gen, "CITED_FIGURES", SAMPLE_CITED)
+    assert readme_text.count(NO_CITATION) == 1
+    return readme_text.replace(NO_CITATION, CITATION)
+
+
+def test_the_readme_declares_no_cited_figure(readme_text, status_text):
+    """The owner removed the README's "Why this exists" section and every outside source it cited, so nothing is
+    declared; the rule stays and is exercised below with the test's own sample."""
+    assert gen.CITED_FIGURES == ()
+    assert "arxiv.org" not in REAL.readme.read_text(encoding="utf-8")
+    assert numbers(readme_text) == []  # the regions' own numbers are not read
     assert numbers(status_text, "status") == []  # the status page cites nothing, so it is not asked to
+
+
+def test_a_declared_figure_and_its_source_pass(cited_readme):
+    assert dict(gen.CITED_FIGURES) == {FIGURE_A: URL, FIGURE_B: URL}
+    assert numbers(cited_readme) == []  # the cited figures pass, the regions' own numbers are not read
+
+
+def test_an_undeclared_citation_fails(cited_readme, monkeypatch):
+    monkeypatch.setattr(gen, "CITED_FIGURES", ())
+    v = numbers(cited_readme)
+    assert [re.search(r"the numeral '([^']+)'", x).group(1) for x in v] == [FIGURE_A, FIGURE_B]
+    assert all("[hand-typed-number]" in x for x in v)
 
 
 def test_a_stray_numeral_in_the_prose_fails_naming_the_line_and_the_number(status_text):
@@ -1080,39 +1107,40 @@ def test_every_stray_numeral_is_reported_with_its_own_line(readme_text):
     assert all("line 3" in x for x in v)
 
 
-def test_a_cited_figure_passes_and_a_near_miss_does_not(readme_text):
-    assert numbers(readme_text) == []
-    near = readme_text.replace(FIGURE_A, "37,624")
+def test_a_cited_figure_passes_and_a_near_miss_does_not(cited_readme):
+    assert numbers(cited_readme) == []
+    near = cited_readme.replace(FIGURE_A, "37,624")
     v = numbers(near)
     assert any("'37,624'" in x and "[hand-typed-number]" in x for x in v)
     assert any("declared figure" in x and repr(FIGURE_A) in x for x in v)  # and the declared one is now stale too
 
 
-def test_a_cited_figure_is_no_exemption_on_the_status_page(status_text):
+def test_a_cited_figure_is_no_exemption_on_the_status_page(status_text, monkeypatch):
+    monkeypatch.setattr(gen, "CITED_FIGURES", SAMPLE_CITED)
     cited = status_text + f"\nA study of {FIGURE_A} pull requests ([source]({URL})).\n"
     v = numbers(cited, "status")
     assert len(v) == 1 and f"the numeral {FIGURE_A!r}" in v[0] and "[hand-typed-number]" in v[0]
 
 
-def test_a_stale_cited_figure_fails(readme_text):
-    gone = readme_text.replace(f"a median of {FIGURE_B}\nhours", "a median of some\nhours")
+def test_a_stale_cited_figure_fails(cited_readme):
+    gone = cited_readme.replace(f"a median of {FIGURE_B}\nhours", "a median of some\nhours")
     v = numbers(gone)
     assert len(v) == 1 and "[cited-figure]" in v[0] and repr(FIGURE_B) in v[0] and "no longer appears" in v[0]
-    in_code = readme_text.replace(f"a median of {FIGURE_B}", f"a median of `{FIGURE_B}`")
+    in_code = cited_readme.replace(f"a median of {FIGURE_B}", f"a median of `{FIGURE_B}`")
     assert any(repr(FIGURE_B) in x and "no longer appears" in x for x in numbers(in_code))  # code is not prose
 
 
-def test_a_missing_source_url_fails(readme_text):
-    v = numbers(readme_text.replace(URL, "https://example.org/x"))
+def test_a_missing_source_url_fails(cited_readme):
+    v = numbers(cited_readme.replace(URL, "https://example.org/x"))
     assert len(v) == 2 and all("is absent from the README" in x and URL in x for x in v)  # one per figure it sources
 
 
-def test_the_declared_figures_live_in_one_place(readme_text, monkeypatch):
+def test_the_declared_figures_live_in_one_place(cited_readme, monkeypatch):
     monkeypatch.setattr(gen, "CITED_FIGURES", gen.CITED_FIGURES + (("99", "https://example.org/nine"),))
-    v = numbers(readme_text)
+    v = numbers(cited_readme)
     assert any("'99'" in x and "https://example.org/nine" in x and "is absent" in x for x in v)
     assert any("'99'" in x and "no longer appears" in x for x in v)
-    assert numbers(readme_text + "\nSee https://example.org/nine: 99 cases.\n") == []
+    assert numbers(cited_readme + "\nSee https://example.org/nine: 99 cases.\n") == []
 
 
 @pytest.mark.parametrize("snippet", [
