@@ -476,3 +476,106 @@ def test_a_read_in_the_strict_shape_still_passes(sandbox, command):
     cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
     r = run(sandbox, SAFETY, cmd)
     assert r.returncode == 0, (cmd, r.stderr)
+
+
+# OB-L13 verifier round 4: the strict shape trusted a command word by its basename, prefix assignments and env
+# wrappers on readers, a git environment list without HOME, XDG_CONFIG_HOME or GIT_COMMON_DIR, a here-string or a
+# redirection that turns a read of the writer into a script, a background `&` or a `cd` before json.tool, an
+# argument write target (sort -o, uniq's second operand) and `git -c` keys with a third segment. Each is refused
+# through the real hook; {S} is the sandbox state dir.
+_DISPATCH = "{S}/claude-commit-dispatch-a.json"
+OB_L13_ROUND4_REFUSALS = [
+    # A1: a command word with a slash runs a file of the caller's choosing.
+    (f"./cat {_SENT}", "bulk-commit-sentinel-write"),
+    (f"/tmp/evil/cat {_SENT}", "bulk-commit-sentinel-write"),
+    (f"./git log -- {_W}", "bulk-commit-sentinel-write"),
+    (f"./python3 -m json.tool {_GRANT}", "commit-grant-raw-write"),
+    (f"/tmp/evil/python3 -m json.tool {_DISPATCH}", "commit-dispatch-attestation-write"),
+    # A2: an assignment or env wrapper in front of a reader.
+    (f"RIPGREP_CONFIG_PATH=/tmp/rgrc rg x {_W}", "bulk-commit-sentinel-write"),
+    (f"env RIPGREP_CONFIG_PATH=/tmp/rgrc rg x {_W}", "bulk-commit-sentinel-write"),
+    (f"PATH=/tmp/evil cat {_SENT}", "bulk-commit-sentinel-write"),
+    (f"PATH=/tmp/evil; cat {_SENT}", "bulk-commit-sentinel-write"),
+    (f"LD_PRELOAD=/tmp/e.so cat {_SENT}", "bulk-commit-sentinel-write"),
+    (f"env -C /tmp/evil ./cat {_SENT}", "bulk-commit-sentinel-write"),
+    (f"env -C /tmp/evil cat {_SENT}", "bulk-commit-sentinel-write"),
+    # A3: an environment variable that points git at another config.
+    (f"HOME=/tmp/h git diff --no-index {_W} /dev/null", "bulk-commit-sentinel-write"),
+    (f"XDG_CONFIG_HOME=/tmp/h git diff --no-index {_W} /dev/null", "bulk-commit-sentinel-write"),
+    (f"GIT_COMMON_DIR=/tmp/g git diff -- {_W}", "bulk-commit-sentinel-write"),
+    (f"env HOME=/tmp/h git diff --no-index {_W} /dev/null", "bulk-commit-sentinel-write"),
+    # A4: a here-string turns a read into a script.
+    (f"cat <<< 'python3 {_W}' > /tmp/x.sh; sh /tmp/x.sh", "bulk-commit-sentinel-write"),
+    # A5: a reader copies the writer, then it runs.
+    (f"cat {_W} > /tmp/w.py; python3 /tmp/w.py", "bulk-commit-sentinel-write"),
+    (f"git show HEAD:{_W} > scripts/w2.py; python3 scripts/w2.py", "bulk-commit-sentinel-write"),
+    (f"head -n 999 {_W} > scripts/w2.py; python3 scripts/w2.py", "bulk-commit-sentinel-write"),
+    (f"tail -n +1 {_W} > /tmp/w.py", "bulk-commit-sentinel-write"),
+    (f"grep '' {_W} > /tmp/w.py", "bulk-commit-sentinel-write"),
+    (f"jq -n --rawfile s {_W} '$s' > /tmp/w.py", "bulk-commit-sentinel-write"),
+    (f"cat {_W} | sort > /tmp/w.py", "bulk-commit-sentinel-write"),
+    # A6: a background job, a cd before json.tool.
+    (f"python3 /tmp/w.py & echo {_GRANT} > /tmp/q", "commit-grant-raw-write"),
+    (f"cd /tmp/evil && python3 -m json.tool {_GRANT}", "commit-grant-raw-write"),
+    # A7: an argument write target onto a sentinel name with a space.
+    ("cat /tmp/f | sort -o \"{S}/claude-bulk-commit-sentinel-x y-n.json\"", "bulk-commit-sentinel-write"),
+    ("sort /tmp/f -o \"{S}/claude-bulk-commit-sentinel-x y-n.json\"", "bulk-commit-sentinel-write"),
+    ("cat /tmp/g | sort -uo {S}/claude-commit-grant-a.json", "commit-grant-raw-write"),
+    ("cat /tmp/g | uniq - {S}/claude-commit-grant-a.json", "commit-grant-raw-write"),
+    (f"grep -rn write-bulk-commit-sentinel.py hooks | uniq - \"{{S}}/claude-bulk-commit-sentinel-a b-c.json\"",
+     "bulk-commit-sentinel-write"),
+    # A8: a git -c key with a third segment runs a program.
+    (f"git -c 'diff.renames.command=f(){{{{ python3 \"$1\"; }}}}; f' diff -- {_W}", "bulk-commit-sentinel-write"),
+    (f"git -c diff.context.command=sh diff -- {_W}", "bulk-commit-sentinel-write"),
+    (f"git -c color.diff.x=y -c diff.algorithm.textconv=python3 log -p -- {_W}", "bulk-commit-sentinel-write"),
+    (f"git -c log.x.command=sh diff -- {_W}", "bulk-commit-sentinel-write"),
+]
+
+
+@pytest.mark.parametrize("command,label", OB_L13_ROUND4_REFUSALS)
+def test_a_reader_outside_the_strict_word_shape_is_refused(sandbox, command, label):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 2 and label in r.stderr, (cmd, r.stderr)
+
+
+OB_L13_ROUND4_PASSES = [
+    f"LC_ALL=C grep -n argv {_W}",
+    f"git -c color.ui=never diff -- {_W}",
+    f"git -c diff.renames=true log --stat -- {_W}",
+    f"nice -n 5 cat {_W}",
+    f"ls {_SENT} 2>/dev/null",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND4_PASSES)
+def test_a_reader_in_the_strict_word_shape_still_passes(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 0, (cmd, r.stderr)
+
+
+def test_git_c_takes_only_exact_display_keys():
+    rules = _rules()
+    for setting in ("color.ui=never", "core.pager=less", "diff.renames=true", "diff.context=5", "log.decorate=short"):
+        assert rules._git_config_inert(setting), setting
+    for setting in ("diff.renames.command=sh", "diff.x.textconv=python3", "diff.context.external=sh",
+                    "log.x.command=sh", "core.pager=python3", "diff.external=sh", "safe.directory=*",
+                    "color.diff.meta.cmd=x", "include.path=/tmp/x"):
+        assert not rules._git_config_inert(setting), setting
+
+
+OB_L13_ROUND4_GRANT_RULE = [
+    "PATH=/tmp/evil; python3 -m json.tool /st/claude-commit-grant-a.json",
+    "a=(/st/claude-commit-grant-a.json); cp /tmp/g \"${a[0]}\"",
+    "a[0]=/st/claude-commit-grant-a.json; cp /tmp/g \"${a[0]}\"",
+    "a+=/st/claude-commit-grant-a.json; cp /tmp/g \"$a\"",
+    "cat /tmp/g | sort -uo /st/claude-commit-grant-a.json",
+    "cat /tmp/g | uniq - /st/claude-commit-grant-a.json",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND4_GRANT_RULE)
+def test_the_namespace_rule_refuses_a_name_outside_the_strict_word_shape(command):
+    import re
+    assert _rules().writes_namespace(command, re.escape("/st/claude-commit-grant-")), command

@@ -619,6 +619,8 @@ def writes_namespace(command, ns_re):
     """
     if not grep(ns_re, command):
         return False
+    if _arg_write_named(command, lambda text: grep(ns_re, text)):
+        return True
     if _relaxation_shape_ok(command, lambda text: grep(ns_re, text)):
         return _relaxed_writes_namespace(command, ns_re)
     one = command.replace("\n", " ")
@@ -705,9 +707,9 @@ def _shape_params(command):
 
 _GIT_PROGRAM_ENV_RE = re.compile(r"(^|[^A-Za-z0-9_])(GIT_EXTERNAL_DIFF|GIT_PAGER|PAGER|GIT_EDITOR|EDITOR|VISUAL"
                                  r"|GIT_SEQUENCE_EDITOR|GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_EXEC_PATH"
-                                 r"|GIT_CONFIG[A-Za-z0-9_]*|GIT_DIR|GIT_WORK_TREE|GIT_TEMPLATE_DIR|GIT_PROXY_COMMAND"
-                                 r"|GIT_DIFF_OPTS|LESSOPEN|LESSCLOSE|BASH_ENV|ENV)([^A-Za-z0-9_]|$)")
-"""Environment variables that make git (or a shell it starts) run a program of their choosing."""
+                                 r"|GIT_[A-Za-z0-9_]*|HOME|XDG_CONFIG_HOME|LESSOPEN|LESSCLOSE|BASH_ENV|ENV)([^A-Za-z0-9_]|$)")
+"""Environment variables that make git (or a shell it starts) run a program of their choosing, or read a config
+(HOME, XDG_CONFIG_HOME, any GIT_*: GIT_DIR, GIT_COMMON_DIR, GIT_WORK_TREE, GIT_CONFIG_* ...) that names one."""
 
 
 def _shape_compounds(command):
@@ -747,7 +749,10 @@ def _relaxation_shape_ok(command, carries):
     is in the command; no builtin that stores a word or runs text (set, read, mapfile, readarray, getopts, declare,
     typeset, local, export, readonly, let, trap, alias, eval, source, printf -v ...); no computed or unreadable
     command word; no positional, special, indirect or transforming expansion ($1, $@, $_, ${!v}, ${v@P}, BASH_*);
-    and, beside a git, no variable that makes git run a program. Fail closed: anything not read is not ok.
+    beside a git, no variable that makes git run a program or read another config; and the word conditions of
+    _shape_strict_ok (bare command words, no assignment or env wrapper, no directory change, no `&`, no write
+    target, no here-string carrying a name, nothing that runs a file beside the writer script's name). Fail closed:
+    anything not read is not ok.
     """
     if _SHAPE_HISTORY_RE.search(_unquoted_single(command)):
         return False
@@ -782,6 +787,170 @@ def _relaxation_shape_ok(command, carries):
             return False
     if re.search(r"(^|[^A-Za-z0-9_])git([^A-Za-z0-9_]|$)", command) and _GIT_PROGRAM_ENV_RE.search(command):
         return False
+    try:
+        return _shape_strict_ok(command, carries, sites)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_SHAPE_ENV_OK_RE = re.compile(r"LC_[A-Z]+|LANG|TZ|NO_COLOR|TERM")
+"""The only assignments the strict shape takes: each changes how a command prints, never what it runs or reads."""
+_SHAPE_ENV_SENSITIVE_RE = re.compile(
+    r"PATH|HOME|IFS|ENV|BASH_ENV|CDPATH|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|TMPDIR|PAGER|EDITOR|VISUAL|MANPAGER"
+    r"|POSIXLY_CORRECT|(LD|PYTHON|PERL|RUBY|NODE|GIT|XDG|RIPGREP|GREP|LESS|JQ|SSH|GNUPG|GPG)[A-Z0-9_]*"
+    r"|.*(PATH|DIR|HOME|CONFIG|OPTS|OPTIONS|PROXY|_proxy)[A-Za-z0-9_]*", re.IGNORECASE)
+"""Variables a standalone assignment (`X=v; cmd`) may change for a later command when already exported: one of these
+takes the command out of the strict shape. Any other standalone assignment stays in the shell."""
+_SHAPE_WRAPPERS = frozenset({"nice", "nohup", "timeout", "command", "xargs", "sudo", "setsid", "env"})
+"""Wrappers that run their command as named (env only with no option)."""
+_SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
+"""A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
+_SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
+_GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
+                 "--config-env")
+_SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
+                              r"|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|tclsh|wish|expect|make|[gmn]?awk|sed"
+                              r"|gsed|exec|source|\.|eval|xargs|parallel|watch|script|su|builtin|strace|ltrace)")
+"""Commands that run a file or text they are handed: beside a mention of the writer script, the shape refuses them."""
+
+
+def _shape_scripts(command):
+    """Every script in the text: the top one, payloads, substitutions and compound bodies; None when unparsed."""
+    try:
+        from lib.shell_parse import parse, active_parts, Compound, _nested_scripts
+        top = parse(command)
+        if top.error is not None:
+            return None
+        stack, seen, out = [top] + list(_nested_scripts(top)), set(), []
+        while stack:
+            script = stack.pop()
+            if id(script) in seen or not hasattr(script, "items"):
+                continue
+            seen.add(id(script))
+            out.append(script)
+            stack.extend(_nested_scripts(script))
+            for pl, _sep in script.items:
+                for stage in pl.stages:
+                    if isinstance(stage, Compound):
+                        stack.extend(b for b in stage.body if hasattr(b, "items"))
+                        for w in list(stage.header) + [r.target for r in stage.redirects if r.target is not None]:
+                            stack.extend(p.body for p in active_parts(w.parts) if p.body is not None)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _arg_write_targets(res):
+    """The files a reader or filter writes through an argument: sort -o/--output (clustered or abbreviated), uniq's
+    second operand, tee's operands, git --output (any abbreviation) or -o. Unknown means a target."""
+    name, vals = res.name, [w.value() for w in res.args]
+    if any(v is None for v in vals):
+        return ["?"] if name in ("sort", "uniq", "tee") else []
+    out = []
+    if name == "tee":
+        out += [v for v in vals if not v.startswith("-")]
+    elif name == "sort":
+        k = 0
+        while k < len(vals):
+            v = vals[k]
+            if v == "--":
+                break
+            if v.startswith("--") and len(v) > 2:
+                key = v.split("=", 1)[0]
+                if "--output".startswith(key) and len(key) >= 3:
+                    out.append(v.split("=", 1)[1] if "=" in v else (vals[k + 1] if k + 1 < len(vals) else "?"))
+            elif v.startswith("-") and len(v) > 1 and "o" in v[1:]:
+                i = v.index("o", 1)
+                if not any(c in "kt" for c in v[1:i]):
+                    out.append(v[i + 1:] or (vals[k + 1] if k + 1 < len(vals) else "?"))
+            k += 1
+    elif name == "uniq":
+        ops, skip = [], False
+        for v in vals:
+            if skip:
+                skip = False
+            elif v in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
+                skip = True
+            elif v == "-" or not v.startswith("-"):
+                ops.append(v)
+        out += ops[1:]
+    elif name == "git":
+        for v in vals:
+            key = v.split("=", 1)[0]
+            if (key.startswith("--o") and "--output".startswith(key)) or key == "-o":
+                out.append("?")
+    return out
+
+
+def _arg_write_named(command, carries):
+    """A tee, sort -o, uniq second operand or git --output whose target names what the caller protects (or cannot
+    be read), whatever the shape: `sort -o "<sentinel with a space>"` and `uniq - <grant>` write it."""
+    for _site, res in _parsed_sites(command) or ():
+        if any(t == "?" or carries(t) for t in _arg_write_targets(res)) and carries(command):
+            return True
+    return False
+
+
+def _shape_strict_ok(command, carries, sites):
+    """The strict shape's conditions on the words themselves (see _relaxation_shape_ok).
+
+    Every command word is a bare name or /bin/<name> or /usr/bin/<name> (`./cat`, `/tmp/x/python3` run a file of the
+    caller's choosing); no prefix assignment (or one handed to env) but LC_*, LANG, TZ, NO_COLOR, TERM, and no
+    standalone one to PATH, HOME, LD_*, PYTHON*, GIT_*, XDG_* or another variable a program reads, and no array,
+    subscripted or `+=` assignment; no
+    wrapper but nice, nohup, timeout, command, xargs, sudo, setsid and an option-less env; no cd, pushd, popd and no
+    git -C, --git-dir, --work-tree or other directory option; no background `&`; no heredoc or here-string whose body
+    names a protected name; no write target but /dev/null (a redirection, tee, sort -o, uniq's second operand, git
+    --output); a `git -c` only with an exact display key (_git_config_inert); and, when a word names the writer script,
+    no write target at all and no command that runs a file (an interpreter, a shell, sed, awk, make, find ...)."""
+    scripts = _shape_scripts(command)
+    if scripts is None or any(sep == "&" for sc in scripts for _pl, sep in sc.items):
+        return False
+    writer = any(n in command for n in BULK_NAMES[1:])
+    for site, res in sites:
+        c = site.cmd
+        heads = list(c.words[:1]) + ([res.head] if res.head is not None else [])
+        if any(w.value() is None or not _SHAPE_HEAD_RE.fullmatch(w.value()) for w in heads):
+            return False
+        for a in tuple(c.assignments) + tuple(res.assignments):
+            if _SHAPE_ENV_OK_RE.fullmatch(a.name or ""):
+                continue
+            if c.words or _SHAPE_ENV_SENSITIVE_RE.fullmatch(a.name or "PATH") or \
+                    not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=(?!\().*", a.word.text or "", re.S):
+                return False
+        for name, opts in res.wrappers:
+            if name not in _SHAPE_WRAPPERS or (name == "env" and opts):
+                return False
+        if res.name in _SHAPE_DIR_CHANGE:
+            return False
+        if res.name == "git":
+            for w in res.args:
+                v = w.value() or ""
+                if v in _GIT_DIR_OPTS or v.split("=", 1)[0] in _GIT_DIR_OPTS:
+                    return False
+                if not v.startswith("-"):
+                    break
+        for r in c.redirects:
+            body = r.hd.body if r.hd is not None else (r.target.text if r.op == "<<<" and r.target is not None else None)
+            if body is not None and (carries(body) or carries(re.sub(r"""[\\'"]""", "", body)) or "$'" in body):
+                return False
+            if r.target is not None and r.writes() and r.target.value() != "/dev/null":
+                return False
+        if any(t != "/dev/null" for t in _arg_write_targets(res)):
+            return False
+        if writer:
+            names = {res.name} | {n for n, _o in res.wrappers}
+            if any(n is not None and _SHAPE_RUNS_FILE.fullmatch(n) for n in names) or \
+                    any("/" in (w.value() or "/") for w in heads) or \
+                    (res.name == "find" and any(w.value() in _BULK_FIND_ACTIONS for w in res.args)):
+                return False
+    if writer:
+        try:
+            from lib.shell_parse import parse, write_targets
+            if any(t.path != "/dev/null" for t in write_targets(parse(command))):
+                return False
+        except Exception:  # noqa: BLE001
+            return False
     return True
 
 
@@ -974,18 +1143,27 @@ def _bulk_standalone(w):
     return v.rsplit("/", 1)[-1].startswith(BULK_NAMES[0]) and not any(c in v for c in " \t\n")
 
 
-_GIT_INERT_CONFIG_RE = re.compile(r"(color|log|format|advice|i18n|column|status|blame|grep|pretty|diff\.(color|"
-                                  r"renames|noprefix|mnemonicprefix|algorithm|indentheuristic|statgraphwidth|context|"
-                                  r"interhunkcontext|relative|submodule|ignoresubmodules|dirstat|wserrorhighlight))"
-                                  r"(\.[^=]*)?(=.*)?|core\.(quotepath|abbrev)(=.*)?|core\.pager=(less|cat|more)|safe\.directory=.*",
-                                  re.IGNORECASE)
-"""`git -c` settings that only change how git prints: any other (diff.external, core.pager, core.editor,
-core.hooksPath, core.sshCommand, include.path, alias.*, a filter or a credential helper ...) can make git run a
-program, so beside a protected name it is refused."""
+_GIT_INERT_CONFIG_RE = re.compile(
+    r"color\.[a-z]+(=(never|always|auto|true|false))?"
+    r"|core\.pager=(cat|less|more)"
+    r"|core\.(quotepath|abbrev)(=[a-z0-9]+)?"
+    r"|log\.(abbrevcommit|decorate|follow|showroot|date)(=[a-z0-9:_-]*)?"
+    r"|diff\.(renames|context|algorithm|colormoved|colormovedws|noprefix|mnemonicprefix|relative|interhunkcontext"
+    r"|indentheuristic|statgraphwidth|suppressblankempty|wserrorhighlight)(=[a-z0-9,_-]*)?"
+    r"|grep\.(patterntype|linenumber|column|extendedregexp|fullname)(=[a-z0-9_-]*)?"
+    r"|status\.(showuntrackedfiles|short|branch|relativepaths|aheadbehind)(=[a-z0-9_-]*)?"
+    r"|advice\.[a-z]+(=(true|false))?", re.IGNORECASE)
+"""The exact `git -c` keys that only change how git prints: two segments, a value with no dot or path. Any other
+setting (diff.external, diff.<driver>.textconv or .command, core.pager=<program>, core.editor, core.hooksPath,
+core.sshCommand, include.path, alias.*, a filter or a credential helper, safe.directory ...) can make git run a
+program or read another repository's config, so beside a protected name it is refused."""
+_GIT_RUN_KEY_RE = re.compile(r"[^=]*\.(command|textconv|external|driver|program|cmd|helper|path)(=.*)?", re.IGNORECASE)
 
 
 def _git_config_inert(setting):
-    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting))
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting)) and \
+        not _GIT_RUN_KEY_RE.fullmatch(setting)
+
 
 
 def _git_runs_bulk_name(res):
@@ -1038,6 +1216,8 @@ def bulk_sentinel_decision(cmd):
     compound, a function or a builtin capture next to a name is refused even when it only reads
     (`for f in hooks/*.py; do grep -l write-bulk-commit-sentinel.py "$f"; done`).
     """
+    if _arg_write_named(cmd, _bulk_mentions):
+        return 'DENY'
     if _relaxation_shape_ok(cmd, _bulk_mentions):
         return _relaxed_bulk_sentinel_decision(cmd)
     verdict = _base_bulk_sentinel_decision(cmd)
