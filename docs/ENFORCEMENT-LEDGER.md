@@ -348,7 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
-| S-014 | permission-layer-read-only-allow-and-its-ask-guards | advisory | exercised | component-tested | settings.json:81 @b0e51172 | tests/test_permission_readonly_allow.py | component-tested |
+| S-014 | permission-layer-read-only-allow-and-its-ask-guards | advisory | exercised | component-tested | settings.json:81 @939d8d64 | tests/test_permission_readonly_allow.py | component-tested |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -363,9 +363,9 @@ no per-rule budget exists.
   not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
   under `--codex`, and `subagentstop-codex-enforce.py` (R-022, run by the producer gate H-092)
   requires the ledger entry that call's PostToolUse (H-050) writes.
-  Since `@b0e51172` (OB-L07, S-014) `permissions.ask` carries six rules; none is a backstop for
-  this class: they only keep the new `git -C` and `rg --files` allow entries from reaching another
-  verb or option. `git -C <dir> push --force` and `git -C <dir> reset --hard` still match no deny
+  Since `@939d8d64` (OB-L07, S-014) `permissions.ask` carries nineteen rules; none is a backstop for
+  this class: they only keep the new `git -C`, `rg --files` and `make -n` allow entries from reaching
+  another verb, option or evaluation. `git -C <dir> push --force` and `git -C <dir> reset --hard` still match no deny
   and ask because no allow entry covers them.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
@@ -380,20 +380,32 @@ no per-rule budget exists.
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
-- **S-014** — OB-L07: `settings.json @b0e51172` `permissions.allow` lets these read-only commands run
+- **S-014** — OB-L07: `settings.json @939d8d64` `permissions.allow` lets these read-only commands run
   without a prompt: `gh pr view|list|diff|checks`, `gh run view`, `gh issue view` (`Bash(<verb>:*)`),
   `git -C <dir> diff|log|show|status` (`Bash(git -C * <verb>)` and `Bash(git -C * <verb> *)`),
   `Bash(make -n:*)` and `Bash(rg --files:*)`. Test runners, builds and gh's mutating verbs have no entry,
   by the owner's decision. The CLI evaluates deny, then ask, then allow, and a `*` matches any text,
   spaces included (code.claude.com/docs/en/permissions.md), so `permissions.ask` guards the allow entries:
   `Bash(git -C * * <verb>*)` for each verb asks whenever the directory's `*` would hold a space (an
-  inserted `push --force origin`, `-c core.pager=...`, `--exec-path=...`), `Bash(git -C *--output*)`
-  asks for a file write, and `Bash(rg *--hostname-bin*)` asks for the one rg option that runs a
-  program under `--files` (ripgrep 14.1.0). Proof layer: the test models the documented matching and
+  inserted `push --force origin`, `-c core.pager=...`, `--exec-path=...`). A rule sees the text before
+  the shell expands it, so a one-word glob slips past that guard: `git -C [ap]* log --force main`
+  expanded to `git -C a push log --force main` and force-pushed unasked at `@b0e51172`. The asks
+  `Bash(<cmd> *\**)`, `Bash(<cmd> *?*)` and `Bash(<cmd> *[*)` for `git -C`, `rg` and `make` (a literal
+  `*`, `?` or `[`) close that; the CLI itself asks for brace expansion, `$NAME` other than `$HOME`,
+  backticks, `$( )` and extglob groups, and `~` and `$HOME` expand to the home directory. So a `git -C`
+  command runs unasked only when its directory is one word with no glob or other expansion (and no `*`,
+  `?` or `[` appears anywhere in it). `Bash(git -C *--output*)` asks for a file write;
+  `Bash(rg *--hostname-bin*)` asks for the one rg option that runs a program under `--files` (ripgrep
+  14.1.0). `make -n` runs what make evaluates itself (GNU make 4.3, measured): `--eval` and its
+  abbreviations, `-E`, a command-line `V:=$(shell ...)` and a makefile read with `-f`/`--file`/
+  `--makefile` (stdin included), so `Bash(make *--e*)`, `Bash(make *-*E*)` (rules match case
+  sensitively, measured), `Bash(make *$*)` and `Bash(make *-*f*)` ask. Cost: `rg --files -g '*.py'`
+  asks, as it did before. Proof layer: the test models the documented matching and
   pins the installed CLI's own decisions (2.1.326, `claude -p` driven offline against a local stand-in
   for the Messages API, no hooks, no-op shims on PATH); the measurement is not `host-observed` in this
   ledger's sense because no hook is involved, and the allow side admits, not prevents. Residual:
-  `make -n` still runs a Makefile's `$(shell ...)`, `+` lines and `--eval` text, and `git -C <dir>`
+  `make -n` still runs the project Makefile's own `$(shell ...)`, `+` and `$(MAKE)` recipe lines (a
+  Makefile the agent can write), and `git -C <dir>`
   reads `<dir>`'s repository config (pager, fsmonitor, diff drivers), the same class the existing
   `Bash(bash:*)`, `Bash(git log:*)` and `Bash(git diff:*)` entries already admit.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
