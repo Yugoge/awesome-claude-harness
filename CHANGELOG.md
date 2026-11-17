@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gated here.
 
 ### Fixed
+- **G1's order rule (R17) reads every way an agent's end comes back.** `hooks/pretool-obligation-gate.py`
+  took a dispatch as returned only by its own Agent call's ok result. A close QA cut off and resumed
+  with SendMessage (its end: the task-notification naming it), or cut off after it had stopped by
+  itself (its end: its own transcript's stop and SubagentStop record), refused `/commit`'s planning
+  dispatch with `producer_not_stopped ... which has not returned a result` while its CLOSE: YES report
+  was on disk; a background launch, whose result comes back while the agent runs, counted as
+  returned at once. The rule now takes an agent as stopped when its latest end (its Agent call's
+  result, a completed task-notification, a /restart journal that saw the response, or a recorded
+  stop of a cut agent that was not resumed) follows its latest start (the dispatch, each SendMessage
+  resume); a running, resumed or failed agent stays refused. The CLI records it reads are recorded by
+  `scripts/cli-fixture-record.sh` (now ten runs). Covered by `hooks/tests/test_obligation_gate_returns.py`.
 - **The worktree guard can no longer lock a session.** `hooks/pretool-worktree-guard.sh`
   runs before every tool and exited 2 while any agent worktree was behind the main
   branch. That blocked the `git worktree remove` it recommended, and every Read,

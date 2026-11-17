@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 182
+- **Total files**: 183
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -99,6 +99,7 @@
 - `test_now_unreferenced_p5_p9.py` - - posttool-subagent-track.py's bookmark marker. P5 moved Gate 4 to the transcript, so
 - `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
 - `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
+- `test_obligation_gate_returns.py` - back, not only its own Agent call's result
 - `test_obligation_templates.py` - Two template forms exist: literal ``<obligation v="1">`` blocks, and the
 - `test_one_process_gates.py` - - The runner keeps each rule's decision: a rule runs as its own hook would run alone,
 - `test_orchestrator_gate_in_flight.py` - P9 reworded the gate's refusals (the Bash limit's and the non-whitelisted limit's first line, the
