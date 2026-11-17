@@ -82,6 +82,8 @@ UNRELATED = [
     "cat docs/session-notes.md",
     'python3 -c "import requests; s = requests.Session()"',
     "git status",
+    'BASE_DIR="$(harness_state_dir)/agentic-commit/push/${REPO_HASH}"',
+    'echo "$(cd /opt/x; ls sessions)" > out.txt',
 ]
 
 # Every read, write or run of the file, every mention outside a pattern or message, and every glob or expansion

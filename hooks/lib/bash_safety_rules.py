@@ -1459,8 +1459,8 @@ def _sd_allowed(site):
 
 
 def _sd_glob_hit(word):
-    """True when a word with a glob or an expansion can resolve to the file: one path component matches the name
-    and the component's written text carries a piece of it."""
+    """True when a word with a glob or an expansion can resolve to the file: one path component that is not a bare
+    expansion matches the name, and the component's written text carries a piece of it."""
     import fnmatch
     if all(p.kind == "lit" for p in word.parts):
         return False
@@ -1485,7 +1485,7 @@ def _sd_glob_hit(word):
     comps.append(("".join(pat), "".join(frag)))
     for pattern, text in comps:
         low = sd_normalize(text)
-        if "*" in pattern or "?" in pattern or "[" in pattern:
+        if pattern.strip("*") and ("*" in pattern or "?" in pattern or "[" in pattern):  # not a bare expansion
             if fnmatch.fnmatchcase(SD_NAME, pattern.lower()) and any(f in low for f in SD_FRAGMENTS):
                 return True
     return False
@@ -1554,7 +1554,8 @@ def session_dirs_rule(command):
                 raw[j] = "\x01"
     if reason is None and SD_NAME in sd_normalize("".join(raw)):
         reason = f"{SD_NAME} stands where it is read, written or run"
-    if reason is None and broken and re.search(r"(sess|_dir|dirs)\S*[*?\[{]|[*?\[{]\S*(sess|_dir|dirs)", low):
+    if reason is None and broken and re.search(r"(sess|dirs)[^\s;&|]*([*?\[]|\{[^}\s]*,)|([*?\[]|\{[^}\s]*,)[^\s;&|]*"
+                                                r"(sess|dirs)", command.lower()):
         reason = f"the command cannot be parsed and a glob in it can resolve to {SD_NAME}"
     if reason:
         refuse(f"BLOCKED: {SD_NAME} is never read, written or executed by an agent", f"Command: {command}",
