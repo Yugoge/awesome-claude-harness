@@ -369,8 +369,14 @@ no per-rule budget exists.
   asks the requirement round, a Stop whose last main-agent text (the Stop payload's `last_assistant_message`, else
   the span's last assistant text) ends with `?` or `？` on its last non-empty line is the gap `<command>: the turn ends
   with a question in text; ask it with AskUserQuestion, or end without it.` `/spec` is checked for this gap only and
-  stays out of `GATED_COMMANDS`; a `/close` span is not checked. The gate still writes nothing; asking with
-  AskUserQuestion, or ending without the question, clears it.
+  stays out of `GATED_COMMANDS`; a `/close` span is not checked. The last line is not counted when its question
+  sentence (the text after its last `: `, else the whole line; one holding no word character never matches) was
+  already asked or recorded in the span: it equals a `questions[].question` of a main-agent AskUserQuestion of the
+  span whose tool_result came back ok (an owner's rejection or an error asks nothing), or it appears verbatim in a
+  project file of the span's write set (`command_span.write_set`, no tree excluded: an Edit-family target with an
+  ok result, or a path a Bash command names, such as `spec-write.py --spec`, whose file changed since the span
+  opened). A previous span's AskUserQuestion or write never counts. The gate still writes nothing; asking with
+  AskUserQuestion, recording the question in a file, or ending without the question, clears it.
 - **S-010** — P13-1 R1 (D18): the code-token lint in `requirement_round.check_round` refuses a round whose question,
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level

@@ -2,7 +2,8 @@
 the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook (``handle``) is
 the one writer of the owner's answers. ``asked`` is the one "asked" predicate (close_rating's too): asked, never
 answered (D9b), so Skip, AFK, a denial or an error result count and record nothing. The checks G1 (``ask_first``),
-G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends_with_question``) decide by live here."""
+G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends_with_question``,
+``question_sentence``) decide by live here."""
 from __future__ import annotations
 
 import hashlib
@@ -363,3 +364,14 @@ def ends_with_question(text) -> bool:
     """R7: the last non-empty line of the turn's last main-agent text ends with "?" or a full-width one."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     return bool(lines) and lines[-1].endswith(("?", "？"))
+
+
+def question_sentence(text) -> str:
+    """R7: the question the last non-empty line of the turn's text asks: the text after its last ": ", else the
+    whole line, stripped; "" when there is no line or the sentence holds no word character (a bare "?")."""
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    _head, colon, tail = lines[-1].rpartition(": ")
+    sentence = (tail if colon else lines[-1]).strip()
+    return sentence if re.search(r"\w", sentence) else ""

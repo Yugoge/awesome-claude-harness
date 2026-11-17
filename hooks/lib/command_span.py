@@ -838,7 +838,7 @@ def _project_relative(raw: str, cwd: str, root: str, excluded=EXCLUDED_TREES) ->
     return None if excluded and rel.startswith(tuple(excluded)) else rel
 
 
-def _bash_named(command: str, cwd: str, root: str) -> set[str]:
+def _bash_named(command: str, cwd: str, root: str, excluded=EXCLUDED_TREES) -> set[str]:
     # A shell command's writes cannot be parsed (interpreters write from inside
     # code), so every path the text names counts: a run of path characters that
     # is a file inside the project now, or has a directory part and a dotted name.
@@ -846,7 +846,7 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     for token in _PATH_RUN.findall(command):
         if token in (".", "..") or token.startswith("-"):
             continue
-        rel = _project_relative(token, cwd, root)
+        rel = _project_relative(token, cwd, root, excluded)
         if rel is None:
             continue
         shaped = "/" in token and "." in os.path.basename(token).strip(".")
@@ -856,10 +856,14 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
 
 
 def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0,
-              excluded=EXCLUDED_TREES, stop_line: int | None = None, main_only: bool = False) -> WriteSet | None:
+              excluded=EXCLUDED_TREES, stop_line: int | None = None, main_only: bool = False,
+              named_excluded=EXCLUDED_TREES) -> WriteSet | None:
     """The project-relative files the transcript's own tool calls after
     ``start_line`` (and before ``stop_line``) wrote or named (TC-46), outside
     ``excluded`` (a caller asking which reports an agent wrote passes none);
+    the paths Bash commands name are held to ``named_excluded`` instead (the
+    bookkeeping trees unless the caller passes otherwise, as the R7 Stop gate
+    does to read a spec that spec-write.py wrote under docs/dev/);
     with ``main_only`` a subagent's own records (isSidechain) are left out.
     None when the transcript cannot be read."""
     root = os.path.normpath(str(project_dir))
@@ -891,5 +895,5 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
             if rel:
                 written.add(rel)
         elif name == "Bash" and isinstance(tool_input.get("command"), str):
-            named |= _bash_named(tool_input["command"], cwd, root)
+            named |= _bash_named(tool_input["command"], cwd, root, named_excluded)
     return WriteSet(written=frozenset(written), named=frozenset(named))

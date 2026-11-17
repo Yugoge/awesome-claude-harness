@@ -17,8 +17,9 @@ payload on stdin and decides, in order:
       (overnight.open_wakes), naming its id; a time-lock it cannot read
       blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
-  (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question; /spec has no
-      other gap); in a gated span the todo half and the command's predicate, each held to the
+  (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
+      ending in "?" whose question the span neither asked with an answered AskUserQuestion nor recorded
+      in a file it wrote; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
       command's text as the span loaded it (_loaded_lacks: a step or the
       close-rating question an update added or reworded after the session
       loaded its text is not asked of it; a cycle whose loaded text names or
@@ -790,11 +791,54 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
 
 def p_text_question(span, payload) -> list[str]:
     """R7 (D28): in a /spec or /dev-family span, a turn whose last main-agent text ends with a question asks it in
-    text; the one agent action that clears it is asking with AskUserQuestion, or ending without the question."""
+    text, unless that question was already asked or recorded in the span (_settled_question). The agent actions
+    that clear it: asking with AskUserQuestion (and getting an answer), recording the question in a file, or
+    ending without the question."""
     text = payload.get("last_assistant_message")
-    if not _lib_round().ends_with_question(span.last_text() if text is None else text):
+    text = span.last_text() if text is None else text
+    if not _lib_round().ends_with_question(text) or _settled_question(span, payload, text):
         return []
     return [f"{span.command}: the turn ends with a question in text; ask it with AskUserQuestion, or end without it."]
+
+
+_RECORD_LIMIT = 4 << 20  # a written file larger than this is not read for a recorded question
+
+
+def _settled_question(span, payload, text) -> bool:
+    """The question of the text's last line (requirement_round.question_sentence: after its last ": ", else the
+    whole line) is one the span already asked or recorded, so the line reports it rather than asks it:
+      asked     it equals a questions[].question of a main-agent AskUserQuestion of this span whose tool_result
+                came back ok (answered; the owner's rejection or an error asked nothing);
+      recorded  it appears verbatim in a project file the span wrote (command_span.write_set over every record
+                of the span, no tree excluded): an Edit-family target with an ok result, or a path the span's
+                Bash commands name (spec-write.py's --spec) whose file changed since the span opened.
+    A previous span's AskUserQuestion or write never counts."""
+    question = _lib_round().question_sentence(text)
+    if not question:
+        return False
+    for call in span.calls("AskUserQuestion"):
+        asked = call.input.get("questions")
+        if call.ok and isinstance(asked, list) and any(
+                isinstance(q, dict) and str(q.get("question") or "").strip() == question for q in asked):
+            return True
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+    found = command_span.write_set(span.transcript_path, root, span.start_line, excluded=(),
+                                   named_excluded=())
+    if found is None:
+        return False
+    opened = span.opened_at()
+    for rel, named in [(rel, False) for rel in sorted(found.written)] + [(rel, True) for rel in sorted(found.named)]:
+        path = Path(root) / rel
+        try:
+            info = path.stat()
+            if not path.is_file() or info.st_size > _RECORD_LIMIT \
+                    or named and (opened is None or info.st_mtime < opened):
+                continue
+            if question in path.read_text(encoding="utf-8", errors="replace"):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _lib_round():
