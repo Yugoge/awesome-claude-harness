@@ -1,92 +1,26 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: forbid branch / PR / worktree CREATION outside /dev-overnight.
+"""PreToolUse hook: refuse worktree creation on the Bash surface outside /dev-overnight.
 
-Policy (user directive 2026-06-04; the verbatim user directive is preserved in
-docs/dev/do-report-44e208af-b8b8-4266-a2ba-fcfc77f92d24.json, the sanctioned
-artifact location for non-English user-binding quotes):
-  Branch creation, pull-request creation, and worktree creation are forbidden by
-  default. A live /dev-overnight session is the always-on exception. In addition,
-  two human-authorized escape hatches are preserved (the user's explicit choice,
-  mirroring pretool-block-enterworktree.sh and pretool-git-privilege-guard.py):
-  /do consent and /allow grants.
+Refused: every `git worktree add` the command runs, in command position, inside
+a shell `-c` string, behind a wrapper or a git global option. Text that only
+mentions it (`echo git worktree add x`) runs nothing and passes. Creating a
+branch or a pull request is allowed; deleting or renaming a branch is refused as
+a direct ref mutation by pretool-bash-safety.sh and pretool-git-privilege-guard.py.
+The EnterWorktree tool is governed by pretool-block-enterworktree.sh.
 
-Scope: the Bash surface only. The EnterWorktree tool is governed by the companion
-hook pretool-block-enterworktree.sh (same bypass semantics, including the
-overnight exception); keeping the two surfaces in separate hooks avoids
-double-blocking EnterWorktree.
+Bypasses (any one allows):
+  1. a live /dev-overnight session   (lib.overnight.is_overnight_active)
+  2. /do consent                     (lib.allowlist.has_do_consent: main agent only)
+  3. an /allow grant                 (sentinel grant: main agent and subagent)
 
-Only the COMMAND token of each shell segment is classified — the first token
-after skipping leading env-var assignments (NAME=VALUE) and known wrappers
-(sudo, doas, env, xargs, time, nohup, setsid, stdbuf, ionice, command, builtin,
-nice). Text that merely MENTIONS the command as an argument (`echo git checkout
--b x`, `echo gh pr new`) is in argument position, never command position, so it
-is NOT a creation. Path-qualified forms like /usr/bin/git, leading env-var
-prefixes, and attached/clustered short options are all caught.
-
-Blocked Bash operations:
-  - git checkout -b/-B/--orphan/--guess <name>    (branch creation, incl. -bNAME)
-  - git switch  -c/-C/--create/--force-create/--orphan/--guess  (incl. -cNAME)
-  - git branch <name>  /  -c/-C/--copy            (branch creation)
-      list / delete / rename / upstream / info forms remain allowed.
-  - git worktree add ...                          (worktree creation)
-  - gh pr create / gh pr new ...                  (PR creation, flags interspersed)
-  - gh pr checkout <N>  (unless --detach)         (creates a local PR branch)
-      `-d` and abbreviated long options are no gh option: gh stops, nothing created.
-  - gh api repos/<o>/<r>/pulls  (POST)            (PR creation via the REST API)
-  - git stash branch <name>                       (branch from a stash)
-  - git fetch/pull <repo> <src>:refs/heads/<name> (refspec into a local branch)
-  - git update-ref refs/heads/<name> <sha>        (plumbing branch creation)
-Long-opt create flags are matched including git's unambiguous unique-prefix
-abbreviations (e.g. `git switch --cr`, `git checkout --or`). Command- and
-process-substitution boundaries (`$(...)`, `<(...)`, `>(...)`, `` `...` ``) are
-split so an inner creation command is classified on its own.
-
-Inherent limitations (a command-text guardrail CANNOT block these; they are
-intentionally out-of-scope — this is an AGENT SPEED-BUMP, not an adversarial
-sandbox, mitigated by the /do consent and /allow grant escape hatches):
-  - a creation command hidden in a quoted string passed to `eval`
-    (`eval "git checkout -b x"`): the quoted string is context-stripped before
-    tokenizing, so the inner command is never seen. A shell's `-c` string
-    (`sh -c "..."`, `bash -c "..."`) is not hidden: it is classified like the
-    command itself (lib.git_command_classifier.iter_shell_texts).
-  - user-defined git aliases (`git co` → checkout, etc.): the alias name is
-    opaque to a static token classifier.
-  - a creation command read from a file or from stdin rather than the argv.
-  - remote-branch creation via `git push <remote> <src>:refs/heads/x` is
-    intentionally NOT handled here because pretool-git-privilege-guard.py already
-    default-denies all agent `git push`.
-  - a quoted-subcommand / backslash-escape evasion (`git 'checkout' -b x`,
-    `\\git checkout -b x`): the quoted/escaped token is removed by _norm's
-    context-strip before tokenizing, so the inner command is never seen — same
-    class as the eval interpreter-string limit above.
-  - a wrapper that consumes its OWN value args before the command (e.g.
-    `nice -n 5 git checkout -b x`): _command_token_index skips wrappers but not
-    their value args, so the command token resolves to `5` and the segment is
-    not classified. Exotic and accepted — escape hatches cover the rare case.
-  - `git symbolic-ref HEAD refs/heads/x`: repoints HEAD but creates no branch
-    ref object (the branch materializes only on the first commit) — out of scope.
-  - `git init -b <name>`: creates a new repository, not a branch in the working
-    repo — out of scope.
-
-Bypass order (any one → allow):
-  1. live /dev-overnight session   (lib.overnight.is_overnight_active)
-  2. /do consent flag              (lib.allowlist.has_do_consent: main agent only)
-  3. /allow grant                  (sentinel grant: main + subagent)
-
-Coexistence
-  Purely additive. PreToolUse blocks if ANY hook exits 2, so this hook only ever
-  tightens — it never loosens an existing block.
-
-Exit codes
-  0 = allow, 2 = block (stderr shown to the agent).
+Exit codes: 0 = allow, 2 = block (stderr shown to the agent).
 
 Fails closed. An error the hook does not expect, a hooks/lib import that fails at
-module load included, refuses a Bash call that may create a branch, PR or
-worktree (exit 2, naming the hook and the error) unless one of the bypasses above
-is confirmed; it is not a policy refusal. A call that cannot create one
-(_may_create) and another tool's call still exit 0, so a broken hook does not
-refuse ordinary commands. Unreadable input (not a JSON object) is judged on its
-raw text the same way.
+module load included, refuses a Bash call that may run `git worktree` (exit 2,
+naming the hook and the error) unless a bypass is confirmed; it is not a policy
+refusal. A call that cannot run it (_may_create) and another tool's call still
+exit 0, so a broken hook does not refuse ordinary commands. Unreadable input (not
+a JSON object) is judged on its raw text the same way.
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -100,7 +34,6 @@ finally:
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -128,42 +61,43 @@ def _read_stdin():
     return _STDIN
 
 
-def _may_create(text):
-    """False only when text cannot create a branch, PR or worktree as this hook
-    reads a command.
-
-    The hook refuses only a command word whose basename is `git` or `gh`, in the
-    command or in a shell `-c` string it runs (_classify_segment). The texts it
-    classifies keep the command's letters in order, and between two letters of a
-    word its reading may delete only white space, a backslash, a quote, a quoted
-    span and a comment up to a newline (`gi'a b't` reads as `git`); a run-time
-    value reads as a placeholder that spells neither word. So text where no `g`
-    is followed by `i` then `t`, or by `h`, in any letter case, past only such
-    text, holds no such word. A quoted span may end at any later same quote and a
-    comment at any later newline, which covers every way of pairing them. One
-    right-to-left pass, linear in len(text).
-    """
-    n = len(text)
-    # reach[k][p]: from p, past deletable text only, the rest of a word follows:
-    # k = 0 't', 1 'i' then 't', 2 'h'.
-    reach = [[False] * (n + 1) for _ in range(3)]
+def _spells(text, word):
+    """True when `word` (lower case) can be read in text with, between two of its
+    letters, only text the hook's reading may delete: white space, a backslash,
+    a quote (with its `$` prefix), a quoted span and a comment up to a newline
+    (`gi'a b't` reads as `git`). Any letter case. A quoted span may end at any
+    later same quote and a comment at any later newline, which covers every way
+    of pairing them. One right-to-left pass, linear in len(text) * len(word)."""
+    n, m = len(text), len(word)
+    # reach[k][p]: from p, past deletable text only, word[k:] follows.
+    reach = [[False] * (n + 1) for _ in range(m)]
     # later[c][k]: reach[k] just past a later quote c, or at a later newline.
-    later = {c: [False] * 3 for c in '\'"\n'}
+    later = {c: [False] * m for c in '\'"\n'}
     for p in range(n - 1, -1, -1):
         ch = text[p]
         low = ch.lower()
-        own = (low == 't', low == 'i' and reach[0][p + 1], low == 'h')
-        for k in range(3):
-            reach[k][p] = (own[k]
+        for k in range(m):
+            own = low == word[k] and (k == m - 1 or reach[k + 1][p + 1])
+            reach[k][p] = (own
                            or ((ch.isspace() or ch in '\\\'"') and reach[k][p + 1])
+                           or (ch == '$' and text[p + 1:p + 2] in ('\'', '"') and reach[k][p + 1])
                            or (ch in '\'"' and later[ch][k])
                            or (ch == '#' and later['\n'][k]))
         if ch in '\'"':
-            later[ch] = [later[ch][k] or reach[k][p + 1] for k in range(3)]
+            later[ch] = [later[ch][k] or reach[k][p + 1] for k in range(m)]
         elif ch == '\n':
-            later[ch] = [later[ch][k] or reach[k][p] for k in range(3)]
-    return any(text[p] in 'gG' and (reach[1][p + 1] or reach[2][p + 1])
-               for p in range(n))
+            later[ch] = [later[ch][k] or reach[k][p] for k in range(m)]
+    return any(reach[0][p] and text[p].lower() == word[0] for p in range(n))
+
+
+def _may_create(text):
+    """False only when text cannot run `git worktree` as this hook reads a
+    command: the hook refuses only a command whose name is `git` with the
+    subcommand `worktree`, and a run-time value spells neither word. An ANSI-C
+    escape (`$'\\147'`) may spell any letter, so text holding one may create."""
+    if "$'" in text and '\\' in text:
+        return True
+    return _spells(text, 'git') and _spells(text, 'worktree')
 
 
 def _payload(raw):
@@ -210,9 +144,15 @@ def _bypassed(text, data):
     return False, problems
 
 
+_PROCEED = ('To proceed: run it inside a live /dev-overnight session, or (main agent) '
+            'use /do, or /allow the specific command first.')
+_PAUSE = ('You are a subagent: PAUSE and report this block to the user per '
+          'Subagent Hook Discipline — do NOT attempt to work around it.')
+
+
 def _internal_error_exit(exc, what='internal error'):
-    """2, naming the hook and exc on stderr, when the call may create a branch,
-    PR or worktree and no bypass is confirmed; else 0."""
+    """2, naming the hook and exc on stderr, when the call may create a worktree
+    and no bypass is confirmed; else 0."""
     raw = _read_stdin()
     data = _payload(raw)
     text = _judged_text(raw, data)
@@ -226,19 +166,15 @@ def _internal_error_exit(exc, what='internal error'):
         '',
         f'BLOCKED: {_HOOK_NAME} {what}, not a policy refusal: '
         f'{type(exc).__name__}: {str(exc)[:300]}',
-        'The hook could not judge this command, which may create a branch, PR or '
-        'worktree, so it refuses it.',
-        'To proceed: run it inside a live /dev-overnight session, or (main agent) '
-        'use /do, or /allow the specific command first. Report the error.',
+        'The hook could not judge this command, which may create a worktree, so it refuses it.',
+        _PROCEED + ' Report the error.',
     ]
     if data is None:
         lines.append('Its input is not a JSON object, so no bypass can be read for it.')
     elif problems:
         lines.append('Bypass checks that could not run: ' + '; '.join(problems) + '.')
     if data is not None and data.get('agent_id'):
-        lines.append(
-            'You are a subagent: PAUSE and report this block to the user per '
-            'Subagent Hook Discipline — do NOT attempt to work around it.')
+        lines.append(_PAUSE)
     sys.stderr.write('\n'.join(lines) + '\n')
     return 2
 
@@ -267,583 +203,30 @@ if __name__ == '__main__':
     sys.excepthook = _refuse_on_load_failure
 
 sys.path.insert(0, str(Path(__file__).parent))
-try:
-    from lib.bash_context_strip import strip_non_executable_contexts
-except Exception:  # pragma: no cover - lib always present in repo
-    strip_non_executable_contexts = None
 from lib.allowlist import (  # noqa: E402
     has_do_consent,
     match_sentinel_grant_for_bash_command,
 )
 from lib.overnight import is_overnight_active  # noqa: E402
-from lib.git_command_classifier import (  # noqa: E402
-    _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,
-    _command_token_index, _git_subcommand, iter_shell_texts,
-)
-
-
-# ---------------------------------------------------------------------------
-# Command classification. Operates on whitespace tokens of each shell segment of
-# the context-stripped command.
-# ---------------------------------------------------------------------------
-def _norm(command):
-    if strip_non_executable_contexts:
-        try:
-            return strip_non_executable_contexts(command)
-        except Exception:
-            return command
-    return command
-
-
-# Long-option name spaces for checkout/switch, split into CREATE vs NON-create.
-# These drive git's real unambiguous-unique-prefix abbreviation rule (see
-# _long_opt_creates): git accepts any `--X` that is a unique prefix of exactly
-# one long option, so `--cr` resolves to `--create`, `--or` to `--orphan`, etc.
-# Listing the NON-create options is required for disambiguation — without them a
-# prefix that is actually ambiguous (e.g. `--c` for switch: --create/--conflict)
-# would be wrongly treated as a create.
-_CO_CREATE_LONG = {'--orphan', '--track', '--guess'}
-_CO_NONCREATE_LONG = {
-    '--ours', '--theirs', '--force', '--detach', '--merge', '--conflict',
-    '--patch', '--quiet', '--progress', '--no-track', '--no-guess',
-    '--ignore-other-worktrees', '--recurse-submodules', '--pathspec-from-file',
-    '--pathspec-file-nul', '--overwrite-ignore', '--overlay', '--no-overlay',
-}
-_SW_CREATE_LONG = {'--create', '--force-create', '--orphan', '--track', '--guess'}
-_SW_NONCREATE_LONG = {
-    '--detach', '--discard-changes', '--force', '--merge', '--conflict',
-    '--quiet', '--progress', '--no-guess', '--no-track', '--recurse-submodules',
-    '--ignore-other-worktrees', '--no-recurse-submodules',
-}
-
-
-def _long_opt_creates(sub, base):
-    """True iff long-opt token `base` (already stripped of any =value) is a
-    CREATE flag for `sub`, including git's unambiguous unique-prefix
-    abbreviations.
-
-    `base` is a `--X` token. Per git: an abbreviation creates iff it is a unique
-    prefix of EXACTLY ONE long option across the union of that subcommand's
-    create + non-create options, and that one option is a CREATE option. Exact
-    full-flag matches are a special case of this (cand == [base]).
-    """
-    if not base.startswith('--') or base == '--':
-        return False
-    if sub == 'checkout':
-        create, noncreate = _CO_CREATE_LONG, _CO_NONCREATE_LONG
-    else:
-        create, noncreate = _SW_CREATE_LONG, _SW_NONCREATE_LONG
-    allopts = create | noncreate
-    cand = [opt for opt in allopts if opt == base or opt.startswith(base)]
-    return len(cand) == 1 and cand[0] in create
-
-
-def _is_co_sw_create(sub, sa):
-    """True iff a `git checkout`/`git switch` invocation CREATES a branch.
-
-    Creation triggers, for BOTH checkout and switch:
-      --orphan                              (orphan branch)
-      -t / --track                          (local tracking branch; creates one)
-    Checkout-only short letters: -b / -B    (create / create-or-reset)
-    Switch-only long opts: --create / --force-create / --orphan and --guess
-      (--guess is switch's explicit "create from a remote-tracking name" flag).
-
-    Long-opt ABBREVIATIONS: git accepts any unambiguous unique-prefix of a long
-    option (`--cr` -> --create, `--or` -> --orphan, `--tr` -> --track,
-    `--g` -> --guess, `--force-c` -> --force-create). _long_opt_creates resolves
-    each `--X` token against the subcommand's real long-option name space and
-    returns True only when the prefix is unique AND lands on a CREATE option, so
-    `--force`/`--detach`/`--conflict`/`--no-track` (non-create) are NOT blocked.
-
-    Handles bare and attached short options (-b, -bNAME, -fb, -tb), long options
-    with or without an attached =value (base = token.split('=')[0], tolerant of a
-    nonexistent --track=value form), short-option clusters containing a create
-    letter or `t`, and stops at the `--` pathspec separator.
-
-    KNOWN LIMITATION (intentionally NOT fixed — fixing would over-block): a BARE
-    `git switch <name>` / `git checkout <name>` with no create flag uses git's
-    default --guess, which CAN create a local branch when <name> matches exactly
-    one remote-tracking branch. That is indistinguishable, without repo state,
-    from switching to an existing local branch, and blocking it would break the
-    legitimate `git switch master` / `git checkout master`. So a bare
-    switch/checkout to a name stays ALLOWED. The limitation is ONLY about the
-    BARE form: an EXPLICIT `git checkout --guess <name>` (or its unique-prefix
-    abbreviation `--g`) IS in the checkout CREATE set and IS blocked — what we
-    cannot distinguish is the implicit default-guess of a bare name.
-    """
-    create_letters = set('bB') if sub == 'checkout' else set('cC')
-    create_letters.add('t')  # -t == --track creates a local tracking branch
-    for x in sa:
-        if x == '--':
-            break  # pathspec separator — options named like -b after it are files
-        if x.startswith('--'):
-            base = x.split('=', 1)[0]  # strip attached =value for long options
-            if _long_opt_creates(sub, base):
-                return True
-            continue
-        if x.startswith('-') and len(x) > 1:
-            # short-option cluster / attached value: -b, -bNAME, -fb, -tNAME ...
-            if any(ch in create_letters for ch in x[1:]):
-                return True
-    return False
-
-
-# `git branch` is overloaded — display/formatting flags are ORTHOGONAL to
-# creation (they can accompany either a list OR a create), so they MUST NOT veto
-# creation. The classifier below is a left-to-right token parser, not a set
-# membership test, because value-consuming flags (--sort X, --format X,
-# --points-at X, -u X, ...) take a separate following token that must NOT be
-# mistaken for a positional branch name.
-
-# Long-opt VETO flags → exclusive op or list/query mode → NOT creation.
-_BRANCH_VETO_LONG = {
-    '--delete', '--move', '--edit-description', '--list', '--all', '--remotes',
-    '--show-current', '--merged', '--no-merged', '--contains', '--no-contains',
-    '--points-at', '--set-upstream-to', '--unset-upstream', '--help',
-}
-# Short VETO letters (in a cluster, any of these → veto).
-_BRANCH_VETO_SHORT = set('dDmMlaruh')
-# Long-opt COPY flags → creation.
-_BRANCH_COPY_LONG = {'--copy'}
-# Short COPY letters → creation.
-_BRANCH_COPY_SHORT = set('cC')
-# Long flags that consume the NEXT token as their REQUIRED value (when not
-# attached '='). git accepts both `--flag=value` AND `--flag value` for these, so
-# the separate following token is the flag's value, NOT a positional branch name
-# (e.g. `git branch --sort refname` is a LIST with no positional → allow).
-#
-# DELIBERATELY EXCLUDED: --color, --column, --abbrev. In git's parse-options these
-# are OPTIONAL-attached-value flags (`--color[=<when>]`, `--column[=<options>]`,
-# `--abbrev[=<n>]`): they accept ONLY the attached `--flag=value` form. A
-# SPACE-separated following token is NOT their value — it is the next positional
-# (the branch name). Empirically confirmed with live git (2026-06-05): each of
-# `git branch --color zzc`, `git branch --column zzc`, `git branch --abbrev 7`
-# CREATES the branch named by the following token. So these must NOT swallow the
-# token here, or a real creation slips through as a list (the under-block bug).
-# Their bare (`--color`) and attached (`--color=always`) forms remain list-mode:
-# bare leaves no positional, attached is a single token — neither creates.
-_BRANCH_VALUE_LONG = {
-    '--contains', '--no-contains', '--merged', '--no-merged', '--points-at',
-    '--sort', '--format', '--set-upstream-to',
-}
-
-
-def _branch_creates(sa):
-    """Left-to-right parse of `git branch` args. Returns True iff it creates.
-
-    VETO flag seen      -> False (exclusive op / list / query mode).
-    else COPY flag seen -> True  (-c/-C/--copy copies => creation).
-    else >=1 positional -> True  (a bare branch name => creation).
-    else                -> False (list / display-only, no name).
-
-    Value-consuming flags swallow their following token so a space-separated
-    value (e.g. `--sort refname`, `--format %(refname)`) is never read as a
-    positional branch name. Display/boolean flags (-v, --verbose, -q, --quiet,
-    --no-color, --no-column, --no-abbrev, and any unrecognized -x) are ignored —
-    they neither veto nor positional. Veto short-circuits immediately, so a veto
-    flag's space-separated value is never mis-read as a positional.
-    """
-    saw_copy = False
-    positionals = 0
-    j = 0
-    n = len(sa)
-    while j < n:
-        x = sa[j]
-        if x == '--':
-            # everything after is positional
-            for t in sa[j + 1:]:
-                if t:
-                    positionals += 1
-            break
-        if x.startswith('--'):
-            base = x.split('=', 1)[0]
-            attached = '=' in x
-            if base in _BRANCH_VETO_LONG:
-                return False  # short-circuit; do not consume a value as positional
-            if base in _BRANCH_COPY_LONG:
-                saw_copy = True
-            elif base in _BRANCH_VALUE_LONG and not attached:
-                j += 1  # swallow the separate value token
-            # else: display/boolean long flag (--verbose, --no-color, ...) ignored
-        elif x.startswith('-') and len(x) > 1:
-            cluster = set(x[1:])
-            # -u (==--set-upstream-to) carries 'u' in the veto set, so it (and
-            # any other veto cluster) short-circuits here; its space-separated
-            # value is never reached/mis-read as a positional. Good.
-            if cluster & _BRANCH_VETO_SHORT:
-                return False
-            if cluster & _BRANCH_COPY_SHORT:
-                saw_copy = True
-            # else: display/boolean short cluster (-v, -q, -vv, ...) ignored
-        else:
-            positionals += 1
-        j += 1
-    if saw_copy:
-        return True
-    return positionals > 0
-
-
-def _stash_creates(sa):
-    """True iff `git stash branch <name>` (creates a branch from a stash).
-
-    Only the `branch` stash subcommand (appearing BEFORE any `--` pathspec
-    separator) creates a branch. Bare `git stash` and the
-    list/show/pop/push/drop/apply/clear/save/store/create subcommands do not.
-    `git stash -- branch` is a pathspec literally named "branch", not the branch
-    subcommand → NOT a creation.
-    """
-    for x in sa:
-        if x == '--':
-            break  # pathspec separator — a following `branch` token is a path
-        if x.startswith('-'):
-            continue
-        return x == 'branch'
-    return False
-
-
-_SCP_LIKE_REMOTE_RE = re.compile(r'^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:')
-
-
-def _refspec_creates(sa):
-    """True iff a fetch/pull arg is a refspec writing into a LOCAL branch.
-
-    `git fetch <repo> <src>:<dst>` (and the pull equivalent) create a local
-    branch when <dst> resolves under refs/heads/. This covers BOTH the explicit
-    `:refs/heads/<name>` form AND the standard BARE-destination shorthand
-    (`main:newbranch`, `HEAD:heads/nb`, `main:foo/bar`) — git puts a bare fetch
-    destination under refs/heads/. Plain fetch/pull (including `--all`, `origin`,
-    `origin main`) carry no creating refspec and stay allowed.
-
-    URL/remote tokens are NOT refspecs and must not be parsed as such: any token
-    containing `://` (https://, ssh://, git://, file://) or an scp-like remote
-    (`git@github.com:o/r.git`) is skipped. A destination under refs/remotes/,
-    refs/tags/, or refs/notes/ is not a local branch → NOT creation; an empty
-    destination (`main:`, a fetch to FETCH_HEAD) is NOT creation.
-
-    `--dry-run` writes nothing, so a creating refspec under `--dry-run` creates
-    no branch → NOT a creation (a later `--no-dry-run` re-arms it).
-    """
-    dry = False
-    for x in sa:
-        if x == '--dry-run':
-            dry = True
-        elif x == '--no-dry-run':
-            dry = False
-    if dry:
-        return False
-    for x in sa:
-        if x.startswith('-'):
-            continue  # flag token, not a refspec
-        if '://' in x or _SCP_LIKE_REMOTE_RE.match(x):
-            continue  # URL / scp-like remote, not a refspec
-        if ':' not in x:
-            continue
-        token = x[1:] if x.startswith('+') else x  # strip a single leading force '+'
-        _src, _, dst = token.partition(':')  # split on the FIRST ':'
-        if not dst:
-            continue  # fetch to FETCH_HEAD, no local branch
-        if dst.startswith(('refs/remotes/', 'refs/tags/', 'refs/notes/')):
-            continue  # not a local branch
-        if dst.startswith('refs/heads/'):
-            return True
-        # bare destination with no refs/ prefix → git places it under refs/heads/
-        return True
-    return False
-
-
-# update-ref flags that consume a separate following VALUE token; that value
-# must not be mistaken for a positional ref. `-m <message>` is the common one
-# (so `update-ref -m refs/heads/msg <ref> <sha>` is a reflog message, not a
-# branch ref).
-_UPDATE_REF_VALUE_FLAGS = {'-m', '--message'}
-
-
-def _update_ref_creates(sa):
-    """True iff `git update-ref refs/heads/<name> <sha>` creates a local branch.
-
-    Creation requires a positional argument starting with `refs/heads/` and NO
-    delete flag. `git update-ref -d refs/heads/x` (delete) and updates to
-    `refs/remotes/...` (not a local branch) stay allowed. The value consumed by
-    `-m`/`--message` (and any other value-flag) is skipped so a reflog message
-    like `-m refs/heads/msg` is never misread as the target ref.
-    """
-    if any(x in ('-d', '--delete') for x in sa):
-        return False
-    i = 0
-    n = len(sa)
-    while i < n:
-        x = sa[i]
-        if x in _UPDATE_REF_VALUE_FLAGS:
-            i += 2  # skip the flag AND its consumed value
-            continue
-        if x.startswith('-'):
-            i += 1
-            continue
-        if x.startswith('refs/heads/'):
-            return True
-        i += 1
-    return False
-
-
-# gh global flags that consume a separate following value token.
-_GH_GLOBAL_VALUE = {'-R', '--repo'}
-
-
-def _gh_skip_flags(args, i):
-    while i < len(args):
-        a = args[i]
-        if a in _GH_GLOBAL_VALUE:
-            i += 2
-            continue
-        if a.startswith('-'):
-            i += 1
-            continue
-        break
-    return i
-
-
-def _is_gh_pr_create(args):
-    # `gh pr new` is the official alias of `gh pr create`; block both.
-    i = _gh_skip_flags(args, 0)
-    if i >= len(args) or args[i] != 'pr':
-        return False
-    i = _gh_skip_flags(args, i + 1)
-    return i < len(args) and args[i] in ('create', 'new')
-
-
-# `gh pr checkout`'s option table, from `gh pr checkout --help` (gh 2.89): `-b`
-# `--branch` and `-R` `--repo` take a value, the rest are booleans, and `--detach`
-# has NO short form (`-d` is not an option of this command). gh reads them with
-# spf13/pflag, which accepts no abbreviation of a long option (`--det` and
-# `--bran` are unknown flags, measured on gh 2.89).
-_GH_CHECKOUT_SHORT = {'b': 'branch', 'f': 'force', 'R': 'repo'}
-_GH_CHECKOUT_VALUE = {'branch', 'repo'}
-_GH_CHECKOUT_BOOL = {'detach', 'force', 'recurse-submodules', 'help'}
-_GH_BOOL_TRUE = {'1', 't', 'T', 'TRUE', 'true', 'True'}  # strconv.ParseBool, as pflag
-_GH_BOOL_FALSE = {'0', 'f', 'F', 'FALSE', 'false', 'False'}
-
-
-def _gh_checkout_parse(args):
-    """Read `gh pr checkout`'s arguments the way gh's flag parser (pflag) does.
-
-    Returns (ok, detach): ok is False when gh stops before it runs anything (an
-    unknown or malformed flag, a flag missing its value, a boolean given a value
-    that is not one, more than one positional argument, or `--help`), so nothing
-    is checked out and no branch is created; detach is True when the last
-    --detach given is true.
-    """
-    detach = helped = False
-    positionals = 0
-    i = 0
-    n = len(args)
-
-    def boolean(value):
-        return True if value in _GH_BOOL_TRUE else False if value in _GH_BOOL_FALSE else None
-
-    while i < n:
-        a = args[i]
-        i += 1
-        if a == '--':
-            positionals += n - i
-            break
-        if a.startswith('--'):
-            name, has_value, value = a[2:].partition('=')
-            if not name or name[0] in '-=':
-                return False, False
-            if name in _GH_CHECKOUT_VALUE:
-                if not has_value:
-                    if i >= n:
-                        return False, False
-                    i += 1  # the next word is the value, whatever it looks like
-            elif name in _GH_CHECKOUT_BOOL:
-                flag = boolean(value) if has_value else True
-                if flag is None:
-                    return False, False
-                if name == 'help':
-                    helped = flag  # like any boolean, the last one given wins
-                elif name == 'detach':
-                    detach = flag
-            else:
-                return False, False
-        elif a.startswith('-') and len(a) > 1:
-            cluster = a[1:]
-            while cluster:
-                letter = cluster[0]
-                name = _GH_CHECKOUT_SHORT.get(letter)
-                if name is None:
-                    return False, False  # unknown shorthand, or -h (help)
-                if len(cluster) > 2 and cluster[1] == '=':
-                    value, cluster = cluster[2:], ''
-                    if name == 'force' and boolean(value) is None:
-                        return False, False
-                elif name == 'force':
-                    cluster = cluster[1:]
-                elif len(cluster) > 1:
-                    cluster = ''  # the rest of the word is the value
-                elif i < n:
-                    i += 1
-                    cluster = ''
-                else:
-                    return False, False
-        else:
-            positionals += 1
-    return positionals <= 1 and not helped, detach
-
-
-def _is_gh_pr_checkout(args):
-    """True iff `gh pr checkout <N>` (checks out a PR by CREATING a local branch).
-
-    `gh pr checkout` materializes a local branch for the PR, so it is creation —
-    UNLESS gh would stop before running it (_gh_checkout_parse: `-d`, an
-    abbreviation such as `--det`) or the last --detach given is true (detached
-    HEAD, no branch ref created). The PR list/view/status/diff subcommands are
-    read-only and are NOT matched here.
-    """
-    i = _gh_skip_flags(args, 0)
-    if i >= len(args) or args[i] != 'pr':
-        return False
-    i = _gh_skip_flags(args, i + 1)
-    if i >= len(args) or args[i] != 'checkout':
-        return False
-    ok, detach = _gh_checkout_parse(args[i + 1:])
-    return ok and not detach
-
-
-# Write-method indicators for `gh api`: any of these makes the call a POST/write
-# (gh defaults to POST when fields are present, and -X/--method set it
-# explicitly).
-_GH_API_WRITE_FLAGS = {'-f', '-F', '--field', '--raw-field', '--input'}
-_GH_API_METHOD_FLAGS = {'-X', '--method'}
-
-
-def _is_gh_api_pr_create(args):
-    """True iff `gh api <pulls-endpoint>` is a PR-creation POST.
-
-    Blocks when the endpoint path component ends in `/pulls` (optionally with a
-    trailing slash) — i.e. `repos/<owner>/<repo>/pulls` — AND the call is a write
-    (POST). A write is indicated by any of `-f/-F/--field/--raw-field/--input`,
-    or `-X POST` / `--method POST`. An explicit `-X GET` / `--method GET` (a LIST)
-    overrides the field-implied POST and is ALLOWED.
-    """
-    i = _gh_skip_flags(args, 0)
-    if i >= len(args) or args[i] != 'api':
-        return False
-    rest = args[i + 1:]
-    targets_pulls = False
-    has_write_flag = False
-    explicit_method = None  # last -X/--method value seen (upper-cased)
-    j = 0
-    n = len(rest)
-    while j < n:
-        a = rest[j]
-        if a in _GH_API_METHOD_FLAGS:
-            if j + 1 < n:
-                explicit_method = rest[j + 1].upper()
-            j += 2
-            continue
-        if a.startswith('-X') and len(a) > 2:  # attached form -XPOST
-            explicit_method = a[2:].upper()
-            j += 1
-            continue
-        if a.startswith('--method='):
-            explicit_method = a.split('=', 1)[1].upper()
-            j += 1
-            continue
-        if a in _GH_API_WRITE_FLAGS:
-            has_write_flag = True
-            j += 2  # these flags consume a following key=value token
-            continue
-        if a.startswith('-'):
-            j += 1
-            continue
-        # positional → candidate endpoint path
-        path = a.rstrip('/')
-        last = path.rsplit('/', 1)[-1]
-        if last == 'pulls':
-            targets_pulls = True
-        j += 1
-    if not targets_pulls:
-        return False
-    # explicit method wins over field-implied POST
-    if explicit_method is not None:
-        return explicit_method == 'POST'
-    return has_write_flag
-
-
-def _classify_gh(args):
-    """Return 'PR' if a gh invocation creates a PR / PR-branch, else None."""
-    if _is_gh_pr_create(args):
-        return 'PR'
-    if _is_gh_pr_checkout(args):
-        return 'branch'
-    if _is_gh_api_pr_create(args):
-        return 'PR'
-    return None
-
-
-def _classify_segment(seg):
-    """Return the creation kind ('worktree'|'PR'|'branch') in seg, or None.
-
-    Classifies ONLY the segment's COMMAND token (the first token after skipping
-    leading env-var assignments and known wrappers). Tokens that merely MENTION
-    git/gh as an argument (e.g. `echo gh pr new`, `echo git checkout -b x`) are
-    in argument position, never command position, so they are not creations.
-    """
-    toks = seg.split()
-    idx = _command_token_index(toks)
-    if idx is None:
-        return None
-    base = _basename(toks[idx])
-    if base == 'git':
-        sub, sa = _git_subcommand(toks[idx + 1:])
-        if sub == 'worktree':
-            for x in sa:
-                if not x.startswith('-'):
-                    return 'worktree' if x == 'add' else None
-            return None
-        if sub in ('checkout', 'switch'):
-            return 'branch' if _is_co_sw_create(sub, sa) else None
-        if sub == 'branch':
-            return 'branch' if _branch_creates(sa) else None
-        if sub == 'stash':
-            return 'branch' if _stash_creates(sa) else None
-        if sub in ('fetch', 'pull'):
-            return 'branch' if _refspec_creates(sa) else None
-        if sub == 'update-ref':
-            return 'branch' if _update_ref_creates(sa) else None
-        return None
-    if base == 'gh':
-        return _classify_gh(toks[idx + 1:])
-    return None
+from lib.shell_parse import git_invocations  # noqa: E402
 
 
 def _detect(command):
-    for text in iter_shell_texts(command):  # the command, then each shell -c string it runs
-        for seg in _segments(_norm(text)):
-            kind = _classify_segment(seg)
-            if kind:
-                return kind
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Bypass checks (overnight handled inline in main; these are the two
-# human-authorized escape hatches the user chose to preserve).
-# ---------------------------------------------------------------------------
-def _get_session_id(data):
-    try:
-        return str(data.get('session_id', '') or '')
-    except Exception:
-        return ''
+    """True when command runs `git worktree add`, read by the shared parser."""
+    for inv in git_invocations(command):
+        if inv.subcommand == 'worktree':
+            first = next((a for a in inv.args if a is None or not a.startswith('-')), None)
+            if first == 'add':
+                return True
+    return False
 
 
 def _allow_grant_matches(command, data):
-    """True iff a /allow grant authorizes this command.
-
-    Sentinel grants reach subagents and the main agent (mirrors the M2 decision
-    in pretool-git-privilege-guard.py).
-    """
-    sid = _get_session_id(data)
+    """True iff a /allow grant authorizes this command (main agent and subagent)."""
+    try:
+        sid = str(data.get('session_id', '') or '')
+    except Exception:
+        sid = ''
     task_id = os.environ.get('CLAUDE_TASK_ID') or sid
     try:
         return bool(task_id) and match_sentinel_grant_for_bash_command(task_id, command) is not None
@@ -851,30 +234,13 @@ def _allow_grant_matches(command, data):
         return False
 
 
-# ---------------------------------------------------------------------------
-# Blocking.
-# ---------------------------------------------------------------------------
-_POLICY = (
-    'Policy (2026-06-04): branch / PR / worktree creation is forbidden outside a '
-    'live /dev-overnight session.\n'
-    'Escape hatches: run it inside /dev-overnight, or (main agent) use /do, or '
-    '/allow the specific command first.\n'
-)
-
-
-def _block(kind, command, data):
-    lines = [
-        '',
-        f'BLOCKED: {kind} creation is forbidden outside /dev-overnight.',
-    ]
+def _block(command, data):
+    lines = ['', 'BLOCKED: worktree creation is forbidden outside /dev-overnight.']
     if command:
         lines.append(f'Command excerpt: {command[:200]}')
-    lines.append('')
-    lines.append(_POLICY.rstrip('\n'))
+    lines += ['', _PROCEED]
     if data.get('agent_id'):
-        lines.append(
-            'You are a subagent: PAUSE and report this block to the user per '
-            'Subagent Hook Discipline — do NOT attempt to work around it.')
+        lines.append(_PAUSE)
     sys.stderr.write('\n'.join(lines) + '\n')
     sys.exit(2)
 
@@ -883,26 +249,18 @@ def main():
     try:
         data = json.loads(_read_stdin())
     except Exception as exc:
-        # No tool or command to read: 0 as before, unless the raw text may create
-        # a branch, PR or worktree (the hook is registered for Bash calls alone).
+        # No tool or command to read: 0, unless the raw text may create a worktree
+        # (the hook is registered for Bash calls alone).
         sys.exit(_fail_closed_exit(exc, 'could not read its input'))
     try:
         if data.get('tool_name', '') != 'Bash':
             sys.exit(0)
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
-        if not command.strip():
+        if not command.strip() or not _detect(command):
             sys.exit(0)
-        kind = _detect(command)
-        if not kind:
+        if is_overnight_active(data.get('cwd')) or has_do_consent(data) or _allow_grant_matches(command, data):
             sys.exit(0)
-        # Bypasses — any one allows the operation.
-        if is_overnight_active(data.get('cwd')):
-            sys.exit(0)
-        if has_do_consent(data):
-            sys.exit(0)
-        if _allow_grant_matches(command, data):
-            sys.exit(0)
-        _block(kind, command, data)
+        _block(command, data)
     except SystemExit:
         raise
     except Exception as exc:

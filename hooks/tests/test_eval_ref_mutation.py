@@ -104,7 +104,11 @@ def test_registered_entries_refuse_ref_mutation(tmp_path, command):
     verdicts = {hook: _run(tmp_path / hook.replace(".", "_"), hook, command) for hook in ENTRIES}
     assert any(_refused(p) for p in verdicts.values()), (command, {
         h: (p.returncode, p.stderr[-400:]) for h, p in verdicts.items()})
-    assert "direct git ref mutation" in verdicts[LAUNCH].stderr, verdicts[LAUNCH].stderr[-400:]
+    # `$'git'` as a command word is an obfuscated token to the shared reader
+    # (as `$'git' branch -D old` is without eval), refused before the ref rule.
+    reason = ("direct git ref mutation", "could not be statically classified") \
+        if "$'git'" in command else ("direct git ref mutation",)
+    assert any(r in verdicts[LAUNCH].stderr for r in reason), verdicts[LAUNCH].stderr[-400:]
 
 
 @pytest.mark.parametrize("command", PASSED)
@@ -127,12 +131,20 @@ def test_allow_grant_still_releases_direct_form(tmp_path):
     ("eval 'git update-ref -d refs/heads/old'", ("update-ref", ["-d", "refs/heads/old"])),
     ('eval "git branch -m a b" >/dev/null', ("branch", ["-m", "a", "b"])),
     ("eval $'git\\x20branch -D old'", ("branch", ["-D", "old"])),
-    ("eval $'git' branch -D old", ("branch", ["-D", "old"])),
 ])
 def test_classifier_reads_eval_payload(command, words):
     invocations, residuals = classify_git_command(command)
     assert words in [(inv.subcommand, inv.args) for inv in invocations]
     assert residuals == []
+
+
+def test_classifier_reads_eval_payload_of_ansi_c_command_word():
+    # The payload's invocation is read; the `$'git'` command word stays the
+    # obfuscated token it is without eval, so the residual matches that form.
+    invocations, residuals = classify_git_command("eval $'git' branch -D old")
+    assert ("branch", ["-D", "old"]) in [(inv.subcommand, inv.args) for inv in invocations]
+    assert [kind for kind, _text in residuals] == [
+        kind for kind, _text in classify_git_command("$'git' branch -D old")[1]]
 
 
 @pytest.mark.parametrize("command", ['eval "$(ssh-agent -s)"', "eval $(dircolors -b)", "echo eval git push"])
