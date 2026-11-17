@@ -67,24 +67,23 @@ def first_present(mapping, names, default=None):
 # interview is active — so arbitrary orchestrator background work stays blocked
 # and the observability policy holds for everything else.
 #
-# The active-interview detection MIRRORS pretool-spec-block-foreground-agent.py
-# (the transcript's active span is /spec AND its checklist has an incomplete
-# step) so the two hooks agree on the /spec FSM window.
+# The active-interview detection is pretool-spec-block-foreground-agent.py's own
+# (lib.todo_canonical.live_spec_checklist: the transcript's active span is /spec,
+# its checklist has an incomplete step, and the span was not abandoned by a human
+# prompt that followed it while Steps 1-3a were open), so the two hooks agree on
+# the /spec FSM window.
 
 
 def _spec_interview_active(payload: dict) -> bool:
-    """True iff the active span is a /spec interview whose checklist (the last
-    ok TodoWrite, or the canonical list before the first) has an incomplete
-    step, read from the transcript (lib.todo_canonical.checklist). Any
-    exception -> False: fail-safe (the hole stays SHUT) AND never-wedge (the
-    hook must never exit 1 on this matcher=None path)."""
+    """True iff the active span is a live /spec interview: its checklist (the
+    last ok TodoWrite, or the canonical list before the first) has an
+    incomplete step and the span was not abandoned, read from the transcript
+    (lib.todo_canonical.live_spec_checklist). Any exception -> False:
+    fail-safe (the hole stays SHUT) AND never-wedge (the hook must never exit
+    1 on this matcher=None path)."""
     try:
-        from lib.todo_canonical import checklist  # only this exemption pays the import
-        state = checklist(payload.get("transcript_path"))
-        if state is None or state.command != "spec":
-            return False
-        todos = state.todos if state.todos is not None else state.canonical
-        return any(t.get("status") != "completed" for t in todos)
+        from lib.todo_canonical import live_spec_checklist  # only this exemption pays the import
+        return live_spec_checklist(payload.get("transcript_path")) is not None
     except Exception:  # noqa: BLE001 — never raise: fail-safe (shut) + never-wedge
         return False
 

@@ -13,7 +13,13 @@ Activation conditions (ALL must be true to block):
   4. The transcript's active span was opened by /spec
   5. Its checklist (the last ok TodoWrite, or the canonical list before the
      first) has at least one step where status != "completed"
-  (4 and 5 are read from the transcript, lib.todo_canonical.checklist.)
+  6. The span was not abandoned: no human-typed prompt followed the opener
+     while Steps 1-3a (the steps /spec runs inside the turn that opened it)
+     were still open, as the last ok TodoWrite before that prompt left them
+     (CRITIQUE A3: an unfinished /spec no longer holds every later dispatch)
+  (4-6 are read from the transcript, lib.todo_canonical.live_spec_checklist,
+   the one reading pretool-block-background-tasks.py's Explore exemption
+   shares.)
 
 Exit 0 = allow. Exit 2 = block (stderr message shown to user).
 
@@ -26,14 +32,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import checklist  # noqa: E402
+from lib.todo_canonical import live_spec_checklist  # noqa: E402
 
 
 def _spec_todo_progress(data: dict):
-    """(done, total) of the active /spec span's checklist, or None when the
-    active span is not /spec."""
-    state = checklist(data.get("transcript_path"))
-    if state is None or state.command != "spec":
+    """(done, total) of the live /spec interview's checklist, or None when
+    the active span is not /spec, its checklist is complete or the span was
+    abandoned."""
+    state = live_spec_checklist(data.get("transcript_path"))
+    if state is None:
         return None
     todos = state.todos if state.todos is not None else state.canonical
     done = sum(1 for t in todos if t.get("status") == "completed")
