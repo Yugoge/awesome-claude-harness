@@ -43,6 +43,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gated here.
 
 ### Fixed
+- **G1's order rule (R17) reads every way an agent's end comes back.** `hooks/pretool-obligation-gate.py`
+  took a dispatch as returned only by its own Agent call's ok result. A close QA cut off and resumed
+  with SendMessage (its end: the task-notification naming it), or cut off after it had stopped by
+  itself (its end: its own transcript's stop and SubagentStop record), refused `/commit`'s planning
+  dispatch with `producer_not_stopped ... which has not returned a result` while its CLOSE: YES report
+  was on disk; a background launch, whose result comes back while the agent runs, counted as
+  returned at once. The rule now takes an agent as stopped when its latest end (its Agent call's
+  result, a completed task-notification, a /restart journal that saw the response, or a recorded
+  stop of a cut agent that was not resumed) follows its latest start (the dispatch, each SendMessage
+  resume); a running, resumed or failed agent stays refused. The CLI records it reads are recorded by
+  `scripts/cli-fixture-record.sh` (now ten runs). Covered by `hooks/tests/test_obligation_gate_returns.py`.
+- **Every reader of "has this dispatch returned" reads it as G1 does.** The reading moved from the
+  gate into `hooks/lib/agent_returns.py` (`Returns`: when the agent stopped and its reply then: its
+  Agent call's result, the `<result>` of a completed task-notification, or a cut agent's own last
+  reply), and three readers that took only an ok Agent result now use it. The `/commit --bulk`
+  Stop read the planning dry-run's `dryrun` block when the landing analyst was cut and resumed, or
+  cut after its stop, and let the commit end whatever the landing reported; with no planning block
+  before it, a landing that reported `committed` that way, or in the background, held the Stop with
+  `commit --bulk: no changelog-analyst status block in this /commit`. A close QA that landed
+  `CLOSE: YES` by those channels required no rating, so `/close` ended without `close <task>: the
+  close-rating question (AskUserQuestion) was not asked`. G1's ask-first let the next dispatch out
+  without asking round 2 a resumed BA had written (round 1: it asked for a new BA intake instead),
+  and asked a round a background BA was still writing. `command_span.Span.dispatches()` lists a
+  span's dispatches however their calls came back. The replay's `/restart` writes the resumed
+  agent's end as the CLI records it: the SendMessage result names the agent, and the
+  task-notification answers that SendMessage and is delivered into the running turn (enqueue,
+  `queued_command`, remove); it wrote a lone queue-operation answering the cut Agent call.
+  `requirement_round.asked` and `spec_path` read only the main agent's own calls and are unchanged.
+  Covered by `hooks/tests/test_agent_end_readers.py`.
+- **The prose-only lint no longer runs out of stack on a recursive test helper.** `tests/lint/prose.py`
+  ran a helper again inside itself whenever its arguments differed, so `tests/cli_shapes.py`'s
+  `_walk`, whose key path grows at each level, raised RecursionError and failed the `prose-only`
+  check (already on the branch this builds on). A helper being run is now not run again inside
+  itself. Covered by `tests/lint/test_lint_checks.py`.
 - **The worktree guard can no longer lock a session.** `hooks/pretool-worktree-guard.sh`
   runs before every tool and exited 2 while any agent worktree was behind the main
   branch. That blocked the `git worktree remove` it recommended, and every Read,

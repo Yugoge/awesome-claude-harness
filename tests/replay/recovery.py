@@ -20,9 +20,13 @@
 Record shapes: the API-error record and the Agent error result are the ones hooks/lib/
 interruption_signals.py documents as measured (`isApiErrorMessage`, `error`, `apiErrorStatus`,
 `stop_reason: "stop_sequence"`; "Agent terminated early due to an API error: <banner> (error type
-rate_limit, HTTP 429)"), and P1's capture (S9). The resumed agent's end reaches the parent as the
-CLI's task-notification, queued (the shape tests/test_restart_command.py reads). Nothing here
-reads such a record: the harness's own /restart helper does (D4c).
+rate_limit, HTTP 429)"), and P1's capture (S9). The SendMessage's result and the resumed agent's end
+are the CLI's recorded records (tests/fixtures/cli, CLI 2.1.326, through tests/cli_shapes.py): the
+result names the resumed agent (resumedAgentId), and the agent's end reaches the parent as its
+task-notification, naming the agent (<task-id>) and answering the SendMessage (<tool-use-id>: that
+call's id, not the cut Agent call's), delivered while the /restart turn runs: queued, attached to the
+turn (queued_command), taken off the queue (notify). Nothing here reads such a record: the harness's
+own /restart helper and the hooks that ask whether a dispatch returned do (D4c, lib/agent_returns.py).
 
 F6o (P1c X8): the same `limit` fault inside /dev-overnight, whose driver models the CLI's scheduler
 (tests/replay/wake.py, rp.cron): no human types /restart (D20). The session idles until its wake fires
@@ -51,9 +55,12 @@ import os
 import re
 import threading
 
+import uuid
+
 from . import cmdtext
 from .faults import _record
 from .pipeline import utc_now
+from .replay import ENVELOPE, cli_shapes, now_iso
 
 BANNER = "You've hit your session limit · resets 5pm (UTC)"
 TERMINATED = f"Agent terminated early due to an API error: {BANNER} (error type rate_limit, HTTP 429)"
@@ -199,9 +206,10 @@ class Cuts:
     _next = None
 
     # ------------------------------------------------------------ the owner's /restart
-    def resume(self, aid: str, message: str) -> None:
+    def resume(self, aid: str, message: str, sent: str) -> None:
         """The SendMessage-resumed agent: the CLI hands it the message, it re-reads what its last call
-        wrote, goes on from there to its stop, and the CLI queues its task-notification."""
+        wrote, goes on from there to its stop, and the CLI delivers its task-notification, which answers
+        SendMessage call ``sent``, to the running /restart turn (notify)."""
         r = next(x for x in self.parked if x.sub.aid == aid)
         sub, s = r.sub, r.sub.s
         s.append({"type": "user", "message": {"role": "user", "content": message}}, aid)
@@ -211,13 +219,36 @@ class Cuts:
         line = re.search(r"otherwise end with `([^`]+)`", message)
         r.d.final_line = line.group(1) if line else ""
         r.resume()
-        s._write(s.tpath, {"type": "queue-operation", "operation": "enqueue", "sessionId": s.sid,
-                           "content": f"<task-notification><task-id>{aid}</task-id>"
-                                      f"<tool-use-id>{r.d.tool_use_id}</tool-use-id><status>completed</status>"
-                                      f"<summary>Agent \"{r.agent_in.get('description', '')}\" completed</summary>"
-                                      f"<result>{getattr(sub, 'last_final', '')}</result></task-notification>"})
+        notify(s, aid, sent, getattr(sub, "last_final", ""))
         next(f for f in self.rp.fault_records if f.get("agent") == aid).update(repaired=True, rounds=1)
         _record(self.rp)
+
+
+def resumed(aid: str) -> dict:
+    """The result of a SendMessage that resumed agent ``aid``, as the CLI records it (its toolUseResult:
+    resumedAgentId, revivedAgentId, pin), with the replay's message text."""
+    return cli_shapes.synthesize("user", "resumed", toolUseResult__resumedAgentId=aid, toolUseResult__revivedAgentId=aid,
+                                 toolUseResult__pin__id=aid, toolUseResult__pin__name=aid,
+                                 toolUseResult__message=f"Message sent to {aid}")["toolUseResult"]
+
+
+def notify(s, aid: str, tool_use_id: str, result: str) -> None:
+    """Agent ``aid``'s end, delivered while the main turn runs, as the CLI records it (tests/fixtures/cli:
+    a background agent ending while the main turn is busy): the task-notification queued (enqueue),
+    attached to the turn (attachment queued_command), taken off the queue (remove). It names the agent
+    and answers ``tool_use_id``, the call whose agent this end is: the SendMessage that resumed it."""
+    text = cli_shapes.notification(aid, tool_use_id, "completed", result=result)
+    delivery, command = str(uuid.uuid4()), str(uuid.uuid4())
+    s._write(s.tpath, cli_shapes.synthesize("queue-operation", "enqueue", content=text, sessionId=s.sid,
+                                            timestamp=now_iso()))
+    attached = cli_shapes.synthesize("attachment/queued_command", attachment__prompt=text,
+                                     attachment__delivery_id=delivery, attachment__source_uuid=command,
+                                     attachment__timestamp=now_iso())
+    for key in ENVELOPE:
+        attached.pop(key, None)
+    s.append(attached)
+    s._write(s.tpath, cli_shapes.synthesize("queue-operation", "remove", content=text, deliveryId=delivery,
+                                            commandUuid=command, sessionId=s.sid, timestamp=now_iso()))
 
 
 def restart_turn(rp, s, cuts: Cuts) -> None:
@@ -274,13 +305,13 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
     for c in pending:  # one batch: a SendMessage per pending candidate, its exact resume message
         msg = c["resume_message"]
         call = s.tool("SendMessage", {"to": c["agent_id"], "message": msg},
-                      perform=lambda aid=c["agent_id"]: {"success": True, "message": f"Message sent to {aid}"},
+                      perform=lambda aid=c["agent_id"]: resumed(aid),
                       label=f"/restart SendMessage {c.get('description') or c.get('agent_type')}")
         if not call.ok:
             raise Stuck(f"SendMessage to {c['agent_id']} was refused: " + rp.blocks[-1]["text"][:600])
-        sent.append((c["agent_id"], msg))
-    for aid, msg in sent:
-        cuts.resume(aid, msg)
+        sent.append((c["agent_id"], msg, call.tool_use_id))
+    for aid, msg, tool_use_id in sent:
+        cuts.resume(aid, msg, tool_use_id)
     status = run("status", "Wait for every resumed agent's response", timeout=600)
     if not status.get("complete"):
         raise Stuck(f"RESTART_INCOMPLETE: {status.get('incomplete_agent_ids')}")

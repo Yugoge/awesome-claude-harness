@@ -1,8 +1,8 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T02:12:48Z*
-**Total entries**: 20
+*Last updated: 2026-11-17T09:09:15Z*
+**Total entries**: 21
 **Convention**: kebab
 
 ## Tree
@@ -16,8 +16,9 @@ fixtures/
 │   │   └── `transcript.jsonl` - jsonl file
 │   ├── 2.1.326/
 │   │   ├── stdin/
-│   │   ├── `shapes.json` - JSON config: stdin:PreToolUse, stdin:SessionStart, stdin:Stop, stdin:SubagentStart, stdin:SubagentStop
+│   │   ├── `shapes.json` - JSON config: meta:subagent, stdin:PreToolUse, stdin:SessionStart, stdin:Stop, stdin:SubagentStart
 │   │   ├── `subagent.jsonl` - jsonl file
+│   │   ├── `subagent.meta.json` - <redacted>
 │   │   └── `transcript.jsonl` - jsonl file
 │   └── `CURRENT` - CURRENT file
 ├── late_repair_golden/

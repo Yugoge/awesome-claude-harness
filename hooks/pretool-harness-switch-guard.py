@@ -205,7 +205,7 @@ def _may_name_settings(token: str) -> bool:
     """Whether `token` can name a settings file or a directory holding one by its spelling alone,
     wherever it is read from: its last component as written is a .json name, .claude,
     managed-settings.d, or `.`, `..` or nothing, which only the directory it is read from resolves.
-    Any other word names one only when that component is a link (_named_settings looks)."""
+    Any other word names one only when its real path's last component does (_named_settings)."""
     last = os.path.basename(token.rstrip("/"))
     return last in ("", ".", "..", ".claude", "managed-settings.d") or last.endswith(".json")
 
@@ -214,17 +214,21 @@ def _named_settings(word: str, dirs: list, dirs_too=False, home=None) -> list:
     """The Claude Code settings files `word` names, read from each directory in `dirs`, as written
     and with links resolved; with `dirs_too` (None: when no directory is there now) also a
     directory holding them. The home's own settings files are the rule above's, not these.
-    A word whose spelling names none (_may_name_settings) costs one lstat a directory, and a
-    path is resolved only where it can name one, so a padded command stays cheap."""
+    Each path is resolved once (os.path.realpath), and a word whose spelling names none
+    (_may_name_settings) is judged further only where its real path's name can, so a padded
+    command stays cheap. The rule decides on names, as written and resolved, and tests no file
+    itself: an os.path.islink of a word would make it a decider on every file a word can name,
+    the subagent meta.json the write gate's other rules decide on included (the artifact
+    check's rule (4))."""
     out, home = [], _settings_files() if home is None else home
     for token in {word, word.split("=", 1)[-1]}:
         token = os.path.expanduser(token)
         spelled = _may_name_settings(token)
         for d in dirs:
             lexical = os.path.normpath(os.path.join(d, token))
-            if not spelled and not os.path.islink(lexical):
-                continue  # its last name is no settings name, and no link: its real path ends in it too
             real = os.path.realpath(lexical)
+            if not spelled and not _may_name_settings(real):
+                continue  # neither its name as written nor its real path's is a settings name
             for p, p_real in ((lexical, real), (real, os.path.realpath(real))):
                 if p_real not in home and (CLAUDE_SETTINGS.search(p) or _settings_dir(p, dirs_too)):
                     out.append(p)

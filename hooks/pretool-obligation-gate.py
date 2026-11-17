@@ -73,7 +73,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
+from lib import agent_returns, command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
 from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
@@ -150,41 +150,28 @@ def _declared(obligation) -> dict:
             if isinstance(a, dict) and isinstance(a.get("path"), str)}
 
 
-def _resumed_returns(span, session_id, before) -> dict:
-    """{id of an Agent call that never came back: the line its agent's resume
-    returned at} for the agents the /restart recovery resumed and saw come
-    back (subagent_restart.completed_resumes, the journal Gate 4 reads; P1c
-    R15): that call is its step's dispatch, with no replacement call
-    (commands/restart.md, Lesson 16), and it returned when its resume did."""
-    try:
-        from lib.subagent_restart import completed_resumes
-        journal = completed_resumes(session_id) if session_id else {}
-    except Exception:
-        return {}
-    returns = {}
-    for message in span.iter_calls("SendMessage", before=before) if journal else ():
-        original = journal.get(str((message.input or {}).get("to")))
-        if original and message.result_line and message.ok:
-            returns[original] = message.result_line
-    return returns
-
-
 def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset) -> list:
     """R17, read from the active span's dispatch order (the CLI's record of
-    each Agent call and its result, never a file's mtime or a clock): for
-    each artifact this prompt names that an earlier dispatch declared, the
-    latest such dispatch must have returned; and unless this dispatch is a
-    verdict itself, the latest verdict naming that producer's artifacts must
-    be issued after it returned and have returned too. A refused or errored
-    dispatch (an is_error result) ran nothing, so it has not returned; a cut
-    dispatch whose agent the /restart recovery resumed returned when its
-    resume did (_resumed_returns)."""
+    each Agent call and how its agent's end came back, never a file's mtime
+    or a clock): for each artifact this prompt names that an earlier dispatch
+    declared, the latest such dispatch's agent must have stopped; and unless
+    this dispatch is a verdict itself, the latest verdict naming that
+    producer's artifacts must be issued after it stopped and have stopped
+    too. A refused or errored dispatch (an is_error result) ran nothing, so it
+    has not returned, unless its agent's own transcript records its stop; a
+    background, resumed or cut dispatch returned when its agent's end came
+    back (lib/agent_returns.py, the one reading of it)."""
     span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
     if span is None:
         return []
-    resumed = _resumed_returns(span, data.get("session_id") or data.get("sessionId"),
-                               data.get("tool_use_id") or None)
-    returned_at = lambda c: c.result_line if (c.result_line and c.ok) else resumed.get(c.id)
+    returns = []  # read once, when a dispatch is first asked about
+
+    def returned_at(call) -> int:
+        if not returns:
+            returns.append(agent_returns.Returns(span, data.get("session_id") or data.get("sessionId"),
+                                                 data.get("tool_use_id") or None, data["transcript_path"]))
+        return returns[0].line(call)
+
     earlier = []
     for call in span.iter_calls("Agent", "Task", before=data.get("tool_use_id") or None):
         parsed = parse_obligation(call.input.get("prompt"), known_schema_ids=known)

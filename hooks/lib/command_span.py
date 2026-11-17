@@ -167,6 +167,42 @@ class Use(namedtuple("Use", "id name input ok result_at")):
     __slots__ = ()
 
 
+class AgentEnd(namedtuple("AgentEnd", "line agent tool_use_id status result")):
+    """One task-notification the CLI delivered to the main session: its line, the agent it names
+    (<task-id>), the tool use it answers (<tool-use-id>: the Agent call that launched the agent in
+    the background, or the SendMessage that resumed it), its <status> ("completed", "failed",
+    "stopped", ...) and its <result>, the agent's own last text ('' when it carries none)."""
+    __slots__ = ()
+
+
+# How the CLI delivers a task-notification to the main session (CLI 2.1.326, recorded in
+# tests/fixtures/cli): as the turn it opens for it, a user record of origin kind
+# "task-notification" whose content is the notification, or, while a turn runs, inside it as an
+# attachment of type queued_command whose commandMode is "task-notification". Neither can be
+# typed, and a subagent's own record (isSidechain) is not the session's. The header tags are read
+# each the first of its name; the <result> after them is the agent's own text, read whole: from its
+# opening tag to the notification's last closing one, whatever tags that text holds.
+_NOTIFICATION = b"<task-notification>"
+_NOTE_TAG = {name: re.compile(rf"<{name}>([^<]*)</{name}>") for name in ("task-id", "tool-use-id", "status")}
+
+
+def _notification_text(record) -> str | None:
+    if not record or record.get("isSidechain"):
+        return None
+    if record.get("type") == "user":
+        origin, message = record.get("origin"), record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(origin, dict) and origin.get("kind") == "task-notification" and isinstance(content, str):
+            return content
+    elif record.get("type") == "attachment":
+        attachment = record.get("attachment")
+        if (isinstance(attachment, dict) and attachment.get("type") == "queued_command"
+                and attachment.get("commandMode") == "task-notification"
+                and isinstance(attachment.get("prompt"), str)):
+            return attachment["prompt"]
+    return None
+
+
 # A record is decoded only when it can matter, so a long session's transcript
 # is not decoded whole at every tool call: its lines are picked by byte search.
 # Quotes inside a JSON string are escaped, so text that merely mentions a
@@ -497,11 +533,54 @@ class Span:
                     return None
         return None
 
+    def use_result(self, ident: str) -> dict:
+        """The toolUseResult the CLI recorded beside call ``ident``'s tool_result in the span ({}
+        while none came back or it holds no object): an Agent call's agentId and status
+        ("async_launched" for a background launch), a SendMessage's resumedAgentId."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return {}
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if any(b.get("type") == "tool_result" and b.get("tool_use_id") == ident for b in _blocks(record)):
+                value = record.get("toolUseResult")
+                return value if isinstance(value, dict) else {}
+        return {}
+
+    def agent_ends(self) -> list:
+        """Each task-notification the CLI delivered to the main session in the span, in order
+        (AgentEnd): how a dispatched agent's end comes back when its Agent call's own result does not
+        carry it (a background launch, a SendMessage resume). agent_returns.Returns reads them."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return []
+        ends, pos, number = [], floor, None
+        for begin, end in lines.offsets((_NOTIFICATION,), floor):
+            number = (self.start_line + 1 + lines.data.count(b"\n", floor, begin) if number is None
+                      else number + lines.data.count(b"\n", pos, begin))
+            pos = begin
+            text = _notification_text(_decode(lines.data[begin:end]))
+            for body in (text or "").split("<task-notification>")[1:]:
+                head = body.split("</task-notification>")[0]
+                fields = {name: (_NOTE_TAG[name].search(head) or [None, ""])[1].strip() for name in _NOTE_TAG}
+                opened, closed = head.find("<result>"), body.rfind("</result>")
+                result = body[opened + len("<result>"):closed] if 0 <= opened < closed else ""
+                if fields["task-id"] or fields["tool-use-id"]:
+                    ends.append(AgentEnd(number, fields["task-id"], fields["tool-use-id"], fields["status"], result))
+        return ends
+
+    def dispatches(self) -> list:
+        """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
+        however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
+        ob = _obligation()
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
-        ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
-        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+        return [(call, doc) for call, doc in self.dispatches() if call.ok]
 
     def session_families(self) -> set:
         """The task families (obligation.task_family) of the span's ok

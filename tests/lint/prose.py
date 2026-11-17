@@ -365,7 +365,10 @@ class Module:
         key = (name, tuple(sorted((k, v.taint, v.paths, v.text) for k, v in args.items())))
         if key in self.ctx_cache:
             return self.ctx_cache[key]
-        if key in self._in_progress:
+        # A function already being run is not run again inside itself, whatever its arguments: a
+        # recursive helper whose arguments grow at each level (cli_shapes._walk's key path) would
+        # otherwise be run again with new values until the interpreter's stack runs out.
+        if any(running == name for running, _args in self._in_progress):
             return Result()
         self._in_progress.add(key)
         res = run_function(self, fn, args)

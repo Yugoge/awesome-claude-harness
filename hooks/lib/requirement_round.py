@@ -335,15 +335,17 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
         doc = getattr(found, "obligation", None)
         if isinstance(doc, dict):
             latest[(doc.get("role"), task_of(doc.get("task_id")))] = (call, doc)
-    contract = _lib("contract_runtime")
+    contract, returns = _lib("contract_runtime"), None
     for path, source, round_file, role in _question_files(project, task):
         rel = path.relative_to(project).as_posix()
         if rel in declared:
             return None
         owner = task if round_file else task_of(source.split(":")[1])
         call = latest.get((role, owner), (None, None))[0]
-        if call is None or not (call.result_line and call.ok):
-            continue  # its producer's latest dispatch has not come back ok: the question is not yet its to ask
+        if call is not None and returns is None:  # read once, as G1 reads a dispatch's return
+            returns = _lib("agent_returns").Returns(span, before=current)
+        if call is None or not returns.line(call):
+            continue  # its producer's latest dispatch's agent has not stopped: the question is not yet its to ask
         schema = "requirement-round.v1" if round_file else "producer-question.v1"
         # A round G2 refuses (an answered question again, a refuted BA's option) is never asked: its producer
         # writes it again, so it holds no dispatch back.

@@ -14,6 +14,6 @@
   "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",
   "session_crons": [],
   "session_id": "<UUID>",
-  "stop_hook_active": false,
+  "stop_hook_active": true,
   "transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>.jsonl"
 }
