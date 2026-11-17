@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed execution-boundary analyzer for the filesystem-removal policy.
 
-THE ALGEBRA (spec-20260808-035658 LANE-POL, Must-1).  Every execution-bearing
+THE ALGEBRA.  Every execution-bearing
 boundary in a command ends in exactly one of:
 
     PROVEN_INERT         nothing executes here, or what executes is a named
@@ -16,9 +16,9 @@ Precedence: FORBIDDEN_REMOVAL > UNRESOLVED > PROVEN_SAFE_REMOVAL > PROVEN_INERT.
 The command is authorized by the removal policy only when every boundary is
 terminal-safe.  There is deliberately NO code path from "no adapter matched",
 "parser gave up", "unsupported syntax", or "analyzer crashed" to *allow* — that
-inversion is the whole point.  Six prior iterations enumerated what is
-FORBIDDEN and allowed on silence; this one enumerates what is PROVABLY SAFE and
-denies on silence.  Consequently every lookup table below may only ever move a
+inversion is the whole point.  The analyzer enumerates what is PROVABLY SAFE
+and denies on silence; it never enumerates what is FORBIDDEN and allows on
+silence.  Consequently every lookup table below may only ever move a
 boundary toward SAFE: absence from a table falls to UNRESOLVED, never to allow.
 
 Two failure classes are distinguished so the deny surface stays proportionate:
@@ -33,7 +33,7 @@ Two failure classes are distinguished so the deny surface stays proportionate:
     evidence.  Without such evidence there is nothing for the removal policy
     to authorize, so the boundary is inert for THIS policy's purposes.
 
-Completeness obligation (Must-2): ``bash_active_syntax_census`` independently
+Completeness obligation: ``bash_active_syntax_census`` independently
 scans the raw bytes and lists every active-syntax site it can see.  This module
 must report that it consumed each one.  Any obligation left undischarged is a
 structural UNRESOLVED.  The census is never imported into the semantic
@@ -53,6 +53,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
+from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
+    WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -71,9 +74,7 @@ MAX_BOUNDARIES = 400
 # forbidden), not the authorization mechanism. Widening it widens the deny
 # surface. It is the SINGLE shared definition of "removal binary": the degraded
 # fallback in hooks/pretool-bash-safety.sh names the same four, so the primary
-# path can never be laxer than the fallback. (Iteration-1 defect: the set held
-# only "rm", so `unlink <path>` passed the analyzer at exit 0 while the
-# fallback already treated unlink as removal evidence.)
+# path can never be laxer than the fallback.
 REMOVAL_EXES = {"rm", "unlink", "shred", "srm"}
 
 # Removal evidence gates the REMOVAL-SCOPED failure class only.
@@ -81,8 +82,9 @@ _REMOVAL_EVIDENCE_RE = re.compile(
     r"(?:^|[^A-Za-z0-9_])(rm|unlink|shred|srm)(?![A-Za-z0-9_])")
 
 # Library-level removal in interpreter payloads. These carry NO rm/unlink/
-# shred/srm token, so _REMOVAL_EVIDENCE_RE is structurally blind to them and
-# `python3 -c 'shutil.rmtree(p)'` read as "no removal token -> inert".
+# shred/srm token, so _REMOVAL_EVIDENCE_RE is structurally blind to them; this
+# set keeps `python3 -c 'shutil.rmtree(p)'` from reading as "no removal token
+# -> inert".
 _API_REMOVAL_RE = re.compile(
     r"(?:^|[^A-Za-z0-9_])"
     r"(rmtree|removedirs|rimraf|unlinkSync|rmSync|rmdirSync|remove_tree"
@@ -96,8 +98,7 @@ _API_DELETE_RE = re.compile(
 
 # Runtime name resolution inside interpreter inline code. These constructs
 # choose their target while running, so no amount of NAME reading can prove the
-# payload inert — `getattr(os,"remove")(p)` was measured allowed by BOTH the
-# primary and the degraded path in iteration 2 (QA F5).
+# payload inert (`getattr(os,"remove")(p)`).
 _DYNAMIC_ACCESS_RE = re.compile(
     r"(?:^|[^A-Za-z0-9_.])"
     r"(getattr|setattr|__getattribute__|__dict__|__import__|globals|locals"
@@ -189,107 +190,6 @@ def _strip_outer_quotes(text):
     return t
 
 
-class LexError(Exception):
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Offset-preserving text slices
-# ---------------------------------------------------------------------------
-
-class Src:
-    """Text plus a per-character map back to absolute offsets in the raw input.
-
-    Every nested context (substitution body, heredoc body, ``-c`` payload)
-    carries its offsets along, so a census obligation recorded at raw offset N
-    can be discharged from arbitrarily deep inside the recursion.
-    """
-
-    __slots__ = ("text", "idx")
-
-    def __init__(self, text, idx):
-        self.text = text
-        self.idx = idx
-
-    @classmethod
-    def from_raw(cls, raw):
-        # Line continuations are removed before any other processing, exactly
-        # as bash does: `$\<nl>(` is a real substitution, `/bi\<nl>n/rm` is a
-        # real /bin/rm. A scanner that skips this is blind to that family.
-        chars = []
-        idx = []
-        i = 0
-        n = len(raw)
-        while i < n:
-            if raw[i] == "\\" and i + 1 < n and raw[i + 1] == "\n":
-                i += 2
-                continue
-            chars.append(raw[i])
-            idx.append(i)
-            i += 1
-        return cls("".join(chars), idx)
-
-    def slice(self, a, b):
-        return Src(self.text[a:b], self.idx[a:b])
-
-    def off(self, i):
-        if 0 <= i < len(self.idx):
-            return self.idx[i]
-        return self.idx[-1] if self.idx else -1
-
-    def __len__(self):
-        return len(self.text)
-
-
-def src_concat(parts, filler=" "):
-    """Join Src pieces with a synthetic separator carrying offset -1."""
-    chars = []
-    idx = []
-    for k, p in enumerate(parts):
-        if k:
-            for ch in filler:
-                chars.append(ch)
-                idx.append(-1)
-        chars.extend(p.text)
-        idx.extend(p.idx)
-    return Src("".join(chars), idx)
-
-
-class Word:
-    """A shell word: literal chunks plus any active expansions inside it."""
-
-    __slots__ = ("segs", "start", "raw")
-
-    def __init__(self, segs, start, raw):
-        self.segs = segs        # list of (kind, Src, abs_offset)
-        self.start = start
-        self.raw = raw          # exact Src slice covering the word
-
-    def literal(self):
-        """The word's static value, or None when any part is computed."""
-        out = []
-        for kind, s, _ in self.segs:
-            if kind != "lit":
-                return None
-            out.append(s.text)
-        return "".join(out)
-
-    def content(self):
-        """Offset-preserving Src of the literal content (for -c payloads)."""
-        return src_concat([s for kind, s, _ in self.segs if kind == "lit"], filler="")
-
-
-class Redir:
-    __slots__ = ("op", "io", "target", "off", "heredoc")
-
-    def __init__(self, op, io, off):
-        self.op = op
-        self.io = io
-        self.off = off
-        self.target = None      # Word, for non-heredoc ops and <<<
-        self.heredoc = None     # (delim, quoted, body Src) for << and <<-
-
-
 class Env:
     """Name bindings introduced by the command itself (hash -p, alias)."""
 
@@ -301,428 +201,12 @@ class Env:
 
 
 # ---------------------------------------------------------------------------
-# Lexer
-# ---------------------------------------------------------------------------
-
-_OP_CHARS = ";&|()"
-_WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
-
-
-def _match_pair(t, i, opener, closer):
-    """Index just past the balanced closer starting at ``t[i] == opener``."""
-    depth = 0
-    n = len(t)
-    while i < n:
-        c = t[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c == "'":
-            j = t.find("'", i + 1)
-            if j < 0:
-                return -1
-            i = j + 1
-            continue
-        if c == '"':
-            i += 1
-            while i < n and t[i] != '"':
-                i += 2 if t[i] == "\\" else 1
-            if i >= n:
-                return -1
-            i += 1
-            continue
-        if c == opener:
-            depth += 1
-        elif c == closer:
-            depth -= 1
-            if depth == 0:
-                return i + 1
-        i += 1
-    return -1
-
-
-def _find_ansi_end(t, i):
-    n = len(t)
-    while i < n:
-        if t[i] == "\\":
-            i += 2
-            continue
-        if t[i] == "'":
-            return i
-        i += 1
-    return -1
-
-
-def _lex_dollar(src, i, segs):
-    """Lex a ``$``-introduced construct at ``i``; append one seg, return next i."""
-    t = src.text
-    n = len(t)
-    off = src.off(i)
-    if i + 1 >= n:
-        segs.append(("lit", src.slice(i, i + 1), off))
-        return i + 1
-    nxt = t[i + 1]
-    if nxt == "(":
-        end = _match_pair(t, i + 1, "(", ")")
-        if end < 0:
-            raise LexError("cmdsub")
-        if i + 2 < n and t[i + 2] == "(":
-            # $(( ... )) arithmetic: body is scanned for expansions, not parsed
-            segs.append(("arith", src.slice(i + 2, end - 1), off))
-        else:
-            segs.append(("sub", src.slice(i + 2, end - 1), off))
-        return end
-    if nxt == "[":
-        end = _match_pair(t, i + 1, "[", "]")
-        if end < 0:
-            raise LexError("arith_bracket")
-        segs.append(("arith", src.slice(i + 2, end - 1), off))
-        return end
-    if nxt == "{":
-        end = _match_pair(t, i + 1, "{", "}")
-        if end < 0:
-            raise LexError("param")
-        segs.append(("param", src.slice(i + 2, end - 1), off))
-        return end
-    j = i + 1
-    if t[j].isalpha() or t[j] == "_":
-        while j < n and (t[j].isalnum() or t[j] == "_"):
-            j += 1
-    elif t[j].isdigit():
-        j += 1
-    elif t[j] in "@*#?-$!0":
-        j += 1
-    else:
-        segs.append(("lit", src.slice(i, i + 1), off))
-        return i + 1
-    segs.append(("param", src.slice(i + 1, j), off))
-    return j
-
-
-def _lex_backtick(src, i, segs):
-    t = src.text
-    n = len(t)
-    end = i + 1
-    found = -1
-    while end < n:
-        if t[end] == "\\":
-            end += 2
-            continue
-        if t[end] == "`":
-            found = end
-            break
-        end += 1
-    if found < 0:
-        raise LexError("backtick")
-    # Bash strips one level of backslash escaping inside backticks.
-    chars = []
-    idx = []
-    k = i + 1
-    while k < found:
-        if t[k] == "\\" and k + 1 < found and t[k + 1] in "`$\\":
-            chars.append(t[k + 1])
-            idx.append(src.idx[k + 1])
-            k += 2
-            continue
-        chars.append(t[k])
-        idx.append(src.idx[k])
-        k += 1
-    segs.append(("sub", Src("".join(chars), idx), src.off(i)))
-    return found + 1
-
-
-def _lex_word(src, i):
-    t = src.text
-    n = len(t)
-    start = i
-    segs = []
-    lit_chars = []
-    lit_idx = []
-
-    def flush():
-        if lit_chars:
-            segs.append(("lit", Src("".join(lit_chars), list(lit_idx)), -1))
-            del lit_chars[:]
-            del lit_idx[:]
-
-    def keep(k):
-        lit_chars.append(t[k])
-        lit_idx.append(src.idx[k])
-
-    while i < n:
-        c = t[i]
-        if c in " \t\n" or c in _OP_CHARS:
-            if c == "(" and lit_chars and _ASSIGN_RE.match("".join(lit_chars)):
-                # NAME=( ... ) array assignment: the parens belong to the word.
-                end = _match_pair(t, i, "(", ")")
-                if end < 0:
-                    raise LexError("array_assign")
-                flush()
-                segs.append(("arraylit", src.slice(i + 1, end - 1), src.off(i)))
-                i = end
-                continue
-            if c == "(" and (
-                    (lit_chars and lit_chars[-1] in "!@+")
-                    or (not lit_chars and segs and segs[-1][0] == "glob"
-                        and segs[-1][1].text in ("*", "?"))):
-                # extglob pattern: ?(x) *(x) +(x) @(x) !(x) — the resulting
-                # command name is chosen by filename matching, not by the text.
-                end = _match_pair(t, i, "(", ")")
-                if end < 0:
-                    raise LexError("extglob")
-                if lit_chars:
-                    del lit_chars[-1]
-                    del lit_idx[-1]
-                else:
-                    segs.pop()
-                flush()
-                segs.append(("glob", src.slice(i - 1, end), src.off(i - 1)))
-                i = end
-                continue
-            break
-        if c in "<>":
-            if i + 1 < n and t[i + 1] == "(":
-                end = _match_pair(t, i + 1, "(", ")")
-                if end < 0:
-                    raise LexError("procsub")
-                flush()
-                segs.append(("procsub", src.slice(i + 2, end - 1), src.off(i)))
-                i = end
-                continue
-            break
-        if c == "\\":
-            if i + 1 < n:
-                keep(i + 1)
-                i += 2
-                continue
-            keep(i)
-            i += 1
-            continue
-        if c == "'":
-            j = t.find("'", i + 1)
-            if j < 0:
-                raise LexError("single_quote")
-            for k in range(i + 1, j):
-                keep(k)
-            i = j + 1
-            continue
-        if c == '"':
-            i += 1
-            closed = False
-            while i < n:
-                ch = t[i]
-                if ch == '"':
-                    closed = True
-                    i += 1
-                    break
-                if ch == "\\" and i + 1 < n and t[i + 1] in '"\\$`':
-                    keep(i + 1)
-                    i += 2
-                    continue
-                if ch == "$" and i + 1 < n:
-                    flush()
-                    i = _lex_dollar(src, i, segs)
-                    continue
-                if ch == "`":
-                    flush()
-                    i = _lex_backtick(src, i, segs)
-                    continue
-                keep(i)
-                i += 1
-            if not closed:
-                raise LexError("double_quote")
-            continue
-        if c == "$":
-            if i + 1 < n and t[i + 1] == "'":
-                j = _find_ansi_end(t, i + 2)
-                if j < 0:
-                    raise LexError("ansi_quote")
-                flush()
-                segs.append(("ansi", src.slice(i + 2, j), src.off(i)))
-                i = j + 1
-                continue
-            if i + 1 < n and t[i + 1] == '"':
-                i += 1
-                continue
-            flush()
-            i = _lex_dollar(src, i, segs)
-            continue
-        if c == "`":
-            flush()
-            i = _lex_backtick(src, i, segs)
-            continue
-        if c in "*?":
-            flush()
-            segs.append(("glob", src.slice(i, i + 1), src.off(i)))
-            i += 1
-            continue
-        if c == "[":
-            j = t.find("]", i + 1)
-            if j > 0 and not any(x in " \t\n" + _OP_CHARS for x in t[i:j]):
-                flush()
-                segs.append(("glob", src.slice(i, j + 1), src.off(i)))
-                i = j + 1
-                continue
-            keep(i)
-            i += 1
-            continue
-        if c == "{":
-            end = _match_pair(t, i, "{", "}")
-            if end > 0:
-                body = t[i + 1:end - 1]
-                if "," in body or ".." in body:
-                    flush()
-                    segs.append(("brace", src.slice(i, end), src.off(i)))
-                    i = end
-                    continue
-            keep(i)
-            i += 1
-            continue
-        keep(i)
-        i += 1
-
-    flush()
-    return Word(segs, src.off(start), src.slice(start, i)), i
-
-
-_REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
-
-
-def _read_heredoc_delim(t, j):
-    n = len(t)
-    quoted = False
-    parts = []
-    while j < n and t[j] not in " \t\n;&|<>()":
-        ch = t[j]
-        if ch == "'":
-            k = t.find("'", j + 1)
-            if k < 0:
-                raise LexError("heredoc_delim")
-            quoted = True
-            parts.append(t[j + 1:k])
-            j = k + 1
-            continue
-        if ch == '"':
-            k = t.find('"', j + 1)
-            if k < 0:
-                raise LexError("heredoc_delim")
-            quoted = True
-            parts.append(t[j + 1:k])
-            j = k + 1
-            continue
-        if ch == "\\":
-            quoted = True
-            parts.append(t[j + 1:j + 2])
-            j += 2
-            continue
-        parts.append(ch)
-        j += 1
-    return "".join(parts), quoted, j
-
-
-def lex(src):
-    """Tokenize ``src`` into ('W', Word) / ('OP', text, off) / ('R', Redir)."""
-    t = src.text
-    n = len(t)
-    toks = []
-    pending_heredocs = []
-    i = 0
-    while i < n:
-        c = t[i]
-        if c in " \t":
-            i += 1
-            continue
-        if c == "#" and (not toks or toks[-1][0] == "OP"):
-            j = t.find("\n", i)
-            i = n if j < 0 else j
-            continue
-        if c == "\n":
-            toks.append(("OP", "\n", src.off(i)))
-            i += 1
-            if pending_heredocs:
-                for redir, delim, quoted in pending_heredocs:
-                    body_start = i
-                    terminated = False
-                    while i <= n:
-                        line_end = t.find("\n", i)
-                        if line_end < 0:
-                            line_end = n
-                        if t[i:line_end].strip() == delim:
-                            redir.heredoc = (delim, quoted, src.slice(body_start, i))
-                            i = min(line_end + 1, n)
-                            terminated = True
-                            break
-                        if line_end >= n:
-                            i = n
-                            break
-                        i = line_end + 1
-                    if not terminated:
-                        raise LexError("unterminated_heredoc")
-                pending_heredocs = []
-            continue
-        if c in "();&|":
-            for op in (";;", "&&", "||", "|&", ";", "&", "|", "(", ")"):
-                if t.startswith(op, i):
-                    toks.append(("OP", op, src.off(i)))
-                    i += len(op)
-                    break
-            continue
-        if c in "<>" and not (i + 1 < n and t[i + 1] == "("):
-            io = None
-            if toks and toks[-1][0] == "W":
-                prev = toks[-1][1]
-                plit = prev.literal()
-                if plit is not None and plit.isdigit() and prev.raw.idx and \
-                        prev.raw.idx[-1] + 1 == src.idx[i]:
-                    io = plit
-                    toks.pop()
-            op = next(o for o in _REDIR_OPS if t.startswith(o, i))
-            r = Redir(op, io, src.off(i))
-            i += len(op)
-            if op in ("<<", "<<-"):
-                while i < n and t[i] in " \t":
-                    i += 1
-                delim, quoted, i = _read_heredoc_delim(t, i)
-                pending_heredocs.append((r, delim, quoted))
-            else:
-                while i < n and t[i] in " \t":
-                    i += 1
-                if i >= n or t[i] in "\n;&|()":
-                    raise LexError("redirect_missing_target")
-                r.target, i = _lex_word(src, i)
-            toks.append(("R", r))
-            continue
-        w, i = _lex_word(src, i)
-        if not w.segs:
-            i += 1
-            continue
-        toks.append(("W", w))
-    if pending_heredocs:
-        raise LexError("unterminated_heredoc")
-    return toks
-
-
-# ---------------------------------------------------------------------------
 # Option-table machinery
 #
 # EVERY table below may only move a boundary toward PROVEN_SAFE. An option that
 # is absent from a table yields UNRESOLVED, never allow. That one-directional
-# property is what separates this from the six rejected enumerative iterations.
+# property keeps an unenumerated option from ever meaning allow.
 # ---------------------------------------------------------------------------
-
-def _spec(bools=(), vals=(), nargs=None):
-    return {"bool": set(bools), "val": set(vals), "nargs": dict(nargs or {})}
-
-
-def _resolve_long(name, spec):
-    if name in spec["bool"] or name in spec["val"]:
-        return name
-    cands = [o for o in (spec["bool"] | spec["val"])
-             if o.startswith("--") and o.startswith(name)]
-    if len(cands) == 1:
-        return cands[0]
-    return None
-
 
 def _resolve_ic_long(name, model):
     """Resolve a long option against a declared-inert consumer's option model.
@@ -741,167 +225,6 @@ def _resolve_ic_long(name, model):
     return None
 
 
-def split_opts(ws, spec, start=0):
-    """Return (first_operand_index, error). Unknown options are an error."""
-    i = start
-    n = len(ws)
-    while i < n:
-        lit = ws[i].literal()
-        if lit is None:
-            return i, None
-        if lit == "--":
-            return i + 1, None
-        if lit in ("-", "+"):
-            return i, None
-        if len(lit) > 1 and lit[:2] == "--":
-            name = lit.split("=", 1)[0]
-            res = _resolve_long(name, spec)
-            if res is None:
-                return i, "unknown_option:" + name
-            if "=" in lit:
-                i += 1
-                continue
-            i += 1 + (spec["nargs"].get(res, 1) if res in spec["val"] else 0)
-            continue
-        if len(lit) > 1 and lit[0] in "-+":
-            j = 1
-            extra = 0
-            while j < len(lit):
-                ch = lit[0] + lit[j]
-                if ch in spec["val"]:
-                    if j + 1 < len(lit):
-                        j = len(lit)
-                    else:
-                        extra = spec["nargs"].get(ch, 1)
-                        j = len(lit)
-                    break
-                if ch in spec["bool"]:
-                    j += 1
-                    continue
-                return i, "unknown_option:" + ch
-            i += 1 + extra
-            continue
-        return i, None
-    if i > n:
-        return n, "missing_option_value"
-    return n, None
-
-
-# Prefix wrappers: options, then (optionally) N fixed operands, then the payload.
-WRAPPERS = {
-    "command": None,          # handled specially (-v/-V are lookups)
-    "exec": (_spec(("-c", "-l"), ("-a",)), 0),
-    "env": (_spec(("-i", "-0", "--null", "--ignore-environment", "-v", "--debug"),
-                  ("-u", "--unset", "-C", "--chdir", "-S", "--split-string")), 0),
-    "nohup": (_spec(), 0),
-    "setsid": (_spec(("-f", "--fork", "-w", "--wait", "-c", "--ctty")), 0),
-    "nice": (_spec(("--help", "--version"), ("-n", "--adjustment")), 0),
-    "ionice": (_spec(("-t", "--ignore"), ("-c", "--class", "-n", "--classdata",
-                                          "-p", "--pid")), 0),
-    "stdbuf": (_spec((), ("-i", "-o", "-e", "--input", "--output", "--error")), 0),
-    "timeout": (_spec(("-f", "--foreground", "--preserve-status", "-v", "--verbose"),
-                      ("-s", "--signal", "-k", "--kill-after")), 1),
-    "chroot": (_spec((), ("--userspec", "--groups", "--skip-chdir")), 1),
-    "strace": (_spec(("-f", "-ff", "-c", "-C", "-T", "-t", "-tt", "-y", "-yy")),
-               0),
-    "ltrace": (_spec(("-f", "-c", "-C", "-S", "-t", "-tt")), 0),
-    "taskset": (_spec(("-a", "--all-tasks", "-p", "--pid")), 0),
-    "prlimit": (_spec((), ("--pid", "--core", "--cpu", "--data", "--fsize",
-                           "--nofile", "--nproc", "--as", "--stack", "--locks",
-                           "--memlock", "--msgqueue", "--nice", "--rtprio",
-                           "--rttime", "--sigpending")), 0),
-    "unshare": (_spec(("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net",
-                       "-p", "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time",
-                       "-f", "--fork", "--mount-proc", "-r", "--map-root-user",
-                       "--kill-child", "--keep-caps"),
-                      ("--propagation", "--setgroups", "--wd", "-S", "--setuid",
-                       "-G", "--setgid")), 0),
-    "nsenter": (_spec(("-a", "--all", "-F", "--no-fork"),
-                      ("-t", "--target", "-m", "--mount", "-u", "--uts", "-i", "--ipc",
-                       "-n", "--net", "-p", "--pid", "-U", "--user", "-C", "--cgroup",
-                       "-S", "--setuid", "-G", "--setgid", "-w", "--wd", "-r", "--root")),
-                0),
-    "setarch": (_spec(("-v", "--verbose", "-3", "--3gb", "-B", "--32bit", "-L",
-                       "--addr-compat-layout", "-F", "--fdpic-funcptrs",
-                       "-I", "--short-inode", "-R", "--addr-no-randomize",
-                       "-S", "--whole-seconds", "-T", "--sticky-timeouts",
-                       "-X", "--read-implies-exec", "-Z", "--mmap-page-zero",
-                       "--uname-2.6")), 1),
-    "fakeroot": (_spec(("-u", "--unknown-is-real", "-h", "--help", "-v", "--version"),
-                       ("-l", "--lib", "-s", "--save-file", "-i", "--load-file",
-                        "-b", "--fd-base")), 0),
-    "eatmydata": (_spec(), 0),
-    "valgrind": (_spec(("-q", "--quiet", "-v", "--verbose"),
-                       ("--tool", "--log-file", "--error-exitcode")), 0),
-    "xvfb-run": (_spec(("-a", "--auto-servernum", "-d", "--auto-display", "-h", "-w"),
-                       ("-n", "--server-num", "-s", "--server-args", "-e",
-                        "--error-file", "-f", "--auth-file", "-p", "--wait")), 0),
-    "dbus-run-session": (_spec((), ("--config-file", "--dbus-daemon")), 0),
-    "daemonize": (_spec(("-v",), ("-a", "-c", "-e", "-o", "-p", "-l", "-u", "-g",
-                                  "-E", "-P")), 0),
-    "systemd-run": (_spec(("--scope", "--user", "--system", "--pty", "-t", "--pipe",
-                           "-q", "--quiet", "--wait", "-d", "--no-block",
-                           "--send-sighup", "--collect", "-G"),
-                          ("--unit", "-u", "--property", "-p", "--description",
-                           "--slice", "--on-active", "--on-boot", "--on-calendar",
-                           "--timer-property", "--setenv", "-E", "--service-type",
-                           "--uid", "--gid", "--nice", "--working-directory",
-                           "--machine", "-M", "--expand-environment")), 0),
-    "chpst": (_spec(("-P", "-v", "-0", "-1", "-2", "-/"),
-                    ("-u", "-U", "-b", "-e", "-m", "-d", "-o", "-p", "-f", "-c",
-                     "-r", "-n", "-l", "-L")), 0),
-    "s6-setuidgid": (_spec(), 1),
-    "firejail": (_spec(("--noprofile", "--quiet", "--private", "--net=none",
-                        "--seccomp", "--caps", "--nosound", "--x11"),
-                       ("--profile", "--name", "--whitelist", "--read-only",
-                        "--bind", "--env", "--chroot", "--net")), 0),
-    "systemd-nspawn": (_spec(("-b", "--boot", "-q", "--quiet", "--private-network",
-                              "-x", "--ephemeral", "-a", "--as-pid2", "-U"),
-                             ("-D", "--directory", "-M", "--machine", "-i", "--image",
-                              "-u", "--user", "--bind", "--bind-ro", "-E", "--setenv",
-                              "--chdir", "--template", "--volatile", "--network-veth")),
-                       0),
-    "busybox": (_spec(), 0),
-    "toybox": (_spec(), 0),
-    "builtin": (_spec(), 0),
-    "sudo": (_spec(("-n", "--non-interactive", "-S", "--stdin", "-b", "--background",
-                    "-E", "--preserve-env", "-H", "--set-home", "-i", "--login",
-                    "-s", "--shell", "-k", "--reset-timestamp", "-K", "--remove-timestamp",
-                    "-v", "--validate", "-l", "--list", "-A", "--askpass", "-P",
-                    "--preserve-groups", "-N", "--no-update"),
-                   ("-u", "--user", "-g", "--group", "-p", "--prompt", "-C",
-                    "--close-from", "-h", "--host", "-D", "--chdir", "-R", "--chroot",
-                    "-T", "--command-timeout", "-r", "--role", "-t", "--type")), 0),
-    "doas": (_spec(("-n", "-s", "-L"), ("-u", "-a", "-C")), 0),
-    "run0": (_spec(("--pty", "--pipe", "--no-ask-password"),
-                   ("-u", "--user", "-g", "--group", "--property", "-D", "--chdir",
-                    "--setenv", "--slice", "--unit", "--description", "--nice",
-                    "--background", "--machine", "-M")), 0),
-    "time": (_spec(("-p", "--portability", "-v", "--verbose", "-a", "--append",
-                    "-q", "--quiet"),
-                   ("-f", "--format", "-o", "--output")), 0),
-    "perf": (_spec(), 1),
-    "machinectl": None,        # handled specially (subcommand dispatch)
-    "start-stop-daemon": None,  # handled specially (--exec names the program)
-    "flock": None,             # handled specially (lock operand then -c or argv)
-    "runuser": None,           # handled specially (-c is shell code)
-    "su": None,
-    "sg": None,
-    "script": None,
-    "bwrap": None,
-    "ssh": None,
-    "sshpass": (_spec(("-e",), ("-p", "-f", "-d", "-P")), 0),
-    "kubectl": None,
-    "watch": None,
-    "xargs": None,
-    "parallel": None,
-    "find": None,
-    "git": None,
-    "docker": None,
-    "podman": None,
-    "coproc": None,
-}
-
 # ---------------------------------------------------------------------------
 # Affirmative-inertness proof set.
 #
@@ -912,22 +235,19 @@ WRAPPERS = {
 #
 # ABSENCE FROM THIS TABLE DOES NOT ALLOW. An unlisted command head whose argv
 # can name a removal front end resolves to UNRESOLVED (Analyzer._terminal_inert)
-# — which denies. That is the inversion the six rejected iterations never had:
-# their tables enumerated the DANGEROUS heads, so an unenumerated head meant
-# allow, and 27 of 47 real installed exec wrappers (chrt, numactl, setpriv,
-# capsh, choom, runcon, cgexec, proxychains, torsocks, systemd-inhibit,
-# lxc-execute, ...) passed a literal `rm <path>` straight through.
+# — which denies. A table that enumerated the DANGEROUS heads would let an
+# unenumerated head mean allow, so every unmodelled exec wrapper (chrt,
+# numactl, setpriv, capsh, choom, runcon, cgexec, proxychains, torsocks,
+# systemd-inhibit, lxc-execute, ...) would pass a literal `rm <path>` through.
 #
 # Anything with a documented facility for executing an argv-derived program is
 # EXCLUDED on purpose: sed (GNU `e` flag), awk (system()), find/xargs/parallel/
 # watch (own handlers), and every shell and interpreter.
 #
-# POSITION, NOT MEMBERSHIP. Iteration 2 made this a plain SET and authorized on
-# membership: the head's name was matched, every word was covered, and
-# PROVEN_INERT was emitted WITHOUT EVER LOOKING AT THE ARGV. Measured
-# consequence: all 109 members allowed a removal front end in option-VALUE
-# position (2180/2180 probes), including the real execution facilities
-# `man -P`, `sort --compress-program=`, `split --filter=`, `sdiff
+# POSITION, NOT MEMBERSHIP. Authorizing on membership alone (the head's name
+# matched, PROVEN_INERT emitted without looking at the argv) would allow a
+# removal front end in option-VALUE position, including the real execution
+# facilities `man -P`, `sort --compress-program=`, `split --filter=`, `sdiff
 # --diff-program=`, `rg --pre` and `compgen -C`.
 #
 # Each member is therefore a DECLARED OPTION MODEL, not a bare name:
@@ -936,7 +256,7 @@ WRAPPERS = {
 #            shell code, so `man -P less ls` stays safe and `man -P '/bin/rm
 #            -rf T' ls` denies
 #   val   -- options that consume a DATA value
-#   why   -- the written justification AC-R02-11 requires
+#   why   -- the written justification of the member's inertness
 # Any option NOT declared is INDETERMINATE: its attached remainder and the
 # following word are treated as option-value position, which denies a removal
 # reference. Only an operand may carry one, which is what keeps `man rm`,
@@ -948,7 +268,7 @@ def _ic(why, bool_=(), exec_=(), val=()):
 
 
 # The PROOF KIND a member's operand position yields. It is carried into the
-# boundary reason code so the AC-R02-10 laxity ledger can be keyed on an
+# boundary reason code so the laxity ledger can be keyed on an
 # admissible proof kind instead of on a blanket "the head was in a table".
 _KIND_LOOKUP = "operand_of_documentation_or_query_consumer"
 _KIND_SEARCH = "search_pattern_operand"
@@ -979,11 +299,10 @@ _RELOCATE_WHY = "file relocation/copy: argv words are source and destination pat
 # affirmative proof of data-ness: the program reads this option's value as a
 # regex, a pattern file, a count, a glob or a label, and never as a program
 # name. A removal-naming token there keeps flowing, because `grep -e rm f.txt`
-# is a developer searching for the string "rm" — denying it was measured as a
-# false positive on ordinary work (QA iteration-3 F4).
+# is a developer searching for the string "rm"; denying it is a false positive
+# on ordinary work.
 #
-# The category had zero members in iteration 3 and so described a distinction
-# that did not exist (QA iteration-3 F7). Every option below is a documented,
+# Every option below is a documented,
 # REQUIRED-value data option of the tool that declares it. Nothing that can
 # name a program may appear here — those belong in `exec`, and they DENY.
 # Optional-value options (`--color[=WHEN]`) are deliberately excluded: their
@@ -1002,7 +321,7 @@ _GREP_DATA = _GREP_CORE_DATA + ("-d", "--directories", "--binary-files",
 # Long options of a non-removal git subcommand whose value git reads as DATA:
 # a regex, an author name, a message, a date. None of them names a program.
 # Declaring them is what makes `git log --grep=rm` and `git log --grep rm`
-# reach the SAME verdict; before this they disagreed purely on attachment.
+# reach the SAME verdict regardless of attachment.
 # TEST/BUILD-RUNNER SELECTOR OPTIONS. A selector is an EXPRESSION matched
 # against test names — never a program name — so a developer filtering on "rm"
 # (`pytest -k rm`, `go test -run rm`) must keep flowing. These heads remain
@@ -1020,13 +339,11 @@ SELECTOR_DATA_OPTIONS = {
 }
 
 GIT_DATA_OPTIONS = frozenset((
-    # `-m` is git's own short spelling of `--message`, and leaving it out made
-    # the two disagree on the SAME string in the SAME position: `git commit
-    # --message 'drop rm usage from the helper'` allowed while `git commit -m
-    # 'drop rm usage from the helper'` denied. That is the spelling-dependent
-    # split this table exists to remove (see the `--grep=rm` / `--grep rm`
-    # rationale above), and it is a false positive on ordinary developer work
-    # that iteration 5 introduced when it widened the quoted-word reading.
+    # `-m` is git's own short spelling of `--message`; both spellings must
+    # reach the same verdict on the SAME string in the SAME position (`git
+    # commit -m 'drop rm usage from the helper'`). Removing that
+    # spelling-dependent split is what this table exists for (see the
+    # `--grep=rm` / `--grep rm` rationale above).
     "-m",
     "--grep", "--author", "--committer", "--message", "--since", "--until",
     "--before", "--after", "--pretty", "--format", "--date", "--grep-reflog",
@@ -1035,12 +352,9 @@ GIT_DATA_OPTIONS = frozenset((
 
 # Subcommands that HAND A COMMAND LINE ONWARD (`git bisect run <cmd>`,
 # `git submodule foreach <cmd>`). For these, NO option may declare its value
-# data: measured directly when `-m` was added above, `git bisect run -m
-# '/bin/rm -rf qa-target'` and `git submodule foreach -m '/bin/rm -rf
-# qa-target'` both flipped to PROVEN_INERT. The same hole was already open
-# through `--message`, which has shipped in the table since revision 2, so
-# scoping the table by subcommand closes a latent leak as well as preventing a
-# new one. It is a pure STRENGTHENING: it can only ever remove allows.
+# data: otherwise `git bisect run -m '/bin/rm -rf T'` and `git submodule
+# foreach --message '/bin/rm -rf T'` would read as PROVEN_INERT. Scoping the
+# table by subcommand can only ever remove allows.
 GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = frozenset(("bisect", "submodule"))
 
 INERT_ARGV_CONSUMERS = {
@@ -1079,11 +393,10 @@ INERT_ARGV_CONSUMERS = {
     # ---- text emission -----------------------------------------------------
     "echo": _ic(_EMIT_WHY, bool_=("-n", "-e", "-E")),
     "printf": _ic(_EMIT_WHY, bool_=("-v",)),
-    # `print` IS ABSENT ON PURPOSE. It was declared here with the ksh/zsh
-    # builtin's option model (-n -r -R -s -p) and the text-emission proof, but
-    # on a Debian host /usr/bin/print is run-mailcap — "execute programs via
-    # entries in the mailcap file", with system() on an argv-derived command
-    # string (QA iteration-3 F3). A head that resolves to a PATH binary must
+    # `print` IS ABSENT ON PURPOSE. The ksh/zsh builtin's option model and
+    # text-emission proof do not hold for it: on a Debian host /usr/bin/print
+    # is run-mailcap — "execute programs via entries in the mailcap file",
+    # with system() on an argv-derived command string. A head that resolves to a PATH binary must
     # not inherit a builtin's proof: the proof was about a different program
     # from the one that would run. Per this table's own exclusion policy,
     # anything with a documented argv-derived execution facility is excluded.
@@ -1136,12 +449,12 @@ INERT_ARGV_CONSUMERS = {
                                      "-q", "-s", "-b", "-H", "-h", "-n", "-a", "-I",
                                      "-z", "-F", "-E", "-P"),
                      val=_GREP_DATA),
-    # `zgrep` IS ABSENT ON PURPOSE — same audit, same rule as `print`. It is a
+    # `zgrep` IS ABSENT ON PURPOSE — same rule as `print`. It is a
     # /bin/sh script that builds and `eval`s command strings from its own argv
     # (`eval "cat --$optarg"`, `eval "$grep$args"`). The shell-quoting applied
-    # before each eval is why no exploit follows today, but the declared proof
-    # said the program "expose[s] no argv-derived exec facility", and that is
-    # false as written. A mitigated facility is still a facility.
+    # before each eval blocks an exploit, but the search-tool proof says the
+    # program "expose[s] no argv-derived exec facility", which is false for
+    # zgrep. A mitigated facility is still a facility.
     "rg": _ic(_SEARCH_WHY + "; EXCEPT --pre/--hostname-bin, which name a program",
               bool_=("-i", "-v", "-w", "-x", "-c", "-l", "-L", "-o", "-q", "-n", "-N",
                      "-s", "-S", "-F", "-P", "-z", "-a", "-u", "-uu", "-uuu", "-p",
@@ -1428,7 +741,7 @@ COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
 # line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
 # command, and zsh's `disable -r` switches the reserved word off.
 COND_DISABLING_BUILTINS = frozenset(("alias", "disable"))
-# A shell's script operand in the quoted CLAUDE_HOME channel (P2 R6), each component plain: a named file.
+# A shell's script operand in the quoted CLAUDE_HOME channel, each component plain: a named file.
 CLAUDE_HOME_FILE = re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+"')
 
 SHELL_SHORT_BOOL = set("abBCefhHiklmnpPrstTuvxD")
@@ -1586,61 +899,9 @@ def basename(path):
 # `cp $SRC $DST` must keep flowing, while `taskset 0x1 /bin/*` must not.
 # ---------------------------------------------------------------------------
 
-_ANSI_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f",
-                "n": "\n", "r": "\r", "t": "\t", "v": "\v", "\\": "\\",
-                "'": "'", '"': '"', "?": "?"}
 _EXPANSION_RE = re.compile(
     r"\$\{[^{}]*\}|\$\([^()]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]")
 _GLOB_META = "*?["
-
-
-def ansi_decode(text):
-    """Decode the escapes bash applies inside $'...'. Never executes anything."""
-    out = []
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if c != "\\" or i + 1 >= n:
-            out.append(c)
-            i += 1
-            continue
-        nxt = text[i + 1]
-        if nxt in _ANSI_SIMPLE:
-            out.append(_ANSI_SIMPLE[nxt])
-            i += 2
-            continue
-        if nxt in "xX":
-            j = i + 2
-            k = j
-            while k < n and k < j + 2 and text[k] in "0123456789abcdefABCDEF":
-                k += 1
-            if k > j:
-                out.append(chr(int(text[j:k], 16)))
-                i = k
-                continue
-        if nxt in "uU":
-            width = 4 if nxt == "u" else 8
-            j = i + 2
-            k = j
-            while k < n and k < j + width and text[k] in "0123456789abcdefABCDEF":
-                k += 1
-            if k > j:
-                out.append(chr(int(text[j:k], 16)))
-                i = k
-                continue
-        if nxt.isdigit():
-            j = i + 1
-            k = j
-            while k < n and k < j + 3 and text[k] in "01234567":
-                k += 1
-            if k > j:
-                out.append(chr(int(text[j:k], 8) & 0xFF))
-                i = k
-                continue
-        out.append(nxt)
-        i += 2
-    return "".join(out)
 
 
 def _glob_escape(text):
@@ -1857,14 +1118,13 @@ def text_token_names_removal(tok):
 # ARGV CANONICALIZATION — one normalized shape, one predicate
 # ---------------------------------------------------------------------------
 #
-# WHY THIS EXISTS. Three rejected iterations share one shape: TWO code paths
-# answered the same question differently and the laxer one won. Iteration 3's
-# residue was measured by QA at 993/1635 — `cat --qa-opt=/bin/rm f` denied while
-# the strictly more dangerous `cat --qa-opt='/bin/rm -rf qa-target' f` allowed,
-# because the attached branch tested a TOKEN predicate and the separated branch
-# tested a PAYLOAD predicate on the identical string.
+# WHY THIS EXISTS. When TWO code paths answer the same question, they can
+# answer it differently and the laxer one wins: an attached branch testing a
+# TOKEN predicate and a separated branch testing a PAYLOAD predicate on the
+# identical string would deny `cat --opt=/bin/rm f` yet allow the strictly
+# more dangerous `cat --opt='/bin/rm -rf T' f`.
 #
-# The remedy is structural, not another patched branch. Every value position —
+# The remedy is structural. Every value position —
 # attached `-XV`, long-joined `--opt=V`, clustered `-abXV`, separated `-X V` /
 # `--opt V`, and a bare payload — is first reduced to a NormalValue. Only then
 # may a removal-recognition predicate run, and there is exactly ONE:
@@ -1903,8 +1163,8 @@ class NormalValue:
         """A value that arrived attached to its option (`-XV`, `--opt=V`).
 
         The text is a slice of an enclosing word whose ``literal()`` was not
-        None, so it is static by construction — which is exactly why the old
-        code reached for a token predicate here and drifted.
+        None, so it is static by construction; it is still judged by the one
+        payload predicate, never by a separate token predicate.
         """
         return NormalValue(s, None, ambiguous_split)
 
@@ -1924,11 +1184,11 @@ _IC_OPAQUE_VALUE = "opaque_option_value"
 _IC_UNRESOLVABLE = "unresolvable_option_word"
 _IC_MISSING_VALUE = "missing_option_value"
 
-# The CLOSED positional-shape vocabulary of AC-R02-10 revision 3. Each token
-# names WHERE the parse placed the word carrying a removal name. The ledger is
-# keyed on (reason_code, positional_shape) because a reason code alone let 981
-# measured elements inherit a justification reading "it sits in OPERAND
-# position" when none of them was in operand position (QA iteration-3 F2).
+# The CLOSED positional-shape vocabulary. Each token names WHERE the parse
+# placed the word carrying a removal name. The ledger is keyed on
+# (reason_code, positional_shape) because a reason code alone would let an
+# element inherit a justification reading "it sits in OPERAND position" when
+# it was not in operand position.
 #
 # `unclassified` is the reserved TOTALITY fallback and is inadmissible as a
 # ledger key: a parse that cannot place the word must fail the criterion rather
@@ -1945,10 +1205,9 @@ SHAPE_OUTPUT_SINK_LITERAL = "interpreter_string_literal_in_output_sink"
 SHAPE_PARSE_ONLY_PAYLOAD = "parse_only_payload"
 SHAPE_SCRIPT_FILE_OPERAND = "script_file_data_operand"
 SHAPE_BUILTIN_LOOKUP = "builtin_lookup_operand"
-# Revision 4 additions. Both name positions the walk ALREADY reached and
-# already covered separately; only the REPORTING was missing, which is why six
-# pinned expected_exit=0 rows reported the inadmissible `unclassified` from a
-# boundary whose recorded shape list was empty.
+# Heredoc bodies and assignment prefixes are positions the walk reaches and
+# covers; naming them keeps such a boundary from reporting the inadmissible
+# `unclassified` with an empty shape list.
 SHAPE_HEREDOC_BODY = "heredoc_or_herestring_body"
 SHAPE_ASSIGNMENT_PREFIX = "assignment_prefix_binding"
 SHAPE_UNCLASSIFIED = "unclassified"
@@ -2014,12 +1273,11 @@ def text_mentions_removal_name(text):
 def _text_is_nested_command_line(text):
     """Would this text have to be RE-PARSED as a command line to be judged?
 
-    Answered by the module's OWN lexer, never by ``str.split``. The dispatch
-    this replaces was `text.split() != [text]`, a tokenizer COARSER THAN A
-    SHELL'S, and the gap was reachable: `x;/bin/rm${IFS}-rf${IFS}qa-target`
-    contains no whitespace, so it was judged as one program reference named
-    `x;/bin/rm${IFS}…` and allowed, while a shell reads it as two commands and
-    runs the second.
+    Answered by the module's OWN lexer, never by ``str.split``, which is a
+    tokenizer COARSER THAN A SHELL'S: `x;/bin/rm${IFS}-rf${IFS}T` contains no
+    whitespace, so a whitespace split would judge it as one program reference
+    named `x;/bin/rm${IFS}…`, while a shell reads it as two commands and runs
+    the second.
 
     A text the lexer reads as exactly ONE bare word carries no nested command
     line: the program-reference reading already answers it completely, and
@@ -2056,13 +1314,8 @@ def text_names_removal(text):
         procedure, which re-lexes it and walks it exactly as a top-level
         command line.
 
-    The dispatch that used to choose between them — `text.split() != [text]` —
-    was a tokenizer COARSER THAN A SHELL'S, and that gap was reachable:
-    `x;/bin/rm${IFS}-rf${IFS}qa-target` has no whitespace, so it was judged as a
-    single program reference named `x;/bin/rm${IFS}…` and allowed, while a
-    shell reads it as two commands, the second of which is `/bin/rm`. Nothing
-    now decides which reading applies; a value that is dangerous under EITHER
-    reading is not proven inert.
+    Nothing decides which reading applies: a value that is dangerous under
+    EITHER reading is not proven inert.
     """
     if not text or not text.strip():
         return False
@@ -2098,7 +1351,7 @@ class Analyzer:
         self._head, self.direct = None, False
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
-        # gets False, the old reading. Any alias text in the command, or a run
+        # gets False. Any alias text in the command, or a run
         # of a COND_DISABLING_BUILTINS builtin, switches it off for the rest.
         self._cond = False
         self._cond_disabled = "alias" in raw.lower()
@@ -2110,28 +1363,21 @@ class Analyzer:
         re-derived afterwards from the reason-code string, which would just be
         the reason code wearing a second name.
 
-        FIRST PLACEMENT NO LONGER WINS, because winning was a bypass. The old
-        rule recorded the first word that merely MENTIONS a removal name and
-        returned early, so one benign leading operand captured the shape of the
-        whole command and every later position's laxity inherited the operand
-        entry's written proof. QA measured it exactly: `cat rm.txt
-        --qa-opt='<payload>' f` reported shape `operand` and came back COVERED,
-        while the identical command without the leading `rm.txt` reported
-        `undeclared_option_value_attached` and came back UNLEDGERED — the proof
-        depended on a word that had nothing to do with the laxity. Over a
-        control family built with that one extra dimension, 10773 of 12016
-        members were absorbed.
+        FIRST PLACEMENT DOES NOT WIN. Recording only the first word that
+        merely MENTIONS a removal name would let one benign leading operand
+        capture the shape of the whole command: `cat rm.txt --opt='<payload>'
+        f` would report `operand` and borrow that entry's written proof, while
+        the same command without `rm.txt` reports
+        `undeclared_option_value_attached`.
 
         Recording the SET means an element is covered only when every position
         that carries a removal name is ledgered, so no position can borrow a
         neighbour's justification.
 
-        Keying the AC-R02-10 laxity ledger on the boundary reason code alone
-        makes new laxity invisible: any command the analyzer maps onto a
-        ledgered code inherits that entry's written positional justification
-        even when the justification does not describe it (QA iteration-3 F2:
-        981 elements absorbed by an entry asserting OPERAND position, none of
-        them in operand position).
+        Keying the laxity ledger on the boundary reason code alone would make
+        new laxity invisible: any command the analyzer maps onto a ledgered
+        code would inherit that entry's written positional justification even
+        when the justification does not describe it.
         """
         if text and text_mentions_removal_name(text):
             if shape not in self._pending_shapes:
@@ -2152,7 +1398,7 @@ class Analyzer:
             self.overflow = True
             return
         # EVERY position this boundary's own walk placed a removal name in.
-        # Attaching the set here is what binds the AC-R02-10 shape to the walk
+        # Attaching the set here is what binds the positional shape to the walk
         # that produced the verdict: `echo "$(command -v rm)"` has an operand
         # AND a builtin-lookup operand, but they belong to two DIFFERENT
         # boundaries, and only the deciding one's shapes may key the ledger.
@@ -2195,7 +1441,7 @@ class Analyzer:
         if off is not None and off >= 0:
             self.discharged.add((kind, off))
 
-    # -- census discharge (Must-2 completeness backstop) ---------------------
+    # -- census discharge (completeness backstop) -----------------------------
 
     def cover_src(self, src):
         """Discharge every removal-reference obligation inside ``src``.
@@ -2208,10 +1454,10 @@ class Analyzer:
         proven to be an output sink.
 
         It must NEVER be driven by "the enclosing command came out safe" —
-        that is circular, and it is precisely how the previous census managed
-        to raise zero effective obligations while a wrapper payload walked
-        through. If no site can explain a removal reference, the obligation
-        stands and the command resolves UNRESOLVED.
+        that is circular, and it would let a census raise zero effective
+        obligations while a wrapper payload walks through. If no site can
+        explain a removal reference, the obligation stands and the command
+        resolves UNRESOLVED.
         """
         if src is None:
             return
@@ -2230,9 +1476,9 @@ class Analyzer:
         here-string are delivered to the receiving command's STDIN; they are
         not words of its argv. The walk already reached both — the body as the
         redirection's own (delim, quoted, body) triple, the here-string as its
-        target word — but recorded no shape for either, so four pinned
-        expected_exit=0 rows reported `unclassified` from an empty shape list.
-        An ordinary `>`/`<` target is NOT this position and stays unreported.
+        target word — and this records SHAPE_HEREDOC_BODY for both, so neither
+        reports `unclassified` from an empty shape list. An ordinary `>`/`<`
+        target is NOT this position and stays unreported.
         """
         if r is None:
             return
@@ -2256,13 +1502,12 @@ class Analyzer:
         wrapper payload arrives in all of them:
           (a) a bare program reference  -- rm, /bin/rm, ../bin/unlink
           (b) a command-line-shaped value -- 'rm -rf x', the quoted payload of
-              an attached/clustered code option such as `script -qc`. This is
-              the shape iteration 3 judged with a token predicate and let
-              through in 993 of 1635 measured option-value placements.
+              an attached/clustered code option such as `script -qc`. A token
+              predicate cannot judge this shape.
           (c) an UNEXPANDED reference -- /bin/r?, /bin/{r,}m, $'\\x72m',
               ${EMPTY}rm. These have no literal whose basename is in
-              REMOVAL_EXES, which is exactly why iteration 2 read them as
-              clean; recognition therefore runs over the representation.
+              REMOVAL_EXES, so a literal-based reading sees them as clean;
+              recognition therefore runs over the representation.
         """
         if v.text is not None:
             if v.ambiguous_split:
@@ -2277,8 +1522,8 @@ class Analyzer:
             return True
         # A whole-word value can equally be a QUOTED PAYLOAD — `setsid -c
         # '<removal>'`, `flock f -c '> log rm -rf T'`. Same text, same one
-        # procedure; the whitespace test that used to gate this is gone for the
-        # same reason it is gone from ``text_names_removal``.
+        # procedure, and no whitespace test gates it, for the same reason
+        # ``text_names_removal`` has none.
         inner = _strip_outer_quotes(w.raw.text)
         if not _text_is_nested_command_line(inner):
             return False
@@ -2297,9 +1542,8 @@ class Analyzer:
         interpreter running a script FILE with no inline-code flag. There the
         parse has already PROVEN what re-parses the word — the script does, as
         data — so the nested-command-line reading has nothing to resolve. This
-        is AC-R02-10's admissible proof kind (7), and the pinned fixture row
-        `python3 checker.py 'git rm qa-inert-3'` (POL-I5-QA-0373, expected exit
-        0) is what forces it.
+        is the script-file data-operand proof kind: `python3 checker.py 'git rm
+        x'` must stay allowed.
 
         It is not a second model of what executes. It is the FIRST of the two
         readings ``value_names_removal`` always applies, called where the other
@@ -2320,16 +1564,12 @@ class Analyzer:
 
         Where an attached value BEGINS is exactly what an undeclared option
         leaves unknown: in `-abXrm` the value may be `bXrm`, `Xrm` or `rm`, and
-        iteration 3 tested only the first of those. Measured consequence in the
-        broadened AC-R02-12 alphabet: 471/530 clustered-short placements
-        allowed.
+        every one of those is tested.
 
-        THERE IS NO CUT CAP. A previous `ATTACHED_SPLIT_LIMIT = 24` stopped the
-        search at a fixed count, and the boundary was exact and reachable:
-        `cat -a<23 pad>rm T` denied while `cat -a<24 pad>rm T` allowed. A fixed
-        number that flips a verdict when it is exceeded is the same defect
-        class as a depth cutoff that turns into an allow, so the search now
-        runs to the end of the text. What still bounds it is STRUCTURAL, not
+        THERE IS NO CUT CAP. A fixed split count would flip the verdict once
+        exceeded (`cat -a<pad>rm T` allowed past the cap), the same defect
+        class as a depth cutoff that turns into an allow, so the search runs
+        to the end of the text. What bounds it is STRUCTURAL, not
         numeric: a cut is only plausible while everything skipped so far still
         looks like clustered option characters, which is what keeps
         `-e$PATTERN` and `-k1,1` from fanning out. Running out of TEXT is
@@ -2344,12 +1584,10 @@ class Analyzer:
         for cut in range(len(text)):
             # The only STRUCTURAL stop: whitespace ends the attached remainder,
             # and everything past it is a separate argv word the walk sees on
-            # its own. The previous stop was "the skipped character is not
-            # alphanumeric or in -+", which made every in-value separator a
-            # bypass: `-X'X,rm'`, `X:rm`, `X%rm`, `X@rm`, `X=rm` all allowed
-            # because the search gave up at the punctuation, even though a
-            # comma- or colon-separated option value is exactly the shape whose
-            # consumption an UNDECLARED option leaves unproven.
+            # its own. Stopping at punctuation would make every in-value
+            # separator a bypass (`-X'X,rm'`, `X:rm`, `X%rm`, `X@rm`, `X=rm`),
+            # yet a comma- or colon-separated option value is exactly the shape
+            # whose consumption an UNDECLARED option leaves unproven.
             if cut and text[cut - 1].isspace():
                 break
             if Analyzer.text_is_removal_reference(text[cut:]):
@@ -2360,9 +1598,8 @@ class Analyzer:
     def unreadable_option_word_names_removal(w):
         """The same question for an option word that is not fully literal.
 
-        `cat -X/bin/r? qa-target` reached a branch that asked a DIFFERENT
-        question entirely — whether the raw text carried removal evidence —
-        and allowed 530/530 such placements. The word's own option marker is
+        `cat -X/bin/r? T` is judged by the one predicate, not by whether the
+        raw text carries removal evidence. The word's own option marker is
         stripped by the split search, so the value is what gets recognised.
         """
         raw = _strip_outer_quotes(w.raw.text)
@@ -2382,26 +1619,18 @@ class Analyzer:
         the same census — recursively, at every depth, with no level at which
         the knowledge thins out.
 
-        Iterations 1-4 each answered this question with a SECOND, private model
-        and the laxer model won. Iteration 4's was a hand-rolled head scan that
-        knew only SHELLS and INTERPRETERS and looked exactly one level deep,
-        while the walk knew the whole installed exec-wrapper set. Measured
-        consequence: `xargs /bin/rm -rf T`, `timeout 5 …`, `sudo -u root …`,
-        `taskset …`, `stdbuf …`, `flock …`, `strace …` and twelve more denied
-        at top level and ALLOWED as an option value (19641/24032 probes);
-        `sh -c 'sh -c /bin/rm'` allowed one level below where it denied; and
-        the scan tokenized on whitespace while a shell tokenizes on
-        metacharacters, so `x;/bin/rm${IFS}-rf${IFS}T` read as one token.
-        Re-entering the procedure removes the second model rather than teaching
-        it another list, which is the only repair that does not have a fifth
-        instance waiting behind it.
+        A SECOND, private model of this question would be laxer than the walk:
+        a head scan that knows only shells and interpreters, or looks one level
+        deep, or tokenizes on whitespace, would allow `xargs /bin/rm -rf T`,
+        `timeout 5 …` or `sudo -u root …` as an option value, `sh -c 'sh -c
+        /bin/rm'` one level down, and `x;/bin/rm${IFS}-rf${IFS}T` as one token.
+        Re-entering the procedure leaves no second model to fall behind.
 
         FAIL-CLOSED, ALWAYS. Anything that stops the procedure short of a
         terminal-safe verdict — a lex failure, a census fatal, an unnamed head,
         a boundary overflow, an exhausted work budget — resolves the payload as
         NOT PROVABLY INERT. A bound that denies on exhaustion is a work bound;
-        a bound that returns "inert" on exhaustion is a bypass, which is what
-        the fixed cut cap and the one-level head scan both were.
+        a bound that returns "inert" on exhaustion is a bypass.
         """
         if not text or not text.strip():
             return False
@@ -2460,17 +1689,15 @@ class Analyzer:
         analyzer. If nothing in ``residual`` can name a removal front end, the
         command lies outside the declared policy scope and is terminal-safe.
         If a removal reference IS present, the absence of a proof is
-        UNRESOLVED — never an allow. This is the leaf QA measured leaking:
-        `taskset 0x1 rm <path>` and `script -qc '<removal>'` reached it and
-        were authorized purely because no table named their head.
+        UNRESOLVED — never an allow: `taskset 0x1 rm <path>` and `script -qc
+        '<removal>'` reach this leaf and deny even though no table names their
+        head.
 
         ``data_opts`` names options the CALLER has proven consume a DATA value.
-        Without it this scan was attachment-dependent in the strict direction:
-        `git log --grep=rm` allowed (the value was glued to the option, so the
-        whole word's basename was not a removal name) while `git log --grep rm`
-        denied. Same string, same position, two verdicts — the defect class of
-        this cycle, merely biased safe instead of unsafe. Declaring the option
-        makes both ALLOW through one canonical value.
+        Without it this scan would be attachment-dependent: `git log --grep=rm`
+        and `git log --grep rm` would get two verdicts for the same string in
+        the same position. Declaring the option makes both ALLOW through one
+        canonical value.
         """
         skip = -1
         for idx, w in enumerate(residual):
@@ -2509,11 +1736,9 @@ class Analyzer:
             if api is not None:
                 # The SAME library-removal knowledge ``_classify_inline_code``
                 # applies to a NAMED interpreter's payload, applied here to an
-                # UNNAMED head's argv. `bun -e 'require("fs").rmSync(p)'` was
-                # allowed by this leaf purely because `bun` is not in
-                # INTERPRETERS, so the payload was never classified — the same
-                # "one position knows less than another" shape as the option
-                # value that did not know about exec wrappers.
+                # UNNAMED head's argv, so `bun -e 'require("fs").rmSync(p)'`
+                # denies even though `bun` is not in INTERPRETERS: no position
+                # may know less than another.
                 self.structural(
                     "unproven_boundary_with_removal_api_reference",
                     "%s:%s" % (detail, api[:40]))
@@ -2550,8 +1775,11 @@ class Analyzer:
             elif kind == "arraylit":
                 self.scan_expansions(s, env)
 
-    def scan_expansions(self, src, env):
-        """Find expansions inside a non-command context (arith / ${...} body)."""
+    def scan_expansions(self, src, env, heredoc_body=False):
+        """Find expansions inside a non-command context (arith / ${...} body).
+
+        ``heredoc_body``: the body of an unquoted heredoc, where a quote is text.
+        """
         t = src.text
         n = len(t)
         i = 0
@@ -2560,7 +1788,7 @@ class Analyzer:
             if c == "\\":
                 i += 2
                 continue
-            if c == "'":
+            if c == "'" and not heredoc_body:
                 j = t.find("'", i + 1)
                 if j < 0:
                     self.structural("lex:single_quote", t[:80])
@@ -2614,7 +1842,7 @@ class Analyzer:
         itself, its substitutions, `eval` and alias bodies (the same shell), and
         a COND_SHELLS -c or stdin program. Every other caller (ssh, at, git
         aliases, exec option values ...) hands the code to a shell this file
-        cannot name, so it keeps the default False and the old reading.
+        cannot name, so it keeps the default False.
         """
         self.depth += 1
         outer = self._cond
@@ -2658,8 +1886,8 @@ class Analyzer:
         # flush like any other word's, so `[[ -n $(cmd) ]]` is analysed as code.
         # Anything else (`;`, `&`, `|`, `;;`, a `)` that closes no `(` of the
         # conditional, as in a case pattern `[[)`) cannot occur inside a
-        # conditional; there the walk falls back to the old reading and treats
-        # it as a boundary. The conditional ends at the first word whose value
+        # conditional; there the walk reads it as it would outside one and
+        # treats it as a boundary. The conditional ends at the first word whose value
         # is `]]`, however quoted: ending it early only splits more.
         cond_depth = None
         for tok in toks:
@@ -2700,7 +1928,7 @@ class Analyzer:
                 # any substitution inside it runs even when the body is mere
                 # data for the receiving command.
                 if r.heredoc is not None and not r.heredoc[1]:
-                    self.scan_expansions(r.heredoc[2], env)
+                    self.scan_expansions(r.heredoc[2], env, heredoc_body=True)
             elif r.op == "<<<":
                 self.note("heredoc", r.off)
                 if r.target is not None:
@@ -2722,7 +1950,7 @@ class Analyzer:
                 continue
             break
         # An assignment prefix normally never executes: its value is data, and
-        # `A=(/bin/rm) echo qa-inert-17` is a pinned SAFE row. But a NAMED set
+        # `A=(/bin/rm) echo x` stays SAFE. But a NAMED set
         # of variables is a documented command hook that the very next command
         # runs — GIT_EXTERNAL_DIFF, GIT_PAGER, GIT_SSH_COMMAND, PAGER, LESSOPEN,
         # EDITOR — so `GIT_EXTERNAL_DIFF=/bin/rm git diff` is an execution
@@ -2734,8 +1962,8 @@ class Analyzer:
                     return
                 # The prefix is a BINDING the following command does not run.
                 # The walk already computed this exact slice and already
-                # covered it; reporting the position is what stopped
-                # `A=rm echo qa-inert-16` from resolving to `unclassified`.
+                # covered it; reporting the position keeps `A=rm echo x` from
+                # resolving to `unclassified`.
                 # Guarded by `k < len(words)` so a prefix with no following
                 # command records nothing — there is no boundary to attach to
                 # and the note would drain into an unrelated later one.
@@ -2776,9 +2004,7 @@ class Analyzer:
         body = value[value.find("=") + 1:]
         if not body.strip():
             return False
-        # ONE predicate here too. This site previously OR-ed a payload test with
-        # a token test — harmless because the union is the stricter of the two,
-        # but it is the same defect shape: two predicates answering one question
+        # ONE predicate here too: two predicates must never answer one question
         # about one string.
         if Analyzer.text_is_removal_reference(body):
             self.add(FORBIDDEN_REMOVAL, "exec_assignment_vector",
@@ -2905,19 +2131,16 @@ class Analyzer:
     def _inert_consumer(self, base, name, args, redirs, env):
         """PHASE 2 — resolve a declared-inert consumer by INSPECTING ITS ARGV.
 
-        Iteration 2 answered this boundary with `base in INERT_ARGV_CONSUMERS`
-        and then covered every word without reading any of them, so the same
-        verdict was returned for `man rm` (a documentation lookup) and for
-        `man -P '/bin/rm -rf T' ls` (a pager invocation). Measured result:
-        2180/2180 option-value probes allowed, 109/109 members leaking.
+        Membership in INERT_ARGV_CONSUMERS alone does not decide the boundary:
+        `man rm` (a documentation lookup) and `man -P '/bin/rm -rf T' ls` (a
+        pager invocation) share a head but not a verdict.
 
         The question asked here is WHERE a removal reference sits. It is asked
         ONCE, of an already-canonical value, so no two syntactic forms of the
         same string can receive different verdicts:
           * OPERAND position is data — `man rm`, `which /bin/rm`,
-            `grep -F /bin/rm README.md` keep flowing (the AC-R02-12
-            counterweight, and the reason deleting members cannot satisfy the
-            criterion);
+            `grep -F /bin/rm README.md` keep flowing, which is why deleting
+            members is no substitute for reading the argv;
           * DECLARED-EXEC option value is a program — its text is analyzed as
             shell code, so `man -P less ls` stays safe while `man -P
             '/bin/rm -rf T' ls` reaches the removal head and denies, in every
@@ -2936,8 +2159,8 @@ class Analyzer:
             if kind is _IC_UNRESOLVABLE:
                 # This word's option/value split is unreadable, but that is a
                 # reason to ask the ONE predicate about every split — not a
-                # reason to ask a different question. Deferring to raw-text
-                # removal evidence here is what allowed `cat -X/bin/r? T`.
+                # reason to ask a different question such as raw-text removal
+                # evidence, which would allow `cat -X/bin/r? T`.
                 if self.unreadable_option_word_names_removal(words[0]):
                     self.structural("option_value_removal_reference",
                                     "%s:%s" % (name, words[0].raw.text[:60]))
@@ -2980,11 +2203,10 @@ class Analyzer:
         """PHASE 1 — reduce argv to canonical slots. NO predicate runs here.
 
         This function deliberately contains not one removal-recognition call.
-        The separation IS the repair: iteration 3 decided the removal question
-        inline at five syntactic branches, and two of those used a different
-        predicate from the other three, so `--qa-opt=/bin/rm` denied while the
-        strictly more dangerous `--qa-opt='/bin/rm -rf qa-target'` allowed.
-        Here every value position — attached ``-XV``, long-joined ``--opt=V``,
+        Deciding the removal question inline at each syntactic branch lets the
+        branches drift onto different predicates, so `--opt=/bin/rm` and the
+        strictly more dangerous `--opt='/bin/rm -rf T'` could disagree. Here
+        every value position — attached ``-XV``, long-joined ``--opt=V``,
         clustered ``-abXV``, separated ``-X V`` / ``--opt V`` — is reduced to a
         NormalValue first, so phase 2 sees one shape and asks one question.
 
@@ -2992,7 +2214,7 @@ class Analyzer:
         ``words_consumed`` is what phase 2 covers; a word examined in
         option-value position WITHOUT being consumed — an undeclared short or
         long option's follower, which may equally be the next option — carries
-        an empty list and is re-walked on its own, exactly as before.
+        an empty list and is re-walked on its own.
         """
         bools, execs, vals = model["bool"], model["exec"], model["val"]
         slots = []
@@ -3005,8 +2227,8 @@ class Analyzer:
                 # Not a plain literal. Its POSITION still decides: only a word
                 # whose static prefix is an option marker can reach an
                 # option-value position, and only then is it unresolvable.
-                # `echo /bin/r?` and `du -sh *` are operands — data — and the
-                # AC-R02-12 counterweight requires them to keep flowing.
+                # `echo /bin/r?` and `du -sh *` are operands — data — and must
+                # keep flowing.
                 slots.append(((_IC_UNRESOLVABLE
                                if _static_prefix(w).startswith("-")
                                else _IC_OPERAND), "", None, [w]))
@@ -3091,9 +2313,9 @@ class Analyzer:
                               [w, args[i + 1]] if consumed_next else [w]))
                 # An UNDECLARED short option may take a SEPARATED value, and
                 # nothing here can tell whether the attached remainder was that
-                # value or a further cluster member. `cat -abX /bin/rm` leaked
-                # precisely because only the remainder was read — so BOTH are
-                # examined, and neither consumes the following word.
+                # value or a further cluster member. Reading only the remainder
+                # would let `cat -abX /bin/rm` through, so BOTH are examined,
+                # and neither consumes the following word.
                 if kind is _IC_OPAQUE_VALUE and i + 1 < n:
                     slots.append((_IC_OPAQUE_VALUE, opt,
                                   NormalValue.from_word(args[i + 1]), []))
@@ -3224,8 +2446,8 @@ class Analyzer:
 
         Offsets matter: the words produced here are the real argv, and whatever
         resolves them has to be able to discharge the census obligations their
-        text raised. Rebuilding them at offset -1 made `env -S 'echo /bin/rm'`
-        unable to explain its own removal name.
+        text raised. Words rebuilt at offset -1 would leave `env -S 'echo
+        /bin/rm'` unable to explain its own removal name.
         """
         words = []
         text = src.text
@@ -3572,8 +2794,7 @@ class Analyzer:
             # facility, so it cannot be authorized as an argv-blind consumer.
             # A removal reference in PREDICATE-VALUE position (`-name rm`) is
             # a search pattern; the same reference in PATH-OPERAND position
-            # (`find /bin/rm -rf T`, measured leaking on the PATH sweep as
-            # `find_without_exec`) is not proven to be anything.
+            # (`find /bin/rm -rf T`) is not proven to be anything.
             prev_is_predicate = False
             for w in args:
                 lit = w.literal()
@@ -3720,12 +2941,12 @@ class Analyzer:
                 return
             # A named script file is the boundary; its operands are data handed
             # to that script. Opaque script contents are the policy's declared
-            # trust boundary (unchanged from the rule this analyzer replaced).
+            # trust boundary.
             #
             # EXCEPT when the script operand IS a removal front end. `bash
             # /bin/rm -rf T` names a removal binary in the position the shell
-            # will open and run; nothing here proves that inert, and a PATH
-            # sweep measured this leaking for every installed shell.
+            # will open and run; nothing here proves that inert, for any
+            # shell.
             if self.word_is_removal_reference(script):
                 self.structural("shell_script_operand_removal_reference",
                                 "%s:%s" % (name, path[:60]))
@@ -3781,7 +3002,7 @@ class Analyzer:
             # front end is not a proven-inert data path. The reading is the
             # PROGRAM-REFERENCE one, because this branch has proven there is no
             # inline-code flag and therefore no nested command line for the
-            # interpreter to run — AC-R02-10 proof kind (7).
+            # interpreter to run (the script-file data-operand proof kind).
             for w in args:
                 if self.word_names_removal_program(w):
                     self.structural("interpreter_script_operand_removal_reference",
@@ -3806,17 +3027,18 @@ class Analyzer:
             self.cover(code)
 
     def _dynamic_interpreter_code(self, base, code):
-        """An inline program whose word holds an expansion (P2-6).
+        """An inline program whose word holds an expansion.
 
-        The scoped check alone refused only when the raw command carried an
-        rm/unlink/shred/srm word, so `python3 -c "shutil.rmtree('$HOME/x')"`
-        was judged inert while its literal-path form was refused. The fixed
-        text is now classified by the SAME classifier as the literal form, with
-        each expansion replaced by a neutral placeholder: a refusal it finds is
-        kept with the literal form's reason. An expansion that can change the
-        program itself, not only a value inside one of its string literals,
-        fails closed. Otherwise the old scoped check runs unchanged, so no
-        earlier refusal weakens and no inert verdict changes its reason.
+        The scoped check alone refuses only when the raw command carries an
+        rm/unlink/shred/srm word, so it would judge `python3 -c
+        "shutil.rmtree('$HOME/x')"` inert while refusing its literal-path form.
+        The fixed text is therefore classified by the SAME classifier as the
+        literal form, with each expansion replaced by a neutral placeholder: a
+        refusal it finds is kept with the literal form's reason. An expansion
+        that can change the program itself, not only a value inside one of its
+        string literals, fails closed. Otherwise the scoped check runs as it
+        does for a literal program, so no refusal weakens and no inert verdict
+        changes its reason.
         """
         text, why = _program_with_placeholders(code, base, self.raw)
         mark = len(self.boundaries)
@@ -3838,9 +3060,7 @@ class Analyzer:
         # DYNAMIC ATTRIBUTE ACCESS FIRST. `getattr(os,"remove")(p)`,
         # `os.__dict__["unlink"](p)`, `globals()["shutil"].rmtree(p)` and
         # `__import__("os").remove(p)` reach the same syscalls while the name
-        # never appears in a form the scans below can attribute to a call:
-        # iteration 2 allowed this family on BOTH the primary and the degraded
-        # path (QA F5), the only measured family with no backstop at all. A
+        # never appears in a form the scans below can attribute to a call. A
         # construct that resolves its target at runtime cannot be proven inert
         # by reading names, so it is UNRESOLVED by construction.
         m = _DYNAMIC_ACCESS_RE.search(text)
@@ -3850,8 +3070,8 @@ class Analyzer:
             return
         # Library-level removal first. shutil.rmtree / fs.unlinkSync /
         # File.delete / fs.rmSync carry NO rm|unlink|shred|srm TOKEN, so the
-        # token scan below cannot see them and read them as "no removal token
-        # -> inert". An interpreter payload that removes through an API is
+        # token scan below cannot see them and would read them as "no removal
+        # token -> inert". An interpreter payload that removes through an API is
         # exactly as unprovable as one that shells out.
         for rx in (_API_REMOVAL_RE, _API_DELETE_RE):
             m = rx.search(text)
@@ -3882,9 +3102,9 @@ class Analyzer:
         """Offset-preserving Src for the body of a `-c alias.X=<body>` value.
 
         The body is always the TAIL of the option word's literal, so slicing
-        the word's content keeps every raw offset. Rebuilding it from a plain
-        str (offset -1 everywhere) is what previously made an alias body
-        unable to discharge the census obligation its own `rm` raised.
+        the word's content keeps every raw offset. A body rebuilt from a plain
+        str (offset -1 everywhere) could not discharge the census obligation
+        its own `rm` raised.
         """
         if word is not None:
             content = word.content()
@@ -4282,7 +3502,7 @@ def _enclosing_call(text, pos):
 # ---------------------------------------------------------------------------
 
 def declared_authorizing_table():
-    """The declaration AC-R02-11 requires, in machine-readable form.
+    """The inertness declaration, in machine-readable form.
 
     Every program that may ALLOW a command whose argv names a removal front end
     appears here with a written justification, its proof kind, and its option
@@ -4356,21 +3576,15 @@ def analyze(raw):
     # OVERFLOW DENIES ITSELF: THE EXHAUSTION PATH IS DECIDED BY THE FLAG,
     # NOT BY A RECORDER.
     #
-    # Both findings above used to be pushed through ``Analyzer.add``, which
-    # returns WITHOUT appending once ``len(self.boundaries) >= MAX_BOUNDARIES``
-    # — so at overflow, the one moment the marker decides the outcome, the
-    # recorder that was supposed to carry it had already switched itself off.
-    # The ranking loop then saw only the first MAX_BOUNDARIES boundaries, all
-    # inert by construction of the padding, and an analysis that never finished
-    # came back PROVEN_INERT. Measured on this host before the change:
-    # 399 inert padding units followed by a filesystem removal exited the hook
-    # 2 (FORBIDDEN_REMOVAL); 400 identical units exited 0 (PROVEN_INERT,
-    # allowed) — a fail-open cliff exactly at the cap, on the same removal.
-    # The conditional ``census_obligation_undischarged`` marker was dropped by
-    # the identical mechanism whenever it fired at overflow; ``add_terminal``
-    # is what stops both from being swallowed.
+    # Both findings above go through ``add_terminal``, not ``Analyzer.add``,
+    # which returns WITHOUT appending once ``len(self.boundaries) >=
+    # MAX_BOUNDARIES``: at overflow, the one moment the marker decides the
+    # outcome, ``add`` would drop it (the ``census_obligation_undischarged``
+    # marker too), and the ranking loop would see only the first
+    # MAX_BOUNDARIES boundaries. Inert padding followed by a filesystem removal
+    # would then come back PROVEN_INERT — a fail-open cliff at the cap.
     #
-    # Raising MAX_BOUNDARIES is not the repair; it relocates the cliff. Any
+    # Raising MAX_BOUNDARIES would only relocate the cliff. Any
     # bound on analysis work must have its exhaustion path decided by something
     # that still functions once the bound is hit, and only a flag read outside
     # the bounded structure qualifies — which is why the seed below reads
@@ -4379,9 +3593,8 @@ def analyze(raw):
     # The seed is monotone in _RANK, so it takes nothing away: a genuine
     # FORBIDDEN_REMOVAL inside the recorded prefix still outranks UNRESOLVED
     # and keeps its own reason, and no PROVEN_INERT boundary can lower the
-    # seed. When ``az.overflow`` is False this block is inert and the verdict
-    # is computed exactly as before, ``add_terminal`` being ``add`` on a
-    # list that is not full.
+    # seed. When ``az.overflow`` is False this block is inert, and
+    # ``add_terminal`` behaves as ``add`` on a list that is not full.
     verdict = PROVEN_INERT
     reason = "no_execution_boundary_requires_removal_authorization"
     if az.overflow:
@@ -4396,26 +3609,22 @@ def analyze(raw):
     result["allowed"] = verdict in _TERMINAL_SAFE
     result["boundaries"] = az.boundaries[:40]
     # The parse-derived positional shape(s) in which a removal reference was
-    # COVERED. AC-R02-10's ledger is keyed on (reason_code, positional_shape);
+    # COVERED. The ledger is keyed on (reason_code, positional_shape);
     # "none" means no inert-consumer argv walk authorized a removal reference,
     # so the proof rests entirely on the reason code's own site.
     # EVERY position placed by EVERY boundary that CARRIES THE FINAL VERDICT —
     # not just the first mention, and not the first co-winning boundary.
     #
-    # Picking the first MENTION let a benign leading operand supply the proof
-    # for laxity sitting in an option value (QA iteration-4 F2: `cat rm.txt
-    # --qa-opt='<payload>' f` reported `operand` and came back COVERED, while
-    # the same command without `rm.txt` reported
-    # `undeclared_option_value_attached` and UNLEDGERED).
+    # Picking the first MENTION would let a benign leading operand supply the
+    # proof for laxity sitting in an option value (`cat rm.txt --opt='<payload>'
+    # f` would report `operand`, while the same command without `rm.txt`
+    # reports `undeclared_option_value_attached`).
     #
-    # Picking the first co-winning BOUNDARY is the same defect one level up,
-    # and it was still live: over 27036 multi-position commands, 432 reported a
-    # strict SUBSET of what their own co-winning boundaries recorded —
-    # `ack rm.txt --pager rm.txt qa-target` reported ['operand'] while a second
-    # PROVEN_INERT boundary had recorded `declared_exec_option_value`, and the
-    # same command without the leading operand reported `unclassified` outright.
-    # The union can only ever report MORE positions, so it can only ever make
-    # coverage harder; it is also what removes those `unclassified` fallbacks.
+    # Picking the first co-winning BOUNDARY is the same defect one level up:
+    # `ack rm.txt --pager rm.txt T` would report ['operand'] while a second
+    # PROVEN_INERT boundary recorded `declared_exec_option_value`. The union
+    # can only ever report MORE positions, so it can only ever make coverage
+    # harder, and it keeps such commands from reporting `unclassified`.
     #
     # Boundaries that do NOT carry the final verdict are still excluded: a
     # position belonging to a losing boundary is not a position the winning

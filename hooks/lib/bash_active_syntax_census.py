@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Over-approximating census of ACTIVE shell syntax in a raw command string.
 
-WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
-obligation").  Six prior iterations of the removal policy failed because the
-authorization algebra treated *analyzer silence* as *permission*: if no adapter
-recognised a construct, no finding was produced, and no finding meant allow.
-Adding more adapters can lower a sample mismatch count but can never prove that
-the analyzer looked everywhere.
+WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
+authorization algebra treats *analyzer silence* as *permission* fails open: if
+no adapter recognises a construct, no finding is produced, and no finding means
+allow.  Adding more adapters can never prove that the analyzer looked
+everywhere.
 
 This module is the independent half of the proof.  It scans the RAW command
 bytes with its own minimal quote/escape state machine and emits one OBLIGATION
@@ -122,14 +121,14 @@ def _scan_removal_references(text: str, emit) -> None:
     Wherever it sits: argument position, wrapper payload, quoted `-c` string,
     heredoc body, git alias body. The analyzer discharges an obligation only by
     positively consuming the text that raised it on a route whose every
-    boundary was terminal-safe. Analyzer SILENCE therefore no longer authorizes
-    anything — a payload nothing ever looked at leaves its obligation standing
-    and the command resolves UNRESOLVED.
+    boundary was terminal-safe. Analyzer SILENCE therefore authorizes nothing —
+    a payload nothing ever looked at leaves its obligation standing and the
+    command resolves UNRESOLVED.
 
-    This is the Must-2 half of the contract and it is deliberately independent
-    of the analyzer's wrapper/handler tables: it needs no model of `taskset`,
-    `chrt`, `numactl` or any other exec wrapper to notice that a removal binary
-    was named and never accounted for.
+    This is the completeness half of the contract and it is deliberately
+    independent of the analyzer's wrapper/handler tables: it needs no model of
+    `taskset`, `chrt`, `numactl` or any other exec wrapper to notice that a
+    removal binary was named and never accounted for.
     """
     n = len(text)
     i = 0
@@ -145,8 +144,32 @@ def _scan_removal_references(text: str, emit) -> None:
         i = j
 
 
-def census(raw: str) -> dict:
+def _ansi_end(text: str, i: int) -> int:
+    """Index of the quote closing a ``$'...'`` body that starts at ``i``, or -1.
+
+    Inside ``$'...'`` a backslash escapes the next character, so ``\\'`` does
+    not close it."""
+    n = len(text)
+    while i < n:
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == "'":
+            return i
+        i += 1
+    return -1
+
+
+def _starts_word(text: str, i: int) -> bool:
+    return i == 0 or text[i - 1] in " \t\n;&|()<>"
+
+
+def census(raw: str, heredoc_body: bool = False) -> dict:
     """Scan ``raw`` and return the obligation set.
+
+    ``heredoc_body`` scans the body of an unquoted heredoc, where quotes,
+    comments and redirections are literal text and only backslashes, ``$``
+    constructs and backticks act.
 
     Returns {"obligations": [{"kind","offset"}...], "fatal": [str...]}.
     """
@@ -179,6 +202,16 @@ def census(raw: str) -> dict:
 
         if c == "\\":
             i += 2
+            continue
+
+        if heredoc_body and c in "'\"<>#":
+            i += 1
+            continue
+
+        if c == "#" and not in_dq and _starts_word(text, i):
+            # A comment runs to the end of the line; quotes in it are text.
+            j = text.find("\n", i)
+            i = n if j < 0 else j
             continue
 
         if c == "'" and not in_dq:
@@ -234,6 +267,13 @@ def census(raw: str) -> dict:
 
         if c == "$" and i + 1 < n:
             nxt = text[i + 1]
+            if nxt == "'" and not in_dq and not heredoc_body:
+                j = _ansi_end(text, i + 2)
+                if j < 0:
+                    fatal.append(FATAL_UNBALANCED + ":ansi_quote")
+                    return {"obligations": obligations, "fatal": fatal}
+                i = j + 1
+                continue
             if nxt == "(":
                 if i + 2 < n and text[i + 2] == "(":
                     end = _skip_matching(text, i + 1, "(", ")")
@@ -291,7 +331,8 @@ def census(raw: str) -> dict:
                 continue
             emit(KIND_HEREDOC, i)
             j = i + 2
-            if j < n and text[j] == "-":
+            strip_tabs = j < n and text[j] == "-"
+            if strip_tabs:
                 j += 1
             while j < n and text[j] in " \t":
                 j += 1
@@ -325,13 +366,13 @@ def census(raw: str) -> dict:
                     continue
                 delim_chars.append(ch)
                 j += 1
-            pending_heredocs.append(("".join(delim_chars), quoted))
+            pending_heredocs.append(("".join(delim_chars), quoted, strip_tabs))
             i = j
             continue
 
         if not in_dq and c == "\n" and pending_heredocs:
             pos = i + 1
-            for delim, quoted in pending_heredocs:
+            for delim, quoted, strip_tabs in pending_heredocs:
                 body_start = pos
                 terminated = False
                 while pos <= n:
@@ -339,7 +380,8 @@ def census(raw: str) -> dict:
                     if line_end < 0:
                         line_end = n
                     line = text[pos:line_end]
-                    if line.strip() == delim:
+                    # The delimiter line matches exactly; `<<-` drops leading tabs.
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
                         if not quoted:
                             heredoc_bodies.append((text[body_start:pos], body_start))
                         pos = line_end + 1
@@ -368,10 +410,10 @@ def census(raw: str) -> dict:
     # Second pass: unquoted heredoc bodies undergo expansion, so any
     # substitution inside them is ACTIVE.  Offsets are mapped back to the
     # original raw string via the joined-offset table.
-    nested = [(b, list(range(s, s + len(b))), "heredoc_body:") for b, s in heredoc_bodies]
-    nested += [(b, idx, "backtick_body:") for b, idx in nested_bodies]
-    for body, idx_map, label in nested:
-        sub = census(body)
+    nested = [(b, list(range(s, s + len(b))), "heredoc_body:", True) for b, s in heredoc_bodies]
+    nested += [(b, idx, "backtick_body:", False) for b, idx in nested_bodies]
+    for body, idx_map, label, as_body in nested:
+        sub = census(body, heredoc_body=as_body)
         for f in sub["fatal"]:
             fatal.append(label + f)
         for ob in sub["obligations"]:
