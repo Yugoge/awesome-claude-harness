@@ -235,6 +235,7 @@ def _parsed_kind(command: str) -> tuple:
          or (res.name or '').startswith(('python', 'pypy')))
         and _protected_kind(sp.cmd_source(site.cmd)) for site, res in sites)
     dirs = _cd_dirs(sp, sites)
+    kinds = set()
     for t in sp.write_targets(script):
         if t.mechanism == 'computed-command':
             continue  # an operand of a command whose name is computed: no known write
@@ -249,10 +250,10 @@ def _parsed_kind(command: str) -> tuple:
             if not spelled.startswith(('/', '~', '$')):
                 candidates += [os.path.normpath(os.path.join(d, spelled)) for d in dirs if d]
             for candidate in candidates:
-                kind = _protected_kind(candidate)
-                if kind:
-                    return kind, settled
-    return '', settled
+                kinds.add(_protected_kind(candidate))
+    # a hooks write is never exempt (the /clean approval covers commands/ only): it decides first
+    kind = 'hooks' if 'hooks' in kinds else 'commands' if 'commands' in kinds else ''
+    return kind, settled
 
 
 def _classify_bash_target(command: str) -> str:
@@ -265,7 +266,9 @@ def _classify_bash_target(command: str) -> str:
         kind, settled = _parsed_kind(command)
     except Exception:
         kind, settled = '', False
-    return kind or ('' if settled else _legacy_kind(command))
+    if kind == 'hooks' or settled:
+        return kind
+    return _legacy_kind(command) or kind
 
 
 def _block(message: str) -> None:

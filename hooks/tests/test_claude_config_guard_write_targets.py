@@ -63,6 +63,7 @@ MUST_PASS = [
     "rg -n 'tee ' ~/.claude/hooks/",
     "cp README.md docs/README-copy.md && ls ~/.claude/hooks/",
     "cp .claude/commands/hello.md docs/hello-command.md",
+    "cp .claude/hooks/x.py /tmp/b.py",
     # variants of the same reads
     'cp "$HOME/.claude/hooks/pretool-launch.py" /tmp/launch-copy.py',
     'cp "${CLAUDE_HOME:-$HOME/.claude}/commands/dev.md" /tmp/dev.md',
