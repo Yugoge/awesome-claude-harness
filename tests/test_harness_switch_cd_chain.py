@@ -272,3 +272,54 @@ def test_a_provably_read_only_interpreter_naming_disable_all_hooks_passes(box, c
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 0, (command, cwd, err)
+
+
+AWK_DIRECTIVE_HERE = [  # gawk's @include / @load / @namespace load a program (`@include "inplace"` is -i inplace)
+    "gawk '@include \"inplace\"; {gsub(/hooks/,\"x\")}1' .claude/settings.json",
+    "awk '@include \"inplace\"\n{gsub(/hooks/,\"x\")}1' .claude/settings.json",
+    "awk '@include \"inplace.awk\"; 1' .claude/settings.json",
+    "gawk '@load \"inplace\"; {print}' .claude/settings.json",
+    "awk '@load \"inplace\"; BEGINFILE{inplace::begin(FILENAME,\"\")} ENDFILE{inplace::end(FILENAME,\"\")} 1'"
+    " .claude/settings.json",
+    "awk '@include \"/tmp/evil.awk\"' .claude/settings.json",
+    "awk '@include \"inplace\"; 1' .claude/settings.local.json",
+    "awk '@ include \"inplace\"; 1' .claude/settings.json",
+    "awk '@namespace \"x\"; {print}' .claude/settings.json",
+    "awk -v a=1 '@include \"inplace\"; 1' .claude/settings.json",
+    "awk -- '@include \"inplace\"; 1' .claude/settings.json",
+    "env awk '@include \"inplace\"; 1' .claude/settings.json",
+    "awk '@include \"inplace\"; /disableAllHooks/' .claude/settings.json",
+]
+AWK_DIRECTIVE_ANYWHERE = [
+    "awk '@include \"inplace\"; 1' {proj}/.claude/settings.json",
+    "cd {proj} && awk '@include \"inplace\"; {sub(/{/,\"{\\\"env\\\":{\\\"X\\\":1},\")}1' .claude/settings.json",
+    "awk '@include \"inplace\"; 1' {F}",
+    "gawk '@load \"inplace\"; {print}' {F}",
+    "cd ~/.claude && awk '@include \"inplace\"; 1' settings.json",
+    "bash -c 'awk \"@include \\\"inplace\\\"; 1\" {proj}/.claude/settings.json'",
+]
+
+
+@pytest.mark.parametrize("command", AWK_DIRECTIVE_HERE)
+def test_awk_with_a_gawk_directive_is_no_reader_of_a_projects_settings(box, command):
+    rc, err = hook(box, fill(box, command), box["proj"])
+    assert rc == 2 and "harness-switch:" in err, (command, err)
+
+
+@pytest.mark.parametrize("command", AWK_DIRECTIVE_ANYWHERE)
+def test_awk_with_a_gawk_directive_is_no_reader_from_any_directory(box, command):
+    command = fill(box, command)
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk '@include \"inplace\"; 1' /tmp/a.json",
+    "awk '{print}' .claude/settings.json",
+    "awk '/hooks/ {n++} END {print n}' .claude/settings.json",
+])
+def test_awk_directive_on_another_file_or_a_plain_awk_reader_passes(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)

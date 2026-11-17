@@ -80,7 +80,9 @@ READER_OUTPUT = {  # a reader's options that write a file or run a program: it i
     "more": re.compile(r"\A\Z"),
     "rg": re.compile(r"--pre(?:=|\Z)")}
 AWKS = ("awk", "gawk", "mawk", "nawk")
-AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b")  # print > file, print | command, system(): an awk program that writes
+AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b|@\s*(?:include|load|namespace)\b")  # print > file, print | command,
+# system(), and gawk's @include / @load / @namespace (`@include "inplace"` is -i inplace): an awk program that
+# writes or loads another program
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
 SED_LONG = ("--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--posix",
@@ -1209,7 +1211,8 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
                members: bool = True) -> list:
     """The words of one simple command that it writes: the paths it writes (`written`), and
     for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; tar -c / -t,
-    its -f archive alone; with `awk`, awk whose program has no > | or system(); with `interpreter`,
+    its -f archive alone; with `awk`, awk whose program has no > | system() or @include / @load /
+    @namespace; with `interpreter`,
     an interpreter provably read-only, _interpreter_reads); for cp its destination and each
     source's name inside it; for any other command every word (tee, dd, sed -i, perl -i, mv, rm,
     ...), with awk's quoted strings, the text after each `w` of a sed script this reading cannot
