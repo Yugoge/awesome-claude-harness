@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T02:01:25Z*
-**Total entries**: 969
+*Last updated: 2026-11-17T02:26:19Z*
+**Total entries**: 970
 **Convention**: kebab
 
 ## Tree
@@ -805,6 +805,7 @@ dot-claude/
 │   │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...
+│   │   ├── `test_restart_replay.py` - A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare runs and lists
 │   │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
 │   │   ├── `test_score_dispatch.py` - The real hooks run under the shipped settings in a sandbox; the score log starts with the rows `s...
 │   │   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...

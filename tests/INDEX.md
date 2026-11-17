@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T02:01:25Z*
-**Total entries**: 255
+*Last updated: 2026-11-17T02:26:20Z*
+**Total entries**: 257
 **Convention**: kebab
 
 ## Tree
@@ -77,6 +77,7 @@ tests/
 │   │   ├── `push.py` - after a /commit that landed (drivers/commit.py, after drivers/do.py or drivers/dev.py and drivers...
 │   │   ├── `receipt.py` - registered Stop hooks with both trust keys in the replay's environment
 │   │   ├── `redev.py` - tree under test; P1b D22: /redev is /dev when saving context, minted a fresh task id exactly as /...
+│   │   ├── `restart.py` - One session: a plain prompt, one foreground dispatch of a read-only subagent, which a usage limit...
 │   │   ├── `smoke.py` - One session: SessionStart, one plain prompt, a few ordinary main-agent tool
 │   │   └── `spec.py` - commands/spec.md, commands/spec-update.md and agents/spec.md of the tree under test
 │   ├── `__main__.py` - `python -m tests.replay ...`: see cli.py.
@@ -116,6 +117,7 @@ tests/
 │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...
+│   ├── `test_restart_replay.py` - A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare runs and lists
 │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
 │   ├── `test_score_dispatch.py` - The real hooks run under the shipped settings in a sandbox; the score log starts with the rows `s...
 │   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...
