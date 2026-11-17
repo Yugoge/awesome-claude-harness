@@ -71,6 +71,16 @@ READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "r
              "readlink", "basename", "dirname", "find"}
 GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
                  "grep", "rev-parse", "stash"}
+GIT_WRAPPERS = ("env", "command", "exec", "nohup", "setsid", "nice", "ionice", "stdbuf", "timeout", "time")
+GIT_EQ_OPTS = shell_parse.GIT_GLOBAL_VALUE_OPTS | {"--exec-path", "--list-cmds"}  # git's options that take =value
+GIT_PROGRAM_KEY = re.compile(  # a config key whose value names a program git runs, or more config
+    r"(?i)(?:alias|pager|filter|credential|include|includeif|man|browser|difftool|mergetool|gpg|sendemail"
+    r"|uploadpack|receivepack|remote|url|protocol)\.|core\.(?:hookspath|fsmonitor|sshcommand|pager|editor"
+    r"|askpass|gitproxy|alternaterefscommand)\Z|(?:diff|merge)\.(?:.+\.)?(?:external|textconv|command|driver"
+    r"|tool)\Z|(?:sequence|interactive)\.|ssh\.|uploadarchive\.|instaweb\.|web\.")
+GIT_CONFIG_ENV = r"(?:GIT_CONFIG_(?:PARAMETERS|COUNT|KEY_\d+|VALUE_\d+|GLOBAL|SYSTEM)?|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH)="
+GIT_RUNS_OR_WRITES = re.compile(  # a reader's option that writes a file or runs a configured program
+    r"--output(?:=|\Z)|--ext-diff\Z|--textconv\Z|--filters\Z|-O|--open-files-in-pager(?:=|\Z)")
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
@@ -172,14 +182,93 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
         yield words, [m.group(1) or nxt for w, nxt in zip(words, words[1:] + [""]) for m in [FALLBACK_REDIRECT.match(w)] if m]
 
 
+def _git(words: list):
+    """None for a command that is not git; for git, past the plain wrappers GIT_WRAPPERS (their
+    options read from hooks/lib/shell_parse.py's WRAPPERS) and its global options (-C, -c,
+    --git-dir, --work-tree, --no-pager, -P, --literal-pathspecs, ...; shell_parse's tables):
+    (index of the subcommand word, None when git would run none; its ("-C" | "--work-tree", dir)
+    options in order, an `env -C` as a -C; whether a -c / --config-env sets a key naming a
+    program (GIT_PROGRAM_KEY) or a -c value starts with `!`; whether an assignment before git
+    hands it config or an external diff)."""
+    i, dirs, env = 0, [], False
+    while i < len(words):
+        w = words[i]
+        if ASSIGNMENT.match(w):
+            env = env or bool(re.match(GIT_CONFIG_ENV, w))
+            i += 1
+            continue
+        name = os.path.basename(w)
+        if name not in GIT_WRAPPERS:
+            break
+        spec, nargs = shell_parse.WRAPPERS[name] or ({"bool": set(), "val": set()}, 0)
+        i += 1
+        while i < len(words) and words[i].startswith("-") and words[i] != "-":
+            opt = words[i]
+            i += 1
+            if opt == "--":
+                break
+            if opt in spec["val"]:
+                value, i = (words[i] if i < len(words) else ""), i + 1
+            elif opt.startswith("--") and "=" in opt and opt.split("=", 1)[0] in spec["val"]:
+                opt, value = opt.split("=", 1)
+            else:
+                continue
+            if name == "env" and opt in ("-C", "--chdir"):
+                dirs.append(("-C", value))
+        while i < len(words) and ASSIGNMENT.match(words[i]) and name == "env":
+            env = env or bool(re.match(GIT_CONFIG_ENV, words[i]))
+            i += 1
+        i += nargs
+    if i >= len(words) or os.path.basename(words[i]) != "git":
+        return None
+    program, i = False, i + 1
+    while i < len(words):
+        w = words[i]
+        name, eq, value = w.partition("=")
+        if w in shell_parse.GIT_GLOBAL_VALUE_OPTS or (eq and w.startswith("--") and name in GIT_EQ_OPTS):
+            if w in shell_parse.GIT_GLOBAL_VALUE_OPTS:
+                name, value, i = w, (words[i + 1] if i + 1 < len(words) else ""), i + 1
+            if name in ("-C", "--work-tree"):
+                dirs.append((name, value))
+            elif name in ("-c", "--config-env"):
+                key, _, val = value.partition("=")
+                program = program or bool(GIT_PROGRAM_KEY.match(key)) or (name == "-c" and val.startswith("!"))
+        elif w.startswith("-c") and len(w) > 2:  # git takes -c only as its own word: it runs nothing
+            key, _, val = w[2:].partition("=")
+            return None, dirs, program or bool(GIT_PROGRAM_KEY.match(key)) or val.startswith("!"), env
+        elif w.startswith("-") and w not in shell_parse.GIT_GLOBAL_FLAGS:
+            return None, dirs, program, env  # an option git does not know: it runs nothing
+        elif not w.startswith("-"):
+            return i, dirs, program, env
+        i += 1
+    return None, dirs, program, env
+
+
+def _git_dirs(words: list, cwd: str) -> list:
+    """The directories a git command's paths are read from besides `cwd`: where its -C options,
+    read in turn from `cwd`, leave it, and its --work-tree; [] for any other command."""
+    out, here = [], cwd
+    for opt, d in (_git(words) or (None, ()))[1]:
+        if opt == "-C":
+            here = _resolve(d, here) if d else here
+        out.append(here if opt == "-C" else _resolve(d, here))
+    return list(dict.fromkeys(out))
+
+
 def _read_only(words: list) -> bool:
+    git = _git(words)
+    if git is not None:  # git reads only through a reading subcommand, after its global options
+        sub, _, program, env = git
+        if sub is None or program or env:
+            return False
+        name, rest = words[sub], words[sub + 1:]
+        if name == "stash" and (rest[:1] or [""])[0] not in ("list", "show"):
+            return False
+        return name in GIT_READ_ONLY and "-delete" not in rest and not any(GIT_RUNS_OR_WRITES.match(w) for w in rest)
     words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
     if not words:
         return True
     head = os.path.basename(words[0])
-    if head == "git":
-        sub = next((w for w in words[1:] if not w.startswith("-")), "")
-        return sub in GIT_READ_ONLY and "-delete" not in words
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 
 
@@ -276,7 +365,8 @@ def settings_writes(command: str, cwd: str) -> list:
     `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = list(_commands(command, "shell"))
     cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
-    dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
+    dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]
+                              + [d for w, _ in segments for d in _git_dirs(w, cwd)]))
     out, seen, home = [], set(), _settings_files()
     for words, written in segments:
         plain = [w for w in words if not ASSIGNMENT.match(w)]
@@ -434,9 +524,19 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
     if TYPED.search(command) and NESTED.search(command):
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
-    settings = _settings_files()
-    for words, _ in _commands(command, "all", every_word=True):
+    settings, segments = _settings_files(), list(_commands(command, "all", every_word=True))
+    cds = [_resolve(".", cwd)] + [_resolve(w[1], cwd) for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd")]
+    for words, _ in segments:
         writes = bool(WRITES.search(" ".join(words))) or not _read_only(words)
+        git, bases = _git(words), [cwd]
+        if git is not None:
+            bases += _git_dirs(words, cwd)
+            homes = {os.path.dirname(f) for f in settings}
+            ran_in = [(_git_dirs(words, d) or [d])[-1] for d in dict.fromkeys(cds)]  # from each `cd`
+            if git[2] and any(d == h or d.startswith(h + os.sep) for d in ran_in for h in homes):
+                return refuse("this Bash command runs git in the harness home with a -c or --config-env that "
+                              "names a program (alias.*, core.hooksPath, core.fsmonitor, core.pager, ...) or a "
+                              "`!` value, which can rewrite the home's settings or the switch's state")
         for word in words:
             token = word.split("=", 1)[-1]
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):
@@ -444,7 +544,7 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
             if harness_switch.DIR_NAME in token and writes:
                 return refuse("this Bash command changes the switch's state (%s)" % harness_switch.DIR_NAME)
             if os.path.basename(token) in SETTINGS_NAMES and writes and not _allow_settings(cwd):
-                if _resolve(token, cwd) in settings:
+                if any(_resolve(token, base) in settings for base in bases):
                     return refuse("this Bash command writes the harness home's %s" % os.path.basename(token))
     for path in settings_writes(command, cwd):
         before = _current(path)
