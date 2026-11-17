@@ -20,9 +20,10 @@ Where an invocation is found:
     only cat, tee or another data reader reads runs just its expansion's
     substitutions, unless the text holds a group, a compound command or an
     `exec` with redirections; one written to a file is data only when every
-    other command of the text is inert and writes nothing (cat, ls, grep, ...)
-    and the file is no shell startup file, Makefile, `.envrc`, git config or
-    file under `.git/`);
+    other command of the text is inert and writes nothing (cat, ls, grep, ...),
+    the file may land as data (_is_code_file: no hidden or `hooks` component,
+    not under `~`, absolute only under /tmp), and the here-document is in the
+    tool command itself, not in a `-c` string or substitution);
   - every shell `-c` string, every program option's value (`rg --pre`), and
     what echo or printf print into a pipe a shell reads, each read as a
     command line of its own (_shell_layers);
@@ -443,16 +444,15 @@ _INERT_COMMANDS = frozenset({
 })
 # grep and rg are inert as text owners (_is_text_only).
 _INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
-# Files run or read as code with no command naming them, by basename, and
-# directories whose files are (git's and husky's); every component is compared
-# case-insensitively. A `git` directory under `.config` holds git's config.
-_CODE_FILES = frozenset({
-    '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases',
-    '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout', '.kshrc',
-    '.envrc', 'makefile', 'gnumakefile', '.gitattributes', '.gitconfig', 'gitconfig',
-    '.gitmodules',
-})
-_CODE_DIRS = frozenset({'.git', '.husky', '.githooks'})
+# Where a written here-document may land as data. The rule is closed: a path
+# with a hidden component (`.git/`, `.bashrc`, `.claude/`, `.vscode/`,
+# `.config/`, and `..`, which leaves the tree), one under the home directory
+# (`~`), one with a `hooks` component (`core.hooksPath`), an absolute one
+# outside /tmp and /var/tmp, and one of these names (any case, files a tool
+# runs by name) is code. Names a tool runs that need no dot:
+_CODE_FILES = frozenset({'makefile', 'gnumakefile', 'gitconfig'})
+_CODE_DIRS = frozenset({'hooks'})
+_DATA_ROOTS = ('/tmp/', '/var/tmp/')
 # Commands that copy their input to a file a word of theirs names.
 _FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
 _NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
@@ -484,10 +484,12 @@ def _written_paths(cmds, k, end):
 
 
 def _is_code_file(path):
-    """True iff path names a file run or read as code by itself: _CODE_FILES, _CODE_DIRS."""
-    parts = [part.lower() for part in path.split('/') if part]
-    return bool(parts) and (parts[-1] in _CODE_FILES or any(p in _CODE_DIRS for p in parts)
-                            or any(a == '.config' and b == 'git' for a, b in zip(parts, parts[1:])))
+    """True iff a here-document written to path may be run or read as code by a tool (see _CODE_FILES)."""
+    if path.startswith('~') or (path.startswith('/') and not path.startswith(_DATA_ROOTS)):
+        return True
+    parts = [part.lower() for part in path.split('/') if part and part != '.']
+    return (not parts or parts[-1] in _CODE_FILES
+            or any(p.startswith('.') or p in _CODE_DIRS for p in parts))
 
 
 def _is_inert(cmd, written):
@@ -517,12 +519,14 @@ def _is_inert(cmd, written):
     name, runtime = _value(cmd.words[0])
     if runtime or '/' in name or name in written:
         return False
+    if name == 'printf' and any(v == '-v' or v.startswith('-v') for v in values[1:2]):
+        return False  # `printf -v PATH .` assigns a variable
     if name in _INERT_COMMANDS:
         return True
     return name in _INERT_TEXT_OWNERS and _is_text_only(cmd.words)
 
 
-def _here_docs_are_data(toks, cmds, k):
+def _here_docs_are_data(toks, cmds, k, nested=False):
     """True iff the here-documents of cmds[k] are read as data.
 
     They are when every command of the pipe cmds[k] starts reads its input as
@@ -531,9 +535,13 @@ def _here_docs_are_data(toks, cmds, k):
     <<'EOF'; } | bash`, `for ...; do cat <<'EOF'; done | sh`) or an `exec`
     with redirections counts as code, as does one whose output a substitution
     captures (see _code_commands). One whose pipe writes a file is data only
-    when the file is named, is no _CODE_FILES one, and every other command of
+    when the file is named, may land as data (_is_code_file), and every other command of
     the text is inert and writes nothing (_is_inert): `cat > x.sh <<'EOF' ...
-    && sh < x.sh` and `... && git status` are code.
+    && sh < x.sh` and `... && git status` are code. nested: the text is not
+    the tool command itself but a `-c` string, an eval or program-option
+    string, a substitution or a here-document body, whose surroundings the
+    rule cannot see (`bash -c "cat > x.sh <<'EOF' ..." && sh x.sh`), so a
+    here-document there that writes a file is code.
     """
     if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(map(_opens_compound, cmds)):
         return False
@@ -549,13 +557,13 @@ def _here_docs_are_data(toks, cmds, k):
     paths, unknown = _written_paths(cmds, k, j)
     if not (paths or unknown):
         return True
-    if unknown or any(map(_is_code_file, paths)):
+    if nested or unknown or any(map(_is_code_file, paths)):
         return False
     written = {_basename(p) for p in paths}
     return all(_is_inert(cmd, written) for n, cmd in enumerate(cmds) if not k <= n < j)
 
 
-def _code_commands(text, depth=0, captured=False):
+def _code_commands(text, depth=0, captured=False, nested=False):
     """(commands, exact): every simple command text runs, its bodies' commands after it.
 
     A here-document read as data (_here_docs_are_data) runs only the
@@ -569,25 +577,26 @@ def _code_commands(text, depth=0, captured=False):
     toks, exact = _lex(text)
     cmds = _group(toks)
     out = []
+    nested = nested or depth > 0
     for k, cmd in enumerate(cmds):
         out.append(cmd)
         if depth < _MAX_DATA_DEPTH:
             subst = _subst_bodies(cmd)
             held = bool(subst) and (captured or not (_is_text_only(cmd.words)
-                                                     and _here_docs_are_data(toks, cmds, k)))
+                                                     and _here_docs_are_data(toks, cmds, k, nested)))
             for body in subst:
-                out.extend(_code_commands(body, depth + 1, held)[0])
+                out.extend(_code_commands(body, depth + 1, held, nested)[0])
             docs = [r for r in cmd.redirs if r.heredoc is not None]
             strings = [r for r in cmd.redirs if r.op == '<<<' and r.target is not None]
-            code = bool(docs or strings) and (captured or not _here_docs_are_data(toks, cmds, k))
+            code = bool(docs or strings) and (captured or not _here_docs_are_data(toks, cmds, k, nested))
             for redir in docs:
                 for body in _here_doc_code(redir, code):
-                    out.extend(_code_commands(body, depth + 1, captured)[0])
+                    out.extend(_code_commands(body, depth + 1, captured, nested)[0])
             if code:
                 # A here-string is a here-document of one word: code when its
                 # reader may run it (`sh <<< 'git push'`).
                 for redir in strings:
-                    out.extend(_code_commands(_value(redir.target)[0], depth + 1, captured)[0])
+                    out.extend(_code_commands(_value(redir.target)[0], depth + 1, captured, nested)[0])
     return out, exact
 
 
@@ -639,7 +648,7 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
         return
     rest = ' '.join(graws[k + 1:])
     text = body[1:] + ' ' + rest if body.startswith('!') else 'git %s %s' % (body, rest)
-    for cmd in _code_commands(text)[0]:
+    for cmd in _code_commands(text, nested=True)[0]:
         yield from _invocations(cmd.words, aliases, depth + 1, seen | {name})
 
 
@@ -807,13 +816,13 @@ def _cmd_invocations(cmd, depth):
         yield from _data_invocations(_value(word)[0], depth + 1)
 
 
-def _segment_invocations(command_text, tagged=False):
+def _segment_invocations(command_text, tagged=False, nested=False):
     """iter_git_invocations() for command_text itself, its `-c` strings aside.
 
     tagged: yield (invocation, quoted) instead, quoted when the invocation was
     read from quoted text a command is given.
     """
-    cmds, exact = _code_commands(command_text)
+    cmds, exact = _code_commands(command_text, nested=nested)
     droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
                  and not any(cmd.opener in ('|', '|&') and not _is_text_only(cmd.words)
                              and not _is_stdin_consumer(cmd.words) for cmd in cmds))
@@ -827,7 +836,7 @@ def _segment_invocations(command_text, tagged=False):
                 yield (inner, True) if tagged else inner
 
 
-def _segment_residual_shapes(command_text):
+def _segment_residual_shapes(command_text, nested=False):
     """Yield (kind, text) for command words that may be git but did not resolve.
 
     Only a command word raises one, so git in argument position (`grep git .`,
@@ -840,7 +849,7 @@ def _segment_residual_shapes(command_text):
       substituted_git_token  it is a command substitution and a git verb
                              follows (`$(which git) push`).
     """
-    cmds, _exact = _code_commands(command_text)
+    cmds, _exact = _code_commands(command_text, nested=nested)
     assigns = {}
     for cmd in cmds:
         raws = [w.raw.text for w in cmd.words]
@@ -1359,9 +1368,10 @@ def _may_run_git(text, runtime_re=_RUNTIME_PLACEHOLDER_RE):
     a git verb nor git: with nothing static after it, the subcommand is part of
     the value (`$CMD`, `$X $Y`, `$SUDO git push`).
     """
-    if any(True for _ in _segment_invocations(text)) or any(True for _ in _segment_residual_shapes(text)):
+    if any(True for _ in _segment_invocations(text, nested=True)) or any(
+            True for _ in _segment_residual_shapes(text, nested=True)):
         return True
-    for cmd in _code_commands(text)[0]:
+    for cmd in _code_commands(text, nested=True)[0]:
         values = _values(cmd.words)
         idx = _command_token_index(values)
         if idx is None or not runtime_re.search(cmd.words[idx].raw.text):
@@ -1702,8 +1712,8 @@ def iter_shell_texts(command_text):
 def _residual_shapes(command_text):
     """Yield (kind, text) for command words that may be git but did not resolve, in every layer."""
     texts, unresolved = _shell_layers(command_text)
-    for text in texts:
-        yield from _segment_residual_shapes(text)
+    for k, text in enumerate(texts):
+        yield from _segment_residual_shapes(text, nested=k > 0)
     for text in unresolved:
         yield ('unresolved_shell_string', text)
 
@@ -1732,7 +1742,8 @@ def iter_git_invocations(command_text):
     quoted reading is not yielded again when a later text yields the same
     invocation, quotes and backslashes aside.
     """
-    layers = [list(_segment_invocations(text, tagged=True)) for text in iter_shell_texts(command_text)]
+    layers = [list(_segment_invocations(text, tagged=True, nested=k > 0))
+              for k, text in enumerate(iter_shell_texts(command_text))]
     for k, layer in enumerate(layers):
         later = collections.Counter(_bare_invocation(inv) for rest in layers[k + 1:] for inv, _q in rest)
         for inv, quoted in layer:
@@ -1779,7 +1790,7 @@ if __name__ == '__main__':
         layers = list(iter_shell_texts(cmd_text))
     results = []
     for k, text in enumerate(layers):
-        for inv in _segment_invocations(text):
+        for inv in _segment_invocations(text, nested=k > 0):
             results.append({
                 'subcommand': inv.subcommand,
                 'args': inv.args,
