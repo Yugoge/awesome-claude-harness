@@ -294,17 +294,17 @@
       "Bash(git -C *?*)",
       "Bash(git -C *[*)",
       "Bash(git -C *--output*)",
-      "Bash(make *\\**)",
-      "Bash(make *?*)",
-      "Bash(make *[*)",
-      "Bash(make *$*)",
-      "Bash(make *--e*)",
-      "Bash(make *-*E*)",
-      "Bash(make *-*f*)",
-      "Bash(rg *\\**)",
-      "Bash(rg *?*)",
-      "Bash(rg *[*)",
-      "Bash(rg *--hostname-bin*)"
+      "Bash(make -n *\\**)",
+      "Bash(make -n *?*)",
+      "Bash(make -n *[*)",
+      "Bash(make -n *$*)",
+      "Bash(make -n *--e*)",
+      "Bash(make -n *-*E*)",
+      "Bash(make -n *-*f*)",
+      "Bash(rg --files *\\**)",
+      "Bash(rg --files *?*)",
+      "Bash(rg --files *[*)",
+      "Bash(rg --files *--hostname-bin*)"
     ]
   },
   "deniedMcpServers": [

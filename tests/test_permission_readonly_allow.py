@@ -25,12 +25,16 @@ other expansions of an unquoted word (brace expansion, `$NAME` but `$HOME`, back
 groups); `~` and `$HOME` expand to the home directory. So only a directory written as one word with no glob
 or expansion runs unasked. `git -C *--output*` asks for diff/log/show writing a file. `rg --files` runs no
 `--pre` program, but `--hostname-bin` runs its program even under `--files` (measured on ripgrep 14.1.0), so
-`rg *--hostname-bin*` asks, and rg's glob asks keep a glob from expanding into that option.
+`rg --files *--hostname-bin*` asks, and rg's glob asks keep a glob from expanding into that option.
 `make -n` prints recipes without running them, except what make evaluates itself: under GNU make 4.3,
 `--eval` (and its abbreviations, `--ev`), `-E`, a command-line `V:=$(shell ...)` and a makefile read with
 `-f`/`--file`/`--makefile` (stdin included) all ran a command. `make *--e*`, `make *-*E*` (rules match case
 sensitively, measured: `make -n -e` and `make -n test` still run), `make *$*`, `make *-*f*` and make's glob asks
-ask for them. Residual: the project's own Makefile still runs its `$(shell ...)`, `+` recipe lines and
+ask for them. Every make and rg ask is anchored at the allowed prefix (`make -n *...`, `rg --files *...`):
+the CLI strips a bare `xargs` before it matches an ask rule, so an unanchored `rg *\\**` asked for
+`find src -name "*.py" | xargs rg -n "TODO.*fix"`, which the base's `Bash(xargs:*)` ran unasked (measured).
+Leftovers behind a bare xargs, measured ask where the base ran them: `xargs make -n "t*"`, `xargs git -C
+src log "--format=%h*"` (the glob asks) and `xargs git -C src log --grep x log` (the space asks). Residual: the project's own Makefile still runs its `$(shell ...)`, `+` recipe lines and
 `$(MAKE)` lines under `-n`.
 
 `decide` models that matching; `_wildcard` follows the CLI's own matcher (the 2.1.326 binary: `*` becomes `.*`
@@ -67,11 +71,14 @@ NEW_ASK = (
     [f"Bash(git -C * * {v}*)" for v in GIT_C_READ]
     + [f"Bash(git -C {g})" for g in GLOB_ASK]
     + ["Bash(git -C *--output*)"]
-    + [f"Bash(make {g})" for g in GLOB_ASK]
-    + ["Bash(make *$*)", "Bash(make *--e*)", "Bash(make *-*E*)", "Bash(make *-*f*)"]
-    + [f"Bash(rg {g})" for g in GLOB_ASK]
-    + ["Bash(rg *--hostname-bin*)"]
+    + [f"Bash(make -n {g})" for g in GLOB_ASK]
+    + ["Bash(make -n *$*)", "Bash(make -n *--e*)", "Bash(make -n *-*E*)", "Bash(make -n *-*f*)"]
+    + [f"Bash(rg --files {g})" for g in GLOB_ASK]
+    + ["Bash(rg --files *--hostname-bin*)"]
 )
+# b0e51172's ask list, the first round of this lane.
+ROUND1_ASK = ([f"Bash(git -C * * {v}*)" for v in GIT_C_READ]
+              + ["Bash(git -C *--output*)", "Bash(rg *--hostname-bin*)"])
 
 MUST_PASS = ["gh pr view 12", "gh run view 1", "git -C src log --oneline -3", "git -C src status",
              "rg --files", "make -n"]
@@ -210,14 +217,26 @@ def subcommands(cmd: str) -> list[str]:
     return [s.strip() for s in out if s.strip()]
 
 
+def _forms(part: str) -> list[str]:
+    """A subcommand as written and, after a bare `xargs` (no option), as the command xargs runs."""
+    m = re.match(r"xargs\s+(?!-)(.+)", part, re.S)
+    return [part, m.group(1)] if m else [part]
+
+
 def decide(perms: dict, cmd: str) -> str:
     parts = subcommands(cmd)
     deny, ask, allow = (_bash(perms.get(k, [])) for k in ("deny", "ask", "allow"))
-    if any(matches(r, p) for p in parts for r in deny):
+    if any(matches(r, f) for p in parts for f in _forms(p) for r in deny):
         return "deny"
-    if any(matches(r, p) for p in parts for r in ask):
+    if any(matches(r, f) for p in parts for f in _forms(p) for r in ask):
         return "ask"
-    return "allow" if all(any(matches(r, p) for r in allow) for p in parts) else "ask"
+    return "allow" if all(p in BUILTIN_PARTS or any(matches(r, f) for f in _forms(p) for r in allow)
+                          for p in parts) else "ask"
+
+
+# Subcommands the CLI's built-in read-only set allows with no entry (measured: `git ls-files | xargs ...` ran on
+# the base, whose allow list has no `git ls-files` entry).
+BUILTIN_PARTS = {"git ls-files"}
 
 
 def _base(perms: dict) -> dict:
@@ -329,14 +348,52 @@ def test_a_glob_or_make_evaluation_asks(cmd):
 def test_the_glob_asks_are_what_refuse_it(cmd):
     """With b0e51172's ask list, the measured CLI ran each form that commit allowed; the model agrees."""
     perms = _perms()
-    old_ask = [e for e in perms["ask"] if e.startswith("Bash(git -C * * ")
-               or e in ("Bash(git -C *--output*)", "Bash(rg *--hostname-bin*)")]
-    assert decide({**perms, "ask": old_ask}, cmd) == GLOB_ATTACKS[cmd][1]
+    assert decide({**perms, "ask": ROUND1_ASK}, cmd) == GLOB_ATTACKS[cmd][1]
 
 
 @pytest.mark.parametrize("cmd", sorted(HOME_FORMS))
 def test_home_forms_and_plain_make_flags_still_run(cmd):
     assert decide(_perms(), cmd) == HOME_FORMS[cmd][2]
+
+
+# Behind a bare xargs (measured: base, 81f1a027 with unanchored make/rg asks, this file).
+XARGS = {
+    'find src -name "*.py" | xargs rg -n "TODO.*fix"': ("allow", "ask", "allow"),
+    'git ls-files | xargs rg -l "foo[0-9]"': ("allow", "ask", "allow"),
+    'find src | xargs make -n "t*"': ("allow", "ask", "ask"),
+    'find src | xargs git -C src log "--format=%h*"': ("allow", "ask", "ask"),
+    'find src -name "*.py" | xargs git -C src log': ("allow", "allow", "allow"),
+    "find src | xargs git -C src log --grep x log": ("allow", "ask", "ask"),
+    "echo a | xargs rg --files": ("allow", "allow", "allow"),
+    "echo a | xargs make -n": ("allow", "allow", "allow"),
+}
+# Anchored guards still ask (measured ask under all three).
+ANCHORED_STILL_ASK = ["rg --files x*", "rg --files --hostname-bin=sh", "rg --files --hostname-b?n=sh",
+                      'make -n --eval "all: ; +touch p"', "make -n -f x.mk", "make -n x*"]
+UNANCHORED_81F1 = (ROUND1_ASK[:-1] + [f"Bash(git -C {g})" for g in GLOB_ASK]
+                   + [f"Bash(make {g})" for g in GLOB_ASK]
+                   + ["Bash(make *$*)", "Bash(make *--e*)", "Bash(make *-*E*)", "Bash(make *-*f*)"]
+                   + [f"Bash(rg {g})" for g in GLOB_ASK] + ["Bash(rg *--hostname-bin*)"])
+
+
+@pytest.mark.parametrize("cmd", sorted(XARGS))
+def test_behind_xargs_the_measured_decision_holds(cmd):
+    base, at_81f1, now = XARGS[cmd]
+    perms = _perms()
+    assert decide(_base(perms), cmd) == base
+    assert decide({**perms, "ask": UNANCHORED_81F1}, cmd) == at_81f1
+    assert decide(perms, cmd) == now
+
+
+@pytest.mark.parametrize("cmd", ['find src -name "*.py" | xargs rg -n "TODO.*fix"',
+                                 'git ls-files | xargs rg -l "foo[0-9]"'])
+def test_xargs_rg_keeps_its_base_decision(cmd):
+    assert decide(_perms(), cmd) == decide(_base(_perms()), cmd) == "allow"
+
+
+@pytest.mark.parametrize("cmd", ANCHORED_STILL_ASK)
+def test_the_anchored_guards_still_ask(cmd):
+    assert decide(_perms(), cmd) == "ask"
 
 
 def test_rule_matching_is_case_sensitive():
