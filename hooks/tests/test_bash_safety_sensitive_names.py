@@ -255,3 +255,94 @@ def test_a_code_copy_a_template_read_or_a_network_url_passes(sandbox, command):
 def test_a_code_copy_into_a_secret_directory_is_still_refused(sandbox):
     r = run(sandbox, "cp src/password.ts secrets/password.ts")
     assert r.returncode == 2 and WRITE in r.stderr, r.stderr
+
+
+# A `file:` URL (any case, with or without a host) and a URL with no host are local files to curl and wget, never
+# a network fetch: the URL exemption does not cover them, whether the client's output goes to a redirection or to
+# its own output option.
+LOCAL_FILE_URLS = [
+    ("curl file:///home/u/.aws/credentials > /tmp/y", READ),
+    ("curl file:///home/u/.env > /tmp/y", READ),
+    ("curl -s FILE:///etc/.env > /tmp/y", READ),
+    ("wget file:///home/u/.env > /tmp/y", READ),
+    ("curl file:///root/.ssh/id_rsa > /tmp/k", READ),
+    ("curl file:///home/u/.env -o /tmp/y", READ),
+    ("curl -s -o /tmp/y File:///home/u/.aws/credentials", READ),
+    ("curl -s file://localhost/home/u/.env > /tmp/y", READ),
+    ("curl -s file:/home/u/.env > /tmp/y", READ),
+    ("curl -s http:///home/u/.env > /tmp/y", READ),
+]
+
+
+@pytest.mark.parametrize("command,label", LOCAL_FILE_URLS)
+def test_a_local_file_url_given_to_a_network_client_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A network client that names its output file after the URL (wget without -O, curl -O, --remote-name,
+# --remote-name-all or -J) writes ./.env or ./credentials: the URL exemption does not cover that URL.
+URL_NAMES_THE_OUTPUT = [
+    ("wget https://x/.env > /tmp/y", READ),
+    ("wget -q https://x/.env > /dev/null", READ),
+    ("wget https://x/credentials > /tmp/log", READ),
+    ("curl -s -O https://x/.env > /tmp/log", READ),
+    ("curl -sO https://x/.env > /tmp/log", READ),
+    ("curl --remote-name https://x/.env > /tmp/log", READ),
+    ("curl --remote-name-all https://x/.env > /tmp/log", READ),
+    ("curl -s -J https://x/.env > /tmp/log", READ),
+]
+
+
+@pytest.mark.parametrize("command,label", URL_NAMES_THE_OUTPUT)
+def test_a_url_that_names_the_clients_output_file_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A network URL fetched into a named output or standard output still passes.
+@pytest.mark.parametrize("command", [
+    "wget -qO- https://example.com/docs/password-policy > /tmp/p.html",
+    "wget -q -O /tmp/p.html https://example.com/docs/password-policy > /tmp/wget.log",
+    "curl -s -o /tmp/p.html https://example.com/docs/password-policy > /tmp/curl.log",
+    "curl -s https://example.com/docs/password-policy -o /tmp/p.html",
+])
+def test_a_network_url_fetched_into_a_named_output_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# A private-key name is a key name alone or followed by a suffix that is no source-code or document extension.
+@pytest.mark.parametrize("command", [
+    "echo x > id_rsa.test.py",
+    "cp docs/id_rsa.md /tmp/",
+    "cp id_rsa_backup.txt /tmp/",
+])
+def test_a_code_or_doc_file_named_after_a_key_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command,label", [
+    ("echo x > id_rsa", WRITE),
+    ("echo x > id_rsa.bak", WRITE),
+    ("echo x > ~/.ssh/id_ed25519", WRITE),
+    ("echo x > id_ecdsa_sk", WRITE),
+    ("cp ~/.ssh/id_rsa /tmp/k", READ),
+    ("cp ~/.ssh/id_rsa.old /tmp/k", READ),
+])
+def test_a_private_key_name_is_still_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+def test_the_url_exemption_excludes_local_file_urls_and_keys_are_exact():
+    from lib.sensitive_names import is_sensitive_name
+    local = ["file:///home/u/.env", "FILE:///etc/.env", "file://localhost/home/u/.env", "file:/home/u/.env",
+             "http:///home/u/.env", "File:///root/.ssh/id_rsa"]
+    assert [n for n in local if not is_sensitive_name(n, url=True)] == []
+    assert not is_sensitive_name("https://example.com/docs/password-policy", url=True)
+    keys = ["id_rsa", "id_rsa.bak", "~/.ssh/id_ed25519", "id_ecdsa_sk", "id_rsa.old", "id_dsa-2020"]
+    assert [n for n in keys if not is_sensitive_name(n)] == []
+    not_keys = ["id_rsa.pub", "id_rsa.test.py", "docs/id_rsa.md", "id_rsa_backup.txt", "id_rsa_parser.go"]
+    assert [n for n in not_keys if is_sensitive_name(n)] == []

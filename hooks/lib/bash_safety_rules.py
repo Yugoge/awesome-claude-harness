@@ -859,6 +859,63 @@ _SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
 _NETWORK_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "aria2c"})
 # The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
 _TEMPLATE_COPIERS = frozenset({"cp", "cat"})
+# Short options of curl and wget that take a value: the rest of a short-option cluster after one is that value.
+_CURL_VALUE_SHORTS = frozenset("AbcCdDeEFHKmoPQrtTuUwxXyYz")
+_WGET_VALUE_SHORTS = frozenset("aABDeiIlOoPQRtTUwX")
+
+
+def _network_output(name, values):
+    """(writes, url_names_it) for a network client's argument values: whether it writes a file of its own, and
+    whether that file is named after the URL (wget without -O/--output-document or with one other than `-`; curl
+    -O, --remote-name, --remote-name-all or -J; aria2c without -o/--out; http, https, httpie or xh with -d or
+    --download and no -o/--output). An option it cannot read is taken as naming no output, so the caller keeps
+    its check rather than lifting it."""
+    vals = [v for v in values if v is not None]
+    if name == "curl":
+        named = to_file = False
+        for i, v in enumerate(vals):
+            if v in ("--remote-name", "--remote-name-all", "--remote-header-name"):
+                named = True
+            elif v == "--output":
+                to_file = to_file or (i + 1 < len(vals) and vals[i + 1] != "-")
+            elif v[:1] == "-" and v[:2] != "--":
+                for k, c in enumerate(v[1:], 1):
+                    if c in "OJ":
+                        named = True
+                    elif c in _CURL_VALUE_SHORTS:
+                        arg = v[k + 1:] or (vals[i + 1] if i + 1 < len(vals) else "")
+                        to_file = to_file or (c == "o" and arg != "-")
+                        break
+        return named or to_file, named
+    if name == "wget":
+        document = None
+        for i, v in enumerate(vals):
+            if v.startswith("--output-document"):
+                document = v.split("=", 1)[1] if "=" in v else (vals[i + 1] if i + 1 < len(vals) else "")
+            elif v[:1] == "-" and v[:2] != "--":
+                k = 1
+                while k < len(v):
+                    c = v[k]
+                    if c == "n":
+                        k += 2
+                        continue
+                    if c in _WGET_VALUE_SHORTS:
+                        if c == "O":
+                            document = v[k + 1:] or (vals[i + 1] if i + 1 < len(vals) else "")
+                        break
+                    k += 1
+        return document != "-", document is None
+    if name == "aria2c":
+        named = not any(v in ("-o", "--out") or v.startswith(("--out=", "-o")) for v in vals)
+        return True, named
+    download = any(v in ("-d", "--download") for v in vals)
+    output = any(v in ("-o", "--output") or v.startswith("--output=") for v in vals)
+    return download or output, download and not output
+
+
+def _local_url(value):
+    """True when a network client's argument is a `file:` URL, any case: a local file it reads."""
+    return bool(value) and value[:5].lower() == "file:"
 
 
 def _word_sensitive(w, **roles):
@@ -897,8 +954,9 @@ def sensitive_redirect(command):
     name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
     by substring with lib/sensitive_names.py's narrow exemptions, each only where its role allows: a test file
     anywhere; a report, log or template as a write target; a template as a cp or cat source; a URL as a network
-    client's argument, never as a redirection or write target or another command's operand; a code file copied
-    onto a code-file name. A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
+    client's argument whose output file it does not name (not `file:`, not host-less), never as a redirection or
+    write target or another command's operand; a `file:` URL a network client reads into its own output file
+    (curl -o, wget -O) is a secret read; a code file copied onto a code-file name. A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
     their raw text. A command the parser cannot read is judged on its raw text by substring, so it is refused more,
     never less.
     """
@@ -923,6 +981,14 @@ def sensitive_redirect(command):
             if any(_word_sensitive(r.target, report=True, template=True) for r in outputs):
                 return "write"
             name = _command_name(site.cmd)
+            network = name in _NETWORK_CLIENTS
+            writes, url_names_output = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
+                                        if network else (False, False))
+            if not outputs and network and writes:
+                # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
+                if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
+                    return "redirect"
+                continue
             if outputs:
                 words = site.cmd.words[1:]
             elif name in _SENSITIVE_COPIERS:
@@ -931,8 +997,9 @@ def sensitive_redirect(command):
             else:
                 continue
             # The destination was judged above, so a cp or cat source here is copied into a path that is not
-            # sensitive; a URL is a network client's argument, never another command's operand.
-            roles = {"url": name in _NETWORK_CLIENTS, "template": name in _TEMPLATE_COPIERS}
+            # sensitive; a URL is a network client's argument, never another command's operand, nor one that names
+            # the client's output file (wget https://x/.env > /tmp/log writes ./.env).
+            roles = {"url": network and not url_names_output, "template": name in _TEMPLATE_COPIERS}
             if any(_word_sensitive(w, **roles) for w in words) \
                     or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
                 return "redirect"

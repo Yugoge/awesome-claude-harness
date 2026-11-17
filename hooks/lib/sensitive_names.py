@@ -4,8 +4,9 @@
 The default is the substring rule bash-safety has always had, made case-insensitive: a text is sensitive when it
 contains `.env`, `credentials`, `secret` or `password` anywhere, the full path included, not only the base name
 (`secrets/prod.yaml`, `.password-store/foo.gpg`, `.env-prod`, `prod.env.bak`, `mysecrets.yaml`, `credentials.py`).
-An SSH private key name (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, their `_sk` forms, anything after them but
-`.pub`) is sensitive too.
+An SSH private key name (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, their `_sk` forms) is sensitive too, alone or
+followed by a suffix that is no `.pub` and leaves no source-code or document extension (`id_rsa.bak`,
+`~/.ssh/id_ed25519` are keys; `id_rsa.pub`, `id_rsa.test.py`, `docs/id_rsa.md`, `id_rsa_backup.txt` are not).
 
 That default is lifted only by these narrow exemptions, and only for a plain static path (no quote, space,
 expansion, glob or brace left in it) whose directories carry none of the words. The caller says which apply, by the
@@ -13,9 +14,12 @@ role the name plays:
 
 - a test file, always: a base name `test_*.<code>`, `*_test.<code>`, `*.test.<code>` or `*.spec.<code>`
   (`test_password_reset.py`, `auth_password_test.go`);
-- a URL (`scheme://...`), with `url=True`: only for a non-output argument of a network client (curl, wget, http,
-  https, httpie, xh, aria2c). A redirection target, a write target or another command's operand is a local path,
-  so `echo x > http://x/.env` and `cat file:///home/u/.env > /tmp/y` stay sensitive;
+- a URL (`scheme://host...`), with `url=True`: only for a non-output argument of a network client (curl, wget,
+  http, https, httpie, xh, aria2c) whose output file the URL does not name (the caller decides that). A `file:`
+  URL in any case (`file:///home/u/.env`, `FILE://localhost/...`, `file:/x/.env`) and a URL with no host
+  (`http:///x/.env`) name a local file and are never exempt. A redirection target, a write target or another
+  command's operand is a local path, so `echo x > http://x/.env` and `cat file:///home/u/.env > /tmp/y` stay
+  sensitive;
 - a report or log, with `report=True`: only for a write target, a base name with `report` as a whole token
   (bounded by the name's start or end or `-`, `_`, `.`) or ending in `.log` (`secret-scan-report.txt`,
   `secret-build.log`), never one whose stem is itself the secret word: a name beginning `.env`, `credentials.`,
@@ -38,7 +42,8 @@ import re
 
 SECRET_SUBSTRING = re.compile(r"\.env|credentials|secret|password", re.IGNORECASE)
 PRIVATE_KEY = re.compile(r"^id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?(?!.*\.pub$)", re.IGNORECASE)
-URL = re.compile(r"^[a-z][a-z0-9+.-]*://\S+$", re.IGNORECASE)
+# A network URL: a scheme other than `file`, then `//` and a host.
+URL = re.compile(r"^(?!file:)[a-z][a-z0-9+.-]*://[^/\s]\S*$", re.IGNORECASE)
 # A plain static path: nothing a shell would still expand or split.
 PLAIN_PATH = re.compile(r"^[A-Za-z0-9_.+@%,:=~/-]+$")
 CODE_EXT = (r"(?:py|pyi|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|rb|rs|java|kt|kts|scala|swift|php|c|cc|cpp|cxx|h|hpp|"
@@ -51,6 +56,7 @@ REPORT_OR_LOG = re.compile(r"(?:^|[-_.])report(?:$|[-_.])|\.log$", re.IGNORECASE
 SECRET_STEM = re.compile(r"^(?:\.env|(?:credentials|secrets?|passwords?)\.)", re.IGNORECASE)
 SECRET_TOKENS = frozenset({"env", "credentials", "secret", "secrets", "password", "passwords"})
 TEMPLATE = re.compile(r"\.(?:example|sample|template)$", re.IGNORECASE)
+DOC_FILE = re.compile(r"\.(?:md|markdown|rst|txt|adoc|asciidoc|org|html?|pdf)$", re.IGNORECASE)
 
 RAW_FALLBACK_WRITE = re.compile(r"(>|>>)\s*\S*(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)",
                                 re.IGNORECASE)
@@ -71,6 +77,12 @@ def _report_or_log(name):
         tokens = tokens[:-1]  # the extension
     rest = [t.lower() for t in tokens if t.lower() != "report"]
     return not all(t in SECRET_TOKENS for t in rest)
+
+
+def _private_key(name):
+    """True when a base name is an SSH private key name, alone or with a suffix that is no `.pub` and leaves no
+    source-code or document extension."""
+    return bool(PRIVATE_KEY.match(name)) and not CODE_FILE.search(name) and not DOC_FILE.search(name)
 
 
 def _exempt(name, report, template):
@@ -94,11 +106,11 @@ def is_sensitive_name(text, computed=False, url=False, report=False, template=Fa
     if url and not computed and URL.match(text):
         return False
     if computed or not PLAIN_PATH.match(text):
-        return bool(SECRET_SUBSTRING.search(text) or any(PRIVATE_KEY.match(p) for p in re.split(r"[/\s'\"=]", text)))
+        return bool(SECRET_SUBSTRING.search(text) or any(_private_key(p) for p in re.split(r"[/\s'\"=]", text)))
     name = base_name(text)
     head = text[:len(text.rstrip("/")) - len(name)]
     if SECRET_SUBSTRING.search(head):
         return True
-    if PRIVATE_KEY.match(name):
+    if _private_key(name):
         return True
     return bool(SECRET_SUBSTRING.search(name)) and not _exempt(name, report, template)
