@@ -337,6 +337,10 @@ def differences(c, m, n):
                 label = "O6:old reads quoted/option/heredoc data as code"
             elif c.startswith("eval "):
                 label = "old over-reads eval (bash joins the word values)"
+            elif "<<<" in c and s_ and s_ in c.split("<<<", 1)[1]:
+                # The classifier reads a here-string its reader may run as
+                # code (OB-L24); shell_parse does not yet: a gap of the new view.
+                label = "gap:old reads a here-string its reader may run; the new view does not"
             add("git", label, repr([tok, sub]))
 
     if isinstance(m["grep"], list):
