@@ -341,3 +341,54 @@ def test_awk_directive_on_another_file_or_a_plain_awk_reader_passes(box, command
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 0, (command, cwd, err)
+
+
+AWK_RUNTIME_PROGRAM = [  # a program word only known at run time: its text is not the program awk runs
+    "awk \"$(printf 'BEGIN{sys%sem(\\\"cp /tmp/e .claude/settings.json\\\")}' t)\" .claude/settings.json",
+    "awk \"$(cat /tmp/prog)\" .claude/settings.json",
+    "awk \"`cat /tmp/prog`\" .claude/settings.json",
+    "awk `cat /tmp/prog` .claude/settings.json",
+    "awk \"${P:-1}\" .claude/settings.json",
+    "awk ${P} .claude/settings.json",
+    "awk $P .claude/settings.json",
+    "awk 'NR==1' .claude/settings.json; awk \"$X\" .claude/settings.json",
+    "awk -v a=1 \"$P\" .claude/settings.json",
+    "awk -- \"$P\" .claude/settings.json",
+    "gawk \"$(cat /tmp/prog)\" .claude/settings.local.json",
+    "awk \"NR==1$X\" .claude/settings.json",
+    "awk \"$((1))\" .claude/settings.json",
+]
+AWK_ENV_LOADS = [  # AWKPATH / AWKLIBPATH choose what awk loads; GAWK_PERSIST_FILE is a file gawk writes
+    "AWKPATH=/tmp awk 'NR<=20' .claude/settings.json",
+    "AWKLIBPATH=/tmp gawk 'NR<=20' .claude/settings.json",
+    "GAWK_PERSIST_FILE=/tmp/p gawk 'NR<=20' .claude/settings.json",
+    "env AWKPATH=/tmp awk 'NR<=20' .claude/settings.json",
+    "env GAWK_PERSIST_FILE=/tmp/p gawk '{print}' .claude/settings.json",
+    "export AWKPATH=/tmp; awk 'NR<=20' .claude/settings.json",
+    "export AWKLIBPATH=/tmp && awk '{print}' .claude/settings.json",
+    "export GAWK_PERSIST_FILE=/tmp/p; gawk 'NR<=20' .claude/settings.json",
+    "AWKPATH=/tmp; export AWKPATH; awk 'NR<=20' .claude/settings.json",
+    "declare -x AWKPATH=/tmp; awk 'NR<=20' .claude/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", AWK_RUNTIME_PROGRAM + AWK_ENV_LOADS)
+def test_awk_with_a_runtime_program_or_load_variable_is_no_reader_of_a_projects_settings(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk 'NR<=20' .claude/settings.json",
+    "awk '{print}' .claude/settings.json",
+    "awk '{print $1}' .claude/settings.json",
+    "awk -F: '{print $NF}' .claude/settings.json",
+    "P='NR<=20'; awk \"$P\" .claude/settings.json",
+    "awk \"$(cat /tmp/prog)\" /tmp/a.json",
+    "AWKPATH=/tmp awk '{print}' /tmp/a.json",
+])
+def test_awk_with_a_literal_program_still_reads(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)

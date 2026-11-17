@@ -84,6 +84,8 @@ AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b|@\s*[A-Za-z_]")  # print > file, print
 # any gawk `@name`: the @include / @load / @namespace directives (`@include "inplace"` is -i inplace) and indirect
 # calls (`f="sys" "tem"; @f(...)` calls system() without spelling it): an awk program that writes, loads another
 # program or may call one; a harmless `@` use such as "@ind_str_asc" is refused too (fail-closed)
+AWK_ENV = re.compile(r"\b(?:AWKPATH|AWKLIBPATH|GAWK_PERSIST_FILE)\b")  # what awk loads, a file gawk writes: named
+# anywhere in the command (before awk, after env, exported, declared), they make every awk in it no reader
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
 SED_LONG = ("--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--posix",
@@ -1212,8 +1214,8 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
                members: bool = True) -> list:
     """The words of one simple command that it writes: the paths it writes (`written`), and
     for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; tar -c / -t,
-    its -f archive alone; with `awk`, awk whose program has no > | system() or @include / @load /
-    @namespace; with `interpreter`,
+    its -f archive alone; with `awk`, awk whose program is a literal (no expansion left unresolved)
+    with no > | system() or gawk `@name`; with `interpreter`,
     an interpreter provably read-only, _interpreter_reads); for cp its destination and each
     source's name inside it; for any other command every word (tee, dd, sed -i, perl -i, mv, rm,
     ...), with awk's quoted strings, the text after each `w` of a sed script this reading cannot
@@ -1229,7 +1231,9 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
         return list(written) + (files if files is not None else words + _sed_w_words(plain))
     if head in AWKS:
         program = _awk(plain)
-        if awk and program is not None and not AWK_OUTPUT.search(program):
+        # a program word holding an expansion the parser leaves unresolved (`$(...)`, a backtick,
+        # `${P:-1}`, `$P`; _text spells each `${...}`) is known only at run time: no reader
+        if awk and program is not None and not AWK_OUTPUT.search(program) and "${" not in program:
             return list(written)
         return list(written) + words + AWK_STRING.findall(program or " ".join(plain[1:]))
     if head == "tar":
@@ -1247,7 +1251,8 @@ def writes_settings_file(command: str) -> bool:
     """True when `command` writes a settings*.json file, in any directory: one of the words it
     writes (_written_by; an interpreter whose -c text shows no write reads) names one."""
     return any(NAMES_SETTINGS.search(w) for words, written in _commands(command, "code")
-               for w in _written_by(words, written, awk=True, interpreter=True, members=False))
+               for w in _written_by(words, written, awk=not AWK_ENV.search(command), interpreter=True,
+                                    members=False))
 
 
 def _may_name_settings(token: str) -> bool:
@@ -1346,7 +1351,7 @@ def settings_writes(command: str, cwd: str) -> list:
     segments = list(_commands(script, "shell", sites=sites))
     git_dirs = [d for w, _ in segments for d in _git_dirs(w, cwd)]
     every_dir, chain = list(dict.fromkeys(_cd_dirs(segments, cwd) + git_dirs)), _chain(script, cwd)
-    out, seen, home = [], set(), _settings_files()
+    out, seen, home, awk = [], set(), _settings_files(), not AWK_ENV.search(command)
     for (words, written), cmd in zip(segments, sites):
         plain = _argv(words)
         if not plain:
@@ -1359,7 +1364,7 @@ def settings_writes(command: str, cwd: str) -> list:
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
-                 (written if (interpreter or message or moves) else _written_by(words, written, awk=True))]
+                 (written if (interpreter or message or moves) else _written_by(words, written, awk=awk))]
         named += _operands(plain, head == "mv") if moves else []
         for word, dirs_too in named:
             if (word, dirs_too, dirs) not in seen:
