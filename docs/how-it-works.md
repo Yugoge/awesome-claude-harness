@@ -38,7 +38,9 @@ graph TD
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     HL -->|PostToolUse doc-sync| IDX[INDEX files]
-    TMP["/tmp/ grants<br/>commit / push / /allow"] -->|grant-keyed validation| HL
+    TMP["/tmp/ grants<br/>commit / /allow"] -->|grant-keyed validation| HL
+    PMG["/push · /merge analyst grants"] -->|"checked before the wrapper runs,<br/>not by the privilege guard"| WRP["push.sh · merge.sh wrappers<br/>git in their own subprocess"]
+    WRP --> GK
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
@@ -72,9 +74,19 @@ Each stage hands a verified artifact to the next; `--codex` adds an opt-in adver
 |---|---|---|
 | Agent does too much in one context — quality silently degrades | Orchestrator-only gate; every real change goes to a single-purpose subagent with a clean context | `hooks/pretool-orchestrator-gate.py` |
 | Irreversible git operation (history-erasing wide checkout; bulk unreviewed commit/push) | Git protection kernel: exit 2 on commit/push/merge/reset--hard without a grant; stash-as-buffer and wide-path checkout exit 2 by shape | `hooks/pretool-bash-safety.sh`, `hooks/pretool-git-privilege-guard.py` |
-| Implementation drifts from the requirement | BA → QA-of-BA → Dev → QA pipeline; user's verbatim words written to disk as the binding spec before any code is written | `agents/ba.md`, `agents/qa.md`, `commands/dev.md` |
+| Implementation drifts from the requirement | BA → QA-of-BA → Dev → QA pipeline; user's verbatim words written to disk as the binding spec before any code is written. BA cites evidence. QA checks the analysis before any code. | `agents/ba.md`, `agents/qa.md`, `commands/dev.md` |
+| Agents build what they guessed you meant | The requirement round asks you first, in the question dialog. A hook writes your answers to disk. The Stop gate refuses to end a turn on a question in plain text. | `hooks/posttool-close-rating.py` (the answers, through `hooks/lib/requirement_round.py`), `hooks/stop-command-gate.py` |
+| A requested outcome quietly becomes "phase two" | One cycle, parallel lanes. QA fails a plan that phases or defers an outcome. | `agents/qa.md`, `tests/test_no_phases_agent_prompts.py` |
+| A missing artifact shows up only at `/close` | Each dispatch declares what its agent owes. A hook checks it when that agent stops. | `hooks/subagentstop-artifact-contract-enforce.py` |
+| QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA until the aggregate report names every declared lane and each lane has a report. | `hooks/pretool-aggregate-check.py` |
+| A false pass ships a broken feature | QA starts from doubt and fails when in doubt. Its report must record the end-to-end status. | `agents/qa.md`, `hooks/subagentstop-e2e-enforce.py` |
+| QA inherits a draft's mistakes | `--codex` puts each draft through an adversarial Codex review first. Claude keeps the verdict. | `commands/codex.md` |
+| Unfinished work is handed off as done | The Stop gate holds a gated command until every todo is done and the artifact chain passes. | `hooks/stop-command-gate.py` |
+| An agent writes outside its job | Each subagent writes only to its role's paths. | `hooks/pretool-tool-policy.py`, `policies/tool-policy.v1.json` |
 
 ## Context-engineering guardrails
+
+The main session's context stays small. The real work happens in the agents' clean contexts.
 
 | Guardrail | What it exits 2 on | Why (context / safety) | Hook |
 |---|---|---|---|
@@ -250,6 +262,20 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. Three are still registered in `settings.json` and count in the table above: `notification-idle-overnight.py`, `posttool-push-gate-token-verify.py` and `pretool-push-analyst-grant-guard.py`. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
 
 ## Design philosophy
+
+The taste behind the project, in short:
+
+- **Enforce in code, not in prose.** "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. A hook carries each rule that must hold. Prompts carry judgment and point at the hook.
+- **Rules, not stories.** Every prompt that touches infrastructure says what is forbidden, not only what is allowed.
+- **WHAT, not HOW.** The orchestrator describes the problem. The agent picks its tools. A hook warns on a leak. It never blocks.
+- **One agent, one issue.** Never bundle. N outcomes become N parallel lanes in one cycle. Nothing is split into phases.
+- **Your words are the contract.** The literal requirement is on disk before any agent runs. BA, QA, dev and the specialists get it. Paraphrase is drift. Drift ships the wrong thing with confidence.
+- **No flow may strand you.** CI fails a replay that reaches a block no action clears. No hook gates `/stop` or Esc.
+- **One producer per fact.** Every artifact has one producer and a reader that decides on it. The repository generates every figure about itself.
+- **Fail closed, leave forensics.** Ambiguous grant? Refuse. Unparseable verdict? Fail. The evidence stays on disk.
+- **Degrade, never fall back unsafely.** A missing extra loses its own feature. Codex never falls back to a bare `codex`. No bubblewrap, no in-place overnight run.
+
+The binding rules behind most of them, and the code that enforces each:
 
 | Principle | Binding rule | Enforced by |
 |---|---|---|

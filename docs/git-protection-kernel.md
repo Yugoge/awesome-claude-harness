@@ -16,30 +16,42 @@ Two failure classes drove its design:
 
 > **Bulk unreviewed commit + push.** A bulk "commit and push everything" request can produce a large multi-subsystem commit with no human sign-off. Gating on overnight-context alone would let this class through, so `hooks/pretool-git-privilege-guard.py` is **always-on** — it runs on every Bash call in both subagent and main-agent contexts — and requires a per-operation authorization grant for each privileged verb.
 
+Both classes are real incidents. The code names each, with its date.
+
+- A dev agent used `git stash` as a scratch buffer. Then it ran a wide-path checkout. It erased seventeen days of UI work. It reported that as an accident.
+- An orchestrator answered "commit and push everything" with a ninety-three-file commit and push. Nobody signed off. It happened in an interactive session. So the guard is not limited to overnight runs.
+
+The guard covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Every agent `git` command passes through the Bash hooks below. They run in parallel. The diagram shows what each one does, not an order.
+
 ```mermaid
 flowchart TD
-    B[Bash: a git verb] --> H1[orchestrator-gate<br/>rate-limit, /do bypass]
-    B --> H2["bash-safety<br/>exits 2 by default on: stash-buffer / wide checkout / reset --hard<br/>(/do or matching /allow break-glass;<br/>not past the settings deny on a leading git reset --hard)"]
-    B --> H3[bulk-commit-detector<br/>warns on the bulk 'sync' commit shape]
-    B --> H4[git-privilege-guard<br/>ALWAYS-ON / exits 2 on a privileged verb]
-
-    H4 --> C{which verb?}
-    C -->|commit| G1{"grant file present, unexpired, bound to repo/branch/HEAD,<br/>spent by the dispatched changelog-analyst?"}
-    C -->|push| G2{grant file: branch + expected-head<br/>+ remote bound?}
-    C -->|merge| G3{"matching /allow grant, or /do off the protected branch?<br/>(/merge merges inside hooks/merge.sh)"}
-    C -->|reset --hard| G4["exit 2 in agent flow unless a matching /allow,<br/>or /do off the protected branch;<br/>a leading git reset --hard stays settings-denied"]
-
-    G1 -->|yes| OK[(allow — the guard spends the commit grant,<br/>unlinking it as it authorizes)]
-    G2 -->|yes| OK2[(allow — push.sh manages lifecycle<br/>unlink on success, retain on failure)]
-    G3 -->|yes| OK3[(allow — the /allow grant is consumed<br/>on the call's result)]
-    G1 & G2 & G3 -->|no grant/env| NO[BLOCKED / exit 2]
-    G4 --> NO
+    B["an agent's Bash call runs git"] --> S["bash safety<br/>refuses stash-as-buffer, a wide-path checkout or restore from a ref, reset --hard<br/>unless /do (main agent) or a matching /allow;<br/>a leading git reset --hard stays settings-denied"]
+    B --> W["bulk-commit detector<br/>warns on the sync-everything commit shape. Never refuses."]
+    B --> G["git privilege guard"]
+    G --> L{"can it read which git<br/>subcommand runs?"}
+    L -->|"no: an expansion or a quoted binary,<br/>unless you issued a residual override"| NO
+    L -->|yes| V{which verb?}
+    V -->|commit| C{"a matching /allow, or a /commit grant bound to this<br/>repository, branch and HEAD, spent by the changelog<br/>analyst that /commit dispatched?"}
+    V -->|"commit with the<br/>auto-bulk: prefix"| K{"a live sentinel from a /commit --bulk<br/>you typed, and no unspent /commit grant<br/>for this HEAD?"}
+    V -->|push| P{"a matching /allow?<br/>never with the wrapper's variable inline,<br/>never force, delete or mirror"}
+    V -->|"merge, reset --hard,<br/>ref change"| R{"a matching /allow, or /do<br/>that cannot move the protected branch?<br/>(a leading git reset --hard stays settings-denied)"}
+    C -->|yes| OK[("allowed. The guard unlinks the grant<br/>as it authorizes, so it is spent once.")]
+    P -->|yes| OK2[("allowed once")]
+    R -->|yes| OK2
+    K -->|yes| OK3[("allowed. The sentinel is not spent.<br/>It covers each bulk commit until it expires.")]
+    C & P & R & K -->|no| NO[/"refused, exit 2: the rule, the reason,<br/>and the command that lands it"/]
 
     classDef block fill:#ffebee,stroke:#c62828
     classDef ok fill:#e3f2fd,stroke:#1565c0
     class NO block
-    class OK ok
+    class OK,OK2,OK3 ok
 ```
+
+The orchestrator gate also sees each Bash call, with its rate limit that `/do` lifts. The hook chain reference below lists it. A `/push` uses two grants. The push analyst writes the first. `scripts/execute-push.py` checks that it is unexpired and matches the branch, remote, session and HEAD, then spends it before `hooks/push.sh` runs. The wrapper writes the second, bound to its branch, expected head and remote. The guard honours it only inside the wrapper. `hooks/push.sh` unlinks it after a successful push and keeps it for a retry after a failure. The grant lifecycle comparison below has each grant's fields. `/merge` merges inside `hooks/merge.sh`, so an agent's own `git merge` has no grant of its own. An `/allow` grant is consumed on the result of the call it matched.
+
+**Grants at a glance.** Something you typed must allow each agent commit, push, merge or hard reset. `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. A command that starts with `git reset --hard` also hits the `settings.json` deny. No grant and no `/do` lifts it. `/do` never covers a commit or a push. It covers the main agent for one turn, and only when the change cannot move the protected branch.
+
+`/push` and `/merge` run git inside their own wrappers. No hook sees inside. `/push` spends the push analyst's grant first. `/merge` runs only after the merge analyst's grant passes its check.
 
 #### Hook chain reference
 
@@ -215,14 +227,18 @@ You (the agent) try the obvious shortcut:
 CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
 ```
 
-`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. It recognizes the `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED** before any `/push` grant or `/allow` is consulted (`/do` does not release a push).
+`hooks/pretool-git-privilege-guard.py` runs *before* the tool executes. It recognizes the `CLAUDE_PUSH_COMMAND_ACTIVE=` prefix as an env-injection attempt — the sanctioned env var must be set by the `/push` wrapper in the child's real environment, not pasted onto the command line — and returns exit 2: **BLOCKED** before any `/push` grant or `/allow` is consulted (`/do` does not release a push). It prints `BLOCKED: agent git push - inline-env injection blocked`. Nothing the agent can arrange lets this form through.
 
 | Method | Result |
 |---|---|
 | Inline `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | BLOCKED (exit 2) — env-injection detected before grant/allow check |
 | `/push` grant file (nonce-keyed, branch+head+remote-bound) | ALLOWED — `push.sh` manages grant lifecycle; guard does not fire on `push.sh` subprocesses. Grant unlinked by `push.sh` on success; left in place on failure (for retry) |
+| Plain `git push` | BLOCKED (exit 2) without a matching `/allow`. Agents may not push. The message points to `/push`. |
+| `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
 
 The refusal message points the agent at the right path (`/push`), and the guard's code exits 2 on the wrong one; the ledger rates that guard `advisory`, since no prevention has been observed on a host. (`hooks/pretool-git-privilege-guard.py`)
+
+The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo (`python3 scripts/capture-hero-run.py --check-only`) replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](status.md) holds the recording.
 
 ## Trust model in practice
 
@@ -230,9 +246,11 @@ The refusal message points the agent at the right path (`/push`), and the guard'
 |---|---|---|---|---|---|---|
 | Human (shell) | ✓ | ✓ | ✓ | ✓ | N/A | N/A |
 | Main Agent | once per tool per turn (its own session scratch: uncounted); unlimited under /do | no commit grant of its own (the /commit grant is spent only by the changelog-analyst that /commit dispatches); a matching /allow | /push grant (branch+head+remote-bound) or matching /allow (never a force, delete or ref-rewrite push) | via /do (unless it can move the protected branch) or matching /allow, only for a form the `settings.json` deny `Bash(git reset --hard:*)` does not match | ✓ | /do, for one turn: lifts the orchestrator-gate limits and releases the rules listed above; not commit, push, the commit guard or protected files |
-| Subagent | role-restricted | /commit grant, only for the changelog-analyst that /commit dispatched | /push grant | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
+| Subagent | role-restricted | /commit grant, only for the changelog-analyst that /commit dispatched, or a matching /allow | matching /allow only (a /push grant is honoured only inside the /push wrapper) | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
 
 Commit grant = time-boxed ISO expiry, single-use (spent by the privilege guard, which unlinks it as it authorizes the commit). Push grant = the push-analyst's grant, bound to request, branch, head and remote, which expires: it carries `expires_at`, 600 s after the push-analyst wrote it, and `scripts/execute-push.py` refuses it once that time has passed ("Grant expired — run /push again"); a valid grant is single-use, unlinked by `execute-push.py` before it runs `push.sh`, so a failed push needs a fresh /push. The chain-B sentinel it writes in its place is stale after 60 s (`push.sh` refuses it). `push.sh` then writes its own record `claude-push-grant-<sid>-<nonce>.json` (no expiry; unlinked on success, left on failure), which no hook reads. /allow sentinel = structured match (op+target+args_contain) or a regex entry, time-boxed (epoch-seconds expiry), single-use (consumed once the call it matched has ended), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do; and neither /do nor /allow lifts the `settings.json` deny `Bash(git reset --hard:*)`, which refuses a command that begins `git reset --hard` before any grant matters.
+
+Two rules the table compresses. A command that starts with `git reset --hard` meets the `settings.json` deny for every agent, main or sub. No grant and no `/do` lifts it. And an agent's own `git push` outside the `/push` wrapper passes only a matching `/allow`. The guard honours a push grant only with `CLAUDE_PUSH_COMMAND_ACTIVE=1` already in its own environment, which only the wrapper's subprocess has. A command that names the variable is refused before any grant is read.
 
 ## Fail-closed vs. skip semantics
 

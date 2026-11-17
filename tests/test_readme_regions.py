@@ -55,14 +55,18 @@ gen = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = gen
 _spec.loader.exec_module(gen)
 
-(FIGURE_A, URL), (FIGURE_B, _URL_B) = gen.CITED_FIGURES[:2]
+# The README cites no outside figure today (gen.CITED_FIGURES is empty), so the cited-figure rule is exercised
+# with a sample declaration of the test's own: `cited_readme` declares it and puts the citation into the prose.
+FIGURE_A, FIGURE_B, URL = "37,623", "12.6", "https://example.org/pdf/a-study"
+SAMPLE_CITED = ((FIGURE_A, URL), (FIGURE_B, URL))
+NO_CITATION = "It cites no outside figure, so it\nhas no source link."
+CITATION = f"A study of {FIGURE_A} pull requests waited a median of {FIGURE_B}\nhours ([source]({URL}))."
 GLYPH_IMG = ('<p align="center"><a href="x.txt"><img src=".github/assets/guard-hero.svg" width="720" '
              'alt="the hero"></a></p>')
 
 README_SKELETON = f"""# A harness
 
-Intro paragraph with no number in it. A study of {FIGURE_A} pull requests waited a median of {FIGURE_B}
-hours ([source]({URL})).
+Intro paragraph with no number in it. {NO_CITATION}
 
 1. First step.
 2. Second step.
@@ -570,21 +574,25 @@ def test_the_hook_registration_cell_names_the_gate_that_fails(status_text):
 
 def test_the_commands_table_is_built_from_the_command_rows_by_group(readme_text):
     lines = body(readme_text, "commands").splitlines()
-    assert lines[0] == "| Command | Group | Typed by | What it does |" and lines[1] == "|---|---|---|---|"
+    assert lines[0] == "| Command | What it does |" and lines[1] == "|---|---|"
     rows = rows_of(body(readme_text, "commands"))
     facts = gen.fact("command_rows")
     order = {g: i for i, g in enumerate(gen.facts_module().COMMAND_GROUPS)}
     shown = sorted((f for f in facts if not f["module"]), key=lambda f: (order[f["group"]], f["name"]))
-    assert len(rows) == len(shown) and all(len(r) == 4 for r in rows)
+    assert len(rows) == len(shown) and all(len(r) == 2 for r in rows)
+    typed, groups = [], []
     for cells, fact in zip(rows, shown):
         usage = f"/{fact['name']}" + (f" {fact['argument_hint']}" if fact["argument_hint"] else "")
-        assert cells[0] == "`" + usage.replace("|", "\\|") + "`", cells
-        assert cells[1] == fact["group"]
-        assert cells[2] == ("owner only" if fact["human_only"] else "owner or agent")
-        assert cells[3] == gen.md_cell(fact["summary"])  # the summary as written, never cut
-        assert not cells[3].endswith("…")
-    assert {c[2] for c in rows} == {"owner only", "owner or agent"}
-    assert [c[1] for c in rows] == sorted((c[1] for c in rows), key=order.__getitem__)  # grouped, in the groups' order
+        command, _, under = cells[0].partition("<br>")  # the command, then who may type it and its group
+        assert command == "`" + usage.replace("|", "\\|") + "`", cells
+        who, _, group = under.partition(", ")
+        assert who == ("owner only" if fact["human_only"] else "owner or agent") and group == fact["group"], cells
+        assert cells[1] == gen.md_cell(fact["summary"])  # the summary as written, never cut
+        assert not cells[1].endswith("…")
+        typed.append(who)
+        groups.append(group)
+    assert set(typed) == {"owner only", "owner or agent"}
+    assert groups == sorted(groups, key=order.__getitem__)  # grouped, in the groups' order
 
 
 def test_an_optional_modules_command_is_left_off_the_front_page_and_pointed_to(readme_text, monkeypatch):
@@ -620,7 +628,7 @@ def test_the_tables_move_with_their_facts(monkeypatch):
     assert "| `zz-new` | A new agent. |" in gen.render_agents()
     with_fact(monkeypatch, "command_rows", lambda rows: rows[0].update(summary="Changed.", group="Quality"))
     first = gen.fact("command_rows")[0]
-    assert f"| Quality | {'owner only' if first['human_only'] else 'owner or agent'} | Changed. |" in gen.render_commands()
+    assert f"<br>{'owner only' if first['human_only'] else 'owner or agent'}, Quality | Changed. |" in gen.render_commands()
 
 
 HOSTILE = {"name": "evil", "argument_hint": "[a|b] <what> `x`", "human_only": False, "group": "Control", "module": None,
@@ -633,12 +641,12 @@ def test_a_summary_can_neither_break_the_table_nor_be_read_as_html(monkeypatch):
     table = gen.render_commands()
     lines = [l for l in table.splitlines() if "/evil" in l]
     assert len(lines) == 1
-    assert len(re.split(r"(?<!\\)\|", lines[0].strip())) == 6  # '', four cells, '' : the pipes did not add cells
+    assert len(re.split(r"(?<!\\)\|", lines[0].strip())) == 4  # '', two cells, '' : the pipes did not add cells
     cells = next(r for r in rows_of(table) if "/evil" in r[0])
     # outside code spans no angle bracket survives; inside one it is literal already
-    prose = gen._CODE_SPAN.sub("", cells[3])
+    prose = gen._CODE_SPAN.sub("", cells[1])
     assert "<" not in prose and ">" not in prose and "&lt;script&gt;" in prose and "&amp;" in prose
-    assert "`code\\|with <pipe>`" in cells[3]
+    assert "`code\\|with <pipe>`" in cells[1]
     assert cells[0].startswith("``") or cells[0].startswith("`/evil")  # a code span, backticks in the hint kept
     assert "<what>" in cells[0] and "\\|" in cells[0]
 
@@ -891,7 +899,8 @@ def test_an_edited_proof_cell_fails_the_byte_compare_and_names_the_region(scratc
 
 
 def test_an_edited_commands_row_fails_the_byte_compare(scratch, capsys):
-    edited(scratch.readme, "| `/commit` | Ship | owner only |", "| `/commit` | Ship | owner or agent |")
+    commit = gen.md_cell(next(c for c in gen.fact("command_rows") if c["name"] == "commit")["summary"])
+    edited(scratch.readme, f"| `/commit`<br>owner only, Ship | {commit} |", f"| `/commit`<br>owner or agent, Ship | {commit} |")
     rc, err, _ = run_check(scratch, capsys)
     assert rc == 2 and "README.md: [region-byte-compare] region 'commands'" in err
 
@@ -1058,10 +1067,33 @@ def numbers(text: str, doc: str = "readme") -> list[str]:
     return gen.assert_no_hand_typed_numbers(text, doc)
 
 
-def test_the_declared_figures_and_their_source(readme_text, status_text):
-    assert dict(gen.CITED_FIGURES) == {"37,623": "https://arxiv.org/pdf/2609.17598", "12.6": "https://arxiv.org/pdf/2609.17598"}
-    assert numbers(readme_text) == []  # the cited figures pass, the regions' own numbers are not read
+@pytest.fixture
+def cited_readme(readme_text, monkeypatch):
+    """The scratch README with the sample citation in its prose, and the sample declared for the test's duration."""
+    monkeypatch.setattr(gen, "CITED_FIGURES", SAMPLE_CITED)
+    assert readme_text.count(NO_CITATION) == 1
+    return readme_text.replace(NO_CITATION, CITATION)
+
+
+def test_the_readme_declares_no_cited_figure(readme_text, status_text):
+    """The README cites no outside figure, so nothing is declared, and the real README's prose holds no numeral
+    the rule would have to excuse; the rule stays and is exercised below with the test's own sample."""
+    assert gen.CITED_FIGURES == ()
+    assert numbers(REAL.readme.read_text(encoding="utf-8")) == []  # the real README, with nothing declared
+    assert numbers(readme_text) == []  # the regions' own numbers are not read
     assert numbers(status_text, "status") == []  # the status page cites nothing, so it is not asked to
+
+
+def test_a_declared_figure_and_its_source_pass(cited_readme):
+    assert dict(gen.CITED_FIGURES) == {FIGURE_A: URL, FIGURE_B: URL}
+    assert numbers(cited_readme) == []  # the cited figures pass, the regions' own numbers are not read
+
+
+def test_an_undeclared_citation_fails(cited_readme, monkeypatch):
+    monkeypatch.setattr(gen, "CITED_FIGURES", ())
+    v = numbers(cited_readme)
+    assert [re.search(r"the numeral '([^']+)'", x).group(1) for x in v] == [FIGURE_A, FIGURE_B]
+    assert all("[hand-typed-number]" in x for x in v)
 
 
 def test_a_stray_numeral_in_the_prose_fails_naming_the_line_and_the_number(status_text):
@@ -1080,39 +1112,40 @@ def test_every_stray_numeral_is_reported_with_its_own_line(readme_text):
     assert all("line 3" in x for x in v)
 
 
-def test_a_cited_figure_passes_and_a_near_miss_does_not(readme_text):
-    assert numbers(readme_text) == []
-    near = readme_text.replace(FIGURE_A, "37,624")
+def test_a_cited_figure_passes_and_a_near_miss_does_not(cited_readme):
+    assert numbers(cited_readme) == []
+    near = cited_readme.replace(FIGURE_A, "37,624")
     v = numbers(near)
     assert any("'37,624'" in x and "[hand-typed-number]" in x for x in v)
     assert any("declared figure" in x and repr(FIGURE_A) in x for x in v)  # and the declared one is now stale too
 
 
-def test_a_cited_figure_is_no_exemption_on_the_status_page(status_text):
+def test_a_cited_figure_is_no_exemption_on_the_status_page(status_text, monkeypatch):
+    monkeypatch.setattr(gen, "CITED_FIGURES", SAMPLE_CITED)
     cited = status_text + f"\nA study of {FIGURE_A} pull requests ([source]({URL})).\n"
     v = numbers(cited, "status")
     assert len(v) == 1 and f"the numeral {FIGURE_A!r}" in v[0] and "[hand-typed-number]" in v[0]
 
 
-def test_a_stale_cited_figure_fails(readme_text):
-    gone = readme_text.replace(f"a median of {FIGURE_B}\nhours", "a median of some\nhours")
+def test_a_stale_cited_figure_fails(cited_readme):
+    gone = cited_readme.replace(f"a median of {FIGURE_B}\nhours", "a median of some\nhours")
     v = numbers(gone)
     assert len(v) == 1 and "[cited-figure]" in v[0] and repr(FIGURE_B) in v[0] and "no longer appears" in v[0]
-    in_code = readme_text.replace(f"a median of {FIGURE_B}", f"a median of `{FIGURE_B}`")
+    in_code = cited_readme.replace(f"a median of {FIGURE_B}", f"a median of `{FIGURE_B}`")
     assert any(repr(FIGURE_B) in x and "no longer appears" in x for x in numbers(in_code))  # code is not prose
 
 
-def test_a_missing_source_url_fails(readme_text):
-    v = numbers(readme_text.replace(URL, "https://example.org/x"))
+def test_a_missing_source_url_fails(cited_readme):
+    v = numbers(cited_readme.replace(URL, "https://example.org/x"))
     assert len(v) == 2 and all("is absent from the README" in x and URL in x for x in v)  # one per figure it sources
 
 
-def test_the_declared_figures_live_in_one_place(readme_text, monkeypatch):
+def test_the_declared_figures_live_in_one_place(cited_readme, monkeypatch):
     monkeypatch.setattr(gen, "CITED_FIGURES", gen.CITED_FIGURES + (("99", "https://example.org/nine"),))
-    v = numbers(readme_text)
+    v = numbers(cited_readme)
     assert any("'99'" in x and "https://example.org/nine" in x and "is absent" in x for x in v)
     assert any("'99'" in x and "no longer appears" in x for x in v)
-    assert numbers(readme_text + "\nSee https://example.org/nine: 99 cases.\n") == []
+    assert numbers(cited_readme + "\nSee https://example.org/nine: 99 cases.\n") == []
 
 
 @pytest.mark.parametrize("snippet", [

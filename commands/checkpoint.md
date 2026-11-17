@@ -1,7 +1,7 @@
 ---
 description: "Checkpoint Command"
 disable-model-invocation: true
-summary: "Snapshot the working tree to the safety ref `refs/checkpoints/<branch>` without moving HEAD, touching the index or pushing."
+summary: "Snapshot the working tree to the safety ref `refs/checkpoints/`, one per branch, without moving HEAD, touching the index or pushing."
 group: Ship
 ---
 
