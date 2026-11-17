@@ -6,8 +6,9 @@ Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 Exits 2 on a refusal, its message on stderr; otherwise prints ALLOW, CONSENT (main-agent /do consent) or
 SENTINEL <task id> (a structured /allow grant). The shell entry allows CONSENT and SENTINEL after the pre-clean
 snapshot guard and refuses anything else (no token, a crash, a wrong interpreter). The runtime and commit guards
-run before the /do and /allow releases and neither releases them; every later rule is released by both. A view
-that cannot be built degrades to the raw command, so a broken helper refuses more, never less.
+and the /do consent-flag rule run before the /do and /allow releases and neither releases them; every later rule
+is released by both. A view that cannot be built degrades to the raw command, so a broken helper refuses more,
+never less.
 """
 import contextlib
 import json
@@ -609,6 +610,1386 @@ def commit_artifact_rules(command, state):
                    "REASON: grants are minted only by scripts/write-commit-grant.py, which requires a live /commit "
                    "user-intent sentinel plus pipeline evidence and stamps minted_by on what it writes. Mint through "
                    "that script (it composes the grant path itself).", released_line())
+
+
+# ── /do consent flag (before /do and /allow) ─────────────────────────────────
+
+# The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
+# writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
+from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+
+CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
+# Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
+# excluded), every simple command in it must be one of these read-only shapes (checked per command below). Anything
+# else, any unknown program included, is refused: the flag cannot be written by a program that is never run.
+_CONSENT_READ_ONLY = frozenset({
+    "cat", "ls", "stat", "file", "wc", "head", "tail", "diff", "cmp", "test", "[", "readlink", "realpath",
+    "basename", "dirname", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "cut", "tr", "nl", "od", "true",
+    "false", ":", "cd", "pushd", "popd", "pwd", "grep", "egrep", "fgrep", "rg", "jq", "find", "echo", "printf",
+    "sed", "awk", "gawk", "mawk", "nawk", "sort", "tee", "git"})
+_CONSENT_STRICT_ARGS = frozenset({"find", "rg", "sed", "awk", "gawk", "mawk", "nawk", "sort", "git", "file", "printf"})
+_FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
+_CONSENT_GIT_READS = frozenset({"log", "show", "diff", "grep", "status", "blame", "shortlog", "ls-files", "rev-parse",
+                                "describe"})
+_CONSENT_GIT_COMMIT_OPTS = frozenset({"-a", "--all", "-q", "--quiet", "-s", "--signoff", "-v", "--verbose",
+                                      "--allow-empty", "--amend", "--no-edit", "--no-verify", "-n", "--"})
+_CONSENT_TMP_VARS = frozenset({"TMPDIR", "TMP", "TEMP", "TEMPDIR", "CLAUDE_TMPDIR"})
+_CONSENT_DIR_CREATORS = frozenset({"touch", "mkdir", "mkfifo", "mknod"})
+_CONSENT_COPIERS = frozenset({"cp", "mv", "ln", "install", "rsync", "link"})
+# Tools that extract or check out files whose names they read from a file (an archive, a package, a stored gzip
+# name) into a directory: program -> how _consent_unpack_dirs reads its options (rule 3b). git checkout-index
+# --prefix and git init/clone are read by _consent_git_tree.
+_CONSENT_UNPACKERS = {
+    "tar": "tar", "bsdtar": "tar", "gtar": "tar", "unzip": "unzip", "cpio": "cpio", "bsdcpio": "cpio",
+    "7z": "7z", "7za": "7z", "7zr": "7z", "gzip": "gzip", "gunzip": "gzip", "zcat": "gzip", "pigz": "gzip",
+    "unpigz": "gzip", "ar": "ar", "dpkg-deb": "deb", "dpkg": "deb", "pax": "pax", "unrar": "rar", "rar": "rar",
+    "unar": "unar", "lha": "lha", "lhasa": "lha"}
+_CONSENT_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")
+_CONSENT_UNKNOWN = ("_", "BASH_REMATCH", "BASH_ARGV", "COMP_WORDS", "REPLY", "MAPFILE")
+
+
+def _consent_norm(text):
+    """Text with quotes, backslashes, `+` and whitespace dropped, lower-cased: `"orch" + 'estrator-con' "sent"` in an
+    interpreter's code reads as the stem it spells."""
+    return re.sub(r"""['"\\+\s`]""", "", text or "").lower()
+
+
+def _consent_name_may_match(toks):
+    """True when the glob tokens can match some `<CONSENT_PREFIX><id><CONSENT_SUFFIX>` (id: one or more characters,
+    no slash): a product walk of the glob against that name's automaton."""
+    pre, suf = CONSENT_PREFIX, CONSENT_SUFFIX
+    p = len(pre)
+    acc = p + 2 + len(suf)
+
+    def target_moves(t):  # [(literal char or None for any non-slash, next state)]; state p+1 also moves by epsilon
+        if t < p:
+            return [(pre[t], t + 1)]
+        if t in (p, p + 1):
+            return [(None, p + 1)]
+        if t < acc:
+            return [(suf[t - p - 2], t + 1)]
+        return []
+
+    def closure(t):
+        return {t, p + 2} if t == p + 1 else {t}
+
+    seen, todo = set(), [(0, s) for s in closure(0)]
+    while todo:
+        g, t = todo.pop()
+        if (g, t) in seen:
+            continue
+        seen.add((g, t))
+        if g == len(toks):
+            if t == acc:
+                return True
+            continue
+        tok = toks[g]
+        if tok[0] == "*":
+            todo.append((g + 1, t))
+        for ch, nt in target_moves(t):
+            if tok[0] == "c" and not (tok[1] == ch if ch is not None else tok[1] != "/"):
+                continue
+            for s in closure(nt):
+                todo.append((g if tok[0] == "*" else g + 1, s))
+    return False
+
+
+def _consent_same_dir(path, state):
+    try:
+        a = {os.path.normpath(path), os.path.realpath(path)}
+        return bool(a & {os.path.normpath(state), os.path.realpath(state)})
+    except (OSError, ValueError):
+        return True
+
+
+def _consent_sites(script, sp, depth=0):
+    """walk's Sites, plus those of the substitutions in an unquoted heredoc body (walk reads them as text)."""
+    for site in sp.walk(script):
+        yield site
+        if depth > 8:
+            continue
+        for red in site.cmd.redirects:
+            hd = getattr(red, "hd", None)
+            for part in (hd.expansions if hd is not None else ()):
+                if part.body is not None:
+                    yield from _consent_sites(part.body, sp, depth + 1)
+
+
+def _consent_compounds(script, sp, depth=0):
+    """Every compound command in ``script`` (for loops, groups ...), nested ones included."""
+    if depth > 24 or script is None:
+        return
+    for pl, _sep in script.items:
+        for stage in pl.stages:
+            if isinstance(stage, sp.Compound):
+                yield stage
+                for body in stage.body:
+                    yield from _consent_compounds(body, sp, depth + 1)
+
+
+class _ConsentView:
+    """What one command can do to the consent flag in `state`: variables, working directories and path words read
+    as glob tokens tagged by origin (lit, glob, state: the state directory itself, unk: a value not known here)."""
+
+    def __init__(self, sp, script, sites, command, cwd, state):
+        self.sp, self.state = sp, state
+        self.state_is_tmp = _consent_same_dir(state, "/tmp")
+        self.home = os.environ.get("HOME", "")
+        self.command = command
+        self.defs = {}  # variable -> list of ("static", text) | ("word", Word) | ("text", source text) | ("state",)
+        self._memo, self._busy = {}, set()
+        for s in sites:
+            cmd = s.cmd
+            for a in cmd.assignments:
+                self._define(a.name, a)
+            r = sp.resolve(cmd)
+            if r.name in ("export", "declare", "typeset", "local", "readonly"):
+                for w in r.args:
+                    m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=", w.raw.text)
+                    if m:
+                        self._define(m.group(1), sp.Assignment(w))
+            if r.name in ("read", "mapfile", "readarray", "getopts", "printf", "wait"):
+                text = " ".join([w.text for w in cmd.words] + [
+                    (rd.target.text if rd.target is not None else "") + (rd.hd.body if rd.hd is not None else "")
+                    for rd in cmd.redirects])
+                names = [w.value() for w in r.args if w.value() and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", w.value())]
+                for n in names or ["REPLY", "MAPFILE"]:
+                    self.defs.setdefault(n, []).append(("text", text))
+        scripts = {id(s.script): s.script for s in sites}
+        scripts[id(script)] = script
+        for sc in scripts.values():
+            for c in _consent_compounds(sc, sp):
+                if c.kind in ("for", "select") and c.header and c.header[0].value():
+                    name = c.header[0].value()
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                        for w in c.header[1:] or [None]:
+                            self.defs.setdefault(name, []).append(("word", w) if w is not None else ("text", "$@"))
+        # The working directories a relative path is read from: (path or None when computed, explicit?) - the call's
+        # cwd, then each cd / pushd target in the command (explicit: the command itself names it).
+        self.cwds = [(cwd, False)]
+        for s in sites:
+            r = sp.resolve(s.cmd)
+            if r.name not in ("cd", "pushd"):
+                continue
+            args = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+            if not args:
+                self.cwds.append((self.home or "/", True))
+                continue
+            if args[0].value() == "-":
+                continue
+            toks = self.tokens(args[0])
+            if any(o == "unk" for _, o in toks):
+                self.cwds.append((None, True))
+            elif any(o == "state" for _, o in toks) and all(t[0] == "c" for t, _ in toks):
+                v = "".join(t[1] for t, _ in toks)
+                self.cwds.extend([(os.path.join(c, v), True) for c, _ in self.cwds if c is not None] or [(v, True)])
+            elif all(t[0] == "c" for t, _ in toks):
+                v = "".join(t[1] for t, _ in toks)
+                self.cwds.extend([(os.path.join(c, v), True) for c, _ in list(self.cwds) if c is not None])
+            else:  # a glob: the directory it can match is the state dir only if the glob can match it
+                self.cwds.append((self.state, True) if self.dir_state(toks) else (None, True))
+
+    def _define(self, name, a):
+        v = a.static_value()
+        if v is not None:
+            self.defs.setdefault(name, []).append(("static", v))
+        elif a.value is not None:
+            self.defs.setdefault(name, []).append(("word", a.value))
+        else:
+            self.defs.setdefault(name, []).append(("text", a.word.text))
+
+    def marks_state(self, text):
+        """Does computed source text (a substitution's body, a read's input) point at the state directory?"""
+        text = text or ""
+        if self.state in text or os.path.realpath(self.state) in text or "CLAUDE_STATE_DIR" in text:
+            return True
+        if self.state_is_tmp and re.search(r"/tmp\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
+            return True
+        if self.cwd_state(".") and re.search(r"\bpwd\b|\bO?L?D?PWD\b|\$\{?PWD|\bdirs\b", text):
+            return True
+        for name in re.findall(r"\$\{?!?([A-Za-z_][A-Za-z0-9_]*)", text):
+            if self.var(name)[0] in ("state", "any"):
+                return True
+        return False
+
+    def var(self, name):
+        """("static", text) | ("state",) | ("unk",): what `$name` can hold as a directory."""
+        if name in self._memo:
+            return self._memo[name]
+        if name in self._busy:
+            return ("unk",)
+        self._busy.add(name)
+        try:
+            out = self._var(name)
+        finally:
+            self._busy.discard(name)
+        self._memo[name] = out
+        return out
+
+    def _var(self, name):
+        defs = self.defs.get(name)
+        if not defs:
+            if name == "CLAUDE_STATE_DIR":
+                return ("state",)
+            if name in _CONSENT_TMP_VARS:
+                return ("state",) if self.state_is_tmp else ("unk",)
+            if name == "HOME" and self.home:
+                return ("static", self.home)
+            if name in ("PWD", "OLDPWD"):
+                return ("state",) if self.cwd_state(".") else ("unk",)
+            if name in _CONSENT_UNKNOWN:
+                return ("any",)  # $_, BASH_REMATCH ...: any path the command touched, the flag's included
+            if re.fullmatch(r"[0-9]+", name):
+                return ("static", "")  # a positional parameter: the Bash tool's shell has none
+            return ("unk",)
+        statics, state = set(), False
+        for d in defs:
+            if d[0] == "static":
+                statics.add(d[1])
+            elif d[0] == "text":
+                state = state or self.marks_state(d[1])
+            else:
+                toks = self.tokens(d[1])
+                if any(o == "state" for _, o in toks) and not any(o == "unk" for _, o in toks):
+                    if all(t[0] == "c" for t, _ in toks):
+                        statics.add("".join(t[1] for t, _ in toks))
+                    else:
+                        state = state or bool(self.dir_state(toks))
+                elif any(o == "glob" for _, o in toks):
+                    state = state or bool(self.dir_state(toks))
+                elif all(t[0] == "c" for t, _ in toks):
+                    statics.add("".join(t[1] for t, _ in toks))
+                elif any(p.kind in ("cmdsub", "backtick") and self.marks_state(p.text) for p in d[1].parts):
+                    state = True
+        if state or any(self.static_dir_state(v) for v in statics):
+            return ("state",)
+        if len(statics) == 1 and len(defs) == 1:
+            return ("static", statics.pop())
+        if statics and len(statics) == len(defs) and len(statics) <= 16:
+            return ("multi", tuple(sorted(statics)))  # `for f in a b`: each value is tried
+        return ("unk",)
+
+    def static_dir_state(self, v):
+        try:
+            if v.startswith("/"):
+                return _consent_same_dir(v, self.state)
+            return any(c is not None and _consent_same_dir(os.path.join(c, v), self.state) for c, _ in self.cwds)
+        except Exception:  # noqa: BLE001
+            return True
+
+    def tokens(self, word=None, text=None, choice=None):
+        """A path word as [(token, origin)]: token ('c', ch) a literal character, ('?',) one character, ('*',) any run.
+
+        A variable known here contributes its value (the state directory's path for one that can hold it); any other
+        expansion reads as `*` (origin unk), a bracket class as one character, a brace as `*` (origin glob)."""
+        out = []
+        if word is None:
+            return [(("c", ch), "lit") for ch in (text or "")]
+        for k, p in enumerate(word.parts):
+            if p.kind == "lit":
+                out.extend((("c", ch), "lit") for ch in p.text)
+            elif p.kind == "glob":
+                t, i = p.text, 0
+                while i < len(t):
+                    if t[i] == "*":
+                        out.append((("*",), "glob"))
+                    elif t[i] == "?":
+                        out.append((("?",), "glob"))
+                    elif t[i] == "[":
+                        j = t.find("]", i + 2)
+                        if j < 0:
+                            out.append((("c", "["), "lit"))
+                        else:
+                            out.append((("?",), "glob"))
+                            i = j
+                    else:
+                        out.append((("c", t[i]), "lit"))
+                    i += 1
+            elif p.kind == "brace":
+                out.append((("*",), "glob"))
+            elif p.kind == "param":
+                m = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*|[0-9])", p.text or "")
+                m2 = re.match(r"[#]?([A-Za-z_][A-Za-z0-9_]*)", p.text or "")
+                if (p.text or "").startswith("!"):  # ${!V}: indirect, a value not known here that can be the state dir
+                    out.append((("*",), "state"))
+                    continue
+                info = self.var((m or m2).group(1)) if (m or m2) else ("unk",)
+                if info[0] == "multi" and m and choice and m.group(1) in choice:
+                    info = ("static", choice[m.group(1)])
+                if info[0] == "static" and m:
+                    out.extend((("c", ch), "lit") for ch in info[1])
+                elif info[0] == "any":
+                    out.append((("*",), "state"))
+                elif info[0] == "state":
+                    if m or k == 0:
+                        out.extend((("c", ch), "state") for ch in self.state)
+                    else:
+                        out.append((("*",), "state"))
+                else:
+                    out.append((("*",), "unk"))
+            elif p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and self.marks_state(p.text):
+                out.extend((("c", ch), "state") for ch in self.state)
+            else:
+                out.append((("*",), "unk"))
+        if out and out[0][0] == ("c", "~") and (len(out) == 1 or out[1][0] == ("c", "/")) and self.home:
+            out = [(("c", ch), "lit") for ch in self.home] + out[1:]
+        return out
+
+    def cwd_state(self, rel):
+        """None, "cwd" (the call's own cwd is the state dir) or "explicit" (a cd in the command makes it so)."""
+        hit = None
+        for c, explicit in self.cwds:
+            if c is None:
+                if ".." in rel.split("/") and explicit:
+                    return "explicit"
+                continue
+            if _consent_same_dir(os.path.join(c, rel), self.state):
+                if explicit:
+                    return "explicit"
+                hit = "cwd"
+        return hit
+
+    def dir_state(self, dtoks):
+        """None, "cwd" or "explicit": can the directory dtoks ([(token, origin)], None: no directory part) be the state
+        dir? A directory with a value not known here is not, unless it climbs out with `..`."""
+        if dtoks is None:
+            return self.cwd_state(".")
+        if any(o == "state" and t[0] != "c" for t, o in dtoks):
+            return "explicit"
+        lits = "".join(t[1] if t[0] == "c" else "\0" for t, _ in dtoks)
+        if any(o == "unk" for _, o in dtoks):
+            return "explicit" if ".." in lits.split("/") else None
+        named = any(o == "state" for _, o in dtoks)
+        if all(t[0] == "c" for t, _ in dtoks):
+            d = lits or "/"
+            if d.startswith("/"):
+                return "explicit" if _consent_same_dir(d, self.state) else None
+            hit = self.cwd_state(d)
+            return "explicit" if hit and named else hit
+        import fnmatch
+        pat = "".join(("[" + t[1] + "]" if t[1] in "[]*?" else t[1]) if t[0] == "c" else t[0] for t, _ in dtoks)
+        cands = {os.path.normpath(self.state), os.path.realpath(self.state)}
+        if pat.startswith("/"):
+            return "explicit" if any(fnmatch.fnmatchcase(s, os.path.normpath(pat)) for s in cands) else None
+        hit = None
+        for c, explicit in self.cwds:
+            if c is None:
+                continue
+            if any(fnmatch.fnmatchcase(s, os.path.normpath(os.path.join(c, pat))) for s in cands):
+                if explicit:
+                    return "explicit"
+                hit = "cwd"
+        return hit
+
+    @staticmethod
+    def split(toks):
+        cut = max((i for i, (t, _) in enumerate(toks) if t == ("c", "/")), default=-1)
+        return toks[cut + 1:], (toks[:cut] if cut >= 0 else None)
+
+    def target(self, word=None, text=None, named=False, toks=None):
+        """Why writing the path word can create or change the consent flag, or None. A variable with a few known
+        values (a for loop's) is tried with each. ``toks``: the path as tokens already (an option's attached value)."""
+        if toks is not None:
+            return self._target(None, None, named, None, toks)
+        multi = {}
+        for p in (word.parts if word is not None else ()):
+            if p.kind == "param" and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", p.text or ""):
+                info = self.var(p.text)
+                if info[0] == "multi":
+                    multi[p.text] = info[1]
+        if multi:
+            import itertools
+            names = sorted(multi)
+            for combo in itertools.islice(itertools.product(*(multi[n] for n in names)), 64):
+                why = self._target(word, text, named, dict(zip(names, combo)))
+                if why:
+                    return why
+            return None
+        return self._target(word, text, named, None)
+
+    def _target(self, word, text, named, choice, toks=None):
+        toks = self.tokens(word, text, choice) if toks is None else list(toks)
+        base, dtoks = self.split(toks)
+        if CONSENT_TOKEN in "".join(t[1] for t, _ in base if t[0] == "c").lower():
+            return "its target is named like the consent flag"
+        if named and any(o in ("unk", "state") for _, o in toks):
+            return "its target is computed in a command that names the consent flag"
+        if not base or not _consent_name_may_match([t for t, _ in base]):
+            return None
+        where = self.dir_state(dtoks)
+        if where is None:
+            return None
+        if any(o in ("unk", "state") and t[0] != "c" for t, o in base):
+            return "its computed target can be the consent flag in the state directory"
+        if where == "explicit":
+            return "its target can match the consent flag in the state directory"
+        # A glob reached only through the call's own cwd matches existing names alone (no new flag), and a literal
+        # name that can be the flag's contains the stem (refused above).
+        return None
+
+    def into_dir(self, word=None, toks=None):
+        """None, "cwd" or "explicit": can the directory word (a copy's destination) be the state dir? ``toks``: the
+        directory as tokens already (an option's attached value)."""
+        toks = self.tokens(word) if toks is None else list(toks)
+        while len(toks) > 1 and toks[-1][0] == ("c", "/"):
+            toks = toks[:-1]
+        return self.dir_state(toks) if toks else None
+
+    def source_may_be_flag(self, word, where):
+        base, _ = self.split(self.tokens(word))
+        if CONSENT_TOKEN in "".join(t[1] for t, _ in base if t[0] == "c").lower():
+            return True
+        if not base or not _consent_name_may_match([t for t, _ in base]):
+            return False
+        if any(o in ("unk", "state") and t[0] != "c" for t, o in base):
+            return True  # a name not known here
+        return where == "explicit"  # a glob: refused into an explicitly named state dir
+
+
+def _consent_lead(view, w):
+    """A word's tokens and its leading literal text: what an option parser can read before the first expansion."""
+    toks = view.tokens(w)
+    n = 0
+    while n < len(toks) and toks[n][0][0] == "c" and toks[n][1] == "lit":
+        n += 1
+    return toks, "".join(t[1] for t, _ in toks[:n])
+
+
+def _consent_text(toks):
+    return "".join(t[1] if t[0] == "c" else "*" for t, _ in (toks or ()))
+
+
+_CONSENT_SPECS = {}
+# getopt tables (lib/shell_parse._spec: flags, then value-taking options) of the programs whose options this rule
+# reads. A long option resolves by its GNU unique prefix (`--out` is `--output`); a short option takes its value
+# attached (`-t<dir>`) or as the next word; an option not in the table is an error the caller fails closed on.
+_CONSENT_SPEC_TEXT = {
+    "sort": ("-b -d -f -g -i -M -h -n -R -r -V -c -C -m -s -u -z --ignore-leading-blanks --dictionary-order "
+             "--ignore-case --general-numeric-sort --ignore-nonprinting --month-sort --human-numeric-sort "
+             "--numeric-sort --random-sort --reverse --version-sort --check --debug --merge --stable --unique "
+             "--zero-terminated --help --version",
+             "-k -t -S -T -o --key --field-separator --buffer-size --temporary-directory --output --batch-size "
+             "--compress-program --files0-from --parallel --random-source --sort"),
+    "sed": ("-n -E -r -s -u -z -i --quiet --silent --debug --follow-symlinks --posix --regexp-extended --separate "
+            "--sandbox --unbuffered --null-data --in-place --help --version",
+            "-e -f -l --expression --file --line-length"),
+    "cp": ("-a -b -d -f -i -H -l -L -n -P -p -R -r -s -T -u -v -x -Z --archive --attributes-only --backup "
+           "--copy-contents --force --interactive --link --dereference --no-clobber --no-dereference --preserve "
+           "--parents --recursive --reflink --remove-destination --strip-trailing-slashes --symbolic-link "
+           "--no-target-directory --update --verbose --one-file-system --context --debug --keep-directory-symlink "
+           "--help --version",
+           "-S -t --suffix --target-directory --no-preserve --sparse"),
+    "mv": ("-b -f -i -n -T -u -v -Z --backup --force --interactive --no-clobber --no-target-directory "
+           "--strip-trailing-slashes --update --verbose --context --no-copy --exchange --debug --help --version",
+           "-S -t --suffix --target-directory"),
+    "ln": ("-b -d -F -f -i -L -n -P -r -s -T -v --backup --directory --force --interactive --logical "
+           "--no-dereference --physical --relative --symbolic --no-target-directory --verbose --help --version",
+           "-S -t --suffix --target-directory"),
+    "install": ("-b -c -C -d -D -p -s -T -v -Z --backup --compare --directory --preserve-timestamps --strip "
+                "--no-target-directory --verbose --preserve-context --context --debug --help --version",
+                "-g -m -o -S -t --group --mode --owner --strip-program --suffix --target-directory"),
+}
+
+
+def _consent_spec(name):
+    if name not in _CONSENT_SPECS and name in _CONSENT_SPEC_TEXT:
+        from lib import shell_parse as sp
+        bools, vals = _CONSENT_SPEC_TEXT[name]
+        _CONSENT_SPECS[name] = sp._spec(bools.split(), vals.split())
+    return _CONSENT_SPECS.get(name)
+
+
+def _consent_opts(view, words, spec, permute=True):
+    """GNU getopt reading of ``words`` against ``spec`` on the rule's path tokens, so a value with an expansion
+    (`-t$CLAUDE_STATE_DIR`, `--output=$D/x`) is kept. Returns (opts, operands, error): opts is a list of (canonical
+    option, value tokens or None, value Word when the value is a whole next word); error names the first option not
+    in the table or computed (read as a flag)."""
+    from lib import shell_parse as sp
+    opts, operands, err = [], [], None
+    i, n = 0, len(words)
+    while i < n:
+        w = words[i]
+        toks, lead = _consent_lead(view, w)
+        whole = len(lead) == len(toks)
+        if not lead.startswith("-") or (whole and lead == "-"):
+            operands.append(w)
+            i += 1
+            if not permute:
+                operands.extend(words[i:])
+                break
+            continue
+        if whole and lead == "--":
+            operands.extend(words[i + 1:])
+            break
+        nxt = words[i + 1] if i + 1 < n else None
+        if lead.startswith("--"):
+            name, eq, _ = lead.partition("=")
+            res = sp._resolve_long(name, spec) if (eq or whole) else None
+            if res is None:
+                err = err or "option `%s` not known here" % name
+                opts.append((name, toks[len(name) + 1:] if eq else None, None))
+            elif eq:
+                opts.append((res, toks[len(name) + 1:], None))
+            elif res in spec["val"]:
+                opts.append((res, view.tokens(nxt) if nxt is not None else None, nxt))
+                i += 1
+            else:
+                opts.append((res, None, None))
+            i += 1
+            continue
+        j, step = 1, 1
+        while j < len(toks):
+            if j >= len(lead):
+                err = err or "a computed option"
+                break
+            ch = "-" + lead[j]
+            if ch in spec["val"]:
+                if j + 1 < len(toks):
+                    opts.append((ch, toks[j + 1:], None))
+                else:
+                    opts.append((ch, view.tokens(nxt) if nxt is not None else None, nxt))
+                    step = 2
+                break
+            if ch not in spec["bool"]:
+                err = err or "option `%s` not known here" % ch
+            opts.append((ch, None, None))
+            j += 1
+        if len(lead) == 1:
+            err = err or "a computed option"
+        i += step
+    return opts, operands, err
+
+
+def _consent_option_values(view, words):
+    """For a program whose option table is not modelled here: every value an option word can carry (after `=`, or
+    attached to a short option)."""
+    for w in words:
+        toks, lead = _consent_lead(view, w)
+        if not lead.startswith("-") or len(toks) < 3:
+            continue
+        k = lead.find("=")
+        if k >= 0:
+            yield toks[k + 1:]
+        elif not lead.startswith("--"):
+            yield toks[2:]
+
+
+# rsync's long flags that take no value: any other long option without `=` may take the next word as its value.
+_CONSENT_RSYNC_FLAGS = frozenset({
+    "--archive", "--verbose", "--recursive", "--relative", "--update", "--links", "--perms", "--times", "--group",
+    "--owner", "--devices", "--specials", "--compress", "--checksum", "--delete", "--delete-after",
+    "--delete-before", "--delete-during", "--delete-excluded", "--dry-run", "--progress", "--partial", "--inplace",
+    "--stats", "--human-readable", "--quiet", "--hard-links", "--acls", "--xattrs", "--sparse", "--existing",
+    "--ignore-existing", "--remove-source-files", "--itemize-changes", "--no-motd", "--force", "--numeric-ids",
+    "--copy-links", "--safe-links", "--one-file-system", "--prune-empty-dirs", "--mkpath", "--append",
+    "--append-verify", "--whole-file", "--no-whole-file", "--omit-dir-times", "--fuzzy", "--help", "--version"})
+
+
+_CONSENT_RSYNC_INERT = frozenset({"--exclude", "--include", "--filter", "--temp-dir"})
+
+
+def _consent_operands(view, r):
+    """(sources, destination tokens or None for the cwd, destination is a directory?, recursive?, refusal or None)
+    of a copy, move or link. cp, mv, ln and install are read with their getopt tables; rsync and link, whose tables
+    are not modelled, fail closed: an option value that can be the state directory is refused."""
+    args = list(r.args)
+    spec = _consent_spec(r.name)
+    if spec is not None:
+        opts, ops, err = _consent_opts(view, args, spec)
+        if err:
+            for val in list(_consent_option_values(view, args)) + [view.tokens(w) for w in ops]:
+                if val and view.into_dir(toks=val):
+                    return ops, None, True, False, (f"`{r.name}` reads {err}, and an operand can be the state "
+                                                     "directory")
+        names = {o for o, _, _ in opts}
+        no_dir = bool(names & {"-T", "--no-target-directory"}) or (
+            r.name == "ln" and bool(names & {"-n", "--no-dereference"}))
+        recursive = bool(names & {"-r", "-R", "-a", "--recursive", "--archive"})
+        targets = [v for o, v, _ in opts if o in ("-t", "--target-directory")]
+        if targets:
+            return ops, targets[-1] or [], True, recursive, None
+        if r.name == "ln" and len(ops) == 1:
+            return ops, None, True, recursive, None
+        if len(ops) < 2:
+            return ops, None, False, recursive, None
+        return ops[:-1], view.tokens(ops[-1]), not no_dir, recursive, None
+    ops, value_next, odd, rest_ops = [], False, None, False
+    for w in args:
+        toks, lead = _consent_lead(view, w)
+        if not rest_ops and lead.startswith("-") and not (lead == "-" and len(toks) == 1):
+            if lead == "--" and len(toks) == 2:
+                rest_ops = True
+                continue
+            # rsync's patterns (--exclude/--include/--filter, -f) and its temp dir (--temp-dir, -T: dot-named partial
+            # files only) write nothing under their own name into the directory they name.
+            inert = r.name == "rsync" and (lead.partition("=")[0] in _CONSENT_RSYNC_INERT or lead[:2] in ("-f", "-T"))
+            for val in (() if inert else _consent_option_values(view, [w])):
+                if val and view.into_dir(toks=val):
+                    odd = f"an option of `{r.name}` names the state directory"
+            value_next = (lead.startswith("--") and "=" not in lead and lead not in _CONSENT_RSYNC_FLAGS) or (
+                not lead.startswith("--") and len(lead) == len(toks) and lead[-1:] in "efBT@M")
+            value_next = "inert" if value_next and inert else value_next
+            continue
+        if value_next and value_next != "inert" and view.into_dir(w):
+            odd = f"an option of `{r.name}` names the state directory"
+        value_next = False
+        ops.append(w)
+    if odd:
+        return ops, None, True, True, odd
+    if r.name == "link":
+        return ops[:-1], view.tokens(ops[-1]) if len(ops) >= 2 else None, False, False, None
+    if len(ops) < 2:
+        return ops, None, False, True, None
+    return ops[:-1], view.tokens(ops[-1]), True, True, None
+
+
+def _consent_unpack_dirs(view, r):
+    """(extracts?, [destination tokens]) of an archive extraction; no destination: the cwd. Short option clusters,
+    attached values (`-xC<dir>`), `--directory=<dir>`, its unique prefixes (`--dir`) and tar's old-style keys
+    (`tar xfC a.tar <dir>`) are read."""
+    args = list(r.args)
+    name = _CONSENT_UNPACKERS.get(r.name, r.name)
+    lex = [_consent_lead(view, w) for w in args]
+
+    def value(i, toks, j):
+        if j + 1 < len(toks):
+            return toks[j + 1:], 0
+        return (lex[i + 1][0] if i + 1 < len(lex) else []), 1
+
+    if name == "tar":
+        extracts, dests = False, []
+        # GNU tar's -s is a flag, bsdtar's takes a pattern: both readings are taken.
+        for vals in ("bCfFgHIKLNTVX", "bCfFgHIKLNsTVX"):
+            i, pending = 0, []
+            while i < len(lex):
+                toks, lead = lex[i]
+                if pending:
+                    if pending.pop(0) == "C":
+                        dests.append(toks)
+                    i += 1
+                    continue
+                if i == 0 and lead and not lead.startswith("-"):
+                    extracts = extracts or "x" in lead or len(lead) < len(toks)
+                    pending = [ch for ch in lead if ch in vals]
+                    i += 1
+                    continue
+                if lead == "--" and len(toks) == 2:
+                    break
+                if lead.startswith("--"):
+                    opt, eq, _ = lead.partition("=")
+                    if len(lead) < len(toks) and not eq:
+                        extracts = True  # a computed long option
+                    elif len(opt) >= 3 and "--directory".startswith(opt):
+                        dests.append(toks[len(opt) + 1:] if eq else (lex[i + 1][0] if i + 1 < len(lex) else []))
+                        i += 0 if eq else 1
+                    elif len(opt) >= 3 and ("--extract".startswith(opt) or "--get".startswith(opt)):
+                        extracts = True
+                    i += 1
+                    continue
+                if lead.startswith("-") and len(toks) > 1:
+                    j, skip = 1, 0
+                    while j < len(toks):
+                        if j >= len(lead):
+                            extracts = True  # a computed option letter
+                            break
+                        ch = lead[j]
+                        if ch == "x":
+                            extracts = True
+                        if ch in vals:
+                            val, skip = value(i, toks, j)
+                            if ch == "C":
+                                dests.append(val)
+                            break
+                        j += 1
+                    i += 1 + skip
+                    continue
+                i += 1
+        return extracts, dests
+    if name == "unzip":
+        dests, i = [], 0
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if lead.startswith("-") and not lead.startswith("--"):
+                for j in range(1, len(toks)):
+                    ch = lead[j] if j < len(lead) else None
+                    if ch in ("d", "P", "I", "O"):
+                        val, skip = value(i, toks, j)
+                        if ch == "d":
+                            dests.append(val)
+                        break
+            i += 1 + skip
+        return True, dests
+    if name == "cpio":
+        extracts, dests, i = False, [], 0
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if lead.startswith("--"):
+                opt, eq, _ = lead.partition("=")
+                if len(opt) >= 3 and "--directory".startswith(opt):
+                    dests.append(toks[len(opt) + 1:] if eq else (lex[i + 1][0] if i + 1 < len(lex) else []))
+                    skip = 0 if eq else 1
+                elif len(opt) >= 3 and "--extract".startswith(opt):
+                    extracts = True
+            elif lead.startswith("-"):
+                for j in range(1, len(toks)):
+                    ch = lead[j] if j < len(lead) else None
+                    if ch is None or ch == "i":
+                        extracts = True
+                    if ch in tuple("CDEFHIMOR"):
+                        val, skip = value(i, toks, j)
+                        if ch == "D":
+                            dests.append(val)
+                        break
+            i += 1 + skip
+        return extracts, dests
+    here = [(("c", "."), "lit")]  # the cwd as a destination
+
+    def long_is(lead, full, least=4):
+        opt = lead.partition("=")[0]
+        return len(opt) >= least and full.startswith(opt)
+
+    def long_value(i, toks, lead):
+        opt, eq, _ = lead.partition("=")
+        return (toks[len(opt) + 1:], 0) if eq else ((lex[i + 1][0] if i + 1 < len(lex) else []), 1)
+
+    if name == "gzip":
+        # -N/--name restores the name stored in the file, next to the input (gzip strips its directory part).
+        dec, keep_name, stdout, recursive = r.name in ("gunzip", "unpigz", "zcat"), False, r.name == "zcat", False
+        if re.search(r"\bGZIP=", view.command) or "GZIP" in view.defs:
+            keep_name = True  # options from the environment
+        ops, i, rest = [], 0, False
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if rest or not lead.startswith("-") or (lead == "-" and len(toks) == 1):
+                ops.append(toks)
+            elif lead == "--" and len(toks) == 2:
+                rest = True
+            elif lead.startswith("--"):
+                if len(lead) < len(toks) and "=" not in lead:
+                    dec = keep_name = True  # a computed long option
+                elif long_is(lead, "--name"):
+                    keep_name = True
+                elif long_is(lead, "--decompress") or long_is(lead, "--uncompress"):
+                    dec = True
+                elif long_is(lead, "--stdout", 5) or long_is(lead, "--to-stdout", 5):
+                    stdout = True
+                elif long_is(lead, "--recursive"):
+                    recursive = True
+                elif long_is(lead, "--suffix") and "=" not in lead:
+                    skip = 1
+            else:
+                for j in range(1, len(toks)):
+                    ch = lead[j] if j < len(lead) else None
+                    if ch is None:
+                        dec = keep_name = True  # a computed option letter
+                        break
+                    dec, keep_name = dec or ch == "d", keep_name or ch == "N"
+                    stdout, recursive = stdout or ch == "c", recursive or ch == "r"
+                    if ch == "S":
+                        skip = 0 if j + 1 < len(toks) else 1
+                        break
+            i += 1 + skip
+        if not (dec and keep_name and not stdout and ops):
+            return False, []
+        dests = []
+        for toks in ops:
+            _, dtoks = view.split(toks)
+            dests.append(here if dtoks is None else dtoks)
+            if recursive:
+                dests.append(toks)
+        return True, dests
+    if name == "ar":
+        # `ar x [--output <dir>] archive`: the key is the first word not a long option; members land in the cwd.
+        key, dests, i = None, [], 0
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if lead.startswith("--"):
+                if long_is(lead, "--output", 3):
+                    val, skip = long_value(i, toks, lead)
+                    dests.append(val)
+                elif "=" not in lead and lead.partition("=")[0] in ("--plugin", "--target"):
+                    skip = 1
+            elif key is None:
+                key = (toks, lead)
+            i += 1 + skip
+        extracts = key is not None and ("x" in key[1] or len(key[1]) < len(key[0]))
+        return extracts, dests
+    if name == "deb":
+        # dpkg-deb -x/-X/-R/-e (dpkg -x/-X/-e) archive [dir]: every operand after the archive is a destination.
+        letters = "xXe" if r.name == "dpkg" else "xXRe"
+        longs = ("--extract", "--vextract", "--control") + (() if r.name == "dpkg" else ("--raw-extract",))
+        extracts, ops = False, []
+        for toks, lead in lex:
+            if lead.startswith("--"):
+                if (len(lead) < len(toks) and "=" not in lead) or any(long_is(lead, o, 5) for o in longs):
+                    extracts = True
+            elif lead.startswith("-") and len(toks) > 1:
+                if len(lead) < len(toks) or any(ch in letters for ch in lead[1:]):
+                    extracts = True
+            else:
+                ops.append(toks)
+        return extracts, (ops[1:] or [here]) if extracts else []
+    if name in ("pax", "rar", "lha", "unar"):
+        # pax -r (into the cwd) and -rw (into the last operand); unrar/rar x|e archive [dir/] or -op<dir>; lha
+        # x|e archive or xw=<dir>; unar -o/--output-directory <dir>. Every operand is tried as a destination too.
+        extracts, dests, outdir, i, first = name == "unar", [], False, 0, True
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if name == "pax" and lead.startswith("-") and len(toks) > 1:
+                extracts = extracts or "r" in lead[1:] or len(lead) < len(toks)
+            elif name == "unar" and lead.startswith("-"):
+                if lead in ("-o", "-output-directory") or long_is(lead, "--output-directory", 4):
+                    val, skip = long_value(i, toks, lead) if lead.startswith("--") else (
+                        (lex[i + 1][0] if i + 1 < len(lex) else []), 1)
+                    dests.append(val)
+                    outdir = True
+            elif name == "rar" and lead.startswith("-op") and len(toks) > 3:
+                dests.append(toks[3:])
+                outdir = True
+            elif name in ("rar", "lha") and first and not (name == "rar" and lead.startswith("-")):
+                first = False
+                k = lead.lstrip("-")
+                extracts = len(lead) < len(toks) or (k[:1] in ("x", "e") if name == "rar" else bool(
+                    set(k.split("w=")[0]) & {"x", "e"}))
+                if name == "lha" and "w=" in lead:
+                    dests.append(toks[lead.index("w=") + 2:])
+                    outdir = True
+            elif not lead.startswith("-"):
+                dests.append(toks)
+            i += 1 + skip
+        return extracts, dests + ([] if outdir else [here])
+    extracts = bool(lex) and lex[0][1] in ("x", "e")
+    return extracts, [toks[2:] for toks, lead in lex if lead.startswith("-o") and len(toks) > 2]
+
+
+# git commands that write nothing into their directory's work tree (object and ref housekeeping writes only under
+# .git): with the state directory as their directory they pass; any other non-read git command there is refused.
+# init, clone, checkout-index and worktree are read by _consent_git_tree itself.
+_CONSENT_GIT_HERE_OK = frozenset({"fetch", "push", "remote", "config", "help", "version", "ls-remote",
+                                  "branch", "tag", "var", "cat-file", "rev-list", "for-each-ref", "show-ref",
+                                  "ls-tree", "gc", "fsck", "count-objects", "prune", "repack", "pack-refs"})
+
+
+def _consent_git_tree(view, sp, r):
+    """Why a git invocation can write files into the state directory, or None: its work tree (--work-tree,
+    GIT_WORK_TREE, core.worktree by -c, --config-env, GIT_CONFIG_* or `git config`) can be the state directory, or it
+    runs a command other than a read where the state directory is its directory (-C, cd, the call's cwd; a GIT_DIR
+    or --git-dir without a work tree makes that directory the work tree)."""
+    why = "it checks files out into the state directory"
+    args = list(r.args)
+    trees, cfg_trees, here, gitdirs, k = [], [], [], [], 0
+    while k < len(args):
+        toks, lead = _consent_lead(view, args[k])
+        whole = len(lead) == len(toks)
+        nxt = view.tokens(args[k + 1]) if k + 1 < len(args) else []
+        opt, eq, _ = lead.partition("=")
+        if whole and lead in sp.GIT_GLOBAL_VALUE_OPTS:
+            val, k = nxt, k + 2
+        elif eq and opt in sp.GIT_GLOBAL_VALUE_OPTS:
+            val, k = toks[len(opt) + 1:], k + 1
+        elif whole and lead in sp.GIT_GLOBAL_FLAGS:
+            k += 1
+            continue
+        else:
+            break
+        if opt == "-C":
+            here.append(val)
+        elif opt == "--work-tree":
+            trees.append(val)
+        elif opt == "--git-dir":
+            gitdirs.append(val)
+        elif opt in ("-c", "--config-env"):
+            m = 0
+            while m < len(val) and val[m][0][0] == "c" and val[m][1] == "lit":
+                m += 1
+            vlead = "".join(t[1] for t, _ in val[:m])
+            key, has_eq, _ = vlead.partition("=")
+            if not has_eq or len(key) + 1 > len(val):
+                if any(o in ("state", "unk") for _, o in val):
+                    return why + " (a computed git config key)"
+                continue
+            if key.strip().lower() == "core.worktree":
+                rest = val[len(key) + 1:]
+                if opt == "--config-env":
+                    info = view.var(_consent_text(rest)) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",
+                                                                          _consent_text(rest)) else ("unk",)
+                    if info[0] != "static":
+                        return why + " (core.worktree from the environment)"
+                    rest = view.tokens(text=info[1])
+                cfg_trees.append(rest)
+    sub = args[k].value() if k < len(args) else None
+    for a in r.assignments:
+        if a.name == "GIT_WORK_TREE":
+            trees.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
+    if "GIT_WORK_TREE" in view.defs:
+        info = view.var("GIT_WORK_TREE")
+        if info[0] in ("state", "any"):
+            return why
+        trees.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
+                                                    info[1] if info[0] == "multi" else ()))
+    # The environment's config (GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS), set here or by export.
+    env = {}
+    for n in view.defs:
+        if n.startswith("GIT_CONFIG_"):
+            info = view.var(n)
+            env[n] = info[1] if info[0] == "static" else None
+    for a in r.assignments:
+        if a.name.startswith("GIT_CONFIG_"):
+            env[a.name] = a.static_value()
+    pairs = []
+    count = env.get("GIT_CONFIG_COUNT")
+    if "GIT_CONFIG_COUNT" in env and not (count or "").isdigit():
+        pairs.append((None, None))
+    for n in range(min(int(count), 64) if (count or "").isdigit() else 0):
+        pairs.append((env.get("GIT_CONFIG_KEY_%d" % n), env.get("GIT_CONFIG_VALUE_%d" % n)))
+    if "GIT_CONFIG_PARAMETERS" in env:
+        params = env["GIT_CONFIG_PARAMETERS"]
+        if params is None:
+            pairs.append((None, None))
+        for item in sp.argv_split(params or ""):
+            key, _eq, v = item.partition("=")
+            pairs.append((key, v))
+    for key, v in pairs:
+        if key is None or key.strip().lower() == "core.worktree":
+            if key is None and "worktree" not in view.command.lower():
+                continue
+            if v is None:
+                return why + " (core.worktree from a computed environment)"
+            cfg_trees.append(view.tokens(text=v))
+    if sub == "config":
+        rest = args[k + 1:]
+        keyed = False
+        for w in rest:
+            v = w.value()
+            if v is not None and v.lower() == "core.worktree":
+                keyed = True
+            elif v is None and any(p.kind not in ("lit", "glob") for p in w.parts) and "worktree" in w.text.lower():
+                keyed = True
+            elif keyed and not (v or "").startswith("-"):
+                cfg_trees.append(view.tokens(w))
+    # core.worktree is read relative to the git directory, which is not known here: a relative value that climbs out
+    # with `..` can reach the state directory.
+    for t in cfg_trees:
+        text = _consent_text(t)
+        if not text.startswith("/") and ".." in text.split("/") and not any(o == "state" for _, o in t):
+            return why + " (a relative core.worktree)"
+        trees.append(t)
+    for t in trees:
+        if t and view.into_dir(toks=t):
+            return why
+    slash = (("c", "/"), "lit")
+
+    def at(d):
+        """Can directory tokens d ([]: git's own directory) read from git's directory (-C, else the cwd) be the
+        state directory?"""
+        if d and (d[0][0] == ("c", "/") or d[0][1] in ("state", "unk") or any(o == "state" for _, o in d)):
+            return view.into_dir(toks=d)
+        if here:
+            return any(h and view.into_dir(toks=list(h) + [slash] + list(d)) for h in here)
+        return view.into_dir(toks=d) if d else view.cwd_state(".")
+
+    rest = args[k + 1:] if sub is not None else []
+    lexr = [_consent_lead(view, w) for w in rest]
+    if sub in ("init", "clone"):
+        # The new repository's directory, its git directory (GIT_DIR, --git-dir, --separate-git-dir) and every
+        # operand: a template (--template, GIT_TEMPLATE_DIR, init.templateDir) copies files named in it there.
+        for a in r.assignments:
+            if a.name == "GIT_DIR":
+                gitdirs.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
+        if "GIT_DIR" in view.defs:
+            info = view.var("GIT_DIR")
+            if info[0] in ("state", "any"):
+                return f"it runs `git {sub}` with the state directory as its git directory"
+            gitdirs.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
+                                                         info[1] if info[0] == "multi" else ()))
+        ops, j = [], 0
+        while j < len(lexr):
+            toks, lead = lexr[j]
+            opt, eq, _ = lead.partition("=")
+            if lead.startswith("--") and len(opt) >= 4 and "--separate-git-dir".startswith(opt):
+                if eq:
+                    gitdirs.append(toks[len(opt) + 1:])
+                else:
+                    gitdirs.append(lexr[j + 1][0] if j + 1 < len(lexr) else [])
+                    j += 1
+            elif lead.startswith("--") and len(lead) < len(toks) and not eq:
+                return f"`git {sub}` reads a computed option"
+            elif not lead.startswith("-") or (lead == "-" and len(toks) == 1):
+                ops.append(toks)
+            j += 1
+        for d in gitdirs + ops:
+            if d and at(d):
+                return f"it runs `git {sub}` into the state directory"
+        if sub == "init" and not ops and at([]):
+            return "it runs `git init` with the state directory as its directory"
+        return None
+    if sub == "checkout-index":
+        # --prefix (any unique abbreviation, `=` or the next word) is prepended to every path checked out: its
+        # directory part is where the files land.
+        prefixes, j = [], 0
+        while j < len(lexr):
+            toks, lead = lexr[j]
+            opt, eq, _ = lead.partition("=")
+            if lead == "--" and len(toks) == 2:
+                break
+            if lead.startswith("--") and len(opt) >= 3 and "--prefix".startswith(opt):
+                if eq:
+                    prefixes.append(toks[len(opt) + 1:])
+                else:
+                    prefixes.append(lexr[j + 1][0] if j + 1 < len(lexr) else [])
+                    j += 1
+            elif lead.startswith("--") and len(lead) < len(toks) and not eq:
+                return "`git checkout-index` reads a computed option"
+            j += 1
+        if prefixes:
+            for p in prefixes:
+                base, dtoks = view.split(p)
+                if dtoks is None:
+                    dtoks = []
+                elif not dtoks:
+                    dtoks = [slash]  # the root
+                if at(dtoks):
+                    return "it checks files out under a --prefix in the state directory"
+            return None
+    if sub == "worktree":
+        # `git worktree add <path>` checks out into <path>; the other actions write only under the git directory.
+        if any(not lead.startswith("-") and at(toks) for toks, lead in lexr[1:]):
+            return "it adds a git worktree in the state directory"
+        return None
+    if sub is not None and sub not in _CONSENT_GIT_READS and sub not in _CONSENT_GIT_HERE_OK:
+        where = any(h and view.into_dir(toks=h) for h in here) if here else view.cwd_state(".")
+        if where:
+            return f"it runs `git {sub}` with the state directory as its directory"
+    if sub is None and k < len(args):
+        if any(h and view.into_dir(toks=h) for h in here) if here else view.cwd_state("."):
+            return "it runs a computed git command with the state directory as its directory"
+    return None
+
+
+def _consent_git_config_file(view, t):
+    """Can the write target be a git config file: `<dir>.git/config`, `.git/.../config(.worktree)`, `~/.gitconfig`,
+    `git/config` (XDG), `config` written from inside a `.git` directory, or a file GIT_CONFIG* names?"""
+    toks = view.tokens(t.word) if t.word is not None else view.tokens(text=t.path or "")
+    text = _consent_text(toks)
+    parts = text.split("/")
+    base, parent = parts[-1], (parts[-2] if len(parts) > 1 else None)
+    if base == ".gitconfig":
+        return True
+    if base in ("config", "config.worktree"):
+        if parent is None:
+            return any(c is None or re.search(r"\.git(/|$)", c) for c, _ in view.cwds)
+        if parent.endswith(".git") or parent == "git" or "*" in parent or "/.git/" in "/" + text:
+            return True
+    named = [os.environ.get(n) for n in ("GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM")]
+    for n in ("GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+        if n in view.defs:
+            info = view.var(n)
+            if info[0] != "static":
+                return True
+            named.append(info[1])
+    try:
+        return any(v and os.path.normpath(v) == os.path.normpath(text) for v in named)
+    except ValueError:
+        return True
+
+
+def _consent_text_names_state(view, text):
+    """Does command text name the state directory as a whole path (its literal path, $CLAUDE_STATE_DIR, a variable
+    holding it, the cwd when that is it), or a core.worktree that climbs with `..`?"""
+    text = text or ""
+    for s in {view.state, os.path.realpath(view.state)}:
+        if re.search(re.escape(s.rstrip("/") or "/") + r"/?\.?(?![\w.\-/])", text):
+            return True
+    if "CLAUDE_STATE_DIR" in text or re.search(r"(?i)worktree[^\n]*\.\.", text):
+        return True
+    if view.state_is_tmp and re.search(r"\$\{?(TMPDIR|TMP|TEMP|TEMPDIR|CLAUDE_TMPDIR)\b|\bmktemp\b", text):
+        return True
+    if view.cwd_state(".") and re.search(r"\bpwd\b|\$\{?O?L?D?PWD\b|\bdirs\b", text):
+        return True
+    for name in re.findall(r"\$\{?!?([A-Za-z_][A-Za-z0-9_]*)", text):
+        if view.var(name)[0] in ("state", "any"):
+            return True
+    return False
+
+
+def _consent_read_only(cmd, name, view, named_writes):
+    """None when the simple command is one of the read-only shapes, else why not."""
+    words = list(cmd.words[1:])
+    vals = [w.value() for w in words]
+    if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in ("lit", "glob") for p in w.parts)
+                                            for w, v in zip(words, vals)):
+        return f"`{name}` takes a computed argument"
+    vals = [v if v is not None else "" for v in vals]  # a glob operand: a file name, read only
+    if name == "find" and any(v in _FIND_ACTIONS for v in vals):
+        return "`find` runs or writes with an action"
+    if name == "rg" and any(v and v.startswith("--pre") for v in vals):
+        return "`rg --pre` runs a program"
+    if name == "file" and any((v.startswith("-") and not v.startswith("--") and "C" in v[1:]) or (
+            len(v.split("=")[0]) > 3 and "--compile".startswith(v.split("=")[0])) for v in vals):
+        return "`file -C` writes a compiled magic file"
+    if name == "printf" and any(v == "-v" or (v or "").startswith("-v") for v in vals[:1]):
+        return "`printf -v` assigns a variable"
+    if name == "sed":
+        opts, operands, err = _consent_opts(view, words, _consent_spec("sed"))
+        if any(o in ("-i", "--in-place", "-f", "--file") for o, _, _ in opts):
+            return "`sed` edits in place or reads its script from a file"
+        if err:
+            return f"`sed` reads {err}"
+        scripts = [_consent_text(v) for o, v, _ in opts if o in ("-e", "--expression")]
+        if not scripts:
+            scripts = [_consent_text(view.tokens(w)) for w in operands[:1]]
+        for s in scripts:
+            s = re.sub(r"\\.", "", s or "")
+            s = re.sub(r"/[^/\n]*/", "", s)
+            if re.search(r"[wWe]", s):
+                return "a `sed` script can write a file or run a command"
+        return None
+    if name in ("awk", "gawk", "mawk", "nawk"):
+        prog, skip = None, False
+        for i, v in enumerate(vals):
+            if skip:
+                skip = False
+                continue
+            if v in ("-F", "-v", "--field-separator", "--assign"):
+                skip = True
+                continue
+            if v.startswith("-F") or v.startswith("-v") or v.startswith("--field-separator=") or v.startswith(
+                    "--assign="):
+                continue
+            if v == "--":
+                continue
+            if v.startswith("-"):
+                return f"`{name} {v}` is not a read-only option"
+            prog = v
+            break
+        if prog is None or re.search(r"[>|@]|system|\bclose\b|fflush|ENVIRON\[", prog):
+            return f"an `{name}` program can write a file or run a command"
+        return None
+    if name == "sort":
+        opts, _, err = _consent_opts(view, words, _consent_spec("sort"))
+        if any(o == "--compress-program" for o, _, _ in opts):
+            return "`sort --compress-program` runs a program"
+        if err:
+            return f"`sort` reads {err}"
+        for o, v, w in opts:
+            if o in ("-o", "--output") and v is not None:
+                named_writes.append(w if w is not None else ("toks", v))
+        return None
+    if name == "tee":
+        for w, v in zip(words, vals):
+            if not (v or "").startswith("-") or v == "-":
+                named_writes.append(w)
+        return None
+    if name == "git":
+        i = 0
+        while i < len(vals) and vals[i].startswith("-"):
+            if vals[i] == "-C":
+                i += 2
+                continue
+            if vals[i] in ("--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"):
+                i += 1
+                continue
+            return f"`git {vals[i]}` is not a read-only git option"
+        sub = vals[i] if i < len(vals) else None
+        opts = vals[i + 1:]
+        if sub in _CONSENT_GIT_READS:
+            # A long option and its unique prefixes (`--out`, `--open`), or git grep's -O in a cluster or with its
+            # pager attached (`-O<cmd>`, `-iO<cmd>`).
+            for v in opts:
+                opt = v.split("=", 1)[0]
+                if opt.startswith("--") and len(opt) > 2 and any(d.startswith(opt) or opt.startswith(d) for d in (
+                        "--output", "--open-files-in-pager", "--ext-diff")):
+                    return f"`git {sub} {v}` writes a file or runs a program"
+                if v == "-O" or (sub == "grep" and v.startswith("-") and not v.startswith("--") and "O" in v[1:]):
+                    return f"`git {sub} {v}` writes a file or runs a program"
+            return None
+        if sub == "commit":
+            skip = False
+            for v in opts:
+                if skip:
+                    skip = False
+                    continue
+                if v in ("-m", "--message"):
+                    skip = True
+                elif v.startswith("--message=") or (v.startswith("-m") and not v.startswith("--")):
+                    continue
+                elif v.startswith("-") and not v.startswith("--") and len(v) > 2 and set(v[1:-1]) <= set("aqsvn") \
+                        and v[-1] == "m":
+                    skip = True
+                elif v.startswith("-") and v not in _CONSENT_GIT_COMMIT_OPTS:
+                    return f"`git commit {v}` is not a plain commit"
+            return None
+        return f"`git {sub}` is not a read-only git command"
+    return None
+
+
+def _consent_uncommented(command, sp):
+    out = list(command)
+    try:
+        sp._blank_comments(command, out)
+    except Exception:  # noqa: BLE001 - the whole text, comments included
+        return command
+    return "".join(out)
+
+
+def consent_flag_verdict(command, cwd, state):
+    """None, or why the command can create, change, move, link, copy onto or delete the /do consent flag."""
+    from lib import shell_parse as sp
+    script = sp.parse(command)
+    sites = list(_consent_sites(script, sp))
+    named = CONSENT_TOKEN in _consent_norm(_consent_uncommented(command, sp)) or any(
+        CONSENT_TOKEN in _consent_norm(w.value() or "") for s in sites for w in s.cmd.words)
+    if named and script.error is not None:
+        return "the command names the consent flag and cannot be parsed"
+    view = _ConsentView(sp, script, sites, command, cwd, state)
+
+    def deletes_state(t):
+        if t.path:
+            norm = os.path.normpath(t.path)
+            return norm.startswith("/") and (_consent_same_dir(norm, state) or
+                                             (one_slash(state) + "/").startswith(one_slash(norm) + "/"))
+        if t.word is not None:
+            toks = view.tokens(t.word)
+            while len(toks) > 1 and toks[-1][0] == ("c", "/"):
+                toks = toks[:-1]
+            return bool(toks) and all(o == "state" or t2 == ("c", "/") for t2, o in toks) and any(
+                o == "state" for _, o in toks)
+        return False
+
+    # 1. Every write target: redirections and the parser's write verbs.
+    real_writes, config_writes = False, False
+    for t in sp.write_targets(script):
+        if t.mode == "delete" and deletes_state(t):
+            return "it deletes or moves the state directory that holds the consent flag"
+        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith("/dev/fd/")):
+            continue
+        real_writes = True
+        config_writes = config_writes or _consent_git_config_file(view, t)
+        if t.word is not None:
+            why = view.target(word=t.word, named=named)
+        elif t.path is not None:
+            why = view.target(text=t.path, named=named)
+        else:
+            why = "its target is computed" if named else None
+        if why:
+            return why
+    # 1a. A git config file written by a command whose text names the state directory: a core.worktree there makes
+    # the next checkout write the index's names into it. (A core.worktree already on disk is not seen here.)
+    if config_writes and _consent_text_names_state(view, command):
+        return "it writes a git config file with text that names the state directory (core.worktree)"
+    for s in sites:
+        r = sp.resolve(s.cmd)
+        if r.name is None:
+            continue
+        # 2. Creators the write-target table does not list: each operand is a target.
+        if r.name in _CONSENT_DIR_CREATORS:
+            for w in r.args:
+                if not (w.value() or "").startswith("-"):
+                    why = view.target(word=w, named=named)
+                    if why:
+                        return why
+        # 3. A copy, move or link into the state directory under a name that can be the flag's, or of the state
+        # directory itself.
+        if r.name in _CONSENT_COPIERS:
+            sources, dest, dest_is_dir, recursive, odd = _consent_operands(view, r)
+            if odd:
+                return odd
+            if r.name == "mv" and any(deletes_state(sp.WriteTarget(w.value(), "delete", "mv", word=w))
+                                      for w in sources):
+                return "it deletes or moves the state directory that holds the consent flag"
+            where = view.cwd_state(".") if dest is None else view.into_dir(toks=dest)
+            if where and not dest_is_dir:
+                return "it replaces the state directory that holds the consent flag"
+            if where and dest_is_dir:
+                for w in sources:
+                    v = w.value() or ""
+                    if recursive and (v.endswith("/") or v.endswith("/.") or v == "."):
+                        return "it copies a directory's contents, names not known here, into the state directory"
+                    if view.source_may_be_flag(w, where):
+                        return ("it copies, moves or links a file that can be named like the consent flag into the "
+                                "state directory")
+        # 3a. xargs, parallel and find -exec build their operands at run time: none may aim at the state directory.
+        head = s.cmd.head().value() if s.cmd.words and s.cmd.head().value() else ""
+        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in ("xargs", "parallel") or \
+                "exec_argv" in s.context:
+            if view.cwd_state(".") == "explicit":
+                return "it runs a command with operands built at run time in the state directory"
+            for w in list(s.cmd.words[1:]):
+                _, dtoks = view.split(view.tokens(w))
+                if (dtoks is not None and view.dir_state(dtoks) == "explicit") or view.into_dir(w) == "explicit":
+                    return "it runs a command with operands built at run time in the state directory"
+        # 3b. An archive extracted into the state directory writes names not known here.
+        if r.name in _CONSENT_UNPACKERS:
+            extracts, dests = _consent_unpack_dirs(view, r)
+            if extracts and (any(view.into_dir(toks=d) == "explicit" for d in dests) if dests else
+                             view.cwd_state(".") == "explicit"):
+                return "it extracts an archive, whose names are not known here, into the state directory"
+        # 3c. A git work tree in the state directory: a checkout writes names not known here.
+        if r.name == "git":
+            why = _consent_git_tree(view, sp, r)
+            if why:
+                return why
+    if not named:
+        return None
+    # 4. The command names the flag: every simple command must be a read-only shape, and nothing it emits that
+    # carries the name reaches a file.
+    named_writes, emits = [], False
+    for s in sites:
+        cmd = s.cmd
+        for red in cmd.redirects:
+            body = (red.hd.body if red.hd is not None else None) or (
+                red.target.text if red.op == "<<<" and red.target is not None else "")
+            if CONSENT_TOKEN in _consent_norm(body):
+                emits = True
+        if not cmd.words:
+            continue
+        head = cmd.head().value()
+        if s.dynamic or head is None:
+            return "a command whose name is computed runs where the consent flag is named"
+        name = sp.basename(head)
+        if name not in _CONSENT_READ_ONLY:
+            return f"`{name}` is not a read-only command, and the command names the consent flag"
+        why = _consent_read_only(cmd, name, view, named_writes)
+        if why:
+            return why + ", and the command names the consent flag"
+        if name in ("echo", "printf") and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
+            emits = True
+    for w in named_writes:
+        why = (view.target(toks=w[1], named=True) if isinstance(w, tuple) else
+               view.target(text=w, named=True) if isinstance(w, str) else view.target(word=w, named=True))
+        if why:
+            return why
+        real_writes = True
+    if emits and real_writes:
+        return "it writes text that names the consent flag into a file"
+    return None
+
+
+def consent_flag_rule(command, payload):
+    """The /do consent flag is written only by hooks/prompt-workflow.py when the owner types /do; no Bash call
+    writes, creates, moves, links, copies onto or deletes it. Runs before the /do and /allow releases."""
+    ti = payload.get("tool_input") if isinstance(payload, dict) else None
+    cwd = (ti.get("cwd") if isinstance(ti, dict) else None) or (payload.get("cwd") if isinstance(payload, dict) else
+                                                                 None) or os.getcwd()
+    state = state_dir()
+    try:
+        why = consent_flag_verdict(command, str(cwd), state)
+    except Exception:  # noqa: BLE001 - an analysis that cannot finish refuses a command that names the flag
+        why = "the consent-flag check could not read the command" if (
+            CONSENT_TOKEN in _consent_norm(command) or "CLAUDE_STATE_DIR" in command) else None
+    if why:
+        refuse("BLOCKED: do-consent-flag-write — this command can write, create, move, link, copy onto or delete the "
+               "/do consent flag", f"Command: {command}",
+               f"REASON: {why}. The flag <state dir>/{CONSENT_PREFIX}<session id>{CONSENT_SUFFIX} is written only by "
+               "hooks/prompt-workflow.py when the owner types /do; a Bash-written one would grant /do consent the "
+               "owner never gave. Reading it (cat, ls, grep, sed -n, awk, git log ...) is allowed; once a command "
+               "names the flag, every program in it must be one of those read-only shapes. Neither /do nor /allow "
+               "releases this rule.")
 
 
 # ── Bulk-commit sentinel (BS-17) ─────────────────────────────────────────────
@@ -1447,6 +2828,7 @@ def decide(payload_text):
     home = os.path.dirname(HOOKS)
     runtime_guard(payload_text, command)
     run_commit_guard(payload, command, home)
+    consent_flag_rule(command, payload)
 
     from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command
     if not get("agent_id"):
