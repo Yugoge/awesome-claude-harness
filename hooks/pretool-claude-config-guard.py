@@ -171,22 +171,43 @@ def _legacy_kind(command: str) -> str:
 # A protected folder named in a path: `.claude/hooks` or `.claude/commands`, as the folder itself or
 # anything below it (`cp -t .claude/hooks x`, `--target-directory=.claude/commands`).
 _PROTECTED = re.compile(r'\.claude/(hooks|commands)(?![A-Za-z0-9_.-])')
-# Commands that run their operands (or a string) as code the shared parser does not read: a write
-# they make is unknown, so where one names a protected folder the base reading decides.
-_OPAQUE = frozenset({
-    'watch', 'parallel', 'docker', 'podman', 'kubectl', 'script', 'bwrap', 'machinectl',
-    'start-stop-daemon', 'coproc', 'sg', 'awk', 'gawk', 'mawk', 'nawk', 'perl', 'ruby', 'node',
-    'php', 'lua', 'tclsh', 'expect', 'make', 'vim', 'vi', 'nvim', 'ex', 'ed', 'emacs',
+_DOT_SEGMENTS = re.compile(r'/(?:\.?/)+')
+_CD = frozenset({'cd', 'pushd', 'popd'})
+_FED = frozenset({'pipe', 'heredoc', 'herestring'})
+# Text in a word that makes it code or a command line rather than a path (`rsync -e 'cp x ...'`).
+_CODE_CHARS = re.compile(r'[\s;|&<>`]|\$\(')
+
+# Commands that write nothing a word of theirs names, whatever the words say (a message, a pattern,
+# a file read): a protected folder named by one of them is not written.
+_READERS = frozenset({
+    'echo', 'printf', 'cat', 'grep', 'egrep', 'fgrep', 'head', 'tail', 'wc', 'ls', 'stat', 'file',
+    'du', 'diff', 'cmp', 'realpath', 'readlink', 'basename', 'dirname', 'test', '[', 'true', 'false',
+    ':', 'pwd', 'md5sum', 'sha1sum', 'sha256sum', 'sha512sum', 'cksum', 'b2sum', 'nl', 'cut', 'tr',
+    'od', 'hexdump', 'strings', 'tac', 'comm', 'which', 'type',
 })
-_CD = frozenset({'cd', 'pushd'})
+# Commands that read their standard input as data, never as code: fed a protected folder's name or
+# text, they write nothing through it (a write verb's targets come from the parser).
+_STDIN_DATA = _READERS | {'tee', 'sed', 'sort', 'uniq', 'jq', 'xxd', 'less', 'more'}
+# Commands whose path operands the guard reads (the parser's write verbs and the item-4 readers
+# below): a protected folder they name as a plain path is read or is a write target the parser or
+# _site_writes finds; one named inside code-looking text (`rsync -e 'cp x ...'`) is not settled.
+_OPERAND_COMMANDS = frozenset({'rg', 'ag', 'tar', 'find', 'touch', 'sort', 'zip', 'unzip', 'patch',
+                               'perl', 'cd', 'pushd', 'popd'})
+_GIT_READS = frozenset({
+    'log', 'diff', 'show', 'status', 'blame', 'annotate', 'ls-files', 'ls-tree', 'rev-parse',
+    'shortlog', 'describe', 'cat-file', 'commit', 'add', 'grep', 'whatchanged', 'reflog',
+    'check-ignore', 'show-ref',
+})
+_GIT_VALUE_GLOBALS = frozenset({'-C', '--git-dir', '--work-tree', '--namespace'})
 
 
 def _protected_kind(text: str) -> str:
-    """'hooks' or 'commands' when ``text`` (with the home spelled out) names a protected folder."""
+    """'hooks' or 'commands' when ``text`` (with the home spelled out, `/./` and `//` folded)
+    names a protected folder."""
     if not text:
         return ''
     for form in dict.fromkeys((text, _home_spelled_out(text))):
-        found = _PROTECTED.search(form.replace('\\', '/'))
+        found = _PROTECTED.search(_DOT_SEGMENTS.sub('/', form.replace('\\', '/')))
         if found:
             return found.group(1)
     return ''
@@ -198,10 +219,360 @@ def _shell_parse():
     return shell_parse
 
 
+def _site_words(cmd) -> list:
+    words = [a.word for a in cmd.assignments] + list(cmd.words)
+    return words + [r.target for r in cmd.redirects if r.target is not None]
+
+
+def _names(raw: str, word) -> bool:
+    """Whether ``word`` as written (its substitutions included) names a protected folder."""
+    return bool(_protected_kind(word.text))
+
+
+def _plain(word) -> bool:
+    return not _CODE_CHARS.search(word.text)
+
+
+def _git_settled(res, raw) -> bool:
+    """A git call naming a protected folder is settled when it reads (log, diff, a commit message)
+    with no `-c` setting, no config or alias, no pager, editor or output option."""
+    vals = [w.value() for w in res.args]
+    k = 0
+    while k < len(vals) and (vals[k] or '').startswith('-'):
+        v = vals[k]
+        if v in ('-c', '--config-env', '--exec-path') or (v or '').startswith(('-c', '--config-env', '--exec-path=')):
+            return False
+        k += 2 if v in _GIT_VALUE_GLOBALS else 1
+    if k >= len(vals) or vals[k] not in _GIT_READS:
+        return False
+    for v in vals[k + 1:]:
+        if v is None or v.startswith(('--output', '--ext-diff', '-O', '--open-files-in-pager', '--exec')):
+            return False
+    return True
+
+
+def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
+    """Whether the guard knows every write of this simple command that a protected folder's name in
+    it could make: the folder is an operand of a reader, a plain path operand of a command whose
+    writes the parser or _site_writes reads, or the code of a payload walked on its own."""
+    cmd = site.cmd
+    named = [w for w in _site_words(cmd) if _names(raw, w)]
+    heredoc = any(r.hd is not None and _protected_kind(r.hd.body) for r in cmd.redirects)
+    stdin_code = (names_any and site.fed & _FED and res.payload is None and not res.stdin_shell
+                  and res.name not in _STDIN_DATA)
+    if stdin_code:
+        return False  # code fed to an interpreter, a scheduler, `make -f -`
+    if not named and not heredoc:
+        return True
+    if res.unresolved and not res.unresolved.startswith('xargs_appends'):
+        return False
+    if res.payload is not None:
+        return not res.unresolved  # the payload's own commands are walked and judged
+    if any(_names(raw, a.word) and not _plain(a.word) for a in cmd.assignments):
+        return False  # a command string in a variable (GIT_EDITOR=..., PAGER=..., c='cp ...')
+    if res.head is None:
+        return True  # assignments and redirects only: the parser reads their targets
+    name = res.name
+    if name is None or site.dynamic:
+        return False
+    if name in _READERS:
+        return True
+    if name == 'git':
+        return _git_settled(res, raw)
+    if name == 'gh':
+        return bool(res.args) and res.args[0].value() in ('pr', 'issue')
+    if name in sp.VERBS or name in _OPERAND_COMMANDS:
+        if heredoc and name not in _STDIN_DATA:
+            return False
+        if name == 'sed' and any(_names(raw, w) for w in _sed_scripts(res.args)):
+            return False  # a sed script naming the folder: `e`, `w` and `r` commands
+        if name == 'perl' and any(_names(raw, w) for w in _perl_code(res.args)):
+            return False
+        return all(_plain(w) for w in named)
+    return False
+
+
+def _sed_scripts(args) -> list:
+    """The script words of a sed call: each -e/--expression value, else the first operand."""
+    scripts, operands, k = [], [], 0
+    while k < len(args):
+        v = args[k].value() or ''
+        if v in ('-e', '--expression', '-f', '--file') and k + 1 < len(args):
+            if v in ('-e', '--expression'):
+                scripts.append(args[k + 1])
+            k += 2
+            continue
+        if v.startswith('--expression='):
+            scripts.append(args[k])
+        elif v.startswith('-e') and len(v) > 2:
+            scripts.append(args[k])
+        elif not v.startswith('-') or v == '-':
+            operands.append(args[k])
+        k += 1
+    return scripts or operands[:1]
+
+
+def _perl_code(args) -> list:
+    """The code words of a perl call (-e/-E values, or the script operand)."""
+    code, k = [], 0
+    while k < len(args):
+        v = args[k].value() or ''
+        if v == '--' or not v.startswith('-'):
+            break
+        if v[-1:] in ('e', 'E') and not v.startswith('--') and k + 1 < len(args):
+            code.append(args[k + 1])
+            k += 2
+            continue
+        k += 1
+    return code
+
+
+_SED_WRITE = re.compile(r'(?:^|[;{}\n\d$!]|/[gpiImMe0-9]*)\s*[wW]\s*(\S+)')
+
+
+def _site_writes(sp, raw: str, res) -> list:
+    """(path text, word) writes of commands the shared parser has no write rule for: touch, perl -i,
+    patch, tar -x -C, unzip -d, git checkout/apply into a folder, sed's w command, find's -fprint
+    family and -delete."""
+    name, args = res.name, list(res.args)
+    vals = [w.value() or '' for w in args]
+    out = []
+
+    def operands(start=0, takes=()):
+        k, ops = start, []
+        while k < len(args):
+            v = vals[k]
+            if v == '--':
+                ops += args[k + 1:]
+                break
+            if v in takes:
+                k += 2
+                continue
+            if not v.startswith('-') or v == '-':
+                ops.append(args[k])
+            k += 1
+        return ops
+
+    def option_values(short, long_=None):
+        found = []
+        for k, v in enumerate(vals):
+            if v and v in (short, long_) and k + 1 < len(args):
+                found.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
+            elif long_ and v.startswith(long_ + '='):
+                found.append((v.split('=', 1)[1], args[k]))
+            elif short and v.startswith(short) and len(v) > len(short) and not v.startswith('--'):
+                found.append((v[len(short):], args[k]))
+        return found
+
+    if name == 'touch':
+        out += [(w.value() or w.text, w) for w in operands(takes=('-r', '--reference', '-d', '--date', '-t'))]
+    elif name == 'perl':
+        inplace, code, ops, k = False, False, [], 0
+        while k < len(args):
+            v = vals[k]
+            if v == '--':
+                ops = args[k + 1:]
+                break
+            if not v.startswith('-') or v == '-':
+                ops = args[k:]
+                break
+            flags = v[1:]
+            if not v.startswith('--') and flags[:1] not in ('M', 'm', 'I', 'x', 'C', 'd', 'D'):
+                inplace = inplace or 'i' in re.split(r'[eE]', flags, 1)[0]
+                if flags[-1:] in ('e', 'E') and k + 1 < len(args):
+                    code, k = True, k + 2
+                    continue
+            k += 1
+        if inplace:
+            out += [(w.value() or w.text, w) for w in (ops if code else ops[1:])]
+    elif name == 'patch':
+        ops = operands(takes=('-p', '-d', '--directory', '-o', '--output', '-i', '--input', '-r',
+                              '-B', '-z', '-D', '-F', '-V', '-g', '-Y'))
+        outputs = option_values('-o', '--output')
+        out += [] if outputs else [(w.value() or w.text, w) for w in ops[:1]]  # -o leaves it as is
+        out += option_values('-d', '--directory') + outputs
+    elif name in ('tar', 'bsdtar', 'gtar'):
+        first = vals[0] if vals else ''
+        extract = any(v in ('-x', '--extract', '--get') or (v.startswith('-') and not v.startswith('--') and 'x' in v)
+                      for v in vals) or (first and not first.startswith('-') and 'x' in first)
+        if extract:
+            out += option_values('-C', '--directory')
+    elif name == 'unzip':
+        out += option_values('-d')
+    elif name == 'git':
+        k, cdir = 0, None
+        while k < len(vals) and vals[k].startswith('-'):
+            if vals[k] == '-C' and k + 1 < len(args):
+                cdir = args[k + 1]
+            k += 2 if vals[k] in _GIT_VALUE_GLOBALS else 1
+        sub = vals[k] if k < len(vals) else ''
+        if sub in ('checkout', 'restore', 'apply', 'reset', 'stash', 'clean', 'switch', 'am', 'merge',
+                   'pull', 'cherry-pick', 'revert', 'rm', 'mv'):
+            if cdir is not None:
+                out.append((cdir.value() or cdir.text, cdir))
+            if sub in ('checkout', 'restore'):
+                out += [(w.value() or w.text, w) for w in args[k + 1:]
+                        if not (w.value() or '-').startswith('-')]
+            if sub == 'apply':
+                out += option_values(None, '--directory')
+    elif name == 'sed':
+        for w in _sed_scripts(args):
+            for found in _SED_WRITE.finditer(w.value() or w.text):
+                out.append((found.group(1), w))
+    elif name == 'find':
+        for k, v in enumerate(vals):
+            if v in ('-fprint', '-fprint0', '-fprintf', '-fls') and k + 1 < len(args):
+                out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
+        if '-delete' in vals:
+            for w in args:
+                if (w.value() or '-').startswith(('-', '(', '!')):
+                    break
+                out.append((w.value() or w.text, w))
+    return [(text, word) for text, word in out if text]
+
+
+class _CdScopes:
+    """Where each part of the command runs: the possible (cwd, OLDPWD) pairs at each simple command,
+    a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
+    stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
+    starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
+    computed target, CDPATH, popd, a function body) leaves the unknown directory '?'."""
+
+    UNKNOWN = ('?', '?')
+
+    def __init__(self, sp, raw: str):
+        self.sp, self.raw = sp, raw
+        self.spans = []
+        self.visited = set()
+        self.cdpath = 'CDPATH' in raw
+
+    def _target(self, cwd: str, word) -> str:
+        arg = _home_spelled_out(word.text) if word is not None else '~'
+        if any(c in arg for c in '$`*?[') or (self.cdpath and not arg.startswith(('/', '~', './', '../'))):
+            return '?'
+        if arg.startswith(('/', '~')):
+            return os.path.normpath(arg)
+        if cwd == '?':
+            return '?'
+        return os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+
+    def _cd(self, name: str, args, states) -> set:
+        if name == 'popd':
+            return {self.UNKNOWN}
+        ops, k = [], 0
+        while k < len(args):
+            v = args[k].value()
+            if v == '--':
+                ops += args[k + 1:]
+                break
+            if v is None or v == '-' or not v.startswith('-') or v[1:2].isdigit() or v[1:2] == '+':
+                ops.append(args[k])
+            k += 1
+        new = set()
+        for cwd, old in states:
+            if ops and ops[0].value() == '-' or (name == 'pushd' and not ops):
+                new.add((old, cwd) if old != '?' else ('?', cwd))
+            elif ops and (ops[0].value() or '').startswith(('+', '-')):
+                new.add(self.UNKNOWN)  # a pushd/cd stack index
+            else:
+                new.add((self._target(cwd, ops[0] if ops else None), cwd))
+        return new
+
+    def _record(self, span, states):
+        self.spans.append((span[0], span[1], frozenset(states)))
+
+    def run_cmd(self, cmd, states):
+        sp = self.sp
+        if isinstance(cmd, sp.SimpleCommand):
+            self.visited.add(cmd.span)
+            res = sp.resolve(cmd)
+            here = set(states)
+            for wname, opts in res.wrappers:
+                for opt, val in opts:
+                    if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
+                        here = {(self._target(cwd, val), cwd) for cwd, _old in here}
+            self._record(cmd.span, here)
+            if res.name in _CD and res.payload is None:
+                return self._cd(res.name, res.args, states), set(states)
+            if res.payload is not None:
+                if res.payload_kind == 'eval':
+                    return self.run_script(res.payload, states)
+                self.run_script(res.payload, here)
+            return set(states), set(states)
+        if isinstance(cmd, sp.Compound):
+            self._record(cmd.span, states)
+            scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, sp.Script)]
+            if cmd.kind in ('subshell', 'coproc'):
+                for s in scripts:
+                    self.run_script(s, states)
+                return set(states), set(states)
+            if cmd.kind == 'group':
+                succ, fail = set(states), set(states)
+                for s in scripts:
+                    succ, fail = self.run_script(s, succ)
+                return succ, fail
+            if cmd.kind == 'function':
+                for s in scripts:
+                    self._record(s.span, {self.UNKNOWN})
+                    self.run_script(s, {self.UNKNOWN})
+                return set(states), set(states)
+            acc = set(states)
+            for s in scripts:
+                succ, fail = self.run_script(s, acc)
+                acc |= succ | fail
+            return acc, acc
+        return set(states), set(states)
+
+    def run_pipeline(self, pl, states):
+        if len(pl.stages) == 1:
+            succ, fail = self.run_cmd(pl.stages[0], states)
+        else:
+            for stage in pl.stages:
+                self.run_cmd(stage, states)  # each stage runs in a subshell
+            succ, fail = set(states), set(states)
+        return (fail, succ) if pl.negated else (succ, fail)
+
+    def run_script(self, script, states):
+        succ, fail, prev = set(states), set(states), None
+        for pl, sep in script.items:
+            if prev == '&&':
+                enter = succ
+            elif prev == '||':
+                enter = fail
+            elif prev is None:
+                enter = set(states)
+            else:
+                enter = succ | fail
+            if sep == '&':
+                self.run_pipeline(pl, enter)  # a background job: its cd stays in it
+                s, f = set(enter), set(enter)
+            else:
+                s, f = self.run_pipeline(pl, enter)
+            if prev == '&&':
+                succ, fail = s, f | fail
+            elif prev == '||':
+                succ, fail = s | succ, f
+            else:
+                succ, fail = s, f
+            prev = sep
+        return succ, fail
+
+    def at(self, offset: int):
+        """The possible directories at raw ``offset``: the innermost recorded command around it."""
+        best = None
+        for a, b, states in self.spans:
+            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
+                best = (a, b, states)
+        return {cwd for cwd, _old in best[2]} if best else {'?'}
+
+
 def _cd_dirs(sp, sites) -> list:
     """Every directory a `cd`/`pushd` in the command may leave the shell in, as written (each `cd`
-    taken from every directory an earlier one may have left), the starting directory first."""
+    taken from every directory an earlier one may have left; a CDPATH entry the command sets
+    before each relative one), the starting directory first."""
     dirs = ['']
+    cdpaths = [v for site, _res in sites for a in site.cmd.assignments if a.name == 'CDPATH'
+               for v in (a.word.value() or '').split('=', 1)[-1].split(':') if v]
     for site, res in sites:
         if res.name not in _CD:
             continue
@@ -213,6 +584,7 @@ def _cd_dirs(sp, sites) -> list:
             new = [arg]
         else:
             new = [os.path.join(d, arg) if d else arg for d in dirs]
+            new += [os.path.join(c, arg) for c in cdpaths]
         dirs.extend(d for d in new if d not in dirs)
         if len(dirs) > 64:
             break
@@ -221,34 +593,54 @@ def _cd_dirs(sp, sites) -> list:
 
 def _parsed_kind(command: str) -> tuple:
     """(kind, settled): the protected folder ('hooks', 'commands' or '') a path the shared parser
-    reads ``command`` to write lies in, and whether that reading settles it. It does not after a
-    parse failure, or where a command it cannot read statically (a computed name, an unresolved
-    wrapper or payload, an interpreter of its own language) names a protected folder: the base
-    reading of the raw text decides as well then."""
+    (or _site_writes) reads ``command`` to write lies in, each relative path read from the
+    directories a `cd` before it in its own shell may have left, and whether that reading settles
+    it. It does not after a parse failure (the targets read still count), or where a simple command
+    naming a protected folder is not one whose writes are known (_site_settled): code fed on stdin,
+    an unknown command or runner, a function call, a command string in a variable, `-c`/`-e` code,
+    git config, aliases, pagers and editors. The base reading of the raw text decides as well then."""
     sp = _shell_parse()
     script = sp.parse(command)
-    if script.errors():
-        return '', False
+    settled = not script.errors()
     sites = [(site, sp.resolve(site.cmd)) for site in sp.walk(script)]
-    settled = not any(
-        (res.unresolved or (res.head is not None and res.name is None) or res.name in _OPAQUE
-         or (res.name or '').startswith(('python', 'pypy')))
-        and _protected_kind(sp.cmd_source(site.cmd)) for site, res in sites)
-    dirs = _cd_dirs(sp, sites)
-    kinds = set()
+    names_any = bool(_protected_kind(command))
+    settled = settled and all(_site_settled(sp, command, site, res, names_any) for site, res in sites)
+    scopes = _CdScopes(sp, command)
+    scopes.run_script(script, {('', '?')})
+    every_dir = _cd_dirs(sp, sites)
+    # a cd the scopes did not follow (inside a substitution, a re-parsed payload): every relative
+    # write after it is read from every directory (fail closed)
+    unfollowed = [site.cmd.span[0] if command[slice(*site.cmd.span)].startswith(site.cmd.words[0].text) else 0
+                  for site, res in sites if res.name in _CD and site.cmd.words
+                  and site.cmd.span not in scopes.visited]
+    writes = []
     for t in sp.write_targets(script):
         if t.mechanism == 'computed-command':
             continue  # an operand of a command whose name is computed: no known write
         texts = [t.path or '', (t.word.text if t.word is not None else '')]
         if t.source and t.mode in (sp.COPY_DEST, sp.MOVE_DEST, sp.LINK) and t.path:
             texts.append(os.path.join(t.path, os.path.basename(t.source.rstrip('/'))))
+        writes.append((texts, t.word, True))
+    for site, res in sites:
+        # a git write is the repository's paths, not the shell's directory
+        writes += [([text], word, res.name != 'git') for text, word in _site_writes(sp, command, res)]
+    kinds = set()
+    for texts, word, joinable in writes:
+        faithful = word is not None and command[slice(*word.span)] == word.text
+        offset = word.span[0] if faithful else len(command)
+        dirs = scopes.at(offset) if faithful else {'?'}
+        if any(offset > u for u in unfollowed):
+            dirs = dirs | {'?'}
         for text in texts:
             spelled = _home_spelled_out(text) if text else ''
             if not spelled:
                 continue
             candidates = [spelled]
-            if not spelled.startswith(('/', '~', '$')):
-                candidates += [os.path.normpath(os.path.join(d, spelled)) for d in dirs if d]
+            if joinable and not spelled.startswith(('/', '~', '$')):
+                for d in dirs:
+                    for base in (every_dir if d == '?' else [d]):
+                        if base:
+                            candidates.append(os.path.normpath(os.path.join(base, spelled)))
             for candidate in candidates:
                 kinds.add(_protected_kind(candidate))
     # a hooks write is never exempt (the /clean approval covers commands/ only): it decides first
