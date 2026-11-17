@@ -1239,8 +1239,7 @@ _SD_GIT_GREP = ("efABCm", "aiIwvhHEGFPnlLcopWzqr",
 _SD_GIT_GLOBAL_FLAGS = {"--no-pager", "-p", "--paginate", "-P", "--no-optional-locks", "--no-replace-objects",
                         "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}
 _SD_LOG_VALUES = {"-n", "--max-count", "--skip", "--since", "--after", "--until", "--before", "--author",
-                  "--committer", "--grep-reflog", "--find-object", "-L", "--min-parents", "--max-parents", "-O",
-                  "--output"}
+                  "--committer", "--grep-reflog", "--find-object", "-L", "--min-parents", "--max-parents", "-O"}
 _SD_COMMIT_SHORT_VALUES = "mFCct"
 _SD_COMMIT_SHORT_OPTIONAL = "Su"
 _SD_COMMIT_SHORT_FLAGS = "aqvsneiopz"
@@ -1251,6 +1250,13 @@ _SD_COMMIT_LONG_FLAGS = {"--all", "--patch", "--quiet", "--verbose", "--signoff"
                          "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--include", "--only",
                          "--reset-author", "--status", "--no-status", "--no-post-rewrite", "--no-gpg-sign",
                          "--interactive", "--gpg-sign", "--untracked-files"}
+
+
+def _sd_writes_output(arg):
+    """True when a git option sends the output to a file: --output in any abbreviation git accepts, or -o."""
+    name = arg.partition("=")[0]
+    return name == "-o" or (name.startswith("-o") and not name.startswith("--")) or \
+        (len(name) >= 4 and "--output".startswith(name)) or name == "--output"
 
 
 def sd_normalize(text):
@@ -1337,7 +1343,7 @@ def _sd_git(args):
             a = rest[j]
             if a == "--":
                 break
-            if a == "--ext-diff":
+            if a == "--ext-diff" or _sd_writes_output(a):
                 return None
             if a in ("-S", "-G", "--grep"):
                 allowed.add(base + j + 1)
@@ -1465,8 +1471,35 @@ def _sd_allowed(site):
 _SD_PIECES = ("session_dir", "dirs.txt", "ion_dirs")
 _SD_PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SD_CANDIDATES = ("session_dirs.txt", "./session_dirs.txt", "a/session_dirs.txt", "/a/b/session_dirs.txt")
-# What an allowed mention's output can be piped into and still only be shown: filters that print what they read.
-_SD_DISPLAY = frozenset({"head", "tail", "wc", "sort", "uniq", "cut", "less", "more", "nl", "column"})
+# What an allowed mention's output can be piped into and still only be shown: filters that print what they read,
+# each with the only options it may carry (short flags, short options with a value, long flags, long options with
+# a value, most operands). Long options are taken only in full (an abbreviation is not read); nothing that reads
+# file names from its input (--files0-from), writes a file (sort -o/--output, -T, --compress-program, uniq's second
+# operand, less's log file) or reads a file of its own choosing (--random-source) is a display.
+_SD_DISPLAY = {
+    "head": ("qvz", "nc", {"--quiet", "--silent", "--verbose", "--zero-terminated"}, {"--lines", "--bytes"}, None),
+    "tail": ("qvzfFr", "ncs", {"--quiet", "--silent", "--verbose", "--zero-terminated", "--follow", "--retry"},
+             {"--lines", "--bytes", "--sleep-interval", "--pid", "--max-unchanged-stats"}, None),
+    "wc": ("clmwL", "", {"--bytes", "--chars", "--lines", "--words", "--max-line-length"}, {"--total"}, None),
+    "cut": ("snz", "bcfd", {"--complement", "--only-delimited", "--zero-terminated"},
+            {"--bytes", "--characters", "--fields", "--delimiter", "--output-delimiter"}, None),
+    "nl": ("p", "bdfhilnsvw", {"--no-renumber"},
+           {"--body-numbering", "--section-delimiter", "--footer-numbering", "--header-numbering",
+            "--line-increment", "--join-blank-lines", "--number-format", "--number-width", "--number-separator",
+            "--starting-line-number"}, None),
+    "column": ("tnexJL", "sc", {"--table", "--fillrows", "--json", "--keep-empty-lines", "--table-noextreme"},
+               {"--separator", "--columns", "--output-width", "--table-columns", "--table-name"}, None),
+    "sort": ("bdfgiMhnRrVcCmsuz", "ktS",
+             {"--ignore-leading-blanks", "--dictionary-order", "--ignore-case", "--general-numeric-sort",
+              "--ignore-nonprinting", "--month-sort", "--human-numeric-sort", "--numeric-sort", "--random-sort",
+              "--reverse", "--version-sort", "--check", "--merge", "--stable", "--unique", "--zero-terminated",
+              "--debug"},
+             {"--key", "--field-separator", "--buffer-size", "--sort", "--parallel"}, None),
+    "uniq": ("cdDiuz", "fsw", {"--count", "--repeated", "--ignore-case", "--unique", "--zero-terminated"},
+             {"--skip-fields", "--skip-chars", "--check-chars", "--all-repeated", "--group"}, 1),
+    "less": ("RSNXFiIrMmEeKqQ", "", set(), set(), None),
+    "more": ("dlfpcsu", "", set(), set(), None),
+}
 # Commands that only list or print the names a glob expands to; a glob in their words lands on no file's content
 # while their output is shown and not consumed.
 _SD_LISTERS = frozenset({"ls", "dir", "vdir", "du", "echo", "printf", "stat", "find"})
@@ -1647,6 +1680,15 @@ def _sd_glob_operand(res, out_safe):
             operands = []
             if _sd_scan(vals[k + 1:], _SD_GIT_GREP, permute=False, operands=operands) is not None:
                 hits += [vals[k + 1 + i] for i in operands]
+        elif k < len(vals) and vals[k] != "commit":  # a pathspec needs no `--` (`git ls-files -o '*dirs*'`)
+            j = k + 1
+            while j < len(vals):
+                if vals[j] in ("-m", "--message", "-F", "--file", "-S", "-G", "--grep", "--output", "-C"):
+                    j += 2
+                    continue
+                if not vals[j].startswith("-"):
+                    hits.append(vals[j])
+                j += 1
     for h in hits:
         if _sd_pattern_hits(h):
             return h
@@ -1734,31 +1776,35 @@ def _sd_code_names(code):
     return any(_sd_pattern_hits(g) for g in re.findall(r"""[^\s'"`(),;\[\]]*[*?][^\s'"`(),;\[\]]*""", code))
 
 
-def _sd_stdout(cmd):
-    """Where a command's own redirections send its stdout: 'pass' (on down the pipe or out), 'discard' (/dev/null,
-    or stderr while stderr is the terminal or /dev/null) or 'unsafe' (a file, another fd, a computed target: a
-    later command or a later call can read it back)."""
-    dest, err = "pass", "discard"
-    for r in cmd.redirects:
-        if r.op in ("<", "<<", "<<-", "<<<", "<&") or r.fd not in (1, 2, None):
+def _sd_streams(node, out, err):
+    """(stdout safe, stderr safe) after a command's own redirections, given whether its stdout and stderr reach only
+    the terminal or /dev/null (through display filters at most) before them. A file, another fd or a computed
+    target is unsafe: a later command or a later call can read it back."""
+    for r in node.redirects:
+        if r.op in ("<", "<<", "<<-", "<<<", "<&"):
             continue
-        if r.fd is None and r.op not in ("&>", "&>>"):
-            dest = err = "unsafe"  # a {NAME}> form
+        both = r.op in ("&>", "&>>") or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
+        fd = None if both else r.fd
+        if fd is None and not both:
+            out = err = False  # a {NAME}> form
+            continue
+        if fd not in (1, 2, None):
             continue
         if r.close:
-            here = "discard"
+            here = True
         elif r.op == ">&" and r.dup is not None:
-            here = (dest if r.dup == 1 else err) if r.dup in (1, 2) else "unsafe"
+            here = (out if r.dup == 1 else err) if r.dup in (1, 2) else False
         elif not r.writes() or r.target is None:
             continue
         else:
             v = r.target.value()
-            here = "discard" if v in ("/dev/null", "/dev/stderr", "/dev/tty") else "unsafe"
-        if r.fd in (1, None):
-            dest = here
-        if r.fd in (2, None):
+            here = {"/dev/null": True, "/dev/tty": True, "/dev/stdout": out, "/dev/fd/1": out,
+                    "/dev/stderr": err, "/dev/fd/2": err}.get(v, False)
+        if fd in (1, None):
+            out = here
+        if fd in (2, None):
             err = here
-    return dest
+    return out, err
 
 
 def _sd_display(stage):
@@ -1779,34 +1825,77 @@ def _sd_display(stage):
     vals = [w.value() for w in res.args]
     if any(v is None for v in vals) or any(r.target is not None and r.target.value() is None for r in stage.redirects):
         return False  # `head $(cat)` reads the pipe through its own words
-    return not (res.name == "sort" and any(v is None or v.startswith(("-o", "--output")) or
-                                            (v.startswith("-") and not v.startswith("--") and "o" in v) for v in vals))
+    return _sd_display_args(_SD_DISPLAY[res.name], vals, res.name in ("head", "tail"))
+
+
+def _sd_display_args(spec, vals, numeric):
+    """True when every option is on the filter's own list and the operands are within its limit."""
+    flags, short_vals, long_flags, long_vals, most = spec
+    operands, k, dashdash = 0, 0, False
+    while k < len(vals):
+        a = vals[k]
+        k += 1
+        if dashdash or a == "-" or not a.startswith(("-", "+")) or (a.startswith("+") and not numeric):
+            operands += 1
+            continue
+        if a == "--":
+            dashdash = True
+            continue
+        if a.startswith("+"):  # tail +5
+            if not a[1:].isdigit():
+                return False
+            continue
+        if a.startswith("--"):
+            name, eq, _v = a.partition("=")
+            if name in long_vals:
+                k += 0 if eq else 1
+                continue
+            if name in long_flags and not eq:
+                continue
+            return False
+        j = 1
+        while j < len(a):
+            c = a[j]
+            if c in short_vals:
+                k += 0 if j + 1 < len(a) else 1
+                break
+            if not (c in flags or (numeric and c.isdigit())):
+                return False
+            j += 1
+    return k <= len(vals) and (most is None or operands <= most)
 
 
 def _sd_key(context, cmd):
     return (tuple(context), cmd.span, tuple(w.text for w in cmd.words))
 
 
-def _sd_output_safety(script):
-    """(safe, unsafe): keys of the simple commands whose stdout only reaches the terminal (or /dev/null), through
-    display filters at most, and of those whose stdout something else consumes. A command inside a substitution, a
-    function body, a coproc or code the walk reaches another way is in neither. An `exec` that moves the shell's
-    own stdout or stderr leaves nothing safe."""
+def _sd_output_safety(script, traced=False):
+    """{key: (stdout safe, stderr safe)} for each simple command the walk reaches through pipelines, compounds and
+    payloads: stdout safe when it only reaches the terminal (or /dev/null) through display filters at most, stderr
+    safe likewise, carrying the redirections of every enclosing group, loop, subshell and payload shell. When the
+    shell may trace (traced), the trace of a command goes to the stderr it inherits, so its stdout counts as safe only
+    with that stderr safe too. A command inside a substitution, a function body, a coproc or code the walk reaches
+    another way is absent. An `exec` that moves the shell's own stdout or stderr leaves nothing safe."""
     from lib.shell_parse import Compound, SimpleCommand, resolve
-    safe, unsafe, moved = set(), set(), []
+    found, moved = {}, []
 
-    def visit(scr, sink_ok, ctx):
+    def visit(scr, out_ok, err_ok, ctx):
         for pl, _sep in scr.items:
-            stages = list(pl.stages)
-            oks = [False] * len(stages)
-            down = sink_ok
+            stages, pipes = list(pl.stages), list(pl.pipes)
+            streams, inherited = [None] * len(stages), [None] * len(stages)
+            down = out_ok
             for k in range(len(stages) - 1, -1, -1):
-                dest = _sd_stdout(stages[k])
-                oks[k] = True if dest == "discard" else (False if dest == "unsafe" else down)
-                down = oks[k] and _sd_display(stages[k])
+                err_in = down if k < len(pipes) and pipes[k] == "|&" else err_ok
+                inherited[k] = err_in
+                streams[k] = _sd_streams(stages[k], down, err_in)
+                down = streams[k][0] and _sd_display(stages[k])
             for k, st in enumerate(stages):
+                o, e = streams[k]
                 if isinstance(st, SimpleCommand):
-                    (safe if oks[k] else unsafe).add(_sd_key(ctx, st))
+                    show = o and (not traced or (inherited[k] and e))
+                    key = _sd_key(ctx, st)
+                    prev = found.get(key, (True, True))
+                    found[key] = (prev[0] and show, prev[1] and e and inherited[k])
                     if [w.value() for w in st.words] == ["exec"] and any(r.writes() or r.op == ">&" for r in st.redirects):
                         moved.append(st)
                     try:
@@ -1814,14 +1903,14 @@ def _sd_output_safety(script):
                     except Exception:  # noqa: BLE001
                         continue
                     if res.payload is not None and res.payload_kind:
-                        visit(res.payload, oks[k], ctx + (res.payload_kind,))
+                        visit(res.payload, o, e, ctx + (res.payload_kind,))
                 elif isinstance(st, Compound):
-                    inner_ok = oks[k] and st.kind not in ("function", "coproc")
+                    inner = st.kind not in ("function", "coproc")
                     for body in st.body:
-                        visit(body, inner_ok, ctx)
+                        visit(body, o and inner, e and inner, ctx)
 
-    visit(script, True, ("top",))
-    return (set(), safe | unsafe) if moved else (safe, unsafe)
+    visit(script, True, True, ("top",))
+    return {k: (False, False) for k in found} if moved else found
 
 
 def _sd_redefines(site):
@@ -1839,6 +1928,82 @@ def _sd_redefines(site):
     if res.name in ("export", "declare", "typeset", "readonly", "local", "set", "env"):
         texts += [w.value() or w.text for w in res.args]
     return any(_SD_VARIABLE.match(t.lstrip("'\"")) for t in texts)
+
+
+# What reads an allowed mention's own text back once the call has run: the shell's command line in /proc, the
+# commit message file and anything else under .git, the shell's history, and the process lists.
+_SD_READBACK = re.compile(r"(^|[^a-z0-9_.-])proc([^a-z0-9_.-]|$)|cmdline|/self/|thread-self|\$\$|\$\{?(bashpid|ppid)|"
+                          r"editmsg|(^|[^a-z0-9_.-])\.git([^a-z0-9_-]|$)|git-dir|git-path|git-common|git_dir|"
+                          r"histfile|_history")
+_SD_READBACK_GLOB = (".git", "proc", "cmdline", "commit_editmsg", "self", "thread-self")
+_SD_READBACK_PROGRAMS = frozenset({"ps", "pgrep", "pkill", "pstree", "top", "htop", "atop", "btop", "procs", "pidof",
+                                   "fc", "history", "jobs", "w", "lsof", "fuser"})
+# git subcommands that never print a commit's message; any other git call after a commit-message mention must show
+# its output (stdout and stderr) only.
+_SD_GIT_QUIET = frozenset({"add", "push", "status", "fetch", "init", "rm", "mv", "restore", "diff", "ls-files",
+                           "ls-tree", "config", "remote", "rev-parse", "check-ignore", "version", "help", "grep"})
+_SD_SHELL = re.compile(r"(ba|da|z|k|mk|y|r|po)?sh|busybox")
+
+
+def _sd_git_sub(vals):
+    """The subcommand of a git call after its global options; None when a global option is not plain."""
+    k = 0
+    while k < len(vals) and vals[k].startswith("-"):
+        if vals[k] == "-C" and k + 1 < len(vals):
+            k += 2
+            continue
+        if vals[k] not in _SD_GIT_GLOBAL_FLAGS:
+            return None
+        k += 1
+    return vals[k] if k < len(vals) else None
+
+
+def _sd_traces(sites):
+    """True when the shell may trace or echo the commands it runs: set -x/-v (or -o xtrace/verbose, shopt -o), a
+    shell run with -x/-v, or a variable that turns tracing on or moves it."""
+    from lib.shell_parse import resolve
+    for site in sites:
+        cmd = site.cmd
+        texts = [a.word.text for a in cmd.assignments]
+        try:
+            res = resolve(cmd)
+        except Exception:  # noqa: BLE001
+            return True
+        texts += [a.word.text for a in res.assignments]
+        if any(re.match(r"['\"]?(SHELLOPTS|BASH_XTRACEFD|BASHOPTS)\+?=", t) for t in texts):
+            return True
+        name = (res.name or "").lower()
+        if name in ("set", "shopt") or _SD_SHELL.fullmatch(name):
+            for w in res.args:
+                v = w.value()
+                if v is None or v.lower() in ("xtrace", "verbose", "--verbose") or \
+                        (re.fullmatch(r"[-+][A-Za-z]+", v) and set(v[1:]) & set("xv")):
+                    return True
+    return False
+
+
+def _sd_reads_back(site, res):
+    """Why this command can read an allowed mention's text back (the shell's command line, the commit message, the
+    history, a process list), or None."""
+    import fnmatch
+    cmd = site.cmd
+    words = [a.word for a in cmd.assignments] + list(cmd.words) + [r.target for r in cmd.redirects if r.target]
+    for w in words:
+        text = w.text
+        for rx, base in _SD_DECODE:
+            text = rx.sub(lambda m: chr(int(m.group(1), base) % 0x110000), text)
+        text = re.sub(r"""['"\\]""", "", text.lower())
+        if _SD_READBACK.search(text):
+            return f"'{w.text}' can read the mention back"
+        if any(p.kind != "lit" for p in w.parts):
+            for comp in re.split(r"[/=:\s]", text):
+                if any(c in comp for c in "*?[") and comp.strip("*?"):
+                    if any(fnmatch.fnmatchcase(t, comp) for t in _SD_READBACK_GLOB):
+                        return f"'{w.text}' can read the mention back"
+    name = (res.name or "").lower() if res is not None else ""
+    if name.rsplit("/", 1)[-1] in _SD_READBACK_PROGRAMS:
+        return f"{name} can read the mention back"
+    return None
 
 
 def session_dirs_rule(command):
@@ -1859,16 +2024,16 @@ def session_dirs_rule(command):
         script = parse(command)
         broken = bool(script.errors())
         sites = list(walk(script))
-        safe, unsafe = _sd_output_safety(script) if not broken else (set(), set())
+        streams = _sd_output_safety(script, _sd_traces(sites)) if not broken else {}
     except Exception:  # noqa: BLE001
-        broken, sites, safe, unsafe = True, [], set(), set()
+        broken, sites, streams = True, [], {}
     redefined = _SD_FUNCTION.search(low) is not None or any(_sd_redefines(site) for site in sites)
     env = _sd_env(sites)
-    blank = []
+    blank, others, committed, mentioned = [], [], False, False
     for site in sites if not broken else ():
         cmd = site.cmd
         key = _sd_key(site.context, cmd)
-        out_safe = key in safe and key not in unsafe
+        out_safe = streams.get(key, (False, False))[0]
         allowed = [] if redefined or not out_safe else _sd_allowed(site)
         allowed_ids = {id(src) for src in allowed}
         try:
@@ -1898,6 +2063,20 @@ def session_dirs_rule(command):
             reason = f"interpreter code names {SD_NAME}"
         if site.depth == 0 or site.script.depth > 0:  # its offsets are the command's own
             blank += allowed
+        if allowed:
+            mentioned = True
+            committed = committed or _sd_git_sub([w.value() or "" for w in res.args]) == "commit"
+        else:
+            others.append((site, res, name, streams.get(key, (False, False))))
+    for site, res, name, (o, e) in others if mentioned else ():
+        why = _sd_reads_back(site, res)
+        if why is None and committed and name == "git":
+            vals = [w.value() or w.text for w in res.args]
+            sub = _sd_git_sub(vals)
+            if any(_sd_writes_output(v) for v in vals) or (sub not in _SD_GIT_QUIET and not (o and e)):
+                why = "a git call after the commit hands its message on"
+        if why is not None:
+            reason = f"{why} after {SD_NAME} is named"
     if blank and _SD_LAST_ARG.search(command):
         reason = f"a word reuses an earlier command's last argument after {SD_NAME} is named"
     for src in blank:

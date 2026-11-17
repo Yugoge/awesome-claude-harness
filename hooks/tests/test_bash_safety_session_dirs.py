@@ -280,6 +280,77 @@ REUSED = [
 ]
 
 
+# What reaches the file through a filter, a redirection around the mention, or the mention's own text read back.
+HANDED_ON = [
+    # a "display" filter that reads file names from its input or writes a file
+    "find . -maxdepth 1 -print0 | grep -z session_dirs.txt | sort --files0-from=-",
+    "ls | grep -x session_dirs.txt | wc --files0-from=- -l",
+    "ls | grep -x session_dirs.txt | tail -n1 | sort --files0-from=/dev/stdin -z",
+    "ls | grep -x session_dirs.txt | cut -c1- | sort --files0-from=-",
+    "printf '%s\\0' sess* | sort --files0-from=-",
+    "find . -name 'sess*' -print0 | sort --files0-from=-",
+    "ls | grep -x session_dirs.txt | uniq - n.txt; xargs cat < n.txt",
+    "find . -maxdepth 1 -print0 | grep -z session_dirs.txt | uniq -z - n.txt; xargs -0 cat < n.txt",
+    "ls | grep -x session_dirs.txt | head -1 | uniq - n.txt; xargs cat < n.txt",
+    "echo sess* | uniq - n.txt; xargs cat < n.txt",
+    "find . -name 'sess*' | uniq - n.txt; xargs cat < n.txt",
+    "ls | grep -x session_dirs.txt | sort --outp=n.txt; xargs cat < n.txt",
+    "ls | grep -x session_dirs.txt | sort -uo n.txt; xargs cat < n.txt",
+    "ls | grep -x session_dirs.txt | sort -T . --compress-program=sh",
+    "ls | grep -x session_dirs.txt | less -o n.txt; xargs cat < n.txt",
+    # stderr (or stdout) of an enclosing group, loop, subshell, payload or traced shell sent to a file
+    "{ ls | grep -x session_dirs.txt 1>&2; } 2>n.txt; xargs cat < n.txt",
+    "for i in 1; do ls | grep -x session_dirs.txt 1>&2; done 2>n.txt; xargs cat < n.txt",
+    "bash -c 'ls | grep -x session_dirs.txt 1>&2' 2>n.txt; xargs cat < n.txt",
+    "( ls | grep -x session_dirs.txt >&2 ) &>n.txt; xargs cat < n.txt",
+    "{ ls | grep -x session_dirs.txt; } >&n.txt; xargs cat < n.txt",
+    "{ set -x; grep -q session_dirs.txt /dev/null; } 2>n.txt; cut -d' ' -f4 n.txt | xargs cat",
+    "{ set -o xtrace; grep -q session_dirs.txt /dev/null; } 2>n.txt; cut -d' ' -f4 n.txt | xargs cat",
+    "bash -x -c 'grep -q session_dirs.txt /dev/null' 2>n.txt; cut -d' ' -f4 n.txt | xargs cat",
+    # the mention's own text read back: the shell's command line, the history, the commit message, git's output
+    "grep -q session_dirs.txt /dev/null; cat \"$(tr '\\0' ' ' < /proc/$$/cmdline | cut -d' ' -f5)\"",
+    "grep -q session_dirs.txt /dev/null; xargs -0 -n1 < /proc/self/cmdline | tail -1",
+    "grep -q session_dirs.txt /dev/null; ps -o args= -p $$ | xargs -n1 | sed -n 4p | xargs cat",
+    "set -o history; grep -q session_dirs.txt /dev/null; fc -ln -1 | cut -f2 | cut -d' ' -f3 | xargs cat",
+    "git commit --allow-empty -m session_dirs.txt; xargs cat < .git/COMMIT_EDITMSG",
+    "git commit -q --allow-empty -m session_dirs.txt; xargs cat < \"$(git rev-parse --git-dir)/COMMIT_EDITMSG\"",
+    "git log -1 --grep=session_dirs.txt --format=%s --output=n.txt; xargs cat < n.txt",
+    "git log -1 --grep=session_dirs.txt --format=%s --outp=n.txt; xargs cat < n.txt",
+    "git commit -q --allow-empty -m session_dirs.txt; git log -1 --format=%s | xargs cat",
+    "git commit -q --allow-empty -m session_dirs.txt; git show -s --format=%s > n.txt; xargs cat < n.txt",
+    # a git pathspec glob with no `--`
+    "git ls-files -o '*dirs*' | xargs cat",
+    "git add -f '*dirs*'; git diff --cached",
+]
+
+
+@pytest.mark.parametrize("command", HANDED_ON)
+def test_a_filter_redirect_or_readback_that_reaches_the_file_is_refused(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 2, (command, r.stdout, r.stderr)
+        assert "session_dirs.txt is never read, written or executed" in r.stderr, (command, r.stderr)
+        assert "neither releases it" in r.stderr
+
+
+# Display filters with their own harmless options, and a mention with its stderr on the terminal, still pass.
+SHOWN = [
+    "grep -rn session_dirs.txt docs/ | sort -k2 -t: | uniq -c | head -n 5",
+    "grep -rn session_dirs.txt docs/ | cut -d: -f1 | sort -u | wc -l",
+    "grep -rn session_dirs.txt docs/ | tail -n +2 | nl | column -t",
+    "{ grep -rn session_dirs.txt docs/ 1>&2; } 2>/dev/null",
+    "git commit -m 'docs: session_dirs.txt' && git push 2>&1 | tail -3",
+    "git commit -m 'docs: session_dirs.txt' && git log --oneline -1",
+]
+
+
+@pytest.mark.parametrize("command", SHOWN)
+def test_a_mention_shown_through_plain_filters_passes(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 0, (command, r.stderr)
+
+
 @pytest.mark.parametrize("command", NEAR_MISSES)
 def test_a_command_that_cannot_touch_the_file_passes(sandbox, command):
     for subagent in (False, True):
