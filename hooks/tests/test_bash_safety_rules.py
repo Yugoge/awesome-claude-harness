@@ -240,3 +240,57 @@ def test_a_global_npm_install_is_the_runtime_guards(sandbox, command):
     """BS-34 merged into the runtime guard's global-install primitive, which refuses each form first."""
     r = run(sandbox, SAFETY, command)
     assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)
+
+
+# OB-L13: the sentinel and commit-artifact rules bind a protected name to the simple command that writes it or runs
+# it. Each command is read through the real hook; {state} is the sandbox state dir.
+OB_L13_PASSES = [
+    "python3 -m json.tool {state}/claude-commit-dispatch-a.json",
+    "touch /tmp/marker && cat {state}/claude-commit-grant-a-n1.json",
+    "rg -n write-bulk-commit-sentinel.py",
+    "grep -rn write-bulk-commit-sentinel.py commands/ | head -20",
+    "git diff -- scripts/write-bulk-commit-sentinel.py | head -40",
+    "grep -n argv scripts/write-bulk-commit-sentinel.py # don't edit",
+    "ls {state}/claude-bulk-commit-sentinel-* 2>/dev/null",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_PASSES)
+def test_a_read_naming_a_protected_artifact_in_another_command_passes(sandbox, command):
+    cmd = command.format(state=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 0, (cmd, r.stderr)
+
+
+OB_L13_REFUSALS = [
+    ("python3 -m json.tool a.json {state}/claude-commit-dispatch-a.json", "commit-dispatch-attestation-write"),
+    ("python3 -m json.tool a.json {state}/claude-commit-grant-a.json", "commit-grant-raw-write"),
+    ("python3 -m json.tool a.json {state}/claude-bulk-commit-sentinel-a.json", "bulk-commit-sentinel-write"),
+    ("echo {{}} > {state}/claude-commit-dispatch-a.json", "commit-dispatch-attestation-write"),
+    ("echo {{}} > {state}/claude-commit-grant-a.json", "commit-grant-raw-write"),
+    ("echo {{}} > {state}/claude-bulk-commit-sentinel-a.json", "bulk-commit-sentinel-write"),
+    ("python3 scripts/write-bulk-commit-sentinel.py", "bulk-commit-sentinel-write"),
+    ("rg --pre ./x {state}/claude-bulk-commit-sentinel-a.json", "bulk-commit-sentinel-write"),
+    ("echo {state}/claude-commit-grant-a.json | xargs cp src", "commit-grant-raw-write"),
+    ("echo {state}/claude-commit-dispatch-a.json | xargs cp src", "commit-dispatch-attestation-write"),
+    ("echo {state}/claude-bulk-commit-sentinel-a.json | xargs cp src", "bulk-commit-sentinel-write"),
+    # Section 5 under-defence: both passed bash-safety before OB-L13.
+    ("git -c alias.x='!python3 scripts/write-bulk-commit-sentinel.py' x", "bulk-commit-sentinel-write"),
+    ("sed -n '1w {state}/claude-bulk-commit-sentinel-x.json' /tmp/forged.json", "bulk-commit-sentinel-write"),
+    # The same shapes through other routes the binding must keep closed.
+    ("git -c core.pager='python3 scripts/write-bulk-commit-sentinel.py' log", "bulk-commit-sentinel-write"),
+    ("sed -n 's/a/b/w {state}/claude-bulk-commit-sentinel-x.json' /tmp/forged.json", "bulk-commit-sentinel-write"),
+    ("python3 <<< \"open('{state}/claude-bulk-commit-sentinel-x.json','w')\"", "bulk-commit-sentinel-write"),
+    ("python3 - <<'E'\nopen('{state}/claude-bulk-commit-sentinel-x.json','w')\nE", "bulk-commit-sentinel-write"),
+    ("cp /tmp/f \"$(ls {state}/claude-bulk-commit-sentinel-*)\"", "bulk-commit-sentinel-write"),
+    ("find {state} -name 'claude-bulk-commit-sentinel-*' -fprint /tmp/list", "bulk-commit-sentinel-write"),
+    ("cat {state}/claude-bulk-commit-sentinel-x | python3 -c 'pass'", "bulk-commit-sentinel-write"),
+    ("touch /tmp/marker && touch {state}/claude-commit-grant-a-n1.json", "commit-grant-raw-write"),
+]
+
+
+@pytest.mark.parametrize("command,label", OB_L13_REFUSALS)
+def test_a_write_or_run_of_a_protected_artifact_is_refused(sandbox, command, label):
+    cmd = command.format(state=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 2 and label in r.stderr, (cmd, r.stderr)
