@@ -126,3 +126,56 @@ MUST_REFUSE = [
 def test_a_command_the_rule_protects_against_is_refused(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# Verifier round 2. git reads its subcommand past global options and their values; dd writes every descriptor its
+# command opens for writing (of=/dev/fd/N and friends name those); dd's of= writes daemon.json.
+WORKFLOW = "workflow state files"
+DISK = "Destructive disk operation"
+MUST_REFUSE_ROUND2 = [
+    ("git -C . rm .claude/workflow-abc.json", WORKFLOW),
+    ("git -C . rm -r .claude/todos/", WORKFLOW),
+    ("git -C . mv .claude/workflow-abc.json /tmp/x", WORKFLOW),
+    ("git --work-tree . mv .claude/workflow-abc.json x", WORKFLOW),
+    ("git -c core.x=y --git-dir=.git rm .claude/workflow-abc.json", WORKFLOW),
+    ("dd if=/dev/zero of=/dev/fd/3 3>/dev/sda", DISK),
+    ("dd if=/dev/zero of=/dev/fd/3 3<>/dev/sda", DISK),
+    ("dd if=/dev/zero of=/proc/self/fd/3 3>/dev/sda", DISK),
+    ("dd if=/dev/zero of=/dev/stderr 2>/dev/sda", DISK),
+    ("dd if=/dev/zero >&3 3>/dev/sda", DISK),
+    ("dd if=x of=/etc/docker/daemon.json", "Modifying Docker daemon config"),
+    ("dd if=x of=/etc/docker/daemon.json conv=notrunc", "Modifying Docker daemon config"),
+    ("dd if=/dev/zero of=/etc/docker/daemon.json count=0", "Modifying Docker daemon config"),
+    ("cat x | sudo dd of=/etc/docker/daemon.json", "Modifying Docker daemon config"),
+    ("docker compose --profile x down", "docker-compose down/stop/restart"),
+    ("docker compose -p proj down -v", "docker-compose down/stop/restart"),
+    ("docker compose --file=x.yml stop web", "docker-compose down/stop/restart"),
+    ("docker --log-level info system prune -a", "docker system prune -a"),
+    ("docker system prune -fa", "docker system prune -a"),
+]
+
+
+@pytest.mark.parametrize("command,label", MUST_REFUSE_ROUND2)
+def test_round2_a_command_the_rule_protects_against_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A down/restart/stop word that is not the compose verb (a command `exec` or `run` runs, a service name) and a
+# prune flag outside `system prune` are data.
+MUST_PASS_ROUND2 = [
+    "docker compose exec db pg_ctl stop",
+    "docker compose exec app supervisorctl restart worker",
+    "docker compose run --rm app ./manage.py down",
+    "docker compose logs -f stop",
+    "docker system --help prune -a",
+    "dd if=in.bin of=/dev/stdout 2>/dev/null",
+    "dd if=in.bin of=out.img 2>dd.log",
+    "git -C . mv notes.md docs/notes.md",
+]
+
+
+@pytest.mark.parametrize("command", MUST_PASS_ROUND2)
+def test_round2_a_word_outside_the_verb_position_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)

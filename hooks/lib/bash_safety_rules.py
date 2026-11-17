@@ -999,11 +999,21 @@ def _raw_workflow(text, view):
 
 # The command-position readings.
 def _daemon_json_write(sv):
-    """A redirection into daemon.json; tee, cp or mv naming it; sed or awk editing it in place or naming it in code."""
+    """A redirection into daemon.json; tee, cp or mv naming it; dd with of= it; sed or awk editing it in place or naming
+    it in code."""
     for site in sv.redirect_sites:
         if any(x.writes() and x.target is not None and DOCKER_DAEMON_JSON in x.target.text for x in site.cmd.redirects):
             return True
     for name, args, _s, _r in sv.sites:
+        if name == "dd":
+            for w in args:
+                v = w.value()
+                if v is None and DOCKER_DAEMON_JSON in w.text:
+                    return True
+                if v is not None and v.startswith("of=") and os.path.normpath(
+                        os.path.join(sv.cwd, v[3:])) == DOCKER_DAEMON_JSON:
+                    return True
+            continue
         if not any(DOCKER_DAEMON_JSON in w.text for w in args):
             continue
         if name in ("tee", "cp", "mv"):
@@ -1018,23 +1028,36 @@ def _daemon_json_write(sv):
     return False
 
 
+_COMPOSE_VALUE_OPTS = frozenset({"-f", "--file", "-p", "--project-name", "--profile", "--env-file",
+                                 "--project-directory", "--ansi", "--parallel", "--progress"})
+
+
 def _docker_compose_stop(sv):
+    """The compose verb (the first non-option word after `compose`, past its global options' values) is down,
+    restart or stop; a later argument (a service name, a command `exec` or `run` runs) is data."""
     for name, args, _s, _r in sv.named("docker", "docker-compose"):
         vals = [w.value() for w in args]
         if name == "docker":
             if "compose" not in vals:
                 continue
             vals = vals[vals.index("compose") + 1:]
-        if any(v in ("down", "restart", "stop") for v in vals):
+        k = 0
+        while k < len(vals) and vals[k] is not None and vals[k].startswith("-") and vals[k] != "-":
+            k += 2 if vals[k] in _COMPOSE_VALUE_OPTS else 1
+        if k < len(vals) and vals[k] in ("down", "restart", "stop"):
             return True
     return False
 
 
 def _docker_prune_all(sv):
+    """`docker system prune` with -a/--all after `prune`."""
     for _n, args, _s, _r in sv.named("docker"):
         vals = [w.value() or "" for w in args]
-        if "system" in vals and "prune" in vals[vals.index("system") + 1:] and any(
-                v.startswith("--all") or re.match(r"^-[A-Za-z]*a", v) for v in vals):
+        if "system" not in vals:
+            continue
+        i = vals.index("system")
+        if vals[i + 1:i + 2] == ["prune"] and any(
+                v.startswith("--all") or re.match(r"^-[A-Za-z]*a", v) for v in vals[i + 2:]):
             return True
     return False
 
@@ -1043,6 +1066,8 @@ def _dd_target_refused(path, sv):
     """True when dd writes a device other than /dev/null, zero, stdout, stderr or fd/*, or a path it cannot read."""
     if not path:
         return True
+    if _dd_fd_of(path) is not None:
+        return False  # a descriptor: the command's own redirections are checked as dd's targets
     if not path.startswith("/"):
         if sv.named("cd", "pushd", "popd"):
             return True  # relative to a directory the command moves to
@@ -1056,6 +1081,21 @@ def _dd_target_refused(path, sv):
             if not (rel in DD_DEV_OK or rel.startswith("fd/")):
                 return True
     return False
+
+
+def _dd_fd_of(path):
+    """The descriptor a path names (/dev/stdout, /dev/fd/N, /proc/self/fd/N ...), else None."""
+    std = {"/dev/stdin": 0, "/dev/stdout": 1, "/dev/stderr": 2}
+    if path in std:
+        return std[path]
+    m = re.match(r"^/(dev|proc/self|proc/thread-self|proc/[0-9]+)/fd/([0-9]+)$", path)
+    return int(m.group(2)) if m else None
+
+
+def _dd_redirect_targets(site):
+    """Every file dd's simple command opens for writing, by any descriptor (N>, N>>, N<>, &>): of=/dev/fd/N,
+    /proc/self/fd/N, /dev/stdout or /dev/stderr and a >&N duplication all write one of these."""
+    return [x.target.value() for x in site.cmd.redirects if x.target is not None and x.writes()]
 
 
 _DD_OPERANDS = ("if=", "of=", "bs=", "ibs=", "obs=", "cbs=", "count=", "skip=", "seek=", "iseek=", "oseek=",
@@ -1075,9 +1115,8 @@ def _destructive_disk(sv):
                         return True
                 elif v is None and not lead.startswith(_DD_OPERANDS):
                     return True  # a computed operand may be of=
-            for x in site.cmd.redirects:
-                if x.writes() and x.target is not None and x.fd == 1 and _dd_target_refused(x.target.value(), sv):
-                    return True
+            if any(_dd_target_refused(t, sv) for t in _dd_redirect_targets(site)):
+                return True
         elif name in ("mkfs", "shred") or name.startswith("mkfs."):
             return True
         elif name == "fdisk":
@@ -1116,10 +1155,15 @@ def _production_systemctl(sv, env):
 
 def _workflow_state_removal(command, sv):
     """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
+    from lib.shell_parse import _git_from_resolved
     for name, args, site, r in sv.sites:
         if name == "git":
-            pos = next((v for v in (w.value() for w in args) if v is None or not v.startswith("-")), "")
-            if pos not in ("rm", "mv"):
+            # The subcommand as git reads it: past global options and their values (-C dir, -c k=v, --work-tree d).
+            invs = _git_from_resolved(r, site.context)
+            if not invs:
+                continue
+            sub, unresolved = invs[0].subcommand, invs[0].unresolved
+            if sub not in ("rm", "mv") and not (sub is None and unresolved):
                 continue
         elif name not in ("rm", "mv"):
             continue
