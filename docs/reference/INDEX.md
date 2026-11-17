@@ -1,8 +1,8 @@
 # reference
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:25:29Z*
-**Total entries**: 27
+*Last updated: 2026-11-17T19:27:55Z*
+**Total entries**: 28
 **Convention**: kebab
 
 ## Tree
@@ -20,6 +20,7 @@ reference/
 ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 ├── `harness-gaps-found-20261005.md` - Harness gaps found during the 2026-10-05 tree-to-zero campaign
 ├── `harness-issues-backlog.md` - harness 问题清单：/dev 会话里发现的新 harness 问题只记录于此、不在该会话修；harness 的 /spec 会话处理它们，条目的 spec 落库后删除
+├── `harness-temp-state.md` - Harness temp state inventory
 ├── `install-compatibility-matrix.md` - Install compatibility matrix
 ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 ├── `lock-file-handling.md` - Git Lock File Handling

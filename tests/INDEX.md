@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T18:34:37Z*
-**Total entries**: 308
+*Last updated: 2026-11-17T19:27:55Z*
+**Total entries**: 313
 **Convention**: kebab
 
 ## Tree
@@ -24,12 +24,14 @@ tests/
 │   ├── `test_channel.py` - produced by the CLI alone, declared by the recorded fixture's shapes; its readers derived from th...
 │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
+│   ├── `test_presence_faults.py` - CPython 3.10 and 3.12 (the CI versions): os.path.exists/isfile/isdir/lexists catch every OSError
 │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
 │   ├── `test_rule2.py` - Each test builds a small harness-shaped tree, derives the static half on it and runs the check's
 │   ├── `test_rule4_6.py` - mutation), rule (5) (the chain function's output used verbatim) and rule (6) (a deciding read
 │   ├── `test_sandbox_template.py` - A copied sandbox must be the built one as far as a replay can tell: the same
 │   ├── `test_shards.py` - The plan is computed from the drivers present at run time: every driver lands
 │   ├── `test_static_half.py` - Each test builds a small harness-shaped tree under tmp_path and checks the
+│   ├── `test_unreadable_fault.py` - Every form _PRESENCE_TEST matches answers False on a removed file or parent (ENOENT, ENOTDIR) and
 │   └── `values.py` - A value is one of:
 ├── differential/
 │   ├── `build_plan_legacy.py` - This is NOT production code. It is ``build_plan`` exactly as it stood at commit
@@ -90,6 +92,7 @@ tests/
 │   │   ├── `push.py` - after a /commit that landed (drivers/commit.py, after drivers/do.py or drivers/dev.py and drivers...
 │   │   ├── `receipt.py` - registered Stop hooks with both trust keys in the replay's environment
 │   │   ├── `redev.py` - tree under test; P1b D22: /redev is /dev when saving context, minted a fresh task id exactly as /...
+│   │   ├── `restart.py` - One session: a plain prompt, one foreground dispatch of a read-only subagent, which a usage limit...
 │   │   ├── `smoke.py` - One session: SessionStart, one plain prompt, a few ordinary main-agent tool
 │   │   └── `spec.py` - commands/spec.md, commands/spec-update.md and agents/spec.md of the tree under test
 │   ├── `__main__.py` - `python -m tests.replay ...`: see cli.py.
@@ -140,6 +143,7 @@ tests/
 │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...
+│   ├── `test_restart_replay.py` - A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare only says that
 │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
 │   ├── `test_score_dispatch.py` - The real hooks run under the shipped settings in a sandbox; the score log starts with the rows `s...
 │   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...
@@ -275,6 +279,7 @@ tests/
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
+├── `test_restart_grant_g1.py` - prepare (scripts/restart-subagents.py, the command commands/restart.md runs) reads the grant as
 ├── `test_score_events.py` - escaped and close_catch, and the observer
 ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
 ├── `test_scratch_permissions.py` - Root cause. A Read/Edit path rule with ONE leading slash is not absolute: "`/path` = relative to ...

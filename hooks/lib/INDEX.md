@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T15:37:41Z*
-**Total entries**: 74
+*Last updated: 2026-11-17T19:27:55Z*
+**Total entries**: 80
 **Convention**: kebab
 
 ## Tree
@@ -18,7 +18,8 @@ lib/
 │   ├── `git_cmds.py` - Depends on pathmatch (`_strip_quotes`, `_expand_leading_home`) +
 │   └── `pathmatch.py` - Depends only on the stdlib and owns `_strip_quotes`; references nothing from
 ├── write_gate/
-│   └── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
+│   ├── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
+│   └── `overwrite_scope.py` - The overwrite rule (lib/write_gate/overwrite.py) refuses a Write onto an existing file; this
 ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 ├── `agent_returns.py` - the one reading of whether a dispatch has returned, for every hook that asks
@@ -28,6 +29,7 @@ lib/
 ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
+├── `bash_read_only.py` - ``is_read_only(command)`` is True only when every simple command in ``command``
 ├── `bash_safety_rules.py` - Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 ├── `bash_write_targets.py` - An import shim for the hooks that read paths rather than parse trees. Every reading is
 ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
@@ -46,6 +48,7 @@ lib/
 ├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
 ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
 ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
+├── `final_report.py` - final_report() is the SubagentHandback message of the agent's latest run, else last_assistant_mes...
 ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
@@ -53,6 +56,7 @@ lib/
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
 ├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
+├── `harness_temp_state.py` - Is a resolved path harness temp state, and which temp root is it in: the one definition
 ├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
 ├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
@@ -62,6 +66,7 @@ lib/
 ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
 ├── `rule_fork.py` - A launcher (lib/hook_launch.py) holds an event's Python hooks and, once its interpreter has
@@ -73,6 +78,7 @@ lib/
 ├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 ├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
+├── `sensitive_names.py` - The default is the substring rule bash-safety has always had, case-sensitive as it was: a text is...
 ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 ├── `shell_parse.py` - Stdlib only. Nothing here executes, expands or evaluates the text it reads, and
 ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
