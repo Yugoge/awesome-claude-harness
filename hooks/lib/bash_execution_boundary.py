@@ -1340,7 +1340,9 @@ def text_names_removal(text):
 # hook time, as prove_git_rm reads the repository. So the rm must be the command
 # string's one command (analyze, Analyzer.commands) and no path may hold a symlink
 # (realpath == normpath): nothing in the same string can change what was proven.
-# Residual: a symlink made by a separate background call after the hook ran.
+# No mount point may lie between its temp root and the path, or below the path
+# (crosses_mount). Residual: a symlink or mount made by a separate background call
+# after the hook ran.
 _RM_SHORT_OPTS = frozenset("fiIrRdv")
 _RM_LONG_OPTS = frozenset(("--force", "--recursive", "--dir", "--verbose", "--one-file-system",
                            "--preserve-root", "--preserve-root=all"))
@@ -1380,6 +1382,11 @@ def _rm_target_proven(path, hts, protected):
     # symlinked directory in the path (and the last one under a trailing slash), and a
     # path is judged here only as the filesystem stands when the hook runs.
     if real != norm:
+        return False
+    # Nor a mount point between the temp root and the path, or anywhere below it: a bind
+    # mount carries the path to the harness home, a repository or `/` with no symlink to
+    # see. Asked with below=True for every target, recursive or not (fail closed).
+    if hts.crosses_mount(path, below=True):
         return False
     parent = os.path.realpath(os.path.dirname(path.rstrip(os.sep)) or os.sep)
     roots = hts.temp_roots()

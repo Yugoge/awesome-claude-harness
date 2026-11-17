@@ -190,6 +190,66 @@ def test_no_symlink_anywhere_on_the_path(roots):
     allowed("rm -rf %s" % w)  # rm -r removes a link inside the tree, never its target
 
 
+def _mountinfo(path, points):
+    """A mountinfo file whose mount points (field 5) are `/` and `points`."""
+    lines = ["%d 1 0:%d / %s rw,relatime - ext4 /dev/x rw" % (20 + i, i, p) for i, p in enumerate(["/"] + points)]
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+@pytest.fixture
+def mounts(roots, tmp_path, monkeypatch):
+    """Point the one mountinfo reader (harness_temp_state.MOUNTINFO_PATH) at a fake file."""
+    def use(*points):
+        monkeypatch.setattr(hts, "MOUNTINFO_PATH", str(_mountinfo(tmp_path / "mountinfo", [str(p) for p in points])), raising=False)
+    use()
+    return use
+
+
+def test_a_bind_mount_at_or_on_the_path(roots, mounts):
+    t = roots["tmp"]
+    (t / "b3" / "hooks").mkdir(parents=True)
+    (t / "b2").mkdir()
+    (t / "b2" / "README.md").write_text("x")
+    mounts(t / "b3", t / "b2")
+    refused("rm -rf %s/b3" % t)  # `mount --bind {config} {tmp}/b3` then this empties the harness home
+    refused("rm -rf %s/b3/hooks" % t)
+    refused("rm -rf %s/b3/" % t)
+    refused("rm -rf %s/b2/README.md" % t)  # `mount --bind {repo} {tmp}/b2`
+    refused("rm -rf %s/b3/*" % t)
+    refused("rm -f %s/b2/*.md" % t)
+
+
+def test_a_bind_mount_below_the_target(roots, mounts):
+    t = roots["tmp"]
+    (t / "w" / "x" / "inner").mkdir(parents=True)
+    (t / "w" / "a.txt").write_text("x")
+    mounts(t / "w" / "x" / "inner")  # `mount --bind {home} {tmp}/w/x/inner`
+    refused("rm -rf %s/w" % t)
+    refused("rm -rf %s/w/x" % t)
+    refused("rm -rf %s/w/*" % t)
+    allowed("rm -f %s/w/a.txt" % t)  # a file beside the mount, neither on nor above it
+
+
+def test_mounts_elsewhere_or_holding_the_temp_root_do_not_refuse(roots, mounts):
+    t = roots["tmp"]
+    w = _work(t)
+    (t / "other").mkdir()
+    mounts(t, roots["var_tmp"], t / "other", roots["outside"])
+    allowed("rm -rf %s" % w)
+    allowed("rm -f %s/*.csv" % w)
+
+
+def test_an_unreadable_mountinfo_refuses(roots, monkeypatch):
+    w = _work(roots["tmp"])
+    monkeypatch.setattr(hts, "MOUNTINFO_PATH", str(roots["outside"] / "no-such-mountinfo"), raising=False)
+    refused("rm -rf %s" % w)
+    empty = roots["outside"] / "empty-mountinfo"
+    empty.write_text("")
+    monkeypatch.setattr(hts, "MOUNTINFO_PATH", str(empty), raising=False)
+    refused("rm -rf %s" % w)
+
+
 def test_proc_dev_and_sys(roots, monkeypatch):
     monkeypatch.chdir(roots["tmp"])  # /proc/self/cwd would resolve into a temp root
     for cmd in ("rm -rf /proc/self/cwd/passwd", "cd /etc && rm -rf /proc/self/cwd/passwd",
@@ -452,5 +512,36 @@ def test_pipeline_refuses_the_reproducers(pipeline, cmd, subagent):
                                  "rm -rf $TMPDIR/work", "sudo rm -rf {tmp}/work"])
 def test_pipeline_still_refuses_the_neighbours(pipeline, cmd, subagent):
     command = cmd.format(tmp=pipeline["tmp"], state=pipeline["state"], config=pipeline["config"])
+    code, err = _run(pipeline, "pretool-bash-safety.sh", command, subagent, 0)
+    assert code == 2 and "removal-policy" in err, (command, code, err)
+
+
+# A live bind mount, through the registered pipeline. Only throwaway directories inside the
+# pytest basetemp are mounted; skipped where mounting is not permitted; unmounted in teardown.
+@pytest.fixture(scope="module")
+def bound(pipeline, tmp_path_factory):
+    src = tmp_path_factory.mktemp("bind-src")
+    (src / "hooks").mkdir()
+    (src / "README.md").write_text("throwaway\n")
+    t = pipeline["tmp"]
+    done = []
+    try:
+        for d in (t / "b3", t / "b2", t / "w" / "x" / "inner"):
+            d.mkdir(parents=True, exist_ok=True)
+            r = subprocess.run(["mount", "--bind", str(src), str(d)], capture_output=True, text=True)
+            if r.returncode != 0:
+                pytest.skip("bind mounts are not permitted here: %s" % r.stderr.strip()[:120])
+            done.append(d)
+        yield t
+    finally:
+        for d in reversed(done):
+            subprocess.run(["umount", str(d)], capture_output=True)
+
+
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "dev"])
+@pytest.mark.parametrize("cmd", ["rm -rf {tmp}/b3", "rm -rf {tmp}/b3/hooks", "rm -rf {tmp}/b2/README.md",
+                                 "rm -rf {tmp}/w", "rm -rf {tmp}/b3/*"])
+def test_pipeline_refuses_a_live_bind_mount(pipeline, bound, cmd, subagent):
+    command = cmd.format(tmp=bound)
     code, err = _run(pipeline, "pretool-bash-safety.sh", command, subagent, 0)
     assert code == 2 and "removal-policy" in err, (command, code, err)
