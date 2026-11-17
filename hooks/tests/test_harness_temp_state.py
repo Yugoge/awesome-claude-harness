@@ -535,7 +535,7 @@ def test_crosses_mount_a_mount_above_a_system_temp_root_is_not_ignored(roots, tm
 
 def test_crosses_mount_bind_at_tmp_with_a_subdirectory_root(roots, tmp_path):
     tmp, _ = roots
-    # `mount --bind /home/x /tmp`: field 4 names the bound directory, not "/".
+    # `mount --bind /srv/victim /tmp`: field 4 names the bound directory, not "/".
     info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "254:0", "/srv/victim"))
     assert hts.crosses_mount(str(tmp / "x"), mountinfo=info)
 
