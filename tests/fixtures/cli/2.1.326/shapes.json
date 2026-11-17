@@ -1,4 +1,33 @@
 {
+ "meta:subagent": {
+  "agentType": [
+   "string"
+  ],
+  "description": [
+   "string"
+  ],
+  "finished": [
+   "boolean"
+  ],
+  "isBuiltIn": [
+   "boolean"
+  ],
+  "pickedEffortModel": [
+   "string"
+  ],
+  "requestNonInteractive": [
+   "boolean"
+  ],
+  "requestShape": [
+   "string"
+  ],
+  "spawnDepth": [
+   "number"
+  ],
+  "toolUseId": [
+   "string"
+  ]
+ },
  "stdin:PreToolUse": {
   "cwd": [
    "string"
@@ -288,7 +317,13 @@
   "message.content[].name": [
    "string"
   ],
+  "message.content[].signature": [
+   "string"
+  ],
   "message.content[].text": [
+   "string"
+  ],
+  "message.content[].thinking": [
    "string"
   ],
   "message.content[].type": [
@@ -380,6 +415,12 @@
   ],
   "sessionId": [
    "string"
+  ],
+  "thinkingDisplay": [
+   "string"
+  ],
+  "thinkingDurationMs": [
+   "number"
   ],
   "timestamp": [
    "string"
@@ -567,6 +608,9 @@
   "gitBranch": [
    "string"
   ],
+  "isMeta": [
+   "boolean"
+  ],
   "isSidechain": [
    "boolean"
   ],
@@ -661,6 +705,9 @@
   "gitBranch": [
    "string"
   ],
+  "isApiErrorMessage": [
+   "boolean"
+  ],
   "isSidechain": [
    "boolean"
   ],
@@ -691,7 +738,13 @@
   "message.content[].name": [
    "string"
   ],
+  "message.content[].signature": [
+   "string"
+  ],
   "message.content[].text": [
+   "string"
+  ],
+  "message.content[].thinking": [
    "string"
   ],
   "message.content[].type": [
@@ -722,7 +775,8 @@
    "string"
   ],
   "message.stop_sequence": [
-   "null"
+   "null",
+   "string"
   ],
   "message.type": [
    "string"
@@ -743,27 +797,32 @@
    "null"
   ],
   "message.usage.inference_geo": [
+   "null",
    "string"
   ],
   "message.usage.input_tokens": [
    "number"
   ],
   "message.usage.iterations": [
-   "array"
+   "array",
+   "null"
   ],
   "message.usage.output_tokens": [
    "number"
   ],
   "message.usage.output_tokens_details": [
+   "null",
    "object"
   ],
   "message.usage.server_tool_use": [
    "object"
   ],
   "message.usage.service_tier": [
+   "null",
    "string"
   ],
   "message.usage.speed": [
+   "null",
    "string"
   ],
   "parentUuid": [
@@ -783,6 +842,15 @@
   ],
   "sessionId": [
    "string"
+  ],
+  "slug": [
+   "string"
+  ],
+  "thinkingDisplay": [
+   "string"
+  ],
+  "thinkingDurationMs": [
+   "number"
   ],
   "timestamp": [
    "string"
@@ -820,6 +888,9 @@
   "wireToolInputs.<ID>.max_results": [
    "number"
   ],
+  "wireToolInputs.<ID>.message": [
+   "string"
+  ],
   "wireToolInputs.<ID>.prompt": [
    "string"
   ],
@@ -836,6 +907,15 @@
    "string"
   ],
   "wireToolInputs.<ID>.subagent_type": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.summary": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.timeout": [
+   "number"
+  ],
+  "wireToolInputs.<ID>.to": [
    "string"
   ]
  },
@@ -987,11 +1067,86 @@
    "string"
   ]
  },
- "transcript:queue-operation": {
-  "content": [
+ "transcript:attachment/queued_command": {
+  "attachment": [
+   "object"
+  ],
+  "attachment.commandMode": [
    "string"
   ],
-  "operation": [
+  "attachment.delivery_id": [
+   "string"
+  ],
+  "attachment.origin": [
+   "object"
+  ],
+  "attachment.origin.kind": [
+   "string"
+  ],
+  "attachment.origin.producer": [
+   "string"
+  ],
+  "attachment.prompt": [
+   "string"
+  ],
+  "attachment.runId": [
+   "string"
+  ],
+  "attachment.source_uuid": [
+   "string"
+  ],
+  "attachment.timestamp": [
+   "string"
+  ],
+  "attachment.type": [
+   "string"
+  ],
+  "attachment.usage": [
+   "object"
+  ],
+  "attachment.usage.durationMs": [
+   "number"
+  ],
+  "attachment.usage.toolUses": [
+   "number"
+  ],
+  "attachment.usage.totalTokens": [
+   "number"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "rendered": [
+   "array"
+  ],
+  "renderedInHumanTurn": [
+   "array"
+  ],
+  "renderedInHumanTurn[]": [
+   "object"
+  ],
+  "renderedInHumanTurn[].content": [
+   "string"
+  ],
+  "renderedRole": [
+   "string"
+  ],
+  "rendered[]": [
+   "object"
+  ],
+  "rendered[].content": [
    "string"
   ],
   "sessionId": [
@@ -1001,6 +1156,142 @@
    "string"
   ],
   "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "transcript:queue-operation": {
+  "commandUuid": [
+   "string"
+  ],
+  "content": [
+   "string"
+  ],
+  "deliveryId": [
+   "string"
+  ],
+  "operation": [
+   "string"
+  ],
+  "reason": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ]
+ },
+ "transcript:system/compact_boundary": {
+  "compactMetadata": [
+   "object"
+  ],
+  "compactMetadata.cumulativeDroppedTokens": [
+   "number"
+  ],
+  "compactMetadata.durationMs": [
+   "number"
+  ],
+  "compactMetadata.postTokens": [
+   "number"
+  ],
+  "compactMetadata.preCompactDiscoveredTools": [
+   "array"
+  ],
+  "compactMetadata.preCompactDiscoveredTools[]": [
+   "string"
+  ],
+  "compactMetadata.preTokens": [
+   "number"
+  ],
+  "compactMetadata.preservedMessages": [
+   "object"
+  ],
+  "compactMetadata.preservedMessages.allUuids": [
+   "array"
+  ],
+  "compactMetadata.preservedMessages.anchorUuid": [
+   "string"
+  ],
+  "compactMetadata.preservedMessages.uuids": [
+   "array"
+  ],
+  "compactMetadata.preservedSegment": [
+   "object"
+  ],
+  "compactMetadata.preservedSegment.anchorUuid": [
+   "string"
+  ],
+  "compactMetadata.preservedSegment.headUuid": [
+   "string"
+  ],
+  "compactMetadata.preservedSegment.tailUuid": [
+   "string"
+  ],
+  "compactMetadata.trigger": [
+   "string"
+  ],
+  "content": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isMeta": [
+   "boolean"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "level": [
+   "string"
+  ],
+  "logicalParentUuid": [
+   "string"
+  ],
+  "parentUuid": [
+   "null"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "slug": [
+   "string"
+  ],
+  "subtype": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
    "string"
   ]
  },
@@ -1088,10 +1379,16 @@
   "gitBranch": [
    "string"
   ],
+  "isCompactSummary": [
+   "boolean"
+  ],
   "isMeta": [
    "boolean"
   ],
   "isSidechain": [
+   "boolean"
+  ],
+  "isVisibleInTranscriptOnly": [
    "boolean"
   ],
   "message": [
@@ -1123,6 +1420,18 @@
   "message.role": [
    "string"
   ],
+  "origin": [
+   "object"
+  ],
+  "origin.kind": [
+   "string"
+  ],
+  "origin.producer": [
+   "string"
+  ],
+  "origin.runId": [
+   "string"
+  ],
   "parentUuid": [
    "null",
    "string"
@@ -1151,10 +1460,16 @@
   "promptSource": [
    "string"
   ],
+  "queueSkipAttachments": [
+   "boolean"
+  ],
   "sandboxed": [
    "boolean"
   ],
   "sessionId": [
+   "string"
+  ],
+  "slug": [
    "string"
   ],
   "sourceToolAssistantUUID": [
@@ -1166,8 +1481,12 @@
   "timestamp": [
    "string"
   ],
+  "toolDenialKind": [
+   "string"
+  ],
   "toolUseResult": [
-   "object"
+   "object",
+   "string"
   ],
   "toolUseResult.agentId": [
    "string"
@@ -1176,6 +1495,9 @@
    "string"
   ],
   "toolUseResult.canContinueAgent": [
+   "boolean"
+  ],
+  "toolUseResult.canReadOutputFile": [
    "boolean"
   ],
   "toolUseResult.commandName": [
@@ -1191,6 +1513,9 @@
    "string"
   ],
   "toolUseResult.content[].type": [
+   "string"
+  ],
+  "toolUseResult.description": [
    "string"
   ],
   "toolUseResult.durable": [
@@ -1214,6 +1539,9 @@
   "toolUseResult.interrupted": [
    "boolean"
   ],
+  "toolUseResult.isAsync": [
+   "boolean"
+  ],
   "toolUseResult.isImage": [
    "boolean"
   ],
@@ -1223,11 +1551,29 @@
   "toolUseResult.matches[]": [
    "string"
   ],
+  "toolUseResult.message": [
+   "string"
+  ],
   "toolUseResult.nextFireAt": [
    "number"
   ],
   "toolUseResult.noOutputExpected": [
    "boolean"
+  ],
+  "toolUseResult.outputFile": [
+   "string"
+  ],
+  "toolUseResult.pin": [
+   "object"
+  ],
+  "toolUseResult.pin.id": [
+   "string"
+  ],
+  "toolUseResult.pin.name": [
+   "string"
+  ],
+  "toolUseResult.pin.ref": [
+   "string"
   ],
   "toolUseResult.prompt": [
    "string"
@@ -1239,6 +1585,12 @@
    "boolean"
   ],
   "toolUseResult.resolvedModel": [
+   "string"
+  ],
+  "toolUseResult.resumedAgentId": [
+   "string"
+  ],
+  "toolUseResult.revivedAgentId": [
    "string"
   ],
   "toolUseResult.status": [

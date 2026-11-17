@@ -18,10 +18,13 @@ from __future__ import annotations
 import functools
 import json
 import pathlib
+import re
 import sys
 
 DEPTH = 3
 SOURCES = (("transcript", "transcript.jsonl"), ("subagent", "subagent.jsonl"))
+# The file the CLI writes beside a subagent's transcript (agent-<id>.meta.json): kind meta:subagent.
+META = "subagent.meta.json"
 
 
 def json_type(value) -> str:
@@ -88,6 +91,8 @@ def fixture_shapes(fixture_dir) -> dict:
                 _merge(shapes, f"{source}:{record_kind(rec)}", rec)
     for f in sorted((root / "stdin").glob("*.json")):
         _merge(shapes, f"stdin:{f.stem}", json.loads(f.read_text()))
+    if (root / META).exists():
+        _merge(shapes, "meta:subagent", json.loads((root / META).read_text()))
     return {k: {p: sorted(t) for p, t in sorted(v.items())} for k, v in sorted(shapes.items())}
 
 
@@ -104,12 +109,17 @@ def load_records(kind: str, version: str | None = None, root=FIXTURES):
 
     `kind` is a kind of `fixture_shapes`: ``transcript:attachment/hook_success``,
     ``subagent:attachment/hook_success``, ``transcript:system/stop_hook_summary``, ... (a list of
-    records, in recording order), or ``stdin:<Event>`` (the one hook stdin dict). A kind without a
+    records, in recording order), ``stdin:<Event>`` (the one hook stdin dict) or ``meta:subagent`` (the
+    meta file the CLI writes beside the first subagent's transcript). A kind without a
     source prefix reads the parent transcript. An unknown kind raises KeyError, never returns [].
     """
     fixture = pathlib.Path(root) / (version or current_version(root))
     source, _, record = kind.rpartition(":")
     source = source or "transcript"
+    if source == "meta" and record == "subagent":
+        if not (fixture / META).exists():
+            raise KeyError(kind)
+        return json.loads((fixture / META).read_text())
     if source == "stdin":
         f = fixture / "stdin" / f"{record}.json"
         if not f.exists():
@@ -167,6 +177,17 @@ def _blocks(rec) -> set:
     return {b.get("type") for b in content if isinstance(b, dict)} if isinstance(content, list) else set()
 
 
+def _use(rec) -> dict:
+    """A tool_result record's toolUseResult object ({} for any other record)."""
+    value = rec.get("toolUseResult") if "tool_result" in _blocks(rec) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _errored(rec) -> bool:
+    content = _content(rec)
+    return isinstance(content, list) and any(isinstance(b, dict) and b.get("is_error") is True for b in content)
+
+
 # The recorded forms of one kind, told apart by structure (never by the redacted text).
 VARIANTS = {
     "user": {
@@ -175,6 +196,13 @@ VARIANTS = {
         "meta": lambda r: bool(r.get("isMeta")) and "sourceToolUseID" not in r,         # a typed command's body
         "skill": lambda r: bool(r.get("isMeta")) and "sourceToolUseID" in r,            # a Skill call's expansion
         "tool_result": lambda r: "tool_result" in _blocks(r),
+        # How a dispatched agent's end comes back (P15 L3's recorder runs 4-10):
+        "agent_result": lambda r: _use(r).get("status") == "completed" and "agentId" in _use(r),  # its Agent call's
+        "agent_launched": lambda r: _use(r).get("isAsync") is True,          # a background launch's result
+        "resumed": lambda r: "resumedAgentId" in _use(r),                     # a SendMessage's result
+        "cut": lambda r: "toolDenialKind" in r and _errored(r),               # an interrupt, or the end of the session
+        "task_notification": lambda r: (r.get("origin") or {}).get("kind") == "task-notification",
+        "compact_summary": lambda r: bool(r.get("isCompactSummary")),
     },
     "assistant": {
         "tool_use": lambda r: "tool_use" in _blocks(r),
@@ -223,6 +251,24 @@ def synthesize(kind: str, variant: str | None = None, **values) -> dict:
             parent, node = node, node[key]
         parent[keys[-1]] = value
     return rec
+
+
+def recording(source: str = "transcript", version: str | None = None, root=FIXTURES) -> list:
+    """Every recorded record of one source (``transcript`` or ``subagent``), in recording order, as
+    fresh copies: a real sequence, for a reader of a transcript's order (an agent's tail)."""
+    path = pathlib.Path(root) / (version or current_version(root)) / dict(SOURCES)[source]
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+_NOTIFICATION_TAG = re.compile(r"<(task-id|tool-use-id|status)>(.*?)</\1>")
+
+
+def notification(task_id: str, tool_use_id: str, status: str = "completed") -> str:
+    """The text of a task-notification as the CLI writes it (the first recorded one: its tags, in
+    their order, the redacted text left in place) with these values in its header tags."""
+    text = template("user", "task_notification")["message"]["content"]
+    values = {"task-id": task_id, "tool-use-id": tool_use_id, "status": status}
+    return _NOTIFICATION_TAG.sub(lambda m: f"<{m.group(1)}>{values[m.group(1)]}</{m.group(1)}>", text)
 
 
 @functools.lru_cache(maxsize=None)
