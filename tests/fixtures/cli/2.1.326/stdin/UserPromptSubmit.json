@@ -1,0 +1,10 @@
+{
+  "cwd": "<CWD>",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "<redacted>",
+  "prompt_id": "<UUID>",
+  "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",
+  "session_id": "<UUID>",
+  "transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>.jsonl"
+}

@@ -1,0 +1,19 @@
+{
+  "cwd": "<CWD>",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "prompt_id": "<UUID>",
+  "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",
+  "session_id": "<UUID>",
+  "tool_input": {
+    "cron": "<redacted>",
+    "prompt": "<redacted>",
+    "recurring": false
+  },
+  "tool_name": "CronCreate",
+  "tool_use_id": "<ID>",
+  "transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>.jsonl"
+}

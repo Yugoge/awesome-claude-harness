@@ -1,0 +1,20 @@
+{
+  "cwd": "<CWD>",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "prompt_id": "<UUID>",
+  "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",
+  "session_id": "<UUID>",
+  "tool_input": {
+    "description": "<redacted>",
+    "prompt": "<redacted>",
+    "run_in_background": false,
+    "subagent_type": "general-purpose"
+  },
+  "tool_name": "Agent",
+  "tool_use_id": "<ID>",
+  "transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>.jsonl"
+}

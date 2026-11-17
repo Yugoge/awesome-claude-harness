@@ -19,6 +19,8 @@ import os
 import re
 from pathlib import Path
 
+from tests.cli_shapes import synthesize
+
 TASK_ID = "20260101-000000"
 FANOUT_WORKERS = ["lane-a", "lane-b"]
 
@@ -97,15 +99,15 @@ def declare_stage_dispatches(root: Path, task_id: str) -> None:
         block = {"task_id": task_id, "lane": None, "lane_set": None, "role": role, "pipeline": "dev",
                  "profile": "singular", "dispatched_at": "2026-01-01T00:00:00Z", "artifacts": artifacts}
         prompt = f'<obligation v="1">\n{json.dumps(block)}\n</obligation>'
-        return {"type": "assistant", "message": {"role": "assistant", "content": [
+        return synthesize("assistant", "tool_use", message__content=[
             {"type": "tool_use", "id": f"toolu_{role}_{task_id}", "name": "Agent",
-             "input": {"subagent_type": role, "prompt": prompt}}]}}
+             "input": {"subagent_type": role, "prompt": prompt}}])
 
     def json_artifact(name: str, schema: str) -> dict:
         return {"kind": "json", "path": f"docs/dev/{name}", "schema": schema, "identity": {"task_id": task_id}}
 
     records = [
-        {"type": "user", "message": {"role": "user", "content": f"/close --late-repair {task_id}"}},
+        synthesize("user", "prompt", turnOrigin="human", message__content=f"/close --late-repair {task_id}"),
         dispatch("ba", [json_artifact(f"context-{task_id}.json", "context.v1"),
                         {"kind": "markdown", "path": f"docs/dev/ticket-{task_id}.md", "identity_anchor": task_id}]),
         dispatch("dev", [json_artifact(f"dev-report-{task_id}.json", "dev-report.v2")]),
