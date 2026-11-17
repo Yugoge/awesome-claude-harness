@@ -354,14 +354,40 @@ def format_active_progress(todos: list, ack: bool) -> str:
 
 # --- Overnight helpers ---
 
+_SPEC_FLAG_RE = re.compile(r'(?:--|[–—])spec\s+(\S+)')
+# A file name's extension: a dot then 1-10 letters or digits ending the token
+# (`spec.md`, `notes.txt`); a sentence's closing period (`parsing.`) is not one.
+_SPEC_EXTENSION_RE = re.compile(r'[^./\\]\.[A-Za-z0-9]{1,10}$')
+
+
+def _is_spec_reference(token: str) -> bool:
+    """Whether the token after a --spec/—spec/–spec is the flag's <path> rather
+    than the next word of prose (A1 over-block: `API—spec section first` and
+    `tests for --spec parsing` were taken as the flag and refused the prompt as
+    an unresolved spec). It is a path when it is shaped like one -- it holds a
+    `/` or `\\`, starts with `~` or `.`, or ends in a file extension -- or when
+    it names a file that exists under the project. A path-shaped token keeps
+    the flag (and its unresolved-spec refusal) however the dash was typed."""
+    if '/' in token or '\\' in token or token.startswith(('~', '.')):
+        return True
+    if _SPEC_EXTENSION_RE.search(token):
+        return True
+    return os.path.isfile(os.path.join(str(PROJECT_DIR), token))
+
+
 def _strip_spec_arg(args: str) -> tuple[str, str]:
-    """Pull --spec/—spec/–spec from args; return (remaining_args, spec_path)."""
-    spec_match = re.search(r'(?:--|[–—])spec\s+(\S+)', args)
-    if not spec_match:
-        return args, ''
-    spec_path = spec_match.group(1)
-    remaining = args[:spec_match.start()].rstrip() + ' ' + args[spec_match.end():].lstrip()
-    return remaining.strip(), spec_path
+    """Pull --spec/—spec/–spec <path> from args; return (remaining_args, spec_path).
+
+    The first dash-spec whose following token is a spec reference
+    (_is_spec_reference) is the flag; a dash-spec followed by a plain word is
+    prose and stays in the text."""
+    for spec_match in _SPEC_FLAG_RE.finditer(args):
+        spec_path = spec_match.group(1)
+        if not _is_spec_reference(spec_path):
+            continue
+        remaining = args[:spec_match.start()].rstrip() + ' ' + args[spec_match.end():].lstrip()
+        return remaining.strip(), spec_path
+    return args, ''
 
 
 def _match_end_time_token(args: str) -> tuple[str, str]:
