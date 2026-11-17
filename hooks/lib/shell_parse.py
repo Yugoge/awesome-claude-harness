@@ -2319,8 +2319,11 @@ PEEL = {
                        "-w", "--whitelist-environment", "-c", "--command")), 0),
 }
 
-SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "rbash", "yash",
-                    "posh", "busybox-sh"})
+SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", "rbash", "yash",
+                    "posh", "busybox-sh", "lksh", "pdksh", "oksh"})
+# A command shaped like a shell (`*sh`, `*sh93`) that SHELLS does not name, given
+# a -c option, is read as a shell, and its reading is unresolved.
+_SHELL_LIKE_RE = re.compile(r"[a-z]*sh[0-9.]*")
 SHELL_SPEC = _spec(("-e", "-x", "-u", "-v", "-n", "-f", "-h", "-k", "-m", "-p", "-t",
                     "-a", "-b", "-B", "-C", "-E", "-H", "-P", "-T", "-i", "-l", "-r", "-s",
                     "+e", "+x", "+u", "+v", "+f", "+h", "+m", "+B", "+H", "+o", "+O",
@@ -2448,6 +2451,13 @@ def resolve(cmd, depth=None):
                     r.assignments = r.assignments + (Assignment(rest[0]),)
                 rest = rest[1:]
             split = [v for o, v in opts if o in ("-S", "--split-string")]
+            if not split and rest and rest[0].value() is None:
+                for j in range(1, len(rest) - 1):
+                    if rest[j].value() in ("-S", "--split-string"):
+                        split = [rest[j + 1]]
+                        r.unresolved = "computed-env-option"
+                        rest = rest[j + 2:]
+                        break
             if split and split[0].value() is not None:
                 # env -S splits by its own rules (\_ is a blank, and more escapes
                 # than these): read as shell words, and the reading is unresolved.
@@ -2532,6 +2542,10 @@ def resolve(cmd, depth=None):
             continue
         if name in SHELLS:
             return _resolve_shell(r, head, words, cmd, depth)
+        if name not in ("ssh", "hash") and _SHELL_LIKE_RE.fullmatch(name) and _has_c(words):
+            _resolve_shell(r, head, words, cmd, depth)
+            r.unresolved = r.unresolved or "unknown_shell"
+            return r
         if name == "find":
             return _resolve_find(r, head, words, cmd, depth)
         if name in ("su", "runuser", "sg") and not _has_c(words):
@@ -2686,6 +2700,7 @@ def _peel_xargs(r, words):
 
 def _merge(outer, inner):
     inner.wrappers = outer.wrappers + inner.wrappers
+    inner.unresolved = inner.unresolved or outer.unresolved
     inner.assignments = outer.assignments + inner.assignments
     return inner
 
@@ -2714,8 +2729,18 @@ def _resolve_shell(r, head, words, cmd, depth):
     has_c = has_s = False
     while k < len(words):
         v = words[k].value()
-        if v is None:
+        if v is None and has_c:
             break
+        if v is None:
+            # A computed option: it may be anything, so a later -c string is
+            # still read as the payload, and the reading is unresolved.
+            later = [j for j in range(k + 1, len(words))
+                     if (words[j].value() or "").startswith("-") and "c" in (words[j].value() or "")[1:]
+                     and not (words[j].value() or "").startswith("--")]
+            if later and later[0] + 1 < len(words):
+                _set_payload(r, [words[later[0] + 1]], "shell_c", depth, "shell_c_dynamic")
+            r.unresolved = "computed-shell-option"
+            return r
         if v in ("--", "-"):
             k += 1
             break
