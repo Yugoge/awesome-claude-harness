@@ -87,18 +87,28 @@ class World:
         return subprocess.run(["bash", "-c", command], cwd=str(self.project), env=self.env(),
                               capture_output=True, text=True, timeout=60)
 
-    def dispatch(self) -> str:
-        """A QA dispatched with an obligation declaring the report at Q."""
+    def dispatch(self, hooked: bool = True) -> str:
+        """A QA dispatched with an obligation declaring the report at Q (``hooked``: its PreToolUse runs)."""
         doc = {"task_id": TASK, "role": "qa", "pipeline": "dev", "profile": "singular",
                "dispatched_at": datetime.now(timezone.utc).isoformat(),
                "artifacts": [{"kind": "json", "path": Q, "schema": "qa-report.v2", "identity": {"task_id": TASK}}]}
         prompt = f"You are qa.\n<obligation v=\"1\">\n{json.dumps(doc)}\n</obligation>"
         agent = "a" + uuid.uuid4().hex[:16]
         call_id = "toolu_" + uuid.uuid4().hex[:20]
+        # The dispatch's PreToolUse (tool-policy, which records the launch), as the CLI runs it: the
+        # CLI records the call in the session transcript first.
+        tool_input = {"description": "qa", "prompt": prompt, "subagent_type": "qa", "run_in_background": False}
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with self.transcript.open("a") as fh:
-            fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "tool_use", "id": call_id, "name": "Agent",
-                 "input": {"description": "qa", "prompt": prompt, "subagent_type": "qa"}}]}}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "timestamp": stamp, "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": call_id, "name": "Agent", "input": tool_input}]}}) + "\n")
+        data = {"session_id": self.sid, "transcript_path": str(self.transcript), "cwd": str(self.project),
+                "hook_event_name": "PreToolUse", "permission_mode": "default", "tool_name": "Agent",
+                "tool_input": tool_input, "tool_use_id": call_id}
+        if hooked:
+            proc = subprocess.run([sys.executable, str(POLICY)], input=json.dumps(data), capture_output=True,
+                                  text=True, cwd=str(self.tmp), env=self.env(), timeout=120)
+            assert proc.returncode == 0, proc.stderr
         sub = self.store / self.sid / "subagents"
         (sub / f"agent-{agent}.jsonl").write_text(
             json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
@@ -309,7 +319,7 @@ def test_a_sibling_qas_observation_is_not_the_main_agents(world):
 
 def test_a_report_no_observation_recorded_is_judged_as_on_the_base(world):
     (world.project / Q).write_text(FORGED + "\n")
-    qa = world.dispatch()
+    qa = world.dispatch(hooked=False)  # no PreToolUse ran: nothing observed the report
     assert world.stop(qa).returncode == 0
 
 

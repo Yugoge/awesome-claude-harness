@@ -1043,22 +1043,16 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
 
 
 def _observe_reports(data: dict) -> None:
-    """Record this call's caller as the writer of every watched QA report (docs/dev/qa-report-*.json
-    and every path a QA dispatch of the session declares, this call's own dispatch included)
-    changed since the ledger last recorded it, bound to this call's tool_use_id
-    (lib/report_provenance.py; the e2e gate reads it). Never refuses."""
+    """Record this call in the provenance ledger's call stream (a QA dispatch's launch, a
+    subagent's call), then this call's caller as the writer of every watched QA report
+    (docs/dev/qa-report-*.json and every path a QA dispatch of the session declares, this
+    call's own dispatch included) changed since the ledger last recorded it, bound to this
+    call's tool_use_id (lib/report_provenance.observe_call; the e2e gate reads it). Never
+    refuses."""
     try:
         from lib import report_provenance
 
-        project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
-        tool_input = data.get("tool_input")
-        declared = ()
-        if data.get("tool_name") in ("Agent", "Task") and isinstance(tool_input, dict):
-            declared = report_provenance.declared_in_prompt(tool_input.get("prompt"))
-        report_provenance.observe(data.get("session_id"), project,
-                                  data.get("agent_id") or report_provenance.MAIN,
-                                  call=data.get("tool_use_id"), session_transcript=_session_transcript(data),
-                                  declared=declared)
+        report_provenance.observe_call(data)
     except Exception:
         pass
 

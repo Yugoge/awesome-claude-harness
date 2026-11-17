@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_report_provenance_gate as base  # noqa: E402
 
 ROOT = base.ROOT
-LAUNCH, GATE = base.LAUNCH, base.PRODUCER_GATE
+LAUNCH, GATE, POLICY = base.LAUNCH, base.PRODUCER_GATE, base.POLICY
 TASK, N, Q = base.TASK, base.N, base.Q
 PROVENANCE = base.PROVENANCE
 UNTRUSTED = "cannot be trusted"
@@ -57,6 +57,18 @@ class World(base.World):
                "artifacts": [{"kind": "json", "path": path, "schema": "qa-report.v2", "identity": {"task_id": TASK}}]}
         return f"You are qa.\n<obligation v=\"1\">\n{json.dumps(doc)}\n</obligation>"
 
+    def pre(self, tool: str, tool_input: dict, agent: str | None = None, hook: Path = base.POLICY, call_id=None):
+        """base.World.pre, with the call's tool_use_id given (the id the CLI records and the
+        subagent's meta names)."""
+        data = {"session_id": self.sid, "transcript_path": str(self.transcript), "cwd": str(self.project),
+                "hook_event_name": "PreToolUse", "permission_mode": "default", "tool_name": tool,
+                "tool_input": tool_input, "tool_use_id": call_id or "toolu_" + uuid.uuid4().hex[:24]}
+        if agent:
+            data.update(agent_id=agent, agent_type="qa")
+        self.record_call(agent, data["tool_use_id"], tool, tool_input)
+        return subprocess.run([sys.executable, str(hook)], input=json.dumps(data), capture_output=True,
+                              text=True, cwd=str(self.tmp), env=self.env(), timeout=120)
+
     def launch(self, tool: str, tool_input: dict, agent=None):
         """A call through the registered PreToolUse launcher."""
         return self.pre(tool, tool_input, agent=agent, hook=LAUNCH)
@@ -67,15 +79,18 @@ class World(base.World):
         ``async_launched`` result the CLI records."""
         prompt = self.obligation_prompt(path)
         tool_input = {"description": "qa", "prompt": prompt, "subagent_type": "qa", "run_in_background": background}
-        if through_launcher and not background:
-            proc = self.launch("Agent", tool_input)
-            assert proc.returncode == 0, proc.stderr
         call_id = "toolu_" + uuid.uuid4().hex[:20]
+        if through_launcher:
+            # The dispatch's PreToolUse, as the CLI runs it (it records the call first). A background
+            # dispatch outside /do is refused by the launcher's background rule, so its PreToolUse
+            # runs tool-policy alone, the hook that records the launch.
+            proc = self.pre("Agent", tool_input, hook=POLICY if background else LAUNCH, call_id=call_id)
+            assert proc.returncode == 0, proc.stderr
+        else:
+            self.record_call(None, call_id, "Agent", tool_input)
         agent = "a" + uuid.uuid4().hex[:16]
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with self.transcript.open("a") as fh:
-            fh.write(json.dumps({"type": "assistant", "timestamp": stamp, "message": {"role": "assistant", "content": [
-                {"type": "tool_use", "id": call_id, "name": "Agent", "input": tool_input}]}}) + "\n")
             if background:
                 fh.write(json.dumps({"type": "user", "timestamp": stamp,
                                      "toolUseResult": {"status": "async_launched", "agentId": agent},
@@ -97,7 +112,9 @@ class World(base.World):
     def qa_bash(self, agent: str, command: str, run: bool = True) -> None:
         """The QA's own Bash call: recorded in its transcript (as the CLI does) and run."""
         call_id = "toolu_" + uuid.uuid4().hex[:20]
-        self.record_call(agent, call_id, "Bash", {"command": command})
+        proc = self.pre("Bash", {"command": command}, agent=agent, hook=POLICY, call_id=call_id)  # its PreToolUse
+        # Not asserted: the throwaway project sits under the system temp dir, which the qa role's
+        # rows deny. The hook records the call before any role row decides.
         with self.agent_transcript(agent).open("a") as fh:
             fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": call_id, "content": ""}]}}) + "\n")

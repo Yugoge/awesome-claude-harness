@@ -203,7 +203,7 @@ def _enforce_own_writer(
 ) -> None:
     """Exit 2 when the declared report's current content comes from the main agent
     (lib/report_provenance.py verdict: the latest record of that content is the main
-    agent's observation, or a subagent's the CLI's transcripts do not witness) and this
+    agent's observation, or a subagent's whose witnesses the hook did not write) and this
     QA's own transcript holds no Write of exactly that content; exit 2 too when the
     provenance ledger cannot be trusted (unreadable, unwritable, held locked, its chain
     broken): the gate fails closed (CD-6)."""

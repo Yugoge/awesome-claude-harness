@@ -6,26 +6,34 @@ a QA's dispatch declares. A report the orchestrator (the main agent) wrote is no
 evidence. No reading of a command line can list every route that writes a file, so the
 writer is measured, not parsed:
 
-* ``observe`` runs on every tool call's PreToolUse (hooks/pretool-tool-policy.py, the
-  caller known from the payload's ``agent_id``, the call from its ``tool_use_id``). It
-  looks at every ``<project>/docs/dev/qa-report-*.json`` and at every path a QA dispatch
-  of the session declares as its qa-report.v2 (a started subagent's obligation, the
-  dispatch this call makes, every path declared before: the ledger's watch list), with no
-  limit on their number. A file whose content (sha256) differs from what the ledger last
-  recorded for it gets a record naming the caller as its writer. The main agent cannot
-  act between its own calls, and a synchronous dispatch is one of its calls, so a report
-  the main agent changed is first seen at its own next PreToolUse, at the latest the
-  dispatch of the QA that will be judged on it: the writer recorded is "main". One
-  exception: while a QA the main agent launched in the background (an ``async_launched``
-  Agent result with no task notification yet) declares the path, a change the main
-  agent's call sees first is that QA's (its own write, /do), unless the main agent's
-  previous call names the path as a write target.
-* ``verdict`` is the gate's question: does the report's current content come from the
-  main agent? It finds the latest record of that content and trusts a subagent's record
-  only when the CLI's own transcript of that subagent holds the observing call
-  (``tool_use_id``) at about the time recorded (a background QA's record, the main
-  agent's call and that QA's launch). A record without that witness (a hand-made
-  ``observe()`` call with an invented agent id or call) counts as the main agent's.
+* ``observe_call`` is the PreToolUse hook's entry (hooks/pretool-tool-policy.py, with the CLI's
+  payload: the caller from ``agent_id``, the call from ``tool_use_id``). It first writes the
+  call into the ledger's call stream: a QA dispatch of the main agent as a launch record (its
+  declared qa-report.v2 paths, whether it runs in the background, its prompt's sha256), a
+  subagent's first call with the sha256 of the prompt its own transcript holds then (the link
+  to its launch), any call that records a change, and the main agent's call after anything
+  else. Then it looks at every ``<project>/docs/dev/qa-report-*.json`` and every path a QA
+  dispatch of the session declares (the ledger's watch list), with no limit on their number.
+  A file whose content (sha256) differs from what the ledger last recorded for it gets a
+  record naming the caller as its writer. The main agent cannot act between its own calls,
+  and a synchronous dispatch is one of its calls, so a report the main agent changed is first
+  seen at its own next PreToolUse, at the latest the dispatch of the QA that will be judged on
+  it: the writer recorded is "main". One exception: while a QA dispatch the main agent made in
+  the background (a launch record) has a started subagent (a call record linked to it) that
+  declares the path and that no task notification names, a change the main agent's call sees
+  first is that QA's (its own write, /do), unless the main agent's previous call names the
+  path as a write target.
+* ``observe`` (out of band: no payload) records changes but no call: its records are no
+  subagent's to the gate, whatever agent id and call it names.
+* ``verdict`` is the gate's question: does the report's current content come from the main
+  agent? It finds the latest record of that content and trusts a subagent's record only when
+  the hook wrote its witnesses: the call record of the observing caller's same call directly
+  precedes it, and the writer is a subagent linked to a launch record declaring the path (the
+  main agent's call observed it only for a background launch). Anything else counts as the
+  main agent's. No transcript content is evidence of a launch or a witness, since the main
+  agent can append to a transcript: a transcript is read only where a forged line refuses
+  more (a task notification ends a background QA's window; the main agent's previous call
+  naming the report keeps the change the main agent's) or widens the watch list.
 
 The ledger is one JSON file per (session, project) under the harness state dir
 (lib/harness_state_dir.py), ``report-provenance/<key>.json``; nothing is written into the
@@ -33,14 +41,18 @@ project. Its records form a hash chain (each record's ``h`` covers its fields an
 previous record's ``h``; the document's ``head`` is the last one). The gate fails
 closed: a ledger that cannot be read, locked or written (its directory replaced by a
 file, made unwritable, held locked; the file unparsable; the chain broken by an edit
-or a deleted record) refuses the QA whose declared report exists. tool-policy refuses
-an agent's write, delete or rename of the ledger directory as a protected path.
+or a deleted record) refuses the QA whose declared report exists. tool-policy refuses an
+agent's write, delete or rename of the ledger directory when the target is one its Bash
+reader reads or a file tool's path; a rename or delete by an interpreter, ``find -delete``
+or a computed name is not seen there, and gains nothing: the next observation starts a new
+ledger and records the report's current content as the main agent's.
 
 Limit, stated plainly: an agent that runs arbitrary code with the user's permissions can
-rewrite any local state, this ledger included (recompute the chain, borrow a real call
-id within its time window). The ledger makes the cheap, one-call forms detectable and
-refused (moving or replacing the directory, editing a record, an out-of-band
-``observe()`` with an invented agent id); it is not a cryptographic proof.
+rewrite any local state, this ledger included (recompute the chain, run the hook's entry
+with a payload it makes up, borrow the call of a background QA while it runs). The ledger
+makes the cheap forms detectable and refused (moving, deleting or replacing the directory,
+editing a record, a fake launch or subagent call appended to a transcript, an out-of-band
+``observe()`` under any agent id and call); it is not a cryptographic proof.
 """
 from __future__ import annotations
 
@@ -60,8 +72,6 @@ NOTE = ("Hook-written provenance of gate-read QA reports (hooks/lib/report_prove
         "An agent able to run arbitrary code with the user's permissions can tamper with any "
         "local state; this chain makes the cheap forms detectable, it is no cryptographic proof.")
 _LOCK_WAIT = 2.0
-_BEFORE = 120.0     # a record may precede its call's transcript timestamp by this much (clock skew)
-_AFTER = 1800.0     # and follow it by this much (the call waiting on a permission prompt)
 _QA_SCHEMA = "qa-report.v2"
 
 
@@ -231,7 +241,11 @@ def declared_reports(session_id, project_dir, session_transcript) -> set:
     return found
 
 
-# -- the session transcript: background QAs, the main agent's previous call -----------
+# -- the session transcript: task notifications, the main agent's previous call ------
+# Transcript content is no evidence that a QA was launched or acted: anything there the main
+# agent can append. It is read only where a forged line can refuse more, never pass more: a
+# task notification ends a background QA's window; the main agent's previous call naming a
+# report as its write target keeps the change the main agent's.
 def _iso(value) -> float | None:
     if not isinstance(value, str) or not value:
         return None
@@ -242,10 +256,9 @@ def _iso(value) -> float | None:
 
 
 def _session_reading(session_transcript, call=None) -> dict:
-    """One pass over the session transcript: the Agent calls launched in the background
-    (``async_launched``) and not yet notified, their declared paths, and the main agent's
-    tool calls (id -> (name, input, timestamp))."""
-    out = {"running": {}, "launched": set(), "calls": {}, "order": []}
+    """One pass over the session transcript: the agent ids a task notification names, and the
+    main agent's tool calls (id -> (name, input, timestamp)) in order."""
+    out = {"notified": set(), "calls": {}, "order": []}
     try:
         from lib import subagent_restart as restart
     except Exception:
@@ -254,14 +267,13 @@ def _session_reading(session_transcript, call=None) -> dict:
         handle = open(str(session_transcript), encoding="utf-8", errors="replace")
     except (OSError, TypeError, ValueError):
         return out
-    dispatch_prompts, notified = {}, set()
     with handle:
         for line in handle:
             if restart is not None and "task-notification" in line:
                 for body in restart._iter_notification_blocks(line):
                     found = restart.TASK_NOTIFICATION_RE.search(body)
                     if found:
-                        notified.add(found.group(1).strip())
+                        out["notified"].add(found.group(1).strip())
             try:
                 record = json.loads(line)
             except ValueError:
@@ -271,23 +283,10 @@ def _session_reading(session_transcript, call=None) -> dict:
             message = record.get("message")
             content = message.get("content") if isinstance(message, dict) else None
             for block in content if isinstance(content, list) else ():
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+                if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str):
                     tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
                     out["calls"][block["id"]] = (block.get("name"), tool_input, _iso(record.get("timestamp")))
                     out["order"].append(block["id"])
-                    if block.get("name") in ("Agent", "Task"):
-                        dispatch_prompts[block["id"]] = tool_input.get("prompt")
-                elif block.get("type") == "tool_result" and block.get("tool_use_id") in dispatch_prompts:
-                    own = record.get("toolUseResult")
-                    if isinstance(own, dict) and own.get("status") == "async_launched" \
-                            and isinstance(own.get("agentId"), str):
-                        agent = own["agentId"]
-                        out["launched"].add(agent)
-                        out["running"][agent] = declared_in_prompt(dispatch_prompts[block["tool_use_id"]])
-    for agent in notified:
-        out["running"].pop(agent, None)
     return out
 
 
@@ -318,86 +317,192 @@ def _previous_main_call_writes(reading: dict, call, root: str, rel: str) -> bool
     return False
 
 
+# -- the hook-written call stream ---------------------------------------------------------
+def _prompt_sha(prompt) -> str | None:
+    if not isinstance(prompt, str) or not prompt:
+        return None
+    return hashlib.sha256(prompt.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def _is_call(record) -> bool:
+    return isinstance(record, dict) and record.get("k") == "call"
+
+
+def _links(records: list, upto: int | None = None) -> dict:
+    """{agent_id: (its first call record's index, the launch record's index or None)}: the
+    QA dispatch of the main agent, recorded at that dispatch's PreToolUse, whose prompt is the
+    one the subagent's own transcript held when the hook first saw the subagent call (the
+    latest such launch before that call)."""
+    out, launches = {}, {}
+    for index, record in enumerate(records[:upto] if upto is not None else records):
+        if not _is_call(record):
+            continue
+        if record.get("agent") == MAIN and isinstance(record.get("launch"), dict):
+            launches[record["launch"].get("prompt")] = index
+        elif record.get("agent") != MAIN and record.get("agent") not in out:
+            link = record.get("link")
+            out[record.get("agent")] = (index, launches.get(link) if isinstance(link, str) else None)
+    return out
+
+
+def _running(records: list, rel: str, notified: set) -> list:
+    """The agents a background QA dispatch of the main agent declaring ``rel`` started, each
+    seen by the hook calling a tool, with no task notification read for it."""
+    out = []
+    for agent, (_first, launch) in _links(records).items():
+        if launch is None or agent in notified:
+            continue
+        spec = records[launch]["launch"]
+        if spec.get("bg") is True and rel in (spec.get("declared") or []):
+            out.append(agent)
+    return out
+
+
+def _current_call(data: dict):
+    """(session_id, project, actor, call, tool_name, tool_input, session_transcript) of a hook payload."""
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
+    raw = data.get("transcript_path")
+    transcript = None
+    if isinstance(raw, str) and raw:
+        path = Path(raw)
+        if path.parent.name == "subagents":  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
+            path = path.parent.parent.parent / f"{path.parent.parent.name}.jsonl"
+        transcript = path
+    return (data.get("session_id"), project, data.get("agent_id") or MAIN, data.get("tool_use_id"),
+            data.get("tool_name"), tool_input, transcript)
+
+
 # -- observe (PreToolUse) ----------------------------------------------------------
-def observe(session_id: str, project_dir, actor: str, call=None, session_transcript=None,
-            declared=()) -> None:
-    """Record ``actor`` ("main" or a subagent's agent_id), observing in the call ``call``
-    (the payload's tool_use_id), as the writer of every watched report of ``project_dir``
-    whose content changed since the ledger last recorded it. ``declared``: the paths the
-    calling dispatch itself declares. Never raises; records nothing it cannot."""
+def observe_call(data: dict) -> None:
+    """The PreToolUse hook's entry (hooks/pretool-tool-policy.py, with the CLI's payload): record
+    this call in the ledger's call stream, then every watched report it sees changed (observe).
+    Only this entry writes call records; a record of a subagent's is trusted only when the call
+    record of that subagent's same call precedes it directly. Never raises."""
     try:
-        root = _root(project_dir)
-        ledger = ledger_path(session_id, project_dir)
-        if not root or not ledger or not actor:
+        sid, project, actor, call, tool, tool_input, transcript = _current_call(data)
+        if not isinstance(call, str) or not call:
             return
-        started = started_declarations(session_transcript)
-        watch_new = {r for r in (_norm(d) for d in declared or ()) if r}
-        for paths in started.values():
-            watch_new.update(paths)
-        reports = {os.path.relpath(p, root) for p in glob.glob(os.path.join(glob.escape(root), REPORT_GLOB))}
-        if not reports and not watch_new and not os.path.exists(ledger):
-            return
-        os.makedirs(os.path.dirname(ledger), mode=0o700, exist_ok=True)
-        with open(ledger + ".lock", "a") as lock:
-            deadline = time.monotonic() + _LOCK_WAIT
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError:
-                    if time.monotonic() > deadline:
-                        return
-                    time.sleep(0.02)
-            try:
-                doc = _read(ledger) or {"v": VERSION, "note": NOTE, "head": "", "records": [], "watch": []}
-            except LedgerError:
-                return  # never repaired here: the gate refuses on it
-            records = doc["records"]
-            watch = set(r for r in doc.get("watch") or [] if _norm(r)) | watch_new
-            latest = _latest(records)
-            reading = None
-            changed = sorted(watch - set(doc.get("watch") or [])) != []
-            for rel in sorted(reports | watch | {p for p in latest if isinstance(p, str)}):
-                path = os.path.join(root, rel)
-                entry = latest.get(rel)
-                stat = _stat(path)
-                if stat is None:
-                    if entry and entry.get("sha") is not None:
-                        _append(doc, rel, None, None, actor, actor, call)
-                        changed = True
-                    continue
-                if entry and entry.get("stat") == stat:
-                    continue
-                sha = _sha(path)
-                if sha is None or (entry and entry.get("sha") == sha):
-                    continue  # same content: the writer stays (a touch changes no writer)
-                writer = actor
-                if actor == MAIN:
-                    if reading is None:
-                        reading = _session_reading(session_transcript, call)
-                    declarers = [a for a, paths in reading["running"].items() if rel in paths]
-                    if declarers and not _previous_main_call_writes(reading, call, root, rel):
-                        writer = declarers[-1]
-                _append(doc, rel, sha, stat, writer, actor, call)
-                changed = True
-            doc["watch"] = sorted(watch)
-            if changed:
-                tmp = f"{ledger}.{os.getpid()}.tmp"
-                with open(tmp, "w", encoding="utf-8") as handle:
-                    json.dump(doc, handle)
-                os.replace(tmp, ledger)
+        info = {}
+        declared = ()
+        if actor == MAIN and tool in ("Agent", "Task"):
+            declared = declared_in_prompt(tool_input.get("prompt"))
+            if declared:
+                info["launch"] = {"bg": tool_input.get("run_in_background") is True,
+                                  "prompt": _prompt_sha(tool_input.get("prompt")), "declared": sorted(declared)}
+        _observe(sid, project, actor, call, transcript, declared, hooked=info)
     except Exception:
         return
 
 
-def _append(doc: dict, rel: str, sha, stat, writer: str, observer: str, call) -> None:
+def observe(session_id: str, project_dir, actor: str, call=None, session_transcript=None,
+            declared=()) -> None:
+    """Record ``actor`` as the writer of every watched report of ``project_dir`` whose content
+    changed since the ledger last recorded it, with no call record: a record made this way,
+    out of band, is one no gate trusts as a subagent's. Never raises."""
+    try:
+        _observe(session_id, project_dir, actor, call, session_transcript, declared, hooked=None)
+    except Exception:
+        return
+
+
+def _observe(session_id, project_dir, actor, call, session_transcript, declared, hooked) -> None:
+    root = _root(project_dir)
+    ledger = ledger_path(session_id, project_dir)
+    if not root or not ledger or not actor:
+        return
+    started = started_declarations(session_transcript)
+    watch_new = {r for r in (_norm(d) for d in declared or ()) if r}
+    for paths in started.values():
+        watch_new.update(paths)
+    reports = {os.path.relpath(p, root) for p in glob.glob(os.path.join(glob.escape(root), REPORT_GLOB))}
+    if not reports and not watch_new and not os.path.exists(ledger):
+        return
+    os.makedirs(os.path.dirname(ledger), mode=0o700, exist_ok=True)
+    with open(ledger + ".lock", "a") as lock:
+        deadline = time.monotonic() + _LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    return
+                time.sleep(0.02)
+        try:
+            doc = _read(ledger) or {"v": VERSION, "note": NOTE, "head": "", "records": [], "watch": []}
+        except LedgerError:
+            return  # never repaired here: the gate refuses on it
+        records = doc["records"]
+        watch = set(r for r in doc.get("watch") or [] if _norm(r)) | watch_new
+        latest = _latest(records)
+        changed = sorted(watch - set(doc.get("watch") or [])) != []
+        reading = None
+        changes = []
+        for rel in sorted(reports | watch | {p for p in latest if isinstance(p, str)}):
+            path = os.path.join(root, rel)
+            entry = latest.get(rel)
+            stat = _stat(path)
+            if stat is None:
+                if entry and entry.get("sha") is not None:
+                    changes.append((rel, None, None, actor))
+                continue
+            if entry and entry.get("stat") == stat:
+                continue
+            sha = _sha(path)
+            if sha is None or (entry and entry.get("sha") == sha):
+                continue  # same content: the writer stays (a touch changes no writer)
+            writer = actor
+            if actor == MAIN and hooked is not None:
+                if reading is None:
+                    reading = _session_reading(session_transcript, call)
+                declarers = _running(records, rel, reading["notified"])
+                if declarers and not _previous_main_call_writes(reading, call, root, rel):
+                    writer = declarers[-1]
+            changes.append((rel, sha, stat, writer))
+        if hooked is not None:
+            last = records[-1] if records else None
+            seen = actor == MAIN or any(_is_call(r) and r.get("agent") == actor for r in records)
+            if changes or hooked.get("launch") or not seen or \
+                    (actor == MAIN and not (_is_call(last) and last.get("agent") == MAIN)):
+                extra = dict(hooked)
+                if not seen:
+                    try:
+                        from lib import obligation
+
+                        folder = _subagents(session_transcript)
+                        extra["link"] = _prompt_sha(obligation.read_first_record_prompt(
+                            folder / f"agent-{actor}.jsonl")) if folder and "/" not in actor else None
+                    except Exception:
+                        extra["link"] = None
+                _append_call(doc, actor, call, extra)
+                changed = True
+        for rel, sha, stat, writer in changes:
+            _append(doc, rel, sha, stat, writer, actor, call)
+            changed = True
+        doc["watch"] = sorted(watch)
+        if changed:
+            tmp = f"{ledger}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(doc, handle)
+            os.replace(tmp, ledger)
+
+
+def _chain(doc: dict, record: dict) -> None:
     records = doc["records"]
-    record = {"seq": len(records) + 1, "path": rel, "sha": sha, "stat": stat, "actor": writer,
-              "by": observer, "call": call if isinstance(call, str) else None, "at": time.time(),
-              "prev": doc.get("head", "")}
+    record.update(seq=len(records) + 1, at=time.time(), prev=doc.get("head", ""))
     record["h"] = _digest(record)
     records.append(record)
     doc["head"] = record["h"]
+
+
+def _append_call(doc: dict, agent: str, call: str, extra: dict) -> None:
+    _chain(doc, {"k": "call", "agent": agent, "path": None, "actor": agent, "by": agent, "call": call, **extra})
+
+
+def _append(doc: dict, rel: str, sha, stat, writer: str, observer: str, call) -> None:
+    _chain(doc, {"path": rel, "sha": sha, "stat": stat, "actor": writer, "by": observer,
+                 "call": call if isinstance(call, str) else None})
 
 
 # -- the gate's reading (SubagentStop) ------------------------------------------------
@@ -437,56 +542,37 @@ def _health(ledger: str) -> dict | None:
     return _read(ledger)
 
 
-def _call_time(transcript, call) -> float | None:
-    """The timestamp of the tool_use ``call`` in ``transcript``; None when it is not there."""
-    try:
-        handle = open(str(transcript), encoding="utf-8", errors="replace")
-    except (OSError, TypeError, ValueError):
-        return None
-    with handle:
-        for line in handle:
-            if call not in line:
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            message = record.get("message") if isinstance(record, dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            for block in content if isinstance(content, list) else ():
-                if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") == call:
-                    return _iso(record.get("timestamp"))
-    return None
-
-
-def _witnessed(record: dict, session_transcript, reading_cache: dict) -> bool:
-    """A subagent's record holds only when the CLI's transcript holds its observing call,
-    at about the time recorded."""
-    call, at, actor, by = record.get("call"), record.get("at"), record.get("actor"), record.get("by")
-    if not isinstance(call, str) or not call or not isinstance(at, (int, float)):
+def _trusted(records: list, index: int, rel: str) -> bool:
+    """A record naming a subagent as the writer holds only when the hook wrote its witnesses:
+    the call record of the observing caller's same call directly precedes it (records of that
+    call aside), the writer is a subagent the hook saw calling a tool, started by a QA dispatch
+    of the main agent whose launch record (written at that dispatch's PreToolUse) declares
+    ``rel``; the main agent's call observed it only for a background dispatch's subagent (whose
+    running observe judged)."""
+    record = records[index]
+    call, by, actor = record.get("call"), record.get("by"), record.get("actor")
+    if not isinstance(call, str) or not call or not isinstance(actor, str) or actor == MAIN:
         return False
-    if by == MAIN:  # a background QA's change the main agent's call saw first
-        if "r" not in reading_cache:
-            reading_cache["r"] = _session_reading(session_transcript)
-        reading = reading_cache["r"]
-        if actor not in reading["launched"] or call not in reading["calls"]:
-            return False
-        stamp = reading["calls"][call][2]
-    else:
-        if by != actor:
-            return False
-        folder = _subagents(session_transcript)
-        if folder is None or not isinstance(actor, str) or "/" in actor or not actor:
-            return False
-        stamp = _call_time(folder / f"agent-{actor}.jsonl", call)
-    return stamp is not None and stamp - _BEFORE <= at <= stamp + _AFTER
+    j = index - 1
+    while j >= 0 and not _is_call(records[j]) and records[j].get("call") == call and records[j].get("by") == by:
+        j -= 1
+    if j < 0 or not _is_call(records[j]) or records[j].get("agent") != by or records[j].get("call") != call:
+        return False
+    first, launch = _links(records, index).get(actor, (None, None))
+    if launch is None:
+        return False
+    spec = records[launch].get("launch") or {}
+    if rel not in (spec.get("declared") or []):
+        return False
+    return by in (actor, MAIN) if spec.get("bg") is True else by == actor
 
 
 def verdict(session_id: str, project_dir, rel: str, session_transcript=None) -> str | None:
     """"main" when report ``rel``'s current content comes from the main agent: the latest
-    record of that content is the main agent's, or a subagent's no transcript witnesses;
-    None when it does not (or no record holds it). LedgerError when the ledger cannot be
-    trusted (the gate refuses)."""
+    record of that content is the main agent's, or a subagent's whose witnesses the hook did
+    not write (_trusted); None when it does not (or no record holds it). LedgerError when the
+    ledger cannot be trusted (the gate refuses). ``session_transcript`` is not read: no
+    transcript content is evidence of a launch or a witness."""
     root = _root(project_dir)
     ledger = ledger_path(session_id, project_dir)
     rel = _norm(rel)
@@ -498,11 +584,12 @@ def verdict(session_id: str, project_dir, rel: str, session_transcript=None) -> 
     current = _sha(os.path.join(root, rel))
     if current is None:
         return None
-    cache: dict = {}
-    for record in reversed(doc["records"]):
-        if record.get("path") != rel or record.get("sha") != current:
+    records = doc["records"]
+    for index in range(len(records) - 1, -1, -1):
+        record = records[index]
+        if _is_call(record) or record.get("path") != rel or record.get("sha") != current:
             continue
-        if record.get("actor") == MAIN or not _witnessed(record, session_transcript, cache):
+        if record.get("actor") == MAIN or not _trusted(records, index, rel):
             return MAIN
         return None
     return None
