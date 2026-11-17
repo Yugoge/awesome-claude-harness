@@ -22,8 +22,10 @@ subagent, each other path by which an agent call could switch the harness or fak
                         a `>` elsewhere: `grep x ~/.claude/settings.json > /tmp/out` reads
   Write / Edit / MultiEdit / NotebookEdit
                         a file under <H>/.harness-switch/; the home's settings files; any
-                        settings*.json that would set disableAllHooks; a script outside a harness
-                        checkout that names the switch's state
+                        settings*.json whose resulting document sets disableAllHooks truthy
+                        (a falsy value passes; an unreadable document naming it does not); a
+                        file outside a harness checkout that names the switch's state: any kind
+                        but prose (.md, .txt, .rst), where only a line that writes it counts
   CronCreate / ScheduleWakeup / SendMessage
                         a prompt or message that types /harness (a scheduled prompt reaches
                         UserPromptSubmit as if typed)
@@ -1733,6 +1735,81 @@ def _new_text(tool: str, ti: dict) -> str:
     return str(ti.get("new_source") or "")
 
 
+PROSE = (".md", ".txt", ".rst")  # a file kind no shell or interpreter runs: naming the state there is prose
+STATE_WRITE = re.compile(  # a line of prose that writes, moves or removes what it names, or keeps it for a write
+    r"\b(?:rm|rmdir|touch|mkdir|mv|cp|ln|tee|dd|install|truncate|chmod|chown|unlink|shred|rsync|cd|pushd"
+    r"|mknod|mkfifo|exec|eval|subprocess|shutil|pathlib|os\.\w+|fs\.\w+)\b|\bsed\b.*\s-[A-Za-z]*i"
+    r"|\bperl\b.*\s-[A-Za-z]*i|[A-Za-z_][A-Za-z0-9_]*=|(?<![-=])>(?!=)|\b(?:open|write\w*|unlink|remove\w*"
+    r"|rename|replace|mkdirs?|makedirs|rmtree|copy\w*|move|symlink\w*|link|touch|appendFile\w*|writeFile\w*"
+    r"|system|Path)\s*\(")
+QUOTE_MARK = re.compile(r"\A\s*(?:>\s*)+")  # a Markdown blockquote's markers, no redirect
+
+
+def _names_state(names: tuple, text: str) -> bool:
+    """Whether a written file's text names the switch's state in a way that may change it: any
+    mention in a file of any kind but prose (.md, .txt, .rst; by every one of `names`, the path as
+    written and as resolved, so a link named x.sh is no prose); in prose, a line that names it and
+    writes (a writing command, a `>` redirect, sed -i, a `cd` into it, an assignment of it, a
+    write call)."""
+    if harness_switch.DIR_NAME not in text:
+        return False
+    if not all(n.lower().endswith(PROSE) for n in names):
+        return True
+    return any(harness_switch.DIR_NAME in line and STATE_WRITE.search(QUOTE_MARK.sub("", line))
+               for line in text.splitlines())
+
+
+class _Pairs(dict):
+    """A JSON object that keeps every (key, value) pair, a repeated key's too."""
+
+    def __init__(self, pairs):
+        super().__init__(pairs)
+        self.pairs = pairs
+
+
+def _truthy(value) -> bool:
+    """JavaScript's truth of a JSON value: false, null, 0 and "" are false, all else true."""
+    return not (value is None or value is False or value == "" or
+                (isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0))
+
+
+def _disable_values(text: str):
+    """Every value the top-level object of `text` gives disableAllHooks (a repeated key's each);
+    None when the text is no JSON object the CLI would load."""
+    try:
+        doc = json.loads(text.lstrip("\ufeff"), object_pairs_hook=_Pairs, parse_constant=_no_constant)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(doc, _Pairs):
+        return None
+    return [json.dumps(v, sort_keys=True) for k, v in doc.pairs if k == "disableAllHooks"]
+
+
+def _sets_disable_all_hooks(tool: str, ti: dict, path: str, text: str) -> bool:
+    """Whether a call on a settings*.json leaves disableAllHooks truthy: a Write whose document
+    holds a truthy value; an Edit or MultiEdit whose result holds one it did not hold before. A
+    document that cannot be computed or read as JSON counts when the call's text names the key."""
+    before = None
+    if tool in ("Edit", "MultiEdit"):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                before = fh.read()
+        except (FileNotFoundError, NotADirectoryError):
+            before = None
+        except (OSError, UnicodeDecodeError):
+            before = False
+    after = _edit_result(tool, ti, before) if tool in ("Write", "Edit", "MultiEdit") else None
+    values = _disable_values(after) if after is not None else None
+    if values is None:
+        return "disableAllHooks" in text
+    if not any(_truthy(json.loads(v)) for v in values):
+        return False
+    if tool == "Write" or "disableAllHooks" in text:
+        return True
+    old = _disable_values(before) if isinstance(before, str) else None
+    return old != values
+
+
 def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
     raw = ti.get("file_path") or ti.get("notebook_path") or ""
     if not isinstance(raw, str) or not raw:
@@ -1742,7 +1819,7 @@ def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
         return refuse("this %s writes the switch's state (%s)" % (tool, raw))
     text = _new_text(tool, ti)
     name = os.path.basename(path)
-    if SETTINGS_ANY.fullmatch(name) and "disableAllHooks" in text:
+    if SETTINGS_ANY.fullmatch(name) and _sets_disable_all_hooks(tool, ti, path, text):
         return refuse("this %s sets disableAllHooks in %s, which would switch every hook off" % (tool, raw))
     if path in _settings_files() and not _allow_settings(cwd):
         return refuse("this %s writes the harness home's %s" % (tool, name))
@@ -1752,7 +1829,7 @@ def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
         change = _settings_change(_held(named[0]), _edit_result(tool, ti, before))
         if change and not _granted(tool, ti, data or {}):
             return _refuse_settings(tool, change, raw)
-    if harness_switch.DIR_NAME in text and not _in_harness_checkout(path):
+    if _names_state((name, os.path.basename(raw)), text) and not _in_harness_checkout(path):
         return refuse("this %s writes a file naming the switch's state (%s), outside the harness" % (tool, raw))
     return 0
 
