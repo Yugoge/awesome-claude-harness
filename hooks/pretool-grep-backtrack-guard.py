@@ -296,15 +296,16 @@ def _extract_patterns(tokens):
 
 def _text(word):
     """A word's value as the shell passes it when no file matches its globs, with
-    each computed part kept as written."""
+    each computed part kept as written in the command."""
+    offs = [word.raw.off(i) for i in range(len(word.raw))]
     out = []
     for p in word.parts:
         if p.kind in _LITERAL_PARTS:
             out.append(p.text)
-        elif p.kind == "param":
-            out.append("${%s}" % p.text)
-        else:
-            out.append("$(%s)" % p.text)
+            continue
+        a = offs.index(p.span[0]) if p.span[0] in offs else None
+        b = offs.index(p.span[1]) if p.span[1] in offs else len(word.raw.text)
+        out.append(word.raw.text[a:b] if a is not None else "$" + p.text)
     return "".join(out)
 
 
