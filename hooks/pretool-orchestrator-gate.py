@@ -27,7 +27,12 @@ Three-tier policy for the main agent:
      dispatch in the same message would otherwise refill the budget.
   3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are blocked even
      with /do consent; an /allow grant naming the tool is the one way
-     through.
+     through. One exception (OB-L45): ExitPlanMode passes, uncounted, while
+     the payload's own top-level permission_mode, which the CLI sets and the
+     model cannot, is exactly "plan" (user_plan_mode): the user put the session
+     in plan mode, and ExitPlanMode is how the plan is put to them. It passes
+     again after the user rejects a plan and the agent revises it, since the
+     user answers each call. tool_input never counts as plan mode.
 
 bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
 increments it. An Agent (subagent) dispatch resets it to
@@ -140,6 +145,14 @@ PERMANENTLY_BLOCKED = {
     "EnterPlanMode",
     "ExitPlanMode",
 }
+
+
+def user_plan_mode(data: dict) -> bool:
+    """True iff the CLI reports the session in plan mode: the payload's top-level
+    permission_mode is exactly the string "plan". The CLI writes that field; the
+    model writes only tool_input, which is never read here (OB-L45)."""
+    return data.get("permission_mode") == "plan"
+
 
 BASH_MAX_CONSECUTIVE = 5
 NON_WHITELIST_MAX_CONSECUTIVE = 1
@@ -521,7 +534,9 @@ def block_permanent(tool_name: str, data: dict) -> None:
     sys.stderr.write(
         f"[Orchestrator Gate] Permanently blocked: {tool_name} (/do does not unlock it).\n"
         f"Delegate to a subagent (Agent tool), or the user grants it once with /allow {tool_name}.\n"
-        f"Whitelisted tools: {allowed}\n"
+        + ("ExitPlanMode passes without a grant only while the user has put the session in plan mode.\n"
+           if tool_name == "ExitPlanMode" else "")
+        + f"Whitelisted tools: {allowed}\n"
     )
     sys.exit(2)
 
@@ -635,6 +650,13 @@ def main():
         pass
 
     if tool_name in PERMANENTLY_BLOCKED:
+        # OB-L45: the user switched the session into plan mode (the CLI's own
+        # permission_mode, never tool_input), so presenting the plan is theirs
+        # to answer. Uncounted and no state write: a rejected plan is revised and
+        # presented again in the same turn. EnterPlanMode has no such exception,
+        # and /do (checked below) still unlocks neither.
+        if tool_name == "ExitPlanMode" and user_plan_mode(data):
+            sys.exit(0)
         block_permanent(tool_name, data)
 
     if has_do_consent(data):

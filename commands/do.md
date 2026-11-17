@@ -25,7 +25,7 @@ State in one sentence what `TASK` changes and what the end state looks like.
 
 ### Step 2: Develop
 
-Do the work yourself: dispatching a subagent exits 2 this turn (`hooks/pretool-do-block-subagents.py`), and the orchestrator gate passes every other tool except EnterPlanMode and ExitPlanMode. Every other hook still applies.
+Do the work yourself: dispatching a subagent exits 2 this turn (`hooks/pretool-do-block-subagents.py`), and the orchestrator gate passes every other tool except EnterPlanMode and ExitPlanMode (ExitPlanMode passes, with or without /do, only while the user has the session in plan mode). Every other hook still applies.
 
 The whole `TASK` is done this turn, with nothing left for later: `do.status` `"completed"` (Step 5) means exactly that, and unfinished work is never reported as completed.
 

@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T10:29:36Z*
-**Total entries**: 986
+*Last updated: 2026-11-17T12:00:00Z*
+**Total entries**: 987
 **Convention**: kebab
 
 ## Tree
@@ -281,6 +281,7 @@ dot-claude/
 │   │   ├── `test_one_process_gates.py` - - The runner keeps each rule's decision: a rule runs as its own hook would run alone,
 │   │   ├── `test_orchestrator_gate_in_flight.py` - P9 reworded the gate's refusals (the Bash limit's and the non-whitelisted limit's first line, the
 │   │   ├── `test_orchestrator_gate_overnight_budget.py` - hooks/pretool-orchestrator-gate.py allows the main agent one call per non-whitelisted tool name per
+│   │   ├── `test_orchestrator_gate_plan_mode.py` - hooks/pretool-orchestrator-gate.py listed ExitPlanMode in PERMANENTLY_BLOCKED, so when the user
 │   │   ├── `test_orchestrator_gate_read_budget.py` - hooks/pretool-orchestrator-gate.py allowed the main agent one call per non-whitelisted tool name ...
 │   │   ├── `test_orchestrator_gate_read_only_bash.py` - hooks/pretool-orchestrator-gate.py counted every main-agent Bash call toward its cap of 5, so a t...
 │   │   ├── `test_orchestrator_gate_refused_refund.py` - hooks/pretool-orchestrator-gate.py counts a call at PreToolUse, before the other hooks have decided
