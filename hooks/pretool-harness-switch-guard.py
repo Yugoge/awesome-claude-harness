@@ -95,7 +95,7 @@ GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "c
                  "for-each-ref", "show-ref", "cherry", "range-diff", "count-objects", "verify-commit",
                  "verify-tag", "show-branch", "check-ignore", "check-mailmap", "check-ref-format", "var"}
 GIT_WRAPPERS = ("env", "command", "exec", "nohup", "setsid", "nice", "ionice", "stdbuf", "timeout", "time",
-                "xargs", "sudo", "doas")  # a wrapper whose inner git is judged as git
+                "xargs", "sudo", "doas", "flock", "chrt", "taskset", "unbuffer")  # its inner git is judged as git
 GIT_ASSIGNING_WRAPPERS = ("env", "sudo")  # a wrapper that takes NAME=value words before its command
 GIT_EQ_OPTS = shell_parse.GIT_GLOBAL_VALUE_OPTS | {"--exec-path", "--list-cmds"}  # git's options that take =value
 GIT_PROGRAM_KEY = re.compile(  # a config key whose value names a program git runs, or more config
@@ -119,9 +119,11 @@ GIT_VIEWER_ENV = ("GIT_PAGER", "PAGER") + GIT_EDITOR_ENV
 GIT_EDITOR_FREE = GIT_READ_ONLY - {"add"}  # readers that start no editor (add -e / -p does)
 GIT_TREE_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")  # where git finds its repository and work tree
 GIT_TRACE_ENV = re.compile(r"GIT_TRACE\w*\Z")  # a trace variable: an absolute path is a file git appends to
+GIT_WRITE_ENV = re.compile(  # a variable naming a file or directory git creates and writes, whatever it runs
+    r"GIT_(?:INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)\Z")
 GIT_CARRIED = re.compile(  # a variable that hands git a program, config or repository: its value matters
     r"(?:GIT_(?:EXTERNAL_DIFF|SSH_COMMAND|SSH|ASKPASS|PAGER|EDITOR|SEQUENCE_EDITOR|EXEC_PATH|DIR|COMMON_DIR"
-    r"|WORK_TREE|CONFIG\w*|TRACE\w*)|SSH_ASKPASS|PAGER|EDITOR|VISUAL|HOME|XDG_CONFIG_HOME)\Z")
+    r"|WORK_TREE|TEMPLATE_DIR|CONFIG\w*|TRACE\w*|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)|SSH_ASKPASS|PAGER|EDITOR|VISUAL|HOME|XDG_CONFIG_HOME)\Z")
 UNKNOWN = "/?unknown-value?"  # the value of a variable the command sets in a way not read here
 LESS_ENV = re.compile(r"\bLESS\w*")  # less's own environment: LESS, LESSOPEN, LESSKEY, ...
 GIT_CONFIG_SOURCE = re.compile(  # where git reads its global and system config from (GIT_TREE_ENV aside)
@@ -131,6 +133,20 @@ GIT_ABBREVIATING = {"grep": ("textconv", "open-files-in-pager"), "cat-file": ("t
                     "range-diff": ("output", "ext-diff", "textconv")}  # readers whose options git abbreviates
 GIT_HARMLESS_LONG = ("text",)  # a reader's own option spelled as a prefix of one of those
 GIT_GREP_ARG_SHORTS = "efABCm"  # git grep's short options whose value is the rest of the word
+GIT_CONFIG_VALUE_OPTS = ("-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url")
+GIT_CONFIG_LONG = (  # git config's long options (old flags and the subcommands' options); git takes a unique prefix
+    "global", "system", "local", "worktree", "file", "blob", "get", "get-all", "get-regexp", "get-urlmatch",
+    "replace-all", "add", "unset", "unset-all", "rename-section", "remove-section", "list", "fixed-value",
+    "edit", "get-color", "get-colorbool", "type", "no-type", "bool", "int", "bool-or-int", "path",
+    "expiry-date", "null", "name-only", "includes", "no-includes", "show-origin", "show-scope", "show-names",
+    "default", "comment", "value", "url", "all", "regexp", "append")
+GIT_CONFIG_SHORT_VALUE = "ft"  # -f <file>, -t <type>; -l, -e, -z take none
+GIT_INIT_LONG = ("template", "bare", "quiet", "shared", "separate-git-dir", "initial-branch", "object-format",
+                 "ref-format")  # git init's long options; git takes a unique prefix
+GIT_INIT_VALUE = ("separate-git-dir", "initial-branch", "object-format", "ref-format", "template")
+GIT_CONFIG_NO_SET = ("--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool",
+                     "--list", "-l", "--unset", "--unset-all", "--remove-section", "--blob", "-e", "--edit",
+                     "get", "list", "unset", "remove-section", "edit")  # git config forms that set no value
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
@@ -402,8 +418,10 @@ def _git(words: list, pre=(), less_env: bool = False):
     programs; `env`, whether an assignment before it hands it a program or config naming one
     (_env_program); `source`, whether an assignment before it moves where it reads config from
     (HOME, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM: GIT_CONFIG_SOURCE); `gitdirs`, its
-    GIT_DIR= / GIT_COMMON_DIR= and --git-dir values; `traces`, the files GIT_TRACE* variables
-    name. A GIT_WORK_TREE= and a -c core.worktree= are --work-tree directories too. `pre` holds
+    GIT_DIR= / GIT_COMMON_DIR= and --git-dir values; `traces`, what git writes whatever it runs:
+    the files GIT_TRACE* variables name (an absolute path) and every GIT_INDEX_FILE,
+    GIT_OBJECT_DIRECTORY and GIT_ALTERNATE_OBJECT_DIRECTORIES (each of its `:` parts) value, one
+    whose value is not read here (UNKNOWN, or an expansion the call cannot resolve) as UNKNOWN. A GIT_WORK_TREE= and a -c core.worktree= are --work-tree directories too. `pre` holds
     the GIT_TREE_ENV assignments an earlier export hands it; an editor counts only where the
     subcommand starts one (GIT_EDITOR_FREE); `less_env` as _harmless_viewer's."""
     i, dirs, assigned, source, gitdirs, trees, traces = 0, [], [], False, [], [], []
@@ -418,6 +436,9 @@ def _git(words: list, pre=(), less_env: bool = False):
             trees.append(("--work-tree", value))
         elif GIT_TRACE_ENV.match(name) and value.startswith(("/", "~")):
             traces.append(value)
+        elif GIT_WRITE_ENV.match(name):
+            parts = value.split(":") if name == "GIT_ALTERNATE_OBJECT_DIRECTORIES" else [value]
+            traces.extend(UNKNOWN if value == UNKNOWN or "${" in p else p for p in parts if p)
         elif GIT_CONFIG_SOURCE.match(w):
             source = True
 
@@ -527,6 +548,125 @@ def _grep_opens_program(word: str, less_env: bool = False) -> bool:
         if c in GIT_GREP_ARG_SHORTS:
             return False
     return False
+
+
+def _long_option(word: str, names: tuple):
+    """The long option `word` (`--name` or `--name=value`) names among `names`, as git's
+    parse-options reads it: the exact name, else the one name it is a unique prefix of, a
+    `--no-` negation read the same way; None when it names none or several."""
+    name = word[2:].partition("=")[0]
+    if name in names:
+        return name
+    hits = [n for n in names if name and n.startswith(name)]
+    if len(hits) == 1:
+        return hits[0]
+    if name.startswith("no-") and _long_option("--" + name[3:], names):
+        return "no-" + _long_option("--" + name[3:], names)
+    return None
+
+
+def _config_sets_program(rest: list, ran_in: list, in_home: bool, settings: set, less_env: bool) -> bool:
+    """Whether `git config <rest>` persists a program key (_program_setting, judged as a -c: alias.*,
+    core.pager, core.hooksPath, include.path, a `!` value, ...) in a config the harness home's git
+    reads: its repository's (in_home), --global / --system run there, or a --file / -f inside the
+    home. `git config <key> <value>`, --add, --replace-all and `set` set one; --get*, --list, -l,
+    --unset*, --remove-section, --blob, --edit and their `get` / `list` / ... words set none. A
+    section rename (--rename-section, rename-section) can make any section a program key's: it
+    counts as one. Options are read as git reads them: a long option by any unique prefix
+    (`--ty`, `--fil=`, `--rename-s`), short ones clustered with -f / -t taking the rest of the word
+    or the next one (`-t path`, `-zt path`), and every word after `--` positional; an unknown or
+    ambiguous option fails closed where the config, or any of its words, is in the home."""
+    files, pos, rename, unknown, it = [], [], False, False, iter(rest)
+    for w in it:
+        if w == "--":
+            pos += list(it)
+            break
+        if w.startswith("--"):
+            opt, eq, value = w[2:].partition("=")
+            name = _long_option(w, GIT_CONFIG_LONG)
+            if name is None:
+                unknown = True
+                continue
+            if "--" + name in GIT_CONFIG_NO_SET:
+                return False
+            if name == "rename-section":
+                rename = True
+            elif "--" + name in GIT_CONFIG_VALUE_OPTS:
+                value = value if eq else next(it, "")
+                files += [value] if name == "file" else []
+        elif w.startswith("-") and w != "-":
+            for j, c in enumerate(w[1:], 1):
+                if c in "le":
+                    return False
+                if c in GIT_CONFIG_SHORT_VALUE:
+                    value = w[j + 1:] or next(it, "")
+                    files += [value] if c == "f" else []
+                    break
+                if c != "z":
+                    unknown = True
+        else:
+            pos.append(w)
+    if files:
+        in_home = _in_home([_resolve(f, r) for f in files for r in ran_in], settings)
+    if pos[:1] and pos[0] in GIT_CONFIG_NO_SET:
+        return False
+    if unknown:  # git may read any word as its file: one in the home, or the home's own config, fails closed
+        return in_home or _in_home([_resolve(w.partition("=")[2] if w.startswith("-") else w, r)
+                                    for w in rest for r in ran_in if w.strip("-")], settings)
+    if rename or pos[:1] == ["rename-section"]:
+        return in_home
+    pos = pos[1:] if pos[:1] == ["set"] else pos
+    return in_home and len(pos) >= 2 and _program_setting("-c", pos[0] + "=" + pos[1], less_env)
+
+
+def _config_attached_files(words: list, git) -> list:
+    """The <file> values `git config` takes attached in a short-option cluster (`-fsettings.json`,
+    `-zf<file>`), as git reads them: before `--`, past the values long options and -t take. They
+    are written words, judged as the spaced `-f <file>` and `--file=<file>` forms are."""
+    if git is None or git.sub is None or words[git.sub] != "config":
+        return []
+    out, it = [], iter(words[git.sub + 1:])
+    for w in it:
+        if w == "--":
+            break
+        if w.startswith("--"):
+            name = _long_option(w, GIT_CONFIG_LONG)
+            if name and "--" + name in GIT_CONFIG_VALUE_OPTS and "=" not in w:
+                next(it, None)
+        elif w.startswith("-") and w != "-":
+            for j, c in enumerate(w[1:], 1):
+                if c in GIT_CONFIG_SHORT_VALUE:
+                    if w[j + 1:] and c == "f":
+                        out.append(w[j + 1:])
+                    elif not w[j + 1:]:
+                        next(it, None)
+                    break
+    return out
+
+
+def _init_template(rest: list, ran_in: list, settings: set, env_template: bool) -> bool:
+    """Whether `git init <rest>`, run from each of `ran_in`, copies a template directory the
+    command chooses (--template=<dir> by any unique prefix, or GIT_TEMPLATE_DIR, `env_template`)
+    into a repository in the harness home: where git runs, or its <directory> operand. Its hooks
+    and config then run there, as -c init.templateDir would."""
+    template, target, it = env_template, None, iter(rest)
+    for w in it:
+        if w == "--":
+            target = next(it, None) if target is None else target
+            break
+        if w.startswith("--"):
+            name = _long_option(w, GIT_INIT_LONG)
+            if name == "template" or name is None:
+                template = True  # an unknown or ambiguous option fails closed
+            if name in GIT_INIT_VALUE and "=" not in w:
+                next(it, None)
+        elif w in ("-b",):
+            next(it, None)
+        elif not w.startswith("-") and target is None:
+            target = w
+    if not template:
+        return False
+    return _in_home(ran_in + ([_resolve(target, r) for r in ran_in] if target else []), settings)
 
 
 def _read_only(words: list) -> bool:
@@ -1208,6 +1348,9 @@ def settings_writes(command: str, cwd: str) -> list:
         if not plain:
             continue
         dirs = tuple(dict.fromkeys(_chained(chain, cmd, every_dir) + git_dirs))
+        git = _git(words)
+        written = list(written) + list(git.traces if git is not None else [])  # GIT_INDEX_FILE, GIT_TRACE*, ...
+        written += _config_attached_files(words, git)  # `-f<file>`: git config writes that file
         head = os.path.basename(plain[0])
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
@@ -1455,14 +1598,24 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
     shared = _shared_assignments(segments)  # an export, a lone assignment, or one before a shell
     shared += _unknown_exports(segments, shared)  # exported with a value set by printf -v, read, ...
     exported = any(GIT_CONFIG_SOURCE.match(x) for x in shared)
-    carried = [x for x in shared if x.split("=", 1)[0] in GIT_TREE_ENV or GIT_TRACE_ENV.match(x.split("=", 1)[0])]
+    carried = [x for x in shared if x.split("=", 1)[0] in GIT_TREE_ENV
+               or GIT_TRACE_ENV.match(x.split("=", 1)[0]) or GIT_WRITE_ENV.match(x.split("=", 1)[0])]
     less_env = bool(LESS_ENV.search(command))
     for (words, written), cmd in zip(segments, sites):
         dirs = _chained(chain, cmd, every_dir)
         git, bases, foreign = _git(words, carried, less_env), dirs, False
         if git is not None:
-            written = list(written) + git.traces  # GIT_TRACE*=<absolute path> appends git's trace there
+            # GIT_TRACE*=<absolute path> appends git's trace there; GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY and
+            # GIT_ALTERNATE_OBJECT_DIRECTORIES name what git writes; `git config -f<file>` writes <file>
+            written = list(written) + git.traces + _config_attached_files(words, git)
             bases = list(dict.fromkeys(dirs + [g for d in dirs for g in _git_dirs(words, d)]))
+            if UNKNOWN in git.traces:
+                return refuse("this Bash command runs git with GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, "
+                              "GIT_ALTERNATE_OBJECT_DIRECTORIES or a GIT_TRACE* variable set to a value not read "
+                              "here (set by read, printf -v, an expansion, ...): git writes where it names, which "
+                              "can be the home's settings or the switch's state")
+            if any(_in_state(_resolve(t, b)) for t in git.traces for b in bases):
+                return refuse("this Bash command has git write into the switch's state (%s)" % harness_switch.DIR_NAME)
             ran_in = [(_git_dirs(words, d) or [d])[-1] for d in dirs]  # from each directory it runs in
             editor = not (git.sub is not None and words[git.sub] in GIT_EDITOR_FREE)
             trees = [d for opt, d in git.dirs if opt == "--work-tree"]
@@ -1478,6 +1631,17 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                               "program or config (GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_<n>, GIT_EXTERNAL_DIFF, "
                               "GIT_SSH_COMMAND, GIT_PAGER, PAGER, GIT_EDITOR, EDITOR, ...), which can rewrite the "
                               "home's settings or the switch's state")
+            if git.sub is not None and words[git.sub] == "config" and _config_sets_program(
+                    words[git.sub + 1:], ran_in, in_home, settings, less_env):
+                return refuse("this Bash command has git config persist a key naming a program (alias.*, "
+                              "core.pager, core.hooksPath, include.path, ...) or a `!` value in config the harness "
+                              "home's git reads, which can rewrite the home's settings or the switch's state")
+            if git.sub is not None and words[git.sub] == "init" and _init_template(
+                    words[git.sub + 1:], ran_in, settings,
+                    any(x.startswith("GIT_TEMPLATE_DIR=") for x in shared + words[:git.sub])):
+                return refuse("this Bash command runs git init on a repository in the harness home with a "
+                              "template directory the command chooses (--template, GIT_TEMPLATE_DIR), whose hooks "
+                              "and config can rewrite the home's settings or the switch's state")
             if git.sub is not None and words[git.sub] == "grep" and _in_home(ran_in, settings) and any(
                     _grep_opens_program(w, less_env) for w in words[git.sub + 1:]):
                 return refuse("this Bash command runs git grep in the harness home with -O<cmd> / "
@@ -1493,7 +1657,7 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                 if git.sub is not None and _in_home([_resolve(w.split("=", 1)[-1] if w.startswith("-") else w, r)
                                                      for w in words[git.sub + 1:] for r in ran_in], settings):
                     foreign = True  # git reads a harness-home path under config the command chooses
-        for word in words:
+        for word in words + _config_attached_files(words, git):  # `git config -f<file>`, as `-f <file>`
             token = word.split("=", 1)[-1]
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):
                 return refuse("this Bash command runs the switch (%s)" % os.path.basename(token))
