@@ -465,9 +465,9 @@ def test_option_table_finds_the_subcommand(options):
     assert inv.subcommand == "commit"
 
 
-def test_guard_option_regex_is_built_from_the_table():
-    match = GUARD.GIT_COMMIT_INVOCATION_RE.search("git --attr-source HEAD -C /o commit -m x")
-    assert match and GUARD._extract_dash_c_from_span(match.group(1), "") == "/o"
+def test_guard_commit_reader_skips_the_option_table():
+    (rec,) = GUARD._commit_records("git --attr-source HEAD -C /o commit -m x")
+    assert rec["dirs"] == ["/o"] and rec["args"] == ["-m", "x"]
 
 
 # ---------------------------------------------------------------------------

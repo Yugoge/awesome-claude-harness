@@ -2,158 +2,31 @@
 """
 PreToolUse Hook: Agent git-privilege guard.
 
-Scope: Runs on EVERY Bash tool call in agent (subagent + main-agent
-orchestrator) contexts, regardless of whether the session is overnight
-or interactive. The b5d447e regression (2026-04-21 17:45 UTC) which
-this guard exists to prevent - a 93-file `git commit` + `git push`
-sweep authored by the orchestrator with no human signoff - happened in
-an INTERACTIVE session (JSONL message 293 of session
-962de59f-fe0b-416e-b88b-7345fdf569e2, prompt `全部commit push`,
-no overnight-state-*.json present). Gating this hook on overnight-
-context only would let that exact regression class pass through; the
-guard must be always-on per spec 5.2.4 line 240-241.
+Runs on every Bash call, for subagents and the main agent, in interactive and
+overnight sessions alike.
 
-The whitelists below preserve the legitimate paths:
-  - `^auto-bulk: end-of-cycle commit for ` blessed bridge from /merge
-  - /merge's own wrapper hooks/merge.sh, whose subprocess runs git merge
-    where no hook sees it
-  - reset to HEAD (non-destructive)
-  - human-driven commits: a human types /commit (or /allow git commit
-    to grant one call); the grant it writes is what lets the commit pass.
+Refused for an agent:
+  - git commit, unless a /commit grant bound to the commit's repository,
+    branch and HEAD authorizes it, or its subject is
+    `auto-bulk: end-of-cycle commit for <branch>` while a /commit --bulk
+    sentinel is live. Stderr literal: `BLOCKED: agent git commit`.
+  - git merge (any form; /merge merges inside hooks/merge.sh, whose subprocess
+    no hook sees). Stderr literal: `BLOCKED: agent git merge`.
+  - git push (any form; /push pushes inside hooks/push.sh). Stderr literal:
+    `BLOCKED: agent git push`. A push that forces, deletes or mirrors refs is
+    refused before /allow and /do are consulted.
+  - git reset --hard. Stderr literal: `BLOCKED: agent git reset --hard`.
+  - direct ref mutation (`git update-ref`, branch force/delete/rename, a
+    writable HEAD symbolic-ref change) and commit-object plumbing.
 
-Forbidden agent operations:
-  - git commit -m '<msg>' whose message does NOT match
-    `^auto-bulk: end-of-cycle commit for ` (the blessed bridge from
-    /merge per spec section 5.2.1.2 R2). Stderr literal:
-    `BLOCKED: agent git commit`.
-  - git merge (any form; /merge merges inside hooks/merge.sh). Stderr
-    literal: `BLOCKED: agent git merge`.
-  - git push (any form). Stderr literal:
-    `BLOCKED: agent git push`.
-  - every hard reset form. Stderr literal:
-    `BLOCKED: agent git reset --hard`.
-  - direct ref mutation (`git update-ref`, branch force/delete/rename,
-    or writable HEAD symbolic-ref changes).
-
-Allowed: git add, git status, git log, git diff, git show, git blame,
-git ls-files, git ls-tree, git restore (working-tree only), git branch
-(list), git rev-list, git rev-parse, git symbolic-ref, git for-each-ref,
-and git stash list/show/pop (non-destructive forms). Hard reset and direct
-ref mutation are not agent-accessible.
-
-/do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
-releases the rules on git merge, forbidden plumbing, hard reset and direct ref
-mutation, and adds none (E2). What one of them refuses without it stays refused
-when it can move the protected branch's ref, or when the guard cannot tell the
-branch it lands on (_moves_protected_branch). git commit, git push and a git
-command the guard cannot classify are judged as without it. Each block then
-names the commands that land them (/close then /commit, /push, /merge).
-
-Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
-
-Revision history:
-  2026-04-25 (Scheme 6 manifest-validation): added two narrow
-  authorized-exemption paths for `git push` and `git commit` driven by
-  the new `/push` and `/commit` slash-command wrappers. Each path
-  requires BOTH:
-    1. an OS-level env var (`CLAUDE_PUSH_COMMAND_ACTIVE=1` for push,
-       `CLAUDE_COMMIT_COMMAND_ACTIVE=1` for commit) set by the wrapper
-       in the child's environment (NOT inline-prepended on the agent
-       command line), AND
-    2. a single-use grant manifest at
-       `<state dir>/claude-{push|commit}-grant-<sid>.json` whose contents
-       bind the operation to a specific branch + expected_head + remote
-       (push) or task_id + allowed_files + expected_message_sha256
-       (commit).
-  Inline-env injection (e.g. `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push ...`
-  on a single Bash call) is rejected by literal-substring scan of the
-  raw command text BEFORE the env-var check, defeating the b5d447e
-  attack class even if the agent learns the env name. The grant file
-  is unlinked on first valid consumption (single-use); validation
-  failures DO NOT consume the grant (forensics + brute-force resistance).
-  Cross-bypass is blocked: the push env name does NOT bypass commit,
-  and vice versa.  Authority: spec ba-spec-20260425-redev2.md §4.1
-  (AC-A1..AC-A17), close-report-20260425-push-commit-debate.md
-  (Scheme 6 verdict CLOSE: YES).
-  2026-04-25 (Option alpha): made always-on. Removed the overnight-
-  context gate after confirming b5d447e occurred in an interactive
-  session - the gate would have let the regression through. The
-  `_is_overnight_active()` helper is retained as dead code for
-  reference but is no longer consulted by main().
-  2026-04-25 (earlier): replaced the dead-code `CLAUDE_OVERNIGHT_ACTIVE`
-  env-var path with the canonical state-file probe.
-  2026-07-15 (repo/branch/HEAD parity fix): `_evaluate_commit` previously
-  validated ONLY `expires_at` before honoring a commit grant -- unlike
-  `_evaluate_push`, which additionally binds `branch` (_validate_push_grant_branch),
-  `expected_head` (_validate_push_grant_head), and `remote`
-  (_validate_push_grant_remote) to the grant's issuance-time values. A
-  validly-issued, unexpired commit grant could therefore authorize a commit
-  in a different repository/branch/commit than the one it was written for.
-  Added `_validate_commit_grant_repo` / `_validate_commit_grant_branch` /
-  `_validate_commit_grant_head`, mirroring the push-grant validators, plus
-  `_extract_commit_dash_c_dir` to resolve the actual target directory of the
-  commit invocation (changelog-analyst always commits via
-  `git -C "${GIT_ROOT}" commit ...`, never a bare `git commit` in its own
-  CWD -- validating against the hook's own CWD unconditionally would
-  wrongly reject every nested ~/.claude repo commit). `write-commit-grant.py`
-  now records `repo_root`/`branch`/`expected_head` at issuance time.
-  2026-07-16 (commit-grant redirect-vector closure): the 2026-07-15 binding
-  only inspected `-C <dir>`, so a commit could still land in a DIFFERENT repo
-  via (1) `--git-dir`/`--work-tree`/`--namespace` global flags, (2) inline
-  `GIT_DIR=`/`GIT_WORK_TREE=`/`GIT_COMMON_DIR=` env assignment, (3) ambient
-  GIT_DIR/GIT_WORK_TREE env, or (4) a second chained `git -C <other> commit`
-  (only the first invocation was validated). `_enforce_commit_grant_binding`
-  now: blocks ambient redirect env; enumerates EVERY commit invocation via
-  `_iter_commit_invocations` (segment + token aware); hard-blocks any
-  flag/inline-env redirect (fail closed, mirroring "multiple -C -> block");
-  and validates repo/branch/HEAD per invocation against its own resolved -C
-  target. The parallel PUSH-grant redirect hole is documented as a separate
-  follow-up (see comment atop `_evaluate_push`) and intentionally left unfixed.
-  2026-08-31 (single-use closure, audit round 3 F4/F5/F6): three semantic holes
-  in the commit grant's single-use guarantee.
-    F4 - "expected_head neutralizes a left-in-place grant" was false. A grant
-    that cannot be deferred to PostToolUse (no per-event key, rename failure,
-    pointer-write failure) is left in place, and the claim that a successful
-    commit moves HEAD past it does not hold: `git reset --soft <expected_head>`
-    (an operation this guard permits) restores the matching tuple, and a
-    deterministic `--amend` (fixed author/committer dates) reproduces the SAME
-    sha so HEAD never moves at all. Both were reproduced against real repos.
-    Spentness is therefore no longer INFERRED from repo state; the guard writes
-    its own validation-time use record (`<grant>.json.use`) holding an
-    APPEND-ONLY witness of the target repo. See `_repo_use_witness`.
-    F5 - every commit invocation in one Bash call was validated against the same
-    pre-execution HEAD and the grant locked once, so one grant authorized N
-    commits in one call. Now refused; see `_enforce_commit_grant_binding`.
-    F6 - the auto-bulk deferral honored ANY parseable unexpired grant file with
-    no repo/branch/HEAD binding check, so a dead leftover or a foreign-repo
-    grant blocked auto-bulk for its whole TTL. The deferral now applies the same
-    binding + spent test the commit validation applies; see
-    `_grant_can_authorize_here`.
-  2026-10-06 (bearer-ticket closure): every check above answers "is this grant
-  still valid HERE?" and none answered "is the caller entitled to spend it?" or
-  "did the pipeline this grant exists to authorize actually run?". A grant was a
-  BEARER ticket. Measured bypass: a seat received a bare `/commit` first line,
-  which lit the user-intent sentinel; the sentinel alone authorized
-  `scripts/write-commit-grant.py` to mint; the minted grant alone authorized a
-  bare `git commit`. 14 commits landed that way with changelog-analyst never
-  dispatched and Phase 2/3/4/5/10 never run -- including the fd-9 lock and the
-  MANDATORY pre-stage validation, both of which fail SILENTLY, so the only
-  symptom ever observed was a missing push-gate token. Disclosure items 1 and 2
-  of commit 1fdbd3767 recorded both halves of this and labelled them
-  `Not fully closed`. Now closed at both ends: the minter additionally requires
-  real pipeline evidence (`hooks/lib/commit_pipeline.verify_pipeline_dispatch`),
-  and `_grant_provenance_refusal` here requires grant provenance
-  (`minted_by.origin`), a dispatched-subagent caller (non-empty `agent_id`), and
-  a hook-written changelog-analyst dispatch attestation of the dispatch that
-  started that caller. See `_grant_provenance_refusal` and
-  hooks/lib/commit_pipeline.py.
-  2026-10-28 (one producer per artifact): the guard no longer writes the
-  artifacts it decides on. A grant is spent by deleting it (an unlink only one
-  event can win), not renamed to `.lck` and restored or tracked in a `.use`
-  record; the attestation is matched to the caller by the digest of the
-  caller's own dispatch prompt instead of being rewritten with a claim; the
-  per-event pointer carries the grant's journal fields to the PostToolUse
-  finalizer. A failed commit's next attempt takes a fresh grant from /commit.
+/allow grants one matching call. /do consent (hooks/lib/allowlist.py
+has_do_consent: main agent, one turn) releases the rules on git merge,
+forbidden plumbing, hard reset and direct ref mutation, and adds none. What one
+of them refuses without it stays refused when it can move the protected
+branch's ref, or when the guard cannot tell the branch it lands on
+(_moves_protected_branch). git commit, git push and a git command the guard
+cannot classify are judged as without it. Each block then names the commands
+that land them (/close then /commit, /push, /merge).
 
 Exit codes:
   0: Allow tool use
@@ -180,7 +53,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -274,25 +146,12 @@ from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command 
 from lib.agent_resolver import resolve_agent_type  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
-    iter_git_invocations, GitInvocation, classify_git_command)
-# Segment/tokenization primitives reused (read-only) so the commit-grant binding
-# can enumerate EVERY git-commit invocation in a chained command string and
-# inspect each invocation's leading env-assignments + global-option flags
-# token-aware (precise, no false match on the word "commit" inside a message).
-# The /do protected-branch rule (_moves_protected_branch) reads segments with
-# them too. They are the classifier's own; this file does not redefine them.
-from lib.git_command_classifier import (  # noqa: E402
-    _unquote_token,
-    _segments as _shell_segments,
-    _command_token_index as _cmd_token_index,
-    _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
-    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,
-)
-# Commit-grant provenance contract (minted_by / expected_consumer) and the
-# hook-written changelog-analyst dispatch attestation. Shared with
-# scripts/write-commit-grant.py and hooks/pretool-commit-dispatch-attest.py so
-# all three agree by construction. See _grant_provenance_refusal.
+    classify_git_command, _unquote_token, GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS)
+# Commit-grant provenance (minted_by) and the hook-written changelog-analyst
+# dispatch attestation, shared with scripts/write-commit-grant.py and
+# hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
+from lib import shell_parse  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
@@ -305,11 +164,9 @@ def _option_alternation(opts):
     return '|'.join(re.escape(o) for o in sorted(opts, key=lambda o: (-len(o), o)))
 
 
-# git's global options between `git` and the subcommand, built from the
-# classifier's option table: a value option and its value (the next word, or
-# `=value` for a long one) or a flag (`=value` allowed: `--exec-path=<dir>`). Git
-# rejects the attached `-C<dir>` / `-cname=value`; the guard still reads them as
-# `-C <dir>` / `-c <name>=<value>`.
+# A git command line up to its subcommand, built from the classifier's option
+# table. The guard does not read commands with it; scripts/check-enforcement-evidence.py
+# and the tests that compare it with pretool-bash-safety.sh's GIT_CMD_RE do.
 GIT_GLOBAL_OPTION_RE = r'(?:\s+(?:(?:%s)\s*\S+|(?:%s)(?:=\S+|\s+\S+)|(?:%s)(?:=\S+)?))*' % (
     _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if not o.startswith('--')),
     _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if o.startswith('--')),
@@ -317,49 +174,12 @@ GIT_GLOBAL_OPTION_RE = r'(?:\s+(?:(?:%s)\s*\S+|(?:%s)(?:=\S+|\s+\S+)|(?:%s)(?:=\
 )
 GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 
-# Matches a `git <global-options>* commit` invocation and CAPTURES the
-# global-options span (group 1) so `_extract_dash_c_from_span` can pull an
-# explicit `-C <dir>` out of it. Reuses the exact GIT_GLOBAL_OPTION_RE grammar
-# above (kept in sync intentionally) so a change to one does not silently
-# desync from the other.
-#
-# The optional `(?:\S*/)?` before `git` lets a PATH-QUALIFIED invocation
-# (`/usr/bin/git`, `./git`) expose its `-C <dir>` span too. Without it the
-# leading anchor class `[\s;&|()`]` (which excludes `/`) failed to match a
-# path-qualified git, so `git -C <other-repo> commit` written as
-# `/usr/bin/git -C <other-repo> commit` yielded an EMPTY options span -> the
-# `-C` redirect was invisible and the commit validated against the hook's cwd
-# instead of <other-repo> (codex adversarial finding, 2026-07-16).
-GIT_COMMIT_INVOCATION_RE = re.compile(
-    r'(?:^|[\s;&|()`])(?:\S*/)?git(' + GIT_GLOBAL_OPTION_RE + r')\s+commit\b'
-)
-
-# `-C` (capital only) is "run as if git was started in <dir>". Lowercase `-c`
-# is an unrelated config override (`-c name=value`) and must never be
-# mistaken for a directory. Matches both `-C dir` and glued `-Cdir` forms,
-# and quoted values (`-C "a b"` / `-C 'a b'`).
-DASH_CAPITAL_C_RE = re.compile(r'-C\s*(?:"([^"]*)"|\'([^\']*)\'|(\S+))')
-
-# Repo/work-tree REDIRECT vectors for a `git commit`. Any of these repoints the
-# commit's EFFECTIVE target repository/work-tree away from the invocation's cwd,
-# so the grant's repo/branch/HEAD binding cannot be soundly verified against the
-# live git state the commit will actually mutate. `-C <dir>` is deliberately NOT
-# in this set: `-C` is the ONE legitimate redirect (changelog-analyst commits the
-# nested repo via `git -C <nested> commit`), and it is resolved + validated
-# against the grant rather than blocked. Everything below is FAIL-CLOSED
-# (hard block), mirroring the existing "multiple -C flags -> hard block"
-# philosophy: no legitimate committer in this repo uses --git-dir / --work-tree /
-# --namespace or a GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR env redirect, and a
-# commit we cannot unambiguously locate must be rejected, not guessed.
+# What repoints a commit at another repository or work tree than its cwd or its
+# one -C directory, where the grant's repo/branch/HEAD binding is checked. No
+# committer uses them, so a commit under a grant that carries one is refused.
 _GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
 _GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
-
-# Shell builtins that change the effective cwd for a LATER git commit in the
-# same command string. The guard probes repo/branch/HEAD from its OWN cwd (or a
-# `-C <dir>`), so a `cd <other-repo> && git commit` runs the real commit in a
-# cwd the probe never sees -> the grant would validate against the hook's cwd
-# while the commit lands elsewhere (codex adversarial finding, 2026-07-16).
-# Any such builtin preceding a commit -> fail closed (block).
+# Builtins that move a later commit to another cwd than the guard probes.
 _CWD_CHANGE_CMDS = ('cd', 'pushd', 'popd')
 
 
@@ -368,16 +188,8 @@ def _block(message):
     sys.exit(2)
 
 
-# ---------------------------------------------------------------------------
-# Scheme 6 manifest-validation helpers (added 2026-04-25)
-# ---------------------------------------------------------------------------
-
 def _get_session_id(data):
-    """Extract session_id from the parsed PreToolUse stdin payload.
-
-    Returns empty string when missing.  Used to compute the per-session
-    grant-file path <state dir>/claude-{kind}-grant-<sid>.json.
-    """
+    """The payload's session_id, or ''."""
     try:
         sid = data.get('session_id', '') or ''
         return str(sid)
@@ -386,71 +198,16 @@ def _get_session_id(data):
 
 
 def _check_git_allowlist(command: str, data: dict) -> bool:
-    """Check /allow grant for non-push git operations. Read-only.
-
-    Sentinel grants (task 20260524-133650) reach subagents too — mirrors the
-    M2 decision in pretool-bash-safety.sh.
-    """
+    """True when a /allow grant matches this command (read-only; subagents included)."""
     sid = _get_session_id(data)
     if not sid:
         return False
-    # Sentinel grant check (task 20260524-133650): NOT gated by subagent firewall.
-    # User-granted sentinels must be honored in subagent context per M2 (20260521-090200).
     task_id = os.environ.get('CLAUDE_TASK_ID') or sid
     return match_sentinel_grant_for_bash_command(task_id, command) is not None
 
 
-def _inline_env_present(command, var_name):
-    """True iff the raw command string contains literal `<var_name>=`.
-
-    This is the literal-substring defense against the inline-env
-    injection attack (e.g. `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push ...`
-    on a single Bash call).  We deliberately use plain substring
-    matching on the raw command text - not a regex, not a normalized
-    form - so that any encoding of the literal `VAR=` token in the
-    command is caught.
-    """
-    if not command or not var_name:
-        return False
-    needle = var_name + '='
-    return needle in command
-
-
-def _find_grant(kind, sid):
-    """Return (resolved_path, grant_dict) or (None, None) on miss/invalid.
-
-    Per close-report-20260425-push-commit-debate.md §1-2, wrappers write
-    per-nonce filenames `<state dir>/claude-{kind}-grant-<sid>-<nonce>.json` so
-    that two concurrent wrapper invocations under the same SID cannot
-    collide on a single shared file.  The guard discovers the grant by
-    glob, sorts by mtime descending, and returns the most recent
-    JSON-parseable candidate.  The caller is responsible for unlinking
-    the resolved path (single-use) on validation success.
-    """
-    pattern = os.path.join(harness_state_dir(), 'claude-%s-grant-%s-*.json' % (kind, sid))
-    try:
-        candidates = glob.glob(pattern)
-    except Exception:
-        return (None, None)
-    try:
-        candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
-    except Exception:
-        # If stat() races a concurrent unlink, fall back to lexical order.
-        candidates.sort(reverse=True)
-    for path in candidates:
-        grant = _load_grant(path)
-        if grant is not None:
-            return (path, grant)
-    return (None, None)
-
-
 def _load_grant(grant_path):
-    """Read and JSON-parse a grant file.
-
-    Returns the parsed dict on success, or None on missing / empty /
-    malformed / unreadable.  Catches all exceptions and fails closed
-    (caller treats None as "no valid grant -> block").
-    """
+    """The grant file as a dict, or None when missing, empty, malformed or unreadable."""
     try:
         with open(grant_path, 'r') as fp:
             text = fp.read()
@@ -465,24 +222,12 @@ def _load_grant(grant_path):
 
 
 def _collect_commit_grant_candidates():
-    """Return ALL parseable commit-grant candidates as (path, grant) pairs,
-    most-recent (highest mtime) first.
+    """Every parseable commit grant as (path, grant), newest first.
 
-    Unlike _find_grant (which returns only the single newest
-    grant), this returns every candidate so _evaluate_commit can SELECT the
-    grant whose repo_root/branch/expected_head match the commit's target repo
-    instead of blindly trusting the newest one. /commit (BULK=false) writes TWO
-    repo-bound grants -- one for CONTROL_ROOT and one for the nested ~/.claude
-    repo (written second => newer mtime). The root-repo commit fires first and
-    MUST bind to its OWN (older) grant; selecting by recency alone blocks it on
-    a repository mismatch (docs/dev/peer-review-grant-parity.md CRITICAL).
-
-    The any-SID glob is a superset of the SID-specific glob, so one glob covers
-    the session's own grants and one written under another id (the writer takes
-    --sid or the env's id); a subagent's PreToolUse payload carries its parent's
-    session_id and main transcript_path, plus agent_id. A spent grant no longer
-    exists, so every match is unspent.
-    """
+    /commit writes one repository-bound grant per repository of its plan, and the
+    commit picks the one bound to its own target. The glob takes any session id:
+    a subagent's payload carries its parent's session_id, and the writer may be
+    given another. A spent grant no longer exists."""
     pattern = os.path.join(harness_state_dir(), 'claude-commit-grant-*-*.json')
     try:
         paths = glob.glob(pattern)
@@ -501,14 +246,10 @@ def _collect_commit_grant_candidates():
 
 
 def _spend_grant(grant_path):
-    """Spend a single-use grant by deleting it; True iff THIS call deleted it.
+    """Spend a single-use grant by deleting it; True when this call deleted it.
 
-    Called ONLY on successful validation paths, NEVER on validation-failure
-    paths (so failure does not consume the grant - this preserves forensic
-    visibility and resists brute-force confirm/deny probing). unlink(2)
-    succeeds for exactly one caller, so two events racing for one grant
-    cannot both spend it: the loser gets False and is not authorized by it.
-    """
+    Only a validated grant is spent. unlink succeeds for one caller, so two
+    events racing for one grant cannot both spend it."""
     try:
         os.unlink(grant_path)
         return True
@@ -517,27 +258,11 @@ def _spend_grant(grant_path):
 
 
 def _grant_can_authorize_here(grant, command):
-    """True iff `grant` could authorize a commit for `command` right now.
-
-    Applies the binding test the commit validation applies
-    (_grant_matches_commit_target), but in a NON-BLOCKING form, because the
-    deferral is a scheduling decision and must never turn into an exit-2 on a
-    command that would merely have been deferred. The commit path keeps its
-    own blocking copy of the same test, which stays the single source of truth
-    for the allow.
-
-    Audit round 3, F6: before this, the deferral honored ANY parseable unexpired
-    grant file, so a grant belonging to a completely different repository
-    blocked auto-bulk here for its whole TTL.
-
-    Fail closed on doubt: an empty command, or a command whose target cannot be
-    resolved without blocking (multiple -C, unresolved ${VAR} — conditions that
-    make _grant_matches_commit_target _block()), counts as "could authorize", so
-    this can only ever NARROW deferral. Swallowing that SystemExit leaves the
-    _block() message it already wrote on stderr while the hook goes on to exit 0
-    — cosmetic only (PreToolUse blocks on the exit code, not on stderr), and it
-    only occurs for a malformed auto-bulk command.
-    """
+    """True when `grant` could authorize this command's commit now: the binding
+    test of _grant_matches_commit_target, which never refuses here, since the
+    auto-bulk deferral is scheduling. An empty command, or a target that cannot
+    be resolved (two -C, a `$` in -C), counts as could, so deferral only narrows.
+    The message such a target writes on stderr does not change the exit."""
     if not command:
         return True
     try:
@@ -549,13 +274,7 @@ def _grant_can_authorize_here(grant, command):
 
 
 def _git_output(args):
-    """Run `git <args...>` and return stripped stdout, or '' on any error.
-
-    Used to read the current branch / HEAD / staged-set inside the
-    guard.  Always runs in the agent's CWD (no `-C` override) so that
-    the resolved values match what the agent's `git push|commit` call
-    would see.
-    """
+    """`git <args>` in the hook's cwd: stripped stdout, or '' on any error."""
     try:
         result = subprocess.run(
             ['git'] + list(args),
@@ -570,161 +289,41 @@ def _git_output(args):
         return ''
 
 
-def _extract_push_remote(invocation):
-    """Best-effort extraction of the explicit remote argument from a push
-    GitInvocation.  Returns the first positional token in invocation.args
-    that is not a flag (does not start with `-`), or '' when not found.
-    """
-    for tok in invocation.args:
-        if tok.startswith('-'):
-            continue
-        if tok.startswith('+') or tok.startswith(':'):
-            continue
-        return tok
-    return ''
+def _ambient_git_redirect_present():
+    """True when the guard's own environment points git at another repository or
+    work tree, so neither a bare commit nor the guard's probes are where they look."""
+    return any(os.environ.get(v) for v in _GIT_REDIRECT_ENV_VARS)
 
 
-def _extract_dash_c_from_span(options_span, command_excerpt):
-    """Resolve the single `-C <dir>` value from a commit invocation's
-    global-options span, or '' when no explicit `-C` is present.
+def _commit_target_dir(rec):
+    """The one `-C` directory of a commit invocation, or '' for the hook's cwd.
 
-    changelog-analyst's canonical commit form is `git -C "<GIT_ROOT>" commit
-    -F <msgfile>` (agents/changelog-analyst.md) for BOTH the root repo and
-    the nested ~/.claude repo -- it never `cd`s, only ever passes `-C`. The
-    guard's own CWD is therefore CONTROL_ROOT for the entire session, even
-    while committing the nested repo. Scoping repo/branch/HEAD validation to
-    this extracted directory (instead of blindly using the hook's CWD, as
-    `_git_output`'s docstring describes for push) is required so the nested-
-    repo commit is validated against ITS OWN repo, not CONTROL_ROOT's.
-
-    Codex adversarial review (2026-07-15) found two sharp edges, both handled
-    here by blocking rather than guessing:
-      - Multiple `-C` options: git applies each in sequence (a later ABSOLUTE
-        `-C` fully overrides an earlier one -- verified empirically), so
-        naively taking the first match would validate one directory while
-        the commit actually lands in another. Since no legitimate caller in
-        this repo ever passes more than one `-C` to a commit invocation,
-        ambiguity is treated as a hard block rather than an attempt to
-        replicate git's full (and, for relative paths, chained) -C semantics.
-      - An unresolved shell variable reference (e.g. `${GIT_ROOT}` never
-        substituted with a concrete path before the command reached the
-        Bash tool): subprocess.run() does not perform shell expansion, so
-        passing this literally to `git -C` would fail and could otherwise
-        surface as a confusing generic "repository mismatch". Blocked here
-        with a distinct, clearer message instead.
-    """
-    matches = list(DASH_CAPITAL_C_RE.finditer(options_span))
-    if not matches:
-        return ''
-    if len(matches) > 1:
+    changelog-analyst commits every repository of its plan with
+    `git -C "<root>" commit -F <msgfile>` from one cwd, so the grant is checked
+    against the `-C` directory. Two `-C` options chain (a later absolute one
+    overrides), and a `$` word reaches the hook unexpanded: both are refused
+    rather than resolved here."""
+    dirs = rec['dirs']
+    if len(dirs) > 1:
         _block(
             '\nBLOCKED: agent git commit - multiple -C directory overrides '
             'in one commit invocation are not supported.\n'
-            'Command excerpt: %s\n' % command_excerpt[:200]
+            'Command excerpt: %s\n' % rec['text'][:200]
             + 'Re-issue the commit with exactly one -C <dir> (or none).\n'
         )
-    dm = matches[0]
-    value = dm.group(1) or dm.group(2) or dm.group(3) or ''
+    value = dirs[0] if dirs else ''
     if '$' in value:
         _block(
             '\nBLOCKED: agent git commit - the -C argument %r looks like an '
             'unresolved shell variable reference, not a concrete path.\n' % value
-            + 'Command excerpt: %s\n' % command_excerpt[:200]
+            + 'Command excerpt: %s\n' % rec['text'][:200]
             + 'Substitute the concrete resolved absolute directory before '
             'submitting the commit command.\n'
         )
     return value
 
 
-def _ambient_git_redirect_present():
-    """True iff the guard's OWN environment carries a GIT_DIR / GIT_WORK_TREE /
-    GIT_COMMON_DIR redirect.
-
-    An ambient redirect repoints the effective target repo/work-tree of a bare
-    `git commit` (and of the guard's own `_git_output` probes) away from the
-    invocation cwd, so the grant's repo/branch/HEAD binding cannot be soundly
-    verified. Fail closed: block rather than validate against an ambiguous
-    target. No legitimate agent commit path sets these in the ambient env.
-    """
-    return any(os.environ.get(v) for v in _GIT_REDIRECT_ENV_VARS)
-
-
-def _iter_commit_invocations(command):
-    """Yield one descriptor dict per `git ... commit` invocation in `command`.
-
-    Segment-aware (reuses the canonical shell segmenter) so EVERY commit in a
-    chained / `&&`-joined / newline-separated / multi-invocation command string
-    is enumerated -- not just the first. This closes the "second chained commit
-    runs unvalidated" hole. Token-aware within each segment (skips leading
-    env-assignments + command wrappers, basename-matches the git token, walks
-    git global options) so the word "commit" appearing inside a -m message is
-    never mistaken for a second invocation.
-
-    Each descriptor:
-      segment              : the raw shell segment (for -C extraction + excerpts)
-      options_span         : global-options text between `git` and `commit`
-      inline_env_redirect  : True iff a GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR
-                             assignment is inline-prefixed before the git token
-      flag_redirect        : True iff --git-dir/--work-tree/--namespace appears
-                             as a git global option before the commit subcommand
-      cwd_redirected       : True iff a cd/pushd/popd segment executes BEFORE
-                             this commit in the same command string (the probe
-                             cannot see the post-cd cwd -> fail closed)
-
-    Segments are visited in execution order so `cwd_redirected` reflects only a
-    cwd change that PRECEDES the commit; a `cd` after the commit is harmless and
-    does not taint it.
-    """
-    cwd_redirected = False
-    for seg in _shell_segments(command):
-        toks = seg.split()
-        if not toks:
-            continue
-        idx = _cmd_token_index(toks)
-        if idx is None:
-            continue
-        # A cd/pushd/popd segment redirects the cwd for every LATER git commit.
-        if os.path.basename(toks[idx].strip('\'"')) in _CWD_CHANGE_CMDS:
-            cwd_redirected = True
-            continue
-        if os.path.basename(toks[idx]) != 'git':
-            continue
-        after_git = toks[idx + 1:]
-        # Split git global options from the subcommand (mirrors classifier's
-        # _git_subcommand, but retains the global-option token list).
-        i = 0
-        while i < len(after_git):
-            a = after_git[i]
-            if a in GIT_GLOBAL_VALUE_OPTS:
-                i += 2
-                continue
-            if a.startswith('-'):
-                i += 1
-                continue
-            break
-        global_opts = after_git[:i]
-        subcommand = after_git[i] if i < len(after_git) else None
-        if subcommand != 'commit':
-            continue
-        inline_env_redirect = any(
-            _ENV_ASSIGN_RE.match(t) and t.split('=', 1)[0] in _GIT_REDIRECT_ENV_VARS
-            for t in toks[:idx]
-        )
-        flag_redirect = any(
-            t.split('=', 1)[0] in _GIT_REDIRECT_FLAGS for t in global_opts
-        )
-        m = GIT_COMMIT_INVOCATION_RE.search(seg)
-        options_span = m.group(1) if m else ''
-        yield {
-            'segment': seg,
-            'options_span': options_span,
-            'inline_env_redirect': inline_env_redirect,
-            'flag_redirect': flag_redirect,
-            'cwd_redirected': cwd_redirected,
-        }
-
-
-def _block_commit_redirect(segment, vector):
+def _block_commit_redirect(rec, vector):
     _block(
         '\nBLOCKED: agent git commit - %s redirect detected.\n' % vector
         + 'A commit grant is bound to a specific repo/branch/HEAD resolved at '
@@ -733,36 +332,27 @@ def _block_commit_redirect(segment, vector):
         'commit at a DIFFERENT target the grant never authorized. Only a bare '
         '`git commit` or `git -C <dir> commit` (validated against the grant) '
         'is permitted.\n'
-        + 'Command excerpt: %s\n' % segment[:200]
-        + 'Spec: pretool-git-privilege-guard.py 2026-07-16 commit-grant '
-        'redirect-vector closure (fail closed, mirrors "multiple -C -> block").\n'
+        + 'Command excerpt: %s\n' % rec['text'][:200]
     )
 
 
 def _enforce_commit_grant_binding(grant, command):
-    """Validate the grant's repo/branch/HEAD binding against EVERY commit
-    invocation in `command`, failing CLOSED on any unresolvable redirect.
+    """Validate the grant's repo/branch/HEAD binding against the one commit
+    invocation in `command`; every check that fails _block()s (exit 2).
 
-    Order of checks (each _block()s exit 2 on failure; a full pass returns):
-      1. Ambient GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR redirect -> block.
-      2. For each enumerated commit invocation:
-         a. inline-env or flag redirect (--git-dir/--work-tree/--namespace,
-            GIT_DIR=/GIT_WORK_TREE=/GIT_COMMON_DIR=) -> block.
-         b. resolve its -C target dir, then validate repo/branch/HEAD.
-      3. If the classifier saw a commit but this enumerator resolved ZERO
-         invocations, the commit's target is unlocatable -> block.
-    """
+    Refused: an ambient or inline GIT_DIR-style redirect, a --git-dir/--work-tree/
+    --namespace option, a cd/pushd/popd before the commit, a commit the reader
+    cannot locate, and more than one commit (one grant authorizes one commit, and
+    every commit in a call would be checked against the same pre-call HEAD)."""
     if _ambient_git_redirect_present():
         _block(
             '\nBLOCKED: agent git commit - ambient GIT_DIR/GIT_WORK_TREE/'
             'GIT_COMMON_DIR environment redirect present.\n'
             'The commit target repo cannot be verified against the grant '
             'binding while these are set. Unset them and re-run /commit.\n'
-            'Spec: pretool-git-privilege-guard.py 2026-07-16 commit-grant '
-            'redirect-vector closure (fail closed).\n'
         )
-    invocations = list(_iter_commit_invocations(command))
-    if not invocations:
+    records = _commit_records(command)
+    if not records or any(rec['unresolved'] for rec in records):
         _block(
             '\nBLOCKED: agent git commit - a commit was detected but its '
             'effective target repository could not be resolved for grant '
@@ -771,53 +361,39 @@ def _enforce_commit_grant_binding(grant, command):
             + 'Fail closed: an unlocatable commit target is rejected, not '
             'guessed.\n'
         )
-    if len(invocations) > 1:
+    if len(records) > 1:
         _block(
             '\nBLOCKED: agent git commit - %d commit invocations in ONE command; '
-            'a commit grant authorizes exactly ONE commit.\n' % len(invocations)
+            'a commit grant authorizes exactly ONE commit.\n' % len(records)
             + 'Command excerpt: %s\n' % command[:200]
             + 'Every invocation in one call is validated against the SAME '
-            'pre-execution HEAD and the grant is locked once, so a second commit '
-            'here would ride the first one\'s authorization (audit round 3, F5). '
-            'The authorized committer is already required to issue a minimal '
+            'pre-execution HEAD, so a second commit here would ride the first '
+            'one\'s authorization. The authorized committer issues a minimal '
             '`git commit -F <msgfile>` with nothing chained on that command line '
-            '(agents/changelog-analyst.md, command-line purity), so no legitimate '
-            'caller reaches this. Issue each commit as its own call under its own '
-            'grant.\n'
+            '(agents/changelog-analyst.md, command-line purity). Issue each commit '
+            'as its own call under its own grant.\n'
         )
-    for inv in invocations:
-        if inv['inline_env_redirect']:
-            _block_commit_redirect(inv['segment'], 'inline-env GIT_DIR/GIT_WORK_TREE')
-        if inv['flag_redirect']:
-            _block_commit_redirect(inv['segment'], '--git-dir/--work-tree/--namespace flag')
-        if inv.get('cwd_redirected'):
-            _block_commit_redirect(inv['segment'], 'cd/pushd cwd-change before commit')
-        target_dir = _extract_dash_c_from_span(inv['options_span'], inv['segment'])
+    for rec in records:
+        if rec['env_redirect']:
+            _block_commit_redirect(rec, 'inline-env GIT_DIR/GIT_WORK_TREE')
+        if rec['flag_redirect']:
+            _block_commit_redirect(rec, '--git-dir/--work-tree/--namespace flag')
+        if rec['cwd_changed']:
+            _block_commit_redirect(rec, 'cd/pushd cwd-change before commit')
+        target_dir = _commit_target_dir(rec)
         _validate_commit_grant_repo(grant, target_dir)
         _validate_commit_grant_branch(grant, target_dir)
         _validate_commit_grant_head(grant, target_dir)
 
 
 def _commit_target_git_output(target_dir, *args):
-    """Like _git_output, but scoped to `target_dir` via `-C` when non-empty.
-
-    target_dir is the (possibly empty) result of _extract_dash_c_from_span.
-    Empty target_dir falls back to the hook's own CWD, matching the
-    no-override push-grant precedent.
-    """
+    """_git_output in `target_dir` (`git -C`), or in the hook's cwd when it is ''."""
     prefix = ['-C', target_dir] if target_dir else []
     return _git_output(prefix + list(args))
 
 
 def _validate_commit_grant_repo(grant, target_dir):
-    """Grant.repo_root must match the toplevel of the commit's target repo.
-
-    New binding (2026-07-15): closes the gap where a commit grant issued for
-    one repository could authorize a `git commit` in a completely different
-    repository, since only expires_at was previously checked. `target_dir` is
-    the resolved `-C <dir>` for THIS commit invocation ('' = hook cwd), so a
-    chained second commit is validated against its OWN target (2026-07-16).
-    """
+    """grant.repo_root must be the toplevel of the repository the commit lands in."""
     grant_repo = grant.get('repo_root') or ''
     current_repo = _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel')
     if not grant_repo or not current_repo or grant_repo != current_repo:
@@ -827,14 +403,11 @@ def _validate_commit_grant_repo(grant, target_dir):
             + 'Current repo_root: %r\n' % current_repo
             + 'A commit grant issued for one repository may not authorize a '
             'commit in another. Re-run /commit from within the target repository.\n'
-            + 'Spec: pretool-git-privilege-guard.py 2026-07-15 repo/branch/HEAD '
-            'parity fix (mirrors _validate_push_grant_branch/_head/_remote).\n'
         )
 
 
 def _validate_commit_grant_branch(grant, target_dir):
-    """AC-A7-equivalent for commit: grant.branch must match the current branch
-    of the commit's target repo (mirrors _validate_push_grant_branch)."""
+    """grant.branch must be the current branch of the commit's repository."""
     grant_branch = grant.get('branch') or ''
     current_branch = _commit_target_git_output(target_dir, 'branch', '--show-current')
     if not grant_branch or grant_branch != current_branch:
@@ -842,24 +415,15 @@ def _validate_commit_grant_branch(grant, target_dir):
             '\nBLOCKED: agent git commit - branch mismatch.\n'
             'Grant branch  : %r\n' % grant_branch
             + 'Current branch: %r\n' % current_branch
-            + 'Spec: pretool-git-privilege-guard.py 2026-07-15 repo/branch/HEAD '
-            'parity fix (mirrors _validate_push_grant_branch).\n'
         )
 
 
 def _validate_commit_grant_head(grant, target_dir):
-    """AC-A6-equivalent for commit: grant.expected_head must match the
-    current HEAD of the commit's target repo (mirrors _validate_push_grant_head).
+    """grant.expected_head must be the commit repository's HEAD.
 
-    No tolerance for HEAD drift: a legitimate single /commit cycle never
-    needs HEAD to move between grant issuance (Step 5) and grant consumption
-    (Step 7) -- staging (`git add`) does not move HEAD, and the one documented
-    multi-commit scenario (changelog-analyst's `nothing_to_commit_precommitted`
-    recovery path, agents/changelog-analyst.md "Recovery step 3") reuses the
-    SAME still-unconsumed grant only because no `git commit` fired earlier in
-    that cycle -- HEAD is unchanged since Step 5 captured it. This is the same
-    strict, no-tolerance behavior _validate_push_grant_head already applies.
-    """
+    No drift is tolerated: staging does not move HEAD between the mint and the
+    commit, and changelog-analyst's recovery commit reuses an unspent grant only
+    while no commit has run since the mint."""
     grant_head = grant.get('expected_head') or ''
     current_head = _commit_target_git_output(target_dir, 'rev-parse', 'HEAD')
     if not grant_head or grant_head != current_head:
@@ -869,38 +433,26 @@ def _validate_commit_grant_head(grant, target_dir):
             + 'Current HEAD       : %r\n' % current_head
             + 'HEAD moved since the grant was issued; re-run /commit to '
             'obtain a fresh grant.\n'
-            + 'Spec: pretool-git-privilege-guard.py 2026-07-15 repo/branch/HEAD '
-            'parity fix (mirrors _validate_push_grant_head).\n'
         )
 
 
 def _grant_matches_commit_target(grant, command):
-    """Non-blocking predicate for grant SELECTION: True iff `grant`'s repo_root /
-    branch / expected_head match EVERY commit invocation's target repo in
-    `command`.
-
-    Mirrors the per-invocation repo/branch/HEAD comparisons that
-    _enforce_commit_grant_binding performs, but returns a bool instead of
-    _block()ing, so _evaluate_commit can PREFER the grant bound to the commit's
-    target repo when /commit has written several repo-bound grants. It does NOT
-    re-implement the redirect fail-closed checks (those are grant-independent);
-    the authoritative _enforce_commit_grant_binding still runs on the selected
-    grant before the commit is allowed, so selection never widens acceptance --
-    a grant missing any binding field, or mismatching on any invocation, is
-    non-matching (fail closed). Note: a malformed invocation (multiple -C or an
-    unresolved ${VAR}) still hard-blocks via _extract_dash_c_from_span, which is
-    the correct fail-closed behavior regardless of grant.
-    """
+    """True when `grant`'s repo_root, branch and expected_head match the target of
+    every commit invocation in `command`: selection among the grants /commit
+    wrote (one per repository of its plan). A grant lacking a binding field
+    matches nothing; the redirect refusals are _enforce_commit_grant_binding's,
+    which still runs on the grant selected, so selection never widens what is
+    allowed. A malformed -C (two of them, a `$`) still _block()s."""
     grant_repo = grant.get('repo_root') or ''
     grant_branch = grant.get('branch') or ''
     grant_head = grant.get('expected_head') or ''
     if not grant_repo or not grant_branch or not grant_head:
         return False
-    invocations = list(_iter_commit_invocations(command))
-    if not invocations:
+    records = _commit_records(command)
+    if not records or any(rec['unresolved'] for rec in records):
         return False
-    for inv in invocations:
-        target_dir = _extract_dash_c_from_span(inv['options_span'], inv['segment'])
+    for rec in records:
+        target_dir = _commit_target_dir(rec)
         if _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel') != grant_repo:
             return False
         if _commit_target_git_output(target_dir, 'branch', '--show-current') != grant_branch:
@@ -957,56 +509,31 @@ def _looks_like_git_direct_ref_mutation(invocations):
     return False
 
 
-def _push_has_forbidden_ref_mutation(invocation):
-    for tok in invocation.args:
-        if tok in ('--force', '-f', '--force-with-lease', '--delete', '-d', '--mirror'):
-            return True
-        if tok.startswith('--force-with-lease='):
-            return True
-        if tok.startswith('+') or tok.startswith(':'):
+# git push options that overwrite or delete remote refs, tags included. git takes
+# any unambiguous prefix of a long option (`--forc`, `--del`, `--mir`) and fails
+# on an ambiguous one, so a prefix of one of these names is read as it.
+_PUSH_REWRITE_LONG = ('force', 'force-with-lease', 'force-if-includes', 'delete', 'mirror', 'prune')
+_PUSH_REWRITE_SHORT = frozenset('fd')
+
+
+def _push_forces_or_deletes(args):
+    """True when push arguments force, delete or mirror a ref: a rewrite option
+    (abbreviated, or a letter of a short-option cluster such as `-uf`), or a
+    refspec that forces (`+src:dst`) or deletes (`:dst`). A computed word (None)
+    is not read."""
+    for word in args:
+        if word is None:
+            continue
+        if word.startswith('--'):
+            name = word[2:].partition('=')[0]
+            if name and any(opt.startswith(name) for opt in _PUSH_REWRITE_LONG):
+                return True
+        elif word.startswith('-'):
+            if _PUSH_REWRITE_SHORT & set(word[1:]):
+                return True
+        elif word.startswith(('+', ':')):
             return True
     return False
-
-
-def _extract_commit_message(command):
-    patterns = [
-        r"-m\s*=?\s*'([^']*)'",
-        r'-m\s*=?\s*"([^"]*)"',
-        r'--message\s*=?\s*"([^"]*)"',
-        r"--message\s*=?\s*'([^']*)'",
-    ]
-    for p in patterns:
-        m = re.search(p, command)
-        if m:
-            return m.group(1)
-    m = re.search(r'-m\s+(\S+)', command)
-    if m:
-        return m.group(1)
-    # -F / --file: changelog-analyst always uses git commit -F <msgfile>. The
-    # operand comes from the tokenised commit invocation, shell-unquoted, so the
-    # subject line BLESSED_BRIDGE_RE matches is the file the analyst wrote.
-    for invocation in iter_git_invocations(command):
-        if invocation.subcommand != 'commit':
-            continue
-        path = _commit_file_operand(invocation.args)
-        if path:
-            try:
-                with open(path) as fh:
-                    return fh.readline().strip()
-            except OSError:
-                pass
-    return ''
-
-
-def _commit_file_operand(args):
-    for i, tok in enumerate(args):
-        if tok in ('-F', '--file') and i + 1 < len(args):
-            return _unquote_token(args[i + 1])
-        if tok.startswith('--file='):
-            return _unquote_token(tok[len('--file='):])
-        if tok.startswith('-F') and len(tok) > 2:
-            return _unquote_token(tok[2:])
-    return ''
 
 
 # Commit options whose value is the next word when it is not attached.
@@ -1015,95 +542,91 @@ _COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fi
                       '--pathspec-from-file'}
 
 
-def _simple_commands(command):
-    """The command's simple commands as lists of shell-unquoted words, split at
-    unquoted ; & | ( ) < > and newlines, with `#` comments dropped; None when a
-    quote is left open."""
-    cmds, words, word, i, n = [], [], None, 0, len(command)
-    while i < n:
-        ch = command[i]
-        if command.startswith('\\\n', i):
-            i += 2
+def _git_view(command):
+    """(walk sites, git invocations) of `command` through the shared parser,
+    pairing each git invocation with the index of its site in walk order; a
+    command the parser cannot read yields neither."""
+    script = shell_parse.parse(command)
+    if script.error is not None:
+        return [], []
+    sites = list(shell_parse.walk(script))
+    at = [k for k, site in enumerate(sites) if shell_parse.resolve(site.cmd).name == 'git']
+    invocations = shell_parse.git_invocations(
+        script, into=tuple(k for k in shell_parse._DEFAULT_INTO if k != 'alias'))
+    return sites, list(zip(at, invocations))
+
+
+def _commit_records(command):
+    """One record per `git commit` the command runs, nested shells included, in
+    order: text, args (long options resolved; None where computed), dirs (its -C
+    values), env_redirect (a GIT_DIR-style assignment on it or on any command of
+    the call), flag_redirect (--git-dir, --work-tree, --namespace) and
+    cwd_changed (a cd, pushd or popd runs before it, so the guard's probes would
+    not look where it lands), unresolved (why the parser cannot read the
+    invocation statically). A command the parser cannot read yields none."""
+    sites, invocations = _git_view(command)
+    moves = [k for k, site in enumerate(sites)
+             if shell_parse.resolve(site.cmd).name in _CWD_CHANGE_CMDS]
+    assigned = any(a.name in _GIT_REDIRECT_ENV_VARS for site in sites for a in site.cmd.assignments)
+    records = []
+    for at, inv in invocations:
+        if inv.subcommand != 'commit':
             continue
-        if ch in ' \t\r;&|()<>\n' or (ch == '#' and word is None):
-            if word is not None:
-                words.append(''.join(word))
-                word = None
-            if ch == '#':
-                i = command.find('\n', i)
-                i = n if i < 0 else i
-                continue
-            if ch not in ' \t\r' and words:
-                cmds.append(words)
-                words = []
-            i += 1
+        records.append({
+            'text': ' '.join(w.text for w in inv.cmd.words),
+            'args': list(inv.args), 'dirs': _dash_c_words(inv),
+            'flag_redirect': any(opt in _GIT_REDIRECT_FLAGS for opt, _v in inv.global_opts),
+            'env_redirect': assigned or any(k in _GIT_REDIRECT_ENV_VARS for k in inv.env),
+            'cwd_changed': any(m < at for m in moves),
+            'unresolved': inv.unresolved,
+        })
+    return records
+
+
+def _dash_c_words(inv):
+    """inv's -C values, a computed one as written (`"${GIT_ROOT}"`)."""
+    words = shell_parse.resolve(inv.cmd).args
+    written = [words[k + 1].text for k in range(len(words) - 1) if words[k].value() == '-C']
+    return [d if d is not None else (written[n] if n < len(written) else '$')
+            for n, d in enumerate(inv.C_dirs)]
+
+
+def _commit_message(rec, cwd):
+    """The whole message of one commit invocation: its -m/--message values as git
+    joins them, or the whole -F/--file regular file (relative to its -C
+    directory). None when the hook cannot read it: no message option, a computed
+    word, stdin or a file it cannot read, or -m with -F (git refuses that)."""
+    base = cwd
+    for d in rec['dirs']:
+        base = os.path.join(base, d)
+    texts, path, args, j = [], None, rec['args'], 0
+    while j < len(args) and args[j] != '--':
+        a, nxt = args[j], (args[j + 1] if j + 1 < len(args) else None)
+        if a is None:  # a computed word may be any option
+            return None
+        if a in ('-m', '--message', '-F', '--file'):
+            opt, value, j = a, nxt, j + 2
+        elif a.startswith(('--message=', '--file=')):
+            (opt, value), j = a.split('=', 1), j + 1
+        elif a in _COMMIT_VALUE_OPTS or not a.startswith('-') or a.startswith('--'):
+            j += 2 if a in _COMMIT_VALUE_OPTS else 1
             continue
-        word = [] if word is None else word
-        if ch in '\'"':
-            j = i + 1
-            while j < n and command[j] != ch:
-                if ch == '"' and command[j] == '\\' and command[j + 1:j + 2] in ('"', '\\', '$', '`'):
-                    j += 1
-                word.append(command[j])
-                j += 1
-            if j >= n:
-                return None
-            i = j + 1
-        elif ch == '\\' and i + 1 < n:
-            word.append(command[i + 1])
-            i += 2
         else:
-            word.append(ch)
-            i += 1
-    if word is not None:
-        words.append(''.join(word))
-    return cmds + [words] if words else cmds
-
-
-def _commit_message_text(command, cwd):
-    """The whole message of the command's commit: its -m/--message values as git
-    joins them, or the whole -F/--file regular file. None when the hook cannot
-    read it: an open quote, no message option, stdin or a file it cannot read,
-    or -m with -F (git refuses that combination)."""
-    texts, path = [], None
-    for words in _simple_commands(command) or []:
-        idx = _cmd_token_index(words)
-        if idx is None or os.path.basename(words[idx]) != 'git':
-            continue
-        base, i = cwd, idx + 1
-        while i < len(words) and words[i].startswith('-'):
-            if words[i] in GIT_GLOBAL_VALUE_OPTS:
-                base = os.path.join(base, words[i + 1]) if words[i] == '-C' and i + 1 < len(words) else base
-                i += 1
-            i += 1
-        if words[i:i + 1] != ['commit']:
-            continue
-        args, j = words[i + 1:], 0
-        while j < len(args) and args[j] != '--':
-            a, nxt = args[j], (args[j + 1] if j + 1 < len(args) else None)
-            if a in ('-m', '--message', '-F', '--file'):
-                opt, value, j = a, nxt, j + 2
-            elif a.startswith(('--message=', '--file=')):
-                (opt, value), j = a.split('=', 1), j + 1
-            elif a in _COMMIT_VALUE_OPTS or not a.startswith('-') or a.startswith('--'):
-                j += 2 if a in _COMMIT_VALUE_OPTS else 1
+            # A short-option cluster (`-am msg`): the first value-taking letter takes the
+            # rest of the word, else the next word; -u/-S take only an attached value.
+            k = next((k for k in range(1, len(a)) if a[k] in 'mFCctuS'), None)
+            if k is None or a[k] in 'uS':
+                j += 1
                 continue
-            else:
-                # A short-option cluster (`-am msg`): the first value-taking letter takes the
-                # rest of the word, else the next word; -u/-S take only an attached value.
-                k = next((k for k in range(1, len(a)) if a[k] in 'mFCctuS'), None)
-                if k is None or a[k] in 'uS':
-                    j += 1
-                    continue
-                opt, value, j = '-' + a[k], a[k + 1:] or nxt, j + (1 if a[k + 1:] else 2)
-                if opt[1] in 'Cct':
-                    continue
-            if value is None or (opt in ('-F', '--file') and value == '-'):
-                return None
-            if opt in ('-m', '--message'):
-                texts.append(value)
-            else:
-                path = os.path.join(base, value)
+            opt, value, j = '-' + a[k], a[k + 1:] or nxt, j + (1 if a[k + 1:] else 2)
+            if opt[1] in 'Cct':
+                continue
+        if value is None or (opt in ('-F', '--file') and value == '-'):
+            return None
+        if opt in ('-m', '--message'):
+            texts.append(value)
+        else:
+            path = os.path.join(base, value)
     if bool(texts) == bool(path):
         return None
     if path is None:
@@ -1117,6 +640,24 @@ def _commit_message_text(command, cwd):
         return None
 
 
+def _commit_message_text(command, cwd):
+    """The message of the command's one commit, or None (unreadable, or not one commit)."""
+    records = _commit_records(command)
+    return _commit_message(records[0], cwd) if len(records) == 1 else None
+
+
+def _auto_bulk_subject(command, cwd):
+    """The auto-bulk subject line when every commit in `command` carries one, else ''.
+
+    Only the messages of the commits themselves are read: an `auto-bulk:` text in
+    another command of the same call does not make a commit an auto-bulk one."""
+    subjects = [(_commit_message(rec, cwd) or '').partition('\n')[0]
+                for rec in _commit_records(command)]
+    if subjects and all(BLESSED_BRIDGE_RE.search(s) for s in subjects):
+        return subjects[0]
+    return ''
+
+
 def _task_id_refusal(grant, grant_path, command, data):
     """Why this grant may not authorize this commit's message, or '' when it may.
 
@@ -1127,7 +668,7 @@ def _task_id_refusal(grant, grant_path, command, data):
     if grant.get('task_id') is None:
         return ''
     line = f"Task-id: {grant['task_id']}"
-    message = _commit_message_text(command, str(data.get('cwd') or '') or os.getcwd())
+    message = _commit_message_text(command, _hook_cwd(data))
     if message is not None and any(row.strip() == line for row in message.splitlines()):
         return ''
     return (
@@ -1138,6 +679,11 @@ def _task_id_refusal(grant, grant_path, command, data):
         + '\nWrite the whole message, that line included, to the message file and commit it with '
         '`git commit -F <msgfile>` (agents/changelog-analyst.md, Phase 8).\n'
     )
+
+
+def _hook_cwd(data):
+    """The directory the command runs in: the payload's cwd, else the hook's own."""
+    return str(data.get('cwd') or '') or os.getcwd()
 
 
 def _extract_reset_target(invocation):
@@ -1166,32 +712,8 @@ def _end_time_passed(end_str):
     return datetime.now(timezone.utc) > end
 
 
-def _state_file_is_live(sf):
-    try:
-        if sf.stat().st_size == 0:
-            return False
-        state = json.loads(sf.read_text())
-    except (OSError, ValueError):
-        return False
-    if state.get('current_phase', '') in ('complete', 'completed'):
-        return False
-    if _end_time_passed(state.get('end_time', '')):
-        return False
-    return True
-
-
-def _is_overnight_active():
-    """True iff a live overnight-state-*.json exists in <project>/.claude/."""
-    try:
-        project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd())
-        state_files = list((project_dir / '.claude').glob('overnight-state-*.json'))
-        return any(_state_file_is_live(sf) for sf in state_files)
-    except Exception:
-        return False
-
-
 def _block_default_deny_commit(msg):
-    """AC-A13: default-deny block when commit env is unset."""
+    """Every other agent commit."""
     _block(
         '\nBLOCKED: agent git commit - only the blessed /merge '
         'auto-bulk bridge or the /commit wrapper may commit from an '
@@ -1202,35 +724,22 @@ def _block_default_deny_commit(msg):
         'For human-driven commits, a human types /commit (or '
         '/allow git commit for one call).\n'
         'Main agent may bypass with /allow <pattern> before the git commit command.\n'
-        'Spec: spec-20260424-233926 section 5.2.4 (R4.3); '
-        'ba-spec-20260425-redev2.md AC-A13.\n'
     )
 
 
 def _has_bulk_commit_sentinel(data):
-    """Return True if a bulk-commit sentinel authorizes an auto-bulk commit now.
+    """True when a live bulk-commit sentinel authorizes an auto-bulk commit now.
 
-    Written by /commit --bulk's UserPromptSubmit capability hook
-    (scripts/write-bulk-commit-sentinel.py) before changelog-analyst is
-    dispatched. Multi-use: NOT consumed on validation so that multiple
-    auto-bulk commits in a single session all succeed. The test on each file is
-    hooks/lib/commit_pipeline.py `bulk_commit_sentinel_live` (kind, origin,
-    expiry), the one rule the Stop cleanup's reap also takes.
-
-    SID fallback rationale (mirrors _collect_commit_grant_candidates for regular commits):
-    a changelog-analyst subagent's payload carries its orchestrator's
-    session_id (plus agent_id), so the SID-specific glob (fast path) finds
-    the session's sentinel; the global glob is the fallback for a sentinel
-    written under another id (its writer takes --sid or the env's id).
-    Acceptable because: (a) sentinels require user-invoked /commit --bulk
-    to be created at all; (b) 30-min TTL bounds exposure; (c) the kind and
-    origin test prevents other JSON files in the state dir from matching.
-    """
+    /commit --bulk's UserPromptSubmit hook (scripts/write-bulk-commit-sentinel.py)
+    writes it before dispatching changelog-analyst; it is not spent, so every
+    auto-bulk commit of that run passes. commit_pipeline.bulk_commit_sentinel_live
+    (kind, origin, expiry) decides each file, as the Stop cleanup's reap does.
+    The session's own sentinels are read first, then any session's, since a
+    subagent's payload carries its parent's session id."""
     sid = _get_session_id(data)
     patterns = []
     if sid:
         patterns.append(commit_pipeline.bulk_sentinel_glob(sid))
-    # Global fallback — see docstring above for rationale.
     patterns.append(commit_pipeline.bulk_sentinel_glob())
     seen = set()
     for pattern in patterns:
@@ -1249,22 +758,11 @@ def _has_bulk_commit_sentinel(data):
 
 
 def _has_active_commit_grant(command=''):
-    """Return True if an unspent commit grant that could authorize a commit
-    HERE is pending (Fix E, narrowed by audit round 3 F6).
-
-    Used to defer auto-bulk commits while a concurrent /commit cycle is active.
-    A grant is pending from its mint until the commit it authorizes spends it.
-
-    F6: this used to honor ANY parseable unexpired grant file, with none of the
-    repo/branch/HEAD binding the commit validation itself applies. A grant that
-    could not possibly authorize a commit here — one belonging to an entirely
-    different repository — therefore blocked auto-bulk in THIS repo for its
-    whole TTL, and an artificially long expiry blocked it indefinitely.
-    Observed in the wild: a live grant bound to the home directory deferred an
-    auto-bulk commit in an unrelated checkout. `command` supplies the auto-bulk
-    commit's own target so the same binding test decides both; an empty
-    command (or an unresolvable target) keeps the old defer-on-doubt behavior.
-    """
+    """True when an unspent, unexpired commit grant that could authorize this
+    command's commit is pending: a /commit cycle is under way, and auto-bulk
+    waits for it. The grant must match the commit's repository, branch and HEAD
+    (_grant_can_authorize_here); an empty command, or a target that cannot be
+    resolved, defers."""
     try:
         for path, grant in _collect_commit_grant_candidates():
             if _end_time_passed(grant.get('expires_at', '')):
@@ -1279,47 +777,19 @@ def _has_active_commit_grant(command=''):
 def _grant_provenance_refusal(grant, grant_path, data):
     """Why this caller may not spend this grant, or '' when it may.
 
-    THE DEFECT THIS CLOSES. A commit grant used to be a BEARER ticket: the
-    guard checked that the grant was unexpired, unspent and bound to this
-    repo/branch/HEAD, and then allowed the commit no matter WHO presented it
-    or WHETHER the pipeline that the grant exists to authorize had run. The
-    measured consequence (2026-10-06): a seat sent a bare `/commit` first
-    line lit the user-intent sentinel, called write-commit-grant.py directly,
-    and committed 14 times -- changelog-analyst never dispatched, and Phase
-    2/3/4/5/10 never executed, including the fd-9 lock and the MANDATORY
-    pre-stage validation, both of which fail SILENTLY. The only symptom that
-    ever surfaced was a missing push-gate token, because that is the only
-    skipped step that says anything out loud. Disclosure items 1 and 2 of
-    commit 1fdbd3767 recorded this gap in terms and labelled it
-    `Not fully closed`.
+    A grant that is unexpired, unspent and bound to this repo/branch/HEAD is
+    still a bearer ticket unless the guard also asks who presents it and
+    whether the pipeline it authorizes ran:
 
-    Three questions, all of which a bearer fails:
+      1. minted_by.origin must be PIPELINE_ORIGIN (the writer checked a real
+         /commit run planned this repository).
+      2. The caller must be a dispatched subagent (non-empty agent_id).
+      3. A hook-written changelog-analyst dispatch attestation, dated at or
+         after the mint, must record the caller's CLI role and the digest of
+         the prompt that dispatched this agent_id (read from its transcript).
 
-      1. Is the grant a PIPELINE product? `minted_by.origin` must be
-         PIPELINE_ORIGIN. A grant minted by an older copy of the writer
-         carries no `minted_by` at all and is refused -- that is deliberate:
-         an unsigned ticket is exactly the thing being retired.
-      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty:
-         a dispatched subagent's payload carries a non-empty id, while the
-         main agent's carries none. This single check is what refuses the
-         orchestrator-as-bearer -- step 4 of the measured bypass.
-      3. Is it THE subagent this pipeline run dispatched? A live
-         hook-written changelog-analyst dispatch attestation must exist,
-         dated at or after the mint, whose `subagent_type` is the caller's
-         CLI role (lib.agent_resolver.resolve_agent_type) and whose
-         `prompt_sha256` is the digest of the prompt that dispatched this
-         agent_id (read from the caller's own transcript, as the producer-stop
-         gate reads it). Every repository of that dispatch's plan is committed
-         under the same attestation; a dev or QA presenting the grant is
-         refused naming its role and changelog-analyst, and a second,
-         unrelated subagent was dispatched with another prompt and is refused.
-         Nothing is written to decide this.
-
-    Returns a reason string rather than blocking directly, so the caller can
-    move on to the next candidate grant instead of letting one stale or
-    legacy grant shadow a legitimate one. The reason is only surfaced if NO
-    candidate ends up authorizing the commit.
-    """
+    A reason is returned rather than a block, so one stale grant cannot shadow
+    a valid one later in the candidate list."""
     minted_by = grant.get('minted_by')
     if not isinstance(minted_by, dict) or \
             minted_by.get('origin') != commit_pipeline.PIPELINE_ORIGIN:
@@ -1331,8 +801,7 @@ def _grant_provenance_refusal(grant, grant_path, data):
             f'"{commit_pipeline.PIPELINE_ORIGIN}", written by '
             'scripts/write-commit-grant.py only after it has verified that a real '
             '/commit pipeline run planned this repository. An unsigned grant is a '
-            'bearer ticket -- the exact shape that let 14 commits bypass '
-            'changelog-analyst entirely -- and is no longer honored.\n'
+            'bearer ticket and is not honored.\n'
             'To commit: invoke /commit, which mints a grant with provenance and '
             'dispatches changelog-analyst to spend it.\n'
         )
@@ -1386,13 +855,11 @@ def _grant_provenance_refusal(grant, grant_path, data):
 
 
 def _evaluate_commit(command, data):
-    msg = _extract_commit_message(command)
-    if msg and BLESSED_BRIDGE_RE.search(msg):
-        # Require a valid bulk-commit sentinel (written by /commit --bulk).
-        # Without it, any agent that knows the prefix could bypass the guard.
+    cwd = _hook_cwd(data)
+    if _auto_bulk_subject(command, cwd):
+        # The auto-bulk subject authorizes nothing by itself: a live /commit --bulk
+        # sentinel must back it, and a pending /commit grant for this target goes first.
         if _has_bulk_commit_sentinel(data):
-            # Fix E: defer auto-bulk if a single-use /commit grant is active.
-            # A concurrent /commit cycle is in progress; let it finish first.
             if _has_active_commit_grant(command):
                 _block(
                     '\nDEFERRED: auto-bulk commit skipped — an active single-use '
@@ -1411,68 +878,38 @@ def _evaluate_commit(command, data):
         )
     if _check_git_allowlist(command, data):
         return
-    # Grant-file mechanism. /commit (BULK=false) writes TWO repo-bound grants
-    # (CONTROL_ROOT + nested ~/.claude); the guard MUST bind to the grant whose
-    # repo_root/branch/expected_head match the commit's target repo, NOT merely
-    # the most-recent grant. Selecting by recency blocks the root commit (which
-    # fires first) on a repository mismatch against the newer nested-repo grant
-    # (docs/dev/peer-review-grant-parity.md CRITICAL). Collect every candidate
-    # (the any-SID glob is a superset of the SID-specific one, covering the
-    # subagent SID-propagation fallback) and pick the one bound to this target.
+    # /commit writes one repository-bound grant per repository of its plan, so the
+    # grant is selected by the commit's target, not by recency.
     live = [(path, grant) for path, grant in _collect_commit_grant_candidates()
             if not _end_time_passed(grant.get('expires_at', ''))]
     provenance_refusal = ''
     for grant_path, grant in live:
         if _grant_matches_commit_target(grant, command):
-            # WHO is spending this grant, and did the pipeline it authorizes
-            # actually run? Checked after the target match so the caller's
-            # transcript is read only for a grant bound to this repository,
-            # and recorded-then-skipped rather than blocking here so one
-            # stale or legacy grant cannot shadow a legitimate one that
-            # appears later in a nondeterministic glob order. If nothing
-            # authorizes the commit, the FIRST refusal is what gets reported
-            # below -- it is the precise reason, where default-deny is not.
+            # Who spends it and with what message, read only for a grant bound to
+            # this target. A refusal is kept and the next grant tried, so one stale
+            # grant cannot shadow a valid one; the first refusal is reported.
             refusal = (_grant_provenance_refusal(grant, grant_path, data)
                        or _task_id_refusal(grant, grant_path, command, data))
             if refusal:
                 provenance_refusal = provenance_refusal or refusal
                 continue
-            # Authoritative binding re-check (redirect vectors + repo/branch/HEAD
-            # across EVERY invocation): a matching grant passes; any redirect
-            # still _block()s (exit 2). Single source of truth for the allow.
             _enforce_commit_grant_binding(grant, command)
-            # Spend it: the unlink only one event can win is the single use, so a
-            # concurrent event that read the same grant falls through to the next
-            # candidate. A failed commit does not get it back; its retry takes a
-            # fresh grant from /commit.
+            # Spent by an unlink only one event can win; the loser tries the next grant.
             if not _spend_grant(grant_path):
                 continue
-            # Hand the grant's journal fields to the PostToolUse finalizer under
-            # THIS EVENT's key, never a session id: the grant's sid and the
-            # finalizer's sid legitimately differ (see
-            # _collect_commit_grant_candidates), and a session-named pointer is
-            # claimable by an unrelated later commit. No key, or a taken name,
-            # leaves this commit authorized and unjournaled.
+            # The finalizer's journal pointer is keyed by this event, not a session
+            # id: the grant's sid and the finalizer's may differ.
             commit_journal.write_event_pointer(
                 commit_journal.event_key(data), commit_journal.raw_tool_use_id(data),
                 grant)
             return
-    # A grant was bound to this exact target but its bearer was not entitled to
-    # spend it. Reported ahead of the binding/default-deny diagnostics below
-    # because those would blame the repo binding or say "no grant", both of
-    # which are false here and send the reader hunting in the wrong place.
     if provenance_refusal:
         _block(provenance_refusal)
-    # Fail closed (security preserved): no unexpired grant is bound to this
-    # commit's target repo/branch/HEAD. If a live-but-mismatched grant exists,
-    # surface the precise diagnostic via the authoritative binding check (it
-    # _block()s, exit 2); otherwise default-deny. Selection narrowed the FALSE
-    # block above WITHOUT widening acceptance -- a mismatched-only grant set is
-    # still rejected here.
+    # A live grant bound elsewhere: its binding check names the mismatch.
     if live:
         _enforce_commit_grant_binding(live[0][1], command)
-    # AC-A13: default-deny all other agent git commit calls.
-    _block_default_deny_commit(msg)
+    message = _commit_message_text(command, cwd) or ''
+    _block_default_deny_commit(message.partition('\n')[0])
 
 
 def _evaluate_merge(command, data):
@@ -1490,11 +927,10 @@ def _evaluate_merge(command, data):
         'wrapper hooks/merge.sh.\n'
         'Command excerpt: %s\n' % command[:200]
         + 'Main agent may bypass with /allow <pattern> before the git merge command.\n'
-        'Spec: spec-20260424-233926 section 5.2.4 (R4.3).\n'
     )
 
 
-# E2: added to every block the guard emits while the main agent holds /do consent.
+# Added to every block the guard emits while the main agent holds /do consent.
 DO_NOT_COVERED = (
     '/do consent does not cover git commit, git push, a git operation this guard refuses '
     'without it that can move the protected branch, or a git command this guard cannot '
@@ -1502,7 +938,7 @@ DO_NOT_COVERED = (
     'push through /push; a merge into the protected branch through /merge.\n'
 )
 
-# E2: with one of these words in a command, git may run in another directory
+# With one of these words in a command, git may run in another directory
 # than the hook's (_DIR_CHANGE_RE) or on another branch than the hook-time HEAD
 # (_BRANCH_CHANGE_RE). Read anywhere in the command: `&`, `|`, loops, functions
 # and traps run its parts in an order the text does not give. `\.` is the dot
@@ -1514,7 +950,7 @@ _BRANCH_CHANGE_RE = re.compile(r'(?<![\w./-])(?:checkout|switch|symbolic-ref)(?!
 _EXPANSION = re.compile(r'[$`*?\[{]')  # a name the shell or git may expand
 
 
-# E2: the git subcommands that can move a branch ref: on HEAD's branch, or by name.
+# The git subcommands that can move a branch ref: on HEAD's branch, or by name.
 _MOVES_HEAD = frozenset({'merge', 'pull', 'rebase', 'cherry-pick', 'revert', 'am', 'reset'})
 _MOVES_NAMED = frozenset({'pull', 'fetch', 'rebase', 'update-ref', 'symbolic-ref', 'branch',
                           'checkout', 'switch', 'worktree', 'filter-branch', 'filter-repo',
@@ -1543,14 +979,12 @@ def _reset_moves(args):
 
 
 def _branch_writes(inv):
-    """E2: (moves the branch HEAD is on, [branch names it writes]) for one git
+    """(moves the branch HEAD is on, [branch names it writes]) for one parser git
     invocation; the name `*` stands for refs the guard cannot list."""
-    sub = inv.subcommand
+    sub, args = inv.subcommand, list(inv.args)
     if sub not in _MOVES_HEAD | _MOVES_NAMED:
         return False, []
-    try:  # the words as the shell passes them (ref names hold no space)
-        args = shlex.split(' '.join(inv.args))
-    except ValueError:  # the segment splitter cut a quoted word: its operands are unknown
+    if None in args:  # a computed word: its operands are unknown
         return sub in _MOVES_HEAD, ['*'] if sub in _MOVES_NAMED else []
     ops = _operands(args)
     if sub in ('cherry-pick', 'revert') and {'-n', '--no-commit'} & set(args):
@@ -1608,13 +1042,20 @@ def _protected_branch():
 
 
 def _moves_protected_branch(command, invocations):
-    """E2: True when a git operation in `command` can move the protected
+    """True when a git operation in `command` can move the protected
     branch's ref (_branch_writes: one on HEAD's branch while HEAD is on it, or
     one that writes it by name), or the guard cannot tell where it lands: a
     directory change or GIT_DIR-style redirect in the command, a branch change
     in it for an operation on HEAD, a prefix or an option before the operation's
-    subcommand, a detached HEAD, or an unset origin/HEAD."""
-    writes = [_branch_writes(inv) for inv in invocations]
+    subcommand, a detached HEAD, or an unset origin/HEAD. `invocations` are the
+    classifier's; one the parser does not read as a git command is a landing
+    the guard cannot tell."""
+    parsed = [inv for _at, inv in _git_view(command)[1]]
+    moving = _MOVES_HEAD | _MOVES_NAMED
+    if (sum(inv.subcommand in moving for inv in invocations)
+            > sum(inv.subcommand in moving for inv in parsed)):
+        return True
+    writes = [_branch_writes(inv) for inv in parsed]
     on_head = any(head for head, _names in writes)
     names = [name for _head, named in writes for name in named]
     if not (on_head or names):
@@ -1622,11 +1063,9 @@ def _moves_protected_branch(command, invocations):
     if (_ambient_git_redirect_present() or _DIR_CHANGE_RE.search(command)
             or (on_head and _BRANCH_CHANGE_RE.search(command))):
         return True
-    for seg in _shell_segments(command):
-        toks = seg.split()
-        if any(any(_branch_writes(inv)) and (
-                _cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
-               for inv in iter_git_invocations(seg)):
+    for inv, write in zip(parsed, writes):
+        if any(write) and (inv.global_opts or inv.env or inv.cmd.assignments or inv.cmd.negated
+                           or inv.context != ('top',) or shell_parse.resolve(inv.cmd).wrappers):
             return True
     protected = _protected_branch()
     if not protected or any(_names_protected(name, protected) for name in names):
@@ -1649,21 +1088,10 @@ def _evaluate_protected_move(command, data):
     )
 
 
-def _block_inline_env_push(command):
-    """AC-A1: literal-substring inline-env injection block for push."""
-    _block(
-        '\nBLOCKED: agent git push - inline-env injection blocked.\n'
-        'Detected literal substring `CLAUDE_PUSH_COMMAND_ACTIVE=` in '
-        'the raw command text; agents are not permitted to set this '
-        'env var inline.  Only the /push wrapper may set it via '
-        'subprocess + os.environ.\n'
-        'Command excerpt: %s\n' % command[:200]
-        + 'Spec: ba-spec-20260425-redev2.md AC-A1.\n'
-    )
-
-
 def _block_default_deny_push(command):
-    """AC-A5: default-deny block when push env is unset."""
+    """Every agent push: /push pushes inside hooks/push.sh, which no hook sees.
+
+    The text is quoted verbatim by the README's hero capture (.github/assets)."""
     _block(
         '\nBLOCKED: agent git push - agents are not authorized to push '
         'to remote from an agent context.\n'
@@ -1677,76 +1105,14 @@ def _block_default_deny_push(command):
     )
 
 
-def _validate_push_grant_branch(grant):
-    """AC-A7: grant.branch must match current branch."""
-    grant_branch = grant.get('branch') or ''
-    current_branch = _git_output(['branch', '--show-current'])
-    if not grant_branch or grant_branch != current_branch:
-        _block(
-            '\nBLOCKED: agent git push - branch mismatch.\n'
-            'Grant branch  : %r\n' % grant_branch
-            + 'Current branch: %r\n' % current_branch
-            + 'Spec: ba-spec-20260425-redev2.md AC-A7.\n'
-        )
-
-
-def _validate_push_grant_head(grant):
-    """AC-A6: grant.expected_head must match current HEAD sha."""
-    grant_head = grant.get('expected_head') or ''
-    current_head = _git_output(['rev-parse', 'HEAD'])
-    if not grant_head or grant_head != current_head:
-        _block(
-            '\nBLOCKED: agent git push - expected_head mismatch.\n'
-            'Grant expected_head: %r\n' % grant_head
-            + 'Current HEAD       : %r\n' % current_head
-            + 'Spec: ba-spec-20260425-redev2.md AC-A6.\n'
-        )
-
-
-def _validate_push_grant_remote(grant, push_invocation):
-    """AC-A6 (remote binding): explicit cmd remote must match grant.remote."""
-    grant_remote = grant.get('remote') or ''
-    cmd_remote = _extract_push_remote(push_invocation)
-    if cmd_remote and grant_remote and cmd_remote != grant_remote:
-        _block(
-            '\nBLOCKED: agent git push - remote mismatch.\n'
-            'Grant remote  : %r\n' % grant_remote
-            + 'Command remote: %r\n' % cmd_remote
-            + 'Spec: ba-spec-20260425-redev2.md AC-A6.\n'
-        )
-
-
-def _block_missing_push_grant(sid):
-    """AC-A4: env present but no on-disk grant for this SID."""
-    pattern = os.path.join(harness_state_dir(), 'claude-push-grant-%s-*.json' % sid)
-    _block(
-        '\nBLOCKED: agent git push - CLAUDE_PUSH_COMMAND_ACTIVE=1 '
-        'is set but no valid grant manifest matching %s.\n' % pattern
-        + 'Single-use grants are unlinked on first valid consumption; '
-        'a missing grant means it was already used or never written.\n'
-        'Spec: ba-spec-20260425-redev2.md AC-A4; '
-        'close-report-20260425-push-commit-debate.md §1-2.\n'
-    )
-
-
 def _evaluate_push(command, invocations, data):
-    # FOLLOW-UP (2026-07-16, out of scope for the commit-grant redirect fix):
-    # _validate_push_grant_branch/_head resolve the current branch/HEAD via
-    # _git_output (hook cwd) with NO target-dir resolution, so the SAME class of
-    # redirect hole closed for commit still exists here -- `git --git-dir=B/.git
-    # --work-tree=B push ...`, `GIT_DIR=B/.git git push ...`, ambient GIT_DIR/
-    # GIT_WORK_TREE, and a second chained `git -C B push` all bypass the
-    # branch/HEAD binding. Deliberately NOT fixed in this task (commit-grant
-    # scope only); tracked as a separate follow-up. Mirror _enforce_commit_grant_binding
-    # here (ambient-env block + per-invocation redirect-flag/inline-env block +
-    # -C target resolution) when addressed.
-    sid = _get_session_id(data)
-    # AC-A1: literal-substring inline-env injection (precedes env check).
-    if _inline_env_present(command, 'CLAUDE_PUSH_COMMAND_ACTIVE'):
-        _block_inline_env_push(command)
-    # Find the push invocation for ref-mutation and remote checks.
-    push_inv = next((inv for inv in invocations if inv.subcommand == 'push'), None)
-    if push_inv and _push_has_forbidden_ref_mutation(push_inv):
+    # The parser's reading (wrappers and nested shells peeled, quotes removed, long
+    # options resolved), and the classifier's, which also reads a quoted payload
+    # it cannot rule out as code.
+    script = shell_parse.parse(command)
+    pushes = [inv.args for inv in shell_parse.git_invocations(script) if inv.subcommand == 'push']
+    pushes += [[_unquote_token(t) for t in inv.args] for inv in invocations if inv.subcommand == 'push']
+    if any(_push_forces_or_deletes(args) for args in pushes):
         _block(
             '\nBLOCKED: agent git push - force/delete/ref-rewrite push is forbidden.\n'
             'Command excerpt: %s\n' % command[:200]
@@ -1755,20 +1121,7 @@ def _evaluate_push(command, invocations, data):
         )
     if _check_git_allowlist(command, data):
         return
-    # AC-A5: default-deny when env unset.
-    if os.environ.get('CLAUDE_PUSH_COMMAND_ACTIVE') != '1':
-        _block_default_deny_push(command)
-    # AC-A4: env present but no grant -> block.  Per close-report §1-2,
-    # filename is `<sid>-<nonce>.json` (per-nonce); glob+match.
-    grant_path, grant = _find_grant('push', sid)
-    if grant is None:
-        _block_missing_push_grant(sid)
-    # AC-A7 + AC-A6: branch / head / remote binding.
-    _validate_push_grant_branch(grant)
-    _validate_push_grant_head(grant)
-    _validate_push_grant_remote(grant, push_inv)
-    # All validations passed.  Consume grant (single-use), then allow.
-    _spend_grant(grant_path)
+    _block_default_deny_push(command)
 
 
 def _evaluate_reset_hard(command, invocations, data):
@@ -1781,7 +1134,6 @@ def _evaluate_reset_hard(command, invocations, data):
         'from agent flow.\n'
         + 'Command excerpt: %s\n' % command[:200]
         + 'Target: %r\n' % target
-        + 'Spec: 2026-05-09 commit/push loss-prevention policy.\n'
     )
 
 
@@ -1797,12 +1149,9 @@ def _evaluate_direct_ref_mutation(command, data):
 
 
 def _looks_like_git_forbidden_plumbing(invocations):
-    """R6: Ban agent direct invocation of git plumbing that creates commit objects.
+    """git commands that write commits or move refs outside /commit and /merge.
 
-    Defense-in-depth: most are already indirectly blocked (they call git commit
-    or git update-ref internally). These explicit bans close the gap for R6.
-    Uses token-aware classification so string literals in python -c code are
-    not matched (only the command token is classified, not arguments).
+    Read from the classified subcommand, so a word in a quoted argument is not one.
     """
     _FORBIDDEN_PLUMBING = {
         'commit-tree', 'cherry-pick', 'rebase', 'pull',
@@ -1827,42 +1176,25 @@ def _evaluate_forbidden_plumbing(command, data):
     )
 
 
-# E2: the rules /do consent releases (_evaluate_command).
+# The rules /do consent releases (_evaluate_command).
 _DO_RELEASED = (_looks_like_git_merge, _looks_like_git_forbidden_plumbing,
                 _looks_like_git_reset_hard, _looks_like_git_direct_ref_mutation)
 
 
 # ---------------------------------------------------------------------------
-# Residual-refusal recovery route (2026-09-03)
+# Residual-refusal recovery route
 #
-# The residual refusal below is the ONE block in this guard that left an agent
-# nothing: it fires before the invocation list, the allowlist cannot reach it
-# (see the ordering note in _evaluate_command), and /do is main-agent-only. A
-# stuck subagent is how guards get disabled wholesale, so the refusal needs a
-# route -- WITHOUT becoming a laundering channel.
+# A command whose git binary the classifier cannot resolve is refused before
+# the invocation list is read, the allowlist cannot reach it, and /do is
+# main-agent-only, so a subagent needs a route that cannot launder a command.
 #
-# Binding. The refusal exists BECAUSE the command did not parse, so the route
-# cannot bind to operations the way a sentinel grant does: there is no op to
-# name. The only thing left to bind to is the command's exact bytes. The
-# override therefore carries sha256 of the FULL command text -- the full text,
-# not the residual segment, because a segment binding would leave every other
-# segment free to be appended after authorization. Full-text digest means the
-# authorized command and the executed command are the same string by
-# construction, with zero degrees of freedom.
-#
-# Reach. An override may only ANSWER a refusal this guard already emitted and
-# journaled (_digest_was_refused). It cannot be minted pre-emptively for a
-# command that was never refused, and it is single-use and short-lived.
-#
-# What this route does NOT claim. It does not claim an agent cannot forge the
-# file: a grant under /tmp is an ordinary JSON file, creating a path that does
-# not yet exist is never denied, so any agent with Bash can mint one. That
-# limitation is declared rather than claimed closed, and this route inherits
-# exactly that declared limitation and adds no new surface. What the route does supply
-# is the property forgery cannot erase: honoring an override emits a
-# non-suppressible stderr audit record naming who authorized it, why, and what
-# was refused, so a forged authorization is visible in the transcript rather
-# than silent.
+# Binding: there is no operation to name, so an override carries sha256 of the
+# full command text; the authorized and the executed command are one string.
+# Reach: an override answers only a refusal this guard already journaled
+# (_digest_was_refused); it is single-use and short-lived.
+# Limit: any agent with Bash can write the override file. Honoring one emits a
+# stderr audit record naming who authorized it, why and what was refused, so a
+# forged authorization shows in the transcript.
 # ---------------------------------------------------------------------------
 
 _RESIDUAL_OVERRIDE_DIR = os.path.join(harness_state_dir(), 'claude-git-residual-override')
@@ -2007,37 +1339,15 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
 
 def _evaluate_command(command, data, do_consent=False):
     # do_consent: the main agent holds /do consent, which releases the rules in
-    # _DO_RELEASED and adds none (E2): what one of them refuses stays refused when
-    # it can move the protected branch or the guard cannot tell the branch it lands
+    # _DO_RELEASED and adds none: what one of them refuses stays refused when it
+    # can move the protected branch or the guard cannot tell the branch it lands
     # on (_moves_protected_branch); git commit, git push and a git command the
     # guard cannot classify are judged as without it.
-    # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
-    # iter_git_invocations uses token-aware parsing so path-qualified forms like
-    # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
     invocations, residuals = classify_git_command(command)
-    # An EMPTY invocation list is not proof that no git runs. Two distinct cases
-    # hide behind it, and conflating them is what made this guard a no-op:
-    #   * genuinely git-free (`echo hi`, `grep git .`) — must stay fast and
-    #     permissive; this hook sees EVERY Bash call in the harness.
-    #   * git-shaped but unparseable (`g\it push`, `$GIT push`, `$(which git)
-    #     push`) — the command token cannot be resolved statically, so NO check
-    #     below can be trusted to judge it. Refuse rather than fall through.
-    # Checked BEFORE the invocation list and WITHOUT an allowlist bypass: a
-    # grant is bound to a specific repo/branch/HEAD, and a command whose binary
-    # is unknowable cannot be shown to be the command the grant authorized.
-    #
-    # That ordering is LOAD-BEARING, and measurably so: the two sides use
-    # DIFFERENT splitters. lib/allowlist.py::_bash_subcommands (the grant
-    # matcher) splits on && || ; | but NOT on `&`, while
-    # lib/git_command_classifier.py::_segments (the residual detector) does
-    # split on `&`. So `git status & $GIT push --force origin master` is ONE
-    # grant-matchable subcommand whose head token is `git status` -- which a
-    # structural sentinel grant satisfies -- while carrying an unresolvable
-    # `$GIT push --force` the guard cannot judge. Run the allowlist first and
-    # authority earned for `git status` is spent on a force-push through an
-    # unknown binary. The recovery route below therefore sits INSIDE this
-    # branch rather than reordering it, and binds to the command's bytes
-    # instead of to operations the allowlist could match.
+    # A git-shaped command whose binary the classifier cannot resolve (`g\it push`,
+    # `$GIT push`, `$(which git) push`) is refused before the invocation list and
+    # before /allow: no grant can be shown to cover an unknown binary, and the
+    # grant matcher may read `git status & $GIT push --force` as one `git status`.
     if residuals:
         kinds = sorted({kind for kind, _seg in residuals})
         segments = [seg for _k, seg in residuals]
@@ -2083,9 +1393,8 @@ def _evaluate_command(command, data, do_consent=False):
             )
     if not invocations:
         return
-    # Fast path: if /allow grant matches for non-push commands, allow immediately.
-    # Push is excluded: its allowlist check must come AFTER _push_has_forbidden_ref_mutation
-    # (force-push must stay blocked even with a broad /allow grant).
+    # An /allow grant settles every command but a push, whose force/delete refusal
+    # no grant lifts (_evaluate_push).
     if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
     if (do_consent and any(rule(invocations) for rule in _DO_RELEASED)
@@ -2115,14 +1424,10 @@ def main():
     try:
         if data.get('tool_name', '') != 'Bash':
             sys.exit(0)
-        # Always-on per spec 5.2.4 line 240-241; overnight gate removed
-        # 2026-04-25 (Option alpha) after b5d447e proved interactive
-        # sessions need this guard too.
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command:
             sys.exit(0)
-        # /do consent (main agent only) releases rules and adds none (E2,
-        # _evaluate_command).
+        # /do consent (main agent only) releases rules and adds none (_evaluate_command).
         do_consent = has_do_consent(data)
         try:
             _evaluate_command(command, data, do_consent)
