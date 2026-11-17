@@ -6,7 +6,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "((rm q);(rm t))",
@@ -15,7 +17,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "arr=($(rm q))",
@@ -24,7 +28,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo {$(rm q),x}",
@@ -33,7 +39,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo [`rm${IFS}q`]",
@@ -42,7 +50,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "[[ x == @($(rm q)|y) ]]",
@@ -51,7 +61,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo ${X:-$'\\''}; rm q; echo \\'}",
@@ -60,7 +72,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "$'rm\\0zz' q",
@@ -69,7 +83,9 @@
   "view": "resolve",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "let 'a[$(rm q)]=1'",
@@ -78,7 +94,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "X='q t'; rm $X",
@@ -87,7 +105,9 @@
   "view": "write_targets",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "X=p; X=ok | cat; echo hi > $X",
@@ -96,6 +116,10 @@
   "view": "write_targets",
   "bash_runs": [
    "cat"
+  ],
+  "git_calls": [],
+  "writes": [
+   "p"
   ]
  },
  {
@@ -105,7 +129,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo $[$(rm q)]",
@@ -114,7 +140,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo hi # c \\\nrm q",
@@ -123,7 +151,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "((echo a) ; (rm b))",
@@ -132,7 +162,9 @@
   "view": "parse/walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo $((echo a); rm b)",
@@ -141,7 +173,9 @@
   "view": "parse/walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "((x=1<<true))\nrm -rf y\ntrue",
@@ -150,7 +184,9 @@
   "view": "parse/walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "!(rm a)",
@@ -159,7 +195,9 @@
   "view": "parse/walk/resolve",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "time -- rm a",
@@ -168,7 +206,9 @@
   "view": "parse/resolve/git_invocations",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "f() { rm -rf x; echo \"a, b\"; }; f",
@@ -178,7 +218,9 @@
   "bash_runs": [
    "f",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo \"$(case x in x) rm b;; esac)\"",
@@ -187,7 +229,9 @@
   "view": "walk/executable_view/git_invocations",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "{ bash; } <<< 'rm x'",
@@ -197,7 +241,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "{ cat; } <<EOF\n$(rm x)\nEOF",
@@ -207,21 +253,31 @@
   "bash_runs": [
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "X=protected; (X=harmless); echo hi > $X",
   "impact": "under-read-high",
   "class": "write_targets assignment projection ignores subshell scope and control flow (shell_parse.py:2478-2487), so a hook checks a decidable but wrong path",
   "view": "write_targets",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": [
+   "protected"
+  ]
  },
  {
   "input": "if true; then :; fi > o1",
   "impact": "under-read-high",
   "class": "New variants of known (7) for the other compound kinds and redirect operators (if/while/until/case/select/[[ ]]/(( ))/function definitions/coproc/time/! and 3>, &>, {fd}>, <>, >|, >&file, multiple redirects). write_targets iterates SimpleCommand sites only.",
   "view": "write_targets",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": [
+   "o1"
+  ]
  },
  {
   "input": "X=($(rm a))",
@@ -230,7 +286,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash <<EOF\necho \"\\$(rm f1)\"\nEOF",
@@ -240,7 +298,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "cat <<'EOF'\nfoo\\\nEOF\nrm f1\nEOF",
@@ -251,7 +311,9 @@
    "EOF",
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "cat <<\"E\\$F\"\nE$F\nrm f1\nE\\$F",
@@ -262,7 +324,9 @@
    "E$F",
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "(( x <<true ))\nrm f1\ntrue",
@@ -271,7 +335,9 @@
   "view": "parse / walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "x=$(cat <<'EOF'\n(\nEOF)\nrm f1\nEOF\n# )",
@@ -282,7 +348,9 @@
    "EOF",
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "while read l; do :; done <<EOF\n$(rm f1)\nEOF",
@@ -291,7 +359,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "{ bash; } <<'EOF'\nrm f1\nEOF",
@@ -301,7 +371,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash -s x <<'EOF'\nrm f1\nEOF",
@@ -311,7 +383,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "source /dev/stdin <<'EOF'\ngit push --force\nEOF",
@@ -320,7 +394,15 @@
   "view": "resolve / executable_view / git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "--force"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "cat <<'EOF' | bash\ngit push --force\nEOF",
@@ -330,7 +412,9 @@
   "bash_runs": [
    "bash",
    "cat"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "exec <<'EOF'\nrm f1\nEOF\nbash",
@@ -340,7 +424,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash <<-EOF\n\tcat <<X\n\tX\n\trm f1\nX\nEOF",
@@ -352,7 +438,9 @@
    "bash",
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "rm f1 ²>/dev/null",
@@ -361,7 +449,9 @@
   "view": "walk / write_targets / executable_view / git_invocations",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "tee --output-error o1 < f1",
@@ -370,7 +460,9 @@
   "view": "write_targets",
   "bash_runs": [
    "tee"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash -eo pipefail -c 'rm x'",
@@ -380,7 +472,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash -co pipefail 'rm x'",
@@ -390,7 +484,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash -c - 'rm x'",
@@ -400,7 +496,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash -s a b <<< 'rm x'",
@@ -410,7 +508,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "{ bash; } <<< 'rm x'",
@@ -420,7 +520,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash 3<<<'rm x' 0<&3",
@@ -430,7 +532,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "source /dev/stdin <<< 'rm x'",
@@ -439,7 +543,9 @@
   "view": "resolve",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "trap 'rm x' EXIT",
@@ -448,7 +554,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "BASH_ENV=/dev/stdin bash -c : <<< 'rm x'",
@@ -458,7 +566,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "shopt -s expand_aliases\nalias x=rm\nx f",
@@ -467,7 +577,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "hash -p /usr/bin/rm ls; ls x",
@@ -476,7 +588,9 @@
   "view": "resolve",
   "bash_runs": [
    "ls"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "env - rm x",
@@ -485,7 +599,9 @@
   "view": "resolve",
   "bash_runs": [
    "env"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "env 'X-Y=1' rm x",
@@ -495,7 +611,9 @@
   "bash_runs": [
    "env",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "sudo VAR=1 rm x",
@@ -504,7 +622,9 @@
   "view": "resolve",
   "bash_runs": [
    "sudo"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "env -S '-i rm x'",
@@ -513,7 +633,9 @@
   "view": "resolve",
   "bash_runs": [
    "env"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "env -S 'rm\\_x'",
@@ -523,7 +645,9 @@
   "bash_runs": [
    "env",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "eval -- rm x",
@@ -532,7 +656,9 @@
   "view": "resolve",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo x | xargs -i rm {}",
@@ -542,7 +668,9 @@
   "bash_runs": [
    "rm",
    "xargs"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo 'rm x' | xargs -I{} sh -c {}",
@@ -552,7 +680,9 @@
   "bash_runs": [
    "rm",
    "xargs"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "find . -name x -exec rm {} \\;",
@@ -561,7 +691,9 @@
   "view": "resolve",
   "bash_runs": [
    "find"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "watch -n 1 rm x",
@@ -570,7 +702,9 @@
   "view": "resolve",
   "bash_runs": [
    "watch"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "runuser -u root -- rm x",
@@ -579,7 +713,9 @@
   "view": "resolve",
   "bash_runs": [
    "runuser"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "su -- root -c 'rm x'",
@@ -588,7 +724,9 @@
   "view": "resolve",
   "bash_runs": [
    "su"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "sg root -c 'rm x'",
@@ -597,7 +735,9 @@
   "view": "resolve",
   "bash_runs": [
    "sg"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "script -qc 'rm x' /dev/null",
@@ -606,7 +746,9 @@
   "view": "resolve",
   "bash_runs": [
    "script"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "setpriv --reuid=0 rm x",
@@ -615,7 +757,9 @@
   "view": "resolve",
   "bash_runs": [
    "setpriv"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "chroot --skip-chdir / rm x",
@@ -624,7 +768,9 @@
   "view": "resolve",
   "bash_runs": [
    "chroot"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "nsenter -t $$ -m rm x",
@@ -633,7 +779,9 @@
   "view": "resolve",
   "bash_runs": [
    "nsenter"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "taskset 1 rm x",
@@ -643,7 +791,9 @@
   "bash_runs": [
    "rm",
    "taskset"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "time -- rm x",
@@ -652,7 +802,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "git -C '' push origin main",
@@ -661,7 +813,18 @@
   "view": "parse/git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-C",
+    "",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "exec -a '' git push origin main",
@@ -670,7 +833,16 @@
   "view": "resolve/git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git -c alias.a=b -c alias.b=push a origin main",
@@ -679,7 +851,20 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-c",
+    "alias.a=b",
+    "-c",
+    "alias.b=push",
+    "a",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=status git -c alias.x=push x origin main",
@@ -688,7 +873,18 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-c",
+    "alias.x=push",
+    "x",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git -c alias.x='!rm -rf f' x",
@@ -697,7 +893,16 @@
   "view": "walk/write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-c",
+    "alias.x=!rm -rf f",
+    "x"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "find . -maxdepth 0 -exec git push origin main \\;",
@@ -707,7 +912,16 @@
   "bash_runs": [
    "find",
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "runuser -u root -- git push origin main",
@@ -716,7 +930,9 @@
   "view": "resolve/git_invocations",
   "bash_runs": [
    "runuser"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "taskset 1 git push origin main",
@@ -726,7 +942,16 @@
   "bash_runs": [
    "git",
    "taskset"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "env - git push origin main",
@@ -735,7 +960,9 @@
   "view": "resolve/git_invocations",
   "bash_runs": [
    "env"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "xargs -i git push origin main",
@@ -744,7 +971,9 @@
   "view": "resolve/git_invocations",
   "bash_runs": [
    "xargs"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo --force | xargs git push origin main",
@@ -754,7 +983,17 @@
   "bash_runs": [
    "git",
    "xargs"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main",
+    "--force"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "eval -- 'git push origin main'",
@@ -763,7 +1002,16 @@
   "view": "resolve/walk/git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "env -S'git push origin main \\c --dry-run'",
@@ -773,7 +1021,16 @@
   "bash_runs": [
    "env",
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "a=( $(git push origin main) )",
@@ -782,7 +1039,16 @@
   "view": "walk/git_invocations/write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "bash -s x <<< 'git push origin main'",
@@ -792,7 +1058,16 @@
   "bash_runs": [
    "bash",
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "/usr/lib/git-core/git-push origin main",
@@ -801,7 +1076,9 @@
   "view": "git_invocations",
   "bash_runs": [
    "git-push"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "git -C sub rm g",
@@ -810,7 +1087,17 @@
   "view": "write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-C",
+    "sub",
+    "rm",
+    "g"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git rebase --exec='git push origin main' HEAD~1",
@@ -819,7 +1106,16 @@
   "view": "git_invocations/walk",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "rebase",
+    "--exec=git push origin main",
+    "HEAD~1"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "!(rm q)",
@@ -828,7 +1124,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "X='$(rm q)'; : ${X@P}",
@@ -837,7 +1135,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "{rm,q}",
@@ -846,7 +1146,9 @@
   "view": "resolve",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo $(echo ${X:-(}) ; rm q #)",
@@ -855,7 +1157,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "[[ \"$(case x in x) rm b;; esac)\" ]]",
@@ -864,7 +1168,9 @@
   "view": "parse (Script.errors)",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "cat <<EOF\n$(rm x)\nEOF",
@@ -874,7 +1180,9 @@
   "bash_runs": [
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash <(cat <<'EOF'\nrm f1\nEOF\n)",
@@ -884,7 +1192,9 @@
   "bash_runs": [
    "bash",
    "cat"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "rm \"1\">o19",
@@ -893,6 +1203,10 @@
   "view": "parse (Redir.io) / walk / resolve / git_invocations / argv_split",
   "bash_runs": [
    "rm"
+  ],
+  "git_calls": [],
+  "writes": [
+   "o19"
   ]
  },
  {
@@ -903,7 +1217,17 @@
   "bash_runs": [
    "git",
    "xargs"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "--force",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "echo 'rm x' | bash",
@@ -913,7 +1237,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "bash <(echo rm x)",
@@ -923,7 +1249,9 @@
   "bash_runs": [
    "bash",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "PS4='$(rm x)'; set -x; :",
@@ -932,7 +1260,9 @@
   "view": "walk",
   "bash_runs": [
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo f | xargs -I{} rm {}",
@@ -942,7 +1272,9 @@
   "bash_runs": [
    "rm",
    "xargs"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "find . -name x -delete",
@@ -951,7 +1283,9 @@
   "view": "write_targets",
   "bash_runs": [
    "find"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "nice -5 rm x",
@@ -961,7 +1295,9 @@
   "bash_runs": [
    "nice",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "yes | rm --interactive x",
@@ -971,7 +1307,9 @@
   "bash_runs": [
    "rm",
    "yes"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "POSIXLY_CORRECT=1 cp f out -v",
@@ -980,7 +1318,9 @@
   "view": "write_targets",
   "bash_runs": [
    "cp"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "sed -n '1e rm x' f",
@@ -989,7 +1329,9 @@
   "view": "walk",
   "bash_runs": [
    "sed"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "git -c core.editor='rm -f f' commit --allow-empty",
@@ -998,7 +1340,17 @@
   "view": "walk/write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-c",
+    "core.editor=rm -f f",
+    "commit",
+    "--allow-empty"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git checkout HEAD~1 f",
@@ -1007,7 +1359,16 @@
   "view": "write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "checkout",
+    "HEAD~1",
+    "f"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git rm -- -f",
@@ -1016,7 +1377,16 @@
   "view": "write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "rm",
+    "--",
+    "-f"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "nice -5 git push origin main",
@@ -1026,7 +1396,16 @@
   "bash_runs": [
    "git",
    "nice"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "trap 'git push origin main' EXIT",
@@ -1035,7 +1414,16 @@
   "view": "walk/git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": ". <(echo git push origin main)",
@@ -1044,7 +1432,16 @@
   "view": "walk/resolve",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git config alias.x push; git x origin main",
@@ -1053,7 +1450,22 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "config",
+    "alias.x",
+    "push"
+   ],
+   [
+    "git",
+    "x",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "E='!git push origin main' git --config-env=alias.x=E x",
@@ -1062,7 +1474,15 @@
   "view": "git_invocations/walk",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "--config-env=alias.x=E",
+    "x"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "$'r\\m' q",
@@ -1071,21 +1491,29 @@
   "view": "resolve",
   "bash_runs": [
    "r\\m"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "coproc time rm a",
   "impact": "over-read-low",
   "class": "reserved word after coproc",
   "view": "resolve",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo a 3>o13 >&3-",
   "impact": "over-read-low",
   "class": "the >&N- / N>&M- move form is read as a file write",
   "view": "write_targets / Redir.writes",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": [
+   "o13"
+  ]
  },
  {
   "input": "rm 1\\\n>o1",
@@ -1094,6 +1522,10 @@
   "view": "parse (Redir.io) / walk",
   "bash_runs": [
    "rm"
+  ],
+  "git_calls": [],
+  "writes": [
+   "o1"
   ]
  },
  {
@@ -1103,7 +1535,9 @@
   "view": "resolve",
   "bash_runs": [
    "bash"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "x=$(cat <<EOF) ; rm f1\nbody\nEOF\n",
@@ -1113,7 +1547,9 @@
   "bash_runs": [
    "cat",
    "rm"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "flock -c 'rm x' l",
@@ -1122,7 +1558,9 @@
   "view": "resolve",
   "bash_runs": [
    "flock"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "git --help push",
@@ -1131,7 +1569,15 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "--help",
+    "push"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git --exec-path push origin main",
@@ -1140,7 +1586,17 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "--exec-path",
+    "push",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git -c alias.status=push status",
@@ -1149,7 +1605,16 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-c",
+    "alias.status=push",
+    "status"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "git -calias.x=push x origin main",
@@ -1158,7 +1623,17 @@
   "view": "git_invocations",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "-calias.x=push",
+    "x",
+    "origin",
+    "main"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "bash -c '' 'git push origin main'",
@@ -1167,7 +1642,9 @@
   "view": "resolve",
   "bash_runs": [
    "bash"
-  ]
+  ],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "git rm --cach f",
@@ -1176,34 +1653,51 @@
   "view": "write_targets",
   "bash_runs": [
    "git"
-  ]
+  ],
+  "git_calls": [
+   [
+    "git",
+    "rm",
+    "--cach",
+    "f"
+   ]
+  ],
+  "writes": []
  },
  {
   "input": "echo x &>(rm q)",
   "impact": "accepts-invalid-low",
   "class": "accepts text bash rejects",
   "view": "parse",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "true | ! rm a",
   "impact": "accepts-invalid-low",
   "class": "invalid compound and negation syntax accepted",
   "view": "parse",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "echo x >#o7",
   "impact": "accepts-invalid-low",
   "class": "redirect or heredoc operator followed by '#' or by another operator is accepted",
   "view": "parse",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": []
  },
  {
   "input": "f() rm x",
   "impact": "accepts-invalid-low",
   "class": "function body not required to be compound; bare coproc accepted",
   "view": "parse",
-  "bash_runs": []
+  "bash_runs": [],
+  "git_calls": [],
+  "writes": []
  }
 ]

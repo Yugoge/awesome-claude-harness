@@ -391,6 +391,8 @@ class Redir:
     def dup(self):
         if self.op in (">&", "<&") and self.target is not None:
             lit = self.target.literal()
+            if lit is not None and lit.endswith("-") and _digits(lit[:-1]):
+                lit = lit[:-1]          # N>&M- moves M onto N
             if lit is not None and _digits(lit):
                 return int(lit)
         return None
@@ -985,6 +987,8 @@ def _lex_into(src, toks, depth=0, comments=None):
                         raise LexError("unterminated_heredoc", redir.off)
                 pending_heredocs = []
             continue
+        if t.startswith("&>(", i):
+            raise LexError("unexpected_token", src.off(i))
         if c == "&" and i + 1 < n and t[i + 1] == ">" and not (i + 2 < n and t[i + 2] == "("):
             op = "&>>" if t.startswith("&>>", i) else "&>"
             r = Redir(op, None, src.off(i))
@@ -1044,7 +1048,7 @@ def _lex_into(src, toks, depth=0, comments=None):
             else:
                 while i < n and t[i] in " \t":
                     i += 1
-                if i >= n or t[i] in "\n;&|()":
+                if i >= n or t[i] in "\n;&|()#":
                     raise LexError("redirect_missing_target", r.off)
                 r.target, i = _lex_word(src, i, depth)
                 r.end = r.target.raw.end_off()
@@ -1564,7 +1568,7 @@ class _Grammar:
                 pipes.append(tok[1])
                 self.pos += 1
                 self.skip_newlines()
-                if self.peek() is None:
+                if self.peek() is None or self.reserved(self.peek(), "!"):
                     self.fail("unexpected_token", tok[2])
                     break
                 continue
@@ -1680,7 +1684,7 @@ class _Grammar:
                 self.pos += 2
             self.skip_newlines()
             body = self.parse_command()
-            if body is None:
+            if not isinstance(body, Compound):
                 self.fail("unexpected_token", off)
             return Compound("function", (name_tok[1],), (_as_script(body, self),), (), (off, off), name)
         if self.reserved(tok, "coproc"):
@@ -1698,7 +1702,7 @@ class _Grammar:
             self.pos += 3
             self.skip_newlines()
             body = self.parse_command()
-            if body is None:
+            if not isinstance(body, Compound):
                 self.fail("unexpected_token", off)
             return Compound("function", (tok[1],), (_as_script(body, self),), (), (off, off),
                             tok[1].literal())
@@ -2510,6 +2514,18 @@ def resolve(cmd, depth=None):
             words, replace = _peel_xargs(r, words)
             if replace is not None and any(replace in (w.value() or w.text) for w in words):
                 r.unresolved = r.unresolved or "xargs_replace"
+            fed = _stdin_redirect(cmd.redirects)
+            text = None
+            if fed is not None and fed.hd is not None and fed.hd.quoted:
+                text = fed.hd.body
+            elif fed is not None and fed.op == "<<<" and fed.target is not None:
+                text = fed.target.value()
+            if text is not None and replace is None:
+                words = list(words) + [_synthetic_word(a, words[-1] if words else head)
+                                       for a in argv_split(text)]
+            elif replace is None:
+                # the words xargs appends come from its input
+                r.unresolved = r.unresolved or "xargs_appends"
             if not words:
                 r.head = None
                 return r
@@ -3112,9 +3128,9 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
     ``env`` gives the values of variables the caller knows before the command.
     A command whose name is computed and whose operands name a copy or a move
     (`"$CP" cp-01 dest`) is read as that copy: its last operand is the destination.
-    Any other computed command word with operands names its last operand as an
-    undecidable target (mechanism ``computed-command``), and one with none names
-    the head word itself: what it writes is unknown, so the caller fails closed.
+    Any other computed command word names each operand as an undecidable target
+    (mechanism ``computed-command``, path known where the operand is static), and
+    one with no operand names the head word itself: the verb is unknown.
     The redirections of a compound command come from walk's redirect-only Site.
     """
     if isinstance(script, str):
@@ -3167,11 +3183,12 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
                         t.decidable = False
                         out.append(t)
                 elif res.head is not None:
-                    last = [w for w in res.args if not (w.value() or "").startswith("-")]
-                    word = last[-1] if last else res.head
-                    path = _project(word, env)[0] if last else None
-                    out.append(WriteTarget(path, TRUNCATE, "computed-command", None, False,
-                                           word, None, site.context))
+                    # the verb is unknown: every operand may be written
+                    ops = [w for w in res.args if not (w.value() or "").startswith("-")]
+                    for word in ops or [res.head]:
+                        path = _project(word, env)[0] if ops else None
+                        out.append(WriteTarget(path, TRUNCATE, "computed-command", None, False,
+                                               word, None, site.context))
                 continue
             if name == "git":
                 out.extend(_git_write_targets(res, env, site.context))
@@ -3181,6 +3198,9 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
                 continue
             if name == "install" and _preceded_by_pkg_manager(cmd, res):
                 continue
+            if (res.unresolved or "").startswith("xargs_appends"):
+                # the operands come from xargs's input: the verb writes something unknown
+                out.append(WriteTarget(None, verb[2], name, None, False, res.head, None, site.context))
             found = [t for t in _verb_targets(name, verb, res.args, env, site.context)
                      if not any(p.kind.startswith("procsub") for p in t.word.parts)]
             if verb[1] == "last" and _appends_args(res):
@@ -3474,7 +3494,8 @@ def _git_write_targets(res, env, context):
         args = inv.arg_words
         if sub in ("rm", "mv"):
             vals = [a.value() for a in args]
-            if sub == "rm" and "--cached" in vals[:vals.index("--") if "--" in vals else len(vals)]:
+            resolved = list(inv.args)
+            if sub == "rm" and "--cached" in resolved[:vals.index("--") if "--" in vals else len(vals)]:
                 continue
             dd = vals.index("--") if "--" in vals else len(vals)
             ops = [a for a in args[:dd] if (a.value() or "x")[:1] != "-"] + list(args[dd + 1:])
@@ -3571,6 +3592,9 @@ GIT_LONG_OPTIONS = {
                 "--no-recurse-submodules", "--overlay", "--no-overlay",
                 "--pathspec-from-file", "--pathspec-file-nul"),
     "clean": ("--dry-run", "--force", "--interactive", "--quiet", "--exclude"),
+    "rm": ("--cached", "--force", "--dry-run", "--quiet", "--ignore-unmatch", "--sparse",
+           "--pathspec-from-file", "--pathspec-file-nul"),
+    "mv": ("--force", "--dry-run", "--verbose", "--sparse"),
     "commit": ("--all", "--patch", "--reuse-message", "--reedit-message", "--fixup",
                "--squash", "--reset-author", "--short", "--branch", "--porcelain", "--long",
                "--null", "--file", "--author", "--date", "--message", "--template",
@@ -3663,6 +3687,10 @@ class GitInvocation:
         return "GitInvocation(%r, %r)" % (self.subcommand, list(self.args))
 
 
+def _sh_quote(text):
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
 def resolve_long_option(sub, opt):
     """``opt`` with an unambiguous abbreviation of ``sub``'s long options expanded."""
     if not opt.startswith("--") or opt == "--":
@@ -3680,7 +3708,7 @@ def resolve_long_option(sub, opt):
 _QUOTED_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"")
 
 
-def git_invocations(script, *, into=_DEFAULT_INTO, strings=False, _depth=0):
+def git_invocations(script, *, into=_DEFAULT_INTO, strings=False, _depth=0, _aliases=()):
     """Every git invocation ``script`` runs, in walk order.
 
     ``strings`` also reads the static string arguments of every command whose
@@ -3699,9 +3727,11 @@ def git_invocations(script, *, into=_DEFAULT_INTO, strings=False, _depth=0):
             if site.templated and inv.unresolved is None:
                 inv.unresolved = "templated_payload"
             out.append(inv)
-            if "alias" in into and inv.alias_body is not None:
+            if inv.subcommand in _aliases:
+                inv.unresolved = inv.unresolved or "alias_loop"   # git refuses a looping alias
+            elif "alias" in into and inv.alias_body is not None and _depth < 8:
                 out.extend(git_invocations(inv.alias_body, into=into, strings=strings,
-                                           _depth=_depth + 1))
+                                           _depth=_depth + 1, _aliases=_aliases + (inv.subcommand,)))
         if strings and res.payload is None and _depth < 4:
             for w in res.args:
                 v = w.value()
@@ -3747,6 +3777,9 @@ def _git_from_resolved(res, context):
                 "--exec-path", "--list-cmds"}:
             name, _eq, val = v.partition("=")
             _git_global(inv, name, val)
+            if name == "--exec-path":
+                # git runs its subcommands from this directory
+                inv.unresolved = inv.unresolved or "exec_path"
             k += 1
             continue
         if v[:2] in ("-c", "-C") and len(v) > 2:
@@ -3772,7 +3805,7 @@ def _git_from_resolved(res, context):
             inv.config_pairs.append((key, val))
     if res.unresolved and inv.unresolved is None:
         inv.unresolved = "wrapper:" + res.unresolved
-    if k < len(args) and (inv.unresolved is None or inv.unresolved.startswith("wrapper:")):
+    if k < len(args) and (inv.unresolved is None or inv.unresolved.startswith(("wrapper:", "exec_path"))):
         sub = args[k].value()
         inv.subcommand = sub
         if sub is None:
@@ -3787,7 +3820,10 @@ def _git_from_resolved(res, context):
                     inv.alias_body = parse(val[1:] + (" " + " ".join(
                         w.text for w in rest) if rest else ""))
                 else:
-                    inner = parse("git " + val + (" " + " ".join(w.text for w in rest) if rest else ""))
+                    carried = " ".join("-c " + _sh_quote("%s=%s" % (k_, v_))
+                                       for k_, v_ in inv.config_pairs if k_ is not None and v_ is not None)
+                    inner = parse("git " + carried + " " + val +
+                                  (" " + " ".join(w.text for w in rest) if rest else ""))
                     inv.alias_body = inner
     elif inv.unresolved is not None:
         inv.args = tuple(w.value() for w in args[k:])
