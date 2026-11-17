@@ -895,8 +895,8 @@ def all_targets_whitelisted(command, verb_re, whitelist, strip_service=False):
     return True
 
 
-def service_rules(command, stripped, env):
-    """BS-20/21, BS-23..BS-31: secrets, docker, disks, process kills, systemd units, workflow state."""
+def service_rules(command, view, env):
+    """BS-20/21, BS-23, BS-25..BS-31: secrets, docker, disks, kills, units, workflow state (`view`: executable view)."""
     family = env["family"]
     sensitive = sensitive_redirect(command)
     if sensitive == "write":
@@ -911,12 +911,12 @@ def service_rules(command, stripped, env):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
     if grep(r"docker\s+system\s+prune\s+-a", command):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
-    if grep(r"^\s*(dd|mkfs|fdisk|shred)\b", stripped):
+    if grep(r"^\s*(dd|mkfs|fdisk|shred)\b", view):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
-    if grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", stripped):
+    if grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", view):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if grep(r"(^|[ \t;|&])(kill)[ \t]+-", stripped):
+    if grep(r"(^|[ \t;|&])(kill)[ \t]+-", view):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
@@ -927,7 +927,7 @@ def service_rules(command, stripped, env):
                    "for production services", f"Command: {command}",
                    f"Hint: only {env['dev_systemd']} is allowed{f' (and {prefix}-* takes the daemon-restart grant)' if prefix else ''}.",
                    released_line())
-    if grep(r"(rm|mv)\s", stripped) and grep(r"(workflow-[^/]*\.json|\.claude/todos/)", command):
+    if grep(r"(rm|mv)\s", view) and grep(r"(workflow-[^/]*\.json|\.claude/todos/)", command):
         refuse("BLOCKED: Deleting/moving workflow state files is refused", f"Command: {command}",
                    "These files are required by the workflow enforcement system.", released_line())
 
@@ -995,9 +995,9 @@ def removal_policy(payload_text, command):
                    f"fallback to allow.")
 
 
-def kill_pid_rule(command, stripped):
+def kill_pid_rule(command, view):
     """BS-35: kill <pid>."""
-    if grep(r"(^|[;&|]\s*)kill\s+[0-9]", stripped):
+    if grep(r"(^|[;&|]\s*)kill\s+[0-9]", view):
         refuse("BLOCKED: kill with PIDs is refused — verify the target is safe before killing", f"Command: {command}",
                    "REASON: Killing a PID can cascade to unrelated processes. Use a scoped restart instead.",
                    released_line())
@@ -1223,9 +1223,10 @@ def decide(payload_text):
     view = GitView(stripped, command)
     bulk_sentinel_rule(command)
     hard_ban_rule(command)
-    service_rules(command, stripped, env)
+    executable = executable_view_or_raw(command)
+    service_rules(command, executable, env)
     removal_policy(payload_text, command)
-    kill_pid_rule(command, stripped)
+    kill_pid_rule(command, executable)
     worktree_git_rules(command, view)
     git_clean_rule(command, stripped, view)
     return "ALLOW"
