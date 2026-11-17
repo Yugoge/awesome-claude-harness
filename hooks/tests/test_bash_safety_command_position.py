@@ -179,3 +179,73 @@ MUST_PASS_ROUND2 = [
 def test_round2_a_word_outside_the_verb_position_passes(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 0, (command, r.stderr)
+
+
+# Verifier round 3. D1: Linux reopens the file behind an of= descriptor for writing, so a file opened on it for
+# reading is a target, and another process's descriptor cannot be read. D2: a command that is not a plain shape
+# (readers, kill -0/-l/-L, an fdisk listing, plain dd, git reads) also keeps the whole-command readings the rules had
+# before command position, so a launcher or git/pager form the parser does not classify loses no refusal.
+COMPOSE = "docker-compose down/stop/restart"
+UNIT = "refused for production services"
+KILLALL = "Killing claude/docker processes"
+PRUNE = "docker system prune -a"
+MUST_REFUSE_ROUND3 = [
+    ("dd if=/dev/zero of=/dev/fd/3 3</dev/sda", DISK),
+    ("dd if=/dev/zero of=/proc/self/fd/3 3</dev/sda", DISK),
+    ("dd if=/dev/zero of=/proc/thread-self/fd/3 3</dev/sda", DISK),
+    ("dd if=/dev/zero of=/dev/stdin </dev/sda", DISK),
+    ("dd if=/dev/zero of=/dev/fd/0 0</dev/sda", DISK),
+    ("dd if=/dev/zero of=/dev/fd/3 3<&4 4</dev/sda", DISK),
+    ("dd if=/dev/zero of=/proc/1/fd/3", DISK),
+    ("dd if=/dev/zero of=/proc/4242/fd/1", DISK),
+    ("exec 3>/dev/sda; dd if=/dev/zero of=/dev/fd/3", DISK),
+    ("dd if=/dev/zero of=~/../../../../../../dev/sda", DISK),
+    ("uv run docker compose down", COMPOSE),
+    ("uv run kill -9 4242", KILL_SIG),
+    ("poetry run kill -9 4242", KILL_SIG),
+    ("pipenv run systemctl restart nginx", UNIT),
+    ("pdm run pkill -f claude", KILLALL),
+    ("hatch run docker system prune -a", PRUNE),
+    ("conda run -n x docker compose down", COMPOSE),
+    ("npm exec -- pkill -f claude", KILLALL),
+    ("pnpm exec docker compose down", COMPOSE),
+    ("pnpm dlx kill -9 4242", KILL_SIG),
+    ("yarn exec systemctl restart nginx", UNIT),
+    ("bunx docker compose down", COMPOSE),
+    ("npx kill -9 4242", KILL_SIG),
+    ("bundle exec docker system prune -a", PRUNE),
+    ("direnv exec . docker compose down", COMPOSE),
+    ("nix develop -c docker compose down", COMPOSE),
+    ("nix-shell --run 'docker compose down'", COMPOSE),
+    ("mise exec -- kill -9 4242", KILL_SIG),
+    ("op run -- systemctl restart nginx", UNIT),
+    ("doppler run -- docker compose down", COMPOSE),
+    ("aws-vault exec p -- kill -9 4242", KILL_SIG),
+    ("dotenv -- pkill -f claude", KILLALL),
+    ("caffeinate docker compose down", COMPOSE),
+    ("cgexec -g cpu:x kill -9 4242", KILL_SIG),
+    ("proxychains docker compose down", COMPOSE),
+    ("torsocks systemctl restart nginx", UNIT),
+    ("tsp docker compose down", COMPOSE),
+    ("faketime '2020-01-01' kill -9 4242", KILL_SIG),
+    ("lldb -- kill -9 4242", KILL_SIG),
+    ("nsenter -t 1 -m systemctl restart nginx", UNIT),
+    ("uv run rm .claude/workflow-a.json", WORKFLOW),
+    ("git -c alias.x='!systemctl restart nginx' x", UNIT),
+    ("git rebase --exec 'docker compose down' HEAD~1", COMPOSE),
+    ("git bisect run docker compose down", COMPOSE),
+    ("git submodule foreach 'docker compose down'", COMPOSE),
+    ("git -c core.sshCommand='docker compose down' fetch", COMPOSE),
+    ("GIT_PAGER='docker compose down' git log", COMPOSE),
+    ("PAGER='docker compose down' man ls", COMPOSE),
+    ("bash -c 'uv run docker compose down'", COMPOSE),
+    ("rg --pre ./x 'docker compose down'", COMPOSE),
+    ("git grep -O'docker compose down' x", COMPOSE),
+    ("sed -n 'w /etc/docker/daemon.json' x", "Modifying Docker daemon config"),
+]
+
+
+@pytest.mark.parametrize("command,label", MUST_REFUSE_ROUND3)
+def test_round3_a_launcher_or_descriptor_form_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
