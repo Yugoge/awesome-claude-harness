@@ -1968,34 +1968,39 @@ _PARSE_PROMPT = []  # [parse_prompt or None], loaded once
 
 def switch_parser():
     """scripts/harness-switch's own parse_prompt (what UserPromptSubmit treats as the owner's /harness),
-    loaded from the file without running its main; None when it cannot be loaded."""
+    compiled from its SOURCE alone (no import machinery, so no __pycache__ pyc, which an agent could plant,
+    is ever read or written) and run without its main; None when it cannot be loaded."""
     if not _PARSE_PROMPT:
         fn = None
         try:
-            import importlib.machinery
-            import importlib.util
-            loader = importlib.machinery.SourceFileLoader("_harness_switch_script", SWITCH_FILES[0])
-            spec = importlib.util.spec_from_loader("_harness_switch_script", loader)
-            module = importlib.util.module_from_spec(spec)
-            loader.exec_module(module)  # top level defines only; main runs under __name__ == "__main__"
-            fn = getattr(module, "parse_prompt", None)
+            path = SWITCH_FILES[0]
+            with open(path, "rb") as f:
+                source = f.read()
+            code = compile(source, path, "exec", dont_inherit=True)
+            namespace = {"__name__": "_harness_switch_script", "__file__": path, "__builtins__": __builtins__}
+            exec(code, namespace)  # top level defines only; main runs under __name__ == "__main__"
+            fn = namespace.get("parse_prompt")
             fn = fn if callable(fn) else None
-        except Exception:
+        except BaseException:  # SystemExit / KeyboardInterrupt from its top level included: fail closed
             fn = None
         _PARSE_PROMPT.append(fn)
     return _PARSE_PROMPT[0]
 
 
+_TAG = re.compile(r"<command-name>\s*/?\s*(?:[^<]*:)?harness\s*</command-name>")
+
+
 def types_switch(text: str) -> bool:
     """Whether the switch would take `text`, arriving as a prompt, for the /harness command; fails closed
-    (any `/harness` in it) when the switch's parser cannot be loaded or raises."""
+    (any `/harness` in it, or a command-name tag naming harness) when the switch's parser cannot be
+    loaded or raises."""
     parse = switch_parser()
     if parse is not None:
         try:
             return parse(text) is not None
-        except Exception:
+        except BaseException:
             pass
-    return "/harness" in text
+    return "/harness" in text or _TAG.search(text) is not None
 
 
 def _strings(value, depth=0):
@@ -2010,7 +2015,7 @@ def _strings(value, depth=0):
 
 
 def check_prompt(tool: str, ti: dict) -> int:
-    """A prompt or message (any string in the tool's input) the switch would take for a typed /harness
+    """A prompt or message (every string in the tool input, nested included) the switch would take for a typed /harness
     command; one that only mentions /harness passes."""
     for text in _strings(ti):
         if types_switch(text):
