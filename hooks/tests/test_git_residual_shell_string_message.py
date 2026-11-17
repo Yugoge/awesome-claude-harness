@@ -92,8 +92,16 @@ def test_a_suggested_route_carrying_a_guarded_subcommand_is_judged_on_its_merits
     assert "unresolved_shell_string" not in proc.stderr, proc.stderr
 
 
-@pytest.mark.parametrize("command", ["$GIT push origin master", "g\\it push origin master"])
+@pytest.mark.parametrize("command", ["$GIT push origin master", "$(which git) push origin master"])
 def test_a_binary_residual_keeps_the_literal_binary_route(sandbox, command):
     err = _guard(sandbox, command, True).stderr
     assert "written literally" in err, err
     assert POSITIONAL_ROUTE not in err, err
+
+
+def test_an_escaped_binary_is_judged_as_the_git_it_runs(sandbox):
+    # OB-L26 reads `g\it` as git receives it, so this is no binary residual
+    # any more: the push rule refuses it as it refuses `git push`.
+    proc = _guard(sandbox, "g\\it push origin master", True)
+    assert proc.returncode == 2, proc.stderr
+    assert "git push" in proc.stderr, proc.stderr
