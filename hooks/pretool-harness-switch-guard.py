@@ -85,6 +85,7 @@ READER_OUTPUT = {  # a reader's options that write a file or run a program: it i
     "more": re.compile(r"\A\Z"),
     "rg": re.compile(r"--pre(?:=|\Z)")}
 AWKS = ("awk", "gawk", "mawk", "nawk")
+AWK_LOADS = re.compile(r"@\s*(?:include|load|namespace)\b")  # gawk's directives that load another file
 AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b")  # print > file, print | command, system(): an awk program that writes
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
@@ -520,14 +521,12 @@ def _proof_reader(res, env: dict) -> bool:
     if name in ("less", "more"):
         return all(re.fullmatch(r"-[A-Za-z]+", a) and not re.search("[oOk]", a) or not a.startswith(("-", "+"))
                    for a in args)
-    if name in ("vim", "view"):
-        return (name == "view" or args.count("-R") == 1) and all(
-            a == "-R" or not a.startswith(("-", "+")) for a in args)
     if name == "sed":
         return _sed(plain) == []
     if name in AWKS:
-        program = _awk(plain)
-        return program is not None and not AWK_OUTPUT.search(program) and "getline" not in program
+        program = _awk(plain)  # None for -f / --file / -i / --include / -l / --load / -E / --exec
+        return (program is not None and not AWK_OUTPUT.search(program) and "getline" not in program
+                and not AWK_LOADS.search(program))
     if name == "git":
         return _read_only(plain) and not any(
             a.startswith(("-O", "-c")) or a.startswith("--") and len(a.split("=", 1)[0]) > 3 and any(
