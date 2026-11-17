@@ -86,6 +86,10 @@ AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b|@\s*[A-Za-z_]")  # print > file, print
 # program or may call one; a harmless `@` use such as "@ind_str_asc" is refused too (fail-closed)
 AWK_ENV = re.compile(r"\b(?:AWKPATH|AWKLIBPATH|GAWK_PERSIST_FILE)\b")  # what awk loads, a file gawk writes: named
 # anywhere in the command (before awk, after env, exported, declared), they make every awk in it no reader
+AWK_SHADOW = re.compile(  # PATH assigned (prefix, export, plain), or a function or alias named awk: in the same
+    r"\bPATH\+?=|\b(?:g|m|n)?awk\s*\(\s*\)|\bfunction\s+(?:g|m|n)?awk\b|\balias\b.*?\b(?:g|m|n)?awk=",
+    re.S)  # command, the `awk` that runs may be another program: every awk in it is no reader
+AWK_UNSAFE = frozenset("{}*?[]$`~!")  # unquoted, a character the shell may expand (brace, glob, $, `, ~, !)
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
 SED_LONG = ("--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--posix",
@@ -862,24 +866,67 @@ def _sed_w_words(plain: list) -> list:
     return [w[m.end():].split("\n", 1)[0].strip() for w in plain[1:] for m in re.finditer(r"[wW]", w)]
 
 
-def _awk(plain: list):
-    """An awk command's program text, or None when it is no reader: an option that loads a
-    program or rewrites or writes files (-f / --file, -i inplace, -e, -l, -o, -p, ...), or no program.
-    -v / --assign and -F / --field-separator take a value (spaced, attached or after `=`); `--`
-    ends the options."""
-    it = iter(plain[1:])
-    for w in it:
+def _awk_at(plain: list):
+    """The index in `plain` of an awk command's program word, or None when it is no reader: an
+    option that loads a program or rewrites or writes files (-f / --file, -i inplace, -e, -l, -o,
+    -p, ...), or no program. -v / --assign and -F / --field-separator take a value (spaced, attached
+    or after `=`); `--` ends the options."""
+    i, n = 1, len(plain)
+    while i < n:
+        w = plain[i]
         if w == "--":
-            return next(it, None)
+            return i + 1 if i + 1 < n else None
         if w in ("-F", "-v", "--field-separator", "--assign"):
-            next(it, None)
+            i += 2
         elif re.fullmatch(r"-[Fv].+|--(?:field-separator|assign)=.*", w, re.S):
-            continue
+            i += 1
         elif w.startswith("-") and w != "-":
             return None
         else:
-            return w
+            return i
     return None
+
+
+def _proven_literal(raw: str) -> bool:
+    """Whether a word's raw shell text expands to exactly itself: single-quoted segments, double-
+    quoted ones holding no $ or backtick, and unquoted characters outside AWK_UNSAFE (escaped or not)."""
+    i, n = 0, len(raw)
+    while i < n:
+        c = raw[i]
+        if c == "'":
+            j = raw.find("'", i + 1)
+            if j < 0:
+                return False
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and raw[j] != '"':
+                if raw[j] in "$`":
+                    return False
+                j += 2 if raw[j] == "\\" else 1
+            if j >= n:
+                return False
+            i = j + 1
+        elif c == "\\":
+            if i + 1 < n and raw[i + 1] in AWK_UNSAFE:
+                return False
+            i += 2
+        elif c in AWK_UNSAFE:
+            return False
+        else:
+            i += 1
+    return True
+
+
+def _raw_words(cmd) -> list | None:
+    """A parsed SimpleCommand's words as raw shell text, aligned with _commands' words for it
+    (assignments, words, each redirection's operator and target); None for no parsed command."""
+    if cmd is None:
+        return None
+    raw = [w.raw.text for w in [a.word for a in cmd.assignments] + list(cmd.words)]
+    for r in cmd.redirects:
+        raw += [(r.io or "") + r.op, r.target.raw.text] if r.target is not None else []
+    return raw
 
 
 TAR_SHORT = set("cvzjJapht")  # tar's short flags that read (create or list) and write no file but -f's
@@ -1211,11 +1258,12 @@ def _argv(words: list) -> list:
 
 
 def _written_by(words: list, written: list, awk: bool = False, interpreter: bool = False,
-               members: bool = True) -> list:
+               members: bool = True, raw: list | None = None) -> list:
     """The words of one simple command that it writes: the paths it writes (`written`), and
     for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; tar -c / -t,
-    its -f archive alone; with `awk`, awk whose program is a literal (no expansion left unresolved)
-    with no > | system() or gawk `@name`; with `interpreter`,
+    its -f archive alone; with `awk`, awk whose program word is a proven literal (_proven_literal on
+    its raw shell text, `raw`, aligned with `words`; the word itself where `raw` is None) with no
+    > | system() or gawk `@name`; with `interpreter`,
     an interpreter provably read-only, _interpreter_reads); for cp its destination and each
     source's name inside it; for any other command every word (tee, dd, sed -i, perl -i, mv, rm,
     ...), with awk's quoted strings, the text after each `w` of a sed script this reading cannot
@@ -1230,10 +1278,13 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
         files = _sed(plain)
         return list(written) + (files if files is not None else words + _sed_w_words(plain))
     if head in AWKS:
-        program = _awk(plain)
-        # a program word holding an expansion the parser leaves unresolved (`$(...)`, a backtick,
-        # `${P:-1}`, `$P`; _text spells each `${...}`) is known only at run time: no reader
-        if awk and program is not None and not AWK_OUTPUT.search(program) and "${" not in program:
+        at = _awk_at(plain)
+        program = plain[at] if at is not None else None
+        # only a program word whose raw text expands to exactly itself is the program awk runs: a
+        # brace, a glob, a $ or backtick expansion, ~ or ! may make it any other program
+        k = None if at is None else len(words) - len(plain) + at
+        text = None if k is None else (raw[k] if raw is not None and k < len(raw) else words[k])
+        if awk and text is not None and _proven_literal(text) and not AWK_OUTPUT.search(program):
             return list(written)
         return list(written) + words + AWK_STRING.findall(program or " ".join(plain[1:]))
     if head == "tar":
@@ -1250,9 +1301,11 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
 def writes_settings_file(command: str) -> bool:
     """True when `command` writes a settings*.json file, in any directory: one of the words it
     writes (_written_by; an interpreter whose -c text shows no write reads) names one."""
-    return any(NAMES_SETTINGS.search(w) for words, written in _commands(command, "code")
-               for w in _written_by(words, written, awk=not AWK_ENV.search(command), interpreter=True,
-                                    members=False))
+    sites, awk = [], not AWK_ENV.search(command) and not AWK_SHADOW.search(command)
+    segments = list(_commands(command, "code", sites=sites))
+    return any(NAMES_SETTINGS.search(w) for (words, written), cmd in zip(segments, sites)
+               for w in _written_by(words, written, awk=awk, interpreter=True, members=False,
+                                    raw=_raw_words(cmd)))
 
 
 def _may_name_settings(token: str) -> bool:
@@ -1351,7 +1404,8 @@ def settings_writes(command: str, cwd: str) -> list:
     segments = list(_commands(script, "shell", sites=sites))
     git_dirs = [d for w, _ in segments for d in _git_dirs(w, cwd)]
     every_dir, chain = list(dict.fromkeys(_cd_dirs(segments, cwd) + git_dirs)), _chain(script, cwd)
-    out, seen, home, awk = [], set(), _settings_files(), not AWK_ENV.search(command)
+    out, seen, home = [], set(), _settings_files()
+    awk = not AWK_ENV.search(command) and not AWK_SHADOW.search(command)
     for (words, written), cmd in zip(segments, sites):
         plain = _argv(words)
         if not plain:
@@ -1364,7 +1418,7 @@ def settings_writes(command: str, cwd: str) -> list:
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
-                 (written if (interpreter or message or moves) else _written_by(words, written, awk=awk))]
+                 (written if (interpreter or message or moves) else _written_by(words, written, awk=awk, raw=_raw_words(cmd)))]
         named += _operands(plain, head == "mv") if moves else []
         for word, dirs_too in named:
             if (word, dirs_too, dirs) not in seen:

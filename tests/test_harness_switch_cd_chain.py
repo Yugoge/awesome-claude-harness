@@ -384,11 +384,60 @@ def test_awk_with_a_runtime_program_or_load_variable_is_no_reader_of_a_projects_
     "awk '{print}' .claude/settings.json",
     "awk '{print $1}' .claude/settings.json",
     "awk -F: '{print $NF}' .claude/settings.json",
-    "P='NR<=20'; awk \"$P\" .claude/settings.json",
     "awk \"$(cat /tmp/prog)\" /tmp/a.json",
     "AWKPATH=/tmp awk '{print}' /tmp/a.json",
 ])
 def test_awk_with_a_literal_program_still_reads(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+AWK_NOT_PROVEN_LITERAL = [  # the program word's shell text is not exactly the program awk runs
+    "awk 'BEGIN{sys'{t,t}'em(\"cp e .claude/settings.json\")}' .claude/settings.json",
+    "awk 'BEGIN{sys'{t,}'em(\"cp e .claude/settings.json\")}' .claude/settings.json",
+    "awk 'BEGIN{s'{y,y}'stem(\"cp e .claude/settings.json\")}' .claude/settings.json",
+    "awk BEGIN{sys{t,t}em\\(\\\"cp\\ e\\ .claude/settings.json\\\"\\)} .claude/settings.json",
+    "awk 'BEGIN{print \"x\" '{\\>,\\>}' \".claude/settings.json\"}' .claude/settings.json",
+    "awk BEGIN\\{s* .claude/settings.json",
+    "awk BEGIN?s* .claude/settings.json",
+    "awk [B]EGIN* .claude/settings.json",
+    "awk * .claude/settings.json",
+    "awk ~ .claude/settings.json",
+    "awk $'BEGIN{system(\"x\")}' .claude/settings.json",
+    "awk \"$_\" .claude/settings.json",
+    ": 'BEGIN{system(\"cp e .claude/settings.json\")}'; awk \"$_\" .claude/settings.json",
+    "P='NR<=20'; awk \"$P\" .claude/settings.json",
+    "awk(){ cp e \"$2\"; }; awk 'NR<=1' .claude/settings.json",
+    "function gawk { cp e \"$2\"; }; gawk 'NR<=1' .claude/settings.json",
+    "alias awk='cp e'; awk 'NR<=1' .claude/settings.json",
+    "PATH=.:$PATH awk 'NR<=1' .claude/settings.json",
+    "export PATH=.:$PATH; awk 'NR<=1' .claude/settings.json",
+    "PATH=.:$PATH; awk 'NR<=1' .claude/settings.json",
+    "cd /tmp && awk 'BEGIN{sys'{t,t}'em(\"cp e {F}\")}' {F}",
+]
+
+
+@pytest.mark.parametrize("command", AWK_NOT_PROVEN_LITERAL)
+def test_awk_whose_program_is_not_a_proven_literal_is_no_reader(box, command):
+    command = fill(box, command)
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk 'NR<=20' .claude/settings.json",
+    "awk '{print}' .claude/settings.json",
+    "awk '{print $1}' .claude/settings.json",
+    "awk -F: '{print $NF}' .claude/settings.json",
+    "awk -v x=1 -- 'NR<=1' .claude/settings.json",
+    "POSIXLY_CORRECT=1 awk 'NR<=1' .claude/settings.json",
+    "awk NR==1 .claude/settings.json",
+    "awk \"NR==1\" .claude/settings.json",
+    "awk 'NR<=1' /tmp/a.json; awk 'BEGIN{sys'{t,t}'em(\"x\")}' /tmp/a.json",
+])
+def test_awk_with_a_proven_literal_program_reads(box, command):
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 0, (command, cwd, err)
