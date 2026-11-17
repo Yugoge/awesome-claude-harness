@@ -104,6 +104,24 @@ def is_code_file(text):
     return bool(text) and bool(PLAIN_PATH.match(text)) and bool(CODE_FILE.search(base_name(text)))
 
 
+SOURCE_DOC = re.compile(r"\.(?:md|markdown|rst)$", re.IGNORECASE)
+
+
+def is_code_or_doc_operand(text):
+    """True when a plain static path is a source-code file or a Markdown/reStructuredText document
+    (`src/password_reset.py`, `docs/password-policy.md`) whose directories carry no secret word and whose base name
+    is no key or exact env-file name and does not begin with the secret word as its stem (`credentials.py`,
+    `secrets.md`, `password.md` are not). Used only for the operands of cp, mv, install, rsync, ln and sed -i, which
+    the base never judged; a redirection, tee, dd, a network client's output or truncate keeps the full check."""
+    if not text or not PLAIN_PATH.match(text):
+        return False
+    name = base_name(text)
+    head = text[:len(text.rstrip("/")) - len(name)]
+    if SECRET_SUBSTRING.search(head) or _private_key(name) or EXACT_ANY_CASE.match(name) or SECRET_STEM.match(name):
+        return False
+    return bool(CODE_FILE.search(name) or SOURCE_DOC.search(name))
+
+
 def is_sensitive_name(text, computed=False, url=False, report=False, template=False):
     """True when `text` may name a secret file, by the rule above.
 

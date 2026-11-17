@@ -430,3 +430,76 @@ def test_an_upper_case_word_or_a_copy_option_passes(sandbox, command):
 def test_an_exact_name_in_any_case_or_a_copy_operand_is_still_refused(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# curl's URL globbing builds the output name from the URL (`-o "#1"` after `{.env}` writes ./.env), and aria2c's
+# -Z/--force-sequential and -i/--input-file ignore -o: the URL exemption does not cover those invocations. An output
+# value holding `#`, or a URL holding a glob character without -g/--globoff, names the output after the URL.
+URL_GLOB_OR_SEQUENTIAL = [
+    'curl -s "https://example.com/{.env}" -o "#1" > /tmp/log',
+    "curl -s https://x/{.env} -o '#1' > /tmp/log",
+    'curl -s -o "#1" "https://example.com/{.env}" > /tmp/log',
+    'curl -s -o "#1" "https://example.com/{.env}" 2> /tmp/err.log',
+    'curl -s "https://example.com/{secrets.yaml}" -o "#1" > /tmp/log',
+    'curl -s "https://example.com/{.env,a}" -o "#1" > /tmp/log',
+    'curl -s -g "https://example.com/{.env}" -o "#1" > /tmp/log',
+    'curl -s --globoff "https://example.com/{.env}" -o "x#1" > /tmp/log',
+    'curl -s "https://example.com/[1-2]/.env" -o /tmp/out > /tmp/log',
+    'curl -s -o /tmp/out "https://example.com/{.env}" > /tmp/log',
+    'wget -O "#1" https://example.com/.env > /tmp/log',
+    "aria2c -Z -o out https://x/.env > /tmp/log",
+    "aria2c -o out -Z https://x/.env > /tmp/log",
+    "aria2c --force-sequential=true -o out https://x/.env > /tmp/log",
+    "aria2c --force-sequential -o out https://x/.env > /tmp/log",
+    "aria2c -i list.txt -o out https://x/.env > /tmp/log",
+    "aria2c -o out 'https://x/{.env,a}' > /tmp/log",
+    "aria2c https://x/.env > /tmp/log",
+]
+
+
+@pytest.mark.parametrize("command", URL_GLOB_OR_SEQUENTIAL)
+def test_a_globbed_url_or_a_sequential_aria2c_download_is_refused(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and READ in r.stderr, (command, r.stderr)
+
+
+# With globbing off and a literal output, or aria2c with -o alone, the URL exemption still holds.
+@pytest.mark.parametrize("command", [
+    'curl -s -g "https://example.com/docs/password-policy" -o /tmp/p.html > /tmp/log',
+    "aria2c -o out https://example.com/.env > /tmp/log",
+])
+def test_a_literal_output_with_no_glob_keeps_the_url_exemption(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# The base never judged cp, mv, install, rsync, ln or sed -i without an output redirection: a source-code or
+# Markdown/reST document operand of theirs whose directories carry no secret word passes again.
+@pytest.mark.parametrize("command", [
+    "sed -i 's/a/b/' src/password_reset.py",
+    "mv docs/password-reset.md docs/pw.md",
+    "cp docs/password-policy.md /tmp/x",
+    "cp /tmp/x docs/password-policy.md",
+    "cp src/auth/reset_password.ts /tmp/",
+])
+def test_a_code_or_doc_operand_of_a_copy_or_sed_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# The code/doc operand exemption never covers env, credential or key names, data files, a secret directory, a name
+# whose stem is the secret word, nor any redirection.
+@pytest.mark.parametrize("command,label", [
+    ("sed -i s/a/b/ .env", WRITE),
+    ("sed -i s/a/b/ config/secrets.yaml", WRITE),
+    ("cp /tmp/x secrets.md", WRITE),
+    ("mv secrets/notes.md /tmp/x", READ),
+    ("cp passwords.txt /tmp/x", READ),
+    ("cp db_password.txt /tmp/x", READ),
+    ("cp ~/.ssh/id_rsa /tmp/x.md", READ),
+    ("echo x > docs/password-reset.md", WRITE),
+    ("sed -i s/a/b/ src/password_reset.py > /tmp/log", READ),
+])
+def test_the_code_or_doc_operand_exemption_stays_narrow(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)

@@ -855,6 +855,10 @@ _SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd
 # The verbs that write what they read into another file: a listed name among their operands is a secret read
 # into a file, as an argument of a command whose output is redirected into one is.
 _SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
+# The writers the base never judged without an output redirection: a source-code or Markdown/reST document operand
+# of theirs (`sed -i ... src/password_reset.py`, `mv docs/password-reset.md docs/pw.md`) is no secret file
+# (lib/sensitive_names.is_code_or_doc_operand).
+_OPERAND_WRITERS = _SENSITIVE_COPIERS | {"sed"}
 # The network clients whose non-output arguments may be URLs: a URL there names no local file.
 _NETWORK_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "aria2c"})
 # The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
@@ -935,13 +939,17 @@ _HTTPIE_OPTIONS = (_HTTPIE_LONG_VALUES, _HTTPIE_LONG_FLAGS, "pPosaA", "jfmhbvdcq
                    {"o": "output", "d": "download"})
 _CLIENT_OPTIONS = {
     "curl": (_CURL_LONG_VALUES, _CURL_LONG_FLAGS, "EKCbcdDFPHhmoxUQreXYytzTuAw", "aqfGgI0ik46jlLMn:NZ#pJORSs231BvV",
-             {"o": "output", "O": "remote-name", "J": "remote-header-name"}),
+             {"o": "output", "O": "remote-name", "J": "remote-header-name", "g": "globoff"}),
     "wget": (_WGET_LONG_VALUES, _WGET_LONG_FLAGS, "aABDeiIlOoPQRtTUwX", "VhbdqvFcNS46xErkKmpHL",
              {"O": "output-document"}),
-    "aria2c": (_ARIA2C_LONG_VALUES, _ARIA2C_LONG_FLAGS, "dDoiIlsxkjtmuU", "cqZVhv", {"o": "out"}),
+    "aria2c": (_ARIA2C_LONG_VALUES, _ARIA2C_LONG_FLAGS, "dDoiIlsxkjtmuU", "cqZVhv",
+               {"o": "out", "Z": "force-sequential", "i": "input-file"}),
     "http": _HTTPIE_OPTIONS, "https": _HTTPIE_OPTIONS, "httpie": _HTTPIE_OPTIONS, "xh": _HTTPIE_OPTIONS,
 }
 _HTTPIE_CLIENTS = frozenset({"http", "https", "httpie", "xh"})
+# curl's URL globbing (`{a,b}`, `[1-3]`) and aria2c's parameterized URIs: with them an output name may be built from
+# the URL (`curl "https://x/{.env}" -o "#1"` writes ./.env).
+_URL_GLOB = re.compile(r"[{}\[\]]")
 
 
 def _resolve_long(name, values, flags):
@@ -1035,19 +1043,31 @@ def _network_output(name, values):
         found = [val for names, val in options if names == {opt}]
         return found[-1] if found else None
 
+    # An output value holding `#` may be a curl glob reference (`-o "#1"`): taken as naming the output after the
+    # URL, in every client. A URL holding a glob or parameter character is taken so too, unless curl's globbing is
+    # off by -g or --globoff (and no word spells a `--no-` option, which might turn it back on).
+    hashed = any(names & {"output", "output-document", "out"} and val is not None and "#" in val
+                 for names, val in options)
+    globbed = any(_URL_GLOB.search(u) for u in urls.values())
     if name == "curl":
-        named = may("remote-name") or may("remote-name-all") or may("remote-header-name")
+        globoff = any(names == {"globoff"} for names, _ in options) \
+            and not any(v is not None and v.startswith("--no-") for v in values)
+        named = may("remote-name") or may("remote-name-all") or may("remote-header-name") or hashed \
+            or (globbed and not globoff)
         to_file = any("output" in names and val != "-" for names, val in options)
         return named or to_file, named, urls
     if name == "wget":
         document = last("output-document")
         unsure = any("output-document" in names and len(names) > 1 for names, _ in options)
-        return document != "-", document is None or unsure, urls
+        return document != "-", document is None or unsure or hashed, urls
     if name == "aria2c":
-        return True, last("out") is None, urls
+        # -Z/--force-sequential downloads each URI under its own name whatever -o says; -i/--input-file reads URIs
+        # and per-URI options from a file; a parameterized URI expands into several.
+        sequential = may("force-sequential") or may("input-file")
+        return True, last("out") is None or sequential or hashed or globbed, urls
     download = may("download")
     output = last("output") is not None
-    return download or output, closed or (download and not output), urls
+    return download or output, closed or hashed or (download and not output), urls
 
 
 # The options of cp, mv, ln, install and rsync that take a value as the next word (or the rest of a short cluster):
@@ -1134,13 +1154,17 @@ def sensitive_redirect(command):
     by substring with lib/sensitive_names.py's narrow exemptions, each only where its role allows: a test file
     anywhere; a report, log or template as a write target; a template as a cp or cat source; a URL as a network
     client's positional operand or curl `--url` value whose output file it does not name (not `file:`, not
-    host-less, not host `.` or `..`), never as an option's value, a redirection or write target or another
+    host-less, not host `.` or `..`; not with an output value holding `#`, a curl URL holding `{`, `}`, `[` or `]`
+    without -g/--globoff, nor aria2c without -o or with -Z/--force-sequential, -i/--input-file or a parameterized
+    URI), never as an option's value, a redirection or write target or another
     command's operand; a `file:` URL a network client reads into its own output file
-    (curl -o, wget -O) is a secret read; a code file copied onto a code-file name. A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
+    (curl -o, wget -O) is a secret read; a code file copied onto a code-file name; a source-code or Markdown/reST
+    operand of cp, mv, install, rsync, ln or sed -i (is_code_or_doc_operand). A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
     their raw text. A command the parser cannot read is judged on its raw text by substring, so it is refused more,
     never less.
     """
-    from lib.sensitive_names import RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_sensitive_name
+    from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
+                                     is_sensitive_name)
     try:
         from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
@@ -1151,6 +1175,8 @@ def sensitive_redirect(command):
             if not writer or t.mode == "delete":
                 continue
             if t.path is not None:
+                if t.mechanism.split("-", 1)[0] in _OPERAND_WRITERS and is_code_or_doc_operand(t.path):
+                    continue
                 if is_sensitive_name(t.path, report=True, template=True) and not _code_copy(t):
                     return "write"
             elif t.word is not None and _word_sensitive(t.word):
@@ -1174,7 +1200,8 @@ def sensitive_redirect(command):
             elif name in _SENSITIVE_COPIERS:
                 # A copy's source operands, its options and their values aside (`rsync --exclude .env`): a
                 # source-code file is no secret read (its destination was judged above).
-                words = [(i, w) for i, w in _copier_operands(name, site.cmd.words[1:]) if not is_code_file(w.value())]
+                words = [(i, w) for i, w in _copier_operands(name, site.cmd.words[1:])
+                         if not is_code_file(w.value()) and not is_code_or_doc_operand(w.value())]
             else:
                 continue
             # The destination was judged above, so a cp or cat source here is copied into a path that is not
