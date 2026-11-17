@@ -102,6 +102,17 @@ REFUSED = [
     "git fetch origin master:${D:=refs/checkpoints/x}",
     "git fetch origin master:${D=refs/checkpoints/x}",
     "git fetch origin master:refs/{x,{y,checkpoints}}/master",
+    # sequence braces, a brace cap, nested defaults and a destination that
+    # stays unresolved (verifier round 2): refused, not guessed
+    "git fetch origin master:refs/checkpoint{s..s}/m",
+    "git fetch origin master:refs/checkpoint{r..t}/m",
+    "git fetch origin master:refs/checkpoint{s,}{,}{,}{,}{,}{,}{,}{,}{,}/m",
+    "git fetch origin master:${D:-${E:-refs/checkpoints/x}}",
+    'git fetch origin "master:$DST"',
+    "git fetch origin master:refs/$NS/x",
+    "git fetch origin master:refs/$(echo checkpoints)/x",
+    "git fetch origin --refmap \"+refs/heads/*:$MAP\" master",
+    "git -c \"remote.origin.fetch=+refs/heads/*:$MAP\" fetch origin",
 ]
 
 PASSES = [
@@ -122,6 +133,11 @@ PASSES = [
     "git -c remote.origin.fetch=+refs/heads/*:refs/heads/* fetch origin",
     "git fetch origin master:refs/remotes/{origin,up}/master",
     "git fetch origin master:${D:-refs/remotes/origin/master}",
+    "git fetch origin master:refs/remotes/origin/b{1..3}",
+    'git fetch "$REMOTE" master',                      # a computed repository
+    'git fetch "https://$HOST/repo.git" master:refs/remotes/h/master',
+    'git fetch origin "$BRANCH"',                      # no destination written
+    "git fetch --multiple origin upstream",
 ]
 
 

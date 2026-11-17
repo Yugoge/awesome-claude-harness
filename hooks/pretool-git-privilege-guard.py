@@ -1370,9 +1370,11 @@ def _evaluate_direct_ref_mutation(command, data):
 # refused when any word of it, read with the parser's static values (quotes,
 # backslashes and $'...' resolved) or as written with quotes and backslashes
 # dropped (which keeps a computed tail: "x:refs/checkpoints/$b"), holds a
-# refspec whose destination is in the namespace, {a,b} brace alternatives
-# expanded and a ${D:-x}/${D-x}/${D:=x}/${D=x} default read in place of D. Any
-# other run-time expansion is not resolved. A remote.<name>.fetch
+# refspec whose destination is in the namespace, {a,b} and {a..b} braces
+# expanded (past _BRACE_CAP words: refused) and ${D:-x}/${D-x}/${D:=x}/${D=x}
+# defaults read in place of D, nested ones too. A destination of the fetch's own
+# refspec words (_refspec_words, remote.<name>.fetch values) still holding `{`,
+# `}` or `$` after that is refused: it cannot be shown to land elsewhere. A remote.<name>.fetch
 # value the command does not show (--config-env) is refused too. A fetch with no
 # destination (`git fetch origin refs/checkpoints/master`, FETCH_HEAD only) or
 # with one elsewhere (refs/remotes/...) passes.
@@ -1410,13 +1412,56 @@ def _in_checkpoint_ns(dst):
 
 
 # `${NAME:-x}`, `${NAME-x}`, `${NAME:=x}`, `${NAME=x}`: the shell may use x.
+# Applied until nothing changes (nested defaults), at most _DEFAULT_ROUNDS times.
 _PARAM_DEFAULT_RE = re.compile(r'\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=]([^{}]*)\}')
+_DEFAULT_ROUNDS = 16
 _BRACE_CAP = 256
+_BRACE_SEQ_RE = re.compile(r'^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$')
+# fetch/pull options whose value is the next word when not attached.
+_FETCH_VALUE_OPTS = frozenset({'--depth', '--deepen', '--shallow-since', '--shallow-exclude',
+                               '--refmap', '--upload-pack', '-j', '--jobs', '-o',
+                               '--server-option', '--negotiation-tip', '--filter',
+                               '--recurse-submodules-default', '--submodule-prefix',
+                               '-s', '--strategy', '-X', '--strategy-option'})
+
+
+class _Unresolved(Exception):
+    """A refspec the guard cannot expand within its caps."""
+
+
+def _with_defaults(text):
+    """`text` with each parameter default read in place of its parameter,
+    nested ones included; past _DEFAULT_ROUNDS what remains keeps its `${`."""
+    for _round in range(_DEFAULT_ROUNDS):
+        new = _PARAM_DEFAULT_RE.sub(r'\1', text)
+        if new == text:
+            break
+        text = new
+    return text
+
+
+def _brace_sequence(inner):
+    """The words of a bash sequence expression `a..b[..step]` (integers or
+    single letters), or None when `inner` is not one. Raises _Unresolved
+    past _BRACE_CAP words."""
+    m = _BRACE_SEQ_RE.match(inner)
+    if not m:
+        return None
+    a, b, step = m.group(1), m.group(2), abs(int(m.group(3) or 1)) or 1
+    num = a.lstrip('-').isdigit() and b.lstrip('-').isdigit()
+    if not num and not (len(a) == 1 and len(b) == 1 and a.isalpha() and b.isalpha()):
+        return None
+    lo, hi = (int(a), int(b)) if num else (ord(a), ord(b))
+    span = range(lo, hi + 1, step) if lo <= hi else range(lo, hi - 1, -step)
+    if len(span) > _BRACE_CAP:
+        raise _Unresolved('brace sequence')
+    return [str(n) if num else chr(n) for n in span]
 
 
 def _brace_group(word):
-    """(start, end, alternatives) of the first `{a,b}` group bash would expand
-    in `word` (not `${...}`), nested groups kept whole in an alternative; None."""
+    """(start, end, alternatives) of the first brace group bash would expand in
+    `word` (`{a,b}`, nested groups kept whole in an alternative, or a sequence
+    `{a..b}`; not `${...}`), or None."""
     for start, ch in enumerate(word):
         if ch != '{' or (start and word[start - 1] == '$'):
             continue
@@ -1430,6 +1475,9 @@ def _brace_group(word):
                     if len(cut) > 1:
                         cut.append(k)
                         return start, k, [word[a + 1:b] for a, b in zip(cut, cut[1:])]
+                    seq = _brace_sequence(word[start + 1:k])
+                    if seq is not None:
+                        return start, k, seq
                     break
             elif word[k] == ',' and depth == 1:
                 cut.append(k)
@@ -1437,10 +1485,10 @@ def _brace_group(word):
 
 
 def _brace_expand(word):
-    """The words bash brace expansion makes of `word` (`{a,b}`, nested), at most
-    _BRACE_CAP of them; past the cap the rest are not expanded."""
+    """The words bash brace expansion makes of `word`. Raises _Unresolved when
+    they would pass _BRACE_CAP."""
     done, todo = [], [word]
-    while todo and len(done) + len(todo) <= _BRACE_CAP:
+    while todo:
         w = todo.pop()
         group = _brace_group(w)
         if group is None:
@@ -1448,18 +1496,28 @@ def _brace_expand(word):
             continue
         start, end, alts = group
         todo.extend(w[:start] + alt + w[end + 1:] for alt in alts)
-    return done + todo
+        if len(done) + len(todo) > _BRACE_CAP:
+            raise _Unresolved('brace expansion')
+    return done
 
 
-def _maps_into_checkpoints(text):
+def _maps_into_checkpoints(text, strict=False):
     """True when `text` holds a refspec `[+]<src>:<dst>` whose <dst> is in the
-    checkpoint namespace (_in_checkpoint_ns), with brace alternatives expanded
-    and a parameter's default (`${D:-x}`, `-`, `:=`, `=`) read in its place."""
-    text = _PARAM_DEFAULT_RE.sub(r'\1', text)
-    for token in _REFSPEC_SPLIT_RE.split(text):
-        for word in _brace_expand(token.replace('\\', '')):
-            if ':' in word and _in_checkpoint_ns(word.rpartition(':')[2]):
-                return True
+    checkpoint namespace (_in_checkpoint_ns), with parameter defaults read in
+    place (`${D:-x}`, `-`, `:=`, `=`, nested) and brace alternatives and
+    sequences expanded; also when that expansion passes its cap. `strict` (a
+    refspec word of fetch or pull itself): also when a <dst> still holds `{`,
+    `}` or `$` after it, a destination that cannot be shown to land elsewhere."""
+    try:
+        for token in _REFSPEC_SPLIT_RE.split(_with_defaults(text)):
+            for word in _brace_expand(token.replace('\\', '')):
+                if ':' not in word:
+                    continue
+                dst = word.rpartition(':')[2]
+                if _in_checkpoint_ns(dst) or (strict and set('{}$') & set(dst)):
+                    return True
+    except _Unresolved:
+        return True
     return False
 
 
@@ -1472,24 +1530,92 @@ def _flat_text(command):
     return flat
 
 
+def _refspec_words(inv):
+    """The words of parsed fetch or pull `inv` that git reads as refspecs, as
+    written (quotes and backslashes dropped): each operand after the
+    repository (none under --all or --multiple, where every operand is a
+    repository) and each --refmap value."""
+    words = [_flat_text(w.text) for w in inv.arg_words]
+    vals = list(inv.args)
+    out, operands, k = [], 0, 0
+    many = any(v in ('--all', '--multiple') for v in vals if v)
+    while k < len(words):
+        v = vals[k] if k < len(vals) else None
+        if v is None and not set('$`') & set(words[k]):
+            v = words[k]  # an unquoted glob (`refs/heads/*`) reads as written
+        if v == '--':
+            rest = words[k + 1:]
+            if not many:
+                out += rest if operands else rest[1:]
+            break
+        if v is not None and v.startswith('-') and v != '-':
+            name, eq, val = v.partition('=')
+            if name == '--refmap':
+                if eq:
+                    out.append(val)
+                elif k + 1 < len(words):
+                    out.append(words[k + 1])
+            if name in _FETCH_VALUE_OPTS and not eq:
+                k += 1
+        else:
+            if operands and not many:
+                out.append(words[k])
+            operands += 1
+        k += 1
+    return out
+
+
+def _config_written(inv):
+    """(key, value) of each -c and --config-env of parsed `inv`: the parser's
+    static pair, or, for a word it leaves computed (an unquoted glob is one),
+    the word as written with quotes and backslashes dropped; a --config-env
+    value is `$ENV`. A GIT_CONFIG_* pair is the parser's."""
+    words = [w.text for w in shell_parse.resolve(inv.cmd).args]
+    written = [_flat_text(words[k + 1]) for k in range(len(words) - 1)
+               if _flat_text(words[k]) == '-c']
+    out, n = [], 0
+    for opt, val in inv.global_opts:
+        if opt != '-c':
+            continue
+        if val is None and n < len(written):
+            key, eq, value = written[n].partition('=')
+            out.append((key, value if eq else 'true'))
+        n += 1
+    seen = {(k, v) for k, v in out}
+    pairs = [p for p in inv.config_pairs if p[0] is not None and p not in seen]
+    return out + pairs
+
+
+def _unreadable_fetch_config(key, value):
+    """True when config `key`=`value` may set a remote.<name>.fetch refspec
+    into refs/checkpoints/ or one the guard cannot read."""
+    if key is None or set('$`') & set(key):
+        return True
+    if not _FETCH_CONFIG_KEY_RE.match(key):
+        return False
+    return value is None or _maps_into_checkpoints(value, strict=True) or (
+        value.startswith('$') and ':' not in value)
+
+
 def _writes_checkpoint_ref(command, invocations):
     """True when `command` runs git fetch or pull (as the parser or the
     classifier reads it) and carries a refspec into refs/checkpoints/, or gives
-    it a remote.<name>.fetch value the guard cannot read."""
+    it a refspec destination or remote.<name>.fetch value the guard cannot read
+    (_maps_into_checkpoints strict)."""
     script = shell_parse.parse(command)
     parsed = [] if script.error is not None else shell_parse.git_invocations(script)
     fetches = [inv for inv in parsed if inv.subcommand in _FETCHING]
     if not fetches and not any(inv.subcommand in _FETCHING for inv in invocations):
         return False
     for inv in fetches:
-        for key, value in inv.config_pairs:
-            if key is not None and _FETCH_CONFIG_KEY_RE.match(key) and (
-                    value is None or value.startswith('$')):
-                return True
+        if any(_unreadable_fetch_config(key, value) for key, value in _config_written(inv)):
+            return True
+        if any(_maps_into_checkpoints(w, strict=True) for w in _refspec_words(inv)):
+            return True
     texts = [_flat_text(command)]
     texts += [_unquote_token(t) for inv in invocations for t in inv.args]
     for inv in fetches:
-        texts += [v for _k, v in inv.config_pairs if v]
+        texts += [v for _k, v in _config_written(inv) if v]
     if script.error is None:
         for site in shell_parse.walk(script):
             texts += [w.value() for w in site.cmd.words if w.value()]
