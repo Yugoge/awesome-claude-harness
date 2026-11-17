@@ -74,7 +74,7 @@ def _home_tilde_variant(path: str) -> Optional[str]:
     """Return the ``~/``-prefixed form of ``path`` iff it lives under the real
     user home (``$HOME`` / ``Path.home()``), else None.
 
-    Generic (no ``/root``-specific branch): on a non-root home
+    Generic (no branch specific to the root user's home): on a non-root home
     (``/home/alice/...``) the ``~/relative`` variant is generated exactly as it
     was for ``/root/...``, so the guard protects the same path written either
     way regardless of which user runs it.

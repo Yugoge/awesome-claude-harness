@@ -289,13 +289,6 @@
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "7ef21dc1e2edd890",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# literal <author-path>, so a fresh non-root home resolves its own config path.\""
-    },
-    {
-      "path": "hooks/lib/runtime_guard/config.py",
       "fingerprint": "8d3cac90d32f6a28",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
@@ -321,13 +314,6 @@
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "def _home_tilde_variant() — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "dbbb031132a3b17e",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Generic (WS1 codex #4 — no ``<author-path>``-specific branch): on a non-root home\""
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
