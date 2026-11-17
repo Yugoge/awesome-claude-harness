@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 962
+*Last updated: 2026-11-17T03:25:29Z*
+**Total entries**: 963
 **Convention**: kebab
 
 ## Tree
@@ -85,6 +85,7 @@ dot-claude/
 │   │   ├── `red-test-trailer.md` - The `Red-test:` trailer and the red-then-green job
 │   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
+│   │   ├── `task-tools-migration-plan.md` - Task tools migration plan — TodoWrite → TaskCreate / TaskUpdate / TaskList / TaskGet
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 │   ├── `ADVERSARIAL-CORPUS.md` - Adversarial Bypass Corpus — claude-code-guardrails
