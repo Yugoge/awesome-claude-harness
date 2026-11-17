@@ -384,15 +384,22 @@ no per-rule budget exists.
   `**/etc/shadow`, `**/passwd`, `//etc/shadow`, `//etc/passwd`. The substring globs `**/*password*`,
   `**/*secret*`, `**/credentials*` and `**/shadow` are gone: the CLI matches case-insensitively and against
   every directory on the path, so they refused ordinary source (`src/auth/ForgotPassword.tsx`,
-  `src/components/Shadow/index.tsx`). `!` negations at the end of the deny list, one set per tool, lift
-  what is not a secret: the templates `.env.example`, `.env.sample`, `.env.template`; directories named
-  `secret`, `secrets`, `password`, `passwords`, `*_password` (`!**/passwords/`: a file of that name stays
-  refused, Laravel's `auth/passwords/` opens); and source or doc files of those names
-  (`!**/*password*.<ext>` and the same for `secret`, `credentials`, over code and doc extensions only).
-  Readable now and refused on the base, on purpose: files inside those directories whose own name is not
-  a secret name, and `shadow` outside `etc/`. Negation is not in the permission docs and was measured on
-  Claude Code 2.1.326: last match wins within a tool's list, so a negation before the rule it lifts lifts
-  nothing (a reordered list over-blocks again and never leaks); a name negation does not pierce a
+  `src/components/Shadow/index.tsx`). The end of the deny list is ordered, the same for each tool, and
+  the order is the contract (last match wins): (1) `!` lifts of directories named `secret`, `secrets`,
+  `password`, `passwords`, `*_password` (`!**/passwords/`: a file of that name stays refused, Laravel's
+  `auth/passwords/` opens); (2) `!` lifts of source and doc files whose name holds the word
+  (`!**/*password*.<ext>`, same for `secret`, `credentials`, code and doc extensions only:
+  `forgot_password.dart`, `reset-password.tsx`, `client_secret.py`); (3) re-denies of what no lift may
+  open: `**/.env` and `**/.env.*` (without them `.env.password.md` opened, measured) and the bare stems
+  `secret.*`, `secrets.*`, `*_secrets.*`, `*-secrets.*`, `credentials.*`, `password.*`, `passwords.*`;
+  (4) the templates `.env.example`, `.env.sample`, `.env.template`, last. Decision on the bare stems: a
+  file named after the secret itself (`settings/secrets.py`, `config/credentials.rb`, `secrets.php`,
+  `password.py`) is a likely secret store whatever its extension and none is on the AUDIT's must-pass
+  list, so it stays refused as on the base. Readable now and refused on the base, on purpose: files inside
+  those directories whose own name is not a secret name, and `shadow` outside `etc/`. Negation is not in
+  the permission docs and was measured on Claude Code 2.1.326: last match wins within a tool's list, so a
+  negation before the rule it lifts lifts nothing (a reordered list over-blocks again and never leaks;
+  `test_the_tail_keeps_its_order` holds the order); a name negation does not pierce a
   directory rule written `dir/**` but does pierce one written `dir/*`, so a future same-list `dir/*` deny
   would be opened for these names (`test_no_deny_rule_a_name_negation_could_pierce` refuses such a rule).
   Only deny entries and same-list negations changed, no allow or ask rule, so no deny is downgraded by any

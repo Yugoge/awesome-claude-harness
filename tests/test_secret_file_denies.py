@@ -9,11 +9,18 @@ under a directory whose name held the word, and `**/.env.*` refused the committe
   `*-password.*`; `secret`, `secrets`, `secret.*`, `secrets.*`, `.secret*`, `*_secret.*`, `*-secret.*`,
   `*_secrets.*`, `*-secrets.*`, `client_secret*.json`; `credentials`, `credentials.*`; `etc/shadow` at any
   depth (`//etc/shadow`, `//etc/passwd`, `**/passwd`, `**/.env`, `**/.env.*` kept);
-* then gitignore negations at the END of the deny list lift what is not a secret: the three `.env`
-  templates; directories named `secret`, `secrets`, `password`, `passwords` or `*_password` (a trailing
-  `/` matches directories only: a FILE of that name stays refused, `auth/passwords/email.blade.php`
-  becomes readable); and source or doc files of those names (`!**/*password*.<ext>`, `!**/*secret*.<ext>`,
-  `!**/*credentials*.<ext>` for SOURCE_EXT, never a data extension).
+* then, at the END of the deny list and in this order for each tool (last match wins, so the order is the
+  contract; test_the_tail_keeps_its_order):
+  1. directory lifts: `secret/`, `secrets/`, `password/`, `passwords/`, `*_password/` (a trailing `/`
+     matches directories only: a FILE of that name stays refused, `auth/passwords/email.blade.php` opens);
+  2. source and doc lifts: `!**/*password*.<ext>`, `!**/*secret*.<ext>`, `!**/*credentials*.<ext>` for
+     SOURCE_EXT, never a data extension (`ForgotPassword`-style names: `forgot_password.dart`,
+     `reset-password.tsx`, `client_secret.py`);
+  3. re-denies of what no lift may open: `**/.env`, `**/.env.*` (else `.env.password.md` would open), and
+     the bare stems `secret.*`, `secrets.*`, `*_secrets.*`, `*-secrets.*`, `credentials.*`, `password.*`,
+     `passwords.*`: a file named after the secret itself is a likely secret store whatever its extension
+     (`settings/secrets.py`, `config/credentials.rb`, `secrets.php`), so it stays refused as on the base;
+  4. the three `.env` templates, last, so nothing after them closes them again.
 
 Every refusal entry is a subset of what the base refused (test_the_new_names_only_narrow_the_old_globs).
 What the base refused and this list opens on purpose is DELIBERATELY_OPEN, listed and justified.
@@ -77,8 +84,8 @@ MEASURED = [
     ("Read", "resources/views/auth/passwords/email.blade.php", "deny", "allow"),
     ("Read", "config/secrets/README.md", "deny", "allow"),
     ("Read", "lib/features/forgot_password/view.dart", "deny", "allow"),
-    ("Read", "src/utils/password.ts", "deny", "allow"),
-    ("Read", "src/secrets.py", "deny", "allow"),
+    ("Read", "src/utils/password.ts", "deny", "deny"),
+    ("Read", "src/secrets.py", "deny", "deny"),
     ("Read", ".env", "deny", "deny"),
     ("Read", ".env.local", "deny", "deny"),
     ("Read", ".env.staging", "deny", "deny"),
@@ -177,12 +184,12 @@ MEASURED = [
     ("Read", "lib/features/forgot_password/forgot_password.dart", "deny", "allow"),
     ("Read", "app/reset-password.tsx", "deny", "allow"),
     ("Read", "src/auth/client_secret.py", "deny", "allow"),
-    ("Read", "src/lib/credentials.ts", "deny", "allow"),
-    ("Read", "docs/secrets.md", "deny", "allow"),
+    ("Read", "src/lib/credentials.ts", "deny", "deny"),
+    ("Read", "docs/secrets.md", "deny", "deny"),
     ("Read", "src/secrets/index.ts", "deny", "allow"),
     ("Read", "src/password/index.ts", "deny", "allow"),
     ("Read", "lib/forgot_password/view.dart", "deny", "allow"),
-    ("Read", "src/auth/passwords.rb", "deny", "allow"),
+    ("Read", "src/auth/passwords.rb", "deny", "deny"),
     ("Read", "docs/password-policy.md", "deny", "allow"),
     ("Read", "db-password.txt", "deny", "deny"),
     ("Read", "app_secrets.json", "deny", "deny"),
@@ -198,20 +205,62 @@ MEASURED = [
     ("Write", ".claude/CLAUDE.md", "deny", "deny"),
     ("Write", ".claude/settings.json", "deny", "deny"),
     ("Write", "a/.harness-switch/password.py", "deny", "deny"),
+    ("Read", ".env.password.md", "deny", "deny"),
+    ("Write", "w/.env.password.md", "deny", "deny"),
+    ("Bash", "cat .env.password.md", "deny", "deny"),
+    ("Read", ".env.secrets.py", "deny", "deny"),
+    ("Write", "w/.env.secrets.py", "deny", "deny"),
+    ("Bash", "cat .env.secrets.py", "deny", "deny"),
+    ("Read", ".env.secret.ts", "deny", "deny"),
+    ("Write", "w/.env.secret.ts", "deny", "deny"),
+    ("Bash", "cat .env.secret.ts", "deny", "deny"),
+    ("Read", "app/.env.credentials.rb", "deny", "deny"),
+    ("Write", "w/app/.env.credentials.rb", "deny", "deny"),
+    ("Bash", "cat app/.env.credentials.rb", "deny", "deny"),
+    ("Read", "settings/secrets.py", "deny", "deny"),
+    ("Read", "local_secrets.py", "deny", "deny"),
+    ("Read", "secrets.php", "deny", "deny"),
+    ("Read", "secrets.ts", "deny", "deny"),
+    ("Read", "config/credentials.rb", "deny", "deny"),
+    ("Read", "credentials.md", "deny", "deny"),
+    ("Read", "password.py", "deny", "deny"),
+    ("Read", "passwords.html", "deny", "deny"),
+    ("Read", "app-secrets.ts", "deny", "deny"),
+    ("Read", "auth/passwords/.env", "deny", "deny"),
+    ("Read", "auth/passwords/.env.local", "deny", "deny"),
+    ("Read", "auth/passwords/a.key", "deny", "deny"),
+    ("Read", "auth/passwords/a.pem", "deny", "deny"),
+    ("Read", "auth/passwords/session_dirs.txt", "deny", "deny"),
+    ("Read", "src/secrets/.env.prod", "deny", "deny"),
+    ("Write", ".claude/hooks/passwords/x.py", "deny", "deny"),
+    ("Write", "a/.harness-switch/passwords/x", "deny", "deny"),
+    ("Write", ".claude/hooks/.env.example", "deny", "deny"),
+    ("Write", "a/.harness-switch/.env.example", "deny", "deny"),
+    ("Write", ".claude/scripts/forgot_password.py", "deny", "deny"),
+    ("Read", "src/api_secret.ts", "deny", "allow"),
+    ("Read", "src/jwt-secret.ts", "deny", "allow"),
+    ("Read", "src/db_password.py", "deny", "allow"),
 ]
 
 # The lane's examples (AUDIT §2 OB-L19 and the lane brief), plus source names the families must not catch.
 MUST_PASS = ["src/auth/ForgotPassword.tsx", "src/secret_scanner.py", "docs/secrets-management.md", ".env.example",
              ".env.sample", ".env.template", "src/components/Shadow/index.tsx", "src/auth/CredentialsProvider.ts",
-             "src/auth/password_reset.py", "src/utils/password.ts", "src/secrets.py", "app/reset-password.tsx",
-             "src/auth/client_secret.py", "src/lib/credentials.ts", "docs/secrets.md", "docs/password-policy.md",
-             "lib/features/forgot_password/forgot_password.dart", "resources/views/auth/passwords/email.blade.php"]
+             "src/auth/password_reset.py", "app/reset-password.tsx", "src/auth/client_secret.py",
+             "docs/password-policy.md", "lib/features/forgot_password/forgot_password.dart",
+             "resources/views/auth/passwords/email.blade.php", "src/secrets/index.ts", "src/password/index.ts"]
 MUST_REFUSE = [".env", ".env.local", ".env.staging", ".env.development", ".env.test", ".env.production",
                "config/secrets.yaml", "secrets.toml", "secrets.json", "credentials.json", ".aws/credentials",
                "config2/credentials", "password.txt", "db_password", "passwords.csv", "rootfs/etc/shadow",
                "/etc/shadow", "/etc/passwd", "certs/server.key", "certs/server.pem",
                # an unknown valued variant stays refused: only the three template names are re-admitted
-               ".env.foo", ".env.example.local", ".env.development.local"]
+               ".env.foo", ".env.example.local", ".env.development.local",
+               # a `.env.*` name that also fits a source lift: the re-deny after the lifts keeps it refused
+               ".env.password.md", ".env.secrets.py", ".env.secret.ts", "app/.env.credentials.rb"]
+# Kept refused as on the base: a source or doc file named after the secret itself (the bare stems).
+KEPT_REFUSED = ["src/secrets.py", "settings/secrets.py", "local_secrets.py", "secrets.php", "secrets.ts",
+                "config/credentials.rb", "credentials.md", "src/lib/credentials.ts", "password.py",
+                "src/utils/password.ts", "passwords.html", "src/auth/passwords.rb", "docs/secrets.md",
+                "app-secrets.ts"]
 # The independent verifier's list of secret names the base refused (scratchpad v19, drop_base.json).
 VERIFIER_DROP = ["secrets", "password", "passwords", "secret", "secrets.properties", "secrets.xml", "secrets.cfg",
                  "secrets.conf", "secret.yaml", "secret.json", "secrets.local.yaml", "secrets.prod.json",
@@ -371,9 +420,49 @@ def test_no_narrowing_beyond_intent(path):
         assert denied(deny, "Write", path), f"a write of {path} is no longer refused"
 
 
+@pytest.mark.parametrize("path", KEPT_REFUSED)
+def test_files_named_after_the_secret_stay_refused(path):
+    deny = _deny()
+    assert denied(deny, "Read", path), f"Read {path} is no longer refused"
+    assert denied(deny, "Write", path), f"a write of {path} is no longer refused"
+
+
 @pytest.mark.parametrize("path", PROTECTED_WRITES)
 def test_name_negations_open_no_protected_path(path):
     assert denied(_deny(), "Write", path), f"a write of {path} is no longer refused"
+
+
+def _lifted_names(pat: str) -> list[str]:
+    """Sample paths a negation pattern re-admits: a file name, or a file inside a lifted directory."""
+    if pat.endswith("/"):
+        return [pat[3:-1].replace("*", "db") + "/x"]
+    return [pat[3:].replace("*", "db")]
+
+
+def _guarded(name: str) -> list[tuple[str, str]]:
+    """(tool, path) pairs that put a lifted name where another deny must still hold."""
+    leaf = name.rsplit("/", 1)[-1]
+    out = [("Read", f".env.{leaf}"), ("Write", f"w/.env.{leaf}"), ("Read", f".env.local/{name}"),
+           ("Write", f".claude/hooks/{name}"), ("Write", f".claude/scripts/{name}"),
+           ("Write", f"a/.harness-switch/{name}")]
+    if name.endswith("/x"):  # inside a lifted directory: the files other rules name
+        d = name[:-2]
+        out += [("Read", f"{d}/.env"), ("Read", f"{d}/.env.local"), ("Read", f"{d}/a.key"), ("Read", f"{d}/a.pem"),
+                ("Read", f"{d}/session_dirs.txt"), ("Write", f"{d}/.env.production")]
+    return out
+
+
+def _negation_cases():
+    deny = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+    pats = dict.fromkeys(e[6:-1] for e in deny if e.startswith(("Read(!", "Edit(!")))
+    return [(p, tool, path) for p in pats for n in _lifted_names(p) for tool, path in _guarded(n)]
+
+
+@pytest.mark.parametrize("pat,tool,path", _negation_cases())
+def test_no_negation_opens_a_path_another_deny_holds(pat, tool, path):
+    """For every negation, a name it lifts stays refused where it is also a `.env.*`, `*.key`/`*.pem`,
+    `session_dirs.txt`, `.harness-switch` or protected `.claude/` path."""
+    assert denied(_deny(), tool, path), f"!{pat} opens {tool} {path}"
 
 
 def test_the_substring_globs_are_retired():
@@ -382,14 +471,21 @@ def test_the_substring_globs_are_retired():
     assert not back, "substring secret globs are back: " + ", ".join(back)
 
 
-def test_negations_come_last():
-    """Last match wins: a negation listed before a rule it should lift lifts nothing (measured)."""
-    deny = _deny()
-    first = next(i for i, e in enumerate(deny) if "(!" in e)
-    assert all("(!" in e for e in deny[first:]), "a refusal entry follows a negation: " + \
-        ", ".join(e for e in deny[first:] if "(!" not in e)
-    for tool in ("Read", "Edit"):
-        assert {f"{tool}(!**/{t})" for t in TEMPLATES} <= set(deny[first:])
+REDENY = ["**/.env", "**/.env.*", "**/secret.*", "**/secrets.*", "**/*_secrets.*", "**/*-secrets.*",
+          "**/credentials.*", "**/password.*", "**/passwords.*"]
+
+
+@pytest.mark.parametrize("tool", ["Read", "Edit"])
+def test_the_tail_keeps_its_order(tool):
+    """Last match wins (measured): per tool, the lifts, then the re-denies, then the templates, last."""
+    rules = [e[len(tool) + 1:-1] for e in _deny() if e.startswith(tool + "(")]
+    first = next(i for i, p in enumerate(rules) if p.startswith("!"))
+    tail = rules[first:]
+    templates = [f"!**/{t}" for t in TEMPLATES]
+    assert tail[-3:] == templates, f"{tool}: the .env templates are not the last three entries"
+    lifts_end = max(i for i, p in enumerate(tail) if p.startswith("!") and p not in templates)
+    assert tail[lifts_end + 1:-3] == REDENY, f"{tool}: the re-denies do not follow the last lift"
+    assert all(p.startswith("!") for p in tail[:lifts_end + 1]), f"{tool}: a refusal sits among the lifts"
 
 
 def test_negations_lift_only_templates_name_directories_and_source():
