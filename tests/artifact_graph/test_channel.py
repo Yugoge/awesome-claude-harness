@@ -11,16 +11,17 @@ from tests.artifact_graph import check as C
 from tests.artifact_graph import pyscan
 
 SHAPES = {
-    "attachment/hook_success": {
+    "transcript:attachment/hook_success": {
         "attachment.type": ["string"], "attachment.hookName": ["string"], "attachment.toolUseID": ["string"],
         "attachment.hookEvent": ["string"], "attachment.content": ["string"], "attachment.stdout": ["string"],
         "attachment.stderr": ["string"], "attachment.exitCode": ["number"], "attachment.command": ["string"],
         "attachment.durationMs": ["number"], "type": ["string"], "uuid": ["string"]},
-    "attachment/hook_additional_context": {
+    "transcript:attachment/hook_additional_context": {
         "attachment.type": ["string"], "attachment.content": ["array"], "attachment.content[]": ["string"],
         "attachment.hookName": ["string"], "attachment.toolUseID": ["string"], "attachment.hookEvent": ["string"],
         "type": ["string"]},
-    "system/stop_hook_summary": {"type": ["string"], "subtype": ["string"], "hookCount": ["number"]},
+    "transcript:system/stop_hook_summary": {"type": ["string"], "subtype": ["string"], "hookCount": ["number"]},
+    "stdin:UserPromptSubmit": {"output": ["string"], "prompt": ["string"]},
 }
 
 PARSER = '''
@@ -163,3 +164,24 @@ def test_pyscan_reads_the_keys_next_to_a_kind_comparison_only():
     recs = [r for r in pyscan.channel_records("hooks/x.py", src) if r["kind"] == "transcript_key"]
     assert sorted((r["function"], r["key"]) for r in recs) == [("parse", "content"), ("parse", "type")]
     assert recs[0]["record_kinds"] == ["hook_additional_context"]
+
+
+def test_c2_judges_the_parser_on_every_key_of_the_recorded_record(tmp_path):
+    """C2 judges the parser (a production function, as C3 counts them): a key of the whole record, outside
+    the attachment, is the fixture's; a test reading the record, or the hooks' stdin, is no parser."""
+    parser = PARSER.replace('return attachment.get("content")\n        return None',
+                            'return attachment.get("content")\n        return attachment.get("uuid")')
+    test = 'def test_it(r):\n    return r["attachment"] if r.get("type") == "hook_success" else r["hook_event_name"]\n'
+    _a, extra, _pending = _channel(_tree(tmp_path, {"hooks/lib/parse.py": parser, "hooks/tests/test_parse.py": test}))
+    assert extra == []
+
+
+def test_cli_shapes_reads_the_recorded_fixture_format():
+    """The fixture P15-L1 committed: its hook-output kinds, an attachment's paths relative to it, the
+    hooks' stdin left out."""
+    declaration, shapes, record_keys, why = C.cli_shapes(str(Path(__file__).resolve().parents[2]))
+    assert why == "" and declaration.endswith("/shapes.json")
+    assert sorted(shapes) == ["hook_additional_context", "hook_success", "stop_hook_summary"]
+    assert shapes["hook_success"]["command"] == ["string"] and shapes["hook_success"]["exitCode"] == ["number"]
+    assert shapes["hook_additional_context"]["content[]"] == ["string"]
+    assert "attachment" in record_keys["hook_success"] and "hook_event_name" not in record_keys["hook_success"]

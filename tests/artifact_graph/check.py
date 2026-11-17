@@ -1511,7 +1511,7 @@ class _Ctx:
         if not keys and not synths:
             return
         a = self.m.art(CHANNEL, "channel")
-        declaration, shapes, why = cli_shapes(self.tree)
+        declaration, shapes, record_keys, why = cli_shapes(self.tree)
         a.writers.append(Rel("cli", "write", declaration, "declaration"))
         a.declared.append({"role": "", "site": declaration, "schema": declaration})
         out = []
@@ -1551,10 +1551,12 @@ class _Ctx:
                 rel = Rel(comp_identity(comp), "read", site, "static", via=qual)
                 if not self._seen(a.readers, rel):
                     a.readers.append(rel)
-        # (C2) every key a parser reads is in the fixture for the kinds it compares
+        # (C2) every key a parser reads is in the fixture, at any depth of the record, for the kinds it compares
         if shapes:
             for r in keys:
-                known = set().union(*(_shape_keys(shapes.get(k) or {}) for k in r["record_kinds"]))
+                if (r["component"], r["function"]) not in parsers:
+                    continue
+                known = set().union(*(record_keys.get(k) or set() for k in r["record_kinds"]))
                 if r["key"] not in known:
                     out.append(Violation("C2-key", CHANNEL, f"{r['component']}#{r['function']} reads key "
                                          f"{r['key']!r}, which no {'/'.join(r['record_kinds'])} record of the "
@@ -1659,39 +1661,44 @@ def _production(component: str) -> bool:
 
 
 def cli_shapes(tree: str) -> tuple:
-    """(declaration path, {record kind: {dotted key path: [JSON types]}}, why it is unreadable or "") of
-    the CLI fixture's shapes.json: the version CURRENT names. A record's key in the file is its `type`
-    plus its attachment's `type` or its `subtype`; only the hook-output kinds are kept, each path
-    relative to the record (an attachment's paths to the attachment)."""
+    """(declaration path, {record kind: {dotted key path: [JSON types]}}, {record kind: every key name of
+    the whole record, at any depth}, why it is unreadable or "") of
+    the CLI fixture's shapes.json: the version CURRENT names. Its keys are "<source>:<record type>/<kind>"
+    (P15-L1); the hook-output kinds of the transcript and subagent sources are kept, merged across sources,
+    each path relative to the record (an attachment's paths to the attachment)."""
     from .pyscan import HOOK_RECORD_KINDS
     try:
         with open(os.path.join(tree, CHANNEL_FIXTURES, "CURRENT"), encoding="utf-8") as fh:
             version = fh.read().strip()
     except OSError as e:
-        return CHANNEL_DECLARATION, {}, f"{CHANNEL_FIXTURES}/CURRENT: {e.strerror}"
+        return CHANNEL_DECLARATION, {}, {}, f"{CHANNEL_FIXTURES}/CURRENT: {e.strerror}"
     rel = f"{CHANNEL_FIXTURES}/{version}/shapes.json" if version and "/" not in version else CHANNEL_DECLARATION
     try:
         with open(os.path.join(tree, rel), encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError) as e:
-        return rel, {}, f"{rel}: {getattr(e, 'strerror', None) or e}"
-    if isinstance(data, dict) and isinstance(data.get("records"), dict):
-        data = data["records"]
+        return rel, {}, {}, f"{rel}: {getattr(e, 'strerror', None) or e}"
     out: dict = {}
+    record_keys: dict = {}
     for key, shape in (data.items() if isinstance(data, dict) else ()):
-        kind = next((k for k in HOOK_RECORD_KINDS if re.search(r"(^|[^a-z_])" + k + r"($|[^a-z_])", key)), None)
-        if kind is None or not isinstance(shape, dict):
+        # "<source>:<record type>/<attachment type or subtype>", e.g. "transcript:attachment/hook_success";
+        # the "stdin:<event>" entries are the hooks' input, not this channel.
+        source, _, record = key.partition(":")
+        rtype, _, kind = record.partition("/")
+        if source == "stdin" or kind not in HOOK_RECORD_KINDS or not isinstance(shape, dict):
             continue
-        paths = {}
+        paths = out.setdefault(kind, {})
+        record_keys.setdefault(kind, set()).update(_shape_keys(shape))
         for path, types in shape.items():
-            p = path[len("attachment."):] if key.startswith("attachment") and path.startswith("attachment.") else path
-            if key.startswith("attachment") and not path.startswith("attachment."):
-                continue
-            paths[p] = sorted(types) if isinstance(types, (list, tuple, set)) else [types]
-        out[kind] = paths
+            if rtype == "attachment":
+                if not path.startswith("attachment."):
+                    continue
+                path = path[len("attachment."):]
+            ts = types if isinstance(types, (list, tuple, set)) else [types]
+            paths[path] = sorted(set(paths.get(path, [])) | set(ts))
     if not out:
-        return rel, {}, f"{rel}: no hook-output record ({', '.join(HOOK_RECORD_KINDS)})"
-    return rel, out, ""
+        return rel, {}, {}, f"{rel}: no hook-output record ({', '.join(HOOK_RECORD_KINDS)})"
+    return rel, out, record_keys, ""
 
 
 def _shape_keys(paths: dict) -> set:

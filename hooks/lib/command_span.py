@@ -617,7 +617,8 @@ def _prompt_hook_text(attachment) -> str | None:
     """The text of a context record the CLI writes for a UserPromptSubmit hook's output, else None.
     CLI 2.1.322 writes a hook's plain stdout (what prompt-workflow.py prints) as a hook_success
     record whose content is that stdout, and a JSON additionalContext as hook_additional_context
-    whose content is a list of strings; older CLIs wrote the plain stdout as hook_additional_context.
+    whose content is a list of strings (CLI 2.1.325 likewise: tests/fixtures/cli); older CLIs wrote the
+    plain stdout as hook_additional_context.
     A hook_success of any other event is not the prompt's context.
     The one parser of the CLI's hook-output channel (tests/artifact_graph: channel:cli-hook-output)."""
     if not isinstance(attachment, dict):
@@ -633,8 +634,7 @@ def _prompt_hook_text(attachment) -> str | None:
     else:
         return None
     if isinstance(content, list):
-        content = "\n".join(b if isinstance(b, str) else b.get("text", "") for b in content
-                            if isinstance(b, (str, dict)))
+        content = "\n".join(b for b in content if isinstance(b, str))
     return content if isinstance(content, str) else None
 
 
