@@ -6,13 +6,16 @@ How to add a command, an agent or a hook so that it follows the harness's conven
 
 ## Extending it
 
+Plain Markdown and scripts. Each piece has a checked contract. A prompt states what is required and what is forbidden. A hook that guards anything dangerous fails closed and says why.
+
 A `PostToolUse` doc-sync hook keeps the marked sections of the INDEX and README files that already exist in sync the moment you save (it creates none), so a new agent appears in `agents/INDEX.md` and `agents/README.md` without manual bookkeeping. It regenerates the written file's folder and every folder above it up to the project root, counting the new file before it is staged, so what it writes is what the committed tree renders. The hook runs only in a live harness session, so `python3 scripts/regen-folder-docs.py` regenerates every such section across the tree with the same writer, and its `--check` (run by CI) fails, naming each file, when one has drifted. Commands have no index files. The README's command and agent tables are generated from each file's own frontmatter by `scripts/generate-hero-status.py`: its `summary:` (one short sentence, never cut: `scripts/readme_facts.py` sets the length limit and the internal names, such as an optional module's own name or a model id, that it may not hold) and, for a command, its `group:` (Spec, Develop, Ship, Quality or Control); a command of an optional module also carries `module: <name>` and is left off the front page. A missing or broken summary or group fails `scripts/verify-claims.sh`. Mirror existing conventions: prompts state what is **required** and what is **forbidden**, and a hook that guards anything dangerous should *fail closed* (block on doubt) and leave its evidence behind.
 
 | Extension type | File location | Required fields | Validation |
 |---|---|---|---|
-| Slash command | `commands/<name>.md` | `description:`, `summary:`, `group:` in YAML frontmatter | Malformed frontmatter hides the command; a missing summary or group fails the README check |
+| Slash command | `commands/<name>.md` | `description:`, `summary:`, `group:` in YAML frontmatter | Malformed frontmatter hides the command; a missing summary or group fails the README check. Generation fails on a missing or over-long summary, or an unknown group. |
 | Subagent | `agents/<name>.md` | `name:`, `description:`, `summary:`, `tools:` in YAML frontmatter | Incorrect `tools:` silently limits toolchain; a missing summary fails the README check |
-| Hook | `hooks/<name>.{sh,py}` + `settings.json` wiring | Executable bit set; correct lifecycle event in `settings.json` | exit 2 = block; exit 0 = allow |
+| Hook | `hooks/<name>.{sh,py}` + `settings.json` wiring | Executable bit set; correct lifecycle event in `settings.json`. Register it through the harness-home path. A row in the [enforcement ledger](ENFORCEMENT-LEDGER.md). | exit 2 = block; exit 0 = allow. `scripts/doctor` fails when a registered hook path does not resolve. `scripts/check-enforcement-evidence.py` fails without its ledger row. |
+| Owner-only command | `commands/<name>.md` with `disable-model-invocation: true` | A `Skill(<name>:*)` entry in the deny list of `settings.json` | A coverage test fails without it (`hooks/tests/test_skill_deny_coverage.py`) |
 | Post-hook verification | Run `examples/guard-demo/run-demo.sh` after any hook changes | Behavioral verification of block-then-grant-then-complete | Standalone; no Claude Code required |
 
 <details>
