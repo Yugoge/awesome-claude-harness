@@ -235,9 +235,13 @@ def test_the_premise_git_reads_the_hooks_path_of_the_per_worktree_file(repo):
 
 def test_helpers_read_a_command_the_way_git_and_the_shell_do():
     g = _load_guard()
-    assert g._neutralize_substitutions('a "$(git rev-parse --git-dir)/c" `x y` ${A:-b} k') \
-        == 'a "$SUBST_git_rev_parse___git_dir/c" $SUBST_x_y $SUBST_A__b k'
-    assert g._neutralize_substitutions("echo $(unclosed") == "echo $(unclosed"
+    # each git invocation is read whole past substitutions in its words, also those inside a
+    # substitution, and the config words keep a placeholder where an expansion stands
+    runs = g._git_runs('git config -f "$(git rev-parse --git-dir)/c" `x y` ${A:-b} k', '/')
+    assert sorted(inv.subcommand for inv, _c, _k in runs) == ["config", "rev-parse"]
+    config = next(inv for inv, _c, _k in runs if inv.subcommand == "config")
+    assert g._config_args(config) == ["-f", "$_/c", "$_", "$_", "k"]
+    assert g._read("echo $(unclosed").unreadable
     for key in ("core.hookspath", "include.path", "includeif.gitdir:/a/.path", "$k", "core.$k",
                 "includeif.$d.path", "includeif.gitdir:$d"):
         assert g._key_may_be_keystone(key), key

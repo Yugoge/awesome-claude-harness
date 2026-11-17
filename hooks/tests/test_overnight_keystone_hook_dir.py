@@ -8,9 +8,8 @@ targets, the keystone hook dir is one of the guard's git-config paths for a Writ
 Bash write target, and bubblewrap rebinds it read-only. A file in the worktree, and every session
 outside overnight, pass.
 
-Padded with 7000 operands, the same chmod must not take the rule past its 20 s budget (a git query
-per write target): an overrun failed open. The guard resolves the git config paths once per
-command, and the rule fails closed.
+Padded with thousands of operands, the same chmod is refused well inside the rule's budget: the
+guard resolves the git config paths once per command, and the rule fails closed on an overrun.
 """
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:11:18Z*
-**Total entries**: 965
+*Last updated: 2026-11-17T01:38:25Z*
+**Total entries**: 979
 **Convention**: kebab
 
 ## Tree
@@ -128,10 +128,10 @@ dot-claude/
 │   │   ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 │   │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   │   ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
-│   │   ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
+│   │   ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
-│   │   ├── `bash_execution_boundary.py` - THE ALGEBRA (spec-20260808-035658 LANE-POL, Must-1).  Every execution-bearing
-│   │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
+│   │   ├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
+│   │   ├── `bash_write_targets.py` - An import shim for the hooks that read paths rather than parse trees. Every reading is
 │   │   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 │   │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
@@ -175,7 +175,9 @@ dot-claude/
 │   │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   │   ├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 │   │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
+│   │   ├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 │   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
+│   │   ├── `shell_parse.py` - Stdlib only. Nothing here executes, expands or evaluates the text it reads, and
 │   │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   │   ├── `specialist_yield.py` - Public API:
 │   │   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
@@ -283,8 +285,9 @@ dot-claude/
 │   │   ├── `test_overnight_cycle_contract.py` - - No seed file: the exploration (steps 2-4) passes the dispatch hook in cycles
 │   │   ├── `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
 │   │   ├── `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
+│   │   ├── `test_overnight_guard_bash_parser.py` - Each decision that changed when the guard's Bash path moved onto the parser is pinned here, with
 │   │   ├── `test_overnight_inplace_bubblewrap.py` - Replayed in a bwrap-less in-place toy session, every removal of the git
-│   │   ├── `test_overnight_keystone_hook_dir.py` - Measured on 1ace5ee4: in both isolation modes a `chmod -x` of
+│   │   ├── `test_overnight_keystone_hook_dir.py` - In both isolation modes neither a `chmod -x` of `<common>/keystone-hooks/reference-transaction`
 │   │   ├── `test_overnight_one_state_reader.py` - cycle contract's one writer (P1b row 13, E13)
 │   │   ├── `test_overnight_operand_scan_channel.py` - The commands run harness scripts as `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/x.sh"`. For an
 │   │   ├── `test_overnight_qa_sentinel_bind.py` - P1b E7 removed the one RW exception the boundary had under main's
@@ -315,6 +318,7 @@ dot-claude/
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   ├── `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 │   │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+│   │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 │   │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   │   ├── `test_requirement_round.py` - hook that calls it
 │   │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
@@ -324,6 +328,7 @@ dot-claude/
 │   │   ├── `test_score_view.py` - hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/lib/score_view.py r...
 │   │   ├── `test_scratch_lifecycle.py` - Covers:
 │   │   ├── `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
+│   │   ├── `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
 │   │   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
 │   │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 │   │   ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
@@ -343,6 +348,7 @@ dot-claude/
 │   │   ├── `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 │   │   ├── `test_todo_validate_after_restart.py` - A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result aft...
 │   │   ├── `test_todo_validate_in_flight.py` - The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
+│   │   ├── `test_todowrite_pin.py` - settings.json's env carries CLAUDE_CODE_ENABLE_TASKS=false and CLAUDE_CODE_ENABLE_TODO_TOOLS=1; the
 │   │   ├── `test_tool_policy_c_layer_writes.py` - hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 │   │   ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 │   │   ├── `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
@@ -393,7 +399,7 @@ dot-claude/
 │   ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 │   ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 │   ├── `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-│   ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
+│   ├── `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
 │   ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 │   ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 │   ├── `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's
@@ -413,7 +419,7 @@ dot-claude/
 │   ├── `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 │   ├── `pretool-commit-dispatch-attest.py` - Writes `<state-dir>/claude-commit-dispatch-<sid>-<nonce>.json` when, and only
 │   ├── `pretool-cp-checkin.py` - cp-state file read (the write is scripts/spec-check.py's `register`)
-│   ├── `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
+│   ├── `pretool-cp-state-write-guard.py` - Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2;
 │   ├── `pretool-dispatch-gate.py` - The rules run in this order, each as its own hook would run alone (its switch, its
 │   ├── `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 │   ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
@@ -438,7 +444,7 @@ dot-claude/
 │   ├── `pretool-tool-policy.py` - tool-policy.v1.json for all subagents
 │   ├── `pretool-workflow-gate.py` - PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools
 │   ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
-│   ├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
+│   ├── `pretool-wrapper-userintent.py` - The /stop slash command releases overnight isolation by running
 │   ├── `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
 │   ├── `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 │   ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
@@ -818,6 +824,13 @@ dot-claude/
 │   │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
+│   ├── shell_parse/
+│   │   ├── `audit_rows.json` - json config
+│   │   ├── `corpus.jsonl` - jsonl file
+│   │   ├── `differential.py` - For one command string, ``old_facts`` runs each reader the hooks use today and
+│   │   ├── `test_audit_rows.py` - audit_rows.json holds the 131 inputs of the independent audit with, for each,
+│   │   ├── `test_bash_oracle.py` - bash runs each generated command with an empty PATH and a
+│   │   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
@@ -914,6 +927,7 @@ dot-claude/
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 │   ├── `test_score_events.py` - escaped and close_catch, and the observer
 │   ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
+│   ├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
 │   ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 │   ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 │   ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two

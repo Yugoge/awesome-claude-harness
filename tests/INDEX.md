@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:11:19Z*
-**Total entries**: 257
+*Last updated: 2026-11-17T01:38:26Z*
+**Total entries**: 265
 **Convention**: kebab
 
 ## Tree
@@ -135,6 +135,13 @@ tests/
 │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
+├── shell_parse/
+│   ├── `audit_rows.json` - json config
+│   ├── `corpus.jsonl` - jsonl file
+│   ├── `differential.py` - For one command string, ``old_facts`` runs each reader the hooks use today and
+│   ├── `test_audit_rows.py` - audit_rows.json holds the 131 inputs of the independent audit with, for each,
+│   ├── `test_bash_oracle.py` - bash runs each generated command with an empty PATH and a
+│   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
@@ -231,6 +238,7 @@ tests/
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 ├── `test_score_events.py` - escaped and close_catch, and the observer
 ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
+├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
 ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
