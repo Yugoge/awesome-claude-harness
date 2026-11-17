@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T14:13:30Z*
-**Total entries**: 983
+*Last updated: 2026-11-17T17:14:43Z*
+**Total entries**: 984
 **Convention**: kebab
 
 ## Tree
@@ -264,6 +264,7 @@ dot-claude/
 │   │   ├── `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
 │   │   ├── `test_git_text_owners.py` - Four readings, each with the inputs that must still be refused:
 │   │   ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
+│   │   ├── `test_git_word_unquoted.py` - as git receives them, quotes and backslashes removed, before any rule judges them
 │   │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 │   │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
