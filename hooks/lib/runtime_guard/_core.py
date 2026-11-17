@@ -2624,13 +2624,83 @@ def _pm_global_setting(name: str, value: Optional[str]) -> bool:
     return False
 
 
-def _pm_global_args(args: list) -> bool:
+_PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
+"""Package-manager subcommands that run another command: their argv after `--`
+(and npm's `-c` / `--call` string) is a nested invocation, not a script's args."""
+_PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+_PM_SUBCMDS = frozenset({
+    "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
+    "ci", "clean-install", "install-clean", "install-test", "it", "install-ci-test", "cit",
+    "uninstall", "un", "unlink", "remove", "rm", "r", "update", "up", "upgrade", "udpate", "link", "ln",
+    "run", "run-script", "rum", "urn", "test", "tst", "t", "start", "stop", "restart", "build",
+    "config", "c", "set", "get", "init", "create", "innit", "publish", "pack", "audit", "outdated",
+    "ls", "list", "la", "ll", "why", "explain", "view", "info", "show", "v", "search", "prefix",
+    "root", "bin", "cache", "help", "version", "doctor", "prune", "dedupe", "ddp", "rebuild", "rb",
+    "fund", "pkg", "query", "global", "workspace", "workspaces", "store", "patch", "import"})
+
+
+def _pm_exec_family(args: list) -> bool:
+    """True if the package manager's subcommand (the first known subcommand word
+    before `--`, so a value like `--prefix /tmp` is skipped) runs a nested
+    command: `exec`, `x`, `dlx`."""
+    head = args[:args.index("--")] if "--" in args else args
+    words = [t for t in head if t and not t.startswith("-")]
+    known = [t for t in words if t in _PM_SUBCMDS or t in _PM_EXEC_SUBCMDS]
+    if known:
+        return known[0] in _PM_EXEC_SUBCMDS
+    return any(t in _PM_EXEC_SUBCMDS for t in words)
+
+
+def _pm_nested_global(tokens: list, depth: int = 0) -> bool:
+    """True if a nested invocation (the argv an exec-family subcommand runs, or a
+    `-c` string) runs a package manager as a global op: a package-manager word
+    whose own arguments are global (`npm exec -- npm i -g x`), an exec runner
+    (`npx`) whose nested argv is, or a string word (`sh -c 'npm i -g x'`) read
+    the same way."""
+    if depth > 4:
+        return True  # nested past the bound: fail closed
+    for i, t in enumerate(tokens):
+        if t is None:
+            continue
+        base = os.path.basename(t)
+        if base in PKG_MANAGERS:
+            return _pm_global_args(tokens[i + 1:], depth + 1)
+        if base in _PM_EXEC_RUNNERS:
+            return _pm_nested_global(_pm_runner_argv(tokens[i + 1:]), depth + 1)
+        if any(c.isspace() for c in t) and _pm_nested_global(_safe_shlex(t), depth + 1):
+            return True
+    return False
+
+
+def _pm_runner_argv(tokens: list) -> list:
+    """The argv an exec runner (`npx`) runs: everything after its own `--`, else
+    from its first non-option word."""
+    if "--" in tokens:
+        return tokens[tokens.index("--") + 1:]
+    for i, t in enumerate(tokens):
+        if t and not t.startswith("-"):
+            return tokens[i:]
+    return []
+
+
+def _pm_global_args(args: list, depth: int = 0) -> bool:
     """True if a package manager's own arguments make it a global op: `-g`,
     `--global`, `--global=<true>`, a short cluster holding `g` (`-gD`),
     `--location=global` / `--location global` (or npm's unique abbreviations
     `--locat` .. `--locatio`), a `global` subcommand (yarn), or a persistent
-    `config set global <true>` / `set location=global`. Arguments after `--`
-    belong to the script the package manager runs, not to it."""
+    `config set global <true>` / `set location=global`. npm stops reading its own
+    flags at `--` (`npm -- i -g x`, `npm i x -- -g`, `npm test -- -g` are not
+    global), so arguments after `--` are not its flags; but for an exec-family
+    subcommand (`npm exec` / `x`, `pnpm exec` / `dlx`, `yarn exec` / `dlx`) they
+    are the nested command it runs, read as a nested invocation, as is npm's
+    `-c` / `--call` string."""
+    args = [a if a is not None else "" for a in args]
+    if _pm_exec_family(args):
+        nested = args[args.index("--") + 1:] if "--" in args else []
+        calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in ("-c", "--call")]
+        calls += [t.split("=", 1)[1] for t in args if t.startswith(("--call=", "-c="))]
+        if _pm_nested_global(nested, depth) or any(_pm_nested_global(_safe_shlex(c), depth + 1) for c in calls):
+            return True
     if "--" in args:
         args = args[:args.index("--")]
     for i, t in enumerate(args):

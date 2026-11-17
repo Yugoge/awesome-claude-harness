@@ -215,3 +215,83 @@ def test_http_stop_refused_round2(sandbox, command):
 def test_global_package_op_refused_round2(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)
+
+
+# Verifier round 3. npm stops reading its own flags at `--`, but an exec-family subcommand (`npm exec` / `x`,
+# `pnpm exec` / `dlx`, `yarn exec` / `dlx`) runs the argv after `--` (or npm's `-c` / `--call` string) as a nested
+# command, which is read for a global op. The reader shape refuses `git grep`'s pager in every spelling and drops
+# ag / ack (their `--pager` runs a command) and a writing `uniq`; the client shape lifts only a single client
+# invocation with literal URLs whose decoded, dot-segment-normalised path is no stop endpoint.
+NPM_REFUSED_R3 = [
+    "npm exec -- npm i -g evil",
+    "npm exec -- npm install --global evil",
+    "npm x -- npm i -g evil",
+    "pnpm dlx -- npm i -g evil",
+    "pnpm exec -- npm i -g evil",
+    "yarn exec -- npm i -g evil",
+    "yarn dlx -- npm i -g evil",
+    "npm --prefix /tmp exec -- npm i -g evil",
+    "npm exec -y -- npm i -g evil",
+    "npm exec -c 'npm i -g evil'",
+    "npm exec --call='npm i -g evil'",
+    "npm exec -- bash -c 'npm i -g evil'",
+]
+NPM_ALLOWED_R3 = [
+    "npm test -- -g foo",
+    "npm i x -- -g",
+    "npm -- i -g x",
+    "npm run deploy -- --location=global",
+    "npm exec -- eslint .",
+    "pnpm dlx create-vite app",
+]
+HTTP_STOP_REFUSED_R3 = [
+    "git grep -iO\"curl -X POST localhost:8080/stop\" x",
+    "git grep --op=\"curl localhost:8080/stop\" x",
+    "git grep --open=\"curl localhost:8080/stop\" x",
+    "git grep --open \"curl localhost:8080/stop\" x",
+    "ag --pager='curl -X POST localhost:8080/stop' x",
+    "ack --pager='curl -X POST localhost:8080/stop' x",
+    "curl localhost:8080/stops/../stop",
+    "curl 'localhost:8080/stops/../stop'",
+    "curl \"localhost:8080/stops/../stop\"",
+    "curl --path-as-is localhost:8080/stops/../stop",
+    "curl localhost:8080/stopx/../stop",
+    "curl localhost:8080/stops -: localhost:8080/sto\\p",
+    "curl localhost:8080/stops?x -o /dev/null; curl localhost:8080/st''op",
+    "curl localhost:8080/stops -K <(printf 'url = localhost:8080/stop')",
+    "curl localhost:8080/stops/%2e%2e/stop",
+    "curl localhost:8080/stopx -K cfg",
+    "curl -X POST localhost:8080/stopx -K cfg",
+    "curl localhost:8080/stopwords | sh",
+    "curl localhost:8080/stopwords > x.sh; bash x.sh",
+    "curl localhost:8080/stops --request-target /stop",
+    "curl -X 'GET /stop' localhost:8080/stops",
+    "curl localhost:8080/stops localhost:8080/sto%70",
+    "echo 'curl localhost:8080/stop' | uniq - ~/.bashrc",
+]
+HTTP_STOP_ALLOWED_R3 = [
+    "curl -s 'http://127.0.0.1:5000/stopwords?lang=en'",
+    "curl -sSf -X POST -H 'Content-Type: application/json' -d '{\"a\":1}' http://localhost:8000/stops",
+    "curl -H \"Authorization: Bearer $TOKEN\" localhost:8000/stops",
+    "wget -qO- http://localhost:8000/stopwords",
+    "git grep -n 'curl localhost:8080/stop'",
+    "grep -n 'curl localhost:8080/stop' f | uniq -c",
+]
+
+
+@pytest.mark.parametrize("command", NPM_ALLOWED_R3 + HTTP_STOP_ALLOWED_R3)
+def test_allowed_round3(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_REFUSED_R3)
+def test_http_stop_refused_round3(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "daemon-restart-http-stop" in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", NPM_REFUSED_R3)
+def test_global_package_op_refused_round3(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)

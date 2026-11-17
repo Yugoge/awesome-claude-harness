@@ -17,6 +17,7 @@ import resource
 import signal
 import subprocess
 import sys
+import urllib.parse
 
 HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(HOOKS, "lib")
@@ -515,8 +516,9 @@ HTTP_CLIENTS = frozenset({"curl", "wget", "nc", "ncat", "netcat", "socat", "teln
                           "xh", "xhs"})
 HTTP_INTERPRETERS = re.compile(r"^(i?python|pypy|node|nodejs|deno|bun|perl|ruby|php)[0-9.]*(-dbg)?$")
 HTTP_LIBRARIES = r"(http\.client|aiohttp|requests|urllib|httpx|fetch\(|axios|LWP|HTTP::Tiny|Net::HTTP)"
-HTTP_STOP_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack", "echo", "printf", "cat", "sed", "git"})
-"""Commands that only print the text they are given or read (sed and git under the checks of _http_reader_ok)."""
+HTTP_STOP_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "echo", "printf", "cat", "sed", "git"})
+"""Commands that only print the text they are given or read (sed, git and uniq under the checks of _http_reader_ok).
+ag and ack are not readers: their `--pager` runs a command."""
 HTTP_STOP_FILTERS = frozenset({"head", "tail", "wc", "cut", "tr", "uniq", "nl", "column", "jq"})
 HTTP_STOP_CONTEXTS = frozenset({"top", "cmdsub", "backtick"})
 
@@ -553,6 +555,38 @@ def _http_plain(site, r):
     return name if name == r.name else None
 
 
+def _git_grep_pager(arg):
+    """True if a `git grep` argument opens the matches in a pager it runs: `-O<cmd>`, a short cluster reaching `O`
+    before a letter that takes a value (`-iO<cmd>`, `-nO`), or `--open-files-in-pager` in any abbreviation git
+    accepts (`--op`, `--open=<cmd>`)."""
+    if arg.startswith("--"):
+        name = arg.split("=", 1)[0]
+        return len(name) > 2 and "--open-files-in-pager".startswith(name) and name != "--"
+    if arg.startswith("-") and len(arg) > 1:
+        for ch in arg[1:]:
+            if ch == "O":
+                return True
+            if ch in "ABCefm" or ch.isdigit():
+                return False  # the rest of the cluster is this option's value
+    return False
+
+
+def _uniq_operands(args):
+    """The number of file operands of a `uniq` call (`uniq IN OUT` writes OUT); an option taking a separate value
+    (`-f N`, `-s N`, `-w N`) does not count its value."""
+    n, skip, ended = 0, False, False
+    for a in args:
+        if skip:
+            skip = False
+        elif not ended and a == "--":
+            ended = True
+        elif not ended and a in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
+            skip = True
+        elif ended or a == "-" or not a.startswith("-"):
+            n += 1
+    return n
+
+
 def _http_reader_ok(site, r):
     """True if the simple command only prints or filters text: a reader or a pure filter, as written, whose
     redirections write nowhere but /dev/null."""
@@ -569,7 +603,10 @@ def _http_reader_ok(site, r):
         return False
     if name == "git":
         return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
-            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args)
+            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args) \
+            and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
+    if name == "uniq":
+        return _uniq_operands(args) < 2
     if name == "sed":
         quiet, scripts, operands, take = False, [], [], False
         for a in args:
@@ -625,15 +662,196 @@ def _http_runs_client(command, sites):
     return False
 
 
+HTTP_LIFT_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "xhs"})
+"""The clients whose request URL is their literal argument; a raw socket client (nc, socat, telnet) is not one."""
+HTTP_LIFT_PIPE = HTTP_STOP_FILTERS | {"grep", "egrep", "fgrep"}
+HTTP_STOP_PATH = re.compile(r"/stop(?![A-Za-z0-9])", re.I)
+# Per client: (flag-only short letters, value-taking short letters, flag-only long options, value-taking long
+# options, whether `--opt=value` is accepted). Any other option (curl's -K/--config, -:/--next, -T, --variable,
+# --expand-*, --request-target; wget's -i, -e, -B, --config, -r; ...) keeps the refusal.
+HTTP_LIFT_OPTIONS = {
+    "curl": ("sSfLiIvkGOJNgj46#q", "XHdouAebcmwFrxECzyY",
+             {"--silent", "--show-error", "--fail", "--fail-with-body", "--location", "--include", "--head",
+              "--verbose", "--insecure", "--compressed", "--globoff", "--http1.0", "--http1.1", "--http2", "--no-buffer",
+              "--get", "--remote-name", "--ipv4", "--ipv6", "--path-as-is", "--no-progress-meter", "--raw",
+              "--tcp-nodelay", "--remote-header-name", "--no-keepalive", "--location-trusted", "--progress-bar",
+              "--fail-early", "--create-dirs", "--show-headers"},
+             {"--request", "--header", "--data", "--data-raw", "--data-binary", "--data-ascii", "--data-urlencode",
+              "--json", "--output", "--user", "--user-agent", "--referer", "--cookie", "--cookie-jar", "--max-time",
+              "--connect-timeout", "--write-out", "--form", "--form-string", "--retry", "--retry-delay",
+              "--retry-max-time", "--range", "--proxy", "--cacert", "--cert", "--key", "--url", "--url-query",
+              "--oauth2-bearer", "--limit-rate", "--max-redirs", "--resolve", "--connect-to", "--dump-header",
+              "--output-dir", "--unix-socket", "--max-filesize", "--noproxy", "--proxy-user"}, False),
+    "wget": ("qvSckN", "OoaTtUP",
+             {"--quiet", "--verbose", "--no-verbose", "--spider", "--server-response", "--no-check-certificate",
+              "--continue", "--timestamping", "--content-disposition", "--no-clobber", "--show-progress",
+              "--save-headers"},
+             {"--output-document", "--output-file", "--append-output", "--timeout", "--tries", "--user-agent",
+              "--header", "--post-data", "--method", "--body-data", "--user", "--password", "--directory-prefix",
+              "--max-redirect", "--wait", "--referer", "--load-cookies", "--save-cookies"}, True),
+    "http": ("vhbjfIFqdSA", "pao",
+             {"--verbose", "--headers", "--body", "--json", "--form", "--check-status", "--ignore-stdin", "--follow",
+              "--offline", "--quiet", "--download", "--stream", "--all", "--path-as-is"},
+             {"--print", "--auth", "--auth-type", "--timeout", "--verify", "--pretty", "--style", "--output"}, True),
+}
+for _alias in ("https", "httpie", "xh", "xhs"):
+    HTTP_LIFT_OPTIONS[_alias] = HTTP_LIFT_OPTIONS["http"]
+HTTP_LIFT_METHOD_OPTS = frozenset({"-X", "--request", "--method"})
+HTTP_LIFT_LITERAL_OPTS = HTTP_LIFT_METHOD_OPTS | {"--url"}
+
+
+def _http_literal(w):
+    """The static text of a word written as one plain literal (bare, or wholly inside one pair of quotes with no
+    escape), with no curl URL glob; else None. `st''op`, `sto\\p`, `"st"op`, `$'..'`, `{a,b}`, `[o]` are not. A bare
+    `?` or `*` (a query string's `?`) is kept as written: a shell glob cannot put a `/` or a leading `.` there."""
+    if not all(p.kind == "lit" or (p.kind == "glob" and set(p.text) <= set("?*")) for p in w.parts):
+        return None
+    v = "".join(p.text for p in w.parts)
+    if w.text not in (v, "'" + v + "'", '"' + v + '"') or (w.text == v and "\\" in v):
+        return None
+    if re.search(r"[{}\[\]]", v):
+        return None
+    return v
+
+
+def _http_path_stops(text):
+    """True if a URL in text reaches a stop endpoint once percent-decoded and its dot segments removed, as the
+    client (curl normalises `/stops/../stop`) or a server may read it."""
+    for m in re.finditer(r":[0-9]+(/[^?#\s]*)", text):
+        path = m.group(1)
+        for _ in range(5):
+            dec = urllib.parse.unquote(path)
+            if dec == path:
+                break
+            path = dec
+        path = path.replace("\\", "/")
+        out = []
+        for seg in path.split("/"):
+            if seg == "..":
+                if len(out) > 1:
+                    out.pop()
+            elif seg != ".":
+                out.append(seg)
+        if HTTP_STOP_PATH.search(path) or HTTP_STOP_PATH.search("/".join(out) or "/"):
+            return True
+    return False
+
+
+def _http_value_ok(opt, value):
+    """A URL option's value is no file of URLs and reaches no stop endpoint; a method is one plain token."""
+    if opt in HTTP_LIFT_METHOD_OPTS:
+        return bool(re.fullmatch(r"[A-Za-z]+", value))
+    return not value.startswith("@") and not _http_path_stops(value)
+
+
+def _http_client_args_ok(name, words):
+    """True if every argument of a lift client is an option it knows to take no URL or request from elsewhere, and
+    every URL-bearing word (positional, --url, a method) is a plain literal whose path is no stop endpoint."""
+    short_flags, short_vals, long_flags, long_vals, eq_ok = HTTP_LIFT_OPTIONS[name]
+    i, positional, literal_next = 0, [], None
+    while i < len(words):
+        w = words[i]
+        if any(p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") for p in w.parts):
+            return False
+        a = w.value() if w.value() is not None else w.text
+        i += 1
+        if literal_next is not None:
+            v = _http_literal(w)
+            if v is None or not _http_value_ok(literal_next, v):
+                return False
+            literal_next = None
+            continue
+        if a == "--":
+            positional.extend(words[i:])
+            break
+        if a.startswith("--"):
+            opt, eq, val = a.partition("=")
+            if eq and not eq_ok:
+                return False
+            if opt in long_flags and not eq:
+                continue
+            if opt not in long_vals:
+                return False
+            if eq:
+                if opt in HTTP_LIFT_LITERAL_OPTS and (_http_literal(w) is None or not _http_value_ok(opt, val)):
+                    return False
+            elif i >= len(words):
+                return False
+            elif opt in HTTP_LIFT_LITERAL_OPTS:
+                literal_next = opt
+            else:
+                i += 1
+            continue
+        if a.startswith("-") and len(a) > 1:
+            for j, ch in enumerate(a[1:], 1):
+                if ch in short_flags:
+                    continue
+                if ch not in short_vals:
+                    return False
+                opt, rest = "-" + ch, a[j + 1:]
+                if rest:
+                    if opt in HTTP_LIFT_LITERAL_OPTS and (_http_literal(w) is None or not _http_value_ok(opt, rest)):
+                        return False
+                elif i >= len(words):
+                    return False
+                elif opt in HTTP_LIFT_LITERAL_OPTS:
+                    literal_next = opt
+                else:
+                    i += 1
+                break
+            continue
+        positional.append(w)
+    if literal_next is not None:
+        return False
+    for k, w in enumerate(positional):
+        v = _http_literal(w)
+        if v is None or _http_path_stops(v):
+            return False
+        if name not in ("curl", "wget") and k == 0 and not re.search(r"[:/.]", v) and \
+                not re.fullmatch(r"[A-Za-z]+", v):
+            return False  # httpie's METHOD word is one plain token
+    return True
+
+
+def _http_single_client(command, sites):
+    """True if the command is one HTTP client invocation run as written at the top level, alone or piped only into
+    pure filters (head, jq, grep, ...; never a shell), whose arguments pass _http_client_args_ok."""
+    try:
+        from lib.shell_parse import SimpleCommand, parse
+        script = parse(command)
+    except Exception:  # noqa: BLE001 - the parser unavailable: no lift
+        return False
+    if script.error is not None or len(script.items) != 1 or not sites:
+        return False
+    stages = script.items[0][0].stages
+    if len(stages) != len(sites) or not all(isinstance(st, SimpleCommand) for st in stages):
+        return False
+    if any(tuple(site.context) != ("top",) for site, _r in sites):
+        return False
+    site, r = sites[0]
+    name = _http_plain(site, r)
+    if name not in HTTP_LIFT_CLIENTS or not _http_client_args_ok(name, list(site.cmd.words[1:])):
+        return False
+    if any(rd.target is not None and rd.target.value() is None for rd in site.cmd.redirects):
+        return False
+    return all(_http_plain(s, rr) in HTTP_LIFT_PIPE and _http_reader_ok(s, rr) for s, rr in sites[1:])
+
+
 def _http_stop_allowed(command, sites):
     """The whole command has one of the two shapes that send no request to a stop endpoint:
     (a) every parsed command only prints or filters text (grep, rg, echo, cat, sed -n, git log, ... | head), so
         the URL is a mention; or
-    (b) no port's /stop in the text is a stop endpoint (`/stops/42`, `/stopwords`), and every such URL sits in a
-        literal argument of an HTTP client run as written."""
+    (b) the command is a single HTTP client invocation (curl, wget, httpie, xh), alone or piped only into pure
+        filters, with no option that takes URLs or requests from elsewhere (`-K`, `--config`, `-:`, `--next`,
+        `-T`, `--variable`, wget's `-i` / `-e`, ...), every URL word a plain literal (no quote splitting, escape,
+        expansion or URL glob), and no URL path reaching `/stop` (not followed by a letter or digit) once
+        percent-decoded and its dot segments removed; so `/stops/42` and `/stopwords` pass and `/stops/../stop`
+        does not."""
     if all(_http_reader_ok(site, r) for site, r in sites):
         return True
     if re.search(HTTP_STOP_ANY + r"(?![A-Za-z0-9])", command):
+        return False
+    if not _http_single_client(command, sites):
         return False
     found = 0
     for site, r in sites:
