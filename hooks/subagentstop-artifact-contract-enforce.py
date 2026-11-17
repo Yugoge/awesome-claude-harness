@@ -394,17 +394,38 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     return lines
 
 
+def _parser_fixture(p: Path, roots: list) -> bool:
+    """A6-RC3: p's realpath lies in a `fixtures` directory directly under a `tests` directory below a
+    root (hooks/tests/fixtures/**), which nothing executes, so it may be invalid on purpose. Not one:
+    a file pytest collects there (test_*.py, *_test.py, conftest.py) or one with another hard link,
+    whose bytes a live file may share. Exact-case names on the canonical path, so `..`, a symlink
+    (file or directory) or a case variant never makes a live file look like a fixture."""
+    try:
+        real = p.resolve(strict=True)
+        if real.name == "conftest.py" or real.suffix == ".py" and (
+                real.name.startswith("test_") or real.stem.endswith("_test")) or real.stat().st_nlink != 1:
+            return False
+    except (OSError, RuntimeError):
+        return False
+    for r in roots:
+        if real.is_relative_to(r):
+            parts = real.relative_to(r).parts[:-1]  # directories only
+            return any(a == "tests" and b == "fixtures" for a, b in zip(parts, parts[1:]))
+    return False
+
+
 def _harness_syntax(resolution) -> list:
     """F3.a: each file of the agent's own written set (no inheritance) under the live harness home's
     hooks/ or scripts/ (realpath) that Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
-    shebang) rejects as it stands now. Nothing is written: no py_compile, no __pycache__."""
+    shebang) rejects as it stands now, a parser fixture (_parser_fixture) aside. Nothing is written:
+    no py_compile, no __pycache__."""
     home, findings = claude_home.resolve(), []
     roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
     try:
         written = sorted(_recorded(getattr(resolution, "transcript_path", None))[0])
     except Exception:  # an unreadable transcript judges nothing
         return []
-    for p in (p for p in written if any(p.is_relative_to(r) for r in roots)):
+    for p in (p for p in written if any(p.is_relative_to(r) for r in roots) and not _parser_fixture(p, roots)):
         try:
             text = p.read_bytes()
             shebang = text.split(b"\n", 1)[0] if text[:2] == b"#!" and not p.suffix else b""
