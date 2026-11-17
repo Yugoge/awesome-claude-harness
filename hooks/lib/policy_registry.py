@@ -32,6 +32,16 @@ Path prefix matching (T1.2 fix for B.11):
     falls back to legacy substring containment. New policies should
     always anchor with '/' or '*'; relative prefixes remain only for
     backward compatibility.
+
+Write carve-outs (``write_carveout_prefixes``, policy_version 9):
+  - A row may name project-root anchored directories ('/reports/') that its
+    role writes although a deny prefix holds them. A target is inside one only
+    when its normalised absolute path AND its realpath both lie under the
+    directory (under the project's logical path or its realpath, never the
+    directory's own realpath), and an existing file there has one hard link.
+  - Such a target passes the allow list and the deny prefixes the carve-out
+    sits under ('/tests/' for '/tests/reports/'); every other deny prefix
+    still applies (_write_denial). A malformed entry carves nothing.
 """
 
 from __future__ import annotations
@@ -39,6 +49,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import stat
 import sys
 from typing import Optional, Tuple
 
@@ -265,10 +276,85 @@ def _check_tool_lists(role_pol: dict, tool_name: str) -> Optional[Tuple[bool, st
     return None
 
 
-def _check_write_path(role_pol: dict, target: Optional[str]) -> Tuple[bool, str]:
-    denied_w = role_pol.get("denied_write_path_prefixes", [])
+def _carveout_entries(role_pol: dict) -> list:
+    """The role's well-formed ``write_carveout_prefixes``: project-root anchors
+    of a directory ('/' first and last, no '*', no '.' or '..' segment).
+    A malformed entry carves nothing."""
+    out = []
+    for entry in role_pol.get("write_carveout_prefixes", []) or []:
+        if not isinstance(entry, str) or len(entry) < 3 or "*" in entry:
+            continue
+        if not (entry.startswith("/") and entry.endswith("/")):
+            continue
+        parts = entry.strip("/").split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            continue
+        out.append(entry)
+    return out
+
+
+def _carveout_roots(entry: str) -> list:
+    """A carve-out's directory under the project: its logical path and the same
+    relative path under the project's realpath, NEVER the carve-out directory's
+    own realpath, so a carve-out that is itself a symlink (tests/reports ->
+    tests) carves nothing beyond its own logical tree."""
+    project = _project_dir()
+    rel = entry.strip("/")
+    roots = [os.path.normpath(os.path.join(project, rel))]
+    real_root = os.path.normpath(os.path.join(os.path.realpath(project), rel))
+    if real_root not in roots:
+        roots.append(real_root)
+    return roots
+
+
+def _in_carveout(target: Optional[str], entry: str) -> bool:
+    """True iff EVERY form of ``target`` (its normalised absolute path and its
+    realpath) lies under the carve-out's directory, and an existing file there
+    has one hard link. A '..' that leaves the directory, a symlink anywhere on
+    the path that resolves outside it, or a hard link to a file elsewhere
+    fails the check."""
+    if not target:
+        return False
+    candidates = _candidate_targets(target)
+    roots = _carveout_roots(entry)
+    if not all(any(_path_is_prefix(r, c) for r in roots) for c in candidates):
+        return False
+    try:
+        st = os.stat(candidates[-1])
+    except OSError:
+        return True  # not there yet: a new file under the carve-out
+    return not (stat.S_ISREG(st.st_mode) and st.st_nlink > 1)
+
+
+def _carveout_waives(deny_prefix: str, entry: str) -> bool:
+    """A carve-out waives a deny prefix it sits under ('/tests/reports/' under
+    '/tests/'), never one that sits under it or beside it."""
+    if not isinstance(deny_prefix, str) or "*" in deny_prefix:
+        return False
+    deny = "/" + deny_prefix.strip("/") + "/"
+    return deny != entry and entry.startswith(deny)
+
+
+def _write_denial(role_pol: dict, target: Optional[str]) -> Optional[str]:
+    """The deny-prefix reason for a write target, or None. A target inside one
+    of the role's carve-outs (_in_carveout) is judged only by the deny prefixes
+    that carve-out does not waive."""
+    denied_w = role_pol.get("denied_write_path_prefixes", []) or []
+    for entry in _carveout_entries(role_pol):
+        if _in_carveout(target, entry):
+            denied_w = [d for d in denied_w if not _carveout_waives(d, entry)]
+            break
     if _path_in_prefixes(target, denied_w):
-        return (False, f"write target {target} matches denied_write_path_prefixes")
+        return f"write target {target} matches denied_write_path_prefixes"
+    return None
+
+
+def _check_write_path(role_pol: dict, target: Optional[str]) -> Tuple[bool, str]:
+    denial = _write_denial(role_pol, target)
+    if denial is not None:
+        return (False, denial)
+    if any(_in_carveout(target, entry) for entry in _carveout_entries(role_pol)):
+        return (True, "ok")
     allowed_w = role_pol.get("allowed_write_path_prefixes", [])
     if allowed_w and "*" not in allowed_w and not _path_in_prefixes(target, allowed_w):
         return (False, f"write target {target} not in allowed_write_path_prefixes")

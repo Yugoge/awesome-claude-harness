@@ -804,8 +804,9 @@ def _declared_write_allowed(role: str, tool: str, target):
     tool_check = policy_registry._check_tool_lists(role_pol, tool)
     if tool_check is not None:
         return tool_check
-    if policy_registry._path_in_prefixes(target, role_pol.get("denied_write_path_prefixes", [])):
-        return (False, f"write target {target} matches denied_write_path_prefixes")
+    denial = policy_registry._write_denial(role_pol, target)
+    if denial is not None:
+        return (False, denial)
     return (True, "ok")
 
 
