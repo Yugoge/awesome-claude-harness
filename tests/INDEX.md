@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T08:26:45Z*
-**Total entries**: 266
+*Last updated: 2026-11-17T10:20:14Z*
+**Total entries**: 267
 **Convention**: kebab
 
 ## Tree
@@ -197,6 +197,7 @@ tests/
 ├── `test_harness_switch.py` - Each test builds a harness home the way the full install leaves one: a git checkout of this
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 ├── `test_hero_demo_state_dir.py` - scripts/capture-hero-run.py writes the demo's single-use grant with allowlist.py's own
+├── `test_home_secret_denies.py` - OB-L19's Read/Edit secret denies are written `**/<name>`, `<name>` or a relative path, and the CLI
 ├── `test_hook_rejection_retry.py` - A hook-rejected operation is never retried on the owner's answer alone: only their /allow grant (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run.
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 ├── `test_iterate_failed_pipelines_compat.py` - It answers the call origin/master's /dev-overnight Step 17 makes (commands/dev-overnight.md:1384 ...
