@@ -975,9 +975,11 @@ class _ConsentView:
         cut = max((i for i, (t, _) in enumerate(toks) if t == ("c", "/")), default=-1)
         return toks[cut + 1:], (toks[:cut] if cut >= 0 else None)
 
-    def target(self, word=None, text=None, named=False):
+    def target(self, word=None, text=None, named=False, toks=None):
         """Why writing the path word can create or change the consent flag, or None. A variable with a few known
-        values (a for loop's) is tried with each."""
+        values (a for loop's) is tried with each. ``toks``: the path as tokens already (an option's attached value)."""
+        if toks is not None:
+            return self._target(None, None, named, None, toks)
         multi = {}
         for p in (word.parts if word is not None else ()):
             if p.kind == "param" and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", p.text or ""):
@@ -994,8 +996,8 @@ class _ConsentView:
             return None
         return self._target(word, text, named, None)
 
-    def _target(self, word, text, named, choice):
-        toks = self.tokens(word, text, choice)
+    def _target(self, word, text, named, choice, toks=None):
+        toks = self.tokens(word, text, choice) if toks is None else list(toks)
         base, dtoks = self.split(toks)
         if CONSENT_TOKEN in "".join(t[1] for t, _ in base if t[0] == "c").lower():
             return "its target is named like the consent flag"
@@ -1014,9 +1016,10 @@ class _ConsentView:
         # name that can be the flag's contains the stem (refused above).
         return None
 
-    def into_dir(self, word):
-        """None, "cwd" or "explicit": can the directory word (a copy's destination) be the state dir?"""
-        toks = self.tokens(word)
+    def into_dir(self, word=None, toks=None):
+        """None, "cwd" or "explicit": can the directory word (a copy's destination) be the state dir? ``toks``: the
+        directory as tokens already (an option's attached value)."""
+        toks = self.tokens(word) if toks is None else list(toks)
         while len(toks) > 1 and toks[-1][0] == ("c", "/"):
             toks = toks[:-1]
         return self.dir_state(toks) if toks else None
@@ -1032,77 +1035,421 @@ class _ConsentView:
         return where == "explicit"  # a glob: refused into an explicitly named state dir
 
 
-def _consent_operands(r):
-    """(sources, destination word, destination is a directory?) of a copy, move or link."""
-    args, target, no_dir, ops, skip = list(r.args), None, False, [], False
-    with_value = {"-t", "-S", "-m", "-o", "-g", "-e", "--suffix", "--mode", "--owner", "--group", "--rsh",
-                  "--target-directory", "--exclude", "--include", "--filter", "-f"}
-    for i, w in enumerate(args):
-        v = w.value()
-        if skip:
-            skip = False
+def _consent_lead(view, w):
+    """A word's tokens and its leading literal text: what an option parser can read before the first expansion."""
+    toks = view.tokens(w)
+    n = 0
+    while n < len(toks) and toks[n][0][0] == "c" and toks[n][1] == "lit":
+        n += 1
+    return toks, "".join(t[1] for t, _ in toks[:n])
+
+
+def _consent_text(toks):
+    return "".join(t[1] if t[0] == "c" else "*" for t, _ in (toks or ()))
+
+
+_CONSENT_SPECS = {}
+# getopt tables (lib/shell_parse._spec: flags, then value-taking options) of the programs whose options this rule
+# reads. A long option resolves by its GNU unique prefix (`--out` is `--output`); a short option takes its value
+# attached (`-t<dir>`) or as the next word; an option not in the table is an error the caller fails closed on.
+_CONSENT_SPEC_TEXT = {
+    "sort": ("-b -d -f -g -i -M -h -n -R -r -V -c -C -m -s -u -z --ignore-leading-blanks --dictionary-order "
+             "--ignore-case --general-numeric-sort --ignore-nonprinting --month-sort --human-numeric-sort "
+             "--numeric-sort --random-sort --reverse --version-sort --check --debug --merge --stable --unique "
+             "--zero-terminated --help --version",
+             "-k -t -S -T -o --key --field-separator --buffer-size --temporary-directory --output --batch-size "
+             "--compress-program --files0-from --parallel --random-source --sort"),
+    "sed": ("-n -E -r -s -u -z -i --quiet --silent --debug --follow-symlinks --posix --regexp-extended --separate "
+            "--sandbox --unbuffered --null-data --in-place --help --version",
+            "-e -f -l --expression --file --line-length"),
+    "cp": ("-a -b -d -f -i -H -l -L -n -P -p -R -r -s -T -u -v -x -Z --archive --attributes-only --backup "
+           "--copy-contents --force --interactive --link --dereference --no-clobber --no-dereference --preserve "
+           "--parents --recursive --reflink --remove-destination --strip-trailing-slashes --symbolic-link "
+           "--no-target-directory --update --verbose --one-file-system --context --debug --keep-directory-symlink "
+           "--help --version",
+           "-S -t --suffix --target-directory --no-preserve --sparse"),
+    "mv": ("-b -f -i -n -T -u -v -Z --backup --force --interactive --no-clobber --no-target-directory "
+           "--strip-trailing-slashes --update --verbose --context --no-copy --exchange --debug --help --version",
+           "-S -t --suffix --target-directory"),
+    "ln": ("-b -d -F -f -i -L -n -P -r -s -T -v --backup --directory --force --interactive --logical "
+           "--no-dereference --physical --relative --symbolic --no-target-directory --verbose --help --version",
+           "-S -t --suffix --target-directory"),
+    "install": ("-b -c -C -d -D -p -s -T -v -Z --backup --compare --directory --preserve-timestamps --strip "
+                "--no-target-directory --verbose --preserve-context --context --debug --help --version",
+                "-g -m -o -S -t --group --mode --owner --strip-program --suffix --target-directory"),
+}
+
+
+def _consent_spec(name):
+    if name not in _CONSENT_SPECS and name in _CONSENT_SPEC_TEXT:
+        from lib import shell_parse as sp
+        bools, vals = _CONSENT_SPEC_TEXT[name]
+        _CONSENT_SPECS[name] = sp._spec(bools.split(), vals.split())
+    return _CONSENT_SPECS.get(name)
+
+
+def _consent_opts(view, words, spec, permute=True):
+    """GNU getopt reading of ``words`` against ``spec`` on the rule's path tokens, so a value with an expansion
+    (`-t$CLAUDE_STATE_DIR`, `--output=$D/x`) is kept. Returns (opts, operands, error): opts is a list of (canonical
+    option, value tokens or None, value Word when the value is a whole next word); error names the first option not
+    in the table or computed (read as a flag)."""
+    from lib import shell_parse as sp
+    opts, operands, err = [], [], None
+    i, n = 0, len(words)
+    while i < n:
+        w = words[i]
+        toks, lead = _consent_lead(view, w)
+        whole = len(lead) == len(toks)
+        if not lead.startswith("-") or (whole and lead == "-"):
+            operands.append(w)
+            i += 1
+            if not permute:
+                operands.extend(words[i:])
+                break
             continue
-        if v is not None and v.startswith("-") and v != "-" and not ops[-1:] == ["--"]:
-            if v == "--":
-                ops.append("--")
+        if whole and lead == "--":
+            operands.extend(words[i + 1:])
+            break
+        nxt = words[i + 1] if i + 1 < n else None
+        if lead.startswith("--"):
+            name, eq, _ = lead.partition("=")
+            res = sp._resolve_long(name, spec) if (eq or whole) else None
+            if res is None:
+                err = err or "option `%s` not known here" % name
+                opts.append((name, toks[len(name) + 1:] if eq else None, None))
+            elif eq:
+                opts.append((res, toks[len(name) + 1:], None))
+            elif res in spec["val"]:
+                opts.append((res, view.tokens(nxt) if nxt is not None else None, nxt))
+                i += 1
+            else:
+                opts.append((res, None, None))
+            i += 1
+            continue
+        j, step = 1, 1
+        while j < len(toks):
+            if j >= len(lead):
+                err = err or "a computed option"
+                break
+            ch = "-" + lead[j]
+            if ch in spec["val"]:
+                if j + 1 < len(toks):
+                    opts.append((ch, toks[j + 1:], None))
+                else:
+                    opts.append((ch, view.tokens(nxt) if nxt is not None else None, nxt))
+                    step = 2
+                break
+            if ch not in spec["bool"]:
+                err = err or "option `%s` not known here" % ch
+            opts.append((ch, None, None))
+            j += 1
+        if len(lead) == 1:
+            err = err or "a computed option"
+        i += step
+    return opts, operands, err
+
+
+def _consent_option_values(view, words):
+    """For a program whose option table is not modelled here: every value an option word can carry (after `=`, or
+    attached to a short option)."""
+    for w in words:
+        toks, lead = _consent_lead(view, w)
+        if not lead.startswith("-") or len(toks) < 3:
+            continue
+        k = lead.find("=")
+        if k >= 0:
+            yield toks[k + 1:]
+        elif not lead.startswith("--"):
+            yield toks[2:]
+
+
+# rsync's long flags that take no value: any other long option without `=` may take the next word as its value.
+_CONSENT_RSYNC_FLAGS = frozenset({
+    "--archive", "--verbose", "--recursive", "--relative", "--update", "--links", "--perms", "--times", "--group",
+    "--owner", "--devices", "--specials", "--compress", "--checksum", "--delete", "--delete-after",
+    "--delete-before", "--delete-during", "--delete-excluded", "--dry-run", "--progress", "--partial", "--inplace",
+    "--stats", "--human-readable", "--quiet", "--hard-links", "--acls", "--xattrs", "--sparse", "--existing",
+    "--ignore-existing", "--remove-source-files", "--itemize-changes", "--no-motd", "--force", "--numeric-ids",
+    "--copy-links", "--safe-links", "--one-file-system", "--prune-empty-dirs", "--mkpath", "--append",
+    "--append-verify", "--whole-file", "--no-whole-file", "--omit-dir-times", "--fuzzy", "--help", "--version"})
+
+
+def _consent_operands(view, r):
+    """(sources, destination tokens or None for the cwd, destination is a directory?, recursive?, refusal or None)
+    of a copy, move or link. cp, mv, ln and install are read with their getopt tables; rsync and link, whose tables
+    are not modelled, fail closed: an option value that can be the state directory is refused."""
+    args = list(r.args)
+    spec = _consent_spec(r.name)
+    if spec is not None:
+        opts, ops, err = _consent_opts(view, args, spec)
+        if err:
+            for val in list(_consent_option_values(view, args)) + [view.tokens(w) for w in ops]:
+                if val and view.into_dir(toks=val):
+                    return ops, None, True, False, (f"`{r.name}` reads {err}, and an operand can be the state "
+                                                     "directory")
+        names = {o for o, _, _ in opts}
+        no_dir = bool(names & {"-T", "--no-target-directory"}) or (
+            r.name == "ln" and bool(names & {"-n", "--no-dereference"}))
+        recursive = bool(names & {"-r", "-R", "-a", "--recursive", "--archive"})
+        targets = [v for o, v, _ in opts if o in ("-t", "--target-directory")]
+        if targets:
+            return ops, targets[-1] or [], True, recursive, None
+        if r.name == "ln" and len(ops) == 1:
+            return ops, None, True, recursive, None
+        if len(ops) < 2:
+            return ops, None, False, recursive, None
+        return ops[:-1], view.tokens(ops[-1]), not no_dir, recursive, None
+    ops, value_next, odd, rest_ops = [], False, None, False
+    for w in args:
+        toks, lead = _consent_lead(view, w)
+        if not rest_ops and lead.startswith("-") and not (lead == "-" and len(toks) == 1):
+            if lead == "--" and len(toks) == 2:
+                rest_ops = True
                 continue
-            if v in ("-T", "--no-target-directory", "-n", "--no-dereference") or (
-                    not v.startswith("--") and ("T" in v[1:])):
-                no_dir = True
-            if v in ("-t", "--target-directory"):
-                target = args[i + 1] if i + 1 < len(args) else None
-                skip = True
-            elif v.startswith("--target-directory="):
-                target = w
-            elif v.startswith("-t") and not v.startswith("--") and len(v) > 2:
-                target = w
-            elif v.split("=")[0] in with_value and "=" not in v:
-                skip = True
+            for val in _consent_option_values(view, [w]):
+                if val and view.into_dir(toks=val):
+                    odd = f"an option of `{r.name}` names the state directory"
+            value_next = (lead.startswith("--") and "=" not in lead and lead not in _CONSENT_RSYNC_FLAGS) or (
+                not lead.startswith("--") and len(lead) == len(toks) and lead[-1:] in "efBT@M")
             continue
+        if value_next and view.into_dir(w):
+            odd = f"an option of `{r.name}` names the state directory"
+        value_next = False
         ops.append(w)
-    ops = [w for w in ops if w != "--"]
-    if target is not None:
-        return ops, target, True
-    if r.name == "ln" and len(ops) == 1:
-        return ops, None, True
+    if odd:
+        return ops, None, True, True, odd
+    if r.name == "link":
+        return ops[:-1], view.tokens(ops[-1]) if len(ops) >= 2 else None, False, False, None
     if len(ops) < 2:
-        return ops, None, False
-    return ops[:-1], ops[-1], not no_dir
+        return ops, None, False, True, None
+    return ops[:-1], view.tokens(ops[-1]), True, True, None
 
 
-def _consent_unpack_dir(r):
-    """(extracts?, destination word or None for the cwd) of an archive extraction."""
-    vals = [w.value() for w in r.args]
+def _consent_unpack_dirs(view, r):
+    """(extracts?, [destination tokens]) of an archive extraction; no destination: the cwd. Short option clusters,
+    attached values (`-xC<dir>`), `--directory=<dir>`, its unique prefixes (`--dir`) and tar's old-style keys
+    (`tar xfC a.tar <dir>`) are read."""
+    args = list(r.args)
     name = r.name
+    lex = [_consent_lead(view, w) for w in args]
+
+    def value(i, toks, j):
+        if j + 1 < len(toks):
+            return toks[j + 1:], 0
+        return (lex[i + 1][0] if i + 1 < len(lex) else []), 1
+
     if name in ("tar", "bsdtar", "gtar"):
-        first = vals[0] if vals else None
-        extracts = any(v in ("-x", "--extract", "--get") or (v and not v.startswith("--") and v.startswith("-")
-                                                              and "x" in v) for v in vals) or bool(
-            first and not first.startswith("-") and "x" in first)
-        dest = None
-        for i, v in enumerate(vals):
-            if v in ("-C", "--directory") and i + 1 < len(r.args):
-                dest = r.args[i + 1]
-            elif v and v.startswith("--directory="):
-                dest = r.args[i]
-        return extracts, dest
+        extracts, dests = False, []
+        # GNU tar's -s is a flag, bsdtar's takes a pattern: both readings are taken.
+        for vals in ("bCfFgHIKLNTVX", "bCfFgHIKLNsTVX"):
+            i, pending = 0, []
+            while i < len(lex):
+                toks, lead = lex[i]
+                if pending:
+                    if pending.pop(0) == "C":
+                        dests.append(toks)
+                    i += 1
+                    continue
+                if i == 0 and lead and not lead.startswith("-"):
+                    extracts = extracts or "x" in lead or len(lead) < len(toks)
+                    pending = [ch for ch in lead if ch in vals]
+                    i += 1
+                    continue
+                if lead == "--" and len(toks) == 2:
+                    break
+                if lead.startswith("--"):
+                    opt, eq, _ = lead.partition("=")
+                    if len(lead) < len(toks) and not eq:
+                        extracts = True  # a computed long option
+                    elif len(opt) >= 3 and "--directory".startswith(opt):
+                        dests.append(toks[len(opt) + 1:] if eq else (lex[i + 1][0] if i + 1 < len(lex) else []))
+                        i += 0 if eq else 1
+                    elif len(opt) >= 3 and ("--extract".startswith(opt) or "--get".startswith(opt)):
+                        extracts = True
+                    i += 1
+                    continue
+                if lead.startswith("-") and len(toks) > 1:
+                    j, skip = 1, 0
+                    while j < len(toks):
+                        if j >= len(lead):
+                            extracts = True  # a computed option letter
+                            break
+                        ch = lead[j]
+                        if ch == "x":
+                            extracts = True
+                        if ch in vals:
+                            val, skip = value(i, toks, j)
+                            if ch == "C":
+                                dests.append(val)
+                            break
+                        j += 1
+                    i += 1 + skip
+                    continue
+                i += 1
+        return extracts, dests
     if name == "unzip":
-        for i, v in enumerate(vals):
-            if v == "-d" and i + 1 < len(r.args):
-                return True, r.args[i + 1]
-        return True, None
+        dests, i = [], 0
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if lead.startswith("-") and not lead.startswith("--"):
+                for j in range(1, len(toks)):
+                    ch = lead[j] if j < len(lead) else None
+                    if ch in ("d", "P", "I", "O"):
+                        val, skip = value(i, toks, j)
+                        if ch == "d":
+                            dests.append(val)
+                        break
+            i += 1 + skip
+        return True, dests
     if name == "cpio":
-        extracts = any(v and (v in ("-i", "--extract") or (v.startswith("-") and not v.startswith("--") and "i" in v))
-                       for v in vals)
-        for i, v in enumerate(vals):
-            if v in ("-D", "--directory") and i + 1 < len(r.args):
-                return extracts, r.args[i + 1]
-        return extracts, None
-    extracts = bool(vals) and vals[0] in ("x", "e")
-    for w, v in zip(r.args, vals):
-        if v and v.startswith("-o") and len(v) > 2:
-            return extracts, w
-    return extracts, None
+        extracts, dests, i = False, [], 0
+        while i < len(lex):
+            toks, lead = lex[i]
+            skip = 0
+            if lead.startswith("--"):
+                opt, eq, _ = lead.partition("=")
+                if len(opt) >= 3 and "--directory".startswith(opt):
+                    dests.append(toks[len(opt) + 1:] if eq else (lex[i + 1][0] if i + 1 < len(lex) else []))
+                    skip = 0 if eq else 1
+                elif len(opt) >= 3 and "--extract".startswith(opt):
+                    extracts = True
+            elif lead.startswith("-"):
+                for j in range(1, len(toks)):
+                    ch = lead[j] if j < len(lead) else None
+                    if ch is None or ch == "i":
+                        extracts = True
+                    if ch in tuple("CDEFHIMOR"):
+                        val, skip = value(i, toks, j)
+                        if ch == "D":
+                            dests.append(val)
+                        break
+            i += 1 + skip
+        return extracts, dests
+    extracts = bool(lex) and lex[0][1] in ("x", "e")
+    return extracts, [toks[2:] for toks, lead in lex if lead.startswith("-o") and len(toks) > 2]
+
+
+# git commands that write nothing into their directory's work tree (clone and init make a new directory or only
+# .git): with the state directory as their directory they pass; any other non-read git command there is refused.
+_CONSENT_GIT_HERE_OK = frozenset({"clone", "init", "fetch", "push", "remote", "config", "help", "version", "ls-remote",
+                                  "branch", "tag", "var", "cat-file", "rev-list", "for-each-ref", "show-ref",
+                                  "ls-tree"})
+
+
+def _consent_git_tree(view, sp, r):
+    """Why a git invocation can write files into the state directory, or None: its work tree (--work-tree,
+    GIT_WORK_TREE, core.worktree by -c, --config-env, GIT_CONFIG_* or `git config`) can be the state directory, or it
+    runs a command other than a read where the state directory is its directory (-C, cd, the call's cwd; a GIT_DIR
+    or --git-dir without a work tree makes that directory the work tree)."""
+    why = "it checks files out into the state directory"
+    args = list(r.args)
+    trees, cfg_trees, here, k = [], [], [], 0
+    while k < len(args):
+        toks, lead = _consent_lead(view, args[k])
+        whole = len(lead) == len(toks)
+        nxt = view.tokens(args[k + 1]) if k + 1 < len(args) else []
+        opt, eq, _ = lead.partition("=")
+        if whole and lead in sp.GIT_GLOBAL_VALUE_OPTS:
+            val, k = nxt, k + 2
+        elif eq and opt in sp.GIT_GLOBAL_VALUE_OPTS:
+            val, k = toks[len(opt) + 1:], k + 1
+        elif whole and lead in sp.GIT_GLOBAL_FLAGS:
+            k += 1
+            continue
+        else:
+            break
+        if opt == "-C":
+            here.append(val)
+        elif opt == "--work-tree":
+            trees.append(val)
+        elif opt in ("-c", "--config-env"):
+            m = 0
+            while m < len(val) and val[m][0][0] == "c" and val[m][1] == "lit":
+                m += 1
+            vlead = "".join(t[1] for t, _ in val[:m])
+            key, has_eq, _ = vlead.partition("=")
+            if not has_eq or len(key) + 1 > len(val):
+                if any(o in ("state", "unk") for _, o in val):
+                    return why + " (a computed git config key)"
+                continue
+            if key.strip().lower() == "core.worktree":
+                rest = val[len(key) + 1:]
+                if opt == "--config-env":
+                    info = view.var(_consent_text(rest)) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",
+                                                                          _consent_text(rest)) else ("unk",)
+                    if info[0] != "static":
+                        return why + " (core.worktree from the environment)"
+                    rest = view.tokens(text=info[1])
+                cfg_trees.append(rest)
+    sub = args[k].value() if k < len(args) else None
+    for a in r.assignments:
+        if a.name == "GIT_WORK_TREE":
+            trees.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
+    if "GIT_WORK_TREE" in view.defs:
+        info = view.var("GIT_WORK_TREE")
+        if info[0] in ("state", "any"):
+            return why
+        trees.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
+                                                    info[1] if info[0] == "multi" else ()))
+    # The environment's config (GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS), set here or by export.
+    env = {}
+    for n in view.defs:
+        if n.startswith("GIT_CONFIG_"):
+            info = view.var(n)
+            env[n] = info[1] if info[0] == "static" else None
+    for a in r.assignments:
+        if a.name.startswith("GIT_CONFIG_"):
+            env[a.name] = a.static_value()
+    pairs = []
+    count = env.get("GIT_CONFIG_COUNT")
+    if "GIT_CONFIG_COUNT" in env and not (count or "").isdigit():
+        pairs.append((None, None))
+    for n in range(min(int(count), 64) if (count or "").isdigit() else 0):
+        pairs.append((env.get("GIT_CONFIG_KEY_%d" % n), env.get("GIT_CONFIG_VALUE_%d" % n)))
+    if "GIT_CONFIG_PARAMETERS" in env:
+        params = env["GIT_CONFIG_PARAMETERS"]
+        if params is None:
+            pairs.append((None, None))
+        for item in sp.argv_split(params or ""):
+            key, _eq, v = item.partition("=")
+            pairs.append((key, v))
+    for key, v in pairs:
+        if key is None or key.strip().lower() == "core.worktree":
+            if key is None and "worktree" not in view.command.lower():
+                continue
+            if v is None:
+                return why + " (core.worktree from a computed environment)"
+            cfg_trees.append(view.tokens(text=v))
+    if sub == "config":
+        rest = args[k + 1:]
+        keyed = False
+        for w in rest:
+            v = w.value()
+            if v is not None and v.lower() == "core.worktree":
+                keyed = True
+            elif v is None and any(p.kind not in ("lit", "glob") for p in w.parts) and "worktree" in w.text.lower():
+                keyed = True
+            elif keyed and not (v or "").startswith("-"):
+                cfg_trees.append(view.tokens(w))
+    # core.worktree is read relative to the git directory, which is not known here: a relative value that climbs out
+    # with `..` can reach the state directory.
+    for t in cfg_trees:
+        text = _consent_text(t)
+        if not text.startswith("/") and ".." in text.split("/") and not any(o == "state" for _, o in t):
+            return why + " (a relative core.worktree)"
+        trees.append(t)
+    for t in trees:
+        if t and view.into_dir(toks=t):
+            return why
+    if sub is not None and sub not in _CONSENT_GIT_READS and sub not in _CONSENT_GIT_HERE_OK:
+        where = any(h and view.into_dir(toks=h) for h in here) if here else view.cwd_state(".")
+        if where:
+            return f"it runs `git {sub}` with the state directory as its directory"
+    if sub is None and k < len(args):
+        if any(h and view.into_dir(toks=h) for h in here) if here else view.cwd_state("."):
+            return "it runs a computed git command with the state directory as its directory"
+    return None
 
 
 def _consent_read_only(cmd, name, view, named_writes):
@@ -1117,32 +1464,20 @@ def _consent_read_only(cmd, name, view, named_writes):
         return "`find` runs or writes with an action"
     if name == "rg" and any(v and v.startswith("--pre") for v in vals):
         return "`rg --pre` runs a program"
-    if name == "file" and any(v in ("-C", "--compile") for v in vals):
+    if name == "file" and any((v.startswith("-") and not v.startswith("--") and "C" in v[1:]) or (
+            len(v.split("=")[0]) > 3 and "--compile".startswith(v.split("=")[0])) for v in vals):
         return "`file -C` writes a compiled magic file"
     if name == "printf" and any(v == "-v" or (v or "").startswith("-v") for v in vals[:1]):
         return "`printf -v` assigns a variable"
     if name == "sed":
-        scripts, rest, skip = [], [], False
-        for i, v in enumerate(vals):
-            if skip:
-                skip = False
-                continue
-            if v in ("-e", "--expression"):
-                scripts.append(vals[i + 1] if i + 1 < len(vals) else "")
-                skip = True
-            elif v.startswith("--expression="):
-                scripts.append(v.split("=", 1)[1])
-            elif v.startswith("--in-place") or v.startswith("--file") or (
-                    v.startswith("-") and not v.startswith("--") and any(c in v[1:] for c in "if")):
-                return "`sed` edits in place or reads its script from a file"
-            elif v.startswith("-") and v != "-":
-                if v.startswith("-e") and not v.startswith("--"):
-                    scripts.append(v[2:])
-                continue
-            else:
-                rest.append(v)
+        opts, operands, err = _consent_opts(view, words, _consent_spec("sed"))
+        if any(o in ("-i", "--in-place", "-f", "--file") for o, _, _ in opts):
+            return "`sed` edits in place or reads its script from a file"
+        if err:
+            return f"`sed` reads {err}"
+        scripts = [_consent_text(v) for o, v, _ in opts if o in ("-e", "--expression")]
         if not scripts:
-            scripts = rest[:1]
+            scripts = [_consent_text(view.tokens(w)) for w in operands[:1]]
         for s in scripts:
             s = re.sub(r"\\.", "", s or "")
             s = re.sub(r"/[^/\n]*/", "", s)
@@ -1171,19 +1506,14 @@ def _consent_read_only(cmd, name, view, named_writes):
             return f"an `{name}` program can write a file or run a command"
         return None
     if name == "sort":
-        for i, v in enumerate(vals):
-            if v.startswith("--compress-program"):
-                return "`sort --compress-program` runs a program"
-            out = None
-            if v in ("-o", "--output"):
-                out = words[i + 1] if i + 1 < len(words) else None
-            elif v.startswith("--output="):
-                out = v.split("=", 1)[1]
-            elif v.startswith("-") and not v.startswith("--") and "o" in v[1:]:
-                rest = v[v.index("o", 1) + 1:]
-                out = rest if rest else (words[i + 1] if i + 1 < len(words) else None)
-            if out is not None:
-                named_writes.append(out)
+        opts, _, err = _consent_opts(view, words, _consent_spec("sort"))
+        if any(o == "--compress-program" for o, _, _ in opts):
+            return "`sort --compress-program` runs a program"
+        if err:
+            return f"`sort` reads {err}"
+        for o, v, w in opts:
+            if o in ("-o", "--output") and v is not None:
+                named_writes.append(w if w is not None else ("toks", v))
         return None
     if name == "tee":
         for w, v in zip(words, vals):
@@ -1203,9 +1533,14 @@ def _consent_read_only(cmd, name, view, named_writes):
         sub = vals[i] if i < len(vals) else None
         opts = vals[i + 1:]
         if sub in _CONSENT_GIT_READS:
+            # A long option and its unique prefixes (`--out`, `--open`), or git grep's -O in a cluster or with its
+            # pager attached (`-O<cmd>`, `-iO<cmd>`).
             for v in opts:
-                if v.startswith("--output") or v in ("-O",) or v.startswith("--open-files-in-pager") or (
-                        v.startswith("--ext-diff")):
+                opt = v.split("=", 1)[0]
+                if opt.startswith("--") and len(opt) > 2 and any(d.startswith(opt) or opt.startswith(d) for d in (
+                        "--output", "--open-files-in-pager", "--ext-diff")):
+                    return f"`git {sub} {v}` writes a file or runs a program"
+                if v == "-O" or (sub == "grep" and v.startswith("-") and not v.startswith("--") and "O" in v[1:]):
                     return f"`git {sub} {v}` writes a file or runs a program"
             return None
         if sub == "commit":
@@ -1291,17 +1626,16 @@ def consent_flag_verdict(command, cwd, state):
         # 3. A copy, move or link into the state directory under a name that can be the flag's, or of the state
         # directory itself.
         if r.name in _CONSENT_COPIERS:
-            sources, dest, dest_is_dir = _consent_operands(r)
+            sources, dest, dest_is_dir, recursive, odd = _consent_operands(view, r)
+            if odd:
+                return odd
             if r.name == "mv" and any(deletes_state(sp.WriteTarget(w.value(), "delete", "mv", word=w))
                                       for w in sources):
                 return "it deletes or moves the state directory that holds the consent flag"
-            where = view.cwd_state(".") if dest is None else view.into_dir(dest)
+            where = view.cwd_state(".") if dest is None else view.into_dir(toks=dest)
             if where and not dest_is_dir:
                 return "it replaces the state directory that holds the consent flag"
             if where and dest_is_dir:
-                recursive = any((w.value() or "").startswith("-") and (
-                    w.value() in ("--recursive", "--archive") or (not w.value().startswith("--") and any(
-                        c in w.value() for c in "rRa"))) for w in r.args) or r.name == "rsync"
                 for w in sources:
                     v = w.value() or ""
                     if recursive and (v.endswith("/") or v.endswith("/.") or v == "."):
@@ -1321,25 +1655,15 @@ def consent_flag_verdict(command, cwd, state):
                     return "it runs a command with operands built at run time in the state directory"
         # 3b. An archive extracted into the state directory writes names not known here.
         if r.name in _CONSENT_UNPACKERS:
-            extracts, dest = _consent_unpack_dir(r)
-            if extracts and (view.into_dir(dest) if dest is not None else view.cwd_state(".")) == "explicit":
+            extracts, dests = _consent_unpack_dirs(view, r)
+            if extracts and (any(view.into_dir(toks=d) == "explicit" for d in dests) if dests else
+                             view.cwd_state(".") == "explicit"):
                 return "it extracts an archive, whose names are not known here, into the state directory"
         # 3c. A git work tree in the state directory: a checkout writes names not known here.
         if r.name == "git":
-            args = list(r.args)
-            for i, w in enumerate(args):
-                toks = view.tokens(w)
-                head = "".join(t[1] for t, _ in toks[:12] if t[0] == "c")
-                if head == "--work-tree=":
-                    toks = toks[12:]
-                elif w.value() == "--work-tree" and i + 1 < len(args):
-                    toks = view.tokens(args[i + 1])
-                else:
-                    continue
-                while len(toks) > 1 and toks[-1][0] == ("c", "/"):
-                    toks = toks[:-1]
-                if toks and view.dir_state(toks):
-                    return "it checks files out into the state directory"
+            why = _consent_git_tree(view, sp, r)
+            if why:
+                return why
     if not named:
         return None
     # 4. The command names the flag: every simple command must be a read-only shape, and nothing it emits that
@@ -1366,7 +1690,8 @@ def consent_flag_verdict(command, cwd, state):
         if name in ("echo", "printf") and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
             emits = True
     for w in named_writes:
-        why = view.target(word=w, named=True) if not isinstance(w, str) else view.target(text=w, named=True)
+        why = (view.target(toks=w[1], named=True) if isinstance(w, tuple) else
+               view.target(text=w, named=True) if isinstance(w, str) else view.target(word=w, named=True))
         if why:
             return why
         real_writes = True

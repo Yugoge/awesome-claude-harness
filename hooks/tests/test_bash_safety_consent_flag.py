@@ -297,3 +297,98 @@ def test_the_rule_reads_the_flag_name_from_its_reader():
     assert rules.CONSENT_PREFIX == allowlist.DO_CONSENT_FLAG_PREFIX
     assert rules.CONSENT_SUFFIX == allowlist.DO_CONSENT_FLAG_SUFFIX
     assert rules.CONSENT_TOKEN in allowlist.DO_CONSENT_FLAG_PREFIX
+
+
+# Option spellings the rule's option readers missed: a long option's GNU abbreviation, a value attached to its short
+# option or after `=`, a value-taking short option whose value desynced the scanner, a git work tree set by
+# environment or config instead of --work-tree, and an archive destination attached to its option. <G> is a glob
+# that can match the flag's name without spelling its stem, so only the destination makes these writes.
+OPTION_SPELLINGS_REFUSED = [
+    # 1. sort's output option abbreviated
+    "echo true | sort --out <F>",
+    "echo true | sort --outp=<F>",
+    "echo true | sort --o=<F>",
+    "echo true | sort --out $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag",
+    "echo true | sort --outp=$CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag",
+    "echo true | sort --o=$CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag",
+    # 2. sed's line-length value read as the script
+    "echo true | sed -n -l 5 'w <F>'",
+    "echo true | sed -n --line-length 5 'w <F>'",
+    "echo true | sed -n -l 5 \"w $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag\"",
+    "echo true | sed -n --line-length 5 \"w $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag\"",
+    # 3. git grep's pager attached, clustered or abbreviated
+    "git grep -O'echo true > <F>;:' -e x",
+    "git grep -O'echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag;:' -e x",
+    "git grep -Ocat -e x -- <F>",
+    "git grep -iO'echo true > <F>;:' -e x",
+    "git grep --open='echo true > <F>;:' -e x",
+    "git grep --open-files='echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag;:' -e x",
+    "git log --out=<F>",
+    # 4. cp/mv target directory attached or after `=`, the source a glob
+    "cp -t<S> /tmp/staged/<G>",
+    "cp -t$CLAUDE_STATE_DIR /tmp/staged/<G>",
+    "cp --target-directory=<S> /tmp/staged/<G>",
+    "cp --target-directory=$CLAUDE_STATE_DIR /tmp/staged/<G>",
+    "cp --target=<S> /tmp/staged/<G>",
+    "cp --targ $CLAUDE_STATE_DIR /tmp/staged/<G>",
+    "mv --target-directory=<S> /tmp/staged/<G>",
+    "mv --target-directory=$CLAUDE_STATE_DIR /tmp/staged/<G>",
+    "mv -vt<S> /tmp/staged/<G>",
+    "ln -st$CLAUDE_STATE_DIR /tmp/staged/<G>",
+    # 5. a git work tree set by environment or config
+    "GIT_WORK_TREE=<S> git -C /tmp/r checkout HEAD -- .",
+    "GIT_WORK_TREE=$CLAUDE_STATE_DIR git -C /tmp/r checkout HEAD -- .",
+    "export GIT_WORK_TREE=$CLAUDE_STATE_DIR; git -C /tmp/r checkout HEAD -- .",
+    "env GIT_WORK_TREE=<S> git -C /tmp/r checkout HEAD -- .",
+    "git -c core.worktree=<S> -C /tmp/r checkout HEAD -- .",
+    "git -c core.worktree=$CLAUDE_STATE_DIR -C /tmp/r checkout HEAD -- .",
+    "git -C /tmp/r config core.worktree <S>",
+    "git -C /tmp/r config core.worktree $CLAUDE_STATE_DIR",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.worktree GIT_CONFIG_VALUE_0=<S> git -C /tmp/r checkout HEAD -- .",
+    "cd <S> && GIT_DIR=/tmp/r/.git git checkout HEAD -- .",
+    "cd $CLAUDE_STATE_DIR && GIT_DIR=/tmp/r/.git git checkout HEAD -- .",
+    "git --git-dir=/tmp/r/.git -C $CLAUDE_STATE_DIR checkout HEAD -- .",
+    # 6. tar destination attached or after `=`
+    "tar -xf - --directory=<S> < /tmp/a.tar",
+    "tar -xf - --directory=$CLAUDE_STATE_DIR < /tmp/a.tar",
+    "tar -xf /tmp/a.tar --dir=<S>",
+    "tar -xC<S> -f /tmp/a.tar",
+    "tar -xC$CLAUDE_STATE_DIR -f /tmp/a.tar",
+    "tar -xvC<S> -f /tmp/a.tar",
+    "tar -xvC$CLAUDE_STATE_DIR -f /tmp/a.tar",
+    "tar --extract -C<S> -f /tmp/a.tar",
+    "tar --extract -C$CLAUDE_STATE_DIR -f /tmp/a.tar",
+    "tar xfC /tmp/a.tar <S>",
+]
+# The same option spellings away from the flag and the state directory still pass.
+OPTION_SPELLINGS_PASS = [
+    "sort --out out.txt in.txt",
+    "sort -k2 -t, -o out.txt in.txt",
+    "sed -n -l 5 p in.txt",
+    "git grep -i -e x",
+    "cp -t/tmp/out a.txt b.txt",
+    "cp --target-directory=/tmp/out ./claude-*",
+    "mv --target=/tmp/out a.txt",
+    "GIT_WORK_TREE=/tmp/w git -C /tmp/r checkout HEAD -- .",
+    "git -c core.worktree=/tmp/w -C /tmp/r checkout HEAD -- .",
+    "tar -xC/tmp/out -f /tmp/a.tar",
+    "tar -xf /tmp/a.tar --directory=/tmp/out",
+    "sort -o out.txt <F>",
+    "sed -n -l 5 p <F>",
+]
+
+
+def _spell(sandbox, template):
+    return fill(sandbox, template).replace("<G>", "claude-orchestrator-con*")
+
+
+@pytest.mark.parametrize("command", OPTION_SPELLINGS_REFUSED)
+def test_an_option_spelling_that_writes_the_flag_is_refused(sandbox, command):
+    proc = run(sandbox, _spell(sandbox, command))
+    assert proc.returncode == 2 and RULE in proc.stderr, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", OPTION_SPELLINGS_PASS)
+def test_the_same_option_spellings_elsewhere_pass(sandbox, command):
+    proc = run(sandbox, _spell(sandbox, command))
+    assert proc.returncode == 0, (command, proc.stderr)
