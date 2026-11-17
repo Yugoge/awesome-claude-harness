@@ -104,6 +104,10 @@ ALSO_REFUSED = [
     "cd <S> && echo true > claude-orchestrator-consent-x.flag",
     "cd <S> && touch c*",
     "cp ./claude-* <S>/",
+    # a computed target in a command that names the flag
+    'test -f <F> && echo true > "$_"',
+    "for f in <F>; do echo true > $f; done",
+    "[[ <F> =~ (.*) ]] && echo true > ${BASH_REMATCH[1]}",
 ]
 MUST_PASS = [
     "cat <F>",
