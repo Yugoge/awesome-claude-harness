@@ -10,6 +10,10 @@ state, `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root, and
 `crosses_mount(path)` whether a mount point under the temp root carries the path elsewhere.
 `hooks/pretool-tool-policy.py` (`_temp_write`) uses it: a policy role writes the temp roots except the control
 state below and any path a mount under the temp root carries or that holds such a mount (`below=True`) (`hooks/tests/test_tool_policy_temp_writes.py`);
+the removal policy of `hooks/pretool-bash-safety.sh` (`hooks/lib/bash_execution_boundary.py`, `rm_temp_targets_proven`)
+uses it to allow a plain `rm` of temp-root paths that are not control state (only as the command string's
+one command, on a path with no symlink and no mount point on it or, for a recursive removal or a directory,
+below it; a symlink or mount a separate background call makes after the hook ran is a residual race);
 `hooks/tests/test_harness_temp_state.py` pins every row.
 
 ## Roots

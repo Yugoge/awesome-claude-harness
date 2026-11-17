@@ -8,7 +8,9 @@ boundary in a command ends in exactly one of:
                          program that is not a filesystem-removal front end
     PROVEN_SAFE_REMOVAL  a removal that is provably NOT a filesystem removal
                          (git rm --cached, docker container/image/compose rm),
-                         or a recoverable non-forced git rm (prove_git_rm)
+                         or a recoverable non-forced git rm (prove_git_rm),
+                         or a plain rm of proven temp-root, non-state paths
+                         (rm_temp_targets_proven)
     FORBIDDEN_REMOVAL    a filesystem removal front end executes
     UNRESOLVED           the analyzer could not PROVE which of the above holds
 
@@ -1327,6 +1329,197 @@ def text_names_removal(text):
 
 
 # ---------------------------------------------------------------------------
+# rm of temp-root paths (owner decision, lane rm-temp)
+# ---------------------------------------------------------------------------
+# Every role may remove paths under /tmp, /var/tmp, $TMPDIR and its own scratch
+# dirs; harness control state there stays protected. hooks/lib/harness_temp_state
+# is the one definition of temp roots and harness state. A plain `rm` is
+# PROVEN_SAFE_REMOVAL only when EVERY operand is proven here; anything this
+# cannot prove keeps FORBIDDEN_REMOVAL filesystem_removal. The proof reads the
+# filesystem (realpath, the entries a recursive removal or a glob reaches) at
+# hook time, as prove_git_rm reads the repository. So the rm must be the command
+# string's one command (analyze, Analyzer.commands) and no path may hold a symlink
+# (realpath == normpath): nothing in the same string can change what was proven.
+# No mount point may lie between its temp root and the path, or below the path
+# (crosses_mount). Residual: a symlink or mount made by a separate background call
+# after the hook ran.
+_RM_SHORT_OPTS = frozenset("fiIrRdv")
+_RM_LONG_OPTS = frozenset(("--force", "--recursive", "--dir", "--verbose", "--one-file-system",
+                           "--preserve-root", "--preserve-root=all"))
+_RM_ENTRY_CAP = 4096  # entries one proof may read; more is "cannot prove", never allow
+_RM_PSEUDO_FS = ("/proc", "/dev", "/sys")  # resolved per process, never a temp path
+
+
+def _rm_harness_homes():
+    """Directories a removal may not touch, reach into or hold: harness homes and the project dir."""
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    dirs = [here]
+    for var in ("CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_PROJECT_DIR"):
+        v = os.environ.get(var) or ""
+        if os.path.isabs(v):
+            dirs.append(v)
+    home = os.environ.get("HOME") or ""
+    if os.path.isabs(home):
+        dirs.append(os.path.join(home, ".claude"))
+    return {os.path.realpath(d) for d in dirs}
+
+
+def _rm_under(path, root):
+    return path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _rm_target_proven(path, hts, protected):
+    """True when removing literal absolute ``path`` (recursively) removes only temp, non-state files."""
+    if not path or not os.path.isabs(path) or "\x00" in path:
+        return False
+    if any(c in (".", "..") for c in path.split(os.sep)):
+        return False
+    norm = os.path.normpath(path)
+    if any(norm == d or norm.startswith(d + os.sep) for d in _RM_PSEUDO_FS):
+        return False
+    real = os.path.realpath(path)
+    # No symlink anywhere on the path, the last component included: GNU rm follows a
+    # symlinked directory in the path (and the last one under a trailing slash), and a
+    # path is judged here only as the filesystem stands when the hook runs.
+    if real != norm:
+        return False
+    # Nor a mount point between the temp root and the path, or anywhere below it: a bind
+    # mount carries the path to the harness home, a repository or `/` with no symlink to
+    # see. Asked with below=True for every target, recursive or not (fail closed).
+    if hts.crosses_mount(path, below=True):
+        return False
+    parent = os.path.realpath(os.path.dirname(path.rstrip(os.sep)) or os.sep)
+    roots = hts.temp_roots()
+    # The file removed (full realpath) and the directory entry removed (its resolved parent)
+    # both lie strictly below a temp root; a temp root itself is never below one.
+    if not hts.is_in_temp_root(real) or not (parent in roots or hts.is_in_temp_root(parent)):
+        return False
+    entry = os.path.join(parent, os.path.basename(path.rstrip(os.sep)))
+    views = {real, entry}
+    if hts.is_harness_state(path) or any(hts.is_harness_state(v) for v in views):
+        return False
+    if any(".git" in v.split(os.sep) for v in views):
+        return False
+    keep_below = set(roots) | set(hts.name_roots()) | {hts.state_dir()} | {d for d, _ in hts.tree_dirs()}
+    for v in views:
+        for p in keep_below | protected:
+            if p == v or _rm_under(p, v):
+                return False  # it holds a temp root, a state root, a harness home or the project
+        if any(_rm_under(v, p) for p in protected):
+            return False  # it is inside a harness home or the project
+    # Control state among the entries a recursive removal reaches: a state pattern is at most
+    # `depth` components below a name root, so only that many levels below the target can match.
+    depth = max(len(p) for loc in hts.LOCATIONS if loc.kind == hts.CONTROL for p in loc.patterns)
+    rels = [len(real[len(r.rstrip(os.sep)) + 1:].split(os.sep)) for r in hts.name_roots() if _rm_under(real, r)]
+    levels = depth - min(rels) if rels else 0
+    if levels > 0 and not os.path.islink(path.rstrip(os.sep) or os.sep) and os.path.isdir(real):
+        seen, frontier = 0, [real]
+        for _ in range(levels):
+            nxt = []
+            for d in frontier:
+                try:
+                    with os.scandir(d) as it:
+                        entries = list(it)
+                except FileNotFoundError:
+                    continue
+                for e in entries:
+                    seen += 1
+                    if seen > _RM_ENTRY_CAP or hts.is_harness_state(e.path):
+                        return False
+                    if e.is_dir(follow_symlinks=False):
+                        nxt.append(e.path)
+            frontier = nxt
+    return True
+
+
+def _rm_glob_matches(word):
+    """The paths a final-component glob operand can expand to, or None when it cannot be bounded.
+
+    Only `*`, `?` and `[...]` in the last component, after a literal absolute directory: every glob
+    piece is read as `*`, and dot entries are listed too, so the set is a superset of what bash
+    matches under any dotglob/extglob setting. No match leaves rm the literal pattern, which names
+    a file inside that directory as well.
+    """
+    from fnmatch import fnmatchcase
+    text, first_glob = "", None
+    for p in word.parts:
+        if p.kind == "glob" and "(" not in p.text and "/" not in p.text:
+            if first_glob is None:
+                first_glob = len(text)
+        elif p.kind != "lit":
+            return None
+        text += p.text
+    if first_glob is None:
+        return None
+    cut = text.rfind(os.sep, 0, first_glob)
+    if cut < 0 or os.sep in text[first_glob:] or "**" in text:
+        return None
+    directory = text[:cut] or os.sep
+    # The last component as an fnmatch pattern: literal text escaped, each glob piece `*`.
+    comp, pos = "", 0
+    for p in word.parts:
+        piece = p.text[max(0, cut + 1 - pos):]
+        pos += len(p.text)
+        if pos <= cut + 1 or not piece:
+            continue
+        comp += "*" if p.kind == "glob" else "".join("[%s]" % c if c in "*?[" else c for c in piece)
+    try:
+        names = os.listdir(directory)
+    except FileNotFoundError:
+        names = []
+    except OSError:
+        return None
+    # bash matches `.` and `..` only by a pattern whose first character is a literal dot (`.*`),
+    # even under dotglob; such a pattern could reach the parent directory, so it is refused.
+    if len(names) > _RM_ENTRY_CAP or comp.startswith(".") and (
+            fnmatchcase(".", comp) or fnmatchcase("..", comp)):
+        return None
+    return directory, [os.path.join(directory, n) for n in names if fnmatchcase(n, comp)]
+
+
+def rm_temp_targets_proven(args):
+    """True when `rm args...` (a direct, top-level rm) removes only proven temp-root paths."""
+    try:
+        import harness_temp_state as hts
+    except Exception:  # the one definition is missing: nothing can be proven
+        return False
+    try:
+        protected = _rm_harness_homes()
+        operands, opts_done = [], False
+        for w in args:
+            lit = w.literal()
+            if not opts_done and lit is not None and lit.startswith("-") and lit != "-":
+                if lit == "--":
+                    opts_done = True
+                elif lit.startswith("--"):
+                    if lit not in _RM_LONG_OPTS:
+                        return False
+                elif not set(lit[1:]) <= _RM_SHORT_OPTS:
+                    return False
+                continue
+            operands.append(w)
+        if not operands:
+            return False
+        for w in operands:
+            lit = w.literal()
+            if lit is not None:
+                if not _rm_target_proven(lit, hts, protected):
+                    return False
+                continue
+            found = _rm_glob_matches(w)
+            if found is None:
+                return False
+            directory, matches = found
+            if not _rm_target_proven(directory, hts, protected):
+                return False
+            if not all(_rm_target_proven(m, hts, protected) for m in matches):
+                return False
+        return True
+    except Exception:  # a proof that crashes proves nothing
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Analyzer
 # ---------------------------------------------------------------------------
 
@@ -1348,6 +1541,9 @@ class Analyzer:
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        # Every command the walk reached, at any depth (substitutions, aliases, heredoc
+        # bodies included). temp_root_removal holds only when it is the one command.
+        self.commands = 0
         self._head, self.direct = None, False
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
@@ -1921,6 +2117,7 @@ class Analyzer:
         redirs = [t[1] for t in toks if t[0] == "R"]
         if not words and not redirs:
             return
+        self.commands += 1
         for r in redirs:
             if r.op in ("<<", "<<-"):
                 self.note("heredoc", r.off)
@@ -2087,6 +2284,13 @@ class Analyzer:
 
         if base in REMOVAL_EXES:
             self.cover(head)  # accounted for: it IS the removal we denied
+            # A plain `rm` of proven temp-root paths (rm_temp_targets_proven): only as its
+            # command's own head at the top level, spelled `rm`, after no shell state a
+            # later command inherits (an assignment, export, alias ...).
+            if name == "rm" and self.direct and not self.git_rm_unresolved \
+                    and rm_temp_targets_proven(args):
+                self.add(PROVEN_SAFE_REMOVAL, "temp_root_removal", name)
+                return
             self.add(FORBIDDEN_REMOVAL, "filesystem_removal", name)
             return
 
@@ -3568,6 +3772,14 @@ def analyze(raw):
                                  for o in undischarged[:5]))
     if az.overflow:
         az.add_terminal(UNRESOLVED, "boundary_limit_exceeded", str(MAX_BOUNDARIES))
+    # A temp-root rm is proven against the filesystem as the hook sees it. Any other
+    # command in the same string (an `ln -s`, `mv`, `cd`, an interpreter, a background
+    # job ...) could change that filesystem before or while rm runs, so the proof holds
+    # only when the rm is the string's one command.
+    for b in az.boundaries if az.commands != 1 else ():
+        if b["reason"] == "temp_root_removal":
+            b.update(verdict=FORBIDDEN_REMOVAL, reason="filesystem_removal",
+                     detail="rm (temp-root removal is not the only command)")
     for b in az.boundaries if az.git_rm_unresolved else ():  # git rm's directory unknown
         if b["reason"] == "git_rm_recoverable":
             b.update(verdict=FORBIDDEN_REMOVAL, reason="git_rm_worktree",

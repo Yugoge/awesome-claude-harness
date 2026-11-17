@@ -1861,7 +1861,7 @@ case "$_EB_DECISION" in
   "DENY "*)
     echo "BLOCKED: removal-policy — ${_EB_DECISION#DENY }" >&2
     echo "Command: $COMMAND" >&2
-    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no submodule); this command has a boundary that is none of these." >&2
+    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no submodule) or a plain rm of literal paths inside /tmp, /var/tmp or the TMPDIR root that are not harness state; this command has a boundary that is none of these." >&2
     exit 2 ;;
   *)
     # DEGRADED MODE. The analyzer is missing, crashed, timed out, or hit the

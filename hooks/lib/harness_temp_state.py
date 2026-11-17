@@ -38,7 +38,9 @@ crosses_mount() disqualifies a temp path that a bind mount under its temp root
 /proc/self/mountinfo for it. Relative TMPDIR-style values count, against the cwd, for state detection
 but never widen temp_roots(). Control names match case-insensitively. Known
 limits (hard links, per-call variable redirects) are in the inventory doc.
-hooks/pretool-tool-policy.py's temp-write rule (_temp_write) uses it.
+hooks/pretool-tool-policy.py's temp-write rule (_temp_write) uses it, and
+hooks/lib/bash_execution_boundary.py uses it to allow a plain rm of temp-root
+paths that are not control state.
 """
 
 from __future__ import annotations
