@@ -160,7 +160,12 @@ def test_an_allow_grant_lets_an_ordinary_push_through(box, command):
     assert proc.returncode == 0, (command, proc.stderr)
 
 
-@pytest.mark.parametrize("command", ALLOWED)
+# A dry run moves no ref, so without a grant it is not refused as a push
+# (test_privilege_guard_read_only_forms.py).
+DRY_RUNS = ("git push --dry-run origin feat", "git push -n origin feat")
+
+
+@pytest.mark.parametrize("command", [c for c in ALLOWED if c not in DRY_RUNS])
 def test_an_ordinary_push_without_a_grant_is_refused_as_a_push(box, command):
     proc = box.run(command, agent_id="agent-1")
     assert proc.returncode == 2, (command, proc.stderr)

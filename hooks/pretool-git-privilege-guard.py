@@ -542,6 +542,190 @@ _COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fi
                       '--pathspec-from-file'}
 
 
+# ---------------------------------------------------------------------------
+# Read-only forms of a guarded subcommand
+#
+# The rules below judge an invocation by its subcommand name, so a form of a
+# guarded subcommand that moves nothing is lifted out first (_without_read_only):
+# help (`git push --help`, `git --help push`, `git merge -h`), a dry run
+# (`git push -n|--dry-run`, `git commit --dry-run`; commit's `-n` is
+# --no-verify) and `git rebase|am --show-current-patch`. Each invocation is
+# judged on its own, so `git push --help; git push origin master` still meets
+# the push rule. git can run a configured program for any of them (help.browser,
+# man.viewer, core.pager, core.sshCommand, a transport helper), so a form is
+# read-only only when the command cannot inject configuration: no -c,
+# --config-env or other option before the subcommand, no assignment, export or
+# function anywhere in the command, no wrapper on the invocation, nothing in a
+# nested shell. (The environment the command starts with is the host's, not the
+# agent's: an agent's export does not outlive its Bash call.)
+# ---------------------------------------------------------------------------
+
+# What can add or repoint git configuration for a later command of the same line.
+_ENV_CHANGING_CMDS = frozenset({'export', 'declare', 'typeset', 'readonly', 'local', 'set',
+                                'source', '.', 'eval', 'env', 'alias', 'shopt', 'enable',
+                                'builtin', 'trap'})
+# Builtins whose parse-options reads `-h` as its usage; `--help` right after any
+# subcommand is rewritten to `git help <sub>` by git itself (an external such as
+# filter-repo, or an alias, may read `-h` as something else).
+_DASH_H_HELP = frozenset({'push', 'merge', 'commit', 'rebase', 'am', 'cherry-pick', 'revert',
+                          'pull', 'reset', 'update-ref', 'symbolic-ref', 'branch', 'commit-tree',
+                          'fast-import', 'replace', 'filter-branch'})
+# push options whose value is the next word when not attached; those that name a
+# program to run end the dry-run reading.
+_PUSH_VALUE_LONG = frozenset({'--repo', '--push-option', '--receive-pack', '--exec'})
+_PUSH_RUNS_PROGRAM = frozenset({'--receive-pack', '--exec'})
+# commit short options that take a value (the rest of the cluster or the next
+# word), and those whose optional value can only be attached.
+_COMMIT_VALUE_SHORT = frozenset('mFCct')
+_COMMIT_ATTACHED_SHORT = frozenset('uS')
+_SHOW_CURRENT_PATCH = {'rebase': ('--show-current-patch',),
+                       'am': ('--show-current-patch', '--show-current-patch=diff',
+                              '--show-current-patch=raw')}
+
+
+def _negates_dry_run(name):
+    """True for `--no-dry-run` or a prefix of it git would take (`--no-d`)."""
+    return len(name) > 5 and 'no-dry-run'.startswith(name[2:])
+
+
+def _push_is_dry_run(args):
+    """True when push arguments ask for a dry run (`-n`, a cluster holding n,
+    `--dry-run`, not undone by a later `--no-dry-run`) and name no program git
+    would run for it: no --receive-pack/--exec, no `<transport>::` address.
+    The value of -o/--push-option/--repo is not an option."""
+    dry = False
+    operands_only = False
+    k = 0
+    while k < len(args):
+        word = args[k]
+        if word is None or '::' in word:
+            return False
+        if operands_only or word == '--':
+            operands_only = True
+        elif word.startswith('--'):
+            name, eq, _value = word.partition('=')
+            if name in _PUSH_RUNS_PROGRAM:
+                return False
+            if name == '--dry-run' and not eq:
+                dry = True
+            elif _negates_dry_run(name):
+                dry = False
+            elif name in _PUSH_VALUE_LONG and not eq:
+                k += 1
+        elif word.startswith('-') and len(word) > 1:
+            letters = word[1:]
+            for n, ch in enumerate(letters):
+                if ch == 'o':
+                    if n == len(letters) - 1:
+                        k += 1
+                    break
+                if ch == 'n':
+                    dry = True
+        k += 1
+    return dry
+
+
+def _commit_is_dry_run(args):
+    """True when commit arguments carry `--dry-run` as an option (not as the
+    value of -m, -F, --author and the like, not after `--`), not undone by a
+    later `--no-dry-run`. commit's `-n` is --no-verify, never a dry run."""
+    dry = False
+    k = 0
+    while k < len(args):
+        word = args[k]
+        if word is None:
+            return False
+        if word == '--':
+            break
+        if word.startswith('--'):
+            name, eq, _value = word.partition('=')
+            if name == '--dry-run' and not eq:
+                dry = True
+            elif _negates_dry_run(name):
+                dry = False
+            elif name in _COMMIT_VALUE_OPTS | {'--message', '--file'} and not eq:
+                k += 1
+        elif word.startswith('-') and len(word) > 1:
+            letters = word[1:]
+            for n, ch in enumerate(letters):
+                if ch in _COMMIT_ATTACHED_SHORT:
+                    break
+                if ch in _COMMIT_VALUE_SHORT:
+                    if n == len(letters) - 1:
+                        k += 1
+                    break
+        k += 1
+    return dry
+
+
+def _read_only_form(inv):
+    """True when parsed invocation `inv` is a read-only form of its subcommand
+    written plainly: top level, no wrapper, assignment, configuration or GIT_*
+    variable on it, and no option before the subcommand but a lone `--help`."""
+    if (inv.unresolved is not None or inv.alias_body is not None or inv.context != ('top',)
+            or inv.config_pairs or inv.env or inv.cmd.assignments
+            or shell_parse.resolve(inv.cmd).wrappers):
+        return False
+    args = tuple(inv.args)
+    if inv.global_opts:
+        # `git --help push` is `git help push`.
+        return inv.global_opts == [('--help', None)]
+    if args and (args[0] == '--help' or (args[0] == '-h' and inv.subcommand in _DASH_H_HELP)):
+        return True
+    if inv.subcommand == 'push':
+        return _push_is_dry_run(args)
+    if inv.subcommand == 'commit':
+        return _commit_is_dry_run(args)
+    return len(args) == 1 and args[0] in _SHOW_CURRENT_PATCH.get(inv.subcommand, ())
+
+
+def _config_may_be_injected(script, sites):
+    """True when a command of the line can give a git invocation configuration
+    it would not otherwise read: an assignment (exported under `set -a`), an
+    export-like or eval-like builtin, or a function (it may shadow git)."""
+    if shell_parse._AssignScope(script).functions:
+        return True
+    return any(site.cmd.assignments or shell_parse.resolve(site.cmd).name in _ENV_CHANGING_CMDS
+               for site in sites)
+
+
+def _injection_free(script):
+    """True when `script` can be read and no command of it may inject
+    configuration (_config_may_be_injected)."""
+    if script.error is not None:
+        return False
+    return not _config_may_be_injected(script, list(shell_parse.walk(script)))
+
+
+def _read_only_parsed(command):
+    """The parser's read-only invocations of `command` (see _read_only_form), or
+    none when the command cannot be read or may inject configuration."""
+    script = shell_parse.parse(command)
+    if not _injection_free(script):
+        return []
+    return [inv for inv in shell_parse.git_invocations(script) if _read_only_form(inv)]
+
+
+def _without_read_only(command, invocations):
+    """The classifier's `invocations` less each one the parser reads as a
+    read-only form; each parsed form lifts at most one, matched by subcommand
+    and arguments (as the parser resolves them, or as written)."""
+    spare = []
+    for inv in _read_only_parsed(command):
+        spare.append((inv.subcommand, {tuple(inv.args),
+                                       tuple(w.value() for w in inv.arg_words)}))
+    kept = []
+    for inv in invocations:
+        args = tuple(_unquote_token(t) for t in inv.args)
+        hit = next((n for n, (sub, forms) in enumerate(spare)
+                    if sub == inv.subcommand and args in forms), None)
+        if hit is None:
+            kept.append(inv)
+        else:
+            del spare[hit]
+    return kept
+
+
 def _git_view(command):
     """(walk sites, git invocations) of `command` through the shared parser,
     pairing each git invocation with the index of its site in walk order; a
@@ -1110,7 +1294,10 @@ def _evaluate_push(command, invocations, data):
     # options resolved), and the classifier's, which also reads a quoted payload
     # it cannot rule out as code.
     script = shell_parse.parse(command)
-    pushes = [inv.args for inv in shell_parse.git_invocations(script) if inv.subcommand == 'push']
+    # A read-only form (a dry run, help) moves nothing whatever else it carries.
+    free = _injection_free(script)
+    pushes = [inv.args for inv in shell_parse.git_invocations(script)
+              if inv.subcommand == 'push' and not (free and _read_only_form(inv))]
     pushes += [[_unquote_token(t) for t in inv.args] for inv in invocations if inv.subcommand == 'push']
     if any(_push_forces_or_deletes(args) for args in pushes):
         _block(
@@ -1391,6 +1578,11 @@ def _evaluate_command(command, data, do_consent=False):
                 + '         --reason "<why this command must run as written>"\n'
                 + '     Command sha256: %s\n' % digest
             )
+    if not invocations:
+        return
+    # A read-only form of a guarded subcommand (help, a dry run,
+    # --show-current-patch) is not judged by the subcommand's rule.
+    invocations = _without_read_only(command, invocations)
     if not invocations:
         return
     # An /allow grant settles every command but a push, whose force/delete refusal
