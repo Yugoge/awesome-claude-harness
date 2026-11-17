@@ -101,6 +101,7 @@ def test_a_layer_is_read_for_its_writes_with_the_outer_assignment():
     policy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(policy)
     policy._bootstrap_security()
-    assert ("/p/out", False) in policy._bash_writes('T=/p/out; bash -c "echo x | tee $T"')  # double: it reaches
-    assert ("/p/out", False) not in policy._bash_writes("T=/p/out; bash -c 'echo x | tee $T'")  # single: it does not
-    assert policy._bash_writes("git status") == ()
+    targets = policy._extract_targets
+    assert "/p/out" in targets("Bash", {"command": 'T=/p/out; bash -c "echo x | tee $T"'})  # double: it reaches
+    assert "/p/out" not in targets("Bash", {"command": "T=/p/out; bash -c 'echo x | tee $T'"})  # single: it does not
+    assert targets("Bash", {"command": "git status"}) == []
