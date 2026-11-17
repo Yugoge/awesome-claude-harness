@@ -29,25 +29,34 @@ SEMANTICS (decision table, first match wins):
   4. structured /allow grant for the Agent tool exists ....... exit 0
      (human escape hatch — same match_sentinel_grant_for_tool lookup
       pretool-subagent-enforce.py already uses)
-  5. tool_input.subagent_type names a role that cannot write . exit 0
-     (_read_only_role; the collision above needs a writer)
+  5. tool_input.subagent_type names a role allowed below ..... exit 0
+     (_read_only_role)
   6. otherwise (main agent, /do active) ...................... exit 2
 
-  A role that cannot write (rule 5) is decided from structure, never from the
-  dispatch prompt's wording, and fails closed:
-    - subagent_type must be a string that equals, byte for byte (no case
-      folding, no trimming), a built-in read-only agent type
-      (READ_ONLY_BUILTIN_TYPES: Explore, Plan, claude-code-guide; the runtime
-      gives them no Write, Edit or NotebookEdit), AND no agent definition the
-      runtime loads (the harness home's agents/, ~/.claude/agents/, the
-      project's .claude/agents/) declares that name, since a custom definition
-      could shadow the built-in with write tools;
-    - or it equals a role of policies/tool-policy.v1.json whose allowed_tools
-      is non-empty and lies wholly inside READ_ONLY_TOOLS (no write tool, no
-      Bash, no wildcard such as mcp__playwright__*).
+  Rule 5 is decided from structure, never from the dispatch prompt's wording,
+  and fails closed. The collision above comes only from a role whose contract
+  writes docs/dev/dev-report-<TASK_ID>.json (dev, qa, ba, changelog-analyst:
+  agents/<role>.md), so these pass:
+    - a built-in role with no Write, Edit or NotebookEdit tool and no
+      dev-report duty: subagent_type equal, byte for byte (no case folding, no
+      trimming), to Explore, Plan or claude-code-guide
+      (READ_ONLY_BUILTIN_TYPES). Explore and Plan do hold Bash, so they are not
+      strictly unable to write; what keeps them out of the collision is that
+      no contract of theirs names a dev report. The built-in name counts only
+      when no agent definition the runtime may load declares it, since a
+      custom definition could shadow the built-in with write tools
+      (_definition_declares: the harness home's agents/, ~/.claude/agents/,
+      and .claude/agents/ of CLAUDE_PROJECT_DIR, of the payload cwd and of
+      every directory above them; subdirectories and symlinks followed with a
+      cycle guard; frontmatter read with a YAML loader after a BOM; a file
+      whose stem or `name` matches case-insensitively, or any candidate file
+      that cannot be read or parsed, keeps the call blocked);
+    - a policies/tool-policy.v1.json role whose allowed_tools is non-empty
+      and lies wholly inside READ_ONLY_TOOLS (no write tool, no Bash, no
+      wildcard such as mcp__playwright__*): it cannot write at all.
     An omitted subagent_type (the runtime's general-purpose), general-purpose
-    itself, any role holding a write tool or Bash, an unknown type, a policy
-    that cannot be read, and any error while deciding all stay blocked.
+    itself, any other role, an unknown type, a policy that cannot be read, a
+    missing YAML loader, and any error while deciding all stay blocked.
 
   Active-/do detection is the one decision every consent bypass takes:
   lib.allowlist.has_do_consent, so the block window of this hook is exactly
@@ -92,7 +101,9 @@ def _parse_stdin() -> dict:
         return {}
 
 
-# Built-in agent types the runtime gives no Write, Edit or NotebookEdit tool.
+# Built-in agent types the runtime gives no Write, Edit or NotebookEdit tool and
+# no dev-report duty (Explore and Plan hold Bash; no contract of theirs names
+# docs/dev/dev-report-<TASK_ID>.json, the file the collision needs).
 READ_ONLY_BUILTIN_TYPES = frozenset({"Explore", "Plan", "claude-code-guide"})
 # Tools that cannot write a file. Bash is absent on purpose: it writes.
 READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "WebSearch", "WebFetch"})
@@ -100,7 +111,7 @@ _POLICY_RELPATH = "policies/tool-policy.v1.json"
 
 
 def _agent_dirs(stdin_data: dict) -> list:
-    """Every directory the runtime loads agent definitions from."""
+    """Every directory the runtime may load agent definitions from."""
     dirs = []
     try:
         from lib import claude_home
@@ -112,33 +123,76 @@ def _agent_dirs(stdin_data: dict) -> list:
     dirs.append(Path.home() / ".claude" / "agents")
     for project in (os.environ.get("CLAUDE_PROJECT_DIR"), stdin_data.get("cwd")):
         if isinstance(project, str) and project:
-            dirs.append(Path(project) / ".claude" / "agents")
+            start = Path(os.path.abspath(project))
+            for directory in (start, *start.parents):
+                dirs.append(directory / ".claude" / "agents")
     return dirs
 
 
+_MAX_DEFINITION_FILES = 5000
+
+
+def _agent_files(directory: Path):
+    """Every *.md under `directory`, following symlinked subdirectories once
+    (a real-path cycle guard); more than _MAX_DEFINITION_FILES raises."""
+    seen = set()
+    count = 0
+    for root, subdirs, files in os.walk(directory, followlinks=True, onerror=_raise):
+        real = os.path.realpath(root)
+        if real in seen:
+            subdirs[:] = []
+            continue
+        seen.add(real)
+        for name in files:
+            if name.lower().endswith(".md"):
+                count += 1
+                if count > _MAX_DEFINITION_FILES:
+                    raise OSError("too many agent definition files")
+                yield Path(root) / name
+
+
+def _raise(error):
+    raise error
+
+
+def _declared_name(text: str):
+    """The frontmatter `name` of a definition (None when it has none).
+    Raises on frontmatter a YAML loader cannot parse."""
+    import yaml
+    text = text.lstrip("\ufeff")
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            data = yaml.safe_load("\n".join(lines[1:index]))
+            break
+    else:
+        raise ValueError("unterminated frontmatter")
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError("frontmatter is not a mapping")
+    return data.get("name")
+
+
 def _definition_declares(name: str, stdin_data: dict) -> bool:
-    """True when an agent definition file declares `name` (case-insensitively),
-    or a definition cannot be read: either may shadow the built-in type."""
+    """True when an agent definition declares `name` (case-insensitively), or
+    any candidate definition cannot be read or parsed: either may shadow the
+    built-in type."""
     wanted = name.strip().casefold()
     for directory in _agent_dirs(stdin_data):
-        if not directory.is_dir():
-            continue
-        for path in directory.rglob("*.md"):
-            if path.stem.strip().casefold() == wanted:
-                return True
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                return True
-            if not text.startswith("---"):
+        try:
+            if not directory.is_dir():
                 continue
-            for line in text.split("\n")[1:]:
-                if line.strip() == "---":
-                    break
-                key, sep, value = line.partition(":")
-                if sep and key.strip() == "name":
-                    if value.strip().strip("'\"").strip().casefold() == wanted:
-                        return True
+            for path in _agent_files(directory):
+                if path.stem.strip().casefold() == wanted:
+                    return True
+                declared = _declared_name(path.read_text(encoding="utf-8"))
+                if declared is not None and str(declared).strip().casefold() == wanted:
+                    return True
+        except Exception:
+            return True
     return False
 
 
@@ -157,7 +211,7 @@ def _policy_role_read_only(name: str) -> bool:
 
 
 def _read_only_role(stdin_data: dict) -> bool:
-    """Rule 5: the dispatched role cannot write. Any doubt is False (blocked)."""
+    """Rule 5: the dispatched role is allowed during /do. Any doubt is False."""
     try:
         tool_input = stdin_data.get("tool_input")
         if not isinstance(tool_input, dict):
@@ -180,7 +234,8 @@ def _emit_block(tool_name: str, session_id: str) -> None:
         '  no-delegation-needed: /do means the main agent does the work DIRECTLY —\n'
         '    the orchestrator gate bypass is already active for this session, so\n'
         '    every tool the work needs is available without dispatching a subagent.\n'
-        '  read-only roles pass: Explore, Plan, claude-code-guide, or a\n'
+        '  roles that pass: the built-ins with no Write/Edit/NotebookEdit tool\n'
+        '    and no dev-report duty (Explore, Plan, claude-code-guide), or a\n'
         '    policies/tool-policy.v1.json role with no write tool and no Bash.\n'
         '  why-forbidden: a dispatched dev/qa subagent writes its report file\n'
         '    (docs/dev/dev-report-<TASK_ID>.json) alongside the /do cycle\'s\n'
@@ -214,7 +269,8 @@ def _main() -> None:
         # overrides the block (read-only; consumption stays in PostToolUse).
         if match_sentinel_grant_for_tool(session_id, 'Agent') is not None:
             sys.exit(0)
-        # A role that cannot write cannot leave the colliding dev-report.
+        # A role with no dev-report duty and no Write/Edit tool cannot leave
+        # the colliding dev-report.
         if _read_only_role(stdin_data):
             sys.exit(0)
         _emit_block(stdin_data.get('tool_name'), session_id)

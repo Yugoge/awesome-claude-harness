@@ -410,3 +410,84 @@ def test_r_every_shipped_policy_role_stays_blocked(tmp_path):
             result = _dispatch(sid, {"subagent_type": role, "prompt": "x"},
                                env_extra={"HOME": str(tmp_path)})
         assert result.returncode == 2, role
+
+
+# Shadow definitions the runtime may load, in every spelling a YAML
+# frontmatter allows, keep the built-in name blocked (verifier follow-up).
+_SHADOW_TEXTS = {
+    "inline-comment": "---\nname: Explore # shadow\ntools: Write\n---\n",
+    "folded-scalar": "---\nname: >-\n  Explore\ntools: Write\n---\n",
+    "literal-scalar": "---\nname: |-\n  Explore\n---\n",
+    "double-quoted": '---\nname: "Explore"\n---\n',
+    "single-quoted": "---\nname: 'Explore'\n---\n",
+    "quoted-padded": '---\nname: " explore "\n---\n',
+    "bom": "﻿---\nname: Explore\ntools: Write\n---\n",
+    "unparsable": "---\nname: [unclosed\n---\n",
+    "unterminated": "---\nname: someone\n",
+}
+
+
+@pytest.mark.parametrize("label", sorted(_SHADOW_TEXTS))
+def test_s_shadow_definition_spellings_stay_blocked(label, tmp_path):
+    project = tmp_path / "proj"
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "custom-role.md").write_text(_SHADOW_TEXTS[label], encoding="utf-8")
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "Explore", "prompt": "x"},
+                           env_extra={"HOME": str(tmp_path / "home")}, cwd=str(project))
+    assert result.returncode == 2, (label, result.stderr)
+    assert BLOCK_BANNER in result.stderr
+
+
+@pytest.mark.parametrize("via", ["cwd", "CLAUDE_PROJECT_DIR"])
+def test_t_shadow_definition_in_a_parent_directory_stays_blocked(via, tmp_path):
+    top = tmp_path / "top"
+    agents = top / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "x.md").write_text("---\nname: Plan\ntools: Write\n---\n")
+    nested = top / "a" / "b"
+    nested.mkdir(parents=True)
+    env_extra = {"HOME": str(tmp_path / "home")}
+    cwd = None
+    if via == "cwd":
+        cwd = str(nested)
+    else:
+        env_extra["CLAUDE_PROJECT_DIR"] = str(nested)
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "Plan", "prompt": "x"},
+                           env_extra=env_extra, cwd=cwd)
+    assert result.returncode == 2, result.stderr
+
+
+def test_u_shadow_definition_behind_a_symlinked_subdirectory_stays_blocked(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "x.md").write_text("---\nname: claude-code-guide\ntools: Write\n---\n")
+    project = tmp_path / "proj"
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "linked").symlink_to(elsewhere, target_is_directory=True)
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "claude-code-guide", "prompt": "x"},
+                           env_extra={"HOME": str(tmp_path / "home")}, cwd=str(project))
+    assert result.returncode == 2, result.stderr
+
+
+def test_v_unrelated_definitions_and_a_symlink_cycle_still_allow(tmp_path):
+    """Valid definitions of other names, a file without frontmatter and a
+    symlink loop do not block the built-in (and the walk terminates)."""
+    project = tmp_path / "proj"
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "helper.md").write_text("---\nname: helper # Explore-like\ntools: Read\n---\n")
+    (agents / "notes.md").write_text("plain notes, no frontmatter\n")
+    (agents / "loop").symlink_to(agents, target_is_directory=True)
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "Explore", "prompt": "x"},
+                           env_extra={"HOME": str(tmp_path / "home")}, cwd=str(project))
+    assert result.returncode == 0, result.stderr
