@@ -579,3 +579,70 @@ OB_L13_ROUND4_GRANT_RULE = [
 def test_the_namespace_rule_refuses_a_name_outside_the_strict_word_shape(command):
     import re
     assert _rules().writes_namespace(command, re.escape("/st/claude-commit-grant-")), command
+
+
+# OB-L13 verifier round 5: a filter whose option runs a program (sort --compress-program, any spelling) or reads or
+# writes a named file, and a sudo that runs its command through `$SHELL -c` (-s, -i, --shell, --login) after a
+# standalone SHELL= assignment, each ran the writer script; refused through the real hook.
+_PAD = f"cat /tmp/pre.py {_W} /tmp/pad | "
+OB_L13_ROUND5_REFUSALS = [
+    _PAD + "sort -s -t '~' -k2,2 -S 20K --compress-program=python3 > /dev/null",
+    _PAD + "sort -s -t '~' -k2,2 -S 20K --compress-prog=python3 > /dev/null",
+    _PAD + "sort -s -k2,2 -S 20K --compress-program python3 > /dev/null",
+    _PAD + "sort -S 20K --compress-program=sh > /dev/null",
+    _PAD + "sort -S 20K --com=sh > /dev/null",
+    _PAD + "sort -S 20K --c=sh > /dev/null",
+    f"cat {_W} | sort -k1 --compress-program=python3",
+    f"cat {_SENT} | sort --compress-program=/tmp/x",
+    f"ls {_W} | xargs sort --compress-program=sh",
+    f"cat {_W} | sort --files0-from=/tmp/list",
+    f"cat {_W} | wc --files0-from=/tmp/list",
+    f"cat {_W} | less -o /tmp/w.py",
+    f"cat {_W} | less --log-file=/tmp/w.py",
+    f"cat {_W} | less -k /tmp/keys",
+    f"cat {_W} | less '+!sh'",
+    f"cat {_W} | git -c alias.x='!sh' x",
+    f"cat {_W} | rg --pre=sh x /etc/hostname",
+    f"SHELL=/tmp/L/evil; sudo -E -s cat {_W}",
+    f"SHELL=/tmp/L/evil; sudo -E -i cat {_W}",
+    f"SHELL=/tmp/L/evil; sudo -E --shell cat {_W}",
+    f"SHELL=/tmp/L/evil; sudo -E --login cat {_W}",
+    f"SHELL=/tmp/L/evil; sudo -Es cat {_W}",
+    f"SHELL=/tmp/L/evil; sudo -E --sh cat {_W}",
+    f"SHELL=/tmp/L/evil; sudo -E -s cat {_SENT}",
+    f"SHELL=/tmp/L/evil; sudo -E cat {_W}",
+    f"sudo -s cat {_W}",
+    f"sudo -iu root cat {_W}",
+    f"sudo -D /tmp cat {_W}",
+    f"GLOBIGNORE=x; ls {{S}}/claude-bulk-commit-sentinel-*",
+    f"PWD=/tmp; cat {_W}",
+    f"shell=/tmp/e; cat {_W}",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND5_REFUSALS)
+def test_a_filter_option_or_sudo_shell_that_runs_the_writer_is_refused(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 2 and "bulk-commit-sentinel-write" in r.stderr, (cmd, r.stderr)
+
+
+OB_L13_ROUND5_PASSES = [
+    f"cat {_W} | sort -r | uniq -c",
+    f"grep -n x {_W} | sort -t: -k1,1n | head -5",
+    f"cat {_W} | sort --key=2 --field-separator=, --reverse --numeric-sort --unique --stable",
+    f"cat {_W} | sort -T /tmp -S 20K | tail -n 2",
+    f"cat {_W} | less -R",
+    f"sudo -u root cat {_W}",
+    f"sudo -E -n cat {_W}",
+    f"f=1; cat {_W}",
+    f"NS=1; cat {_W}",
+    f"LANG=C; cat {_W}",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND5_PASSES)
+def test_a_filter_with_listed_options_or_a_plain_sudo_still_reads(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 0, (cmd, r.stderr)

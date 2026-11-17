@@ -797,12 +797,21 @@ _SHAPE_ENV_OK_RE = re.compile(r"LC_[A-Z]+|LANG|TZ|NO_COLOR|TERM")
 """The only assignments the strict shape takes: each changes how a command prints, never what it runs or reads."""
 _SHAPE_ENV_SENSITIVE_RE = re.compile(
     r"PATH|HOME|IFS|ENV|BASH_ENV|CDPATH|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|TMPDIR|PAGER|EDITOR|VISUAL|MANPAGER"
-    r"|POSIXLY_CORRECT|(LD|PYTHON|PERL|RUBY|NODE|GIT|XDG|RIPGREP|GREP|LESS|JQ|SSH|GNUPG|GPG)[A-Z0-9_]*"
+    r"|SHELL|POSIXLY_CORRECT|PWD|OLDPWD|TMP|TEMP|CC|CXX|CPP|AR|AS|FC|PS[0-9]"
+    r"|(LD|PYTHON|PERL|RUBY|NODE|GIT|XDG|RIPGREP|GREP|LESS|JQ|SSH|GNUPG|GPG)[A-Z0-9_]*"
     r"|.*(PATH|DIR|HOME|CONFIG|OPTS|OPTIONS|PROXY|_proxy)[A-Za-z0-9_]*", re.IGNORECASE)
-"""Variables a standalone assignment (`X=v; cmd`) may change for a later command when already exported: one of these
-takes the command out of the strict shape. Any other standalone assignment stays in the shell."""
+"""Names a program or the shell reads (case ignored): no standalone assignment to one stays in the strict shape."""
+_SHAPE_STANDALONE_RE = re.compile(r"[a-z_][a-z0-9_]*|[A-Z][A-Z0-9_]{0,2}")
+"""The standalone assignments (`x=v; cmd`) the strict shape takes besides _SHAPE_ENV_OK_RE: a lower-case shell
+variable, or an upper-case name of one to three characters (`NS`, `T`, `OUT`), that matches no
+_SHAPE_ENV_SENSITIVE_RE pattern (`http_proxy`, `dir`, `shell`, `IFS`, `PWD`, `TMP`, `CC` are refused). Any longer
+upper-case or mixed name (`SHELL`, `GLOBIGNORE`, `FOO_BAR`) takes the command out of the shape."""
 _SHAPE_WRAPPERS = frozenset({"nice", "nohup", "timeout", "command", "xargs", "sudo", "setsid", "env"})
-"""Wrappers that run their command as named (env only with no option)."""
+"""Wrappers that run their command as named (env only with no option, sudo only with _SHAPE_SUDO_OPTS)."""
+_SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve-env", "-n", "--non-interactive",
+                              "-H", "--set-home"})
+"""sudo's options that keep its command as named: -s/--shell and -i/--login run it through `$SHELL -c`, and any
+other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
 _SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
 """A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
 _SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
@@ -895,10 +904,10 @@ def _shape_strict_ok(command, carries, sites):
     """The strict shape's conditions on the words themselves (see _relaxation_shape_ok).
 
     Every command word is a bare name or /bin/<name> or /usr/bin/<name> (`./cat`, `/tmp/x/python3` run a file of the
-    caller's choosing); no prefix assignment (or one handed to env) but LC_*, LANG, TZ, NO_COLOR, TERM, and no
-    standalone one to PATH, HOME, LD_*, PYTHON*, GIT_*, XDG_* or another variable a program reads, and no array,
-    subscripted or `+=` assignment; no
-    wrapper but nice, nohup, timeout, command, xargs, sudo, setsid and an option-less env; no cd, pushd, popd and no
+    caller's choosing); no prefix assignment (or one handed to env) but LC_*, LANG, TZ, NO_COLOR, TERM, no
+    standalone one but those and a lower-case name matching no _SHAPE_ENV_SENSITIVE_RE pattern (_SHAPE_STANDALONE_RE),
+    and no array, subscripted or `+=` assignment; no wrapper but nice, nohup, timeout, command, xargs, setsid, an
+    option-less env and a sudo whose options are among -u, -g, -E, -n, -H (not -s/-i); no cd, pushd, popd and no
     git -C, --git-dir, --work-tree or other directory option; no background `&`; no heredoc or here-string whose body
     names a protected name; no write target but /dev/null (a redirection, tee, sort -o, uniq's second operand, git
     --output); a `git -c` only with an exact display key (_git_config_inert); and, when a word names the writer script,
@@ -915,11 +924,13 @@ def _shape_strict_ok(command, carries, sites):
         for a in tuple(c.assignments) + tuple(res.assignments):
             if _SHAPE_ENV_OK_RE.fullmatch(a.name or ""):
                 continue
-            if c.words or _SHAPE_ENV_SENSITIVE_RE.fullmatch(a.name or "PATH") or \
+            if c.words or not _SHAPE_STANDALONE_RE.fullmatch(a.name or "") or \
+                    _SHAPE_ENV_SENSITIVE_RE.fullmatch(a.name) or \
                     not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=(?!\().*", a.word.text or "", re.S):
                 return False
         for name, opts in res.wrappers:
-            if name not in _SHAPE_WRAPPERS or (name == "env" and opts):
+            if name not in _SHAPE_WRAPPERS or (name == "env" and opts) or \
+                    (name == "sudo" and any(o not in _SHAPE_SUDO_OPTS for o, _v in opts)):
                 return False
         if res.name in _SHAPE_DIR_CHANGE:
             return False
@@ -1120,6 +1131,79 @@ _BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
 """Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
 _BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
 """Builtins whose arguments are assignments: a name in one is carried in a variable to a later command."""
+_BULK_FILTER_OPTS = {
+    # name: (short flags, short options taking a value, exact long flags, exact long options taking a value, digits)
+    "sort": ("bdfgiMhnRrVsuzcCm", "ktSTo", {"--ignore-leading-blanks", "--dictionary-order", "--ignore-case",
+             "--general-numeric-sort", "--ignore-nonprinting", "--month-sort", "--human-numeric-sort",
+             "--numeric-sort", "--random-sort", "--reverse", "--version-sort", "--stable", "--unique",
+             "--zero-terminated", "--merge", "--check", "--debug"},
+             {"--key", "--field-separator", "--buffer-size", "--temporary-directory", "--output", "--parallel"}, False),
+    "uniq": ("cdDiuz", "fsw", {"--count", "--repeated", "--ignore-case", "--unique", "--zero-terminated"},
+             {"--skip-fields", "--skip-chars", "--check-chars"}, True),
+    "head": ("qvz", "cn", {"--quiet", "--silent", "--verbose", "--zero-terminated"}, {"--bytes", "--lines"}, True),
+    "tail": ("qvzfF", "cns", {"--quiet", "--silent", "--verbose", "--zero-terminated", "--follow", "--retry"},
+             {"--bytes", "--lines", "--sleep-interval"}, True),
+    "wc": ("lwcmL", "", {"--lines", "--words", "--bytes", "--chars", "--max-line-length"}, set(), False),
+    "less": ("RrSNnFXEeiIMmsqQcfKwWJaBGL~", "xyzbhjpP", {"--RAW-CONTROL-CHARS", "--raw-control-chars",
+             "--chop-long-lines", "--LINE-NUMBERS", "--line-numbers", "--quit-if-one-screen", "--no-init",
+             "--ignore-case", "--IGNORE-CASE", "--squeeze-blank-lines", "--quiet", "--silent", "--no-lessopen"},
+             set(), True),
+    "more": ("dflcpsu", "n", {"--silent", "--logical", "--no-pause", "--print-over", "--clean-print", "--squeeze",
+             "--plain"}, {"--lines"}, True),
+}
+"""The options a filter (or a reader fed by a pipe or xargs) may carry while a command names the sentinel or a
+writer: none runs a program (sort --compress-program), reads a list of files or keys (--files0-from, less -k) or
+writes a file (less -o/-O/--log-file; sort -o is a write target checked apart). A long option counts only spelled in
+full, so no abbreviation (`--compress-prog`, `--c`) reaches one off the list; less takes no `+cmd` operand. cut, tr,
+nl and column have no option that runs, reads a named list or writes, so they carry any."""
+
+
+def _bulk_filter_runs(res):
+    """True when a filter's (or fed reader's) options leave its allow-list (_BULK_FILTER_OPTS), when a fed git
+    could run a program (_git_runs_bulk_name), or a fed rg, file or find runs or writes (--pre, -C, -exec ...)."""
+    name = res.name
+    vals = [w.value() for w in res.args]
+    if name == "git":
+        return _git_runs_bulk_name(res)
+    if name == "rg":
+        return any(v is None or v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals)
+    if name == "file":
+        return any(v is None or v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals)
+    if name == "find":
+        return any(v is None or v in _BULK_FIND_ACTIONS for v in vals)
+    spec = _BULK_FILTER_OPTS.get(name)
+    if spec is None:
+        return False
+    flags, valued, long_flags, long_valued, digits = spec
+    k = 0
+    while k < len(vals):
+        v = vals[k]
+        k += 1
+        if v is None:
+            return True
+        if v == "--":
+            break
+        if name == "less" and v.startswith("+"):
+            return True
+        if v.startswith("--"):
+            key = v.split("=", 1)[0]
+            if key in long_valued:
+                k += 0 if "=" in v else 1
+            elif key not in long_flags or "=" in v:
+                return True
+            continue
+        if not v.startswith("-") or v == "-":
+            continue
+        i = 1
+        while i < len(v):
+            ch = v[i]
+            if ch in valued:
+                k += 0 if i + 1 < len(v) else 1
+                break
+            if not (ch in flags or (digits and ch.isdigit())):
+                return True
+            i += 1
+    return False
 
 
 def _bulk_mentions(text):
@@ -1374,6 +1458,8 @@ def _relaxed_bulk_sentinel_decision(cmd):
         fed = "pipe" in site.fed or any(n == "xargs" for n, _o in res.wrappers)
         if named and (site.dynamic or (fed and name not in _BULK_FILTERS)):
             return 'DENY'
+        if named and (fed or name in _BULK_FILTERS - _BULK_READERS) and _bulk_filter_runs(res):
+            return 'DENY'
         if named and name not in _BULK_FILTERS | _BULK_BENIGN and any(w.value() is None for w in res.args):
             return 'DENY'
         if not (any(_bulk_word_mentions(w) for w in words) or any(_bulk_mentions(b) for b in bodies)):
@@ -1430,7 +1516,8 @@ def bulk_sentinel_rule(command):
                "fgrep|rg|jq|find|test|[ or a plain git read) with no rg --pre, file -C, find write or exec action, "
                "git global option, git --output/-O/difftool/bisect/submodule-style run, no write target, code (sed, "
                "awk, eval, -c, heredoc), assignment, env variable, for/select list or $_ carrying it, and no "
-               "non-filter fed by a pipe or xargs.", released_line())
+               "non-filter fed by a pipe or xargs, and no filter option that runs a program or reads or writes a named "
+               "file (sort --compress-program, --files0-from, less -o).", released_line())
 
 
 # ── Hard-banned scripts (BS-19) ──────────────────────────────────────────────
