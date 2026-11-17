@@ -42,6 +42,11 @@ Write carve-outs (``write_carveout_prefixes``, policy_version 9):
   - Such a target passes the allow list and the deny prefixes the carve-out
     sits under ('/tests/' for '/tests/reports/'); every other deny prefix
     still applies (_write_denial). A malformed entry carves nothing.
+  - ``carveouts=False`` (is_allowed, _check_write_path, _write_denial) judges a
+    target as if the row had none: hooks/pretool-tool-policy.py passes it for a
+    Bash target that the same command first makes as a link, copy or move
+    destination (itself or a directory above it), whose realpath the check
+    cannot see before the command runs.
 """
 
 from __future__ import annotations
@@ -335,12 +340,13 @@ def _carveout_waives(deny_prefix: str, entry: str) -> bool:
     return deny != entry and entry.startswith(deny)
 
 
-def _write_denial(role_pol: dict, target: Optional[str]) -> Optional[str]:
+def _write_denial(role_pol: dict, target: Optional[str], carveouts: bool = True) -> Optional[str]:
     """The deny-prefix reason for a write target, or None. A target inside one
     of the role's carve-outs (_in_carveout) is judged only by the deny prefixes
-    that carve-out does not waive."""
+    that carve-out does not waive; with ``carveouts`` false no carve-out
+    applies (a Bash target its own command re-stages first)."""
     denied_w = role_pol.get("denied_write_path_prefixes", []) or []
-    for entry in _carveout_entries(role_pol):
+    for entry in (_carveout_entries(role_pol) if carveouts else []):
         if _in_carveout(target, entry):
             denied_w = [d for d in denied_w if not _carveout_waives(d, entry)]
             break
@@ -349,11 +355,11 @@ def _write_denial(role_pol: dict, target: Optional[str]) -> Optional[str]:
     return None
 
 
-def _check_write_path(role_pol: dict, target: Optional[str]) -> Tuple[bool, str]:
-    denial = _write_denial(role_pol, target)
+def _check_write_path(role_pol: dict, target: Optional[str], carveouts: bool = True) -> Tuple[bool, str]:
+    denial = _write_denial(role_pol, target, carveouts)
     if denial is not None:
         return (False, denial)
-    if any(_in_carveout(target, entry) for entry in _carveout_entries(role_pol)):
+    if carveouts and any(_in_carveout(target, entry) for entry in _carveout_entries(role_pol)):
         return (True, "ok")
     allowed_w = role_pol.get("allowed_write_path_prefixes", [])
     if allowed_w and "*" not in allowed_w and not _path_in_prefixes(target, allowed_w):
@@ -377,9 +383,10 @@ def _fail_open_or_closed(role: str, reason: str) -> Tuple[bool, str]:
 
 
 def is_allowed(
-    role: str, tool_name: str, target_path: Optional[str]
+    role: str, tool_name: str, target_path: Optional[str], carveouts: bool = True
 ) -> Tuple[bool, str]:
-    """Return (allowed: bool, reason: str). See module docstring."""
+    """Return (allowed: bool, reason: str). See module docstring. With
+    ``carveouts`` false the row's write_carveout_prefixes admit nothing."""
     try:
         policy = load_policy()
         if not policy:
@@ -391,7 +398,7 @@ def is_allowed(
         if tool_check is not None:
             return tool_check
         if tool_name in WRITE_TOOLS:
-            return _check_write_path(role_pol, target_path)
+            return _check_write_path(role_pol, target_path, carveouts)
         return _check_read_path(role_pol, target_path)
     except Exception as e:  # pragma: no cover
         sys.stderr.write(f"policy_registry: unexpected ({e})\n")

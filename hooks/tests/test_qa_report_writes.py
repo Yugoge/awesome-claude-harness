@@ -328,6 +328,35 @@ def test_hook_judges_each_target_of_one_command(tmp_path, hook_project):
     assert mixed.returncode == 2 and "tests/test_x.py" in mixed.stderr, mixed.stderr
 
 
+@pytest.mark.parametrize("command", [
+    "ln -s ../test_x.py tests/reports/s && echo x > tests/reports/s",
+    "ln -s .. tests/reports/up && echo x > tests/reports/up/test_x.py",
+    "ln tests/test_x.py tests/reports/h && echo x >> tests/reports/h",
+    "cp -l tests/test_x.py tests/reports/h && echo x >> tests/reports/h",
+    "cp -s ../test_x.py tests/reports/s; echo x | tee tests/reports/s",
+    "mv lnk tests/reports/d && echo x > tests/reports/d/test_x.py",
+    "cp -r somedir reports/d && echo x > reports/d/lnk/h.py",
+    "mv lnk tests/reports/ && echo x > tests/reports/lnk/test_x.py",
+], ids=["ln-s-then-write", "ln-s-dir-then-write", "ln-then-append", "cp-l-then-append", "cp-s-then-tee",
+        "mv-link-then-write-below", "cp-r-then-write-below", "mv-into-carve-out-then-write-below"])
+def test_hook_refuses_a_target_its_own_command_restages_first(tmp_path, hook_project, command):
+    # The realpath check reads the tree before the command runs: a target the same command first
+    # makes as a link, copy or move destination (itself or a directory above it) has no carve-out.
+    proc = run_hook(tmp_path, hook_project, "Bash", {"command": command})
+    assert proc.returncode == 2 and proc.stderr.startswith(BLOCK), (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "cp notes.txt tests/reports/notes.txt",
+    "cp notes.txt tests/reports/",
+    "mv notes.txt reports/notes.txt",
+    "cp notes.txt tests/reports/a.txt && echo x | tee tests/reports/b.txt reports/c.txt",
+])
+def test_hook_lets_qa_stage_a_report_without_writing_through_it(tmp_path, hook_project, command):
+    proc = run_hook(tmp_path, hook_project, "Bash", {"command": command})
+    assert proc.returncode == 0, (command, proc.stderr)
+
+
 def test_hook_owner_case_with_an_absolute_target(tmp_path, hook_project):
     command = OWNER_CASE.replace("> tests/reports/age.txt", f"> {hook_project}/tests/reports/age.txt")
     assert run_hook(tmp_path, hook_project, "Bash", {"command": command}).returncode == 0
@@ -415,9 +444,11 @@ def test_pipeline_qa_writes_the_reports_trees(tmp_path, pipeline_project, tool, 
     ("Bash", {"command": "echo x | tee tests/reports/ok.txt tests/unit/test_y.py"}),
     ("Bash", {"command": "cp notes.txt reports/to-outside/o.txt"}),
     ("Bash", {"command": "echo x >> hooks/h.py"}),
+    ("Bash", {"command": "ln -s ../test_x.py tests/reports/s && echo x > tests/reports/s"}),
 ], ids=["write-test", "edit-test", "traversal", "symlink-file", "hard-link", "symlink-settings", "claude-hooks",
         "claude-settings", "owner-case-test-code", "owner-case-traversal", "owner-case-symlinked-dir",
-        "tee-second-target", "cp-symlink-outside", "append-hooks"])
+        "tee-second-target", "cp-symlink-outside", "append-hooks",
+        "link-then-write-in-one-command"])
 def test_pipeline_still_refuses_qa(tmp_path, pipeline_project, tool, tool_input):
     results = run_pipeline(tmp_path, pipeline_project, tool, tool_input)
     refused = _refusals(results)
