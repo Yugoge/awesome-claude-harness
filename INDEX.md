@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 962
+*Last updated: 2026-11-17T17:49:30Z*
+**Total entries**: 986
 **Convention**: kebab
 
 ## Tree
@@ -128,9 +128,10 @@ dot-claude/
 │   │   ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 │   │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   │   ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
-│   │   ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
+│   │   ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
-│   │   ├── `bash_execution_boundary.py` - THE ALGEBRA (spec-20260808-035658 LANE-POL, Must-1).  Every execution-bearing
+│   │   ├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
+│   │   ├── `bash_safety_rules.py` - Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 │   │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   │   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 │   │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
@@ -150,8 +151,7 @@ dot-claude/
 │   │   ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
 │   │   ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 │   │   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
-│   │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
-│   │   ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
+│   │   ├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
 │   │   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 │   │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   │   ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
@@ -175,7 +175,9 @@ dot-claude/
 │   │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   │   ├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 │   │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
+│   │   ├── `sensitive_names.py` - The default is the substring rule bash-safety has always had, case-sensitive as it was: a text is...
 │   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
+│   │   ├── `shell_parse.py` - Stdlib only. Nothing here executes, expands or evaluates the text it reads, and
 │   │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   │   ├── `specialist_yield.py` - Public API:
 │   │   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
@@ -200,15 +202,22 @@ dot-claude/
 │   │   ├── `test_bash_execution_boundary_conditional.py` - Before this fix the walk split `[[ "$A" != "." && "$A" != ".." ]]` at its `&&`
 │   │   ├── `test_bash_execution_boundary_dynamic_interpreter.py` - Before this fix, `python3 -c "import shutil; shutil.rmtree('$HOME/x')"` reached
 │   │   ├── `test_bash_safety_channel_script_operand.py` - script operand spelled through the quoted CLAUDE_HOME channel as the named script file it is,
+│   │   ├── `test_bash_safety_command_position.py` - command's own arguments (lib/shell_parse.py), not raw-text co-occurrence
+│   │   ├── `test_bash_safety_consent_flag.py` - The flag is <state dir>/claude-orchestrator-consent-<session id>.flag. Its one writer is hooks/pr...
 │   │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
-│   │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+│   │   ├── `test_bash_safety_context_rules.py` - hooks/pretool-bash-safety.sh that read the context-stripped view
 │   │   ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
+│   │   ├── `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
+│   │   ├── `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
+│   │   ├── `test_bash_safety_rules.py` - their cases, the over-blocks fixed, the bulk-commit writer closed from Bash, and the release word...
+│   │   ├── `test_bash_safety_sensitive_names.py` - check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write targe...
+│   │   ├── `test_bash_safety_session_dirs.py` - The name may stand only as a search pattern (grep, rg, git grep, git log -S/-G/--grep) or in a gi...
 │   │   ├── `test_bash_views_guard.py` - the quoted CLAUDE_HOME channel spelling P2 R6 gave every command line, as it
 │   │   ├── `test_bash_write_targets_policy.py` - Execution-semantic write-target resolution at the exact sink use site.
 │   │   ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
-│   │   ├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
-│   │   ├── `test_block_branch_pr_worktree_fails_closed.py` - hooks/pretool-block-branch-pr-worktree.py used to exit 0 on any error it did not
-│   │   ├── `test_block_branch_pr_worktree_gh_checkout.py` - `gh pr checkout` creates a local branch for the pull request unless it is told to
+│   │   ├── `test_block_branch_pr_worktree.py` - The hook refuses worktree CREATION on the Bash surface, with three bypasses (in
+│   │   ├── `test_block_branch_pr_worktree_fails_closed.py` - On an error it does not expect, a payload it cannot read or an import that fails
+│   │   ├── `test_block_branch_pr_worktree_gh_checkout.py` - Creating a branch is allowed, so the hook lets every `gh pr checkout` through,
 │   │   ├── `test_bulk_commit_sentinel.py` - Covers:
 │   │   ├── `test_c_layer_protected_targets.py` - d1b244f0 made a shell `-c` layer fail closed: run-time text given to a program outside
 │   │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
@@ -250,19 +259,22 @@ dot-claude/
 │   │   ├── `test_doc_sync_update_only.py` - A Write in a product repository leaves no CLAUDE.md, INDEX.md or README.md behind that was
 │   │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 │   │   ├── `test_e2e_enforce.py` - is judged on
-│   │   ├── `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
+│   │   ├── `test_env_configured_defaults.py` - such values come only through the environment (normally the untracked settings
+│   │   ├── `test_eval_ref_mutation.py` - `eval` joins its arguments and runs them as a command line, so
 │   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 │   │   ├── `test_g2_file_lists.py` - files Claude Code recorded the dev writing (hooks/subagentstop-artifact-
 │   │   ├── `test_g2_harness_syntax.py` - artifact-contract-enforce.py, _harness_syntax) parses every file of the
 │   │   ├── `test_g2_spec_views.py` - subagent's stop by `spec-verify.py --strict` on the views its dispatch declares
-│   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+│   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 │   │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   │   ├── `test_git_residual_override.py` - Background
 │   │   ├── `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
+│   │   ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 │   │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 │   │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+│   │   ├── `test_hard_ban_noexec.py` - `bash -n`, `sh -n`, `bash -o noexec`, `-n` inside a short-option cluster) and a unary file test (...
 │   │   ├── `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
 │   │   ├── `test_hook_output_reaches_model.py` - The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 │   │   ├── `test_inflight_push_route.py` - COMPATIBILITY TESTS, kept only as long as hooks/pretool-tool-policy.py's _note_inflight_token_rou...
@@ -303,7 +315,9 @@ dot-claude/
 │   │   ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 │   │   ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 │   │   ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
-│   │   ├── `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
+│   │   ├── `test_privilege_guard_fails_closed.py` - When a name the guard imports from the classifier is missing, the guard raises at
+│   │   ├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
+│   │   ├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
 │   │   ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 │   │   ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
 │   │   ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the
@@ -315,15 +329,18 @@ dot-claude/
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   ├── `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 │   │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+│   │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 │   │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   │   ├── `test_requirement_round.py` - hook that calls it
 │   │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 │   │   ├── `test_role_from_cli.py` - The role is the payload's agent_type when it carries an agent_id, else the agentType of
 │   │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   │   ├── `test_runtime_guard.py` - Two layers:
+│   │   ├── `test_runtime_guard_drifted_config.py` - A schema-1 file that lacks some REQUIRED_KEYS lists (written before a key existed, or
 │   │   ├── `test_score_view.py` - hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/lib/score_view.py r...
 │   │   ├── `test_scratch_lifecycle.py` - Covers:
 │   │   ├── `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
+│   │   ├── `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
 │   │   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
 │   │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 │   │   ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
@@ -353,7 +370,7 @@ dot-claude/
 │   │   ├── `test_unit_find_cmds.py` - Imports the find_cmds sibling module DIRECTLY (not via the _core facade) and
 │   │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 │   │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
-│   │   ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
+│   │   ├── `test_unit_shell_lex.py` - The guard splits a command into pipeline groups of simple commands, tokenizes each
 │   │   ├── `test_userprompt_bulk_commit_capability.py` - These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
 │   │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   │   ├── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
@@ -402,11 +419,11 @@ dot-claude/
 │   ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 │   ├── `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
 │   ├── `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
-│   ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
+│   ├── `pretool-bash-safety.sh` - PreToolUse safety hook for Bash: the rules live in lib/bash_safety_rules.py, run in one interpreter per call.
 │   ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 │   ├── `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
-│   ├── `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
+│   ├── `pretool-block-branch-pr-worktree.py` - Refused: every `git worktree add` the command runs, in command position, inside
 │   ├── `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 │   ├── `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector (advisory: exit 0 always)
 │   ├── `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
@@ -418,7 +435,7 @@ dot-claude/
 │   ├── `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 │   ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 │   ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
-│   ├── `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
+│   ├── `pretool-grep-backtrack-guard.py` - Why
 │   ├── `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
 │   ├── `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 │   ├── `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
@@ -817,6 +834,13 @@ dot-claude/
 │   │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
+│   ├── shell_parse/
+│   │   ├── `audit_rows.json` - json config
+│   │   ├── `corpus.jsonl` - jsonl file
+│   │   ├── `differential.py` - For one command string, ``old_facts`` runs each reader the hooks use today and
+│   │   ├── `test_audit_rows.py` - audit_rows.json holds the 131 inputs of the independent audit with, for each,
+│   │   ├── `test_bash_oracle.py` - bash runs each generated command with an empty PATH and a
+│   │   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"

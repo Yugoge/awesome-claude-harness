@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 254
+*Last updated: 2026-11-17T17:49:31Z*
+**Total entries**: 261
 **Convention**: kebab
 
 ## Tree
@@ -134,6 +134,13 @@ tests/
 │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
 │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
+├── shell_parse/
+│   ├── `audit_rows.json` - json config
+│   ├── `corpus.jsonl` - jsonl file
+│   ├── `differential.py` - For one command string, ``old_facts`` runs each reader the hooks use today and
+│   ├── `test_audit_rows.py` - audit_rows.json holds the 131 inputs of the independent audit with, for each,
+│   ├── `test_bash_oracle.py` - bash runs each generated command with an empty PATH and a
+│   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"

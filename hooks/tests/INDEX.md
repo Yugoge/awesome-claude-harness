@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 186
+*Last updated: 2026-11-17T17:49:31Z*
+**Total entries**: 201
 **Convention**: kebab
 
 ## Tree
@@ -30,15 +30,22 @@ tests/
 ├── `test_bash_execution_boundary_conditional.py` - Before this fix the walk split `[[ "$A" != "." && "$A" != ".." ]]` at its `&&`
 ├── `test_bash_execution_boundary_dynamic_interpreter.py` - Before this fix, `python3 -c "import shutil; shutil.rmtree('$HOME/x')"` reached
 ├── `test_bash_safety_channel_script_operand.py` - script operand spelled through the quoted CLAUDE_HOME channel as the named script file it is,
+├── `test_bash_safety_command_position.py` - command's own arguments (lib/shell_parse.py), not raw-text co-occurrence
+├── `test_bash_safety_consent_flag.py` - The flag is <state dir>/claude-orchestrator-consent-<session id>.flag. Its one writer is hooks/pr...
 ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
-├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
+├── `test_bash_safety_context_rules.py` - hooks/pretool-bash-safety.sh that read the context-stripped view
 ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
+├── `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
+├── `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
+├── `test_bash_safety_rules.py` - their cases, the over-blocks fixed, the bulk-commit writer closed from Bash, and the release word...
+├── `test_bash_safety_sensitive_names.py` - check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write targe...
+├── `test_bash_safety_session_dirs.py` - The name may stand only as a search pattern (grep, rg, git grep, git log -S/-G/--grep) or in a gi...
 ├── `test_bash_views_guard.py` - the quoted CLAUDE_HOME channel spelling P2 R6 gave every command line, as it
 ├── `test_bash_write_targets_policy.py` - Execution-semantic write-target resolution at the exact sink use site.
 ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
-├── `test_block_branch_pr_worktree.py` - The hook forbids branch / PR / worktree CREATION on the Bash surface, with three
-├── `test_block_branch_pr_worktree_fails_closed.py` - hooks/pretool-block-branch-pr-worktree.py used to exit 0 on any error it did not
-├── `test_block_branch_pr_worktree_gh_checkout.py` - `gh pr checkout` creates a local branch for the pull request unless it is told to
+├── `test_block_branch_pr_worktree.py` - The hook refuses worktree CREATION on the Bash surface, with three bypasses (in
+├── `test_block_branch_pr_worktree_fails_closed.py` - On an error it does not expect, a payload it cannot read or an import that fails
+├── `test_block_branch_pr_worktree_gh_checkout.py` - Creating a branch is allowed, so the hook lets every `gh pr checkout` through,
 ├── `test_bulk_commit_sentinel.py` - Covers:
 ├── `test_c_layer_protected_targets.py` - d1b244f0 made a shell `-c` layer fail closed: run-time text given to a program outside
 ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
@@ -80,19 +87,22 @@ tests/
 ├── `test_doc_sync_update_only.py` - A Write in a product repository leaves no CLAUDE.md, INDEX.md or README.md behind that was
 ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 ├── `test_e2e_enforce.py` - is judged on
-├── `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
+├── `test_env_configured_defaults.py` - such values come only through the environment (normally the untracked settings
+├── `test_eval_ref_mutation.py` - `eval` joins its arguments and runs them as a command line, so
 ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
 ├── `test_g2_file_lists.py` - files Claude Code recorded the dev writing (hooks/subagentstop-artifact-
 ├── `test_g2_harness_syntax.py` - artifact-contract-enforce.py, _harness_syntax) parses every file of the
 ├── `test_g2_spec_views.py` - subagent's stop by `spec-verify.py --strict` on the views its dispatch declares
-├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
+├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 ├── `test_git_prefix_enumeration.py` - THE DEFECT
 ├── `test_git_residual_override.py` - Background
 ├── `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
+├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+├── `test_hard_ban_noexec.py` - `bash -n`, `sh -n`, `bash -o noexec`, `-n` inside a short-option cluster) and a unary file test (...
 ├── `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
 ├── `test_hook_output_reaches_model.py` - The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 ├── `test_inflight_push_route.py` - COMPATIBILITY TESTS, kept only as long as hooks/pretool-tool-policy.py's _note_inflight_token_rou...
@@ -133,7 +143,9 @@ tests/
 ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
-├── `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
+├── `test_privilege_guard_fails_closed.py` - When a name the guard imports from the classifier is missing, the guard raises at
+├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
+├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
 ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
 ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the
@@ -145,15 +157,18 @@ tests/
 ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 ├── `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 ├── `test_requirement_round.py` - hook that calls it
 ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 ├── `test_role_from_cli.py` - The role is the payload's agent_type when it carries an agent_id, else the agentType of
 ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 ├── `test_runtime_guard.py` - Two layers:
+├── `test_runtime_guard_drifted_config.py` - A schema-1 file that lacks some REQUIRED_KEYS lists (written before a key existed, or
 ├── `test_score_view.py` - hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/lib/score_view.py r...
 ├── `test_scratch_lifecycle.py` - Covers:
 ├── `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
+├── `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
 ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
 ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
@@ -183,7 +198,7 @@ tests/
 ├── `test_unit_find_cmds.py` - Imports the find_cmds sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
-├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
+├── `test_unit_shell_lex.py` - The guard splits a command into pipeline groups of simple commands, tokenizes each
 ├── `test_userprompt_bulk_commit_capability.py` - These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
 ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 ├── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
