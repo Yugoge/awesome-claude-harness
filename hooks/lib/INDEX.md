@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T02:01:25Z*
-**Total entries**: 73
+*Last updated: 2026-11-17T11:26:29Z*
+**Total entries**: 74
 **Convention**: kebab
 
 ## Tree
@@ -45,6 +45,7 @@ lib/
 ├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
 ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
 ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
+├── `final_report.py` - final_report() is the SubagentHandback message of the agent's latest run, else last_assistant_mes...
 ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git

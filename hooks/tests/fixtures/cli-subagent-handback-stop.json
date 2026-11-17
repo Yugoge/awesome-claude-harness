@@ -1,0 +1,169 @@
+{
+ "_about": "Recorded on Claude Code 2.1.326 (permission mode auto, a general-purpose subagent reporting through SubagentHandback, local stand-in Messages API; ids, paths and the prompt scrubbed). subagent_stop_payload: what the SubagentStop hook received (no last_assistant_message key). The *_records: the agent's own transcript (agent_transcript_path) as it stood when SubagentStop ran, assistant/user/attachment records only, each cut to type, isSidechain, isMeta, toolEndsTurn and message role/content.",
+ "cli_version": "2.1.326",
+ "subagent_stop_payload": {
+  "session_id": "<session_id>",
+  "transcript_path": "<parent transcript_path>",
+  "cwd": "<cwd>",
+  "prompt_id": "<prompt_id>",
+  "permission_mode": "auto",
+  "agent_id": "<agent_id>",
+  "agent_type": "general-purpose",
+  "effort": {
+   "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "<agent_transcript_path>",
+  "background_tasks": [],
+  "session_crons": []
+ },
+ "run_start_records": [
+  {
+   "type": "user",
+   "isSidechain": true,
+   "message": {
+    "role": "user",
+    "content": "<dispatch prompt>"
+   }
+  },
+  {
+   "type": "user",
+   "isSidechain": true,
+   "isMeta": true,
+   "message": {
+    "role": "user",
+    "content": "<system-reminder>\nYour final report is delivered through SubagentHandback: when your work is complete, call SubagentHandback({message: <your full report>}). The call ends your run, so make it your last step. Only a SubagentHandback call reaches your caller as your result; plain text you write at the end is not delivered. Do not also send the report with SendMessage: your caller would get it twice.\n</system-reminder>"
+   }
+  }
+ ],
+ "text_then_handback_records": [
+  {
+   "type": "assistant",
+   "isSidechain": true,
+   "message": {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "PRE-HANDBACK-TEXT"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "isSidechain": true,
+   "message": {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_hb00000000000000000001",
+      "name": "SubagentHandback",
+      "input": {
+       "message": "T7-HANDBACK-REPORT line one\nRESPONSE: done"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "attachment",
+   "isSidechain": true,
+   "attachment": {
+    "type": "hook_success"
+   }
+  },
+  {
+   "type": "user",
+   "isSidechain": true,
+   "toolEndsTurn": true,
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_hb00000000000000000001",
+      "type": "tool_result",
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "type": "attachment",
+   "isSidechain": true,
+   "attachment": {
+    "type": "prompt_snapshot"
+   }
+  }
+ ],
+ "two_handbacks_records": [
+  {
+   "type": "assistant",
+   "isSidechain": true,
+   "message": {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_hb00000000000000000001",
+      "name": "SubagentHandback",
+      "input": {
+       "message": "T7-HANDBACK-REPORT line one\nRESPONSE: done"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "isSidechain": true,
+   "message": {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_hb00000000000000000002",
+      "name": "SubagentHandback",
+      "input": {
+       "message": "SECOND REPORT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "attachment",
+   "isSidechain": true,
+   "attachment": {
+    "type": "hook_success"
+   }
+  },
+  {
+   "type": "user",
+   "isSidechain": true,
+   "toolEndsTurn": true,
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_hb00000000000000000001",
+      "type": "tool_result",
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

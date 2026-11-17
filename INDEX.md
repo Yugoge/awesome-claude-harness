@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T07:38:13Z*
-**Total entries**: 971
+*Last updated: 2026-11-17T11:26:29Z*
+**Total entries**: 973
 **Convention**: kebab
 
 ## Tree
@@ -148,6 +148,7 @@ dot-claude/
 │   │   ├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
 │   │   ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
 │   │   ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
+│   │   ├── `final_report.py` - final_report() is the SubagentHandback message of the agent's latest run, else last_assistant_mes...
 │   │   ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 │   │   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 │   │   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
@@ -341,6 +342,7 @@ dot-claude/
 │   │   ├── `test_stop_launch.py` - The launcher runs the Stop coordinator and relays it; when the coordinator cannot decide it
 │   │   ├── `test_stop_md_userintent_wrapper.py` - commands/stop.md runs the release wrapper through the printed harness root. hooks/pretool-wrapper-
 │   │   ├── `test_stop_obligation_gate.py` - stub (P1b row 3, D15) that settings.json no longer registers (P5 R12)
+│   │   ├── `test_subagent_handback_report.py` - In auto mode a subagent delivers its final report as a SubagentHandback call: the
 │   │   ├── `test_subagentstop_codex_enforce.py` - The codex ledger's one deciding read blocks a stopping subagent whose session
 │   │   ├── `test_subagentstop_cp_enforce.py` - Armed as shipped (settings.json's env sets CP_ENFORCE_MODE=block), the hook blocks
 │   │   ├── `test_test_writer_manifest_skeleton.py` - (agents/test-writer.md, agents/dev.md "Generated tests"). schemas/test-writer-manifest.v1.json

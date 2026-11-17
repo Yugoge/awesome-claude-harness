@@ -2,13 +2,14 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 7
+- **Total files**: 8
 - **Subdirectories**: 0
 - **Naming convention**: lower
 
 ## Files
 - `adversarial_corpus.json` - json config
 - `cli-agent-dispatch-hook-payloads.json` - JSON config: _doc, cli_version, recorded, runs
+- `cli-subagent-handback-stop.json` - JSON config: _about, cli_version, subagent_stop_payload, run_start_records, text_then_handback_records
 - `pol_benign_strictness_exceptions.json` - JSON config: schema, criterion, task_id, iteration, _doc
 - `pol_installed_program_allow_set.json` - JSON config: allowing, allowing_count, criterion, probe_shape, program_set_size
 - `pol_iteration5_qa_matrix.v1.json` - JSON config: schema, schema_descriptor, provenance_key, digests, counts
