@@ -301,7 +301,6 @@ CONFIG_SOURCES = [
     "XDG_CONFIG_HOME=/tmp/evil git -C ~/.claude diff",
     "GIT_CONFIG_GLOBAL=/tmp/evil git -C ~/.claude diff",
     "GIT_CONFIG_SYSTEM=/tmp/evil git -C ~/.claude status",
-    "GIT_CONFIG_NOSYSTEM=1 git -C ~/.claude diff -- settings.json",
     "GIT_DIR=/tmp/evil/.git git -C ~/.claude diff",
     "git -C ~/.claude --git-dir=/tmp/evil/.git diff",
     "git --git-dir=/tmp/evil/.git -C ~/.claude log -p",
@@ -598,3 +597,206 @@ def test_nested_shell_carries_config_source(box):
             assert rc == 2, (command, cwd, err)
     rc, err = hook(box, "HOME=/tmp/x bash -c 'git -C %s log -1'" % box["proj"], box["other"])
     assert rc == 0, err
+
+
+# --- round 4: a redirect elsewhere writes no path word; harmless pagers and editors; more config
+# sources, wrappers and program keys; variables exported without a readable value; grep -O ---
+
+READER_REDIRECT_ELSEWHERE_PASS = [
+    "git -C ~/.claude log --oneline -- settings.json > /tmp/x.log",
+    "git -C ~/.claude grep -n hooks -- settings.json > /tmp/g",
+    "git -C ~/.claude diff -- settings.json > /tmp/settings.diff",
+    "git --work-tree=~/.claude --git-dir=~/.claude/.git log -- settings.json > /tmp/x",
+    "git -C ~/.claude log -- settings.json 2>/tmp/err >/tmp/out",
+    "git -C ~/.claude show HEAD:settings.json >> /tmp/s.bak",
+    "git -C ~/.claude log -- settings.json &>/tmp/x.log",
+    "cd ~/.claude && git log --oneline -- settings.json > /tmp/x.log",
+    "env LC_ALL=C git -C ~/.claude diff -- settings.json >/tmp/d",
+]
+
+
+@pytest.mark.parametrize("command", READER_REDIRECT_ELSEWHERE_PASS)
+def test_reader_with_redirect_elsewhere_passes(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+READER_REDIRECT_PROTECTED_REFUSED = [
+    "git -C ~/.claude log -- settings.json > ~/.claude/settings.json",
+    "git -C ~/.claude diff -- settings.json 2> ~/.claude/settings.json",
+    "git -C ~/.claude log -- x >/tmp/x 2>~/.claude/settings.local.json",
+    "git -C ~/.claude log > /tmp/x 1>>~/.claude/.harness-switch/off",
+    "cd ~/.claude && git log -- settings.json > /tmp/x 2>settings.json",
+    "git -C ~/.claude log > ~/.claude/settings.json 2>/dev/null",
+]
+
+
+@pytest.mark.parametrize("command", READER_REDIRECT_PROTECTED_REFUSED)
+def test_reader_redirect_onto_protected_file_still_refused(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+
+
+HARMLESS_VIEWER_PASS = [
+    "git -C ~/.claude -c core.pager='less -R' log -3",
+    "git -C ~/.claude -c core.pager='less -FRX' log -3",
+    "git -C ~/.claude -c core.pager='less -F -R -X' log -3",
+    "git -C ~/.claude -c pager.log='less -S' log -3",
+    "GIT_PAGER='less -R' git -C ~/.claude log -3",
+    "PAGER='more -d' git -C ~/.claude log -3",
+    "export GIT_PAGER='less -FRX'; git -C ~/.claude log -3",
+    "EDITOR=vim git -C ~/.claude log -3",
+    "export EDITOR=vim; git -C ~/.claude log -3 -- settings.json",
+    "VISUAL=code GIT_EDITOR=nano git -C ~/.claude status",
+    "GIT_SEQUENCE_EDITOR=vim git -C ~/.claude diff -- settings.json",
+    "GIT_CONFIG_NOSYSTEM=1 git -C ~/.claude diff -- settings.json",
+    "export GIT_CONFIG_NOSYSTEM=1; git -C ~/.claude log -3",
+    "GIT_PAGER=cat; export GIT_PAGER; git -C ~/.claude log -3",
+    "export GIT_DIR=~/.claude/.git; git -C ~/.claude log -- settings.json",
+    "export GIT_WORK_TREE=~/.claude; git -C ~/.claude status",
+    "git -C ~/.claude grep -Oless -e x",
+    "git -C ~/.claude grep --open-files-in-pager -e x",
+    "env -iu X git -C ~/.claude log -3",
+    "xargs git -C ~/.claude log --oneline -3",
+    "sudo -u root git -C ~/.claude log -3",
+    "GIT_TRACE=1 git -C ~/.claude log -3",
+    "GIT_TRACE=/tmp/trace.log git -C ~/.claude log -3",
+]
+
+
+@pytest.mark.parametrize("command", HARMLESS_VIEWER_PASS)
+def test_round4_harmless_passes(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+VIEWER_STILL_REFUSED = [
+    "git -C ~/.claude -c core.pager='less +!sh' log -3",
+    "git -C ~/.claude -c core.pager='less -o /tmp/x' log -3",
+    "git -C ~/.claude -c core.pager='less -Ro/tmp/x' log -3",
+    "git -C ~/.claude -c core.pager='less -O/tmp/x' log -3",
+    "git -C ~/.claude -c core.pager='less --log-file=/tmp/x' log -3",
+    "git -C ~/.claude -c core.pager='less --LOG-FILE=/tmp/x' log -3",
+    "git -C ~/.claude -c core.pager='less -k /tmp/k' log -3",
+    "git -C ~/.claude -c core.pager='less -R; sh' log -3",
+    "git -C ~/.claude -c core.pager='less -R /tmp/x' log -3",
+    "git -C ~/.claude -c core.pager='more +/x' log -3",
+    "LESSOPEN='|/tmp/p %s' GIT_PAGER='less -R' git -C ~/.claude log -3",
+    "export LESSKEY=/tmp/k; git -C ~/.claude -c core.pager='less -R' log -3",
+    "LESS=-o/tmp/x git -C ~/.claude -c core.pager='less -R' log -3",
+    "GIT_PAGER='vim -R' git -C ~/.claude log -3",
+    "EDITOR=vim git -C ~/.claude commit",
+    "EDITOR=vim git -C ~/.claude add -e",
+    "export EDITOR=vim; git -C ~/.claude rebase -i HEAD~2",
+    "GIT_SEQUENCE_EDITOR=vim git -C ~/.claude rebase -i HEAD~2",
+    "git -C ~/.claude -c core.editor=vim commit",
+    "git -C ~/.claude -c core.editor=vim tag -a v1",
+]
+
+
+@pytest.mark.parametrize("command", VIEWER_STILL_REFUSED)
+def test_round4_viewer_with_program_still_refused(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+
+
+ROUND4_REFUSED = [
+    # GIT_COMMON_DIR as GIT_DIR; --exec-path=<dir> as GIT_EXEC_PATH; exported GIT_WORK_TREE
+    "GIT_COMMON_DIR=/tmp/evil/.git git -C ~/.claude log",
+    "export GIT_COMMON_DIR=/tmp/evil/.git; git -C ~/.claude log",
+    "cd ~/.claude && GIT_COMMON_DIR=/tmp/evil/.git git log",
+    "env GIT_COMMON_DIR=/tmp/evil/.git git -C ~/.claude log",
+    "git --exec-path=/tmp/evil -C ~/.claude log",
+    "git -C ~/.claude --exec-path=/tmp/evil status",
+    "cd ~/.claude && git --exec-path=/tmp/evil log",
+    "export GIT_WORK_TREE=~/.claude; git -C /tmp/evil diff -- settings.json",
+    "GIT_WORK_TREE=~/.claude; export GIT_WORK_TREE; git -C /tmp/evil diff",
+    "declare -x GIT_WORK_TREE=~/.claude; git -C /tmp/evil log -p",
+    "export GIT_DIR=/tmp/evil/.git; git -C ~/.claude log",
+    "git -C ~/.claude -c core.attributesFile=/tmp/a diff",
+    # env clustered short options, xargs, sudo, doas
+    "env -iu X git -C ~/.claude -c alias.x='!sh' x",
+    "env -vu X GIT_PAGER=/tmp/p git -C ~/.claude log",
+    "env -0u X git -C ~/.claude -c core.pager=/tmp/p log",
+    "env -iC ~/.claude git -c alias.x='!sh' x",
+    "env -iC ~/.claude git checkout -- settings.json",
+    "env -iu X git -C ~/.claude checkout -- settings.json",
+    "xargs git -C ~/.claude -c alias.x='!sh' x",
+    "xargs -0 -n1 git -C ~/.claude -c core.pager=/tmp/p log",
+    "echo x | xargs -I{} git -C ~/.claude -c alias.x='!sh' x",
+    "xargs git -C ~/.claude checkout -- settings.json",
+    "sudo git -C ~/.claude -c alias.x='!sh' x",
+    "sudo -u root -E git -C ~/.claude -c core.pager=/tmp/p log",
+    "sudo -D ~/.claude git checkout -- settings.json",
+    "sudo git -C ~/.claude checkout -- settings.json",
+    "sudo GIT_PAGER=/tmp/p git -C ~/.claude log",
+    "doas -u root git -C ~/.claude -c alias.x='!sh' x",
+    "GIT_PAGER=/tmp/p xargs git -C ~/.claude log",
+    "GIT_PAGER=/tmp/p sudo git -C ~/.claude log",
+    "HOME=/tmp/evil sudo git -C ~/.claude diff",
+    # program keys
+    "git -C ~/.claude -c trailer.x.cmd=/tmp/c log",
+    "git -C ~/.claude -c trailer.x.command=/tmp/c log",
+    "git -C ~/.claude -c tar.tgz.command=/tmp/c archive HEAD",
+    "git -C ~/.claude -c imap.tunnel=/tmp/c log",
+    "git -C ~/.claude -c guitool.x.cmd=/tmp/c log",
+    "git -C ~/.claude -c init.templateDir=/tmp/t log",
+    "git -C ~/.claude -c diff.guitool=x log",
+    "git -C ~/.claude -c http.sslKeyLogFile=/tmp/k log",
+    # a program-carrying variable exported without a readable value
+    "printf -v GIT_PAGER %s /tmp/p; export GIT_PAGER; git -C ~/.claude log",
+    "read -r GIT_EXTERNAL_DIFF <<< /tmp/d; export GIT_EXTERNAL_DIFF; git -C ~/.claude diff",
+    "declare -n r=GIT_PAGER; r=/tmp/p; export GIT_PAGER; git -C ~/.claude log",
+    "mapfile -t GIT_SSH_COMMAND < /tmp/f; export GIT_SSH_COMMAND; git -C ~/.claude fetch",
+    "printf -v GIT_DIR %s /tmp/evil/.git; export GIT_DIR; git -C ~/.claude log",
+    "printf -v GIT_COMMON_DIR %s /tmp/evil/.git; export GIT_COMMON_DIR; git -C ~/.claude log",
+    "printf -v HOME %s /tmp/evil; export HOME; git -C ~/.claude diff",
+    "printf -v XDG_CONFIG_HOME %s /tmp/evil; declare -x XDG_CONFIG_HOME; git -C ~/.claude diff",
+    "read -r GIT_WORK_TREE <<< x; export GIT_WORK_TREE; git -C /tmp/evil diff",
+    "printf -v GIT_CONFIG_PARAMETERS %s x; export GIT_CONFIG_PARAMETERS; git -C ~/.claude log",
+    "GIT_PAGER=cat; printf -v GIT_PAGER %s /tmp/p; export GIT_PAGER; git -C ~/.claude log",
+    "printf -v EDITOR %s /tmp/e; export EDITOR; git -C ~/.claude commit",
+    "set -a; read -r GIT_PAGER <<< /tmp/p; git -C ~/.claude log",
+    # git grep's -O / --open value is a program run where git runs
+    "git -C ~/.claude grep -O/tmp/p -e x",
+    "git -C ~/.claude grep -nO/tmp/p -e x",
+    "git -C ~/.claude grep --open=/tmp/p -e x",
+    "git -C ~/.claude grep --open-files-in-pager=/tmp/p -e x",
+    "cd ~/.claude && git grep -O'sh -c x' -e x",
+    # git's trace variables append to the file they name
+    "GIT_TRACE=~/.claude/settings.json git -C /tmp log",
+    "GIT_TRACE2_EVENT=$HOME/.claude/settings.json git status",
+    "export GIT_TRACE_PERFORMANCE=~/.claude/settings.json; git status",
+    "GIT_TRACE=~/.claude/.harness-switch/off git status",
+]
+
+
+@pytest.mark.parametrize("command", ROUND4_REFUSED)
+def test_round4_under_defence_refused(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+        assert "BLOCKED: harness-switch" in err
+
+
+ROUND4_AWAY_PASS = [
+    "GIT_COMMON_DIR=/tmp/x/.git git -C {proj} log",
+    "git --exec-path=/tmp/x -C {proj} log",
+    "git -C {proj} grep -O/tmp/p -e x",
+    "sudo git -C {proj} -c core.pager=/tmp/p log",
+    "xargs git -C {proj} -c alias.x='!sh' x",
+    "printf -v GIT_PAGER %s /tmp/p; export GIT_PAGER; git -C {proj} log",
+    "git -C {proj} -c trailer.x.cmd=/tmp/c log",
+]
+
+
+@pytest.mark.parametrize("command", ROUND4_AWAY_PASS)
+def test_round4_away_from_home_passes(box, command):
+    command = command.format(proj=box["proj"])
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
