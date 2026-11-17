@@ -482,3 +482,83 @@ def test_a_git_log_option_that_shifts_the_pattern_is_refused(sandbox, command):
         assert r.returncode == 2, (command, r.stdout, r.stderr)
         assert "session_dirs.txt is never read, written or executed" in r.stderr, (command, r.stderr)
         assert "neither releases it" in r.stderr
+
+
+# ── the rule and settings.json's entries, pinned together ─────────────────────────────────────────────────────────
+# OB-L16 relaxed session_dirs.txt in two layers: settings.json's permissions.deny keeps `Read(**/session_dirs.txt)`,
+# `Edit(**/session_dirs.txt)` and one Bash entry per command that reads, writes or runs the file
+# (tests/test_session_dirs_permission.py), and this rule reads the parsed command. A text entry is keyed on the
+# command word; the rule reads words, so the two refuse different texts on purpose. These are the differences:
+
+# What a settings entry refuses and the rule lets through. A glob in a `for` header, an `xargs -a` file or a quoted
+# `git -c` value is a word the rule does not read; a patch flag beside the pickaxe is a search to the rule and
+# committed contents to the settings layer. Each stays denied by its entry; the set may only shrink.
+LEFT_TO_THE_SETTINGS_LAYER = {
+    "for f in session_dirs.tx?; do cat $f; done",
+    "for f in session_dirs?txt; do cat $f; done",
+    "xargs -a session_dirs.tx? echo",
+    "xargs -a session_dirs?txt echo",
+    "git -c core.pager='cat session_dirs.tx?' log",
+    "git -c core.pager='cat session_dirs?txt' log",
+    "git log -S session_dirs.txt -p",
+    "git log -S session_dirs.txt --patch",
+    "git log -S session_dirs.txt -u",
+    "git log -G session_dirs.txt -p",
+}
+# Mentions the rule passes that an entry keyed on the command word refuses: a shell, find or `git -C` around the
+# search, or a patch flag before the pickaxe. The set may only shrink.
+MENTIONS_A_SETTINGS_ENTRY_REFUSES = {
+    "bash -c 'grep -rn session_dirs.txt docs/'",
+    "find docs -name '*.md' -exec grep -l session_dirs.txt {} +",
+    "git -C /tmp/repo log --oneline -S session_dirs.txt",
+    "git log -p --unified -S session_dirs.txt",
+    "git log -p --unified=5 -S session_dirs.txt",
+}
+
+
+def _settings_layer():
+    """tests/test_session_dirs_permission.py: the entries' examples, the measured decisions and the rule model."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_session_dirs_permission", REPO / "tests" /
+                                                  "test_session_dirs_permission.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _rule_refuses(command):
+    import contextlib
+    import io
+    from lib.bash_safety_rules import session_dirs_rule
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            session_dirs_rule(command)
+    except SystemExit as stop:
+        assert stop.code == 2 and "session_dirs.txt is never read, written or executed" in err.getvalue(), command
+        return True
+    return False
+
+
+def test_the_rule_and_the_settings_entries_agree():
+    """Both layers pass the owner's mentions and a name that merely contains session_dirs, and refuse the lane's
+    must-still-refuse examples; what the settings layer leaves open on purpose (a heredoc body, a glob no entry spells,
+    the forms ledger S-018 records as no longer denied there) the rule refuses; and the two differ only as recorded
+    above, each difference still refused by a settings entry."""
+    layer = _settings_layer()
+    deny = layer._deny()
+    for command in layer.MUST_PASS + layer.BASE_KEPT:
+        assert not layer.bash_denies(deny, command), command
+        assert not _rule_refuses(command), command
+    for command in layer.MUST_REFUSE:
+        assert layer.MEASURED[command][1] == "deny" and _rule_refuses(command), command
+    for command in layer.HOOK_ONLY + layer.NO_LAYER + sorted(layer.NOT_DENIED_NOW):
+        assert not layer.bash_denies(deny, command), command
+        assert _rule_refuses(command), command
+    refused_there = set(layer.ENTRIES.values()) | set(layer.REGAINED) | \
+        {command for command, (_, after) in layer.MEASURED.items() if after == "deny"}
+    assert {command for command in refused_there if not _rule_refuses(command)} <= LEFT_TO_THE_SETTINGS_LAYER
+    for command in LEFT_TO_THE_SETTINGS_LAYER:
+        assert layer.bash_denies(deny, command), command
+    assert {command for command in MENTIONS + SHOWN if layer.bash_denies(deny, command)} <= \
+        MENTIONS_A_SETTINGS_ENTRY_REFUSES

@@ -104,9 +104,13 @@ def test_the_docker_daemon_disable_is_the_settings_deny():
 
 
 def test_session_dirs_ban_is_the_settings_deny():
-    """BS-18 merged into settings.json's permissions.deny, which refuses it for Bash, Read and Edit."""
+    """BS-18 merged into settings.json's permissions.deny, which refuses the file for Read and Edit and, since
+    OB-L16 (owner decision: a search pattern or commit message naming it passes), per command for Bash: each
+    command that reads, writes or runs it has its own entry for the name and for a `?` glob of the dot."""
     deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
-    assert {"Bash(*session_dirs.txt*)", "Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
+    assert {"Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
+    stems = ("cat *", "cp *", "rm *", "tee *", "bash *", "sh *", "source *", ". *", "eval *", "python*")
+    assert {f"Bash({stem}{tail})" for stem in stems for tail in ("session_dirs.t*", "session_dirs?*")} <= set(deny)
 
 
 @pytest.mark.parametrize("script", ["/tmp/x.sh", "/var/tmp/x.sh", "/dev/shm/x.sh", "{tmp}/x.sh"])
