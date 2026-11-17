@@ -17,7 +17,7 @@
   },
   "_env": {
     "CLAUDE_HOME": "Absolute path of the harness home (this checkout). Written by scripts/bootstrap. Every hook command resolves \"${CLAUDE_HOME:-$HOME/.claude}\", so without it hooks fall back to $HOME/.claude.",
-    "TMPDIR": "Scratch directory for sessions and tools. The clean form pins /var/tmp/claude-scratch; override TMPDIR and CLAUDE_CODE_TMPDIR together. scripts/bootstrap creates the directory (mode 1777) if it is absent.",
+    "TMPDIR": "Scratch directory for sessions and tools. The clean form pins /var/tmp/claude-scratch; override TMPDIR and CLAUDE_CODE_TMPDIR together. scripts/bootstrap creates the directory (mode 1777) if it is absent. The clean form's scratch entries Read and Edit of //var/tmp/claude-scratch/claude-[0-9]*/*/*/scratchpad and of that path + /** name only Claude Code's session scratchpad under the pinned root, so an overlay that moves it appends the same four for its own root, with two leading slashes (a single one anchors at the settings source, not the filesystem root), as permissions.allow below does for /opt/demo/scratch. Never the root as a whole: hooks read files there to decide (the daemon-restart grant flag, the git blessed-token grants, each session dir's .owner and doc-sync state); never /tmp as a whole, which holds the hook state root.",
     "CLAUDE_CODE_TMPDIR": "Claude Code's own scratch directory; keep it equal to TMPDIR.",
     "GIT_AUTO_PUSH": "Optional opt-in, not set in this example. The clean form sets \"0\" (no automatic push); add \"GIT_AUTO_PUSH\": \"1\" to env only if this machine wants automatic remote backup.",
     "CLAUDE_DEV_CONTAINERS": "No hook reads it any more: the protected-family docker rule it whitelisted is deleted. scripts/install/render-settings still migrates an old value.",
@@ -57,7 +57,11 @@
     "allow": [
       "Bash(/opt/demo/bin/demo-sync.sh:*)",
       "Bash(node /opt/demo/bin/demo-healer.mjs:*)",
-      "Bash(/opt/demo/bin/demo-self-update --help:*)"
+      "Bash(/opt/demo/bin/demo-self-update --help:*)",
+      "Read(//opt/demo/scratch/claude-[0-9]*/*/*/scratchpad)",
+      "Read(//opt/demo/scratch/claude-[0-9]*/*/*/scratchpad/**)",
+      "Edit(//opt/demo/scratch/claude-[0-9]*/*/*/scratchpad)",
+      "Edit(//opt/demo/scratch/claude-[0-9]*/*/*/scratchpad/**)"
     ],
     "deny": [
       "Bash(/opt/demo/bin/demo-wipe.sh:*)"
