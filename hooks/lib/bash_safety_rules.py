@@ -733,14 +733,26 @@ def _http_lift_value_ok(kind, v):
     """A value of one of shape (b)'s value options: a plain output file (or `-`), a write-out format that reads no
     file, a number of seconds, or the method GET / HEAD."""
     if kind == "file":
-        return v == "-" or bool(re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v))
+        return v == "-" or _http_out_path_ok(v)
     if kind == "format":
-        return bool(v) and not v.startswith("@")
+        return bool(v) and not v.startswith("@") and not re.search(r"/stop|\\|%output", v, re.I) \
+            and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in v)
     if kind == "number":
         return bool(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", v))
     if kind == "method":
         return v in ("GET", "HEAD")
     return False
+
+
+def _http_out_path_ok(v):
+    """A place shape (b)'s client (or its option) may write to: /dev/null, or a plain literal file path with no
+    `..` segment that is not under /dev or /proc (no /dev/tcp, /dev/udp, /dev/fd or /proc/*/fd socket)."""
+    if v == "/dev/null":
+        return True
+    if not re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v):
+        return False
+    segs = [s for s in v.split("/") if s not in ("", ".")]
+    return bool(segs) and ".." not in segs and segs[0] not in ("dev", "proc")
 
 
 def _http_lift_url_ok(v):
@@ -825,6 +837,17 @@ def _http_single_client(command, sites):
         return False
     if any(rd.op.startswith("<") for rd in site.cmd.redirects):
         return False  # stdin fed to the client can become a request body
+    for rd in site.cmd.redirects:
+        if rd.close:
+            continue
+        if rd.dup is not None:
+            if rd.dup not in (1, 2):
+                return False  # an inherited descriptor may be a socket
+        elif rd.writes():
+            if rd.target is None or not _http_out_path_ok(rd.target.value()):
+                return False  # the client's output (a -w format, a body) must reach no socket
+        else:
+            return False
     return all(_http_plain(s, rr) in HTTP_LIFT_PIPE and _http_reader_ok(s, rr) for s, rr in sites[1:])
 
 
@@ -833,8 +856,10 @@ def _http_stop_allowed(command, sites):
     (a) every parsed command only prints or filters text (grep, rg, echo, cat, sed -n, git log, ... | head), so
         the URL is a mention; or
     (b) the command is a single HTTP client invocation (curl, wget, httpie, xh), alone or piped only into pure
-        filters, with no input redirection, whose options are only those of a minimal set (curl: -s -S -f -i -v,
-        --compressed, -o FILE, -w FORMAT, --max-time N, -X GET|HEAD; wget: -q, -nv, -O FILE|-; httpie / xh: -b,
+        filters, with no input redirection and output redirected only to /dev/null or a plain file path outside
+        /dev and /proc (the pipe filters: /dev/null only), whose options are only those of a minimal set (curl: -s -S -f -i -v,
+        --compressed, -o FILE, -w FORMAT (no `/stop`, backslash escape, control character or %output),
+        --max-time N, -X GET|HEAD; wget: -q, -nv, -O FILE|-; httpie / xh: -b,
         -h, -v, --check-status, --ignore-stdin, and the method GET only) and whose one URL word is a plain
         literal `[http(s)://]<localhost host>:<port>[/path][?query]` of plain characters (no header, data,
         redirect following, proxy, config or @file option, no `#`, `%`, whitespace or control character, no `.` /

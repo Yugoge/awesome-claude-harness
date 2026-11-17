@@ -458,3 +458,47 @@ def test_http_stop_refused_round5(sandbox, command):
 def test_global_package_op_refused_round5(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)
+
+
+
+# Round 6: shape (b) sent the client's own output to a socket (`> /dev/tcp/...`), where an agent-controlled `-w`
+# format becomes a raw `POST /stop` request; the client and its option targets may write only to /dev/null or a
+# plain file outside /dev and /proc, and a `-w` format may hold no `/stop`, escape or control character.
+HTTP_STOP_REFUSED_R6 = [
+    "curl -s -o /dev/null -w 'POST /stop HTTP/1.0\\r\\n\\r\\n' http://localhost:18000/stops > /dev/tcp/localhost/18080",
+    "curl -s -o /dev/null -w 'POST /stop HTTP/1.0\\r\\n\\r\\n' http://localhost:18000/stops >> /dev/tcp/localhost/18080",
+    "curl -s -o /dev/null -w 'POST /stop HTTP/1.0\\r\\n\\r\\n' http://localhost:18000/stops 2>&1 > /dev/tcp/localhost/18080",
+    "wget -qO- http://localhost:18000/stops > /dev/tcp/localhost/18080",
+    "curl -s http://localhost:18000/stops/42 > /dev/udp/127.0.0.1/18080",
+    "curl -s http://localhost:18000/stops/42 &> /dev/tcp/localhost/18080",
+    "curl -s http://localhost:18000/stops/42 >/proc/self/fd/1",
+    "curl -s -o /dev/tcp/localhost/18080 http://localhost:18000/stops/42",
+    "wget -q -O /dev/tcp/localhost/18080 http://localhost:18000/stops/42",
+    "wget -q --output-document=/dev/udp/localhost/18080 http://localhost:18000/stops/42",
+    "curl -s -o ../../dev/tcp/localhost/18080 http://localhost:18000/stops/42",
+    "curl -s -o /dev/null -w 'POST /stop HTTP/1.0' http://localhost:18000/stops",
+    "curl -s -o /dev/null -w '%{http_code}\\n' http://localhost:18000/stops",
+    "curl -s -o /dev/null -w $'%{http_code}\\r\\n' http://localhost:18000/stops",
+    "curl -s -o /dev/null -w '%output{out.txt}x' http://localhost:18000/stops",
+    "curl -s http://localhost:18000/stops/42 >&3",
+    "curl -s http://localhost:18000/stops/42 | head -1 > /dev/tcp/localhost/18080",
+]
+HTTP_STOP_ALLOWED_R6 = [
+    "curl -s http://localhost:8000/stops/42 > out.json",
+    "curl -s http://localhost:8000/stops/42 >> logs/out.json 2>&1",
+    "curl -s http://localhost:8000/stops/42 > /dev/null 2>&1",
+    "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/stops/42",
+    "wget -qO out.json http://127.0.0.1:5000/stops/42",
+]
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_REFUSED_R6)
+def test_http_stop_refused_round6(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "daemon-restart-http-stop" in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_ALLOWED_R6)
+def test_allowed_round6(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
