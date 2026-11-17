@@ -12,7 +12,7 @@ ENFORCEMENT (default disposition matters):
     SendMessage passes only lib/send_policy.decide: the exact, validated /restart
     recovery message to a pending candidate, or a send to this session's own
     finished subagent dispatched with no obligation outside every gated span.
-    Workflow remains blocked outright.
+    Workflow is blocked, except one call an `/allow Workflow` grant names.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
 
@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import has_do_consent  # noqa: E402
+from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 
 
 def first_present(mapping, names, default=None):
@@ -151,13 +151,21 @@ def main():
         )
         sys.exit(2)
 
-    # Workflow spawns a whole background fleet and has no synchronous mode: blocked.
+    # Workflow spawns a whole background fleet and has no synchronous mode: blocked,
+    # except the one call an `/allow Workflow` grant names (posttool-allowlist-consume.py
+    # spends the grant after that call, so the next one is refused again).
     if tool_name == "Workflow":
+        sid = payload.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "default")
+        try:
+            if match_sentinel_grant_for_tool(sid, "Workflow") is not None:
+                sys.exit(0)
+        except Exception:  # noqa: BLE001 — an unreadable grant is no grant
+            pass
         print(
             "[BLOCK] Workflow runs agents in the background and is forbidden for "
             "the orchestrator.\n"
             "There is no synchronous mode; dispatch work with "
-            "Agent(run_in_background=false), or use /do.",
+            "Agent(run_in_background=false), or use /do; an owner's /allow Workflow grant admits exactly one.",
             file=sys.stderr,
         )
         sys.exit(2)

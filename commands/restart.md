@@ -38,7 +38,10 @@ so the steps below are the rule.
    ```
 
    The helper fails closed with `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when the environment holds
-   no session id. Its output is the candidate set of THIS parent session's own transcript (after
+   no session id. It reads the `/restart` grant as data only: with none valid (no `/restart` in this
+   session, or an expired one) it still lists the candidates, adds `restart_grant` to its output and
+   says on stderr that every resume send will be refused until `/restart` mints one; the refusal is
+   the SendMessage gate's. Its output is the candidate set of THIS parent session's own transcript (after
    `claude --resume` it carries the interrupted history forward); other sessions and accounts are
    not scanned by default, and children that finished (a terminal `end_turn` report) are already
    excluded, so do not re-judge the list. Only when the operator asks for the account-rotation case

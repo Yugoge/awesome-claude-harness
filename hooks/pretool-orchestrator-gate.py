@@ -9,7 +9,14 @@ Three-tier policy for the main agent:
      lib/bash_read_only proves read-only (OB-L03) passes uncounted. The built-in
      read-only tools of READ_ONLY_ALLOWED (LSP, TaskOutput/BashOutput,
      ReadMcpResourceTool, ListMcpResourcesTool) pass too and are not
-     counted.
+     counted. Monitor runs arbitrary shell too, so each Monitor call
+     counts against the same
+     cap, in the same counter (BASH_CAPPED). Monitor is refused outright
+     on a CLI below 2.1.314 (MONITOR_MIN_CLI), where the CLI did not run
+     Bash-matcher hooks on Monitor's command; the version is the one the
+     CLI writes on the session's latest transcript record, and a session
+     whose version cannot be read is refused (fail closed). /do does not
+     lift that refusal; an /allow grant naming Monitor passes one call.
   2. Non-whitelist tools are allowed once TOTAL per tool name per turn
      (2nd same-name call blocked regardless of intervening tool calls).
      A Write, Edit, MultiEdit or NotebookEdit of a file inside the session's
@@ -34,8 +41,8 @@ Three-tier policy for the main agent:
      again after the user rejects a plan and the agent revises it, since the
      user answers each call. tool_input never counts as plan mode.
 
-bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
-increments it. An Agent (subagent) dispatch resets it to
+bash_consecutive is a Bash-ONLY accumulator: only a Bash or Monitor call
+(BASH_CAPPED) increments it. An Agent (subagent) dispatch resets it to
 {"last_tool": "Agent", "count": 0} (and, inside an open overnight window,
 empties per_tool_counts but the retrieval tools' entries), and
 hooks/prompt-workflow.py removes the whole
@@ -113,12 +120,16 @@ ALWAYS_ALLOWED = {
     "Read",
     "Glob",
     "Grep",
+    "Monitor",
+    "TaskStop",
+    "ListAgents",
+    "PushNotification",
 }
 
 # Built-in tools that only read (code intelligence, a background task's
 # output, MCP resources): no state change for a subagent to own, so they
-# pass uncounted. Kept apart from ALWAYS_ALLOWED because the in-flight
-# refusal prints ALWAYS_ALLOWED in origin/master's wording, byte for byte.
+# pass uncounted. Kept apart from ALWAYS_ALLOWED, as the in-flight refusal
+# keeps origin/master's wording byte for byte (INFLIGHT_ALLOWED).
 READ_ONLY_ALLOWED = frozenset({
     "LSP",
     "TaskOutput",
@@ -140,6 +151,19 @@ RETRIEVAL_TOOLS = frozenset({
     "mcp__plugin_context7_context7__get-library-docs",
     "mcp__plugin_context7_context7__query-docs",
 })
+
+# Tools that share Bash's cap and counter (bash_consecutive): each runs an arbitrary shell command.
+BASH_CAPPED = {"Bash", "Monitor"}
+
+# Before this CLI version, "hooks matching Bash [were] not running on shell commands started by the
+# Monitor tool" (CLI changelog 2.1.314); from it on, a Bash-matcher hook gets each Monitor command as a
+# Bash call (measured on 2.1.325). The launcher's Bash rules get it from pretool-monitor-command.py.
+MONITOR_MIN_CLI = (2, 1, 314)
+VERSION_SCAN_BYTES = 16 * 1024 * 1024  # how far back from a transcript's end cli_version looks
+
+# The whitelist as origin/master (2acc29b) listed it, for the in-flight (D15) wording of a refusal.
+INFLIGHT_ALLOWED = ("Agent", "AskUserQuestion", "Bash", "CronCreate", "CronDelete", "CronList", "Glob",
+                    "Grep", "Read", "ScheduleWakeup", "Skill", "TodoWrite")
 
 PERMANENTLY_BLOCKED = {
     "EnterPlanMode",
@@ -276,7 +300,7 @@ def settle(state: dict, session_id: str, transcript_path) -> None:
             continue
         if not ended[r["id"]]:
             continue
-        if r["tool"] == "Bash":
+        if r["tool"] in BASH_CAPPED:  # Monitor shares Bash's counter
             bash = state["bash_consecutive"]
             if bash["last_tool"] == "Bash" and bash["count"] > 0:
                 bash["count"] -= 1
@@ -310,7 +334,7 @@ def update_streak(session_id: str, tool_name: str, data: dict | None = None) -> 
     state = read_streak_state(tool_streak_path(session_id))
 
     if tool_name in ALWAYS_ALLOWED:
-        if tool_name == "Bash":
+        if tool_name in BASH_CAPPED:
             settle(state, session_id, data.get("transcript_path"))
             bash = state["bash_consecutive"]
             if bash["last_tool"] == "Bash":
@@ -521,13 +545,69 @@ def in_flight(data: dict) -> bool:
         return False
 
 
+def _record_version(line: bytes):
+    """The top-level "version" of one transcript record, as three ints, or None."""
+    if b'"version"' not in line:
+        return None
+    import re
+    try:
+        match = re.match(r"(\d+)\.(\d+)\.(\d+)", json.loads(line).get("version"))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def cli_version(data: dict):
+    """The CLI version (a tuple of three ints) on the latest transcript record that carries one, or None.
+
+    The PreToolUse payload has no version field, and CLAUDE_CODE_VERSION in a hook's environment is
+    inherited from whatever launched the CLI (it read 2.1.42 under a 2.1.325 CLI), so the transcript
+    the running CLI writes is the source: every user, assistant and attachment record carries the
+    writer's top-level "version". Only Monitor calls read it: the file is read backwards from its end
+    in 64 KiB blocks, each line parsed once, at most VERSION_SCAN_BYTES."""
+    path = data.get("transcript_path")
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            end = handle.seek(0, os.SEEK_END)
+            carry, scanned = b"", 0
+            while end > 0 and scanned < VERSION_SCAN_BYTES:
+                start = max(0, end - 65536)
+                handle.seek(start)
+                block = handle.read(end - start) + carry
+                scanned += end - start
+                end = start
+                lines = block.split(b"\n")
+                carry = lines.pop(0) if start > 0 else b""  # may be cut mid-record: completed by the next block
+                for line in reversed(lines):
+                    version = _record_version(line)
+                    if version is not None:
+                        return version
+    except OSError:
+        return None
+    return None
+
+
+def block_monitor_version(version) -> None:
+    seen = ".".join(str(part) for part in version) if version else "unknown (no transcript record names it)"
+    need = ".".join(str(part) for part in MONITOR_MIN_CLI)
+    sys.stderr.write(
+        f"[Orchestrator Gate] BLOCKED: Monitor needs Claude Code {need} or later; this session's CLI is {seen}.\n"
+        f"Before {need} the Bash hooks (pretool-bash-safety.sh) did not run on Monitor's command, so the "
+        f"refusal holds under /do too. Use Bash, delegate to a subagent (Agent tool), update the CLI, or the "
+        f"user grants one with /allow Monitor.\n"
+    )
+    sys.exit(2)
+
+
 def block_permanent(tool_name: str, data: dict) -> None:
     if in_flight(data):  # origin/master's (2acc29b's) wording, which the session's text was written against
         allowed = ", ".join(sorted(ALWAYS_ALLOWED))
         sys.stderr.write(
             f"[Orchestrator Gate] Permanently blocked: {tool_name}\n"
             f"Delegate to subagents (Agent tool) or run /do to unlock.\n"
-            f"Allowed without /do: {allowed}\n"
+            f"Allowed without /do: {', '.join(INFLIGHT_ALLOWED)}\n"
         )
         sys.exit(2)
     allowed = ", ".join(sorted(ALWAYS_ALLOWED | READ_ONLY_ALLOWED))
@@ -548,6 +628,13 @@ def block_streak(tool_name: str, count: int, limit: int, data: dict) -> None:
             f"Delegate to a subagent (Agent tool) or ask the user to run /do to unlock.\n"
         )
         sys.exit(2)
+    if tool_name == "Monitor":
+        sys.stderr.write(
+            f"[Orchestrator Gate] BLOCKED: Monitor used consecutively beyond limit ({count}/{limit}): Monitor and "
+            f"Bash share one count of their uses since the last Agent dispatch or prompt.\n"
+            f"Delegate to a subagent (Agent tool) or ask the user to run /do to unlock.\n"
+        )
+        sys.exit(2)
     sys.stderr.write(
         f"[Orchestrator Gate] BLOCKED: {tool_name} used consecutively beyond limit ({count}/{limit}): Bash "
         f"counts its calls since the last Agent dispatch or prompt, any other non-whitelisted tool its calls "
@@ -561,7 +648,7 @@ def block_streak(tool_name: str, count: int, limit: int, data: dict) -> None:
 
 def enforce_streak_limit(tool_name: str, count: int, data: dict) -> None:
     if tool_name in ALWAYS_ALLOWED:
-        if tool_name == "Bash" and count > BASH_MAX_CONSECUTIVE:
+        if tool_name in BASH_CAPPED and count > BASH_MAX_CONSECUTIVE:
             block_streak(tool_name, count, BASH_MAX_CONSECUTIVE, data)
         return
     limit = turn_limit(tool_name)
@@ -658,6 +745,11 @@ def main():
         if tool_name == "ExitPlanMode" and user_plan_mode(data):
             sys.exit(0)
         block_permanent(tool_name, data)
+
+    if tool_name == "Monitor":  # before /do: a CLI that skips the Bash hooks on Monitor is refused under /do too
+        version = cli_version(data)
+        if version is None or version < MONITOR_MIN_CLI:
+            block_monitor_version(version)
 
     if has_do_consent(data):
         sys.exit(0)

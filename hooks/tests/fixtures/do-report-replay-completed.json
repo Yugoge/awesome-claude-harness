@@ -1,0 +1,23 @@
+{
+  "report_version": 1,
+  "task_id": "20261117-102730",
+  "request_id": "20261117-102730",
+  "source": "do",
+  "request": "make toy.add raise TypeError naming the offending argument when an argument is not a number",
+  "profile": "do",
+  "expected_absent": [
+    "qa-report",
+    "dev-report",
+    "ticket",
+    "context",
+    "completion"
+  ],
+  "do": {
+    "status": "completed",
+    "summary": "toy.add now raises TypeError naming the argument that is not a number.",
+    "files_modified": [
+      "toy/__init__.py"
+    ],
+    "files_created": []
+  }
+}

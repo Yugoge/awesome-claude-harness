@@ -193,7 +193,7 @@ class Decision:
     position: str
     evidence: str           # run/event/mutation, or file:line
     source: str             # differential | static
-    how: str = ""           # mutation: removed | invalid | any
+    how: str = ""           # mutation: removed | invalid | any; or the fault 'unreadable'
     settings: str = ""      # shipped | armed | static
     event: str = ""
     matcher: str = ""
@@ -1073,9 +1073,13 @@ class _Ctx:
                 if key is None:
                     continue
                 keys = [key]
-            # a branch on a presence test decides on the file's removal alone (rule (4)'s mutations)
-            how = "removed" if d.get("read_mode") == "name" and _presence_only(
-                probes.get(((d.get("read_through") or [d["read_site"]])[-1], d["path"]))) else "any"
+            # a branch on a presence test decides on the file's removal alone (rule (4)'s mutations);
+            # an except clause over presence tests alone decides on none of them: each test answers
+            # False on a removed file or parent and raises only on a fault that leaves the file in
+            # place unread (_PRESENCE_TEST), a fault class of its own that rule (4) does not count
+            presence = d.get("read_mode") == "name" and _presence_only(
+                probes.get(((d.get("read_through") or [d["read_site"]])[-1], d["path"])))
+            how = ("unreadable" if d["evidence"] == "except" else "removed") if presence else "any"
             for key in keys:
                 self._static_decision(d, key, how)
 
@@ -1639,7 +1643,10 @@ _LOCK = re.compile(r"\.(?:lock|lck)$")
 _DIR_TEST = re.compile(r"(^|\.)(is_?dir)$|^test -d$")
 # rule (4): a test that a file is there (exists, is a file or a link, is non-empty, may be
 # opened), as against one of its content or of its times: E1's 'invalid' mutation rewrites the
-# file in place and leaves every such answer as it was, so only its removal can change them
+# file in place and leaves every such answer as it was, so only its removal can change them.
+# None raises on a removal: CPython 3.10/3.12 pathlib's tests swallow ENOENT and ENOTDIR
+# (Lib/pathlib.py _ignore_error), os.path's every OSError (Lib/genericpath.py, Lib/posixpath.py),
+# os.access answers False on any errno (Modules/posixmodule.c os_access_impl), `test` exits 1
 _PRESENCE_TEST = re.compile(r"(^|\.)(exists|lexists|is_?file|is_?symlink|islink|access)$|^test -[aefsrwxLhGO]$")
 
 

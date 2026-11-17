@@ -16,6 +16,10 @@ record() is posttool-restart-sendmessage.py's journal of a send that was not a /
    prompt (an obligation is the pipeline's to close, which this module does not read), and have
    been dispatched outside every span a gated command opened (lib/stop-commands.json).
    Steering a lane is refused rather than routed through the dispatch gate.
+   A send resumes its child in the background (CLI 2.1.325: "Resuming agent ..."; the resumed run's end
+   is a later <task-notification> carrying that send's tool use id), so a child an earlier send resumed
+   counts as running again until a completion notification arrives after that send. Which sends ran and
+   which child each resumed is the journal's: record() writes it, sends() is its one reader.
 """
 from __future__ import annotations
 
@@ -48,11 +52,15 @@ def _cut(text: str) -> bool:
     return is_quota_text(text) or is_interrupt_text(text)
 
 
-def children(transcript_path: Any) -> tuple[dict[str, dict], dict[str, str]]:
+def children(transcript_path: Any, session_id: str = "") -> tuple[dict[str, dict], dict[str, str]]:
     """({agent id: child}, {name: agent id}) of the session's Agent calls whose result named an
     agent. A child: tool_use_id, name, command (the span its dispatch was issued in, or None),
-    obligation (its prompt carries a block), finished (bool) and state (why)."""
+    obligation (its prompt carries a block), finished (bool) and state (why). With the session id, a
+    SendMessage the session's journal shows resumed a child marks it running from that call on, until
+    a later task-notification for it says how the resumed run ended."""
     commands = command_span.harness_commands()
+    resumed = {str(e["tool_use_id"]): e for e in (sends(session_id) if session_id else [])
+               if isinstance(e.get("tool_use_id"), str) and e.get("success") is not False}
     calls: dict[str, dict] = {}
     kids: dict[str, dict] = {}
     names: dict[str, str] = {}
@@ -81,6 +89,14 @@ def children(transcript_path: Any) -> tuple[dict[str, dict], dict[str, str]]:
                     if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in AGENT_TOOLS \
                             and isinstance(b.get("input"), dict):
                         calls[str(b.get("id") or "")] = {"input": b["input"], "command": current}
+                    elif isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SendMessage" \
+                            and str(b.get("id") or "") in resumed:
+                        sent = resumed[str(b["id"])]
+                        to, own = (x if isinstance(x, str) else "" for x in (sent.get("to"), sent.get("agent_id")))
+                        agent = own if own in kids else names.get(to, to)
+                        if agent in kids:
+                            kids[agent].update(finished=False, state=f"resumed by SendMessage {b['id']}, "
+                                               "no completion notification since")
                 continue
             if record.get("type") != "user":
                 continue
@@ -148,7 +164,7 @@ def decide(payload: dict) -> tuple[bool, str]:
     if not isinstance(to, str) or not to or to == "main" or not restart.AGENT_RE.fullmatch(to):
         return False, (f"to={to!r} is not one of this session's own subagents (main, other sessions and the "
                        "'name [ref]' form are refused)" + restart_note)
-    kids, names = children(payload.get("transcript_path"))
+    kids, names = children(payload.get("transcript_path"), sid)
     agent = to if to in kids else names.get(to)
     if agent is None:
         return False, (f"to={to!r} is no agent id or name an Agent result in this session's transcript returned"
@@ -170,6 +186,29 @@ def decide(payload: dict) -> tuple[bool, str]:
 
 def journal_path(session_id: str) -> Path:
     return restart.state_dir() / "sends" / f"{restart._safe_session_id(session_id)}.jsonl"
+
+
+def sends(session_id: str) -> list[dict]:
+    """The session's journal, oldest first: the lines record() wrote, [] when it has none (or the
+    session id is not a valid one). The journal's one reader; a torn or foreign line is skipped."""
+    try:
+        path = journal_path(session_id)
+    except restart.RestartError:
+        return []
+    try:
+        handle = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    entries = []
+    with handle:
+        for line in handle:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+    return entries
 
 
 def record(payload: dict) -> dict | None:

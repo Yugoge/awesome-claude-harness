@@ -5,7 +5,8 @@ The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 declares what it owes; each declared artifact is checked while that producer
 still has the context to repair it: json (existence, schema, identity),
 markdown (identity anchor, terminal line), response_line and response_block
-(its own final reply), spec_views (spec-verify.py --strict), a dev report's
+(its own final report: the message of its SubagentHandback call when it reported
+through one, else its last reply; lib/final_report.py), spec_views (spec-verify.py --strict), a dev report's
 downstream wires (attribution journal, /commit's trial plan, a fan-out lane's
 canonical aggregate, and P6 A3.a: its file lists against the files Claude Code
 recorded the dev writing) and P3 R14's dispatch echo (written for this
@@ -62,6 +63,7 @@ from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
 from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
 from lib import contract_runtime
+from lib import final_report
 from lib import dispatch_template
 from lib import obligation
 from lib import requirement_round
@@ -821,7 +823,6 @@ def main() -> None:
         try:
             session_id = data.get("session_id") or data.get("sessionId")
             transcript_hint = data.get("agent_transcript_path")
-            last_assistant_message = data.get("last_assistant_message")
             resolution = obligation.resolve_own_obligation(
                 session_id=session_id,
                 agent_id=agent_id,
@@ -850,6 +851,10 @@ def main() -> None:
                                  + (f"  you wrote its file(s): {', '.join(wrote)}\n" if wrote else ""))
                 sys.exit(2)
             if isinstance(resolution, obligation.Resolved):
+                # The agent's own final report: its SubagentHandback message when it reported
+                # through one (auto mode; the payload then has no last_assistant_message), else
+                # the payload's last_assistant_message (lib/final_report.py).
+                last_assistant_message = final_report.final_report(data, resolution.transcript_path)
                 artifacts = resolution.obligation.get("artifacts", [])
                 json_artifacts = [a for a in artifacts if a.get("kind") == "json"]
                 markdown_artifacts = [a for a in artifacts if a.get("kind") == "markdown"]

@@ -30,6 +30,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "hooks"))
 
@@ -690,3 +692,42 @@ def test_markdown_obligation_no_identity_anchor_or_regex_declared_passes(tmp_pat
     path.write_text("# Doc\nanything\n", encoding="utf-8")
     result = cr.validate_markdown_artifact_for_obligation(str(path), None, None)
     assert result["status"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# A do-report that is not valid UTF-8 is refused like malformed JSON
+# ---------------------------------------------------------------------------
+
+# A do-report a traced /do replay wrote (tests/replay/drivers/do.py, shipped tree).
+_REPLAY_DO_REPORT = Path(__file__).resolve().parent / "fixtures" / "do-report-replay-completed.json"
+
+
+def _non_utf8_do_report(tmp_path: Path) -> Path:
+    """The replay's do-report with one byte that is not UTF-8 in do.summary."""
+    data = _REPLAY_DO_REPORT.read_bytes()
+    assert data.count(b"naming the argument") == 1
+    path = tmp_path / "do-report-20261117-102730.json"
+    path.write_bytes(data.replace(b"naming the argument", b"naming \xff the argument"))
+    with pytest.raises(UnicodeDecodeError):
+        path.read_bytes().decode("utf-8")
+    return path
+
+
+def test_replay_do_report_fixture_passes_as_written(tmp_path):
+    path = tmp_path / "do-report-20261117-102730.json"
+    path.write_bytes(_REPLAY_DO_REPORT.read_bytes())
+    result = cr.validate_report_artifact(str(path))
+    assert (result["status"], result["schema"]) == ("pass", "do-report.v1")
+
+
+def test_non_utf8_do_report_is_refused_like_malformed_json(tmp_path):
+    """A do-report that is not UTF-8 gets the malformed-JSON result; no
+    UnicodeDecodeError escapes to the caller (resolve-dev-artifact-chain.py
+    turned it into an instrument failure)."""
+    malformed = tmp_path / "malformed" / "do-report-20261117-102730.json"
+    malformed.parent.mkdir()
+    malformed.write_text(_REPLAY_DO_REPORT.read_text(encoding="utf-8")[:-20], encoding="utf-8")
+    expected = cr.validate_report_artifact(str(malformed))
+    assert expected["status"] == "skip" and "unparseable JSON" in expected["reason"]
+
+    assert cr.validate_report_artifact(str(_non_utf8_do_report(tmp_path))) == expected

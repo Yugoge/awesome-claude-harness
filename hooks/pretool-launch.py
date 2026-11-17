@@ -50,6 +50,7 @@ RULES = (
     Rule('runcode-watchdog', 'pretool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
     Rule('bulk-commit-detector', 'pretool-bulk-commit-detector.py', ('Bash',), timeout=5),
     Rule('git-privilege-guard', 'pretool-git-privilege-guard.py', ('Bash',)),
+    Rule('monitor-command', 'pretool-monitor-command.py', ('Monitor',), timeout=360),
 )
 
 if __name__ == "__main__":

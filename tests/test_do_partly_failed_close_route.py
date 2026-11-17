@@ -171,3 +171,15 @@ def test_the_do_stop_still_refuses_lists_short_of_the_write_set(project, tmp_pat
     [(code, artifact, detail)] = resolver.do_report_gaps(project, TASK, path, tx)
     assert (code, artifact) == ("FILES_NOT_WRITE_SET", DO_REL)
     assert detail.endswith(json.dumps(["src/a.py", "src/b.py"]))
+
+
+def test_the_do_stop_on_a_non_utf8_do_report_is_as_on_malformed_json(project, tmp_path):
+    """The /do Stop's route reads the do-report through contract_runtime's schema gate: a do-report
+    that is not UTF-8 (a real replay do-report with one bad byte) yields what malformed JSON yields,
+    not a UnicodeDecodeError (which made resolve-dev-artifact-chain.py report an instrument failure)."""
+    fixture = (REPO / "hooks" / "tests" / "fixtures" / "do-report-replay-completed.json").read_bytes()
+    tx = transcript(tmp_path / "s.jsonl", project, ["toy/__init__.py"])
+    path = write(project, DO_REL, fixture.decode("utf-8")[:-20])
+    malformed = resolver.do_report_gaps(project, TASK, path, tx)
+    path.write_bytes(fixture.replace(b"naming the argument", b"naming \xff the argument"))
+    assert resolver.do_report_gaps(project, TASK, path, tx) == malformed
