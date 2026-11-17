@@ -2,7 +2,8 @@
 judge the git invocations lib/shell_parse.py finds, not the raw text: a git subcommand named in data passes, one
 that runs (past wrappers, in a shell payload, in interpreter code that spawns it) is refused. The data lift holds
 only inside the strict data shape (bash_safety_rules.data_shape); data handed on to a shell, interpreter, xargs, tee,
-at, crontab, make or a written script keeps the base refusal.
+at, crontab, make or a written script keeps the base refusal, and so does a command that writes a hook location or
+any file beside a git command (a hook it plants would fire) or whose git grep runs a pager.
 
 Every case runs the real hook entry (pretool-bash-safety.sh fed a PreToolUse payload) with a scratch HOME, state dir,
 git config and a valid empty protected-runtime file. No command is ever executed.
@@ -55,6 +56,8 @@ MUST_PASS = [
     "printf '%s\\n' \"git stash push\"",
     "cat > docs/clean.md <<'EOF'\nUse git clean -n to preview\nEOF\n",
     "cat <<'EOF'\ngit clean -fdx\nEOF\n",
+    "cat > docs/notes.md <<'EOF'\nrun git stash before you switch\nEOF\n",
+    "cat > ./docs/notes.md <<'EOF'\nrun git stash before you switch\nEOF\n",
     "git commit -F - <<'EOF'\navoid git stash\nEOF\n",
 ]
 
@@ -134,6 +137,41 @@ MUST_REFUSE = [
     ("tee notes.md <<'EOF'\ngit clean -fdx wipes\nEOF\n", CLEAN),
     # A git clean named in a commit message is still refused (only stash/checkout/restore text is lifted there).
     ('git commit -m "run git clean -fdx first"', CLEAN),
+] + [
+    # Round 2: git grep runs its pager option's value (any --o... abbreviation, or O in a short cluster).
+    ("git grep --open-files-in-pager=\"sh -c 'git stash -u'\" a", STASH),
+    ("git grep --open-files=\"sh -c 'git stash -u'\" a", STASH),
+    ("git grep --open=\"sh -c 'git stash -u'\" a", STASH),
+    ("git grep -iO\"sh -c 'git stash -u'\" a", STASH),
+    ("git grep -O\"sh -c 'git stash -u'\" a", STASH),
+    ("git grep --open=\"sh -c 'git clean -fdx'\" a", CLEAN),
+    ("git grep -iO\"sh -c 'git clean -fdx'\" a", CLEAN),
+    # Round 2: a hook written by the command, then fired by a git command in it.
+    ("cat > .husky/post-checkout <<'EOF'\ngit stash -u\nEOF\ngit checkout -q HEAD", STASH),
+    ("cat > .husky/pre-commit <<'EOF'\ngit stash -u\nEOF\ngit commit -qm x", STASH),
+    ("cat > .pre-commit-config.yaml <<'EOF'\nrepos:\n- repo: local\n  hooks:\n  - id: x\n    entry: git stash -u\n"
+     "EOF\ngit commit -qm x", STASH),
+    ("cat > .git/hooks/post-checkout <<'EOF'\ngit stash -u\nEOF\ngit checkout -q HEAD", STASH),
+    ("cat > tools/post-checkout <<'EOF'\ngit stash -u\nEOF\ngit checkout -q HEAD", STASH),
+    ("cat > docs/notes.md <<'EOF'\ngit stash -u\nEOF\ngit commit -qm x", STASH),
+    ("cat > bare.git/config <<'EOF'\n[core]\n\tpager = sh -c 'git stash -u'\nEOF\n", STASH),
+    ("cat > sub/config <<'EOF'\n[core]\n\tpager = sh -c 'git stash -u'\nEOF\n", STASH),
+    ("cat > .ackrc <<'EOF'\n--pager=sh -c 'git stash -u'\nEOF\nack a", STASH),
+    ("cat > .vscode/tasks.json <<'EOF'\n{\"tasks\":[{\"command\":\"git stash -u\"}]}\nEOF\n", STASH),
+    ("cat > .github/workflows/x.yml <<'EOF'\nrun: git stash -u\nEOF\n", STASH),
+    ("cat > package.json <<'EOF'\n{\"scripts\":{\"precommit\":\"git stash -u\"}}\nEOF\n", STASH),
+    ("cat > lefthook.yml <<'EOF'\npre-commit:\n  commands:\n    s:\n      run: git stash -u\nEOF\n", STASH),
+    ("cat > .husky/pre-commit <<'EOF'\ngit clean -fdx\nEOF\ngit commit -qm x", CLEAN),
+    ("git log -1 --format='tformat:git stash -u' --output=.git/hooks/post-checkout && git checkout -q HEAD", STASH),
+    ("git log -1 --format='tformat:git stash -u' --outp=.git/hooks/post-checkout && git checkout -q HEAD", STASH),
+    ("git log -1 --format='tformat:git stash -u' --out=.git/hooks/pre-commit && git commit -qm x", STASH),
+    ("git show -s --format='git stash -u' --ou=.git/hooks/pre-commit HEAD && git commit -qm x", STASH),
+    ("echo 'git stash -u' | uniq - .git/hooks/post-checkout && git checkout -q HEAD", STASH),
+    ("echo 'git stash -u' | uniq - .git/hooks/pre-commit && git commit -qm x", STASH),
+    ("echo 'git stash -u' | sort -o .git/hooks/pre-commit && git commit -qm x", STASH),
+    ("echo 'git stash -u' | sort -uo.git/hooks/pre-commit && git commit -qm x", STASH),
+    ("echo 'git stash -u' | sort --outp=.git/hooks/pre-commit && git commit -qm x", STASH),
+    ("echo 'git stash -u' | sort --o .git/hooks/pre-commit && git commit -qm x", STASH),
 ]
 
 

@@ -1094,7 +1094,7 @@ _SHAPE_COMMANDS = frozenset({"echo", "printf", "cat", "ls", "true", "git"}) | _S
 _SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2"})
 _SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
                              "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
-                             "grep", "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
+                             "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
 _SHAPE_GIT_GLOBALS = frozenset({"-C", "--no-pager", "-P", "--no-optional-locks"})
 _EXEC_DOC_EXT_RE = re.compile(r"\.(sh|bash|zsh|ksh|fish|csh|tcsh|command|mk|mak|make|py|pl|pm|rb|js|mjs|cjs|ts|php|"
                               r"tcl|lua|awk|sed|ps1|bat|cmd|service|timer|desktop|cron|rc|env|envrc)$", re.I)
@@ -1104,23 +1104,44 @@ _EXEC_DOC_NAMES = frozenset({"makefile", "gnumakefile", "crontab", ".bashrc", ".
                              "justfile", "rakefile", "dockerfile", "procfile", ".tclshrc"})
 
 
+_HOOK_NAME_RE = re.compile(r"^(pre-|post-|p4-)|^(commit-msg|prepare-commit-msg|applypatch-msg|update|proc-receive|"
+                           r"reference-transaction|push-to-checkout|sendemail-validate|fsmonitor-watchman)$")
+_ROOT_CONFIG_EXT_RE = re.compile(r"\.(json|ya?ml|toml|ini|cfg|conf)$")
+
+
 def _doc_path_ok(path):
-    """A file the data shape may write: a literal path that no shell, make, cron, git or login sequence reads."""
-    if not path or path.startswith(("~", "-", "/etc/", "/usr/", "/bin/", "/sbin/", "/lib", "/opt/", "/proc/",
-                                    "/sys/", "/dev/", "/var/spool/", "/boot/", "/root/")):
+    """A file the data shape may write: a relative literal path inside the repository that no shell, make, cron,
+    git, hook manager or login sequence reads. Refused: an absolute path or one with a `..`, `~` or option form,
+    any dot-file or dot-directory component (.git, .husky, .github, .vscode, .config, .pre-commit-config.yaml ...),
+    a file named like a git hook, package.json, a json/yaml/toml/ini/cfg/conf file at the repository root, a file
+    named config or *gitconfig*, any component ending in .git (a bare repository), and an executable or login-read
+    name."""
+    if not path or path.startswith(("~", "-", "/")):
         return False
     low = path.lower()
-    base = low.rsplit("/", 1)[-1]
-    return not (not base or base in _EXEC_DOC_NAMES or _EXEC_DOC_EXT_RE.search(base) or base.startswith(".git")
-                or "/.git/" in "/" + low or "/bin/" in "/" + low
+    parts = [c for c in low.split("/") if c not in ("", ".")]
+    if not parts or any(c == ".." or c.startswith(".") or c.endswith(".git") for c in parts):
+        return False
+    base = parts[-1]
+    if _HOOK_NAME_RE.search(base) or base in ("package.json", "config") or "gitconfig" in base \
+            or (len(parts) == 1 and _ROOT_CONFIG_EXT_RE.search(base)):
+        return False
+    return not (base in _EXEC_DOC_NAMES or _EXEC_DOC_EXT_RE.search(base) or "bin" in parts
                 or any(k in low for k in ("hook", "cron", "systemd", "autostart", "profile.d", "rc.d", "init.d")))
+
+
+def _long_prefix_of(arg, names, shortest=3):
+    """True when `arg` (before any `=`) is `--x` with x a prefix, at least `shortest` characters with the dashes,
+    of one of `names` (git and GNU tools take any unique abbreviation of a long option)."""
+    name = (arg or "").split("=", 1)[0]
+    return name.startswith("--") and len(name) >= shortest and any(n.startswith(name) for n in names)
 
 
 def _word_is_static(w):
     return all(p.kind not in ("cmdsub", "backtick", "procsub_in", "procsub_out") for p in w.parts)
 
 
-def _shape_redirects(cmd, may_write_doc):
+def _shape_redirects(cmd, may_write_doc, state):
     for red in cmd.redirects:
         if red.fd_var is not None:
             return False
@@ -1134,6 +1155,8 @@ def _shape_redirects(cmd, may_write_doc):
             lit = red.target.literal() if red.target is not None else None
             if lit not in _SAFE_DEVICES and not (may_write_doc and _doc_path_ok(lit)):
                 return False
+            if lit not in _SAFE_DEVICES:
+                state["writes"] = True
     return True
 
 
@@ -1147,12 +1170,28 @@ def _shape_git(cmd, invs):
             or any(opt not in _SHAPE_GIT_GLOBALS for opt, _v in inv.global_opts):
         return False
     args = [a or "" for a in inv.args]
-    if inv.subcommand == "grep" and any(a.startswith(("-O", "--open-files-in-pager")) for a in args):
-        return False
+    if any(_long_prefix_of(a, ("--output",)) for a in args):
+        return False  # git writes the named file (log, show, diff, reflog ... --output / --outp / --ou)
     return "--ext-diff" not in args
 
 
-def _shape_simple(cmd, invs, stage):
+def _uniq_writes(args):
+    """uniq given an output operand (its second file operand) writes that file."""
+    operands, k, opts_done = 0, 0, False
+    while k < len(args):
+        a = args[k]
+        if opts_done or a == "-" or not a.startswith("-"):
+            operands += 1
+        elif a == "--":
+            opts_done = True
+        elif a in ("-f", "-s", "-w") or (a.startswith("--") and "=" not in a and _long_prefix_of(
+                a, ("--skip-fields", "--skip-chars", "--check-chars"), 4)):
+            k += 1
+        k += 1
+    return operands >= 2
+
+
+def _shape_simple(cmd, invs, stage, state):
     """One simple command of the data shape: a pipeline's first stage, or a later pure-filter stage."""
     from lib.shell_parse import SimpleCommand, resolve
     if not isinstance(cmd, SimpleCommand) or cmd.assignments or not cmd.words \
@@ -1174,11 +1213,16 @@ def _shape_simple(cmd, invs, stage):
                                          or (name == "rg" and a.startswith("-") and not a.startswith("--")
                                              and "z" in a) for a in args):
         return False
-    if name == "sort" and any(a.startswith(("--compress-program", "-o", "--output")) for a in args):
+    if name == "sort" and any(_long_prefix_of(a, ("--output", "--compress-program"))
+                              or (a.startswith("-") and not a.startswith("--") and "o" in a) for a in args):
+        return False  # -o / -uoFILE / --output / --outp= / --o write a file; --compress-program runs one
+    if name == "uniq" and _uniq_writes(args):
         return False
-    if name == "git" and not _shape_git(cmd, invs):
-        return False
-    return _shape_redirects(cmd, may_write_doc=(name == "cat" and not stage))
+    if name == "git":
+        if not _shape_git(cmd, invs):
+            return False
+        state["git"] = True
+    return _shape_redirects(cmd, may_write_doc=(name == "cat" and not stage), state=state)
 
 
 def data_shape(command, invs):
@@ -1189,9 +1233,10 @@ def data_shape(command, invs):
     a plain git invocation of a fixed subcommand set (no alias, -c, GIT_* assignment, wrapper, path-qualified git,
     exec-taking option); a later stage is only a pure filter (head, tail, wc, sort, uniq, cut, less, more, grep, rg).
     Output goes to stdout or a device only, except that cat may write a document path no shell, make, cron, git or
-    login sequence reads. No word holds a command or process substitution and no heredoc body expands. So no shell,
-    interpreter, xargs, tee, at, batch, crontab, make or unknown program ever runs what the command prints or
-    writes."""
+    login sequence reads (_doc_path_ok); a command that writes any file runs no git at all, so no hook it could
+    plant fires. No git option, sort or uniq form writes a file. No word holds a command or process substitution and
+    no heredoc body expands. So no shell, interpreter, xargs, tee, at, batch, crontab, make, git hook or unknown
+    program ever runs what the command prints or writes."""
     if invs is None:
         return False
     try:
@@ -1199,14 +1244,33 @@ def data_shape(command, invs):
         script = parse(command)
         if script.error is not None or script.errors() or not script.items:
             return False
+        state = {"writes": False, "git": False}
         for pipeline, sep in script.items:
             if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in ("|", "|&") for p in pipeline.pipes):
                 return False
-            if not all(_shape_simple(stage, invs, k) for k, stage in enumerate(pipeline.stages)):
+            if not all(_shape_simple(stage, invs, k, state) for k, stage in enumerate(pipeline.stages)):
                 return False
-        return True
+        return not (state["writes"] and state["git"])
     except Exception:  # noqa: BLE001 - anything unexpected is outside the shape
         return False
+
+
+def _grep_pager_texts(args):
+    """The pager commands a `git grep` runs on its matches: the value of --open-files-in-pager=CMD or of any `--o...`
+    abbreviation of it, and the rest of a short cluster after its O (-OCMD, -iOCMD)."""
+    texts = []
+    for a in args:
+        if a is None or a == "--":
+            break
+        if a.startswith("--"):
+            name, eq, val = a.partition("=")
+            if eq and val and _long_prefix_of(name, ("--open-files-in-pager",)):
+                texts.append(val)
+        elif a.startswith("-") and "O" in a[1:]:
+            val = a[a.index("O", 1) + 1:]
+            if val:
+                texts.append(val)
+    return texts
 
 
 def git_view(command):
@@ -1230,6 +1294,11 @@ def git_view(command):
                 out.append((inv, ctx))
                 if inv.alias_body is not None and depth < 8:
                     collect(inv.alias_body, ctx + ("alias",), depth + 1)
+                if inv.subcommand == "grep" and depth < 4:
+                    for text in _grep_pager_texts(inv.args):
+                        sub = parse(text)
+                        if sub.error is None:
+                            collect(sub, ctx + ("pager",), depth + 1)
             if depth >= 4:
                 return
             for site in walk(scr, into=into):
