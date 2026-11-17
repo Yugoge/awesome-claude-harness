@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T10:19:58Z*
-**Total entries**: 964
+*Last updated: 2026-11-17T01:11:18Z*
+**Total entries**: 965
 **Convention**: kebab
 
 ## Tree
@@ -887,6 +887,7 @@ dot-claude/
 │   ├── `test_no_phases_spec_template.py` - The nine section headings, each section's `### Cycle 1` (or `### 9.N`) subsections and placeholde...
 │   ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+│   ├── `test_overnight_state_budget_clock.py` - The launch's start time, its end time (relative: Nm, Nh, the default 8h; or a clock time, rolled
 │   ├── `test_p10_42_hook_bytecode_env.py` - R9 set `"PYTHONDONTWRITEBYTECODE": "1"` in settings.json's env so that hooks stop writing
 │   ├── `test_p9_parts_of_p10_rows.py` - - R9 (the harness home's .gitignore): the old score store's lines stay under D28. Nothing writes
 │   ├── `test_parent_cycle_claimant_reader.py` - THE DEFECT.  Admission to a cycle's ownership-completeness claimant set was
