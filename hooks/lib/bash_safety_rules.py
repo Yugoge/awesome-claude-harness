@@ -758,6 +758,119 @@ def executable_view_or_raw(command):
         return command
 
 
+_HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
+_HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
+
+
+def _hb_shell_options(args):
+    """A bash/sh/dash argument list read as the shell reads it: (runs, has_c, has_s, operands). runs is False when
+    the options leave noexec on (`-n`, `-nx`, `-o noexec`; the last one wins, `+n` / `+o noexec` turn it off), so
+    the shell reads its script or `-c` string without running it; an interactive (`-i`) shell, which ignores
+    noexec, runs. None for an option it cannot read."""
+    noexec = interactive = has_c = has_s = False
+    k = 0
+    while k < len(args):
+        v = args[k].value()
+        if v is None:
+            return None
+        if v in ("--", "-"):
+            k += 1
+            break
+        if v.startswith("--"):
+            if v in ("--rcfile", "--init-file"):
+                k += 2
+            elif v in _HB_SHELL_LONG:
+                k += 1
+            else:
+                return None
+            continue
+        if len(v) < 2 or v[0] not in "-+":
+            break
+        k += 1
+        for ch in v[1:]:
+            if ch in "oO":
+                if k >= len(args) or args[k].value() is None:
+                    return None
+                if ch == "o" and args[k].value() == "noexec":
+                    noexec = v[0] == "-"
+                k += 1
+            elif ch == "n":
+                noexec = v[0] == "-"
+            elif v[0] == "-" and ch in "ics":
+                interactive = interactive or ch == "i"
+                has_c = has_c or ch == "c"
+                has_s = has_s or ch == "s"
+    return (interactive or not noexec), has_c, has_s, args[k:]
+
+
+def hard_ban_noexec_blank(command):
+    """command with the words no shell runs blanked (offsets kept): the literal operands of `test`, `[` and
+    `[[ ... ]]`, and those of a noexec bash/sh/dash (`bash -n x.sh`) whose output is not piped on. Found through
+    lib/shell_parse.py at command position (wrappers peeled, substitutions descended); a word holding a
+    substitution or expansion stays. A bash/sh/dash that does run gets a line appended naming what it runs
+    (`bash <script>`, or its `-c` string), so an option the command-word pattern does not read
+    (`bash +x x.sh`, `bash -o errexit x.sh`, `bash -n +n x.sh`) still shows the run. command unchanged when it
+    does not parse."""
+    try:
+        from lib.shell_parse import Compound, SimpleCommand, active_parts, parse, resolve
+    except Exception:  # noqa: BLE001
+        return command
+    script = parse(command)
+    if script.error is not None:
+        return command
+    spans = []
+    runs_text = []
+
+    def literal(w):
+        return w.value() is not None and not any(p.body is not None for p in active_parts(w.parts))
+
+    def nested(words):
+        for w in words:
+            for p in active_parts(w.parts):
+                if p.body is not None:
+                    visit(p.body)
+
+    def visit_cmd(cmd, piped_on):
+        if isinstance(cmd, Compound):
+            if cmd.kind == "cond":
+                spans.extend(w.span for w in cmd.header if literal(w))
+            nested(cmd.header)
+            nested([r.target for r in cmd.redirects if r.target is not None])
+            for body in cmd.body:
+                visit(body)
+            return
+        if not isinstance(cmd, SimpleCommand):
+            return
+        res = resolve(cmd)
+        if res.unresolved is None and res.head is not None:
+            inert = None
+            if res.name in ("test", "["):
+                inert = res.args
+            elif res.name in _HB_NOEXEC_SHELLS:
+                opts = _hb_shell_options(list(res.args))
+                if opts is not None:
+                    runs, has_c, has_s, operands = opts
+                    if not runs and not piped_on:
+                        inert = operands
+                    elif runs and operands and (has_c or not has_s) and operands[0].value() is not None:
+                        runs_text.append(operands[0].value() if has_c else "bash " + operands[0].value())
+            spans.extend(w.span for w in inert or () if literal(w))
+        nested([a.word for a in cmd.assignments] + list(cmd.words) +
+               [r.target for r in cmd.redirects if r.target is not None])
+
+    def visit(s):
+        for pl, _sep in s.items:
+            for k, stage in enumerate(pl.stages):
+                visit_cmd(stage, k < len(pl.stages) - 1)
+
+    visit(script)
+    out = list(command)
+    for a, b in spans:
+        for i in range(max(a, 0), min(b, len(out))):
+            out[i] = " "
+    return "".join(out) + "".join("\n" + line for line in runs_text)
+
+
 def hard_ban_mask(t):
     """t with ; & | ( ! { inside quoted data made inert, unless a word outside quotes may run text; t when unsure."""
     n, i, o, u = len(t), 0, [], []
@@ -815,7 +928,8 @@ def hard_ban_rule(command):
     each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word: in the
     text with its quoted data masked (unless a word outside quotes names a program that runs text), or in the
     parser's executable view, which keeps what a shell `-c`, a git alias or a substitution runs and blanks the data
-    an option such as git's `-c` merely configures."""
+    an option such as git's `-c` merely configures. The default names are read after hard_ban_noexec_blank, so a
+    test operand or a noexec shell's script (`bash -n x.sh`) is not a run."""
     configured = os.environ.get("CLAUDE_HARD_BANNED_SCRIPTS", "")
     value = (configured or "session-recovery|restart-all-sessions").split("\n", 1)[0]
     bans = value.split("|")
@@ -823,20 +937,26 @@ def hard_ban_rule(command):
         bans.pop()
     data = None
     view = None
+    text = command
+    if not configured:
+        try:
+            text = hard_ban_noexec_blank(command)
+        except Exception:  # noqa: BLE001
+            text = command
     for ban in bans:
         if configured:
             rx = ban
         else:
             rx = _HB_CMD + ban + r"""(\.sh)?(["'\s;&|)<>`]|$)"""
-            if data is None and grep(rx, command):
+            if data is None and grep(rx, text):
                 try:
-                    masked = hard_ban_mask(command).rstrip("\n")
+                    masked = hard_ban_mask(text).rstrip("\n")
                 except Exception:  # noqa: BLE001
                     masked = ""
-                data = masked or command
+                data = masked or text
         if ban and not configured and view is None:
-            view = executable_view_or_raw(command)
-        if ban and (grep(rx, data if data is not None else command) or (not configured and grep(rx, view))):
+            view = executable_view_or_raw(text)
+        if ban and (grep(rx, data if data is not None else text) or (not configured and grep(rx, view))):
             refuse(f"BLOCKED: hard-banned script '{ban}' is refused", f"Command: {command}",
                        "REASON: it manages session state or restarts daemons and can kill all sessions. Only the user "
                        "runs it manually.", released_line())
