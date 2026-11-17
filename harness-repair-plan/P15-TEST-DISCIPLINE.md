@@ -410,7 +410,11 @@ L6 merges after L7, L8 and L9. **Done when:**
 
 ## 6. Owner decisions
 
-**O1. Re-recording the CLI fixtures in CI.**
+**O1, decided (2026-11-17, relayed by the reviewer session): option 1.** CLI fixtures are re-recorded locally only, when
+the CLI is upgraded, and then committed. There is no CI recording job and no API-key secret. Lane L1 builds no
+scheduled or per-PR recording; the canary advisory and the shape-diff gate are the whole mechanism.
+
+**O1. Re-recording the CLI fixtures in CI (the question as asked).**
 - Background: recording needs the CLI and model access (about $0.03 and 30 s a run). CI has no key today.
 - Options:
   1. locally only, on upgrade, prompted by the canary advisory;
