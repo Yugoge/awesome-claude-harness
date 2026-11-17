@@ -409,7 +409,9 @@ no per-rule budget exists.
   `tests/test_secret_file_denies.py`, not in the black-box corpus. Not covered here: a file under the home
   outside the project (`~/.aws/credentials`, `~/.env`; `**/` anchors at the current directory), which
   S-023 covers, and contents read by an interpreter (`python3 -c 'open(".env")'`), which no Read rule
-  reaches.
+  reaches. Nor a Bash operand that is a shell glob or a directory read recursively (`cat .env*`,
+  `grep -r TODO .`): the CLI checks the operand as written, before the shell expands it, so no file rule
+  sees the names it reaches (see S-023, measured there for the home).
 - **S-023** — S5 (under-defence): S-019's denies anchor at the current directory, so from a project
   they never reached the home credential stores or a sibling project's `.env`, and `Read(~/**)` with
   `Bash(cat:*)` let them be read without a prompt. `permissions.deny` now carries, for `Read` and `Edit`
@@ -429,19 +431,30 @@ no per-rule budget exists.
   readable. Measured on Claude Code 2.1.326 with S-019's offline rig, the project inside a throwaway
   HOME, cwd = project and cwd = HOME: `~/<path>` anchors at the home and does not match at depth (a bare
   `~/.env` misses `~/sub/.env`), `~/**/<name>` does; `~/.ssh/id_*` would also refuse `id_rsa.pub`; a Bash
-  operand is refused in every spelling the CLI resolves (`~/`, `$HOME/`, absolute, `../../`), and
-  `${HOME}/` is never auto-run whatever the rules; a `!` negation lifts only matches of rules with its
+  operand that names the file literally is refused in each path spelling the CLI resolves (`~/`,
+  `$HOME/`, absolute, `../../`), and `${HOME}/` is never auto-run whatever the rules; a glob operand or
+  a recursive directory read is NOT refused (below); a `!` negation lifts only matches of rules with its
   own anchor, so S-019's `!**/.env.example` did not lift a trial `~/**/.env.*` even for the project's
   own `.env.example`: hence no `~/**/` entry names anything an S-019 lift opens, no `~/` negation
   exists, and S-019's tail and order are untouched. Over S-019's own 168 measured cases, run in a project
   under HOME, every decision is unchanged; ordinary home files (`~/.bashrc`, `~/.gitconfig`,
   `~/notes.txt`) keep their decision, so the exact-path entries upgrade nothing beyond the files they
-  name and, being denies, downgrade nothing. Deliberately open: a sibling project's `.env.example` and
+  name and, being denies, downgrade nothing. Refused now on purpose: `~/.env.example` (and any
+  `~/.env.<x>`) at the top of the home, through `~/.env.*`; a project's own templates stay open.
+  Deliberately open: a sibling project's `.env.example` and
   an unlisted valued variant (`~/other/.env.foo`) below the home's top level, and below the top level
   the names in (2) (an S-019 lift would have to be repeated per anchor). With cwd = HOME itself, a
   top-level name in (2) stays refused where an S-019 lift would open it (`~/secrets/README.md`). Not
-  covered: other home stores (`~/.npmrc`, `~/.pypirc`, `~/.config/gcloud/application_default_credentials.json`,
-  `~/.vault-token`, ...), keys outside `~/.ssh` and the home's top level, and interpreter reads.
+  covered: (a) Bash operands that are shell globs and recursive directory reads: the CLI checks the
+  operand as written, before the shell expands it, so `cat ~/.ssh/id_rs[a]`, `cat ~/.ssh/id_*`,
+  `cat ~/.aws/cred*`, `grep -r token ~/.aws` and `grep -r x ~/work/other` return the files' content
+  (measured by the independent verifier on this branch, cwd = project; the same class exists inside a
+  project under S-019: `cat .env*`, `grep -r TODO .`). A directory-tree deny such as `~/.ssh/**` would
+  catch the literal glob operand, but it was rejected so that `~/.ssh/config`, `known_hosts` and `*.pub`
+  (and, likewise, `~/.aws/config`, `~/.config/gh/config.yml`) stay readable; (b) other home stores
+  (`~/.claude/.credentials.json`, `~/.npmrc`, `~/.pypirc`,
+  `~/.config/gcloud/application_default_credentials.json`, `~/.vault-token`, ...); (c) keys outside
+  `~/.ssh` and the home's top level; (d) interpreter reads.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,

@@ -15,7 +15,8 @@ and Edit alike, before OB-L19's ordered negation tail:
   inside the project.
 * TOP_LEVEL, `~/<name>`: the L19 names a lift CAN re-open inside a project (`*_password.*`, the
   directory names `secrets`, `password`, ..., `.secret*`), the key files `*.key`/`*.pem`, and `.env.*`:
-  refused at the top of HOME only.
+  refused at the top of HOME only (so `~/.env.example` there is refused on purpose; a project's own
+  templates stay open). Not covered: `~/.claude/.credentials.json` and other stores not listed.
 * STORES: the standard home credential stores, by exact path; under `~/.ssh` only private keys
   (`id_<type>`, `*.key`, `*.pem`), never `*.pub`, `config` or `known_hosts`; `~/.config/gh/hosts.yml`
   (the token) but not `config.yml`.
@@ -29,10 +30,16 @@ can run with cwd = HOME:
 * `~/<path>` anchors at HOME and does NOT match at depth, even for a bare name: `Read(~/.env)` refuses
   `~/.env`, not `~/sub/.env` nor `~/work/proj/.env`; `~/**/<name>` matches at any depth under HOME;
 * `~/.ssh/id_*` also refuses `id_rsa.pub`, so the keys are named one by one;
-* a Bash operand is held to the rules in every spelling the CLI resolves: `cat ~/.env`, `cat $HOME/.env`,
-  `cat <home>/.env` (absolute), `cat ../../.env`; a redirection `> ~/.netrc` likewise. `${HOME}` is
-  never auto-run whatever the rules ("A variable in braces in this command can't be checked before it
-  runs"), so it needs no rule;
+* a Bash operand that names the file literally is held to the rules in each path spelling the CLI
+  resolves: `cat ~/.env`, `cat $HOME/.env`, `cat <home>/.env` (absolute), `cat ../../.env`; a redirection
+  `> ~/.netrc` likewise. `${HOME}` is never auto-run whatever the rules ("A variable in braces in this
+  command can't be checked before it runs"), so it needs no rule. NOT covered: a glob operand or a
+  recursive directory read. The CLI checks the operand as written, before the shell expands it, so
+  `cat ~/.ssh/id_rs[a]`, `cat ~/.ssh/id_*`, `cat ~/.aws/cred*`, `grep -r token ~/.aws` and
+  `grep -r x ~/work/other` return content (measured by the independent verifier on this branch; the
+  same class exists in a project under OB-L19: `cat .env*`, `grep -r TODO .`). A directory-tree deny
+  such as `~/.ssh/**` would catch the literal glob, but was rejected so that config files
+  (`~/.ssh/config`, `known_hosts`, `*.pub`) stay readable;
 * a `!` negation lifts only matches of rules with the SAME anchor: OB-L19's `!**/.env.example` (anchored
   at the cwd) did not lift a `~/**/.env.*` match even for `<proj>/.env.example`. That is why no `~/**/`
   entry names anything an L19 lift opens (a first try with `~/**/.env.*` refused the project's own
