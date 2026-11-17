@@ -932,7 +932,9 @@ def _default_perform(actor: Actor, name: str, ti: dict):
         return {"mode": "files_with_matches", "filenames": hits, "numFiles": len(hits)}
 
     def todo():
-        old, actor.todos = actor.todos, ti["todos"]
+        # The CLI stores [] once every item is completed (tests/fixtures/cli-todowrite-oldtodos).
+        done = all(t.get("status") == "completed" for t in ti["todos"])
+        old, actor.todos = actor.todos, [] if done else ti["todos"]
         return {"oldTodos": old, "newTodos": ti["todos"]}
 
     def ask():
