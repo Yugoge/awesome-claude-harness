@@ -16,7 +16,10 @@ Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md)
                owner for (the chain's own unowed_gap, used verbatim) can never
                be produced unattended: list-actionable --next-action close
                passes the task over, its reason on stderr (`auto_skip`);
-               /close <task> still takes it
+               /close <task> still takes it. That verdict reads the
+               project's session transcripts; a scan reads each of them at
+               most once (obligation.transcript_scan), and a listing for
+               commit, which never uses it, reads none
   close     -- a close-report exists: the one classifier's class of its last
                line (hooks/lib/close-verdict.py), then commit detection; the
                chain is not called
@@ -37,6 +40,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
@@ -47,6 +51,7 @@ from hooks.lib.obligation import terminal_status  # noqa: E402  (the one termina
 # A docs/dev/ file names a task only when its id part passes the one task-id
 # rule (hooks/lib/obligation.py).
 from hooks.lib.obligation import TASK_ID_RE  # noqa: E402
+from hooks.lib.obligation import transcript_scan  # noqa: E402  (one read of each transcript per scan)
 
 _HOOK_DENY_RE = re.compile(
     r"(?:PreToolUse|PostToolUse|Stop):[^\n]*hook error:[^\n]*BLOCKED",
@@ -310,11 +315,13 @@ def close_and_commit(
 # --------------------------------------------------------------------------
 
 
-def derive_state(project_root: Path, task_id: str) -> dict:
+def derive_state(project_root: Path, task_id: str, owners: bool = True) -> dict:
     """Derive one task-id's lifecycle row, by precedence: a dev-report (its close-report's verdict, else
     the /dev chain's, unless it is dev's report concluding a /do task whose do-report is not completed:
     Q7); else a ba-qa-report, direct evidence of a /dev-track attempt; else a do-report, the /do track's
-    substitute for the whole chain, BA-QA included (AC-L1-L3 and AC-L9/L10 hold together)."""
+    substitute for the whole chain, BA-QA included (AC-L1-L3 and AC-L9/L10 hold together). With
+    ``owners`` false a dev chain's row leaves out ``auto_skip`` (the one field read from the session
+    transcripts) and the instrument failure only its reading raises: a caller that never reads them."""
     project_root = Path(project_root)
     dev_dir = project_root / "docs" / "dev"
     row: dict[str, Any] = {
@@ -348,7 +355,7 @@ def derive_state(project_root: Path, task_id: str) -> dict:
             row.update(chain_state(task_id, result))
             # The chain's verdict on the disposition /close's Step 0 takes: a gap nobody owes (its
             # instrument failure raises: a blocked row, below).
-            ownerless = resolver.unowed_gap(project_root, task_id, "dev")
+            ownerless = resolver.unowed_gap(project_root, task_id, "dev") if owners else None
             if ownerless:  # /close <task> still takes it; --auto passes it over, saying why
                 row["auto_skip"] = f"no dispatch record or todo step owes {ownerless}"
             return row
@@ -428,18 +435,25 @@ def discover_task_ids(dev_dir: Path) -> dict[str, Any]:
     return {"tickets": sorted(tickets), "specs": specs, "context_spec_links": context_spec_links}
 
 
-def scan(project_root: Path) -> list[dict]:
+def scan(project_root: Path, owners: bool = True, progress: Optional["Progress"] = None) -> list[dict]:
+    """Every task's row (derive_state, ``owners`` passed on), in one transcript
+    scan: a session transcript the rows' owner questions read is read once for
+    all of them, not once per task and gap. ``progress`` hears of each task and
+    each transcript read."""
     project_root = Path(project_root)
     dev_dir = project_root / "docs" / "dev"
     discovered = discover_task_ids(dev_dir)
 
     rows: list[dict] = []
     lane_owner: dict[str, str] = {}
-    for tid in discovered["tickets"]:
-        row = derive_state(project_root, tid)
-        rows.append(row)
-        for lane in row.get("lanes", []):
-            lane_owner[lane["task_id"]] = tid
+    with transcript_scan(on_read=progress.read if progress else None):
+        for index, tid in enumerate(discovered["tickets"], 1):
+            if progress:
+                progress.task(index, len(discovered["tickets"]), tid)
+            row = derive_state(project_root, tid, owners)
+            rows.append(row)
+            for lane in row.get("lanes", []):
+                lane_owner[lane["task_id"]] = tid
 
     by_id = {r["task_id"]: r for r in rows}
     for lane_tid, parent_tid in lane_owner.items():
@@ -510,7 +524,7 @@ def auto_targets(project_root: Path, next_action: str, cutoff: Optional[float] =
         except ValueError:
             return None
 
-    rows = scan(Path(project_root)) if rows is None else rows
+    rows = scan(Path(project_root), owners=next_action == "close") if rows is None else rows
     by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
     targets = []
     for task_id in actionable_parents(rows, next_action):
@@ -602,6 +616,41 @@ def render_table(rows: list[dict]) -> str:
 # --------------------------------------------------------------------------
 
 
+class Progress:
+    """A long scan's progress on stderr, so whoever waits on it sees it work:
+    nothing for its first ``after`` seconds (a usual scan has ended by then),
+    then a line at most every ``after`` seconds naming the task being derived
+    and the transcripts read so far. A line begins ``dev-lifecycle.py:``, never
+    with a task id, so a reader of the ``<task-id>: skipped: <reason>`` lines
+    passes it over."""
+
+    def __init__(self, after: float = 10.0, stream=None, clock=time.monotonic) -> None:
+        self.clock, self.after, self.stream = clock, after, stream
+        self.started = clock()
+        self.due = self.started + after
+        self.at = ""
+        self.read_so_far = ""
+
+    def task(self, index: int, total: int, task_id: str) -> None:
+        self.at = f"task {index} of {total} ({task_id})"
+        self._report()
+
+    def read(self, scan) -> None:
+        self.read_so_far = f"; {scan.transcripts} session transcripts read ({scan.bytes / 1e6:.0f} MB)"
+        self._report()
+
+    def _report(self) -> None:
+        now = self.clock()
+        if now < self.due:
+            return
+        self.due = now + self.after
+        try:
+            print(f"dev-lifecycle.py: still scanning after {now - self.started:.0f}s: {self.at}{self.read_so_far}",
+                  file=self.stream or sys.stderr, flush=True)
+        except (OSError, ValueError):  # a closed stderr never stops the scan
+            pass
+
+
 def _default_project_dir() -> str:
     return str(Path(__file__).resolve().parent.parent)
 
@@ -624,7 +673,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     project_root = Path(args.project_dir).resolve()
 
     if args.command == "scan":
-        rows = scan(project_root)
+        rows = scan(project_root, progress=Progress())
         if args.format == "json":
             print(json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True, default=str))
         else:
@@ -634,8 +683,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "list-actionable":
         # One line per parent: its task-id, then, for a dev-chain parent, its
         # chain result as the chain's own CLI prints it -- the walked task's
-        # step takes it from here instead of calling the chain again.
-        rows = scan(project_root)
+        # step takes it from here instead of calling the chain again. Only
+        # the close listing asks who owes each gap (auto_skip).
+        rows = scan(project_root, owners=args.next_action == "close", progress=Progress())
         by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
         skipped: list[str] = []
         for task_id in auto_targets(project_root, args.next_action, args.cutoff, rows, skipped):
