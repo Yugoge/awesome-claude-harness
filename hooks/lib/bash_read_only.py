@@ -214,8 +214,13 @@ def _sed(args) -> bool:
 # text, so a word inside a string, regex literal or comment counts too (awk's
 # tokenizer can only see less than this scan does: a backslash-newline splits
 # an identifier, it never joins one). ARGV and ARGC are refused because
-# assigning them names input files the text need not spell: gawk opens a
-# concatenated "/in" "et/tcp/..." element as a network connection.
+# assigning them names input files the text need not spell: an element built
+# as "/in" "et/tcp/0/host/80" is a main-input operand, and gawk io.c opens it
+# through nextfile() -> devopen() -> inetfile() -> socketopen(), a TCP
+# connection; devopen() checks neither the mode nor |& (only --traditional
+# skips it), so getline < "/inet/..." connects the same way, through
+# redirect_string(). Read in the gawk 5.2.2, 5.3.0, 5.3.2 and 5.4.2 sources,
+# not run; the manual names |& as the use of these files, not the only one.
 _AWK_FORBIDDEN_TEXT = ("system", "|", ">", "getline", "@", "close", "fflush", "/inet", "ARGV", "ARGC")
 
 
