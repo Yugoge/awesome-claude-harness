@@ -10,9 +10,14 @@ that is one of:
   - `<root>/<id>/views/*.md` (views are read-only)
   - `<root>/<id>/views/manifest.json` (Write tool only)
   - `<root>/<id>/cp-state-*.json` (spec-check.py only)
+A `touch` operand counts as a write, and a copy, move, install or link into a directory
+(-t/--target-directory, a trailing `/`, several sources, or an existing directory) writes
+`<dest>/<basename(source)>`.
 A relative target is read from the call's directory and from every directory a `cd`/`pushd`
-of the command names; each target is matched as written (normalised) and by its real path, so
-`./`, `../`, absolute spellings and a symlink into a spec root are refused alike. A lock file
+of the command names; each target is matched with `..` folded as text and by the real path of
+its unfolded spelling (a symlink resolved before the `..` after it, as the kernel and `cd -P`
+do), so `./`, `../`, absolute spellings, a symlink into a spec root and `link/../<id>/` are
+refused alike. A lock file
 or a views-shaped path outside every spec root (`/tmp/deps.lock.json`, a test fixture) passes.
 Every `>`/`>>` in the raw text is read as a redirect target too (as the base guard read it),
 so a command the shell parser cannot read is still checked.
@@ -110,13 +115,17 @@ def _blocked_path(path):
 
 
 def _candidates(text, dirs):
-    """Each absolute spelling of a written path: normalised, and its real path."""
+    """Each absolute spelling of a written path: `..` folded as text, and the real path.
+
+    The real path is taken of the UNFOLDED spelling, so a symlink is resolved before the `..`
+    after it, as the kernel does (`link/../s1/x` with `link -> .claude/specs/s1`).
+    """
     text = os.path.expanduser(text)
     bases = [""] if os.path.isabs(text) else dirs
     out = []
     for d in bases:
-        joined = os.path.normpath(os.path.join(d, text))
-        out.append(joined)
+        joined = os.path.join(d, text)
+        out.append(os.path.normpath(joined))
         try:
             out.append(os.path.realpath(joined))
         except (OSError, ValueError):
@@ -133,7 +142,11 @@ def _call_dir(data):
 
 
 def _cd_dirs(script, call_dir):
-    """The call's directory and each directory a `cd`/`pushd` names, read from those before it."""
+    """The call's directory and each directory a `cd`/`pushd` names, read from those before it.
+
+    A directory is kept unfolded (`<dir>/vlink/..`), so a target read from it is matched both as
+    `cd` reads it by default (logical, `..` folded as text) and as `cd -P` does (the real path).
+    """
     dirs = [call_dir]
     for site in _sp.walk(script):
         res = _sp.resolve(site.cmd)
@@ -149,10 +162,76 @@ def _cd_dirs(script, call_dir):
             target = os.path.expanduser(args[0])
             new = [target] if os.path.isabs(target) else [os.path.join(d, target) for d in dirs]
         for d in new:
-            d = os.path.normpath(d)
             if d not in dirs and len(dirs) < _MAX_DIRS:
                 dirs.append(d)
     return dirs
+
+
+# Copy, move, install and link: into a directory destination the written path is
+# `<dest>/<basename(source)>`.
+_INTO_DIR = ("cp", "mv", "install", "ln", "rsync")
+_NO_TARGET_DIR = ("-T", "--no-target-directory")
+
+
+def _word_text(w):
+    v = w.value() if w is not None else None
+    return os.path.expanduser(v) if v else None
+
+
+def _into_dir_texts(script, dirs):
+    """`<dest>/<basename(src)>` for each copy, move, install or link into a directory.
+
+    The destination is a directory when it is named by -t/--target-directory, ends in `/`,
+    follows several sources or already is a directory; `ln` with one operand links into `.`.
+    """
+    out = []
+    for site in _sp.walk(script):
+        res = _sp.resolve(site.cmd)
+        if res.name not in _INTO_DIR or res.name not in _sp.VERBS:
+            continue
+        opts, operands, _err = _sp.split_options(list(res.args), _sp.VERBS[res.name][0], 0,
+                                                  permute=True, lenient=True)
+        names = {o for o, _v in opts}
+        if names.intersection(_NO_TARGET_DIR):
+            continue
+        if res.name == "install" and names.intersection(("-d", "--directory")):
+            continue
+        target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
+        if target_dir:
+            dest, sources, into = _word_text(target_dir[-1]), operands, True
+        elif res.name == "ln" and len(operands) == 1:
+            dest, sources, into = ".", operands, True
+        elif len(operands) >= 2:
+            dest, sources = _word_text(operands[-1]), operands[:-1]
+            into = bool(dest) and (dest.endswith("/") or len(sources) > 1 or any(
+                os.path.isabs(c) and os.path.isdir(c) for c in _candidates(dest, dirs)))
+        else:
+            continue
+        if not dest or not into:
+            continue
+        for s in sources:
+            src = _word_text(s)
+            base = os.path.basename(src.rstrip("/")) if src else ""
+            if base and base not in (".", ".."):
+                out.append(os.path.join(dest, base))
+    return out
+
+
+# touch creates or stamps each operand.
+_TOUCH_SPEC = None if _sp is None else _sp._spec(
+    ("-a", "-c", "--no-create", "-f", "-h", "--no-dereference", "-m"),
+    ("-d", "--date", "-r", "--reference", "-t", "--time"))
+
+
+def _touch_texts(script):
+    out = []
+    for site in _sp.walk(script):
+        res = _sp.resolve(site.cmd)
+        if res.name != "touch":
+            continue
+        _opts, operands, _err = _sp.split_options(list(res.args), _TOUCH_SPEC, 0, permute=True, lenient=True)
+        out.extend(t for t in (_word_text(w) for w in operands) if t)
+    return out
 
 
 def _target_texts(command, script):
@@ -179,6 +258,11 @@ def _matches_block(command, call_dir):
             dirs = _cd_dirs(script, call_dir)
         except Exception:
             pass
+        for extra in (lambda: _touch_texts(script), lambda: _into_dir_texts(script, dirs)):
+            try:
+                texts += extra()
+            except Exception:
+                pass
     for text in dict.fromkeys(texts):
         if not text:
             continue

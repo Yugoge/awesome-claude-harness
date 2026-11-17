@@ -4,8 +4,9 @@
 Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2: a
 `cp-state-*.json` below a spec root (a `.claude/specs/`, `docs/dev/specs/` or
 `dot-claude/specs/` directory). A relative path is read from the call's directory
-(the payload's cwd); the path is matched normalised and by its real path, so `./`,
-`../`, absolute spellings and a symlink landing in a spec root are refused alike,
+(the payload's cwd); the path is matched normalised and by the real path of its unfolded
+spelling (a symlink is resolved before a `..` after it, as the kernel does), so `./`, `../`,
+absolute spellings, a symlink landing in a spec root and `link/../<id>/` are refused alike,
 and a `cp-state-*.json` under any other `specs/` (a test fixture) passes;
 a Bash command is out of scope (the cooperative threat model needs only the
 direct-write check).
@@ -47,12 +48,16 @@ def _call_dir(data: dict) -> str:
 
 
 def _path_candidates(path: str, call_dir: str) -> list:
-    abs_p = os.path.normpath(os.path.join(call_dir, os.path.expanduser(path)))
+    # `..` is folded textually (the path as written) and also read as the kernel reads it: the
+    # real path of the UNFOLDED spelling, so a symlink is resolved before the `..` that follows
+    # it (`link/../s1/x` with `link -> .claude/specs/s1` is `.claude/specs/s1`, not `s1`).
+    joined = os.path.join(call_dir, os.path.expanduser(path))
+    out = [os.path.normpath(joined)]
     try:
-        real = os.path.realpath(abs_p)
+        out.append(os.path.realpath(joined))
     except (OSError, ValueError):
-        return [abs_p]
-    return list(dict.fromkeys([abs_p, real]))
+        pass
+    return list(dict.fromkeys(out))
 
 
 def _is_cp_state_under_root(candidate: str) -> bool:
