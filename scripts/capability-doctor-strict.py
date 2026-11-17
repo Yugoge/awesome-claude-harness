@@ -83,6 +83,15 @@ CANARY = "capability-canary.py"
 # not that the host misidentified the event or the session. Not a measurement.
 WINDOW_REASONS = ("transcript_missing_run_nonce", "transcript_mtime_stale")
 NO_SESSION = "<a running session's id>"
+# The in-session proof of the session's own PreToolUse/PostToolUse. The harness's
+# hooks/pretool-block-background-tasks.py refuses the main agent a background Bash
+# unless /do consent holds this turn, and a background task a subagent starts dies
+# with that subagent before the nonce reaches the main transcript, so /do is the
+# one route that works. hooks/tests pins this exact call against that hook.
+IN_SESSION_COMMAND = "scripts/doctor --strict --timeout 60"
+IN_SESSION_ACTION = (f"type /do in this session, then have it run `{IN_SESSION_COMMAND}` as a "
+                     "background task and read its output once while it waits (without /do "
+                     "the harness refuses a background task)")
 DEEP_ACTIONS = {
     "identity_propagation": "a probe following a real subagent's host-issued identity across live callbacks",
     "permission_deny": "a probe with an actually-denied operation and an allowed control, both live",
@@ -207,12 +216,11 @@ def _event_actions(in_session: bool, sid: str | None) -> dict[str, str]:
     """The one proving action per event. `sid` is None when no real session id is
     known (a terminal run without --session-id); no synthetic id is ever printed."""
     if sid is None:
-        rerun = (f"rerun doctor --strict inside a session as a background task, or with "
+        rerun = (f"rerun doctor --strict inside a session ({IN_SESSION_ACTION}), or with "
                  f"--session-id {NO_SESSION} --timeout 120")
         return {label: rerun for label in cs.RELIED_UPON_EVENTS}
     nonce = "; the probe-open line must reach that session's transcript inside the window"
-    tool = ("run doctor --strict as a background task in this session and read its output "
-            "once while it waits" if in_session
+    tool = (IN_SESSION_ACTION if in_session
             else "have that session run one tool call that prints the probe-open line")
     return {
         "SessionStart": f"resume that session (claude --resume {sid}) while the probe is open{nonce}",
