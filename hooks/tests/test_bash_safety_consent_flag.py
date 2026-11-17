@@ -392,3 +392,163 @@ def test_an_option_spelling_that_writes_the_flag_is_refused(sandbox, command):
 def test_the_same_option_spellings_elsewhere_pass(sandbox, command):
     proc = run(sandbox, _spell(sandbox, command))
     assert proc.returncode == 0, (command, proc.stderr)
+
+
+# Standard tools that plant the flag by writing names they read from a file (an index, a template, a stored gzip
+# name, an archive, a git config naming the state dir as the work tree), into the state directory.
+PLANTERS_REFUSED = [
+    # git checkout-index --prefix: an output directory (any spelling, any abbreviation)
+    "git -C /tmp/r checkout-index -a --prefix=<S>/",
+    "git -C /tmp/r checkout-index -a --prefix <S>/",
+    "git -C /tmp/r checkout-index --prefix=$CLAUDE_STATE_DIR/ -a",
+    "git -C /tmp/r checkout-index -a -f --prefix=$CLAUDE_STATE_DIR/",
+    "git -C /tmp/r checkout-index -a -f --pre=<S>/",
+    "git --git-dir=/tmp/r/.git checkout-index -a --prefix=<S>/",
+    "cd /tmp/r && git checkout-index --all --prefix $CLAUDE_STATE_DIR/",
+    "git -C /tmp/r checkout-index -a --prefix=<S>/claude-orchestrator-",
+    "cd <S> && git --git-dir=/tmp/r/.git checkout-index -a --prefix=x-",
+    "git -C <S> --git-dir=/tmp/r/.git checkout-index -a --prefix=./",
+    # git init / clone whose directory, GIT_DIR, --git-dir or --separate-git-dir can be the state dir
+    "git init --template=/tmp/tpl <S>",
+    "git init --bare --template=/tmp/tpl $CLAUDE_STATE_DIR",
+    "git init --template=/tmp/tpl --bare $CLAUDE_STATE_DIR",
+    "GIT_TEMPLATE_DIR=/tmp/tpl git init --bare <S>",
+    "git -c init.templateDir=/tmp/tpl init --bare <S>",
+    "GIT_DIR=<S> git init --template=/tmp/tpl",
+    "GIT_DIR=$CLAUDE_STATE_DIR git init",
+    "export GIT_DIR=<S>; git init",
+    "git --git-dir=<S> init --template=/tmp/tpl",
+    "git --git-dir <S> init",
+    "git init --separate-git-dir=<S> --template=/tmp/tpl /tmp/sg",
+    "git init --separate-git-dir <S> /tmp/sg",
+    "cd <S> && git init --template=/tmp/tpl",
+    "cd $CLAUDE_STATE_DIR && git init --bare",
+    "git -C <S> init --bare --template=/tmp/tpl .",
+    "git -C $CLAUDE_STATE_DIR init",
+    "git clone --template=/tmp/tpl /tmp/r <S>",
+    "git clone --separate-git-dir=<S> /tmp/r /tmp/c",
+    "git clone /tmp/r $CLAUDE_STATE_DIR",
+    "cd <S> && git clone --template=/tmp/tpl /tmp/r .",
+    # gzip -N / --name restores the stored name next to the input (or in the cwd)
+    "cp /tmp/a.gz <S>/ && gzip -dN <S>/a.gz",
+    "cp /tmp/a.gz $CLAUDE_STATE_DIR/ && gunzip -N $CLAUDE_STATE_DIR/a.gz",
+    "gzip -dN $CLAUDE_STATE_DIR/a.gz",
+    "gunzip -N <S>/a.gz",
+    "gunzip --name $CLAUDE_STATE_DIR/a.gz",
+    "gzip -d --name <S>/a.gz",
+    "gzip --decompress --name <S>/a.gz",
+    "gzip -Nd <S>/a.gz",
+    "gzip -dNf <S>/a.gz",
+    "cd <S> && gzip -dN a.gz",
+    "cd $CLAUDE_STATE_DIR && gunzip -N a.gz",
+    "gunzip -rN <S>",
+    "GZIP=-N gunzip <S>/a.gz",
+    "sudo gunzip -N <S>/a.gz",
+    "unpigz -N <S>/a.gz",
+    # ar x
+    "cd <S> && ar x /tmp/a.ar",
+    "cd $CLAUDE_STATE_DIR && ar x /tmp/a.ar",
+    "ar x --output=<S> /tmp/a.ar",
+    "ar x --output <S> /tmp/a.ar",
+    "ar xv --output=$CLAUDE_STATE_DIR /tmp/a.ar",
+    "ar -x --output=<S> /tmp/a.ar",
+    # dpkg-deb / dpkg extraction
+    "dpkg-deb -x /tmp/f.deb <S>",
+    "dpkg-deb --extract /tmp/f.deb $CLAUDE_STATE_DIR",
+    "dpkg-deb -X /tmp/f.deb <S>",
+    "dpkg-deb --vextract /tmp/f.deb <S>",
+    "dpkg-deb -R /tmp/f.deb <S>",
+    "dpkg-deb --raw-extract /tmp/f.deb $CLAUDE_STATE_DIR",
+    "dpkg -x /tmp/f.deb <S>",
+    # the other extract-into-directory tools
+    "cd <S> && rpm2cpio /tmp/a.rpm | cpio -idm",
+    "cd <S> && bsdcpio -i < /tmp/a.cpio",
+    "cd <S> && pax -r -f /tmp/a.pax",
+    "pax -rw /tmp/src <S>",
+    "unrar x /tmp/a.rar <S>/",
+    "cd <S> && unrar e /tmp/a.rar",
+    "unar -o <S> /tmp/a.rar",
+    "unar --output-directory=$CLAUDE_STATE_DIR /tmp/a.rar",
+    "cd <S> && lha x /tmp/a.lzh",
+    "lha xw=<S> /tmp/a.lzh",
+    # a git config file written with text that names the state dir (core.worktree)
+    "printf '[core]\\n\\tworktree = %s\\n' <S> >> /tmp/r/.git/config; git -C /tmp/r checkout -f HEAD -- .",
+    'echo "[core] worktree = $CLAUDE_STATE_DIR" >> /tmp/r/.git/config && git -C /tmp/r checkout -f HEAD -- .',
+    "printf '[core]\\n\\tworktree = %s\\n' <S> >> /tmp/bare.git/config",
+    "printf '[core]\\n\\tworktree = %s\\n' $CLAUDE_STATE_DIR >> ~/.gitconfig",
+    "printf '[core]\\n\\tworktree = %s\\n' <S> >> $XDG_CONFIG_HOME/git/config",
+    "printf '[core]\\n\\tworktree = %s\\n' <S> | tee -a /tmp/r/.git/config",
+    "cat > /tmp/r/.git/config <<EOF\n[core]\n\tworktree = <S>\nEOF",
+    "export GIT_CONFIG_GLOBAL=/tmp/g.cfg; echo \"[core] worktree = <S>\" > /tmp/g.cfg",
+    "cd /tmp/r/.git && echo \"[core] worktree = <S>\" >> config",
+    "echo \"[core] worktree = <S>\" >> /tmp/r/.git/worktrees/w/config.worktree",
+    "echo \"[core] worktree = ../../state\" >> /tmp/r/.git/config",
+    "sed -i 's|^\\[core\\]|&\\n\\tworktree = <S>|' /tmp/r/.git/config",
+]
+# The same tools away from the state directory still pass.
+PLANTERS_ELSEWHERE_PASS = [
+    "git -C /tmp/r checkout-index -a --prefix=/tmp/out/",
+    "git -C /tmp/r checkout-index -a --prefix=out/",
+    "git init /tmp/newrepo",
+    "git init --bare --template=/tmp/tpl /tmp/bare.git",
+    "git clone /tmp/r /tmp/c",
+    "gzip -dN /tmp/a.gz",
+    "gunzip <S>/a.gz",
+    "gzip -dc --name <S>/a.gz",
+    "zcat -N <S>/a.gz",
+    "ar x /tmp/a.ar",
+    "ar t <S>/a.ar",
+    "dpkg-deb -x /tmp/f.deb /tmp/out",
+    "dpkg-deb -c /tmp/f.deb",
+    "unar -o /tmp/out /tmp/a.rar",
+    "echo '[core] bare = false' >> /tmp/r/.git/config",
+    "printf '[core]\\n\\tworktree = %s\\n' /tmp/w >> /tmp/r/.git/config",
+]
+
+
+@pytest.mark.parametrize("command", PLANTERS_REFUSED)
+def test_a_tool_that_plants_the_flag_into_the_state_dir_is_refused(sandbox, command):
+    proc = run(sandbox, fill(sandbox, command))
+    assert proc.returncode == 2 and RULE in proc.stderr, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", PLANTERS_ELSEWHERE_PASS)
+def test_the_same_tools_away_from_the_state_dir_pass(sandbox, command):
+    proc = run(sandbox, fill(sandbox, command))
+    assert proc.returncode == 0, (command, proc.stderr)
+
+
+# With the state dir at its default /tmp: commands that write nothing into /tmp itself pass; writes into it do not.
+DEFAULT_TMP_PASS = [
+    "cd /tmp && git worktree list",
+    "cd /tmp && git gc",
+    "rsync -av --temp-dir=/tmp src/ host:/x/",
+    "rsync -av --exclude=/tmp src/ dst/",
+    "cd /tmp && git checkout-index -a --prefix=out/",
+]
+DEFAULT_TMP_REFUSED = [
+    "cd /tmp && git checkout-index -a --prefix=x-",
+    "cd /tmp && git worktree add .",
+    "cd /tmp && git init",
+    "rsync -av --backup-dir=/tmp src/ dst/",
+]
+
+
+def run_default_state(sandbox, command):
+    env = {k: v for k, v in sandbox["env"].items() if k != "CLAUDE_STATE_DIR"}
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": SID,
+               "cwd": sandbox["repo"], "hook_event_name": "PreToolUse"}
+    return subprocess.run(["bash", str(SAFETY)], input=json.dumps(payload), capture_output=True, text=True,
+                          env=env, cwd=sandbox["repo"], timeout=120)
+
+
+@pytest.mark.parametrize("command", DEFAULT_TMP_PASS)
+def test_default_tmp_state_commands_that_write_nothing_there_pass(sandbox, command):
+    proc = run_default_state(sandbox, command)
+    assert proc.returncode == 0, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", DEFAULT_TMP_REFUSED)
+def test_default_tmp_state_writes_into_it_are_refused(sandbox, command):
+    proc = run_default_state(sandbox, command)
+    assert proc.returncode == 2 and RULE in proc.stderr, (command, proc.stderr)
