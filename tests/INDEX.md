@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 254
+*Last updated: 2026-11-17T02:12:48Z*
+**Total entries**: 261
 **Convention**: kebab
 
 ## Tree
@@ -38,6 +38,10 @@ tests/
 │   ├── `test_combine_differential.py` - hooks/lib/write_gate/__init__.py's `combine` (cyclomatic complexity 37) was split into helpers
 │   └── `test_completed_codex_subagents_differential.py` - The frozen copy in completed_codex_subagents_legacy.py is the function as it was at
 ├── fixtures/
+│   ├── cli/
+│   │   ├── 2.1.325/
+│   │   ├── 2.1.326/
+│   │   └── `CURRENT` - CURRENT file
 │   ├── late_repair_golden/
 │   │   ├── `complete.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 │   │   ├── `fanout.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
@@ -136,6 +140,7 @@ tests/
 │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
 ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
+├── `cli_shapes.py` - The rule (P15 section 2(d)):
 ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 ├── `test_ac_deviation_fanout_consumer.py` - lanes that stop short of ``completed`` and the lifecycle row of a chain
 ├── `test_ac_deviation_record_chain.py` - A dev report that records an acceptance-criteria deviation is reported
@@ -157,6 +162,8 @@ tests/
 ├── `test_ci_visibility_gate.py` - The private repository (full history) and the public one (the clean tree as one commit per
 ├── `test_clean_orchestrator_merge.py` - clean-merge-reports reads the three inspection reports of the request the Step 3 context
 ├── `test_cleaner_discard.py` - Action Types table gives and prints a DISCARDED line whose recover command restores the file. The
+├── `test_cli_fixture_shapes.py` - Tests built CLI records by hand, so CLI 2.1.322's change of the hook-output records (plain stdout
+├── `test_cli_synthesizers.py` - The replay harness and the hook tests below wrote CLI transcript records by hand, so the records ...
 ├── `test_close_command_text.py` - Each test hands the text to the code that consumes it (the obligation reader, the listing script,
 ├── `test_close_rating_step_label.py` - 376a9ae relabelled it so that no command's dispatch template would sit under a heading of the same
 ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)

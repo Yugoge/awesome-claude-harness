@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 from hooks.lib import obligation  # noqa: E402
 from hooks.lib.subagent_restart import project_slug  # noqa: E402
+from tests.cli_shapes import synthesize  # noqa: E402
 
 RESOLVER_PATH = REPO_ROOT / "scripts" / "resolve-dev-artifact-chain.py"
 TASK = "20260724-120000"
@@ -230,27 +231,32 @@ def session(root: Path, sid: str, records: list[dict]) -> Path:
     directory = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / project_slug(root)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{sid}.jsonl"
+    for record in records:  # this session's values in the recorded records
+        record["sessionId"] = sid
+        if "cwd" in record:
+            record["cwd"] = str(root)
     path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
     return path
 
 
+# Each record is the recorded CLI fixture's (tests/fixtures/cli), values filled in.
 def typed(command: str, args: str = "") -> dict:
-    return {"type": "user", "message": {"role": "user", "content":
-            f"<command-message>{command} is running…</command-message>\n"
-            f"<command-name>/{command}</command-name>\n<command-args>{args}</command-args>"}}
+    return synthesize("user", "command", turnOrigin="human", message__content=(
+        f"<command-message>{command} is running…</command-message>\n"
+        f"<command-name>/{command}</command-name>\n<command-args>{args}</command-args>"))
 
 
 def minted(task: str = TASK) -> dict:
-    return {"type": "attachment", "attachment": {
-        "type": "hook_additional_context", "hookName": "UserPromptSubmit",
-        "content": f"[/do] Consent granted.\n[/do] task-id minted: {task} — resolve via the session sidecar."}}
+    """prompt-workflow.py's plain stdout for a /do opener, as the CLI records it (hook_success)."""
+    stdout = f"[/do] Consent granted.\n[/do] task-id minted: {task} — resolve via the session sidecar.\n"
+    return synthesize("attachment/hook_success", attachment__content=stdout.rstrip("\n"), attachment__stdout=stdout)
 
 
 def dispatch(use_id: str, subagent_type: str, doc: dict) -> dict:
     prompt = "Do the work.\n" + obligation.serialize_obligation(doc)
-    return {"type": "assistant", "message": {"role": "assistant", "content": [
+    return synthesize("assistant", "tool_use", message__content=[
         {"type": "tool_use", "id": use_id, "name": "Agent",
-         "input": {"subagent_type": subagent_type, "prompt": prompt}}]}}
+         "input": {"subagent_type": subagent_type, "prompt": prompt}}])
 
 
 def ob(tid, role, pipeline, profile, artifacts, lane=None, lane_set=None):
@@ -390,8 +396,8 @@ def test_the_minted_record_is_found_from_a_later_session(tmp_path):
 
 @pytest.mark.parametrize("records", [
     [typed("dev", "x"), minted()],
-    [typed("do", "x"), {"type": "assistant", "message": {"role": "assistant", "content": [
-        {"type": "text", "text": f"[/do] task-id minted: {TASK}"}]}}],
+    [typed("do", "x"), synthesize("assistant", "text", message__content=[
+        {"type": "text", "text": f"[/do] task-id minted: {TASK}"}])],
 ], ids=["outside-a-do-span", "agent-text"])
 def test_a_minted_line_outside_the_do_hook_record_is_no_do_task(tmp_path, records):
     tree = Tree(tmp_path / "proj")

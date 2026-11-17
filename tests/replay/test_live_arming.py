@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.cli_shapes import synthesize
 from tests.replay import hookrun, sites
 
 REPO = Path(__file__).resolve().parents[2]
@@ -110,29 +111,31 @@ class World:
 
     # -- records in the CLI's shapes
     def add(self, name, record):
+        """Write ``record`` (synthesized from the recorded CLI fixture) with this session's values."""
         self.clock += timedelta(seconds=1)
-        record.setdefault("timestamp", self.clock.isoformat().replace("+00:00", "Z"))
-        record.setdefault("sessionId", SID[name])
+        record["timestamp"] = self.clock.isoformat().replace("+00:00", "Z")
+        record["sessionId"] = SID[name]
+        if "cwd" in record:
+            record["cwd"] = str(self.project)
         with self.transcripts[name].open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
 
     def command(self, name, command, args="", context=None):
-        self.add(name, {"type": "queue-operation", "operation": "enqueue", "content": f"/{command} {args}".strip()})
-        self.add(name, {"type": "user", "message": {"role": "user", "content":
-                 f"<command-message>{command}</command-message>\n<command-name>/{command}</command-name>\n"
-                 f"<command-args>{args}</command-args>"}})
-        self.add(name, {"type": "user", "isMeta": True, "message": {"role": "user", "content": [
-            {"type": "text", "text": f"body of /{command}"}]}})
-        if context:
-            self.add(name, {"type": "attachment", "attachment": {"type": "hook_additional_context",
-                                                                 "content": context, "hookName": "UserPromptSubmit"}})
+        self.add(name, synthesize("queue-operation", "enqueue", content=f"/{command} {args}".strip()))
+        self.add(name, synthesize("user", "command", turnOrigin="human", message__content=(
+            f"<command-message>{command}</command-message>\n<command-name>/{command}</command-name>\n"
+            f"<command-args>{args}</command-args>")))
+        self.add(name, synthesize("user", "meta", message__content=[{"type": "text", "text": f"body of /{command}"}]))
+        if context:  # the UserPromptSubmit hook's plain stdout, as the CLI records it
+            self.add(name, synthesize("attachment/hook_success", attachment__content=context.rstrip("\n"),
+                                      attachment__stdout=context))
 
     def tool(self, name, tool, tool_input, result="ok"):
         ident = f"toolu_{name}_{len(self.transcripts[name].read_text().splitlines()):04d}"
-        self.add(name, {"type": "assistant", "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": ident, "name": tool, "input": tool_input}]}})
-        self.add(name, {"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": ident, "content": result}]}})
+        self.add(name, synthesize("assistant", "tool_use", message__content=[
+            {"type": "tool_use", "id": ident, "name": tool, "input": tool_input}]))
+        self.add(name, synthesize("user", "tool_result", message__content=[
+            {"type": "tool_result", "tool_use_id": ident, "content": result, "is_error": False}]))
 
     def canonical(self, command):
         out = subprocess.run([sys.executable, str(self.home / ".claude" / "scripts" / "todo" / f"{command}.py")],
@@ -172,7 +175,7 @@ class World:
              "worktree_path": str(self.project), "main_root": str(self.project)}))
 
     def _ungated(self):
-        self.add("ungated", {"type": "user", "message": {"role": "user", "content": "summarise the open issues"}})
+        self.add("ungated", synthesize("user", "prompt", turnOrigin="human", message__content="summarise the open issues"))
 
     # -- running hooks
     def env(self, settings, mark=False):

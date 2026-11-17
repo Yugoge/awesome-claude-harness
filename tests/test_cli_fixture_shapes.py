@@ -65,7 +65,7 @@ def test_the_recording_holds_the_hook_record_forms_of_section_2d():
     events = {r["attachment"]["hookEvent"] for r in cli_shapes.load_records("attachment/hook_success")}
     assert "SubagentStop" not in events
     sub = cli_shapes.load_records("subagent:attachment/hook_success")
-    assert {r["attachment"]["hookEvent"] for r in sub} == {"SubagentStop"}
+    assert "SubagentStop" in {r["attachment"]["hookEvent"] for r in sub}
     for event in ("Stop", "SubagentStop"):
         for key in ("effort", "background_tasks", "session_crons", "last_assistant_message"):
             assert f"{key}" in shapes[f"stdin:{event}"], (event, key)
@@ -110,7 +110,8 @@ def test_shape_is_three_levels_deep_with_list_items_marked():
     assert shape["attachment.deep.deeper"] == {"object"}
     assert "attachment.deep.deeper.deepest" not in shape
     assert cli_shapes.record_kind(rec) == "attachment/hook_x"
-    assert cli_shapes.record_kind({"type": "system", "subtype": "stop_hook_summary"}) == "system/stop_hook_summary"
+    summary = cli_shapes.load_records("system/stop_hook_summary")[0]  # a recorded record, not a hand-built one
+    assert cli_shapes.record_kind(summary) == "system/stop_hook_summary"
 
 
 def test_the_loader_fixture_returns_fresh_recorded_records(cli_record):

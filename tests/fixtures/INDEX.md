@@ -1,13 +1,25 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T02:46:59Z*
-**Total entries**: 8
+*Last updated: 2026-11-17T02:12:48Z*
+**Total entries**: 20
 **Convention**: kebab
 
 ## Tree
 ```
 fixtures/
+├── cli/
+│   ├── 2.1.325/
+│   │   ├── stdin/
+│   │   ├── `shapes.json` - JSON config: stdin:PreToolUse, stdin:SessionStart, stdin:Stop, stdin:SubagentStop, stdin:UserPromptSubmit
+│   │   ├── `subagent.jsonl` - jsonl file
+│   │   └── `transcript.jsonl` - jsonl file
+│   ├── 2.1.326/
+│   │   ├── stdin/
+│   │   ├── `shapes.json` - JSON config: stdin:PreToolUse, stdin:SessionStart, stdin:Stop, stdin:SubagentStart, stdin:SubagentStop
+│   │   ├── `subagent.jsonl` - jsonl file
+│   │   └── `transcript.jsonl` - jsonl file
+│   └── `CURRENT` - CURRENT file
 ├── late_repair_golden/
 │   ├── `complete.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 │   ├── `fanout.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts

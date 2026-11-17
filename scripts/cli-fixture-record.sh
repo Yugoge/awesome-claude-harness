@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 # Usage: bash scripts/cli-fixture-record.sh [--out <dir>] [--keep-raw <dir>]
-#   Runs the installed CLI headless, twice in one session, in a throwaway HOME whose minimal
+#   Runs the installed CLI headless, three times in one session, in a throwaway HOME whose minimal
 #   settings.json registers trivial hooks (SessionStart; UserPromptSubmit plain stdout;
-#   UserPromptSubmit JSON additionalContext; PreToolUse; Stop; SubagentStop). The second
-#   prompt dispatches a subagent, so SubagentStop fires and a subagent transcript is written.
+#   UserPromptSubmit JSON additionalContext; PreToolUse; Stop; SubagentStart plain stdout and JSON
+#   additionalContext; SubagentStop). The first prompt is
+#   a typed slash command whose body calls a skill (the Skill expansion record) and Bash; the
+#   second dispatches a subagent that calls Bash, so SubagentStop fires and a subagent transcript
+#   is written; the third calls CronCreate (its toolUseResult).
 #   Writes tests/fixtures/cli/<version>/{transcript.jsonl,subagent.jsonl,stdin/<Event>.json,
 #   shapes.json} and sets tests/fixtures/cli/CURRENT to <version>.
-# Kept: hook attachment records, system/stop_hook_summary, the user/assistant envelopes and
-#   each event's hook stdin. Home, cwd, uuids and timestamps become placeholders; every other
+# Kept: hook attachment records, system/stop_hook_summary, the queue-operation, user and
+#   assistant envelopes and each event's hook stdin. Home, cwd, uuids and timestamps become placeholders; every other
 #   string becomes "<redacted>" unless its key is a structural one (type, hookEvent, ...) or it
 #   is a marker this script's own hooks print. No prompt or system-prompt text is kept.
 # Cost: about $0.03 and 30 s a run; it needs the CLI's model access. Run it on a CLI upgrade,
@@ -38,7 +41,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 HOME_DIR="$SCRATCH/home"
 WORK_DIR="$SCRATCH/work"
 RAW="$SCRATCH/raw"
-mkdir -p "$HOME_DIR/.claude" "$WORK_DIR" "$RAW/stdin"
+mkdir -p "$HOME_DIR/.claude/commands" "$HOME_DIR/.claude/skills/fixture-skill" "$WORK_DIR" "$RAW/stdin"
 HOME_DIR="$(cd "$HOME_DIR" && pwd -P)"
 WORK_DIR="$(cd "$WORK_DIR" && pwd -P)"
 
@@ -70,23 +73,32 @@ settings = {"hooks": {
     "UserPromptSubmit": [entry("UserPromptSubmit", "plain"), entry("UserPromptSubmit", "json")],
     "PreToolUse": [entry("PreToolUse", "plain", "*")],
     "Stop": [entry("Stop", "plain")],
+    "SubagentStart": [entry("SubagentStart", "plain"), entry("SubagentStart", "json")],
     "SubagentStop": [entry("SubagentStop", "plain")],
 }}
 with open(path, "w") as fh:
     json.dump(settings, fh, indent=2)
 PY
 
+# The typed command and the skill it calls (a command's isMeta body; a Skill call's isMeta expansion).
+printf -- '---\ndescription: fixture command\n---\nUse the Skill tool once with the skill fixture-skill, then run the Bash command true, then reply with the single word ok. $ARGUMENTS\n' \
+  > "$HOME_DIR/.claude/commands/fixture.md"
+printf -- '---\nname: fixture-skill\ndescription: A fixture skill. Use it when asked to.\n---\nReply with the single word ok.\n' \
+  > "$HOME_DIR/.claude/skills/fixture-skill/SKILL.md"
+
 SESSION="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 run_cli() {
   # The throwaway HOME is the CLI's whole config; nothing of the caller's home or session is read.
   (cd "$WORK_DIR" && env -u CLAUDECODE -u CLAUDE_CONFIG_DIR -u CLAUDE_PROJECT_DIR -u CLAUDE_HOME \
       HOME="$HOME_DIR" FIXTURE_RAW="$RAW" "$CLI" -p "$@" --max-turns 6 \
-      --allowedTools "Agent Task" --output-format json >>"$RAW/cli-output.log" 2>>"$RAW/cli-stderr.log" \
+      --allowedTools "Agent Task Bash Skill CronCreate" --output-format json >>"$RAW/cli-output.log" 2>>"$RAW/cli-stderr.log" \
     || echo "cli-fixture-record: a CLI run exited $? (see what still recorded)" >&2)
 }
-run_cli --session-id "$SESSION" "Reply with the single word ok."
+run_cli --session-id "$SESSION" "/fixture now"
 run_cli --resume "$SESSION" \
-  "Use the Agent tool once to dispatch a general-purpose subagent whose only task is to reply with the single word ok. Then reply with the single word ok."
+  "Use the Agent tool once to dispatch a general-purpose subagent whose only task is to run the Bash command true and reply with the single word ok. Then reply with the single word ok."
+run_cli --resume "$SESSION" \
+  "Use the CronCreate tool once to schedule the prompt noop with cron 7 3 1 1 *, not recurring. Then reply with the single word ok."
 
 if [[ -n "$KEEP_RAW" ]]; then
   mkdir -p "$KEEP_RAW" && cp -r "$RAW" "$HOME_DIR/.claude/projects" "$KEEP_RAW"/ 2>/dev/null || true
@@ -143,7 +155,7 @@ def clean(value, key=None):
 
 def wanted(rec):
     t = rec.get("type")
-    if t in ("user", "assistant"):
+    if t in ("user", "assistant", "queue-operation"):
         return True
     if t == "attachment":
         a = rec.get("attachment")
