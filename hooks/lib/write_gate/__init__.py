@@ -13,7 +13,8 @@ Each rule declares:
   refusing input.
 - ``fail``: what an error the rule's own handlers did not catch, or an overrun of its
   budget, means: "open" (the call goes on, as a crashed or timed-out hook let it) or
-  "closed" (refused: WS1, tool-policy's import failure blocks).
+  "closed" (refused: WS1, tool-policy's import failure blocks; harness-switch, whose
+  overrun would let through the settings write it exists to refuse).
 - ``exemptions``: what lets the rule allow a call it would otherwise refuse. Each rule
   checks its own; the gate grants none (no consent check at the gate's entry).
 - ``budget``: seconds, measured (test_write_gate.py::test_budgets_cover_the_measured_times).
@@ -70,8 +71,12 @@ class Rule:
 RULES: tuple[Rule, ...] = (
     Rule("bash-views", "pretool-bash-views-guard.py", frozenset({"Bash"}), "both", "open",
          ("a command that runs scripts/spec-check.py, the cp-state writer",), 5.0),
+    # Fails closed: for an overnight actor its answer is a refusal or the bwrap rewrite, and an overrun
+    # that failed open dropped both (on d5eb015f a padded `chmod -x ... <keystone hook>` overran and
+    # ran, unrefused and outside bwrap). An error it raises before it knows the caller is an overnight
+    # actor is its own exit 1 (main()), so another session still goes on as it did when this failed open.
     Rule("overnight-boundary", "pretool-overnight-hook-guard.py",
-         frozenset({"Write", "Edit", "MultiEdit", "Bash", "AskUserQuestion"}), "both", "open",
+         frozenset({"Write", "Edit", "MultiEdit", "Bash", "AskUserQuestion"}), "both", "closed",
          ("outside a live /dev-overnight session the rule allows everything",
           "no /do and no /allow exemption: the overnight self-repair boundary holds for both"), 20.0),
     Rule("tool-policy", "pretool-tool-policy.py", None, "both", "closed",
@@ -88,7 +93,7 @@ RULES: tuple[Rule, ...] = (
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
     Rule("harness-switch", "pretool-harness-switch-guard.py",
          WRITE_TOOLS | {"Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"},
-         "both", "open",
+         "both", "closed",  # an overrun refuses: an agent pads a command past the budget at will
          ("reading the switch's state or settings files",
           "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files",
           "an /allow grant for the one call, for a Claude Code settings file's env, hooks or permissions "

@@ -7,12 +7,16 @@ ref move. The shared parser reads the operands of chmod, chown, chattr and setfa
 targets, the keystone hook dir is one of the guard's git-config paths for a Write, an Edit and each
 Bash write target, and bubblewrap rebinds it read-only. A file in the worktree, and every session
 outside overnight, pass.
+
+Padded with thousands of operands, the same chmod is refused well inside the rule's budget: the
+guard resolves the git config paths once per command, and the rule fails closed on an overrun.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -267,3 +271,82 @@ def test_out_of_scope_found_writes_the_parser_cannot_read(repo, form):
     command = MISSES[form].format(rt=rt, work=work, dir=rt.parent)
     r = _hook(repo, "Bash", {"command": command}, work)
     assert r.returncode == 2, (form, r.stderr)
+
+
+
+GATE = HOOKS / "pretool-write-gate.py"
+PAD = 7000  # the integration review's padded command: about 42 KB of operands before the target
+# The overnight-boundary rule alone, as the write gate runs it (lib/rule_runner, its RULES entry; argv[2],
+# if given, replaces its budget), and the gate's answer from it: [overrun, exit status, stdout, stderr].
+# The other rules of the gate can only add refusals to it, and their own costs stay out of the timing.
+_RULE_ALONE = """
+import dataclasses, json, sys
+sys.path.insert(0, sys.argv[1])
+from lib import write_gate
+from lib.rule_runner import run_rule
+rule = next(r for r in write_gate.RULES if r.name == "overnight-boundary")
+if sys.argv[2:]:
+    rule = dataclasses.replace(rule, budget=float(sys.argv[2]))
+run = run_rule(rule.file, sys.stdin.buffer.read(), rule.budget)
+answer = write_gate.combine([(rule, run)])
+print(json.dumps([run.overrun, answer.code, answer.stdout, answer.stderr]))
+"""
+
+
+def _padded(*tail: str) -> str:
+    return "chmod -x " + " ".join([*(f"f{i}" for i in range(PAD)), *tail])
+
+
+def _rule_alone(main: Path, command: str, cwd: Path, env: dict, *budget: str) -> list:
+    payload = {"session_id": SID, "tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd),
+               "transcript_path": str(main / "t.jsonl")}
+    p = subprocess.run([sys.executable, "-c", _RULE_ALONE, str(HOOKS), *budget], input=json.dumps(payload),
+                       capture_output=True, text=True, env=env, cwd=cwd, timeout=120)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_padded_chmod_of_the_keystone_hook_is_refused_within_the_budget(repo, kind):
+    """On d5eb015f the guard ran a `git rev-parse` for each write target (about 3 ms each), so 7000
+    operands before the keystone hook took the rule past its 20 s budget: the gate exited 1, and
+    the chmod ran, unrefused and outside bwrap. The git config paths are resolved once per command
+    now: the rule refuses it inside its budget, with its own reason."""
+    work = _state(repo, kind)
+    rt = _keystone(repo)
+    overrun, code, out, err = _rule_alone(repo, _padded(str(rt)), work, _env(repo, work, bwrap=True))
+    assert not overrun and code == 2 and "OVERNIGHT GIT CONFIG PROTECTION" in err, (overrun, code, err[-400:])
+    assert f"Blocked: Bash to {rt}" in err
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_padded_ordinary_command_is_still_run_inside_bwrap(repo, kind):
+    """The same padding with no keystone target: the rule still rewrites the command into bwrap,
+    which on d5eb015f the overrun dropped."""
+    work = _state(repo, kind)
+    overrun, code, out, err = _rule_alone(repo, _padded(), work, _env(repo, work, bwrap=True))
+    assert not overrun and code == 0, (overrun, code, err[-400:])
+    argv = shlex.split(json.loads(out)["hookSpecificOutput"]["updatedInput"]["command"])
+    assert os.path.basename(argv[0]) == "bwrap" and "--ro-bind" in argv and argv[-1] == _padded()
+
+
+def test_an_overrun_of_the_boundary_refuses_an_overnight_actors_call(repo, tmp_path):
+    """The rule fails closed: an overrun of its budget refuses an overnight actor's call, so a timeout
+    can drop neither a refusal nor the bwrap rewrite (failing open, the gate exited 1 with neither).
+    The overrun is made with a git that hangs, which every git query of the rule then waits on, and a
+    budget of 1 s. An error before the caller is classified is no actor's: another session's call,
+    with a malformed state file in the project, is still a non-blocking error, not a refusal."""
+    work = _state(repo, "in_place")
+    hung = tmp_path / "hung-git"
+    hung.mkdir()
+    (hung / "git").write_text("#!/bin/sh\nexec sleep 60\n")
+    (hung / "git").chmod(0o755)
+    env = _env(repo, work, bwrap=True)
+    env["PATH"] = f"{hung}{os.pathsep}{env['PATH']}"
+    overrun, code, out, err = _rule_alone(repo, "echo x > out.txt", work, env, "1.0")
+    assert overrun and code == 2 and "updatedInput" not in out, (overrun, code, out, err)
+    assert "overnight-boundary ran past its 1 s budget" in err and "fails closed" in err, err
+    state = repo / ".claude" / f"overnight-state-{SID}.json"
+    state.write_text(json.dumps({**json.loads(state.read_text()), "worktree_path": [str(work)]}))
+    r = _hook(repo, "Bash", {"command": "echo x > out.txt"}, repo, session="the-owner", hook=GATE)
+    assert r.returncode == 1 and "TypeError" in r.stderr, (r.returncode, r.stdout, r.stderr)

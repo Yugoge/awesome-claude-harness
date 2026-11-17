@@ -40,25 +40,7 @@ def _codes(text: str) -> list[str]:
 
 
 # ------------------------------------------------------------------ Step 2
-def test_step2_typed_id_is_authoritative_only_when_it_names_a_task() -> None:
-    step2 = _flat(_section(COMMIT, "### Step 2:"))
-    bullet = re.search(r"- A supplied `TASK_ID` is authoritative (.*?) - Otherwise", step2).group(1)
-    assert bullet.startswith("when it names a task:"), bullet
-    for needle in ("`docs/dev/`", "typed as a path, that file exists", "(a mistyped id) is not authoritative",
-                   "ask the `Which task` question below", "`close.md`'s Task-id resolution",
-                   "`_targets` in the command Stop gate, `stop-command-gate.py`",
-                   "with none dispatched the Stop holds"):
-        assert needle in bullet, needle
-    # The question the bullet points at is Step 2's own, the one a replay asks.
-    assert re.search(r"header `Task`, question `Which task should /commit land\?`", step2)
-    assert "no `TASK_ID` supplied" in step2
-    usage = next(line for line in COMMIT.splitlines() if line.startswith("| `<task-id>` |"))
-    assert "An explicit task-id that names a task is authoritative (Step 2 checks it)." in usage
-    # close.md's passage the bullet points at.
-    assert 'A path that does not exist: ask "Which task?"' in _flat(_section(
-        (REPO / "commands" / "close.md").read_text(encoding="utf-8"), "### Task-id resolution"))
-
-
+# The bullet's wording is read by no code; the rule it states is the Stop gate's, run below.
 def test_step2_rule_is_the_gates_resolve_rule(tmp_path: Path) -> None:
     """The gate's `_resolves` checks what the bullet says: a docs/dev file carrying the id (its own or a
     lane's of that parent), or a typed path that exists; a mistyped id resolves to nothing."""

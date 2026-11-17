@@ -261,6 +261,7 @@ class Dispatch:
         self.lock = threading.Lock()
         self.finished = False
         self.real = (os.dup(1), os.dup(2))
+        self.done: dict = {}  # index -> Result of the rules an at-once run that faulted had settled
 
     def run(self) -> None:
         """Run every selected hook; their results are in ``self.results``, in rule order. Several
@@ -273,9 +274,15 @@ class Dispatch:
             run_rule = None
         if run_rule is not None and len(self.rules) > 1 and self.run_at_once():
             return
-        for rule in self.rules:
+        for i, rule in enumerate(self.rules):
             if self.finished:
                 break
+            if i in self.done:  # it ended in an at-once run that then faulted: never run twice
+                with self.lock:
+                    if self.finished:
+                        break
+                    self.results.append(self.done[i])
+                continue
             self.mark(rule.path)
             try:
                 if run_rule is None:
@@ -294,7 +301,10 @@ class Dispatch:
     def run_at_once(self) -> bool:
         """The selected hooks at the same time, one fork of this process each (lib/rule_fork), a
         rule naming earlier rules (``after``) started once those have ended. False, with no hook
-        run, when this process cannot fork safely (lib/rule_fork.can_fork)."""
+        run, when this process cannot fork safely (lib/rule_fork.can_fork), or when the at-once run
+        itself faulted: every fork has been ended then (lib/rule_fork), the rules it settled keep
+        their results (``self.done``) and the others run one after another, so the answer is the
+        one-after-another run's, never the launcher's own exit 1 (which the CLI lets through)."""
         try:
             from lib import rule_fork
             if not rule_fork.can_fork():
@@ -307,12 +317,22 @@ class Dispatch:
                     for i, r in enumerate(self.rules)]
         except Exception:
             return False
-        runs = rule_fork.run_at_once(
-            jobs, fallback=lambda i: run_process(self.rules[i], self.raw),
-            mark=(lambda i, on: self.mark(self.rules[i].path if on else None)) if self.marks else None)
-        self.results = [rr if isinstance(rr, Result) else
-                        Result(rule, TIMEOUT if rr.overrun else rr.code, rr.stdout, rr.stderr, rr.seconds, "fork")
-                        for rule, rr in zip(self.rules, runs)]
+
+        def result(i, rr):
+            return rr if isinstance(rr, Result) else Result(self.rules[i], TIMEOUT if rr.overrun else rr.code,
+                                                            rr.stdout, rr.stderr, rr.seconds, "fork")
+
+        done = {}
+        try:
+            runs = rule_fork.run_at_once(
+                jobs, fallback=lambda i: run_process(self.rules[i], self.raw),
+                mark=(lambda i, on: self.mark(self.rules[i].path if on else None)) if self.marks else None,
+                finished=lambda i, rr: done.__setitem__(i, rr))
+        except Exception:  # the fork machinery's own fault: its forks are ended; the rest one after another
+            self.mark(None)
+            self.done = {i: result(i, rr) for i, rr in done.items()}
+            return False
+        self.results = [result(i, rr) for i, rr in enumerate(runs)]
         return True
 
     def emergency(self, stuck: Rule) -> None:  # pragma: no cover - needs a hook that ignores its timeout
@@ -324,8 +344,9 @@ class Dispatch:
             self.finished = True
             done = list(self.results)
         done.append(Result(stuck, TIMEOUT))
-        rest = self.rules[self.rules.index(stuck) + 1:]
-        done += [run_process(r, self.raw) for r in rest]
+        at = self.rules.index(stuck)
+        done += [self.done[i] if i in self.done else run_process(r, self.raw)
+                 for i, r in enumerate(self.rules) if i > at]
         self.results = done
         code, out, err = combine(self.event, done)
         self.record()
