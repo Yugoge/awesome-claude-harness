@@ -89,8 +89,8 @@ def test_stand_in_daemon_is_gated_and_grantable(sandbox):
     assert r.returncode == 2
     assert "daemon-restart-prohibition" in r.stderr
     assert "/opt/demo/bin/allow-restart <target>" in r.stderr
-    r = hook(env, "timeout 5 bash -c 'echo restart demo-daemon'")
-    assert r.returncode == 2 and "daemon-restart-wrapper" in r.stderr
+    # Only echoes the words: no systemctl or service runs, so nothing restarts.
+    assert hook(env, "timeout 5 bash -c 'echo restart demo-daemon'").returncode == 0
     r = hook(env, "systemctl restart demo-unit")
     assert r.returncode == 2
     assert "(and demo-daemon-* takes the daemon-restart grant)" in r.stderr
@@ -104,6 +104,27 @@ def test_stand_in_daemon_is_gated_and_grantable(sandbox):
     # E12: no output the owner reads names a grant audit log, so a consumed grant writes none
     assert not list((tmp_path / "config").rglob("*.log"))
 
+
+
+@pytest.mark.parametrize("command", [
+    "timeout 5 bash -c 'systemctl restart demo-daemon'",
+    "nohup systemctl restart demo-daemon",
+    "env X=1 systemctl restart demo-daemon",
+    "systemd-run systemctl restart demo-daemon",
+    "eval 'systemctl restart demo-daemon'",
+    "echo 'systemctl restart demo-daemon' | at now",
+    "watch systemctl restart demo-daemon",
+    "(crontab -l; echo '* * * * * systemctl restart demo-daemon') | crontab -",
+    "python3 -c 'import os; os.system(\"systemctl restart demo-daemon\")'",
+    "node -e 'require(\"child_process\").execSync(\"systemctl restart demo-daemon\")'",
+    "perl -e 'system(\"systemctl restart demo-daemon\")'",
+    "ruby -e 'system(\"systemctl restart demo-daemon\")'",
+    "echo systemctl restart demo-daemon | nc localhost 9",
+])
+def test_wrapped_daemon_restart_is_refused(sandbox, command):
+    _, env = sandbox
+    r = hook({**env, **STAND_INS}, command)
+    assert r.returncode == 2 and "daemon-restart-" in r.stderr, r.stderr
 
 GUARD = REPO / "hooks" / "lib" / "runtime_guard.py"
 
