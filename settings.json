@@ -194,11 +194,8 @@
       "Bash(git push -f:*)",
       "Bash(git reset --hard:*)",
       "Bash(halt:*)",
-      "Bash(kubectl apply:*)",
-      "Bash(kubectl create:*)",
       "Bash(kubectl delete:*)",
       "Bash(mkfs:*)",
-      "Bash(npm publish:*)",
       "Bash(poweroff:*)",
       "Bash(reboot:*)",
       "Bash(rm -rf /*:*)",
@@ -269,7 +266,11 @@
       "Skill(stop:*)",
       "Skill(test:*)"
     ],
-    "ask": []
+    "ask": [
+      "Bash(kubectl apply:*)",
+      "Bash(kubectl create:*)",
+      "Bash(npm publish:*)"
+    ]
   },
   "deniedMcpServers": [
     {
