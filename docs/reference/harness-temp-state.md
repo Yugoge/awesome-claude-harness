@@ -6,9 +6,13 @@ Every file or directory the harness itself keeps under `/tmp`, `/var/tmp` or `$T
 with the `path:line` that creates or reads it. `hooks/lib/harness_temp_state.py` is the one
 definition of this list: `LOCATIONS` holds one entry per row below (the **Location** column),
 `classify(path)` answers which entry a path is, `is_harness_state(path)` whether it is control
-state, and `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root. The removal policy of
-`hooks/pretool-bash-safety.sh` (`hooks/lib/bash_execution_boundary.py`, `rm_temp_targets_proven`)
-uses it to allow a plain `rm` of temp-root paths that are not control state (only as the command string's one command, on a path with no symlink; a symlink a separate background call creates after the hook ran is a residual race); `hooks/tests/test_harness_temp_state.py` pins every row.
+state, `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root, and
+`crosses_mount(path)` whether a mount point under the temp root carries the path elsewhere. The removal
+policy of `hooks/pretool-bash-safety.sh` (`hooks/lib/bash_execution_boundary.py`, `rm_temp_targets_proven`)
+uses it to allow a plain `rm` of temp-root paths that are not control state (only as the command string's
+one command, on a path with no symlink and no mount point on it or, for a recursive removal or a directory,
+below it; a symlink or mount a separate background call makes after the hook ran is a residual race);
+`hooks/tests/test_harness_temp_state.py` pins every row.
 
 ## Roots
 
@@ -86,6 +90,19 @@ uses it to allow a plain `rm` of temp-root paths that are not control state (onl
   `~/.claude`), the attribution journal (`hooks/lib/attribution_journal.py:92`), overnight state
   (`scripts/create-overnight-state.sh:688`, under the project's `.claude/`).
 
+## Mount points
+
+realpath cannot see a bind mount: as root, `mount --bind ~/.claude /tmp/b3` leaves `/tmp/b3`
+resolving to itself (same `st_dev` too, when both are on one filesystem), while `rm -rf /tmp/b3`
+or a write to `/tmp/b3/settings.json` reaches the mounted directory. `crosses_mount(path, *,
+below=False, cwd=None, mountinfo=None)` reads `/proc/self/mountinfo` (`mount_points()`, field 5
+with its `\040`-style octal escapes undone, each realpath'd) and is True when a mount point lies
+between the path's temp root and the path, the path itself included, or with `below=True`
+anywhere under it (for a recursive removal). Mounts at or above the temp root, such as a tmpfs
+`/tmp` or the root filesystem, are ignored. It is a disqualifier only and fails closed: True
+when the path is in no temp root, when mountinfo cannot be read or parsed, or on any error.
+A caller allowing a temp write or removal requires `is_in_temp_root(p) and not crosses_mount(p)`.
+
 ## Limitations
 
 - **Case.** Control-state locations match case-insensitively, the root prefix as well as the
@@ -100,5 +117,8 @@ uses it to allow a plain `rm` of temp-root paths that are not control state (onl
   `CLAUDE_GIT_BLESSED_GRANT_DIR=/x git ...`, and the program it runs then reads and writes state
   in a directory no hook-side classifier knows about. Catching that means parsing the command's
   environment assignments, which is the caller's job.
+- **Races.** Every check reads the filesystem when the hook runs. A symlink or a mount created
+  afterwards, by a separate call that is still running (a backgrounded `sleep 1; mount --bind
+  ...`), is not seen; the path's later meaning is outside any pre-tool check.
 - **Input.** A `str`, `bytes` (decoded with `os.fsdecode`) or `os.PathLike` path is accepted;
   any other type raises `TypeError` rather than reading as "not state".
