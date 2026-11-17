@@ -1,5 +1,6 @@
-"""cd-read: a prompt that steers an agent to search after a `cd` in a compound command.
+"""cd-read lint: reports a prompt that searches after a `cd` in a compound command.
 
+A `Read()` deny rule makes the CLI ask before a relative-path read after a `cd`.
 While settings.json carries any `Read()` deny rule, the Claude Code CLI cannot resolve
 statically which file a read command reads by a relative path after a `cd` in a compound
 command, so it asks for approval (`grep reads a file by a relative path after a cd in a

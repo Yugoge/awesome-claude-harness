@@ -1,6 +1,7 @@
-"""OB-L10: the harness prose searches with path operands, never after a `cd` in a compound command.
+"""Checks that harness prompts search with path operands, not after a `cd` (OB-L10).
 
-Root cause (audit G3, perm-read-deny-arms-cd-guard): settings.json carries `Read()` deny rules,
+A `Read()` deny rule makes the CLI ask before a relative-path read after a `cd` (audit G3).
+Root cause (perm-read-deny-arms-cd-guard): settings.json carries `Read()` deny rules,
 and while any is configured the CLI asks for approval when a read command reads a relative path
 after a `cd` in a compound command. Docs (https://code.claude.com/docs/en/permissions.md):
 "a compound command like `cd packages/api && ls` runs without a prompt when each part qualifies

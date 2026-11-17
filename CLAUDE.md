@@ -82,7 +82,7 @@ A subagent must not restart a long-running daemon it itself depends on to verify
 - Communication: concise, technical, no emojis, accuracy over validation; cite locations as `path:line`.
 - A library or framework the user names: fetch its Context7 docs before generating library-specific code.
 - Multi-source research (5+ sources, site exploration, reflection): delegate to a subagent. Simple 1-3 search queries: `WebSearch` directly.
-- Search files with a path operand and no `cd` (`grep -rn PAT src`, `rg -n PAT src`, `git -C src log`): while `settings.json` has a `Read()` deny rule, the CLI asks for approval for a read by a relative path after a `cd` in a compound command.
+- Search files with a path operand and no `cd` (`grep -rn PAT src`, `rg -n PAT src`, `git -C src log`): while `settings.json` has a `Read()` deny rule, the CLI asks for approval for a read by a relative path after a `cd` in a compound command (`git -C` reads stop prompting once their allow entries land).
 
 ## Orchestrator Prompt Purity
 

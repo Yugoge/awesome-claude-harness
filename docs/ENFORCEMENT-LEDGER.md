@@ -348,7 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
-| S-014 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
+| S-017 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -476,13 +476,15 @@ no per-rule budget exists.
     (task_id, sid, nonce, repo_root, branch, expected_head, created_at, expires_at) that
     `pretool-git-privilege-guard.py` (H-031) consumes; it exits 2 when it has no session id or
     cannot resolve the repository, branch or HEAD the grant binds.
-- **S-014** — the CLI, not a hook: while `settings.json` has any `Read()` deny rule (`:236-248`), it
+- **S-017** — the CLI, not a hook: while `settings.json` has any `Read()` deny rule (`:236-248`), it
   asks for approval when a read command reads a relative path after a `cd` in a compound command.
   The deny rules stay (they keep `cat .env` denied); CLAUDE.md Working Practice states the
-  convention instead (a path operand, no `cd`), and `tests/lint/cd_read.py` reports a
-  `cd <dir> && <read command>` in the prompts or skills, or a CLAUDE.md that states no
-  convention while a `Read()` deny exists. Prose only: nothing stops an agent from writing the
-  compound, and the CLI then asks.
+  convention instead (a path operand, no `cd`). `tests/lint/cd_read.py` reports, one line at a
+  time, a `cd` or `pushd` joined by `&&`, `;` or `||` to one of its listed read commands (grep,
+  rg, cat, sed, find, git, ...) in CLAUDE.md, commands/, agents/ or skills/ Markdown, and a
+  CLAUDE.md with no line naming `cd`, `Read()` and a path operand while a `Read()` deny exists. A
+  compound split across lines, or a read command it does not list, is not reported. Prose only:
+  nothing stops an agent from writing the compound, and the CLI then asks.
 
 ---
 
