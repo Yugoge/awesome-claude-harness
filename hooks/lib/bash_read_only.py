@@ -11,7 +11,11 @@ arithmetic expansion, a word that still spells one after quote removal
 (bash's ``test -v 'a[$(cmd)]'`` runs cmd), a heredoc or here-string, any redirection but output
 thrown into /dev/null or one standard stream duplicated onto the other, a
 command named by a path, and a pipeline with any stage outside PROGRAMS. Silence
-never proves: a program, option or form not listed here is not read-only.
+never proves: a program, option or form not listed here is not read-only. A
+check reads options as GNU getopt does (an option after an operand still
+parses, a long option may be abbreviated or take ``=``), and one that admits no
+operand refuses ``--``, after which a dash-named word is an operand (GNU
+``uniq -- -in -out`` writes ``-out``).
 
 The verdict reads the shell_parse tree (``parse``, ``walk``, ``resolve``,
 ``write_targets``) and is cross-checked against the independent byte scan of
@@ -125,8 +129,10 @@ def _sort(args) -> bool:
 
 
 def _uniq(args) -> bool:
-    # uniq IN OUT writes OUT: no operand at all, so only stdin to stdout.
-    return all(a.startswith("-") and a != "-" for a in args)
+    # uniq IN OUT writes OUT: no operand at all, so only stdin to stdout. A bare
+    # `--` ends option parsing and makes every later word an operand, dash-named
+    # ones included (uniq -- -in -out writes -out), so it is refused too.
+    return all(a.startswith("-") and a not in ("-", "--") for a in args)
 
 
 _SED_ADDR = r"(?:\d+|\$|/(?:[^/\\\n]|\\.)*/[IM]*)"

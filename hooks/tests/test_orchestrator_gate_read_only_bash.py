@@ -48,7 +48,7 @@ MORE_READ_ONLY = [
     "find . -name '*.py'", "find . -newer x -type f", "grep -rn foo src | head -20", "ls src/*.py",
     "cat a b | wc -l", "sed -n '10,20p' f", "sed 's/a/b/g' f", "awk '{print $1}' f", "sort f | uniq -c",
     "ls missing 2>/dev/null", "rg foo 2>&1 | head", "cd src && ls", "test -f x && cat x", "echo hi",
-    "rg --files | rg test", "git worktree list", "! git diff --quiet",
+    "rg --files | rg test", "git worktree list", "! git diff --quiet", "uniq -c -i", "sort f | uniq -f1 -s2 --count",
 ]
 
 # AUDIT.md section 2 OB-L03 and the lane's list, then adversarial variants.
@@ -92,6 +92,19 @@ ADVERSARIAL = [
     "test -v x", "[ -R x ]", "test ! -v 'a[1]'", "test 'a[$(id)]' -eq 1", "[ 'a[`id`]' -lt 2 ]",
     "printf '%d' 'a[$(id)]'", "echo 'a[$(id)]'", "cd 'a[$(id)]'", "wc -l 'a[${x}]'", "grep '$((1))' f",
     "cat 'a[$[1]]'", "ls \"$(id)\"",
+    # `--` ends option parsing: GNU uniq then takes dash-named words as INPUT and OUTPUT and creates or
+    # truncates the OUTPUT (uniq -- -in -out writes -out)
+    "uniq -- -in -out", "uniq -c -- -a -b", "uniq -- -a", "uniq -i --", "sort f | uniq -d -- -x -y",
+]
+
+# The other checkers against the same class: an end-of-options `--` before a script word, GNU option
+# permutation (an option after an operand still parses), an abbreviated or `=`-joined long option. Each
+# runs code or writes a file as GNU tools parse it; each already counts, and they guard the audit.
+END_OF_OPTIONS = [
+    "sort x -o f", "sort --o=f x", "sort --outp f x", "sed p f -i", "sed --in-pl=.b p f", "sed -n -- 'w out' f",
+    "sed -n -- 'p;w out' f", "sed -n --expr='w out' f", "awk -- 'BEGIN{system(\"id\")}'",
+    "awk -v x=1 -- '{print > \"o\"}' f", "rg x --pre=sh", "git log --oneline --outp=x", "git diff --textc",
+    "find . -name x -fprint f", "printf -vPATH x", "uniq a b -c",
 ]
 
 
@@ -102,6 +115,11 @@ def test_read_only_command_is_proven(command):
 
 @pytest.mark.parametrize("command", MUST_REFUSE + ADVERSARIAL)
 def test_command_that_can_run_or_write_is_not_proven(command):
+    assert is_read_only(command) is False
+
+
+@pytest.mark.parametrize("command", END_OF_OPTIONS)
+def test_end_of_options_and_permuted_or_abbreviated_option_is_not_proven(command):
     assert is_read_only(command) is False
 
 
@@ -193,6 +211,12 @@ def test_arithmetic_subscript_code_counts_through_the_launcher(tmp_path, command
     """test -v 'a[$(cmd)]' runs cmd in bash: through hooks/pretool-launch.py it is counted."""
     s = Session(tmp_path)
     assert [s.allowed(command, hook=LAUNCH) for _ in range(6)] == [True] * 5 + [False]
+
+
+def test_uniq_end_of_options_counts_through_the_launcher(tmp_path):
+    """uniq -- -a -b truncates -b in GNU uniq: through hooks/pretool-launch.py it is counted."""
+    s = Session(tmp_path)
+    assert [s.allowed("uniq -- -a -b", hook=LAUNCH) for _ in range(6)] == [True] * 5 + [False]
 
 
 def test_registered_pipeline(tmp_path):
