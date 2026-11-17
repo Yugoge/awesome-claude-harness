@@ -474,33 +474,44 @@ def test_analyzer_timeout_default_leaves_headroom_under_load():
     assert 'duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")' in src
 
 
-# ── Round 7: every spelling of every refused option ─────────────────────────
+# ── Round 7: every spelling of every refused option ──
 
 # Where each allowlisted head's refused options are tried, and the same command without them (which must pass).
 SPELLING_CONTEXT = {
     "kubectl": "kubectl get pods {} -A", "helm": "helm list {} -A", "pip": "pip list {} -v", "pip3": "pip3 list {} -v",
     "npm": "npm ls {} -a", "pnpm": "pnpm ls {} -r", "apt": "apt show x {} -a", "apt-cache": "apt-cache show x {} -a",
     "ruff": "ruff check {} -q", "less": "less {} f -n", "more": "more {} f -n", "hostname": "hostname {} -v",
-    "man": "man ls {} -a", "info": "info ls {} -a",
+    "man": "man ls {} -a", "info": "info ls {} -a", "go": "go version {} -m", "tsc": "tsc --noEmit {} --strict",
+    "whatis": "whatis ls {} -l", "apropos": "apropos ls {} -l",
 }
 
+# Letters that take a value but whose parser keeps scanning the rest of the cluster (tree hands -P/-I/-T/-H/-o the
+# NEXT word; less, ss and apt are read letter by letter here): a refused letter after one of them still refuses.
+SCANNED_VALUE_LETTERS = {"tree": "LPITHo", "less": "bhjpPxyz", "ss": "fAFN", "apt": "ta", "rg": "", "fd": ""}
 
-def _spellings(option, values, refused):
-    """Exact, `=value`, every abbreviation, in a cluster and with an attached value."""
+
+def _spellings(option, values, refused, fold=False, scanned=""):
+    """Exact, `=value`, every abbreviation (and its case variants where the program folds case), in a cluster, with
+    an attached value, and after a value letter whose parser keeps scanning."""
     if option.startswith("--"):
-        return [option, option + "=v"] + ["--" + option[2:k] for k in range(3, len(option))]
+        out = [option, option + "=v"] + ["--" + option[2:k] for k in range(3, len(option))]
+        if fold:
+            out += [o.upper() for o in out] + ["--" + o[2:].capitalize() for o in out]
+        return out
     if len(option) == 2 and option[0] == "-":
         filler = next(c for c in "uqvayzw" if c not in values and "-" + c not in refused)
-        return [option, option + "val", "-" + filler + option[1], "-" + filler + option[1] + "val"]
+        return [option, option + "val", "-" + filler + option[1], "-" + filler + option[1] + "val"] + [
+            "-" + v + option[1] for v in scanned if v != option[1]]
     return [option]
 
 
 def refused_spellings():
     cases = []
-    for head, (refused, values) in sorted(R._DG_REFUSED_OPTS.items()):
+    for head, (refused, values, *fold) in sorted(R._DG_REFUSED_OPTS.items()):
         context = SPELLING_CONTEXT.get(head, head + " {} x -q")
         for option in refused:
-            cases += [(context, context.format(sp)) for sp in _spellings(option, values, refused)]
+            cases += [(context, context.format(sp)) for sp in _spellings(
+                option, values, refused, bool(fold and fold[0]), SCANNED_VALUE_LETTERS.get(head, ""))]
     for sub, (options, words) in sorted(R._DG_GIT_SUB.items()):
         refused = R._DG_GIT_ALL + options
         for option in refused:
@@ -546,6 +557,20 @@ R7_WRITES = [
     "less -k x f -n", "less --lesskey-src=x f -n", "tsc -b --noEmit", "git merge -s evil x -q",
 ]
 
+# Round 8: a lesskey file in any case and spelling, tree's next-word values, xxd's -C flag, tsc's writing options,
+# man's local-file operand.
+R8_SPELLINGS = [
+    "less --lesskey-file=/dev/shm/lk/k.bin /dev/shm/lk/f -N", "less --lesskey-fi=/dev/shm/lk/k.bin /dev/shm/lk/f -N",
+    "less --LESSKEY-FILE=/dev/shm/lk/k.bin /dev/shm/lk/f -N", "less --LESSKEY-SRC=/dev/shm/lk/k.src /dev/shm/lk/f -N",
+    "less --lesskey-file=/dev/shm/lk/k.bin /dev/shm/lk/f\nls -l", "tree -Lo 1 /dev/shm/ts/out /dev/shm/ts -a",
+    "tree -L2o /dev/shm/ts/out /dev/shm/ts -a", "tree -Po x /dev/shm/ts/out /dev/shm/ts -a",
+    "tree -Io x /dev/shm/ts/out /dev/shm/ts -a", "tree -To t /dev/shm/ts/out /dev/shm/ts -a",
+    "xxd -C /dev/shm/ts/in /dev/shm/ts/out -u", "tsc --noEmit --generateCpuProfile /dev/shm/ts/v1 a.ts --pretty",
+    "tsc --noEmit --incremental --tsBuildInfoFile /dev/shm/ts/v2 a.ts --strict", "tsc --noEmit --init -q",
+    "tsc --NOEMIT --GENERATETRACE /dev/shm/ts/t -q", "man ./foo.1 -a", "go env -w GOFLAGS=x -json",
+]
+
+
 # Local forms restored after round 7 (they run nothing beyond what commit and pull already do).
 R7_ALLOWED = [
     "ls -la | less", "git log -5 | less", "git switch main -q", "git checkout -b x -q", "git restore --staged x -q",
@@ -555,7 +580,7 @@ R7_ALLOWED = [
 ]
 
 
-@pytest.mark.parametrize("command", R7_OPTION_SPELLINGS + R7_WRITES)
+@pytest.mark.parametrize("command", R7_OPTION_SPELLINGS + R7_WRITES + R8_SPELLINGS)
 def test_round7_forms_refuse(command):
     assert R.degraded_refuses(command, _rmref()), command
 
@@ -576,5 +601,6 @@ def test_round7_option_spellings_refuse_end_to_end(mode, tmp_path):
             'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
         hook = str(dst / "pretool-bash-safety.sh")
     with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), R7_OPTION_SPELLINGS))
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))),
+                              R7_OPTION_SPELLINGS + R8_SPELLINGS))
     assert not [c for c, code, _err in results if code != 2], (mode, results)

@@ -1230,15 +1230,19 @@ def _dg_quoted_head(line):
 # git command text, shell strings inside words) still apply to every allowed command.
 
 
-def _dg_opt_hit(word, refused, values=""):
+def _dg_opt_hit(word, refused, values="", fold=False):
     """True when `word` spells one of the `refused` options, as getopt_long, clap and git would read it.
 
     A long option matches exactly, as `--name=value`, or abbreviated to any prefix of a refused name (ambiguous
-    prefixes included: strict). A short option matches anywhere in a cluster (`-iOsh`) or with an attached value
-    (`-xpython3`); the scan of a cluster stops only at a letter in `values`, an option whose attached remainder is
-    its value (`date -Iseconds`). A `+`-word matches only exactly."""
+    prefixes included: strict), in any letter case when `fold` (less reads `--LOG-FILE` and `--Lesskey-File`). A
+    short option matches anywhere in a cluster (`-iOsh`) or with an attached value (`-xpython3`); the scan of a
+    cluster stops only at a letter in `values`, an option whose parser hands it the rest of the word as its value
+    (`date -Iseconds`); a parser that keeps scanning after a value option (tree) declares none. A `+`-word matches
+    only exactly."""
     if word.startswith("--") and len(word) > 2:
         name = word[2:].split("=", 1)[0]
+        if fold:
+            return any(r.startswith("--") and r[2:].lower().startswith(name.lower()) for r in refused)
         return any(r.startswith("--") and r[2:].startswith(name) for r in refused)
     if len(word) > 1 and word[0] == "-":
         for c in word[1:]:
@@ -1250,8 +1254,8 @@ def _dg_opt_hit(word, refused, values=""):
     return word in refused
 
 
-def _dg_opts_hit(words, refused, values=""):
-    return any(_dg_opt_hit(w, refused, values) for w in words)
+def _dg_opts_hit(words, refused, values="", fold=False):
+    return any(_dg_opt_hit(w, refused, values, fold) for w in words)
 
 
 def _dg_any(t, words):
@@ -1277,11 +1281,16 @@ def _dg_operands(words, valued):
     return out
 
 
-# Options each entry refuses, as (options, short options whose attached remainder is their value). One registry,
-# so tests enumerate every spelling of every refused option. The reason sits beside each.
+# Options each entry refuses, as (options, short options whose parser hands them the rest of the word as their value,
+# and optionally True when long names are read in any letter case). One registry, so tests enumerate every spelling
+# of every refused option. The reason sits beside each; the value letters were checked against each parser:
+# GNU sort (-k -S -t -T), file (-m -f -F -e -P), ripgrep/clap (-e -f -g -t -T -A -B -C -m -M -j -r -E), fd/clap
+# (-e -t -E), GNU date (-I -d -r), man-db and whatis/apropos argp (-M -L -m -S -s -e -p -E -r -R -T), GNU info
+# (-d -f -n). tree's parser takes -P/-I/-T/-H/-o values from the NEXT word and keeps scanning the cluster, and less,
+# ss, apt and git are scanned whole, so they declare none.
 _DG_REFUSED_OPTS = {
     "sort": (("-o", "--output", "--compress-program"), "kStT"),     # writes a file it names; runs a compressor
-    "tree": (("-o", "-H", "-R"), "LPIT"),                           # writes a file; HTML output (-R rewrites dirs)
+    "tree": (("-o", "-H", "-R"), ""),                               # writes a file; HTML output (-R rewrites dirs)
     "file": (("-C", "--compile"), "mfFeP"),                         # compiles a magic file beside the operand
     "rg": (("--pre", "--pre-glob", "--hostname-bin", "-z", "--search-zip"), "efgtTABCmMjrE"),  # run programs
     "fd": (("-x", "-X", "--exec", "--exec-batch"), "etE"),          # run a command per match
@@ -1290,26 +1299,34 @@ _DG_REFUSED_OPTS = {
     "man": (("-P", "--pager", "-H", "--html", "-B", "--browser", "-C", "--config-file", "-X", "--gxditview",
              "-l", "--local-file"), "MLmSsepErRT"),                 # name a program or format a file it is given
     "info": (("-o", "--output", "--dribble", "--restore", "--init-file"), "dfn"),  # write or replay keystrokes
-    "less": (("-k", "--lesskey", "--lesskey-src", "--lesskey-content", "-o", "-O", "--log-file", "--LOG-FILE"),
-             ""),                                                   # key bindings (commands) and log files
-    "ruff": (("-o", "--output-file"), ""),                          # writes a file it names
+    # Key-binding files (a lesskey `#env LESSOPEN=|cmd` runs a command), log files it writes, tags files it follows.
+    "less": (("-k", "--lesskey-file", "--lesskey", "--lesskey-src", "--lesskey-content", "-o", "-O", "--log-file",
+              "--LOG-FILE", "-t", "--tag", "-T", "--tag-file"), "", True),
+    "ruff": (("-o", "--output-file", "--cache-dir"), ""),           # writes a file or directory it names
     "kubectl": (("--kubeconfig",), ""),                             # a kubeconfig's exec plugin is code
     "helm": (("--kubeconfig", "--post-renderer"), ""),              # same, and a renderer program
     "pip": (("--python", "--log", "--log-file"), ""),               # re-runs under a named interpreter; writes
-    "npm": (("--userconfig", "--globalconfig", "--node-options", "--script-shell"), ""),  # config naming programs
-    "pnpm": (("--pnpmfile", "--global-pnpmfile"), ""),               # a pnpmfile is JavaScript it runs
+    "npm": (("--userconfig", "--globalconfig", "--node-options", "--script-shell"), "", True),  # config naming programs
+    "pnpm": (("--pnpmfile", "--global-pnpmfile"), "", True),         # a pnpmfile is JavaScript it runs
     "apt": (("-o", "--option", "-c", "--config-file"), ""),          # APT config can name hooks (Pre-Invoke …)
     "printf": (("-v",), ""),                                         # assigns a shell variable (PATH …)
     "ss": (("-K", "--kill"), ""),                                    # closes the sockets it lists
+    "whatis": (("-P", "--pager", "-C", "--config-file"), "smML"),    # a pager program; a man-db config file
+    "go": (("-w", "-u"), ""),                                        # `go env -w/-u` write the go env file
+    # tsc reads option names in any case; these write files (build output, profiles, build info, a new config).
+    "tsc": (("-b", "--build", "-w", "--watch", "-i", "--incremental", "--init", "--generateTrace",
+             "--generateCpuProfile", "--tsBuildInfoFile", "--outDir", "--outFile", "--out", "--declarationDir"),
+            "", True),
 }
 _DG_REFUSED_OPTS["more"] = _DG_REFUSED_OPTS["less"]
 _DG_REFUSED_OPTS["pip3"] = _DG_REFUSED_OPTS["pip"]
 _DG_REFUSED_OPTS["apt-cache"] = _DG_REFUSED_OPTS["apt"]
+_DG_REFUSED_OPTS["apropos"] = _DG_REFUSED_OPTS["whatis"]
 
 
 def _dg_refusing(head, then=_dg_any):
-    refused, values = _DG_REFUSED_OPTS[head]
-    return lambda t, words: not _dg_opts_hit(words[1:], refused, values) and then(t, words)
+    refused, values, *fold = _DG_REFUSED_OPTS[head]
+    return lambda t, words: not _dg_opts_hit(words[1:], refused, values, bool(fold and fold[0])) and then(t, words)
 
 
 def _dg_subcommands(*allowed):
@@ -1420,9 +1437,11 @@ def _dg_python(t, words):
 
 
 def _dg_tsc(t, words):
-    """tsc type-checks and, with --noEmit, writes nothing; it never runs the code it reads."""
+    """tsc type-checks and, with --noEmit and none of its file-writing options, writes nothing; it never runs the
+    code it reads. (The runtime guard refuses tsc before this fallback is reached, so this has no end-to-end
+    effect today.)"""
     return (len(words) == 2 and words[1] in _DG_INFO) or (
-        "--noEmit" in words and not _dg_opts_hit(words[1:], ("-b", "--build", "-w", "--watch", "--generateTrace")))
+        any(w.lower() == "--noemit" for w in words) and _dg_refusing("tsc")(t, words))
 
 
 _DG_ALLOW = {
@@ -1434,8 +1453,12 @@ _DG_ALLOW = {
                      "pwd", "cd", "pushd", "popd", "type"), _dg_any),
     "printf": _dg_refusing("printf"),
     # One input operand: a second operand is the file they write.
-    "uniq": lambda t, w: len(_dg_operands(w, ("-f", "-s", "-w"))) <= 1,
-    "xxd": lambda t, w: len(_dg_operands(w, ("-c", "-g", "-l", "-s", "-o", "-n", "-C"))) <= 1,
+    "uniq": lambda t, w: len(_dg_operands(w, ("-f", "-s", "-w", "--skip-fields", "--skip-chars",
+                                              "--check-chars"))) <= 1,
+    # xxd.c: -c/-cols, -g/-groupsize, -l/-len, -s/-seek, -o, -n/-name and -R take the NEXT word unless the value is
+    # attached; -b -C -E -i -p -r -u -a -d -e are flags.
+    "xxd": lambda t, w: len(_dg_operands(w, ("-c", "-cols", "-g", "-groupsize", "-l", "-len", "-s", "-seek", "-o",
+                                             "-n", "-name", "-R"))) <= 1,
     "sort": _dg_refusing("sort"), "tree": _dg_refusing("tree"), "file": _dg_refusing("file"), "ls": _dg_any,
     # Pagers: no `+command` start-up word, no key-binding file (bindings run commands), no log file. Reading keys
     # needs a terminal, which a tool call does not have.
@@ -1463,7 +1486,10 @@ _DG_ALLOW = {
     # Arithmetic: bc's language has no command or file-writing statement (unlike dc's `!`).
     "bc": _dg_any,
     # Documentation: refused options name a pager, browser or config, or format a file given on the command line.
-    "man": _dg_refusing("man"), "info": _dg_refusing("info"), "apropos": _dg_any, "whatis": _dg_any,
+    # man formats an operand holding a `/` as a local file, as -l does.
+    "man": _dg_refusing("man", lambda t, w: not any("/" in x for x in w[1:] if not x.startswith("-"))),
+    "info": _dg_refusing("info"), "apropos": _dg_refusing("apropos"),
+    "whatis": _dg_refusing("whatis"),
     "apt": _dg_refusing("apt", _dg_subcommands("show", "list", "search", "policy", "depends", "rdepends",
                                                 "showsrc")),
     "apt-cache": _dg_refusing("apt-cache", _dg_subcommands("show", "search", "policy", "depends", "rdepends",
@@ -1483,7 +1509,7 @@ _DG_ALLOW = {
     "yarn": _dg_subcommands("--version", "-v"),
     "node": _dg_subcommands("--version", "-v"), "deno": _dg_subcommands("--version"),
     "bun": _dg_subcommands("--version"), "cargo": _dg_subcommands("--version", "-V"),
-    "rustc": _dg_subcommands("--version", "-V"), "go": _dg_subcommands("version", "env"),
+    "rustc": _dg_subcommands("--version", "-V"), "go": _dg_refusing("go", _dg_subcommands("version", "env")),
     "java": _dg_subcommands("-version", "--version"), "javac": _dg_subcommands("-version", "--version"),
     "mvn": _dg_subcommands("-v", "--version"), "tsc": _dg_tsc,
     # Linters and formatters that parse files and load no code from their configuration (eslint, prettier, mypy,
