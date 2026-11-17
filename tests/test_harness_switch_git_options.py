@@ -176,3 +176,187 @@ def test_git_env_config_never_read_only(box):
                     "GIT_CONFIG_PARAMETERS=\"'core.pager'='sh'\" git -C ~/.claude log -- settings.json"):
         rc, err = hook(box, command, box["other"])
         assert rc == 2, (command, err)
+
+
+# --- rework: readers, -O, abbreviations, config keys, config sources ---------------------------
+
+READERS_PASS = [
+    "git -C ~/.claude ls-tree HEAD settings.json",
+    "git -C ~/.claude ls-tree -r --name-only HEAD -- settings.json",
+    "git -C ~/.claude rev-list --count HEAD -- settings.json",
+    "git -C ~/.claude shortlog -sn -- settings.json",
+    "git -C ~/.claude reflog -- settings.json",
+    "git -C ~/.claude reflog show -- settings.json",
+    "git -C ~/.claude reflog list",
+    "git -C ~/.claude whatchanged -1 -- settings.json",
+    "git -C ~/.claude diff-tree -p HEAD -- settings.json",
+    "git -C ~/.claude diff-index -p HEAD -- settings.json",
+    "git -C ~/.claude diff-files -p -- settings.json",
+    "git -C ~/.claude annotate settings.json",
+    "git -C ~/.claude name-rev HEAD -- settings.json",
+    "git -C ~/.claude describe --always -- settings.json",
+    "git -C ~/.claude merge-base HEAD HEAD -- settings.json",
+    "git -C ~/.claude for-each-ref -- settings.json",
+    "git -C ~/.claude show-ref -- settings.json",
+    "git -C ~/.claude cherry -v -- settings.json",
+    "git -C ~/.claude range-diff HEAD~1...HEAD -- settings.json",
+    "git -C ~/.claude count-objects -v -- settings.json",
+    "git -C ~/.claude verify-commit HEAD -- settings.json",
+    "git -C ~/.claude show-branch -- settings.json",
+    "git -C ~/.claude check-ignore -v settings.json",
+    # -O names an order file for diff, log and show; only git grep's -O runs a pager
+    "git -C ~/.claude diff -O/tmp/order -- settings.json",
+    "git -C ~/.claude log -p -O/tmp/order -- settings.json",
+    "git -C ~/.claude show -O /tmp/order HEAD -- settings.json",
+    "git -C ~/.claude diff-tree -p -Oorder HEAD -- settings.json",
+    # harmless options that only look like a writing option's prefix
+    "git -C ~/.claude diff --text -- settings.json",
+    "git -C ~/.claude grep --text -e x -- settings.json",
+    "git -C ~/.claude grep --or -e x -e y -- settings.json",
+    "git -C ~/.claude grep -o -e x -- settings.json",
+    "git -C ~/.claude grep -e O -- settings.json",
+    "git -C ~/.claude grep -eO -- settings.json",
+    "git -C ~/.claude diff --no-ext-diff --no-textconv -- settings.json",
+    "git -C ~/.claude cat-file --batch-check -- settings.json",
+    # config keys that name no program
+    "git -C ~/.claude -c protocol.version=2 log -- settings.json",
+    "git -C ~/.claude -c remote.origin.prune=true log -- settings.json",
+    "git -C ~/.claude -c url.https://x/.insteadOf=git://x/ log -- settings.json",
+    "git -C ~/.claude -c man.viewer=x log -- settings.json",
+    "git -C ~/.claude -c credential.helper= log -- settings.json",
+    "git -C ~/.claude -c credential.helper=  diff -- settings.json",
+    "git -C ~/.claude -c filter.lfs.required=true diff -- settings.json",
+]
+
+
+@pytest.mark.parametrize("command", READERS_PASS)
+def test_more_readers_pass(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+WRITERS_REFUSED = [
+    "git -C ~/.claude reflog expire --all -- settings.json",
+    "git -C ~/.claude reflog delete HEAD@{0} -- settings.json",
+    "git -C ~/.claude diff-tree --output=settings.json -p HEAD",
+    "git -C ~/.claude shortlog --output=settings.json HEAD",
+    "git -C ~/.claude blame --output=settings.json settings.json",
+    "git -C ~/.claude grep --open='cp /tmp/evil.json' -e . -- ~/.claude/settings.json",
+    "git -C ~/.claude grep --open-files='cp /tmp/evil.json' -e . -- settings.json",
+    "git -C ~/.claude grep --op='cp /tmp/evil.json' -e . -- settings.json",
+    "git -C ~/.claude grep --open-files-in-pager='cp /tmp/evil.json' -e . -- settings.json",
+    "git -C ~/.claude grep -O -e . -- settings.json",
+    "git -C ~/.claude grep -nO'cp /tmp/evil.json' -e . -- settings.json",
+    "git -C ~/.claude grep -iwO'cp /tmp/evil.json' -e . -- settings.json",
+    "git -C ~/.claude grep --textc -e . -- settings.json",
+    "git -C ~/.claude cat-file --textc --path=settings.json HEAD",
+    "git -C ~/.claude cat-file --tex --path=settings.json HEAD",
+    "git -C ~/.claude cat-file --t --path=settings.json HEAD",
+    "git -C ~/.claude cat-file --filt --path=settings.json HEAD",
+    "git -C ~/.claude cat-file --fi --path=settings.json HEAD",
+    "git -C ~/.claude range-diff --ext HEAD~1...HEAD -- settings.json",
+    "env git -C ~/.claude grep --open='cp /tmp/evil.json' -e . -- settings.json",
+    "bash -c \"git -C ~/.claude grep --open='cp /tmp/evil.json' -e . -- settings.json\"",
+]
+
+
+@pytest.mark.parametrize("command", WRITERS_REFUSED)
+def test_writing_reader_options_refused(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+        assert "BLOCKED: harness-switch" in err
+
+
+STILL_PROGRAM = [
+    "-c credential.helper=/tmp/h log",
+    "-c credential.https://x.helper='!sh' log",
+    "-c core.askPass=/tmp/a log",
+    "-c core.gitProxy=/tmp/p log",
+    "-c merge.x.driver=/tmp/m log",
+    "-c filter.x.clean=/tmp/c diff",
+    "-c filter.x.smudge=/tmp/c diff",
+    "-c filter.x.process=/tmp/c diff",
+    "-c include.path=/tmp/cfg log",
+    "-c includeIf.gitdir:/.path=/tmp/cfg log",
+    "-c gpg.program=/tmp/g log",
+    "-c submodule.x.update=/tmp/u log",
+    "-c man.x.cmd=/tmp/m log",
+    "-c protocol.version='!sh' log",
+]
+
+
+@pytest.mark.parametrize("opts", STILL_PROGRAM)
+def test_program_keys_still_refused_in_home(box, opts):
+    for command in ("git -C ~/.claude %s" % opts, "cd ~/.claude && git %s" % opts):
+        rc, err = hook(box, command, box["other"])
+        assert rc == 2, (command, err)
+
+
+CONFIG_SOURCES = [
+    "HOME=/tmp/evil git -C ~/.claude diff --no-index /tmp/a ~/.claude/settings.json",
+    "HOME=/tmp/evil git -C ~/.claude log -p",
+    "HOME=/tmp/evil git diff --no-index /tmp/a ~/.claude/settings.json",
+    "XDG_CONFIG_HOME=/tmp/evil git -C ~/.claude diff",
+    "GIT_CONFIG_GLOBAL=/tmp/evil git -C ~/.claude diff",
+    "GIT_CONFIG_SYSTEM=/tmp/evil git -C ~/.claude status",
+    "GIT_CONFIG_NOSYSTEM=1 git -C ~/.claude diff -- settings.json",
+    "GIT_DIR=/tmp/evil/.git git -C ~/.claude diff",
+    "git -C ~/.claude --git-dir=/tmp/evil/.git diff",
+    "git --git-dir=/tmp/evil/.git -C ~/.claude log -p",
+    "git --git-dir /tmp/evil/.git --work-tree ~/.claude diff",
+    "cd ~/.claude && HOME=/tmp/evil git diff",
+    "env HOME=/tmp/evil git -C ~/.claude diff",
+    "env -u PAGER HOME=/tmp/evil git -C ~/.claude diff",
+    "timeout 5 env XDG_CONFIG_HOME=/tmp/evil git -C ~/.claude diff",
+    "export HOME=/tmp/evil; git -C ~/.claude diff",
+    "export GIT_CONFIG_GLOBAL=/tmp/evil && git -C ~/.claude log -p",
+    "bash -c 'HOME=/tmp/evil git -C ~/.claude diff'",
+    "HOME=/tmp/evil git -C /tmp diff --no-index /tmp/a ~/.claude/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", CONFIG_SOURCES)
+def test_agent_config_source_in_home_refused(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+        assert "BLOCKED: harness-switch" in err
+
+
+CONFIG_SOURCES_ELSEWHERE = [
+    "HOME=/tmp/x git -C {proj} log --oneline -3",
+    "HOME=/tmp/x git -C /tmp status",
+    "XDG_CONFIG_HOME=/tmp/x git -C {other} status",
+    "GIT_CONFIG_NOSYSTEM=1 git -C {proj} log",
+    "GIT_DIR=/tmp/x/.git git log --oneline",
+    "git --git-dir=/tmp/x/.git log --oneline",
+    "HOME=/tmp/x git diff --no-index /tmp/a /tmp/b",
+    "git --git-dir=$HOME/.claude/.git log -- settings.json",
+]
+
+
+@pytest.mark.parametrize("command", CONFIG_SOURCES_ELSEWHERE)
+def test_config_source_away_from_home_passes(box, command):
+    command = command.format(proj=box["proj"], other=box["other"])
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+def test_grep_open_really_runs_pager_in_sandbox(box, tmp_path):
+    """The verifier's proof, kept as the reason: git runs grep's --open value through the shell."""
+    import shutil
+    if not shutil.which("git"):
+        pytest.skip("git not installed")
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / "s.json").write_text("{}\n")
+    evil = tmp_path / "evil.json"
+    evil.write_text('{"env": {"EVIL": "1"}}\n')
+    env = dict(box["env"], GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "grep", "--no-index", "--open=cp %s" % evil, "-e", ".", "--", "s.json"],
+                   env=env, capture_output=True, timeout=60)
+    assert "EVIL" in (repo / "s.json").read_text()
