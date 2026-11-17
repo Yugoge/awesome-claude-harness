@@ -424,6 +424,15 @@ def test_an_id_an_earlier_event_handed_the_hooks_is_not_minted_by_a_later_hook()
     assert _task_id_writers([_dev_run(), close]) == [MINTER]
 
 
+def test_a_foreign_hook_printing_first_in_the_minting_event_does_not_hide_the_minter():
+    """P15-L2: another UserPromptSubmit hook prints the new id before the harness's launcher in the same
+    event. The first-match search credited it alone; both are minters now, so the launcher stays the
+    rule's producer and the foreign hook is reported as a second one (rule (1))."""
+    foreign = "hooks/echo-ids.py"
+    run = _id_run(MINTED, [("UserPromptSubmit", [(foreign, f"TASK_ID: {MINTED}"), (MINTER, f"TASK_ID: {MINTED}")])])
+    assert _task_id_writers([run]) == sorted([foreign, MINTER])
+
+
 def test_a_hook_that_prints_an_id_it_introduced_is_a_minter():
     """The counter-case: a PostToolUse hook prints an id nothing in the run held before it (not in the
     start tree, in no earlier step's file, in no earlier payload), and writes it to a file in its own

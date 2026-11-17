@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:11:18Z*
-**Total entries**: 965
+*Last updated: 2026-11-17T08:15:44Z*
+**Total entries**: 971
 **Convention**: kebab
 
 ## Tree
@@ -601,6 +601,7 @@ dot-claude/
 │   ├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
+│   ├── `cli-fixture-record.sh` - Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 │   ├── `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 │   ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
@@ -727,6 +728,7 @@ dot-claude/
 │   │   ├── `shparse.py` - dependency beyond the standard library
 │   │   ├── `shscan.py` - Words are evaluated into the same templates as Python values (variables by
 │   │   ├── `static_half.py` - `derive(tree)` reads one harness tree and returns every record the static
+│   │   ├── `test_channel.py` - produced by the CLI alone, declared by the recorded fixture's shapes; its readers derived from th...
 │   │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
 │   │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
@@ -744,6 +746,7 @@ dot-claude/
 │   │   ├── `test_combine_differential.py` - hooks/lib/write_gate/__init__.py's `combine` (cyclomatic complexity 37) was split into helpers
 │   │   └── `test_completed_codex_subagents_differential.py` - The frozen copy in completed_codex_subagents_legacy.py is the function as it was at
 │   ├── fixtures/
+│   │   ├── cli/
 │   │   ├── late_repair_golden/
 │   │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
@@ -820,6 +823,7 @@ dot-claude/
 │   │   └── `validate-workflow-json-cleanup.py` - Validator: validate-workflow-json-cleanup
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
+│   ├── `cli_shapes.py` - The rule (P15 section 2(d)):
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 │   ├── `test_ac_deviation_fanout_consumer.py` - lanes that stop short of ``completed`` and the lifecycle row of a chain
 │   ├── `test_ac_deviation_record_chain.py` - A dev report that records an acceptance-criteria deviation is reported
@@ -842,6 +846,8 @@ dot-claude/
 │   ├── `test_ci_visibility_gate.py` - The private repository (full history) and the public one (the clean tree as one commit per
 │   ├── `test_clean_orchestrator_merge.py` - clean-merge-reports reads the three inspection reports of the request the Step 3 context
 │   ├── `test_cleaner_discard.py` - Action Types table gives and prints a DISCARDED line whose recover command restores the file. The
+│   ├── `test_cli_fixture_shapes.py` - Tests built CLI records by hand, so CLI 2.1.322's change of the hook-output records (plain stdout
+│   ├── `test_cli_synthesizers.py` - The replay harness and the hook tests below wrote CLI transcript records by hand, so the records ...
 │   ├── `test_close_command_text.py` - Each test hands the text to the code that consumes it (the obligation reader, the listing script,
 │   ├── `test_close_rating_step_label.py` - 376a9ae relabelled it so that no command's dispatch template would sit under a heading of the same
 │   ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)

@@ -1,0 +1,10 @@
+{
+  "agent_id": "<AGENT_ID>",
+  "agent_type": "general-purpose",
+  "cwd": "<CWD>",
+  "hook_event_name": "SubagentStart",
+  "prompt_id": "<UUID>",
+  "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",
+  "session_id": "<UUID>",
+  "transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>.jsonl"
+}

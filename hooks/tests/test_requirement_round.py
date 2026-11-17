@@ -22,6 +22,7 @@ HOOK = REPO / "hooks" / "posttool-close-rating.py"
 sys.path.insert(0, str(REPO))
 from hooks.lib import command_span, contract_runtime  # noqa: E402
 from hooks.lib import requirement_round as rr  # noqa: E402
+from tests.cli_shapes import synthesize  # noqa: E402
 
 TASK, DEV_ID = "20261109-120000", "dev-20261109-120000"
 DIMS = ["intent", "scope", "edge_cases", "acceptance"]
@@ -36,31 +37,33 @@ class TX:
         path.write_text("", encoding="utf-8")
 
     def add(self, record: dict) -> None:
+        """Write ``record`` (synthesized from the recorded CLI fixture) with this session's values."""
         self.clock += timedelta(seconds=1)
-        record.setdefault("timestamp", self.clock.isoformat().replace("+00:00", "Z"))
+        record["timestamp"] = self.clock.isoformat().replace("+00:00", "Z")
+        record["cwd"] = os.environ.get("CLAUDE_PROJECT_DIR", "")
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
 
     def command(self, name: str, context: str | None = None) -> None:
-        self.add({"type": "user", "message": {"role": "user", "content":
-                  f"<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>\n"
-                  "<command-args>a request</command-args>"}})
-        self.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": [
-            {"type": "text", "text": f"body of {name}: its requirement-round is asked first"}]}})
-        if context:
-            self.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": context,
-                                                           "hookName": "UserPromptSubmit"}})
+        self.add(synthesize("user", "command", turnOrigin="human", message__content=(
+            f"<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>\n"
+            "<command-args>a request</command-args>")))
+        self.add(synthesize("user", "meta", message__content=[
+            {"type": "text", "text": f"body of {name}: its requirement-round is asked first"}]))
+        if context:  # the UserPromptSubmit hook's plain stdout, as the CLI records it
+            self.add(synthesize("attachment/hook_success", attachment__content=context.rstrip("\n"),
+                                attachment__stdout=context))
 
     def tool(self, name: str, tool_input: dict, ok: bool | None = True, sidechain: bool = False) -> str:
         """A tool use and its result; ok None: no result came back yet."""
         self.n += 1
         ident = f"toolu_{self.n:04d}"
-        side = {"isSidechain": True, "agentId": "a1"} if sidechain else {}
-        self.add({"type": "assistant", **side, "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": ident, "name": name, "input": tool_input}]}})
+        source, side = ("subagent:", {"agentId": "a1"}) if sidechain else ("", {})
+        self.add(synthesize(f"{source}assistant", "tool_use", **side, message__content=[
+            {"type": "tool_use", "id": ident, "name": name, "input": tool_input}]))
         if ok is not None:
-            self.add({"type": "user", **side, "message": {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": ident, "content": "done", **({} if ok else {"is_error": True})}]}})
+            self.add(synthesize(f"{source}user", "tool_result", **side, message__content=[
+                {"type": "tool_result", "tool_use_id": ident, "content": "done", "is_error": not ok}]))
         return ident
 
     def dispatch(self, role: str, paths, ok: bool | None = True, task: str = TASK) -> str:
