@@ -5,10 +5,10 @@ Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 
 Exits 2 on a refusal, its message on stderr; otherwise prints ALLOW, CONSENT (main-agent /do consent) or
 SENTINEL <task id> (a structured /allow grant). The shell entry allows CONSENT and SENTINEL after the pre-clean
-snapshot guard and refuses anything else (no token, a crash, a wrong interpreter). The runtime and commit guards
-and the /do consent-flag rule run before the /do and /allow releases and neither releases them; every later rule
-is released by both. A view that cannot be built degrades to the raw command, so a broken helper refuses more,
-never less.
+snapshot guard and refuses anything else (no token, a crash, a wrong interpreter). The runtime, commit and
+session_dirs.txt guards and the /do consent-flag rule run before the /do and /allow releases and neither releases
+them; every later rule is released by both. A view that cannot be built degrades to the raw command, so a broken
+helper refuses more, never less.
 """
 import contextlib
 import json
@@ -2797,6 +2797,1137 @@ def git_clean_rule(command, stripped, view):
                "Escape: the user can authorize this specific command via /do consent or an /allow grant.")
 
 
+# ── session_dirs.txt (before /do and /allow) ─────────────────────────────────
+
+SD_NAME = "session_dirs.txt"
+# Pieces of the name a glob or expansion carries when it is written to land on the file (`sess*`, `*_dirs.t?t`).
+SD_FRAGMENTS = ("sess", "_dir", "dirs", "on_d", "n_di")
+_SD_DECODE = (
+    (re.compile(r"\\[xX]([0-9a-fA-F]{1,2})"), 16),
+    (re.compile(r"\\u([0-9a-fA-F]{4})"), 16),
+    (re.compile(r"\\U([0-9a-fA-F]{8})"), 16),
+    (re.compile(r"\\0?([0-7]{1,3})"), 8),
+)
+_SD_DROP = re.compile(r"""['"\\$+`\s]""")
+_SD_HEAD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+# What can change which program a search or commit call runs, or what it reads: a shell function of that name
+# (read with quotes, blanks and escapes gone), a command that defines one or an alias or rehashes a path, and a
+# variable that moves the program, its options or its config.
+_SD_FUNCTION = re.compile(r"(^|[^a-z0-9_])(e|f)?(grep|rg|git)\(\)|function(e|f)?(grep|rg|git)([^a-z0-9_-]|$)")
+_SD_DEFINERS = frozenset({"alias", "hash", "enable", "eval", "source", ".", "trap"})
+_SD_VARIABLE = re.compile(r"(PATH|GREP_OPTIONS|RIPGREP_CONFIG_PATH|GIT_[A-Z0-9_]*|BASH_ENV|ENV|LD_PRELOAD|"
+                          r"LD_LIBRARY_PATH|DYLD_[A-Z_]*)(\[[^\]]*\])?\+?=")
+_SD_INTERPRETER = re.compile(r"(python[0-9.]*|pypy[0-9.]*|node(js)?|deno|bun|perl[0-9.]*|ruby|php[0-9.]*|lua(jit)?|"
+                             r"osascript|rscript|julia|tclsh|wish|expect|[gmn]?awk)")
+
+# Search programs: (short value options, short flags, long value options, long flags, long options with an optional
+# `=value`, options that refuse the mention because they run a program or drop the pattern operand).
+_SD_GREP = ("efmABCdD", "abcEFGhHiIlLnoPqrRsTuUvVwxyzZ",
+            {"--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context", "--directories",
+             "--devices", "--include", "--exclude", "--exclude-from", "--exclude-dir", "--label", "--binary-files",
+             "--group-separator"},
+            {"--extended-regexp", "--fixed-strings", "--basic-regexp", "--perl-regexp", "--ignore-case",
+             "--no-ignore-case", "--word-regexp", "--line-regexp", "--null-data", "--no-messages", "--invert-match",
+             "--byte-offset", "--line-number", "--no-line-number", "--line-buffered", "--with-filename",
+             "--no-filename", "--only-matching", "--quiet", "--silent", "--text", "--recursive",
+             "--dereference-recursive", "--files-without-match", "--files-with-matches", "--count", "--initial-tab",
+             "--null", "--no-group-separator", "--binary"},
+            {"--color", "--colour"}, set())
+_SD_RG = ("efgtTmABCdMjEr", "aAbcFHhiIlLnNopqsSuUvVwx0",
+          {"--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--type-add", "--type-clear",
+           "--max-count", "--after-context", "--before-context", "--context", "--max-depth", "--maxdepth",
+           "--max-filesize", "--max-columns", "--threads", "--encoding", "--engine", "--sort", "--sortr", "--colors",
+           "--context-separator", "--field-match-separator", "--field-context-separator", "--path-separator",
+           "--replace", "--dfa-size-limit", "--regex-size-limit", "--ignore-file", "--pre-glob", "--hyperlink-format"},
+          {"--hidden", "--no-hidden", "--no-ignore", "--ignore", "--no-ignore-vcs", "--no-ignore-parent",
+           "--no-ignore-dot", "--no-ignore-global", "--no-ignore-exclude", "--no-ignore-files", "--no-require-git",
+           "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--line-number",
+           "--no-line-number", "--column", "--no-column", "--heading", "--no-heading", "--with-filename",
+           "--no-filename", "--ignore-case", "--smart-case", "--case-sensitive", "--fixed-strings",
+           "--no-fixed-strings", "--word-regexp", "--line-regexp", "--invert-match", "--multiline",
+           "--multiline-dotall", "--only-matching", "--json", "--vimgrep", "--follow", "--no-follow", "--text",
+           "--binary", "--no-binary", "--pcre2", "--no-pcre2", "--crlf", "--no-crlf", "--null", "--null-data", "--trim",
+           "--stats", "--quiet", "--passthru", "--passthrough", "--unrestricted", "--no-messages", "--no-config",
+           "--byte-offset", "--debug", "--trace", "--pretty", "--one-file-system", "--no-unicode", "--auto-hybrid-regex",
+           "--no-pcre2-unicode", "--mmap", "--no-mmap", "--block-buffered", "--line-buffered", "--include-zero",
+           "--max-columns-preview", "--glob-case-insensitive", "--ignore-file-case-insensitive", "--sort-files"},
+          {"--color", "--colour"},
+          {"--pre", "--hostname-bin", "--files", "--type-list", "--search-zip", "-z", "--generate"})
+_SD_GIT_GREP = ("efABCm", "aiIwvhHEGFPnlLcopWzqr",
+                {"--max-depth", "--threads", "--context", "--after-context", "--before-context", "--max-count"},
+                {"--cached", "--untracked", "--no-index", "--index", "--no-exclude-standard", "--exclude-standard",
+                 "--recurse-submodules", "--text", "--no-textconv", "--ignore-case", "--word-regexp",
+                 "--invert-match", "--full-name", "--extended-regexp", "--basic-regexp", "--perl-regexp",
+                 "--fixed-strings", "--line-number", "--column", "--files-with-matches", "--name-only",
+                 "--files-without-match", "--null", "--only-matching", "--count", "--show-function",
+                 "--function-context", "--break", "--heading", "--all-match", "--quiet", "--and", "--or", "--not",
+                 "--no-color"},
+                {"--color"}, {"--textconv", "-O", "--open-files-in-pager"})
+_SD_GIT_GLOBAL_FLAGS = {"--no-pager", "-p", "--paginate", "-P", "--no-optional-locks", "--no-replace-objects",
+                        "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}
+# git log options. A value option takes the next word (or its `=value`); a flag takes nothing; an attached option
+# takes a value only after `=` (git reads an optional or `=`-only value, as `--unified[=<n>]` or `--orderfile=<f>`, never
+# from the next word, so such an option is a flag or attached-only, never a value option). An option on none of these lists (a new one included) leaves no allowed mention, since
+# one that takes the next word would shift `-S` into value position and the name after it into a pathspec.
+_SD_LOG_VALUES = {"-n", "--max-count", "--skip", "--since", "--after", "--until", "--before", "--author",
+                  "--committer", "--grep-reflog", "--find-object", "-L", "-O",
+                  "-I", "--ignore-matching-lines", "--exclude", "--word-diff-regex", "--anchored", "--rotate-to",
+                  "--skip-to", "--line-prefix", "--src-prefix", "--dst-prefix", "--max-age", "--min-age",
+                  "--since-as-filter", "--decorate-refs", "--decorate-refs-exclude", "--diff-algorithm",
+                  "--inter-hunk-context", "--output-indicator-new", "--output-indicator-old",
+                  "--output-indicator-context", "--ws-error-highlight", "--stat-width", "--stat-name-width",
+                  "--stat-graph-width", "--stat-count", "--date", "--encoding", "--diff-merges", "--default",
+                  "--exclude-hidden"}
+_SD_LOG_FLAGS = {"-p", "-u", "--patch", "-s", "--no-patch", "-i", "--regexp-ignore-case", "-E", "--extended-regexp",
+                 "-F", "--fixed-strings", "-P", "--perl-regexp", "--basic-regexp", "--all-match", "--invert-grep",
+                 "--oneline", "--all", "--branches", "--tags", "--remotes", "--reverse", "--graph", "--no-graph",
+                 "--decorate", "--no-decorate", "--abbrev-commit", "--no-abbrev-commit", "--no-abbrev", "--merges",
+                 "--no-merges", "--first-parent", "--follow", "--no-follow", "--pickaxe-all", "--pickaxe-regex",
+                 "--date-order", "--author-date-order", "--topo-order", "--no-color", "--source", "--full-history",
+                 "--simplify-merges", "--simplify-by-decoration", "--ancestry-path", "--dense", "--sparse", "--stat",
+                 "--shortstat", "--numstat", "--summary", "--name-only", "--name-status", "--raw", "--compact-summary",
+                 "--relative-date", "--left-right", "--boundary", "--cherry-pick", "--cherry-mark", "--cherry",
+                 "--left-only", "--right-only", "--full-diff", "--no-renames", "-M", "-C", "-B", "--text", "-a",
+                 "-w", "--ignore-all-space", "-b", "--ignore-space-change", "--ignore-blank-lines",
+                 "--ignore-space-at-eol", "--ignore-cr-at-eol", "--minimal", "--patience", "--histogram", "-m", "-c",
+                 "--cc", "-r", "-t", "-R", "-W", "--function-context", "--log-size", "--no-notes", "--show-signature",
+                 "--no-ext-diff", "--no-textconv", "-g", "--walk-reflogs", "--use-mailmap", "--mailmap",
+                 "--no-mailmap", "--no-use-mailmap", "--full-index", "--binary", "--check", "--quiet", "--exit-code",
+                 "--no-walk", "--do-walk", "--parents", "--children", "--show-pulls", "--remove-empty", "--no-prefix",
+                 "--default-prefix", "--clear-decorations", "--count", "--no-diff-merges", "--combined-all-paths",
+                 "--no-min-parents", "--no-max-parents", "--show-linear-break", "--expand-tabs", "--no-expand-tabs",
+                 "--word-diff", "--color-words", "--color", "--color-moved", "--no-color-moved", "--submodule",
+                 "--relative", "--no-relative", "--abbrev", "--notes", "--show-notes", "--standard-notes",
+                 "--no-standard-notes", "--dirstat", "--cumulative", "--indent-heuristic", "--no-indent-heuristic",
+                 "--find-renames", "--find-copies", "--find-copies-harder", "--break-rewrites", "--unified"}
+_SD_LOG_ATTACHED = {"--format", "--pretty", "--abbrev", "--decorate", "--color", "--color-moved", "--word-diff",
+                    "--color-words", "--stat", "--dirstat", "--diff-filter", "--relative", "--notes", "--show-notes",
+                    "--submodule", "--branches", "--tags", "--remotes", "--glob", "--expand-tabs",
+                    "--show-linear-break", "--no-walk", "--color-moved-ws", "--ignore-submodules", "--simplify-merges",
+                    "--ancestry-path", "--find-renames", "--find-copies", "--break-rewrites", "--unified",
+                    "--min-parents", "--max-parents", "--orderfile"}
+_SD_LOG_SHORT_ATTACHED = "nUMCBlIO"  # a short option whose value may follow it in the same word, as `-n5` or `-U3`
+_SD_COMMIT_SHORT_VALUES = "mFCct"
+_SD_COMMIT_SHORT_OPTIONAL = "Su"
+_SD_COMMIT_SHORT_FLAGS = "aqvsneiopz"
+_SD_COMMIT_LONG_VALUES = {"--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author",
+                          "--date", "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file"}
+_SD_COMMIT_LONG_FLAGS = {"--all", "--patch", "--quiet", "--verbose", "--signoff", "--no-signoff", "--no-verify",
+                         "--verify", "--amend", "--no-edit", "--edit", "--allow-empty", "--allow-empty-message",
+                         "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--include", "--only",
+                         "--reset-author", "--status", "--no-status", "--no-post-rewrite", "--no-gpg-sign",
+                         "--interactive", "--gpg-sign", "--untracked-files"}
+
+
+def _sd_writes_output(arg):
+    """True when a git option sends the output to a file: --output in any abbreviation git accepts, or -o."""
+    name = arg.partition("=")[0]
+    return name == "-o" or (name.startswith("-o") and not name.startswith("--")) or \
+        (len(name) >= 4 and "--output".startswith(name)) or name == "--output"
+
+
+def sd_normalize(text):
+    """text as the name check reads it: escapes decoded, lower case, quotes, `$`, `+`, backslashes and blanks gone."""
+    for rx, base in _SD_DECODE:
+        text = rx.sub(lambda m: chr(int(m.group(1), base) % 0x110000), text)
+    return _SD_DROP.sub("", text.lower())
+
+
+def _sd_scan(args, spec, permute=True, operands=None):
+    """The arg indexes a grep-like program reads as its pattern; None when an option is unknown or refuses the name.
+    operands, when given, receives the indexes of the other positional words (paths, revisions, pathspecs)."""
+    short_val, short_flag, long_val, long_flag, long_opt, refused = spec
+    patterns, positional, explicit, k, dashdash = set(), [], False, 0, False
+    while k < len(args):
+        a = args[k]
+        if dashdash or a == "-" or not a.startswith("-") or (positional and not permute):
+            positional.append(k)
+            k += 1
+            continue
+        if a == "--":
+            dashdash = True
+            k += 1
+            continue
+        if a.startswith("--"):
+            name, eq, _val = a.partition("=")
+            if name in refused:
+                return None
+            if name in long_val:
+                if name in ("--regexp", "--file"):
+                    explicit = True
+                if name == "--regexp":
+                    patterns.add(k if eq else k + 1)
+                k += 1 if eq else 2
+                continue
+            if name in long_opt or (name in long_flag and not eq):
+                k += 1
+                continue
+            return None
+        if a[:2] in refused:
+            return None
+        j = 1
+        while j < len(a):
+            c = a[j]
+            if c in short_val:
+                if c in "ef":
+                    explicit = True
+                if c == "e":
+                    patterns.add(k if j + 1 < len(a) else k + 1)
+                if j + 1 >= len(a):
+                    k += 1
+                break
+            if c not in short_flag and not c.isdigit():
+                return None
+            j += 1
+        k += 1
+    if not explicit and positional:
+        patterns.add(positional[0])
+    if operands is not None:
+        operands.extend(i for i in positional if i not in patterns)
+    return patterns
+
+
+def _sd_git(args):
+    """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
+    or in a commit message; None when any part of it is not read."""
+    k = 0
+    while k < len(args) and args[k].startswith("-"):
+        if args[k] == "-C" and k + 1 < len(args):
+            k += 2
+            continue
+        if args[k] not in _SD_GIT_GLOBAL_FLAGS:
+            return None
+        k += 1
+    if k >= len(args):
+        return None
+    sub, rest, base = args[k], args[k + 1:], k + 1
+    if sub == "grep":
+        found = _sd_scan(rest, _SD_GIT_GREP, permute=False)
+        return None if found is None else ({base + i for i in found}, False)
+    if sub == "log":
+        allowed, j = set(), 0
+        while j < len(rest):
+            a = rest[j]
+            if a == "--":
+                break
+            if a == "--ext-diff" or _sd_writes_output(a):
+                return None
+            if a in ("-S", "-G", "--grep"):
+                allowed.add(base + j + 1)
+                j += 2
+                continue
+            if (a[:2] in ("-S", "-G") and len(a) > 2) or a.startswith("--grep="):
+                allowed.add(base + j)
+            elif a in _SD_LOG_VALUES:
+                j += 2
+                continue
+            elif a.startswith("-") and a != "-":
+                name, eq, _val = a.partition("=")
+                known = (a in _SD_LOG_FLAGS or re.fullmatch(r"-[0-9]+", a)
+                         or (eq and name.startswith("--") and (name in _SD_LOG_VALUES or name in _SD_LOG_ATTACHED))
+                         or (not a.startswith("--") and len(a) > 2 and a[1] in _SD_LOG_SHORT_ATTACHED))
+                if not known:
+                    return None
+            j += 1
+        return allowed, False
+    if sub == "commit":
+        allowed, stdin, j = set(), False, 0
+        while j < len(rest):
+            a = rest[j]
+            if a == "--" or not a.startswith("-") or a == "-":
+                return allowed, stdin  # a pathspec follows: its words are not messages
+            if a.startswith("--"):
+                name, eq, val = a.partition("=")
+                if name in _SD_COMMIT_LONG_VALUES:
+                    value_at = j if eq else j + 1
+                    value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
+                    if name == "--message":
+                        allowed.add(base + value_at)
+                    if name == "--file" and value in ("-", "/dev/stdin"):
+                        stdin = True
+                    j += 1 if eq else 2
+                    continue
+                if name in _SD_COMMIT_LONG_FLAGS:
+                    j += 1
+                    continue
+                return None
+            c_at = 1
+            while c_at < len(a):
+                c = a[c_at]
+                if c in _SD_COMMIT_SHORT_VALUES:
+                    attached = c_at + 1 < len(a)
+                    value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
+                    if c == "m":
+                        allowed.add(base + (j if attached else j + 1))
+                    if c == "F" and value in ("-", "/dev/stdin"):
+                        stdin = True
+                    if not attached:
+                        j += 1
+                    break
+                if c in _SD_COMMIT_SHORT_OPTIONAL:
+                    break
+                if c not in _SD_COMMIT_SHORT_FLAGS:
+                    return None
+                c_at += 1
+            j += 1
+        return allowed, stdin
+    return None
+
+
+def _sd_message_doc(word):
+    """The heredoc of a word that is one `"$(cat <<'EOF' ... EOF)"` and nothing else; None otherwise."""
+    from lib.shell_parse import SimpleCommand
+    if len(word.parts) != 1 or word.parts[0].kind != "cmdsub" or word.parts[0].quote != "double":
+        return None
+    body = word.parts[0].body
+    if body is None or body.error is not None or len(body.items) != 1 or len(body.items[0][0].stages) != 1:
+        return None
+    inner = body.items[0][0].stages[0]
+    if not isinstance(inner, SimpleCommand) or inner.assignments or [w.value() for w in inner.words] != ["cat"]:
+        return None
+    if len(inner.redirects) != 1 or inner.redirects[0].op not in ("<<", "<<-"):
+        return None
+    hd = inner.redirects[0].hd
+    return hd if hd is not None and (hd.quoted or not hd.expansions) else None
+
+
+def _sd_allowed(site):
+    """The Srcs of one walked command that name the file only as a search pattern or a commit message: the words,
+    and the heredoc or here-string that is the message."""
+    from lib.shell_parse import resolve
+    cmd = site.cmd
+    if site.templated or not cmd.words or cmd.assignments:
+        return []
+    try:
+        res = resolve(cmd)
+    except Exception:  # noqa: BLE001
+        return []
+    if res.unresolved or res.head is None or res.payload is not None or res.assignments:
+        return []
+    hv = res.head.value()
+    if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
+        return []
+    docs = {}
+    args = []
+    for k, w in enumerate(res.args):
+        v = w.value()
+        if v is None or any(p.kind != "lit" for p in w.parts):
+            hd = _sd_message_doc(w) if res.name == "git" else None
+            if hd is None:
+                return []
+            docs[k] = hd
+            v = "message"
+        args.append(v)
+    stdin = False
+    if res.name in ("grep", "egrep", "fgrep"):
+        found = _sd_scan(args, _SD_GREP)
+    elif res.name == "rg":
+        found = _sd_scan(args, _SD_RG)
+    elif res.name == "git":
+        git = _sd_git(args)
+        found, stdin = git if git is not None else (None, False)
+    else:
+        found = None
+    if found is None or not set(docs) <= found:
+        return []
+    out = [res.args[i].raw for i in found if i < len(res.args)]  # a message `$(cat <<'EOF' ..)` is inert text
+    if stdin:
+        for r in cmd.redirects:
+            if r.fd == 0 and r.op in ("<<", "<<-") and r.hd is not None and (r.hd.quoted or not r.hd.expansions):
+                out.append(r.hd.body_src)
+            elif r.fd == 0 and r.op == "<<<" and r.target is not None and r.target.value() is not None \
+                    and all(p.kind == "lit" for p in r.target.parts):
+                out.append(r.target.raw)
+    return out
+
+
+# Strong pieces of the name a command substitution's text carries when it is written to print it.
+_SD_PIECES = ("session_dir", "dirs.txt", "ion_dirs")
+_SD_PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SD_CANDIDATES = ("session_dirs.txt", "./session_dirs.txt", "a/session_dirs.txt", "/a/b/session_dirs.txt")
+# What an allowed mention's output can be piped into and still only be shown: filters that print what they read,
+# each with the only options it may carry (short flags, short options with a value, long flags, long options with
+# a value, most operands). Long options are taken only in full (an abbreviation is not read); nothing that reads
+# file names from its input (--files0-from), writes a file (sort -o/--output, -T, --compress-program, uniq's second
+# operand, less's log file) or reads a file of its own choosing (--random-source) is a display.
+_SD_DISPLAY = {
+    "head": ("qvz", "nc", {"--quiet", "--silent", "--verbose", "--zero-terminated"}, {"--lines", "--bytes"}, None),
+    "tail": ("qvzfFr", "ncs", {"--quiet", "--silent", "--verbose", "--zero-terminated", "--follow", "--retry"},
+             {"--lines", "--bytes", "--sleep-interval", "--pid", "--max-unchanged-stats"}, None),
+    "wc": ("clmwL", "", {"--bytes", "--chars", "--lines", "--words", "--max-line-length"}, {"--total"}, None),
+    "cut": ("snz", "bcfd", {"--complement", "--only-delimited", "--zero-terminated"},
+            {"--bytes", "--characters", "--fields", "--delimiter", "--output-delimiter"}, None),
+    "nl": ("p", "bdfhilnsvw", {"--no-renumber"},
+           {"--body-numbering", "--section-delimiter", "--footer-numbering", "--header-numbering",
+            "--line-increment", "--join-blank-lines", "--number-format", "--number-width", "--number-separator",
+            "--starting-line-number"}, None),
+    "column": ("tnexJL", "sc", {"--table", "--fillrows", "--json", "--keep-empty-lines", "--table-noextreme"},
+               {"--separator", "--columns", "--output-width", "--table-columns", "--table-name"}, None),
+    "sort": ("bdfgiMhnRrVcCmsuz", "ktS",
+             {"--ignore-leading-blanks", "--dictionary-order", "--ignore-case", "--general-numeric-sort",
+              "--ignore-nonprinting", "--month-sort", "--human-numeric-sort", "--numeric-sort", "--random-sort",
+              "--reverse", "--version-sort", "--check", "--merge", "--stable", "--unique", "--zero-terminated",
+              "--debug"},
+             {"--key", "--field-separator", "--buffer-size", "--sort", "--parallel"}, None),
+    "uniq": ("cdDiuz", "fsw", {"--count", "--repeated", "--ignore-case", "--unique", "--zero-terminated"},
+             {"--skip-fields", "--skip-chars", "--check-chars", "--all-repeated", "--group"}, 1),
+    "less": ("RSNXFiIrMmEeKqQ", "", set(), set(), None),
+    "more": ("dlfpcsu", "", set(), set(), None),
+}
+# Commands that only list or print the names a glob expands to; a glob in their words lands on no file's content
+# while their output is shown and not consumed.
+_SD_LISTERS = frozenset({"ls", "dir", "vdir", "du", "echo", "printf", "stat", "find"})
+# What a later word can use to reach an earlier command's last argument (`grep -l session_dirs.txt; cat $_`).
+_SD_LAST_ARG = re.compile(r"\$(_(?![A-Za-z0-9_])|\{_(?![A-Za-z0-9_])|\{?BASH_(ARGV|ARGC|COMMAND|EXECUTION_STRING)|\{!)"
+                          r"|!\$")
+_SD_FIND_NAMES = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"}
+_SD_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
+# Interpreters: (short options whose value is code, short options that take the next word, long options whose
+# value is code).
+_SD_CODE_OPTS = (
+    (re.compile(r"(python|pypy)[0-9.]*"), "c", "mWXQ", set()),
+    (re.compile(r"node(js)?|bun"), "ep", "r", {"--eval", "--print"}),
+    (re.compile(r"deno"), "", "", {"--eval"}),
+    (re.compile(r"perl[0-9.]*"), "eE", "", set()),
+    (re.compile(r"ruby"), "e", "IrCx", set()),
+    (re.compile(r"php[0-9.]*"), "rRBE", "cdfzt", set()),
+    (re.compile(r"lua(jit)?|osascript|rscript|julia"), "e", "l", {"--eval", "--expr"}),
+    (re.compile(r"expect"), "c", "f", set()),
+)
+
+
+def _sd_strong_piece(text):
+    low = sd_normalize(text)
+    return any(p in low for p in _SD_PIECES) or ("session" in low and "dirs" in low)
+
+
+def _sd_variants(word, env):
+    """The word's parts, with each variable the command assigns a literal value read as that value."""
+    out = [[]]
+    for p in word.parts:
+        vals = env.get(p.text) if p.kind == "param" and _SD_PARAM_NAME.fullmatch(p.text) else None
+        if vals:
+            out = [v + [("lit", val)] for v in out for val in sorted(vals)][:32]
+        else:
+            out = [v + [(p.kind, p.text)] for v in out]
+    return out
+
+
+def _sd_glob_hit(word, env=None):
+    """True when a word with a glob or an expansion can resolve to the file: the last component of one of its paths
+    (split at `=` and `:`), not a bare expansion, matches the name, and its written text carries a piece of it. A variable the command
+    assigns a literal value reads as that value, and a command substitution whose text carries a strong piece of
+    the name counts as a hit."""
+    import fnmatch
+    if all(p.kind == "lit" for p in word.parts):
+        return False
+    for parts in _sd_variants(word, env or {}):
+        comps, pat, frag = [], [], []
+        for kind, text in parts:
+            if kind == "lit":
+                for ch in text:
+                    if ch in "/=:":
+                        if ch != "/":  # a directory component is not the file; only a path's last one is tested
+                            comps.append(("".join(pat), "".join(frag)))
+                        pat, frag = [], []
+                    else:
+                        pat.append("[%s]" % ch if ch in "*?[]" else ch)
+                        frag.append(ch)
+            elif kind == "glob":
+                pat.append(text)
+                frag.append(text)
+            elif kind in ("brace", "cmdsub", "backtick", "procsub_in", "procsub_out"):
+                if kind in ("cmdsub", "backtick") and _sd_strong_piece(text):
+                    return True
+                pat.append("*")
+                frag.append(text)
+            else:
+                pat.append("*")
+        comps.append(("".join(pat), "".join(frag)))
+        for pattern, text in comps:
+            low = sd_normalize(text)
+            if pattern.strip("*"):  # not a bare expansion
+                if fnmatch.fnmatchcase(SD_NAME, pattern.lower()) and any(f in low for f in SD_FRAGMENTS):
+                    return True
+    return False
+
+
+def _sd_env(sites):
+    """name -> the literal values the command assigns it anywhere (plain assignments and export/declare/local)."""
+    from lib.shell_parse import Assignment, resolve
+    env = {}
+    for site in sites:
+        found = list(site.cmd.assignments)
+        try:
+            res = resolve(site.cmd)
+            if res.name in ("export", "declare", "typeset", "local", "readonly"):
+                found += [Assignment(w) for w in res.args if "=" in w.text]
+        except Exception:  # noqa: BLE001
+            pass
+        for a in found:
+            v = a.static_value()
+            if a.name and v is not None:
+                env.setdefault(a.name, set()).add(v)
+    return env
+
+
+def _sd_pattern_hits(value, regex=False):
+    """True when a glob (or find regex) a program applies to file names matches the file and carries a piece of its
+    name, whatever quoting the shell saw."""
+    import fnmatch
+    low = value.lower()
+    if not any(f in sd_normalize(low) for f in SD_FRAGMENTS):
+        return False
+    if regex:
+        try:
+            return any(re.fullmatch(low, c) for c in _SD_CANDIDATES)
+        except re.error:
+            return True
+    m = re.match(r":(\(([^)]*)\)|[!^/]*)", low)  # a git pathspec's magic
+    if m and m.group(0) != ":":
+        magic = m.group(2) if m.group(2) is not None else m.group(1)
+        if "exclude" in magic or magic.startswith(("!", "^")):
+            return False
+        low = low[m.end():]
+    if not any(c in low for c in "*?["):
+        return False
+    return any(fnmatch.fnmatchcase(c, low) for c in _SD_CANDIDATES)
+
+
+def _sd_glob_operand(res, out_safe):
+    """The glob a program applies to file names itself (find -name/-path/-regex, rg -g, grep --include, git
+    pathspecs, tar --wildcards/--include, rsync --include/--filter) when it matches the file; None otherwise. A
+    find that only lists names to the terminal is left alone."""
+    name = res.name
+    vals = [w.value() if w.value() is not None else w.text for w in res.args]
+    hits = []
+
+    def opt_values(longs, shorts=""):
+        found, k = [], 0
+        while k < len(vals):
+            a = vals[k]
+            nm, eq, v = a.partition("=")
+            if nm in longs:
+                if eq:
+                    found.append(v)
+                elif k + 1 < len(vals):
+                    found.append(vals[k + 1])
+                    k += 1
+            elif shorts and len(a) >= 2 and a[0] == "-" and a[1] in shorts:
+                if len(a) > 2:
+                    found.append(a[2:])
+                elif k + 1 < len(vals):
+                    found.append(vals[k + 1])
+                    k += 1
+            k += 1
+        return found
+
+    if name == "find":
+        if res.payload is None and not any(v in _SD_FIND_ACTIONS for v in vals) and out_safe:
+            return None
+        for k, a in enumerate(vals[:-1]):
+            if a in _SD_FIND_NAMES and _sd_pattern_hits(vals[k + 1]):
+                return vals[k + 1]
+            if a in ("-regex", "-iregex") and _sd_pattern_hits(vals[k + 1], regex=True):
+                return vals[k + 1]
+        return None
+    if name == "rg":
+        hits = [h for h in opt_values({"--glob", "--iglob"}, "g") if not h.startswith("!")]
+    elif name in ("grep", "egrep", "fgrep"):
+        hits = opt_values({"--include"})
+    elif name == "rsync":
+        hits = opt_values({"--include"})
+        for r in opt_values({"--filter"}, "f"):
+            m = re.match(r"(\+|include)[ ,_]\s*(.*)", r)
+            if m:
+                hits.append(m.group(2))
+    elif name in ("tar", "bsdtar", "gtar"):
+        hits = opt_values({"--include"})
+        if "--wildcards" in vals:
+            hits += [v for v in vals if not v.startswith("-")]
+    elif name == "git":
+        if "--" in vals:
+            hits += vals[vals.index("--") + 1:]
+        k = 0
+        while k < len(vals) and vals[k].startswith("-"):
+            k += 2 if vals[k] == "-C" else 1
+        if k < len(vals) and vals[k] == "grep":
+            operands = []
+            if _sd_scan(vals[k + 1:], _SD_GIT_GREP, permute=False, operands=operands) is not None:
+                hits += [vals[k + 1 + i] for i in operands]
+        elif k < len(vals) and vals[k] != "commit":  # a pathspec needs no `--` (`git ls-files -o '*dirs*'`)
+            j = k + 1
+            while j < len(vals):
+                if vals[j] in ("-m", "--message", "-F", "--file", "-S", "-G", "--grep", "--output", "-C"):
+                    j += 2
+                    continue
+                if not vals[j].startswith("-"):
+                    hits.append(vals[j])
+                j += 1
+    for h in hits:
+        if _sd_pattern_hits(h):
+            return h
+    return None
+
+
+def _sd_interpreter_code(res, cmd):
+    """The code an interpreter call runs from its own words or its stdin: a -c/-e/-r style option's value (awk's
+    program operand), and a heredoc or here-string. A script path and the script's arguments are not code."""
+    name = res.name.lower()
+    vals = [w.value() if w.value() is not None else w.text for w in res.args]
+    code = []
+    if re.fullmatch(r"[gmn]?awk", name):
+        k, from_file = 0, False
+        while k < len(vals):
+            a = vals[k]
+            if a == "--":
+                k += 1
+                break
+            if not a.startswith("-") or a == "-":
+                break
+            nm, eq, v = a.partition("=")
+            if a in ("-f", "--file") or a.startswith("-f"):
+                from_file = True
+            if nm in ("-e", "--source"):
+                code.append(v if eq else (vals[k + 1] if k + 1 < len(vals) else ""))
+                from_file = True
+            if a in ("-f", "-v", "-F", "-e", "--file", "--assign", "--field-separator", "--source", "-i", "-l",
+                     "--include", "--load"):
+                k += 2
+                continue
+            k += 1
+        if not from_file and k < len(vals):
+            code.append(vals[k])
+    else:
+        spec = next((s for s in _SD_CODE_OPTS if s[0].fullmatch(name)), (None, "", "", set()))
+        _rx, code_letters, next_letters, longs = spec
+        k = 0
+        while k < len(vals):
+            a = vals[k]
+            if a in ("--", "-"):
+                break
+            if a.startswith("--"):
+                nm, eq, v = a.partition("=")
+                if nm in longs:
+                    code.append(v if eq else (vals[k + 1] if k + 1 < len(vals) else ""))
+                    k += 1 if eq else 2
+                    continue
+                k += 1
+                continue
+            if a.startswith("-"):
+                j, skip = 1, False
+                while j < len(a):
+                    c = a[j]
+                    if c in code_letters:
+                        if a[j + 1:]:
+                            code.append(a[j + 1:])
+                        elif k + 1 < len(vals):
+                            code.append(vals[k + 1])
+                            skip = True
+                        break
+                    if c in next_letters:
+                        skip = not a[j + 1:]
+                        break
+                    j += 1
+                k += 2 if skip else 1
+                continue
+            if name == "deno" and a == "eval" and k + 1 < len(vals):
+                code.append(vals[k + 1])
+            break  # the script; what follows is its arguments
+    for r in cmd.redirects:
+        if r.hd is not None:
+            code.append(r.hd.body)
+        elif r.op == "<<<" and r.target is not None:
+            code.append(r.target.value() or r.target.text)
+    return code
+
+
+_SD_LITERAL = re.compile(r"""'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`""", re.S)
+# What splits a string literal where a value is interpolated (`{p}`, `${p}`, `$p`, `#{p}`, `%s`).
+_SD_INTERPOLATION = re.compile(r"\{[^{}]*\}|\$\{[^}]*\}|\$[a-z_][a-z0-9_]*|#\{[^}]*\}|%[-0-9.]*[a-z]")
+# What joins two literals into one string: `+`, `.`, `..`, `~` and juxtaposition.
+_SD_JOIN = re.compile(r"[\s+.~]*")
+
+
+def _sd_literal_runs(code):
+    """The strings interpreter code writes: consecutive string literals joined by a concatenation operator, split
+    where a value is interpolated or another expression stands between them."""
+    runs, cur, last = [], None, 0
+    for m in _SD_LITERAL.finditer(code):
+        body = next(g for g in m.groups() if g is not None)
+        pieces = _SD_INTERPOLATION.split(body)
+        if cur is not None and not _SD_JOIN.fullmatch(code[last:m.start()]):
+            runs.append(cur)
+            cur = None
+        cur = (cur or "") + pieces[0]
+        for piece in pieces[1:]:
+            runs.append(cur)
+            cur = piece
+        last = m.end()
+    if cur is not None:
+        runs.append(cur)
+    return runs
+
+
+def _sd_code_names(code):
+    """True when interpreter code names the file, builds exactly its name from pieces (a literal run that is the
+    name, a strong tail of it a computed head can complete, or a head and a tail that together cover it), or globs
+    for it. A run naming another file that merely ends in `dirs.txt` (`build_dirs.txt`) is no hit."""
+    if SD_NAME in sd_normalize(code):
+        return True
+    low = code
+    for rx, base in _SD_DECODE:
+        low = rx.sub(lambda m: chr(int(m.group(1), base) % 0x110000), low)
+    runs = [r for r in _sd_literal_runs(low.lower()) if r]
+    tails = [r for r in runs if SD_NAME.endswith(r)]
+    if any(len(t) >= len("dirs.txt") for t in tails):
+        return True
+    heads = [r.rsplit("/", 1)[-1] for r in runs]
+    heads = [h for h in heads if h and SD_NAME.startswith(h)]
+    if any(len(h) + len(t) >= len(SD_NAME) for h in heads for t in tails):
+        return True
+    return any(_sd_pattern_hits(g) for g in re.findall(r"""[^\s'"`(),;\[\]]*[*?][^\s'"`(),;\[\]]*""", code))
+
+
+def _sd_streams(node, out, err):
+    """(stdout safe, stderr safe) after a command's own redirections, given whether its stdout and stderr reach only
+    the terminal or /dev/null (through display filters at most) before them. A file, another fd or a computed
+    target is unsafe: a later command or a later call can read it back."""
+    for r in node.redirects:
+        if r.op in ("<", "<<", "<<-", "<<<", "<&"):
+            continue
+        both = r.op in ("&>", "&>>") or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
+        fd = None if both else r.fd
+        if fd is None and not both:
+            out = err = False  # a {NAME}> form
+            continue
+        if fd not in (1, 2, None):
+            continue
+        if r.close:
+            here = True
+        elif r.op == ">&" and r.dup is not None:
+            here = (out if r.dup == 1 else err) if r.dup in (1, 2) else False
+        elif not r.writes() or r.target is None:
+            continue
+        else:
+            v = r.target.value()
+            here = {"/dev/null": True, "/dev/tty": True, "/dev/stdout": out, "/dev/fd/1": out,
+                    "/dev/stderr": err, "/dev/fd/2": err}.get(v, False)
+        if fd in (1, None):
+            out = here
+        if fd in (2, None):
+            err = here
+    return out, err
+
+
+def _sd_display(stage):
+    """True when a pipeline stage only shows what it reads: a display filter with no wrapper, payload or output
+    file of its own."""
+    from lib.shell_parse import SimpleCommand, resolve
+    if not isinstance(stage, SimpleCommand) or stage.assignments:
+        return False
+    try:
+        res = resolve(stage)
+    except Exception:  # noqa: BLE001
+        return False
+    if res.unresolved or res.payload is not None or res.wrappers or res.assignments or res.name not in _SD_DISPLAY:
+        return False
+    hv = res.head.value()
+    if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
+        return False
+    vals = [w.value() for w in res.args]
+    if any(v is None for v in vals) or any(r.target is not None and r.target.value() is None for r in stage.redirects):
+        return False  # `head $(cat)` reads the pipe through its own words
+    return _sd_display_args(_SD_DISPLAY[res.name], vals, res.name in ("head", "tail"))
+
+
+def _sd_display_args(spec, vals, numeric):
+    """True when every option is on the filter's own list and the operands are within its limit."""
+    flags, short_vals, long_flags, long_vals, most = spec
+    operands, k, dashdash = 0, 0, False
+    while k < len(vals):
+        a = vals[k]
+        k += 1
+        if dashdash or a == "-" or not a.startswith(("-", "+")) or (a.startswith("+") and not numeric):
+            operands += 1
+            continue
+        if a == "--":
+            dashdash = True
+            continue
+        if a.startswith("+"):  # tail +5
+            if not a[1:].isdigit():
+                return False
+            continue
+        if a.startswith("--"):
+            name, eq, _v = a.partition("=")
+            if name in long_vals:
+                k += 0 if eq else 1
+                continue
+            if name in long_flags and not eq:
+                continue
+            return False
+        j = 1
+        while j < len(a):
+            c = a[j]
+            if c in short_vals:
+                k += 0 if j + 1 < len(a) else 1
+                break
+            if not (c in flags or (numeric and c.isdigit())):
+                return False
+            j += 1
+    return k <= len(vals) and (most is None or operands <= most)
+
+
+def _sd_key(context, cmd):
+    return (tuple(context), cmd.span, tuple(w.text for w in cmd.words))
+
+
+def _sd_output_safety(script, traced=False):
+    """{key: (stdout safe, stderr safe)} for each simple command the walk reaches through pipelines, compounds and
+    payloads: stdout safe when it only reaches the terminal (or /dev/null) through display filters at most, stderr
+    safe likewise, carrying the redirections of every enclosing group, loop, subshell and payload shell. When the
+    shell may trace (traced), the trace of a command goes to the stderr it inherits, so its stdout counts as safe only
+    with that stderr safe too. A command inside a substitution, a function body, a coproc or code the walk reaches
+    another way is absent. An `exec` that moves the shell's own stdout or stderr leaves nothing safe."""
+    from lib.shell_parse import Compound, SimpleCommand, resolve
+    found, moved = {}, []
+
+    def visit(scr, out_ok, err_ok, ctx):
+        for pl, _sep in scr.items:
+            stages, pipes = list(pl.stages), list(pl.pipes)
+            streams, inherited = [None] * len(stages), [None] * len(stages)
+            down = out_ok
+            for k in range(len(stages) - 1, -1, -1):
+                err_in = down if k < len(pipes) and pipes[k] == "|&" else err_ok
+                inherited[k] = err_in
+                streams[k] = _sd_streams(stages[k], down, err_in)
+                down = streams[k][0] and _sd_display(stages[k])
+            for k, st in enumerate(stages):
+                o, e = streams[k]
+                if isinstance(st, SimpleCommand):
+                    show = o and (not traced or (inherited[k] and e))
+                    key = _sd_key(ctx, st)
+                    prev = found.get(key, (True, True))
+                    found[key] = (prev[0] and show, prev[1] and e and inherited[k])
+                    if [w.value() for w in st.words] == ["exec"] and any(r.writes() or r.op == ">&" for r in st.redirects):
+                        moved.append(st)
+                    try:
+                        res = resolve(st)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if res.payload is not None and res.payload_kind:
+                        visit(res.payload, o, e, ctx + (res.payload_kind,))
+                elif isinstance(st, Compound):
+                    inner = st.kind not in ("function", "coproc")
+                    for body in st.body:
+                        visit(body, o and inner, e and inner, ctx)
+
+    visit(script, True, True, ("top",))
+    return {k: (False, False) for k in found} if moved else found
+
+
+def _sd_redefines(site):
+    """True when this command can change which program a later search or commit call runs, or what it reads."""
+    from lib.shell_parse import resolve
+    cmd = site.cmd
+    try:
+        res = resolve(cmd)
+    except Exception:  # noqa: BLE001
+        return True
+    names = [res.name] + [w[0] for w in res.wrappers]
+    if any(n in _SD_DEFINERS for n in names):
+        return True
+    texts = [a.word.text for a in cmd.assignments] + [a.word.text for a in res.assignments]
+    if res.name in ("export", "declare", "typeset", "readonly", "local", "set", "env"):
+        texts += [w.value() or w.text for w in res.args]
+    return any(_SD_VARIABLE.match(t.lstrip("'\"")) for t in texts)
+
+
+# What reads an allowed mention's own text back once the call has run: the shell's command line in /proc, the
+# commit message file and anything else under .git, the shell's history, and the process lists.
+_SD_READBACK = re.compile(r"(^|[^a-z0-9_.-])proc([^a-z0-9_.-]|$)|cmdline|/self/|thread-self|\$\$|\$\{?(bashpid|ppid)|"
+                          r"editmsg|(^|[^a-z0-9_.-])\.git([^a-z0-9_-]|$)|git-dir|git-path|git-common|git_dir|"
+                          r"histfile|_history")
+_SD_READBACK_GLOB = (".git", "proc", "cmdline", "commit_editmsg", "self", "thread-self")
+_SD_READBACK_PROGRAMS = frozenset({"ps", "pgrep", "pkill", "pstree", "top", "htop", "atop", "btop", "procs", "pidof",
+                                   "fc", "history", "jobs", "w", "lsof", "fuser"})
+# git subcommands that never print a commit's message; any other git call after a commit-message mention must show
+# its output (stdout and stderr) only.
+_SD_GIT_QUIET = frozenset({"add", "push", "status", "fetch", "init", "rm", "mv", "restore", "diff", "ls-files",
+                           "ls-tree", "config", "remote", "rev-parse", "check-ignore", "version", "help", "grep"})
+_SD_SHELL = re.compile(r"(ba|da|z|k|mk|y|r|po)?sh|busybox")
+
+
+def _sd_git_sub(vals):
+    """The subcommand of a git call after its global options; None when a global option is not plain."""
+    k = 0
+    while k < len(vals) and vals[k].startswith("-"):
+        if vals[k] == "-C" and k + 1 < len(vals):
+            k += 2
+            continue
+        if vals[k] not in _SD_GIT_GLOBAL_FLAGS:
+            return None
+        k += 1
+    return vals[k] if k < len(vals) else None
+
+
+def _sd_traces(sites):
+    """True when the shell may trace or echo the commands it runs: set -x/-v (or -o xtrace/verbose, shopt -o), a
+    shell run with -x/-v, or a variable that turns tracing on or moves it."""
+    from lib.shell_parse import resolve
+    for site in sites:
+        cmd = site.cmd
+        texts = [a.word.text for a in cmd.assignments]
+        try:
+            res = resolve(cmd)
+        except Exception:  # noqa: BLE001
+            return True
+        texts += [a.word.text for a in res.assignments]
+        if any(re.match(r"['\"]?(SHELLOPTS|BASH_XTRACEFD|BASHOPTS)\+?=", t) for t in texts):
+            return True
+        name = (res.name or "").lower()
+        if name in ("set", "shopt") or _SD_SHELL.fullmatch(name):
+            for w in res.args:
+                v = w.value()
+                if v is None or v.lower() in ("xtrace", "verbose", "--verbose") or \
+                        (re.fullmatch(r"[-+][A-Za-z]+", v) and set(v[1:]) & set("xv")):
+                    return True
+    return False
+
+
+def _sd_reads_back(site, res):
+    """Why this command can read an allowed mention's text back (the shell's command line, the commit message, the
+    history, a process list), or None."""
+    import fnmatch
+    cmd = site.cmd
+    words = [a.word for a in cmd.assignments] + list(cmd.words) + [r.target for r in cmd.redirects if r.target]
+    for w in words:
+        text = w.text
+        for rx, base in _SD_DECODE:
+            text = rx.sub(lambda m: chr(int(m.group(1), base) % 0x110000), text)
+        text = re.sub(r"""['"\\]""", "", text.lower())
+        if _SD_READBACK.search(text):
+            return f"'{w.text}' can read the mention back"
+        if any(p.kind != "lit" for p in w.parts):
+            for comp in re.split(r"[/=:\s]", text):
+                if any(c in comp for c in "*?[") and comp.strip("*?"):
+                    if any(fnmatch.fnmatchcase(t, comp) for t in _SD_READBACK_GLOB):
+                        return f"'{w.text}' can read the mention back"
+    name = (res.name or "").lower() if res is not None else ""
+    if name.rsplit("/", 1)[-1] in _SD_READBACK_PROGRAMS:
+        return f"{name} can read the mention back"
+    return None
+
+
+# The whole command an allowed mention may stand in: a `;`/`&&`/`||` list (groups, subshells and `if` at most) of
+# allowed search, log or commit calls and a few harmless commands, each with literal words, its output piped only
+# into display filters and redirected only to /dev/null or between stdout and stderr. Nothing in it assigns or
+# exports a variable, defines, configures or reads back anything, or writes a file.
+_SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
+_SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
+_SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
+# git options of those subcommands that run a program or write a file (taken in any abbreviation).
+_SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
+_SD_PLAIN_COMPOUNDS = frozenset({"group", "subshell", "if"})
+
+
+def _sd_quiet_redirects(redirects, stdin_doc=False):
+    """True when every redirection sends stdout or stderr to /dev/null or to each other; a quoted heredoc or a
+    literal here-string on stdin only where the call reads its message from it (stdin_doc)."""
+    for r in redirects:
+        if r.fd_var is not None:
+            return False
+        if r.op in ("<<", "<<-"):
+            if not (stdin_doc and r.fd == 0 and r.hd is not None and (r.hd.quoted or not r.hd.expansions)):
+                return False
+            continue
+        if r.op == "<<<":
+            if not (stdin_doc and r.fd == 0 and r.target is not None and r.target.value() is not None
+                    and all(p.kind == "lit" for p in r.target.parts)):
+                return False
+            continue
+        if r.op == ">&" and r.dup is not None:
+            if r.fd not in (1, 2) or r.dup not in (1, 2):
+                return False
+            continue
+        if not r.writes() or r.target is None or r.target.value() != "/dev/null" or \
+                any(p.kind != "lit" for p in r.target.parts):
+            return False
+    return True
+
+
+def _sd_plain_git(vals):
+    """True when a git call is status, diff, log, show, push or fetch with plain global options and nothing that
+    runs a program or writes a file."""
+    if _sd_git_sub(vals) not in _SD_PLAIN_GIT:
+        return False
+    for v in vals:
+        name = v.partition("=")[0].lower()
+        if _sd_writes_output(v) or (name.startswith("--") and len(name) >= 4 and
+                                    any(r.startswith(name) for r in _SD_PLAIN_GIT_REFUSED)):
+            return False
+    return True
+
+
+def _sd_plain_command(cmd):
+    """True when one simple command fits the plain shape: an allowed search, log or commit call, or a harmless
+    command (echo, printf, true, false, :, pwd, cd, ls, git status/diff/log/show/push/fetch), with plain wrappers at
+    most, literal words and quiet redirections; or a shell -c or a find -exec whose code is itself plain."""
+    from types import SimpleNamespace
+    from lib.shell_parse import Script, resolve
+    if cmd.assignments or not cmd.words:
+        return False
+    try:
+        res = resolve(cmd)
+    except Exception:  # noqa: BLE001
+        return False
+    if res.unresolved or res.assignments or res.head is None:
+        return False
+    if any(w[0] not in _SD_PLAIN_WRAPPERS for w in res.wrappers):
+        return False
+    hv = res.head.value()
+    if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
+        return False
+    literal = all(w.value() is not None and all(p.kind == "lit" for p in w.parts) for w in cmd.words)
+    name = res.name
+    if res.payload is None and _sd_allowed(SimpleNamespace(cmd=cmd, templated=False)):
+        commit = name == "git" and _sd_git_sub([w.value() or "" for w in res.args]) == "commit"
+        return (literal or commit) and _sd_quiet_redirects(cmd.redirects, stdin_doc=commit)
+    if not literal or not _sd_quiet_redirects(cmd.redirects):
+        return False
+    vals = [w.value() for w in res.args]
+    if name in _SD_PLAIN_SHELLS:
+        return len(vals) == 2 and vals[0] == "-c" and isinstance(res.payload, Script) and \
+            _sd_plain_script(res.payload)
+    if name == "find":
+        actions = [v for v in vals if v in _SD_FIND_ACTIONS]
+        return set(actions) <= {"-exec", "-execdir"} and len(actions) <= 1 and \
+            (not actions or (isinstance(res.payload, Script) and _sd_plain_script(res.payload)))
+    if res.payload is not None:
+        return False
+    if name in ("echo", "true", "false", ":", "pwd", "ls", "cd"):
+        return True
+    if name == "printf":
+        return bool(vals) and vals[0] != "-v"
+    return name == "git" and _sd_plain_git(vals)
+
+
+def _sd_plain_script(script):
+    """True when every command of a parsed list fits the plain shape (see _sd_plain_command): no background job,
+    no loop, function, case or coproc, and every later pipeline stage a display filter with quiet redirections."""
+    from lib.shell_parse import Compound, SimpleCommand
+    if script.error is not None:
+        return False
+    for pl, sep in script.items:
+        if sep == "&" or any(p not in ("|", "|&") for p in pl.pipes):
+            return False
+        for k, st in enumerate(pl.stages):
+            if k > 0:
+                if not (_sd_display(st) and _sd_quiet_redirects(st.redirects)):
+                    return False
+            elif isinstance(st, Compound):
+                if st.kind not in _SD_PLAIN_COMPOUNDS or st.header or not _sd_quiet_redirects(st.redirects) or \
+                        not all(_sd_plain_script(b) for b in st.body):
+                    return False
+            elif not (isinstance(st, SimpleCommand) and _sd_plain_command(st)):
+                return False
+    return True
+
+
+def session_dirs_rule(command):
+    """session_dirs.txt is never read, written or executed: its name may stand only as the pattern of grep, rg or
+    git grep, the -S/-G/--grep value of git log, or a git commit message, only when the whole command is plain (see
+    _sd_plain_script: literal words, no variable, configuration or file write, quiet redirections), and only while
+    what that call prints reaches the terminal (through display filters at most) and no later word can reuse its
+    last argument. Every
+    other mention, a glob or expansion written to land on the file where a program reads, writes or runs it, a glob
+    a program applies to names itself (find -name with an action, rg -g, grep --include, git pathspecs, tar, rsync)
+    that matches it, and interpreter code naming it are refused; a call the parser cannot read keeps every mention
+    refused."""
+    low = sd_normalize(command)
+    if not any(f in low for f in SD_FRAGMENTS):
+        return
+    from lib.shell_parse import parse, walk, resolve
+    raw = list(command)
+    reason = None
+    try:
+        script = parse(command)
+        broken = bool(script.errors())
+        sites = list(walk(script))
+        streams = _sd_output_safety(script, _sd_traces(sites)) if not broken else {}
+        plain = not broken and _sd_plain_script(script)
+    except Exception:  # noqa: BLE001
+        broken, sites, streams, plain = True, [], {}, False
+    redefined = _SD_FUNCTION.search(low) is not None or any(_sd_redefines(site) for site in sites)
+    env = _sd_env(sites)
+    blank, others, committed, mentioned = [], [], False, False
+    for site in sites if not broken else ():
+        cmd = site.cmd
+        key = _sd_key(site.context, cmd)
+        out_safe = streams.get(key, (False, False))[0]
+        allowed = [] if redefined or not out_safe or not plain else _sd_allowed(site)
+        allowed_ids = {id(src) for src in allowed}
+        try:
+            res = resolve(cmd)
+            name = res.name.lower() if res.name is not None else None
+        except Exception:  # noqa: BLE001
+            res, name = None, None
+        lister = (out_safe and res is not None and res.payload is None and name in _SD_LISTERS
+                  and not (name == "printf" and any(w.value() in (None, "-v") for w in res.args[:1]))
+                  and not (name == "find" and any(w.value() in _SD_FIND_ACTIONS for w in res.args)))
+        words = [a.word for a in cmd.assignments] + ([] if lister else list(cmd.words))
+        words += [r.target for r in cmd.redirects if r.target]
+        for w in words:
+            if id(w.raw) not in allowed_ids and _sd_glob_hit(w, env):
+                reason = f"'{w.text}' can resolve to {SD_NAME}"
+        if res is not None and name is not None:
+            hit = _sd_glob_operand(res, out_safe)
+            if hit is not None:
+                reason = f"the pattern '{hit}' {name} applies to file names matches {SD_NAME}"
+        if res is None:
+            code = [w.value() or w.text for w in cmd.words[1:]] + [r.hd.body for r in cmd.redirects if r.hd]
+        elif name is not None and _SD_INTERPRETER.fullmatch(name):
+            code = _sd_interpreter_code(res, cmd)
+        else:
+            code = []
+        if any(_sd_code_names(c) for c in code):
+            reason = f"interpreter code names {SD_NAME}"
+        if site.depth == 0 or site.script.depth > 0:  # its offsets are the command's own
+            blank += allowed
+        if allowed:
+            mentioned = True
+            committed = committed or _sd_git_sub([w.value() or "" for w in res.args]) == "commit"
+        else:
+            others.append((site, res, name, streams.get(key, (False, False))))
+    for site, res, name, (o, e) in others if mentioned else ():
+        why = _sd_reads_back(site, res)
+        if why is None and committed and name == "git":
+            vals = [w.value() or w.text for w in res.args]
+            sub = _sd_git_sub(vals)
+            if any(_sd_writes_output(v) for v in vals) or (sub not in _SD_GIT_QUIET and not (o and e)):
+                why = "a git call after the commit hands its message on"
+        if why is not None:
+            reason = f"{why} after {SD_NAME} is named"
+    if blank and _SD_LAST_ARG.search(command):
+        reason = f"a word reuses an earlier command's last argument after {SD_NAME} is named"
+    for src in blank:
+        pos = [(src.idx[i], ch) for i, ch in enumerate(src.text)]
+        if all(0 <= j < len(raw) and command[j] == ch for j, ch in pos):
+            for j, _ch in pos:
+                raw[j] = "\x01"
+    if reason is None and SD_NAME in sd_normalize("".join(raw)):
+        reason = f"{SD_NAME} stands where it is read, written or run"
+    if reason is None and broken and re.search(r"(sess|dirs)[^\s;&|]*([*?\[]|\{[^}\s]*,)|([*?\[]|\{[^}\s]*,)[^\s;&|]*"
+                                                r"(sess|dirs)", command.lower()):
+        reason = f"the command cannot be parsed and a glob in it can resolve to {SD_NAME}"
+    if reason:
+        refuse(f"BLOCKED: {SD_NAME} is never read, written or executed by an agent", f"Command: {command}",
+               f"REASON: {reason}. Editing it once triggered a full session restore that killed every session.",
+               "Allowed: the name as the pattern of grep, rg or git grep, as the -S/-G/--grep value of git log, or "
+               "in a git commit message, with the output shown, not consumed. This refusal runs before /do and "
+               "/allow; neither releases it.")
+
+
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def environment():
@@ -2829,6 +3960,7 @@ def decide(payload_text):
     runtime_guard(payload_text, command)
     run_commit_guard(payload, command, home)
     consent_flag_rule(command, payload)
+    session_dirs_rule(command)
 
     from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command
     if not get("agent_id"):
