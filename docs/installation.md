@@ -276,10 +276,13 @@ session, `CLAUDE_PROJECT_DIR` or the nearest directory above doctor's own with
 known, an event with no receipt and no registration in the layers read is `FAIL` when those
 layers wire the canary for other events (a partial wiring doctor can see), and
 `NOT_PROVABLE_HERE`, naming what was read, when they wire it for none. Run without a session and without `--session-id`, each event's
-action says to rerun inside a session or with `--session-id` of a running session. To prove a session's own PreToolUse and PostToolUse, run `scripts/doctor --strict
---timeout 60` there as a background task and read its output once while it waits: that read is a
-tool call inside the window, and it puts the run's nonce (the `probe open` line on stderr) in the
-transcript. From a terminal, `--session-id <id> --timeout 120` probes a running session; the
+action says to rerun inside a session or with `--session-id` of a running session. To prove a session's own PreToolUse and PostToolUse, type `/do` in that session,
+then have it run `scripts/doctor --strict --timeout 60` as a background task and read its output
+once while it waits: that read is a tool call inside the window, and it puts the run's nonce (the
+`probe open` line on stderr) in the transcript. `/do` is needed because
+`hooks/pretool-block-background-tasks.py` refuses the main agent a background task without it;
+a subagent may start one, but the task ends with the subagent, before its report carries the nonce
+into the session's transcript. From a terminal, `--session-id <id> --timeout 120` probes a running session; the
 report names what to do in it per event. The session id is `--session-id`, else
 `CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`. A `NOT_PROVABLE_HERE` or `FAIL` run leaves the
 handshake state UNPROTECTED, so protected routes stay refused. While `/harness off` holds, doctor
