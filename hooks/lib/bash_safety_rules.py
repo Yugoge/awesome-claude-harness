@@ -1305,9 +1305,9 @@ _DG_REFUSED_OPTS = {
     # writes a file or directory it names; a --config (file or inline `cache-dir=`) can name one too
     "ruff": (("-o", "--output-file", "--cache-dir", "--config"), ""),
     # a kubeconfig's exec plugin is code; klog and profile files are written; dump writes a directory
-    "kubectl": (("--kubeconfig", "--log-file", "--log-dir", "--cache-dir", "--profile-output",
+    "kubectl": (("--kubeconfig", "--kuberc", "--log-file", "--log-dir", "--cache-dir", "--profile-output",
                  "--output-directory"), ""),
-    "pip": (("--python", "--log", "--log-file", "--cache-dir", "--report"), ""),  # a named interpreter; writes
+    "pip": (("--python", "--log", "--local-log", "--log-file", "--cache-dir", "--report"), ""),  # interpreter; writes
     # APT reads long names in any case: config can name hooks (Pre-Invoke …); -p/-s overwrite the cache files named
     "apt": (("-o", "--option", "-c", "--config-file", "-p", "--pkg-cache", "-s", "--src-cache"), "", True),
     "ss": (("-K", "--kill", "-D", "--diag"), ""),                    # closes the sockets it lists; -D writes a file
@@ -1342,10 +1342,11 @@ _DG_GIT_GLOBAL_OK = frozenset(("--no-pager", "-P", "--version", "--help"))
 _DG_GIT_ALL = ("--output", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager")
 _DG_GIT_SUB = {
     **dict.fromkeys(("status", "log", "diff", "show", "rev-parse", "describe", "shortlog", "ls-files", "ls-tree",
-                     "cherry", "count-objects", "blame", "commit", "version", "help", "range-diff", "merge-base",
+                     "cherry", "count-objects", "blame", "commit", "version", "range-diff", "merge-base",
                      "show-ref", "rev-list", "cat-file", "whatchanged", "switch", "remote", "config", "fetch"),
                     ((), ())),
     "pull": (("-s", "--strategy"), ()),                                      # as merge
+    "help": (("-w", "--web", "-i", "--info"), ()),                           # start a browser or info program
     "grep": (("-O",), ()),                                                   # -O<pager> runs it
     "ls-remote": (("-u",), ()),                                              # -u <upload-pack>
     "add": (("-i", "--interactive", "-p", "--patch", "-e", "--edit"), ()),
@@ -1387,15 +1388,252 @@ def _dg_git(t, words):
         words_ = [w for w in rest if not w.startswith("-")]
         return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
             not words_ or words_[0] in ("show", "get-url"))
-    if sub == "config":  # reading only: --list/--get*, or one key; never edit
+    if sub == "config":  # reading only, in the old and the subcommand syntax; never set, unset or edit
         reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
                  "--local", "--system", "--name-only", "-z", "--null")
-        if "edit" in rest or _dg_opts_hit(rest, ("-e", "--edit")):
+        if not all(w in reads for w in rest if w.startswith("-")):
             return False
-        return all(w in reads or w.startswith("--get") for w in rest if w.startswith("-")) and \
-            (any(w in ("-l", "--list") or w.startswith("--get") for w in rest) or
-             len([w for w in rest if not w.startswith("-")]) <= 1)
+        ops = [w for w in rest if not w.startswith("-")]
+        if ops and ops[0] in ("get", "list"):  # `git config get KEY`, `git config list`
+            return len(ops) <= (2 if ops[0] == "get" else 1)
+        if ops and ops[0] in ("set", "unset", "edit", "rename-section", "remove-section"):
+            return False
+        if any(w in ("-l", "--list") for w in rest):
+            return not ops
+        return len(ops) <= (2 if any(w.startswith("--get") for w in rest) else 1)
     return not set(rest) & set(_DG_GIT_SUB[sub][1])
+
+
+# ── Positive option lists ──
+# For heads whose option surface is large or read from plugins and configuration, every option word must be one the
+# everyday lists need or an obviously inert display option; anything else refuses (an unknown option, an
+# abbreviation, a `_` spelling kubectl would normalise, an option glued to a value it does not take).
+
+
+def _dg_opts(flags="", valued="", longs=(), vlongs=(), operand=None, fold=False, under=False, value_ok=None,
+             optional="", numeric=""):
+    """A checker for options from index `start`: short `flags` (clusterable), short `valued` options (value attached
+    or the next word), `optional` ones (value only when attached: `date -Iseconds`), `numeric` ones (attached digits,
+    after which the cluster scan continues, as less and top read them, or the next word at the end of the word),
+    long `longs` flags and `vlongs` taking `=value` or the next word, all matched exactly (after `_`→`-` when
+    `under`, case-folded when `fold`). `operand` vets each non-option word (None: any)."""
+    norm = (lambda n: n.lower()) if fold else (lambda n: n)
+    longs_n, vlongs_n = {norm(x) for x in longs}, {norm(x) for x in vlongs}
+
+    def check(t, words, start=1):
+        i, n = start, len(words)
+        while i < n:
+            w = words[i]
+            if w == "--":
+                return operand is None or all(operand(x) for x in words[i + 1:])
+            if w.startswith("--"):
+                name, eq, val = w[2:].partition("=")
+                name = norm(name.replace("_", "-") if under else name)
+                if name in longs_n and not eq:
+                    i += 1
+                    continue
+                if name not in vlongs_n:
+                    return False
+                if not eq:
+                    if i + 1 >= n:
+                        return False
+                    i, val = i + 1, words[i + 1]
+                if value_ok and not value_ok("--" + name, val):
+                    return False
+                i += 1
+                continue
+            if w.startswith("-") and len(w) > 1:
+                j, take = 1, 0
+                while j < len(w):
+                    c = w[j]
+                    j += 1
+                    if c in flags:
+                        continue
+                    if c in optional:
+                        break
+                    if c in numeric:
+                        k = j
+                        while j < len(w) and (w[j].isdigit() or w[j] in ".,"):
+                            j += 1
+                        take += k == j == len(w)
+                        continue
+                    if c not in valued:
+                        return False
+                    val = w[j:]
+                    if not val:
+                        if i + take + 1 >= n:
+                            return False
+                        take += 1
+                        val = words[i + take]
+                    if value_ok and not value_ok("-" + c, val):
+                        return False
+                    break
+                if i + take >= n:
+                    return False
+                i += 1 + take
+                continue
+            if operand is not None and not operand(w):
+                return False
+            i += 1
+        return True
+    return check
+
+
+def _dg_kubectl_output(name, value):
+    """kubectl -o: a printed format, never a template or column file."""
+    if name not in ("-o", "--output"):
+        return True
+    return value in ("wide", "yaml", "json", "name") or value.startswith(
+        ("jsonpath=", "jsonpath-as-json=", "custom-columns=", "go-template=")) and "-file" not in value.split("=")[0]
+
+
+# kubectl (pflag; `_` is normalised to `-`): the read subcommands' display, selection and log options. Not
+# --kubeconfig/--kuberc (an exec plugin is code), not log, cache, profile or dump paths.
+_DG_KUBECTL_OPTS = _dg_opts(
+    flags="Awpf", valued="nolcL",
+    longs=("all-namespaces", "show-labels", "no-headers", "watch", "watch-only", "follow", "previous", "client",
+           "all-containers", "timestamps", "show-kind", "ignore-not-found", "minify", "flatten", "raw", "recursive",
+           "prefix", "help"),
+    vlongs=("namespace", "output", "selector", "field-selector", "sort-by", "container", "tail", "since",
+            "since-time", "context", "label-columns", "request-timeout", "chunk-size", "api-version", "limit-bytes"),
+    under=True, value_ok=_dg_kubectl_output)
+# pip list/show/freeze/check (optparse, which would accept abbreviations: exact names only here).
+_DG_PIP_OPTS = _dg_opts(
+    flags="vqlouef", valued="",
+    longs=("verbose", "quiet", "local", "outdated", "uptodate", "files", "user", "not-required", "exclude-editable",
+           "include-editable", "editable", "pre", "all", "no-color", "disable-pip-version-check", "no-input",
+           "help", "version"),
+    vlongs=("format", "exclude"))
+# set: errexit, nounset, xtrace and pipefail only (not -k, which turns later `X=v` words into environment).
+_DG_SET_OPTS = _dg_opts(flags="eux", valued="o",
+                        value_ok=lambda n, v: v in ("pipefail", "errexit", "nounset", "xtrace"),
+                        operand=lambda w: False)
+
+
+def _dg_set(t, words):
+    plus = [w for w in words[1:] if w.startswith("+")]
+    return _DG_SET_OPTS(t, [w if not w.startswith("+") else "-" + w[1:] for w in words]) and all(
+        len(w) > 1 for w in plus)
+
+
+# date: report forms. Operands only `+FORMAT` (a `MMDDhhmm` operand sets the clock).
+_DG_DATE_OPTS = _dg_opts(flags="uR", valued="dr", optional="I",
+                         longs=("utc", "universal", "rfc-email", "iso-8601", "help", "version"),
+                         vlongs=("iso-8601", "rfc-3339", "date", "reference"),
+                         operand=lambda w: w.startswith("+"))
+# apt (option names read in any case): the listing flags of show/list/search/policy.
+_DG_APT_OPTS = _dg_opts(flags="aqh", longs=("all-versions", "installed", "upgradable", "manual-installed", "quiet",
+                                            "help", "full", "names-only"), fold=True)
+# docker read subcommands: display, filter and log options.
+_DG_DOCKER_OPTS = _dg_opts(
+    flags="aqslt", valued="fn",
+    longs=("all", "quiet", "no-trunc", "size", "latest", "no-stream", "timestamps", "details", "follow", "digests",
+           "services", "help"),
+    vlongs=("format", "filter", "last", "tail", "since", "until", "type"))
+# ruff check/format: rule selection and reporting; paths as operands. Not --config, --cache-dir, -o, --watch.
+_DG_RUFF_OPTS = _dg_opts(
+    flags="qvsen",
+    longs=("fix", "no-fix", "check", "diff", "show-fixes", "statistics", "quiet", "verbose", "silent", "exit-zero",
+           "exit-non-zero-on-fix", "no-cache", "unsafe-fixes", "preview", "no-preview", "isolated", "show-files",
+           "help"),
+    vlongs=("select", "ignore", "extend-select", "output-format", "line-length", "target-version", "exclude",
+            "extend-exclude"))
+# ss: socket-listing flags; filter words (`dst 1.2.3.4`, `state established`) are operands. Not -K, -D, -F, -N.
+_DG_SS_OPTS = _dg_opts(
+    flags="tulnpaemois46xwrHO",
+    longs=("tcp", "udp", "listening", "numeric", "processes", "all", "extended", "memory", "options", "info",
+           "summary", "ipv4", "ipv6", "unix", "raw", "resolve", "no-header", "oneline", "help"))
+# man: lookup and section options; operands are page names (no `/`: a path is formatted as a local file).
+_DG_MAN_OPTS = _dg_opts(flags="afkwWiI7", valued="sS",
+                        longs=("all", "whatis", "apropos", "where", "regex", "wildcard", "names-only", "ignore-case",
+                               "match-case", "no-hyphenation", "no-justification", "help"),
+                        vlongs=("sections",), operand=lambda w: "/" not in w)
+# less (long names in any case): display options. Not -k/-o/-O/-t/-T or the lesskey/log/tag options, no `+` word.
+_DG_LESS_OPTS = _dg_opts(
+    flags="NnRrSFXiIMmsEeqQgGJwWKcCaBfLuUV~", valued="pP", numeric="#xyzbhj",
+    longs=("line-numbers", "raw-control-chars", "chop-long-lines", "quit-if-one-screen", "no-init", "ignore-case",
+           "squeeze-blank-lines", "mouse", "quiet", "silent", "status-column", "long-prompt", "help", "version"),
+    vlongs=("tabs", "pattern", "shift", "window", "jump-target"), fold=True,
+    operand=lambda w: not w.startswith("+"))
+
+
+def _dg_tree(t, words):
+    """tree: display flags; -L/-P/-I take the NEXT word (or -L attached digits) and the cluster scan continues."""
+    flags, nexts = set("adlfxiqNQpugshDFvtcUrCnASJX"), set("LPI")
+    longs = ("--du", "--si", "--dirsfirst", "--noreport", "--prune", "--matchdirs", "--ignore-case", "--gitignore",
+             "--help", "--version")
+    i = 1
+    while i < len(words):
+        w, take = words[i], 0
+        if w.startswith("--"):
+            if w not in longs:
+                return False
+        elif w.startswith("-") and len(w) > 1:
+            j = 1
+            while j < len(w):
+                c = w[j]
+                if c == "L" and w[j + 1:j + 2].isdigit():
+                    j += 1
+                    while j < len(w) and w[j].isdigit():
+                        j += 1
+                    continue
+                if c in nexts:
+                    take += 1
+                elif c not in flags:
+                    return False
+                j += 1
+        i += 1 + take
+    return True
+
+
+# fd (clap): search flags; extension, type, exclude and depth values. Not -x/-X/--exec*, -l (runs ls).
+_DG_FD_OPTS = _dg_opts(
+    flags="HIusigFapL01q", valued="etEdSojc",
+    longs=("hidden", "no-ignore", "case-sensitive", "ignore-case", "glob", "fixed-strings", "absolute-path",
+           "follow", "full-path", "print0", "quiet", "show-errors", "help", "version"),
+    vlongs=("extension", "type", "exclude", "max-depth", "min-depth", "exact-depth", "size", "changed-within",
+            "changed-before", "owner", "threads", "max-results", "color"))
+# rg (clap): search and output flags. Not --pre/--pre-glob/--hostname-bin/-z/--search-zip.
+_DG_RG_OPTS = _dg_opts(
+    flags="isSwxvnNclLHIFuUaoq0bp", valued="efgtTABCmMjrEd",
+    longs=("hidden", "no-ignore", "files", "type-list", "pretty", "json", "vimgrep", "count", "files-with-matches",
+           "files-without-match", "no-heading", "heading", "line-number", "no-line-number", "column", "trim",
+           "smart-case", "ignore-case", "case-sensitive", "word-regexp", "fixed-strings", "multiline", "follow",
+           "stats", "unrestricted", "passthru", "no-messages", "null", "invert-match", "only-matching", "help",
+           "version"),
+    vlongs=("regexp", "file", "glob", "iglob", "type", "type-not", "after-context", "before-context", "context",
+            "max-count", "max-columns", "threads", "replace", "encoding", "max-depth", "sort", "sortr", "color",
+            "colors"))
+# sort: ordering flags and key, separator and buffer values. Not -o/--output, --compress-program, -T.
+_DG_SORT_OPTS = _dg_opts(
+    flags="nrufbdghiMRVscCmz", valued="ktS",
+    longs=("numeric-sort", "reverse", "unique", "ignore-case", "ignore-leading-blanks", "dictionary-order",
+           "general-numeric-sort", "human-numeric-sort", "ignore-nonprinting", "month-sort", "random-sort",
+           "version-sort", "stable", "check", "merge", "zero-terminated", "help", "version"),
+    vlongs=("key", "field-separator", "buffer-size", "sort"))
+# find: tests, global options and printing actions; values are paths, patterns or numbers.
+_DG_FIND_WORDS = frozenset((
+    "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex", "-lname", "-ilname",
+    "-type", "-xtype", "-maxdepth", "-mindepth", "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin", "-newer",
+    "-anewer", "-cnewer", "-size", "-empty", "-user", "-group", "-uid", "-gid", "-nouser", "-nogroup", "-perm",
+    "-links", "-inum", "-samefile", "-readable", "-writable", "-executable", "-true", "-false", "-print",
+    "-print0", "-printf", "-ls", "-prune", "-quit", "-not", "-a", "-o", "-and", "-or", "-L", "-H", "-P", "-xdev",
+    "-mount", "-follow", "-depth", "-daystart", "-noleaf", "-fstype", "-help", "-version"))
+
+
+def _dg_find(t, words):
+    return all(not w.startswith("-") or w in _DG_FIND_WORDS or re.fullmatch(r"-\d+[a-zA-Z]?", w)
+               for w in words[1:])
+
+
+# top (batch reports) and ps (listing formats): display options only.
+_DG_TOP_OPTS = _dg_opts(flags="bcHiS1", valued="opuUEw", numeric="nd", longs=("help", "version"),
+                        operand=lambda w: False)
+_DG_PS_OPTS = _dg_opts(
+    flags="efFlajAdNxHLTwyMZ", valued="uUpCoOGgtsq",
+    longs=("forest", "no-headers", "headers", "help", "version", "cumulative", "deselect"),
+    vlongs=("sort", "format", "pid", "ppid", "user", "User", "group", "Group", "cols", "columns", "lines"),
+    operand=lambda w: re.fullmatch(r"[auxewfjlvrhcSTmgnsZ]+|\d+", w) is not None)
 
 
 # docker / kubectl: read subcommands only, never `--` (kubectl runs what follows it).
@@ -1422,7 +1660,24 @@ def _dg_kubectl(t, words):
     return len(words) > 1 and words[1] in _DG_KUBECTL_READ
 
 
-_DG_PIP = _dg_refusing("pip", _dg_subcommands("list", "show", "freeze", "--version", "-V", "check"))
+def _dg_pip(t, words):
+    if len(words) == 2 and words[1] in ("--version", "-V", "--help"):
+        return True
+    return len(words) > 1 and words[1] in ("list", "show", "freeze", "check") and _DG_PIP_OPTS(t, words, 2)
+
+
+_DG_PIP = _dg_refusing("pip", _dg_pip)
+
+
+def _dg_docker_read(t, words):
+    if not _dg_docker(t, words):
+        return False
+    start = 3 if words[1] in ("network", "volume", "image", "container", "system", "compose") else 2
+    return _DG_DOCKER_OPTS(t, words, start)
+
+
+def _dg_kubectl_read(t, words):
+    return _dg_kubectl(t, words) and _DG_KUBECTL_OPTS(t, words, 3 if words[1] == "config" else 2)
 
 
 def _dg_python(t, words):
@@ -1452,37 +1707,44 @@ def _dg_version_only(*forms):
 # by one of those lists.
 _DG_ALLOW = {
     # Text readers and listings: options select, format or count; operands are files read.
-    **dict.fromkeys(("head", "tail", "wc", "base64", "jq", "ls", "du", "df", "pwd", "cd", "echo"), _dg_any),
-    "sort": _dg_refusing("sort"), "tree": _dg_refusing("tree"),
+    **dict.fromkeys(("head", "tail", "wc", "jq", "ls", "du", "df", "pwd", "cd", "echo"), _dg_any),
+    # base64: GNU coreutils flags only (the BSD -o/-i forms write and read named files).
+    "base64": _dg_opts(flags="di", valued="w", longs=("decode", "ignore-garbage", "help", "version"),
+                       vlongs=("wrap",)),
+    "sort": _dg_refusing("sort", _DG_SORT_OPTS), "tree": _dg_refusing("tree", _dg_tree),
     # One input operand: a second operand is the file uniq writes.
     "uniq": lambda t, w: len(_dg_operands(w, ("-f", "-s", "-w", "--skip-fields", "--skip-chars",
                                               "--check-chars"))) <= 1,
     # Pager: no `+command` start-up word, no key-binding file (bindings run commands), no log or tags file. Reading
     # keys needs a terminal, which a tool call does not have.
-    "less": _dg_refusing("less", lambda t, w: not any(x.startswith("+") for x in w[1:])),
+    "less": _dg_refusing("less", _DG_LESS_OPTS),
+    # cat as a pipe sink (`git diff --stat | cat`): GNU cat's options only number or mark what it prints.
+    "cat": _dg_opts(flags="AbeEnstTuv", longs=("show-all", "number-nonblank", "number", "squeeze-blank",
+                                               "show-ends", "show-tabs", "show-nonprinting", "help", "version")),
     "cp": _dg_any,  # copies its operands; the analyzer's relocator class (no option runs a program)
-    "find": lambda t, w: not set(w[1:]) & t["find_ops"],  # exec, delete and fprint actions refuse
-    "fd": _dg_refusing("fd"),
+    "find": lambda t, w: not set(w[1:]) & t["find_ops"] and _dg_find(t, w),  # no exec, delete or fprint action
+    "fd": _dg_refusing("fd", _DG_FD_OPTS),
     # Search tools: patterns and paths are data; rg's preprocessor and decompressor options run programs.
-    "grep": _dg_any, "rg": _dg_refusing("rg"),
+    "grep": _dg_any, "rg": _dg_refusing("rg", _DG_RG_OPTS),
     # System inspection: read-only reports. hostname, date, stty and ulimit can also set; only reading forms.
-    **dict.fromkeys(("uname", "id", "nproc", "uptime", "free", "ps", "top", "netstat"), _dg_any),
-    "ss": _dg_refusing("ss"),
-    "date": _dg_refusing("date"),
+    **dict.fromkeys(("uname", "id", "nproc", "uptime", "free", "netstat"), _dg_any),
+    "ps": _DG_PS_OPTS, "top": _DG_TOP_OPTS,
+    "ss": _dg_refusing("ss", _DG_SS_OPTS),
+    "date": _dg_refusing("date", _DG_DATE_OPTS),
     "hostname": _dg_refusing("hostname", lambda t, w: all(x.startswith("-") for x in w[1:])),
     "stty": _dg_options_only("-a", "--all", "-g", "--save"),
     "ulimit": _dg_options_only("-a"),
-    "set": lambda t, w: all(x[:1] in "-+" for x in w[1:]),  # shell options only, no positional reset
+    "set": _dg_set,
     "hash": _dg_options_only("-r", "-l", "-t", "-d"),
     "history": lambda t, w: all(x.isdigit() for x in w[1:]),
     # Arithmetic: bc's language has no command or file-writing statement (unlike dc's `!`).
     "bc": _dg_any,
     # man formats an operand holding a `/` as a local file, as -l does.
-    "man": _dg_refusing("man", lambda t, w: not any("/" in x for x in w[1:] if not x.startswith("-"))),
-    "apt": _dg_refusing("apt", _dg_subcommands("show", "list", "search", "policy", "depends", "rdepends",
-                                                "showsrc")),
+    "man": _dg_refusing("man", _DG_MAN_OPTS),
+    "apt": _dg_refusing("apt", lambda t, w: _dg_subcommands(
+        "show", "list", "search", "policy", "depends", "rdepends", "showsrc")(t, w) and _DG_APT_OPTS(t, w, 2)),
     # Version control and orchestration CLIs, read forms (see above).
-    "git": _dg_git, "docker": _dg_docker, "kubectl": _dg_refusing("kubectl", _dg_kubectl),
+    "git": _dg_git, "docker": _dg_docker_read, "kubectl": _dg_refusing("kubectl", _dg_kubectl_read),
     "terraform": _dg_subcommands("version", "fmt"),  # fmt rewrites its operand files, loads no provider
     # Version reports: exactly the head and the word. Not `cargo fmt`: fmt is an external subcommand, so a
     # `[alias] fmt = "run …"` in the repository's .cargo/config.toml runs repository code.
@@ -1494,7 +1756,8 @@ _DG_ALLOW = {
     # Interpreters: version reports and `-m pip` read forms only.
     **dict.fromkeys(("python", "python3"), _dg_python),
     "pip": _DG_PIP, "tsc": _dg_tsc,
-    "ruff": _dg_refusing("ruff", _dg_subcommands("check", "format", "--version")),
+    "ruff": _dg_refusing("ruff", lambda t, w: (len(w) == 2 and w[1] in _DG_INFO) or (
+        len(w) > 1 and w[1] in ("check", "format") and _DG_RUFF_OPTS(t, w, 2))),
     # Keys and agents: listing only.
     "ssh-add": _dg_options_only("-l", "-L"),
     "gpg": _dg_options_only("--list-keys", "-k", "--list-secret-keys", "-K", "--fingerprint", "--version"),

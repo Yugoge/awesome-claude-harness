@@ -488,12 +488,13 @@ SPELLING_CONTEXT = {
     "npm": "npm ls {} -a", "pnpm": "pnpm ls {} -r", "apt": "apt show x {} -a", "apt-cache": "apt-cache show x {} -a",
     "ruff": "ruff check {} -q", "less": "less {} f -n", "more": "more {} f -n", "hostname": "hostname {} -v",
     "man": "man ls {} -a", "info": "info ls {} -a", "go": "go version {} -m", "tsc": "tsc --noEmit {} --strict",
-    "whatis": "whatis ls {} -l", "apropos": "apropos ls {} -l",
+    "whatis": "whatis ls {} -l", "apropos": "apropos ls {} -l", "sort": "sort {} x -n", "tree": "tree {} x -a",
+    "rg": "rg {} foo -i", "fd": "fd {} x -H", "date": "date {} -u", "ss": "ss {} -t",
 }
 
 # Letters that take a value but whose parser keeps scanning the rest of the cluster (tree hands -P/-I/-T/-H/-o the
 # NEXT word; less, ss and apt are read letter by letter here): a refused letter after one of them still refuses.
-SCANNED_VALUE_LETTERS = {"tree": "LPITHo", "less": "bhjpPxyz", "ss": "fAFN", "apt": "ta", "rg": "", "fd": ""}
+SCANNED_VALUE_LETTERS = {"tree": "LPITHo", "less": "bhjxyz#", "ss": "fAFN", "apt": "ta", "rg": "", "fd": ""}
 
 
 def _spellings(option, values, refused, fold=False, scanned=""):
@@ -659,7 +660,8 @@ def test_every_allowlisted_head_is_used_by_an_everyday_list():
     """The allowlist holds only heads an everyday fixture needs on a line where a command ends on an option."""
     t = R._degraded_tables()
     used = set()
-    for command in (EVERYDAY_TRAILING_OPTION + MENTIONS + R7_ALLOWED + MULTILINE_EVERYDAY + PLAIN_LINES):
+    for command in (EVERYDAY_TRAILING_OPTION + MENTIONS + R7_ALLOWED + MULTILINE_EVERYDAY + PLAIN_LINES
+                    + PIPE_EVERYDAY):
         for line in R.lines_of(command):
             parsed = R._dg_commands(line)
             for words in (parsed[0] if parsed else []):
@@ -674,3 +676,66 @@ def test_every_allowlisted_head_is_used_by_an_everyday_list():
                                   "yarn", "go", "openssl", "file", "more", "xxd", "printf", "cat", "mv", "ln"])
 def test_pruned_heads_refuse_on_a_trailing_option(head):
     assert R.degraded_refuses(head + " x -q", _rmref()), head
+
+
+# ── Round 10: positive option lists ──
+
+PIPE_EVERYDAY = ["git diff --stat | cat", "git log --oneline -5 | cat -n"]
+
+R10_REFUSED = [
+    "kubectl get pods --kuberc=/dev/shm/v/kuberc -A", "kubectl get pods --kuberc /dev/shm/v/kuberc -A",
+    "kubectl version --kuberc=/dev/shm/v/kuberc --client",
+    "kubectl cluster-info dump --output_directory=/dev/shm/v/od -A",
+    "kubectl get pods --cache_dir=/dev/shm/v/cd -A", "pip list --local-log=/dev/shm/v/l -v",
+    "pip freeze --local-log /dev/shm/v/l -l", "python3 -m pip list --local-log /dev/shm/v/l -v",
+    "python -m pip show pip --local-log=/dev/shm/v/l -f", "set -k\nls LD_PRELOAD=/dev/shm/v/x.so",
+    "set -ek; git diff GIT_EXTERNAL_DIFF=/dev/shm/v/x -q", "set -k; git log GIT_EXTERNAL_DIFF=/dev/shm/v/x -p",
+    "date 01010101 -u", "kubectl get pods -o go-template-file=/dev/shm/v/t -A", "less -bk /dev/shm/v/k f -N",
+    "git help -w log -a", "git help --web log -a", "git help -i log -a", "git config set core.hooksPath /x --get",
+    "git config --global core.hooksPath /x -l", "git config set --global core.hooksPath /x -l",
+    "base64 -i /dev/shm/v/a -o /dev/shm/v/b -D",
+]
+
+
+@pytest.mark.parametrize("command", PIPE_EVERYDAY)
+def test_cat_as_a_pipe_sink_stays_allowed(command):
+    assert not R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("command", R10_REFUSED)
+def test_round10_forms_refuse(command):
+    assert R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
+def test_round10_forms_refuse_end_to_end(mode, tmp_path):
+    hook = None
+    if mode == "crash":
+        dst = tmp_path / "hooks"
+        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        analyzer = dst / "lib" / "bash_execution_boundary.py"
+        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
+            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
+        hook = str(dst / "pretool-bash-safety.sh")
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), R10_REFUSED))
+    assert not [c for c, code, _err in results if code != 2], (mode, results)
+
+
+# Each positive-list head in an allowed form, and the same form with one unknown option (long, short, `_`-spelt).
+POSITIVE_FORMS = {
+    "kubectl": "kubectl get pods {} -A", "pip": "pip list {} -v", "python3": "python3 -m pip list {} -v",
+    "set": "set {} -e", "date": "date {} -u", "apt": "apt show git {} -a", "docker": "docker ps {} -a",
+    "gpg": "gpg {} --list-keys", "ssh-add": "ssh-add {} -l", "ruff": "ruff check {} -q", "ss": "ss {} -t",
+    "man": "man git {} -a", "less": "less {} f -N", "tree": "tree {} x -a", "fd": "fd {} x -H",
+    "rg": "rg {} foo -i", "sort": "sort {} x -n", "find": "find . {} -print", "top": "top {} -b", "ps": "ps {} -e",
+    "cat": "git diff | cat {} -n", "base64": "base64 {} -d",
+}
+
+
+@pytest.mark.parametrize("head", sorted(POSITIVE_FORMS))
+def test_positive_list_heads_refuse_an_unknown_option(head):
+    form, rmref = POSITIVE_FORMS[head], _rmref()
+    assert not R.degraded_refuses(form.format("").replace("  ", " "), rmref), form
+    for unknown in ("--zz-unknown", "--zz-unknown=1", "-Y", "-%", "--log_file=x"):
+        assert R.degraded_refuses(form.format(unknown), rmref), form.format(unknown)
