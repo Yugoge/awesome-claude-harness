@@ -356,6 +356,7 @@ no per-rule budget exists.
 | S-015 | permission-layer-project-writes | advisory | unexercised | component-tested | settings.json:158 @c1f2e447 | tests/test_project_write_permissions.py | component-tested |
 | S-016 | permission-layer-scratch-reach | advisory | unexercised | source-level | settings.json:167 @d1abc798 | tests/test_scratch_permissions.py | source-level |
 | S-017 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
+| S-019 | permission-layer-secret-file-denies | advisory | unexercised | source-level | settings.json:278 @79c79db1 | tests/test_secret_file_denies.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -548,6 +549,38 @@ no per-rule budget exists.
   glob operand to grep (`grep pat session_dirs.tx?`: grep has no stem, so the search forms pass), a glob
   no tail spells (`cat session_dirs*`, `cat session_dir?.txt`) or a name built at run time. A text rule
   cannot see a read that never spells the name.
+- **S-019** — OB-L19: `permissions.deny` refuses secret files by the shape of their name, any extension,
+  for `Read` and `Edit` alike (`*.key`, `*.pem` Read only): `.env` and `.env.*` (every valued variant, an
+  unknown one included); `password`, `passwords`, `password.*`, `passwords.*`, `.password*`, `*_password`,
+  `*_password.*`, `*-password.*`; `secret`, `secrets`, `secret.*`, `secrets.*`, `.secret*`, `*_secret.*`,
+  `*-secret.*`, `*_secrets.*`, `*-secrets.*`, `client_secret*.json`; `credentials`, `credentials.*`;
+  `**/etc/shadow`, `**/passwd`, `//etc/shadow`, `//etc/passwd`. The substring globs `**/*password*`,
+  `**/*secret*`, `**/credentials*` and `**/shadow` are gone: the CLI matches case-insensitively and against
+  every directory on the path, so they refused ordinary source (`src/auth/ForgotPassword.tsx`,
+  `src/components/Shadow/index.tsx`). The end of the deny list is ordered, the same for each tool, and
+  the order is the contract (last match wins): (1) `!` lifts of directories named `secret`, `secrets`,
+  `password`, `passwords`, `*_password` (`!**/passwords/`: a file of that name stays refused, Laravel's
+  `auth/passwords/` opens); (2) `!` lifts of source and doc files whose name holds the word
+  (`!**/*password*.<ext>`, same for `secret`, `credentials`, code and doc extensions only:
+  `forgot_password.dart`, `reset-password.tsx`, `client_secret.py`); (3) re-denies of what no lift may
+  open: `**/.env` and `**/.env.*` (without them `.env.password.md` opened, measured) and the bare stems
+  `secret.*`, `secrets.*`, `*_secrets.*`, `*-secrets.*`, `credentials.*`, `password.*`, `passwords.*`;
+  (4) the templates `.env.example`, `.env.sample`, `.env.template`, last. Decision on the bare stems: a
+  file named after the secret itself (`settings/secrets.py`, `config/credentials.rb`, `secrets.php`,
+  `password.py`) is a likely secret store whatever its extension and none is on the AUDIT's must-pass
+  list, so it stays refused as on the base. Readable now and refused on the base, on purpose: files inside
+  those directories whose own name is not a secret name, and `shadow` outside `etc/`. Negation is not in
+  the permission docs and was measured on Claude Code 2.1.326: last match wins within a tool's list, so a
+  negation before the rule it lifts lifts nothing (a reordered list over-blocks again and never leaks;
+  `test_the_tail_keeps_its_order` holds the order); a name negation does not pierce a
+  directory rule written `dir/**` but does pierce one written `dir/*`, so a future same-list `dir/*` deny
+  would be opened for these names (`test_no_deny_rule_a_name_negation_could_pierce` refuses such a rule).
+  Only deny entries and same-list negations changed, no allow or ask rule, so no deny is downgraded by any
+  rule-tier ordering. The row stays `advisory`/`source-level`: the measurement
+  (a real CLI driven offline through a local stand-in API, method in the test's docstring) is recorded in
+  `tests/test_secret_file_denies.py`, not in the black-box corpus. Not covered: a file under the home
+  outside the project (`~/.aws/credentials`, `~/.env`; `**/` anchors at the current directory), and
+  contents read by an interpreter (`python3 -c 'open(".env")'`), which no Read rule reaches.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
