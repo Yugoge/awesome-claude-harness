@@ -17,9 +17,21 @@ way, such as `git -C . push`, isn't matched" by `Bash(git push *)`. A `*` also m
 `git -C * log *` alone would approve `git -C x push --force origin log` (a push of a ref named log; the
 `git push --force` deny does not see the `-C` spelling) and `git -C x -c core.pager=sh log`. Each `git -C`
 verb therefore has an ask rule `git -C * * <verb>*`, which matches exactly when the text at the directory's
-`*` holds a space, so only a one-word directory runs unasked. `git -C *--output*` asks for diff/log/show
-writing a file. `rg --files` runs no `--pre` program, but `--hostname-bin` runs its program even under
-`--files` (measured on ripgrep 14.1.0), so `rg *--hostname-bin*` asks.
+`*` holds a space. The rule sees the text before the shell expands it, so a word without a space can still
+expand into several: `git -C [ap]* log --force main` became `git -C a push log --force main` and force-pushed
+under the space guards alone. `git -C *\\**`, `git -C *?*` and `git -C *[*` (a literal `*`, `?` or `[`) ask for
+any glob in a `git -C` command, after the verb too (`git -C x log --outpu?=f`). The CLI itself asks for the
+other expansions of an unquoted word (brace expansion, `$NAME` but `$HOME`, backticks, `$( )`, extglob
+groups); `~` and `$HOME` expand to the home directory. So only a directory written as one word with no glob
+or expansion runs unasked. `git -C *--output*` asks for diff/log/show writing a file. `rg --files` runs no
+`--pre` program, but `--hostname-bin` runs its program even under `--files` (measured on ripgrep 14.1.0), so
+`rg *--hostname-bin*` asks, and rg's glob asks keep a glob from expanding into that option.
+`make -n` prints recipes without running them, except what make evaluates itself: under GNU make 4.3,
+`--eval` (and its abbreviations, `--ev`), `-E`, a command-line `V:=$(shell ...)` and a makefile read with
+`-f`/`--file`/`--makefile` (stdin included) all ran a command. `make *--e*`, `make *-*E*` (rules match case
+sensitively, measured: `make -n -e` and `make -n test` still run), `make *$*`, `make *-*f*` and make's glob asks
+ask for them. Residual: the project's own Makefile still runs its `$(shell ...)`, `+` recipe lines and
+`$(MAKE)` lines under `-n`.
 
 `decide` models that matching; `_wildcard` follows the CLI's own matcher (the 2.1.326 binary: `*` becomes `.*`
 with the dot matching newlines, a lone trailing ` *` also matches the bare prefix, runs of spaces and tabs
@@ -50,16 +62,23 @@ NEW_ALLOW = (
     + [e for v in GIT_C_READ for e in (f"Bash(git -C * {v})", f"Bash(git -C * {v} *)")]
     + ["Bash(make -n:*)", "Bash(rg --files:*)"]
 )
+GLOB_ASK = [r"*\**", "*?*", "*[*"]
 NEW_ASK = (
     [f"Bash(git -C * * {v}*)" for v in GIT_C_READ]
-    + ["Bash(git -C *--output*)", "Bash(rg *--hostname-bin*)"]
+    + [f"Bash(git -C {g})" for g in GLOB_ASK]
+    + ["Bash(git -C *--output*)"]
+    + [f"Bash(make {g})" for g in GLOB_ASK]
+    + ["Bash(make *$*)", "Bash(make *--e*)", "Bash(make *-*E*)", "Bash(make *-*f*)"]
+    + [f"Bash(rg {g})" for g in GLOB_ASK]
+    + ["Bash(rg *--hostname-bin*)"]
 )
 
 MUST_PASS = ["gh pr view 12", "gh run view 1", "git -C src log --oneline -3", "git -C src status",
              "rg --files", "make -n"]
 ALSO_PASS = ["gh pr list --state open", "gh pr diff 3", "gh pr checks 3", "gh issue view 4",
              "git -C src diff HEAD~1 -- a.py", "git -C src show HEAD", "git -C src log",
-             "git -C src status --porcelain", "rg --files -g '*.py' src", "make -n test"]
+             "git -C src status --porcelain", "rg --files src", "make -n test", "make -n -e", "make -n -k all",
+             "git -C ~ log", "git -C ~/src log", "git -C $HOME log"]
 # The lane's must-still-refuse examples: none of them may run unasked.
 MUST_REFUSE = ["git -C x push --force", "git -C x reset --hard", "gh api -X POST repos/o/r/pulls",
                "gh pr merge 1", "rg --pre sh x", "pytest -q", "make test"]
@@ -94,7 +113,7 @@ MEASURED = {
     "gh pr checks 3": ("ask", "allow"), "gh issue view 4": ("ask", "allow"),
     "git -C src diff HEAD~1 -- a.py": ("ask", "allow"), "git -C src show HEAD": ("ask", "allow"),
     "git -C src log": ("ask", "allow"), "git -C src status --porcelain": ("ask", "allow"),
-    "rg --files -g '*.py' src": ("ask", "allow"), "make -n test": ("ask", "allow"),
+    "rg --files -g '*.py' src": ("ask", "ask"), "make -n test": ("ask", "allow"),
     "git -C x push --force": ("ask", "ask"), "git -C x reset --hard": ("ask", "ask"),
     "gh api -X POST repos/o/r/pulls": ("ask", "ask"), "gh pr merge 1": ("ask", "ask"),
     "rg --pre sh x": ("ask", "ask"), "pytest -q": ("ask", "ask"), "make test": ("ask", "ask"),
@@ -116,6 +135,37 @@ MEASURED = {
 MEASURED_WITHOUT_ASK = {cmd: "allow" for cmd in ASK_GUARDED}
 BUILTIN_READ_ONLY = {"rg --files-with-matches foo"}
 
+# The verifier's finding and its kin: a glob or expansion in a word with no space. Claude Code 2.1.326's own
+# decision, measured as above: (base settings.json, b0e51172's, this one's).
+GLOB_ATTACKS = {
+    "git -C [ap]* log --force main": ("ask", "allow", "ask"), "git -C -* log": ("ask", "allow", "ask"),
+    "git -C [-]* status": ("ask", "allow", "ask"), "git -C ?? log": ("ask", "allow", "ask"),
+    "git -C x* log": ("ask", "allow", "ask"), "git -C x log --outpu?=f": ("ask", "allow", "ask"),
+    "git -C src log *": ("ask", "allow", "ask"),
+    "rg --files *": ("ask", "allow", "ask"), "rg --files [-]*": ("ask", "allow", "ask"),
+    "rg --files ?": ("ask", "allow", "ask"), "rg --files -g '*.py' src": ("ask", "allow", "ask"),
+    "make -n *": ("ask", "allow", "ask"), "make -n ?": ("ask", "allow", "ask"),
+    "make -n --eval 'all: ; +touch X'": ("ask", "allow", "ask"),
+    "make -n -f /dev/null --eval='$(shell touch X)'": ("ask", "allow", "ask"),
+    "make -n --ev='all: ; +touch X'": ("ask", "allow", "ask"),
+    "make -n -E 'all: ; +touch X'": ("ask", "allow", "ask"),
+    "make -nE'all: ; +touch X'": ("ask", "ask", "ask"),
+    "make -n -f /dev/null 'V:=$(shell touch X)'": ("ask", "allow", "ask"),
+    "make -n -f -": ("ask", "allow", "ask"), "make -nf /dev/stdin": ("ask", "ask", "ask"),
+    "make -n --file=/dev/stdin": ("ask", "allow", "ask"), "make -n --makefile=x": ("ask", "allow", "ask"),
+    "echo 'all: ; +touch X' | make -n -f -": ("ask", "allow", "ask"),
+}
+# Forms the CLI asks for by itself, whatever the rules ("Brace expansion", "A variable in this command can't be
+# checked before it runs", command substitution, "`(...)` group directly follows ... a word"): measured ask
+# under all three settings files. The model does not reproduce these checks.
+CLI_ASKS_ITSELF = ["git -C {a,push} log --force main", "git -C x{,} log", "git -C $D log", "git -C `echo a` log",
+                   "git -C $(echo a) log", "git -C @(push) log", "git -C !(x) log", "git -C +(a) log",
+                   "git -C x log @(a|b)", "rg --files {a,b}", "make -n {a,b}"]
+# Measured (base, b0e51172, this file): one-word expansions to the home directory and plain make flags run.
+HOME_FORMS = {"git -C ~ log": ("ask", "allow", "allow"), "git -C ~/src log": ("ask", "allow", "allow"),
+              "git -C $HOME log": ("ask", "allow", "allow"), "make -n -e": ("ask", "allow", "allow"),
+              "make -n -k all": ("ask", "allow", "allow"), "rg --files src": ("ask", "allow", "allow")}
+
 
 # ------------------------------------------------------------------ the model
 def _perms() -> dict:
@@ -127,8 +177,10 @@ def _bash(entries: list[str]) -> list[str]:
 
 
 def _wildcard(rule: str, cmd: str) -> bool:
+    """`\\*` is a literal star, every other character but `*` is literal, and matching is case-sensitive."""
     rule, cmd = re.sub(r"[ \t]+", " ", rule.strip()), re.sub(r"[ \t]+", " ", cmd.strip())
-    rx = ".*".join(re.escape(p) for p in rule.split("*"))
+    rule = rule.replace("\\*", "\x00")
+    rx = ".*".join(re.escape(p).replace("\x00", r"\*") for p in rule.split("*"))
     if rule.endswith(" *") and rule.count("*") == 1:
         rx = rx[: -len(re.escape(" ") + ".*")] + "( .*)?"
     return re.fullmatch(rx, cmd, re.S) is not None
@@ -240,7 +292,7 @@ def test_no_spaced_directory_slot_reaches_an_allow():
     """Property: whatever text with a space sits in the directory's place, a git -C command never runs unasked."""
     perms = _perms()
     rng = random.Random(7)
-    words = ["push", "--force", "reset", "--hard", "origin", "-c", "core.pager=sh", "--exec-path=/e",
+    words = ["push", "--force", "reset", "--hard", "origin", "-c", "core.pager=sh", "--exec-path=/e", "[ap]*", "??",
              "checkout", "commit", "-am", "x", "log", "status", "diff", "show", "--", "."]
     for _ in range(2000):
         slot = " ".join(rng.choice(words) for _ in range(rng.randint(2, 5)))
@@ -265,5 +317,35 @@ def test_the_measured_cli_ran_the_attack_without_the_ask_rules(cmd):
     assert decide({**_perms(), "ask": []}, cmd) == MEASURED_WITHOUT_ASK[cmd]
 
 
+@pytest.mark.parametrize("cmd", sorted(GLOB_ATTACKS))
+def test_a_glob_or_make_evaluation_asks(cmd):
+    base, _old, now = GLOB_ATTACKS[cmd]
+    perms = _perms()
+    assert decide(perms, cmd) == now == "ask"
+    assert decide(_base(perms), cmd) == base
+
+
+@pytest.mark.parametrize("cmd", sorted(GLOB_ATTACKS))
+def test_the_glob_asks_are_what_refuse_it(cmd):
+    """With b0e51172's ask list, the measured CLI ran each form that commit allowed; the model agrees."""
+    perms = _perms()
+    old_ask = [e for e in perms["ask"] if e.startswith("Bash(git -C * * ")
+               or e in ("Bash(git -C *--output*)", "Bash(rg *--hostname-bin*)")]
+    assert decide({**perms, "ask": old_ask}, cmd) == GLOB_ATTACKS[cmd][1]
+
+
+@pytest.mark.parametrize("cmd", sorted(HOME_FORMS))
+def test_home_forms_and_plain_make_flags_still_run(cmd):
+    assert decide(_perms(), cmd) == HOME_FORMS[cmd][2]
+
+
+def test_rule_matching_is_case_sensitive():
+    """`make *-*E*` asks for -E and leaves -e and a target with a lower-case e alone (measured)."""
+    perms = _perms()
+    assert decide(perms, "make -n -E x") == "ask"
+    assert decide(perms, "make -n -e") == decide(perms, "make -n test") == "allow"
+
+
 def test_every_example_is_measured():
-    assert set(MUST_PASS + ALSO_PASS + MUST_REFUSE + WILDCARD_ATTACKS) <= set(MEASURED)
+    assert set(MUST_PASS + ALSO_PASS + MUST_REFUSE + WILDCARD_ATTACKS) <= set(MEASURED) | set(HOME_FORMS)
+    assert not set(GLOB_ATTACKS) & set(MUST_PASS + ALSO_PASS)
