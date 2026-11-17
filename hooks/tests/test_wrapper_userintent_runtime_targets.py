@@ -105,7 +105,6 @@ RG_CONFIG = [
     ("RIPGREP_CONFIG_PATH={S}/rcbash rg x ~/.claude/hooks/", "P"),
     ("RIPGREP_CONFIG_PATH={S}/rcbash rg x", "HK"),
     (f"printf -- '--pre=bash\\n' > {{S}}/rc3; RIPGREP_CONFIG_PATH={{S}}/rc3 rg x {W}", "P"),
-    (f"RIPGREP_CONFIG_PATH={{S}}/missing rg x {W}", "P"),
     (f"RIPGREP_CONFIG_PATH=$(echo {{S}}/rcbash) rg x {W}", "P"),
     ("RIPGREP_CONFIG_PATH=$(echo {S}/rcbash) rg x", "HK"),
     (f"timeout 5 env RIPGREP_CONFIG_PATH={{S}}/rcbash rg x {W}", "P"),
@@ -146,10 +145,8 @@ GIT_GREP = [
     ("git -C {H} grep -iObash x", "P"),
     ("git grep -Obash x", "H"),
     ("git grep --open-files-in-pager=bash x", "H"),
-    ("git grep --open-files-in-pager bash", "HK"),
     ("git grep --open=bash x", "H"),
     ("git grep --op=bash x", "H"),
-    ("cd ~/.claude && git grep -O x", "P"),
     ("git grep -Obash x -- ~/.claude/hooks/stop.sh", "P"),
 ]
 
@@ -200,6 +197,8 @@ HARMLESS = [
     ("RIPGREP_CONFIG_PATH={S}/rcbash rg x docs/", "P"),
     (f"RIPGREP_CONFIG_PATH={{S}}/rcbash rg --no-config x {W}", "P"),
     ("RIPGREP_CONFIG_PATH={S}/missing rg x docs/", "P"),
+    # round 5: a config that does not exist runs no program (was pinned as refused)
+    (f"RIPGREP_CONFIG_PATH={{S}}/missing rg x {W}", "P"),
     ("export RIPGREP_CONFIG_PATH={S}/rcplain; rg -n stop.sh ~/.claude/hooks/", "P"),
     ("rg -n stop.sh ~/.claude/hooks/", "P"),
     ("cat ~/.claude/hooks/$n.sh", "P"),
@@ -217,6 +216,9 @@ HARMLESS = [
     ("git -C ~/.claude grep --only-matching stop", "P"),
     ("git -C ~/.claude grep --or -e x -e y", "P"),
     ("git grep -Obash x", "P"),
+    # round 5: -O with no program opens the files in less (was pinned as refused)
+    ("git grep --open-files-in-pager bash", "HK"),
+    ("cd ~/.claude && git grep -O x", "P"),
     ("git -C ~/.claude log -1 --oneline", "P"),
     ("make -f /dev/stdin <<< $'all:\\n\\techo hi'", "P"),
     ("make -f - < {S}/mkok", "P"),
