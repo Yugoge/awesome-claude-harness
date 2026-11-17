@@ -2483,3 +2483,174 @@ def test_r7_a_session_whose_text_asks_no_round_is_not_held_to_it(env):
     env.tx.command("spec", "a new report", body="an earlier spec text")
     env.tx.say("Which report did you mean?")
     assert run(env) == (0, "")
+
+
+# ---------------------------------------------------------------- A6-RC2: a refusal met again after the owner's answer
+# push.md's dispatch protocol and merge.md's Refusals: where a step refuses, ask ONE AskUserQuestion; act on the
+# answer; "a refusal met again after it is reported in the reply, not asked again". Step 5's call failing again with
+# no git or grant record (an unreachable remote; merge conflicts) is such an end, released only while the gate's own
+# reading of git still meets the refusal.
+PUSH_STEP5 = (f'python3 "{REPO}/scripts/execute-push.py" --repo-hash 0123456789abcdef --branch topic --remote origin '
+              '--request-id 00000000000000000000000000000001 --repo-root /p')
+PUSH_FAILED = ("fatal: '/p/origin.git' does not appear to be a git repository\nfatal: Could not read from remote "
+               "repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n"
+               "Exit code 1")
+
+
+def refusal_asked(env, answer, ok=True, header="Push"):
+    """The one AskUserQuestion a refusal asks, and the owner's answer (``ok``) or the owner's rejection of it."""
+    question = "Step 5 refused: the call came back with an error."
+    env.tx.tool("AskUserQuestion", {"questions": [{"question": question, "header": header, "multiSelect": False,
+                                                   "options": [{"label": answer, "description": ""},
+                                                               {"label": "I give another instruction",
+                                                                "description": ""}]}]},
+                ok=ok, result=(f'User has answered your questions: "{question}"="{answer}". You can now continue.'
+                               if ok else "The user doesn't want to proceed with this tool use. The tool use was "
+                               "rejected. STOP what you are doing and wait for the user to tell you how to proceed."))
+
+
+def unreachable(env, *names):
+    """Each named remote's bare repository moved away: its URL, as the opener recorded it, lists nothing."""
+    for name in names:
+        (env.tmp / f"{name}.git").rename(env.tmp / f"{name}-gone.git")
+
+
+@pytest.mark.parametrize("typed", ["origin", ""])
+def test_rc2_a_push_failing_again_after_the_owners_answer_on_unreachable_remotes_ends(env, remotes, typed):
+    """push.sh exits 1 on an unreachable remote and leaves no git or grant record: the Stop held forever. Step 5's
+    call failed, the owner answered the one question, the call failed again: reported, not asked again. It ends
+    while every remote the Stop judges is one git ls-remote cannot read; one that lists again owes the push."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, typed)
+    unreachable(env, *(["origin"] if typed else ["origin", "fork"]))
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text
+    assert "; origin: git ls-remote: fatal: '" in text and "does not appear to be a git repository" in text, text
+    assert "git ls-remote: and the repository exists." not in text
+    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    assert run(env)[0] == 2
+    refusal_asked(env, "Retry the push (Recommended)")
+    assert run(env)[0] == 2
+    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    env.tx.say("The push failed again: origin is unreachable; topic is not published.")
+    assert run(env) == (0, "")
+    (env.tmp / "origin-gone.git").rename(env.tmp / "origin.git")  # the gate's own reading: origin lists again
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, text
+    git(remotes, "push", "-q", "origin", "topic")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("case", ["reachable", "not-now", "one-failure", "no-attempt-after-the-answer", "rejected",
+                                  "asked-before-the-refusal", "succeeded-after", "url-redirected",
+                                  "another-remote-lists"])
+def test_rc2_every_other_push_record_or_reading_holds(env, remotes, case):
+    """Released only on the full record (failed, answered, failed again, the last Step-5 call) and the gate's own
+    reading (every judged remote unreadable at the URL the opener recorded): a forged record over a remote git
+    lists, a single failure, no attempt after the answer, a rejected question (no answer: the CLI stops the turn
+    for the owner), a question asked before any refusal, a remote redirected after the opener, or another judged
+    remote that lists, all hold."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "" if case == "another-remote-lists" else "origin")
+    if case == "url-redirected":
+        git(remotes, "remote", "set-url", "origin", str(env.tmp / "nowhere.git"))
+    elif case not in ("reachable", "not-now"):
+        unreachable(env, "origin")
+    failed = lambda: env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)  # noqa: E731
+    if case == "not-now":
+        refusal_asked(env, "Not now, I will push after review tomorrow")
+    elif case == "asked-before-the-refusal":
+        refusal_asked(env, "Push now (Recommended)")
+        failed()
+    else:
+        failed()
+        if case != "one-failure":
+            refusal_asked(env, "Retry the push (Recommended)", ok=case != "rejected")
+            if case != "no-attempt-after-the-answer":
+                failed()
+            if case == "succeeded-after":
+                env.tx.tool("Bash", {"command": PUSH_STEP5}, result="push.sh: nothing to push")
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, (case, text)
+
+
+def conflicting(repo, *names):
+    """Each named branch, cut from master, and master itself rewrite base.txt: a merge of either conflicts."""
+    for name in (*names, "master"):
+        git(repo, "checkout", "-q", *(("-b", name, "master") if name != "master" else (name,)))
+        (Path(repo) / "base.txt").write_text(f"{name} side\n")
+        git(repo, "commit", "-q", "-am", f"{name} side")
+
+
+def merge_wrapper(repo, *args):
+    """/merge Step 5 in the main checkout: hooks/merge.sh itself, its exit code and output."""
+    GIT_CLOCK[0] += 1
+    environment = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+                   "GIT_AUTHOR_DATE": f"@{int(GIT_CLOCK[0])} +0000",
+                   "GIT_COMMITTER_DATE": f"@{int(GIT_CLOCK[0])} +0000"}
+    done = subprocess.run(["bash", str(HOOKS / "merge.sh"), *args], cwd=str(repo), capture_output=True, text=True,
+                          env=environment, timeout=60)
+    return done.returncode, done.stdout + done.stderr
+
+
+def merge_step5(env, repo, ref="feature"):
+    """Step 5's call, made on the repository and recorded with how it came back."""
+    code, output = merge_wrapper(repo, ref)
+    env.tx.tool("Bash", {"command": f'bash "{HOOKS}/merge.sh" "{ref}"'}, ok=code == 0, result=output)
+    return code, output
+
+
+def test_rc2_merge_conflicts_met_again_after_the_owners_answer_end(env, repo):
+    """merge.sh exits non-zero on conflicts and leaves them for the owner (action "I resolve the conflicts myself,
+    then you continue"); on that answer Step 1 runs again and merge.sh refuses again: reported, not asked again.
+    It ends while git holds the merge of the source in conflict (MERGE_HEAD at its tip); aborted, the merge is
+    owed; committed by the owner, it is made."""
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    code, output = merge_step5(env, repo)
+    assert code != 0 and "likely conflicts" in output, output
+    assert run(env)[0] == 2
+    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
+    assert run(env)[0] == 2
+    assert merge_step5(env, repo)[0] != 0
+    env.tx.say("merge.sh refused again: the conflicts in base.txt are still unresolved; master is unchanged.")
+    assert run(env) == (0, "")
+    git(repo, "merge", "--abort")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, text
+
+
+def test_rc2_the_owner_resolving_the_conflicts_completes_the_merge(env, repo):
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    merge_step5(env, repo)
+    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
+    merge_step5(env, repo)
+    assert run(env) == (0, "")
+    (Path(repo) / "base.txt").write_text("resolved\n")
+    git(repo, "add", "base.txt")
+    git(repo, "commit", "-q", "--no-edit")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("case", ["no-question", "rejected", "no-attempt-after-the-answer", "aborted",
+                                  "another-source-in-conflict"])
+def test_rc2_every_other_merge_record_or_reading_holds(env, repo, case):
+    """No question between the two refusals, a rejected question, no attempt after the answer, a conflict no longer
+    in git (aborted), or git in conflict over another source than the /merge's: the missing merge holds."""
+    conflicting(repo, "feature", "other")
+    opener_now(env, "merge", "feature")
+    ref = "other" if case == "another-source-in-conflict" else "feature"
+    merge_step5(env, repo, ref)
+    if case != "no-question":
+        refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", ok=case != "rejected",
+                      header="Conflicts")
+    if case != "no-attempt-after-the-answer":
+        merge_step5(env, repo, ref)
+    if case == "aborted":
+        git(repo, "merge", "--abort")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, (case, text)

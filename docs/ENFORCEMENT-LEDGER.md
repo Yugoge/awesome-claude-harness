@@ -443,7 +443,13 @@ no per-rule budget exists.
     after `end_time` (`overnight.closeout_gaps`: no PM retrospective report, or no non-empty
     overnight summary written since `start_time`), the hook-minted
     `/do` task's do-report with lists equal to its write set, close and commit stages, git facts
-    for `/merge` and `/push`), an exception being the gap
+    for `/merge` and `/push`; each of these two also ends on a Step-5 refusal met again after the
+    owner's answer, as `commands/push.md` and `commands/merge.md` prescribe: the span's
+    `execute-push.py` or `merge.sh` call came back as an error, an `AskUserQuestion` after it came
+    back answered (a rejected one is no answer), and the call failed again after it with no later
+    ok run, while the gate's own reading meets the refusal now: every remote the push is judged on
+    unreadable by `git ls-remote` at the URL the opener recorded, or `MERGE_HEAD` at the source's
+    tip), an exception being the gap
     `gate instrument failure: <type>: <message>`. It writes no file and keeps no count; the next
     compliant step clears each gap, and the human's `/stop` opens a span that is not gated. A
     completion failure (exit outside {0, 2}, a timeout, a launch error, a missing file) is decided

@@ -27,7 +27,10 @@ payload on stdin and decides, in order:
       `gate instrument failure: <type>: <message>`, never an allow but one:
       a /close that stalled at Step 0 as close.md says (close_stalled) while
       the predicate's own reading fails too ends its turn (D25: no agent
-      action in the span clears an instrument both read);
+      action in the span clears an instrument both read); likewise /push and
+      /merge end on Step 5's refusal met again after the owner's answer
+      (refusal_met_again), while git still meets it: no remote the push is
+      judged on reads, or the source's merge stands in conflict;
   (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
       else the block text on stderr, exit 2.
 
@@ -501,6 +504,30 @@ def _json(raw: bytes) -> dict:
     return record if isinstance(record, dict) else {}
 
 
+# push.md's dispatch protocol and merge.md's Refusals: a refusal is asked ONE AskUserQuestion; "a refusal met again
+# after it is reported in the reply, not asked again". Step 5's call, by the script it runs.
+PUSH_CALL, MERGE_CALL = "execute-push.py", "merge.sh"
+
+
+def refusal_met_again(span, call: str) -> bool:
+    """Step 5's call (a Bash naming the script ``call``) came back as an error, an AskUserQuestion after it came
+    back answered (ok: a rejected question is no answer, and the CLI stops the turn for the owner), and the call,
+    run after that answer, came back as an error again; no later run of it came back ok. The transcript's record
+    only: a predicate ends its turn on it only where its own reading of git meets the same refusal now (a remote
+    git ls-remote cannot read; the source's merge in conflict), as close_stalled does (D25: no agent action in the
+    span clears it)."""
+    word = re.compile(r"(?:^|[\s/\"'])" + re.escape(call) + r"(?=[\s\"';|&)]|$)")
+    state = 0  # 1: refused; 2: refused, then answered; 3: refused again after the answer
+    for use in span.uses("Bash", "AskUserQuestion"):
+        if use.result_at is None:
+            continue
+        if use.name == "AskUserQuestion":
+            state = 2 if state == 1 and use.ok else state
+        elif word.search(str(use.input.get("command") or "")):
+            state = 0 if use.ok else (3 if state >= 2 else 1)
+    return state == 3
+
+
 def _bulk_block(span):
     """The status block of the span's last ok commit-bulk dispatch (its
     obligation's response_block, changelog-status.v1, checked at the
@@ -620,7 +647,9 @@ def p_merge(span, root, payload) -> list[str]:
     DEFAULT_BRANCH ("Already up to date"), or this session's newest merge-analyst grant since the opener is
     `blocked` for the source at its tip now (Step 3 refuses; R14 leaves the risks to the owner, and a
     grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
-    session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup."""
+    session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup. Step 5's
+    conflicts met again after the owner's answer (refusal_met_again) end it while MERGE_HEAD is at a value
+    of the source: the merge stands in conflict for the owner (aborted, it is owed again)."""
     _repository(root)
     root = _session_worktree(root, payload)
     args = span.args.split()
@@ -653,6 +682,9 @@ def p_merge(span, root, payload) -> list[str]:
                 "session since the opener names its source"]
     if _git(root, "ls-files", "-u"):
         gaps.append("merge: unmerged paths remain in the index")
+    if gaps and tips and _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD") in tips and refusal_met_again(
+            span, MERGE_CALL):
+        return []  # Step 5: the source's merge stands in conflict; merge.sh refused again after the owner's answer
     return gaps
 
 
@@ -696,14 +728,18 @@ def p_push(span, root, payload) -> list[str]:
     is published where that branch holds it or a remote took it. The token and
     the grant are protected
     for every caller but their producers (pretool-tool-policy.py), and a detach,
-    reset or rewrite after the opener is no refusal: no agent's act makes one true."""
+    reset or rewrite after the opener is no refusal: no agent's act makes one true. Step 5 met again
+    after the owner's answer (refusal_met_again: push.sh's exit 1) ends it too while git ls-remote reads
+    none of the remotes judged at the URLs the opener recorded (one that lists, or a URL changed since,
+    holds it)."""
     _repository(root)
     typed = next((a for a in span.args.split() if not a.startswith("-")), None)
     since, now = _since(span), _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     heads = span.opener_heads()
     opened = [(b, c) for b, c in heads if b] or [((None if heads else _opener_branch(root, since)) or now, None)]
+    again = refusal_met_again(span, PUSH_CALL)
     return [gap for branch, commit in dict.fromkeys(opened) if branch  # none: Step 2, "HEAD is detached"
-            for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes())]
+            for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes(), again)]
 
 
 def _remote_tip(top: str, url: str, ref: str) -> tuple:
@@ -718,13 +754,15 @@ def _remote_tip(top: str, url: str, ref: str) -> tuple:
     except subprocess.TimeoutExpired:
         return None, "git ls-remote timed out"
     if done.returncode:
-        return None, "git ls-remote: " + ((done.stderr.strip().splitlines() or ["failed"])[-1])
+        said = [line.strip() for line in done.stderr.splitlines() if line.strip()]
+        return None, "git ls-remote: " + next((line for line in said if line.startswith(("fatal:", "error:"))),
+                                              said[0] if said else "failed")
     return next((line.split("\t")[0] for line in done.stdout.splitlines() if line.endswith("\t" + ref)), None), ""
 
 
-def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list[str]:
+def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=False) -> list[str]:
     """p_push's gaps for BRANCH at its tip and at the opener's commit (``opened``, None: none recorded);
-    ``pinned``: the opener's remote lines (None: none printed)."""
+    ``pinned``: the opener's remote lines (None: none printed); ``again``: refusal_met_again for Step 5."""
     head = _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}^{{commit}}")
     if not head:
         return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
@@ -740,6 +778,7 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
                          f"refs/heads/{branch}") or "").split())
     up = up if up and len(up) == 2 and up[0] in remotes and (pinned is None or up[0] in pinned) else None
     top, gaps, tips, errors = _git(root, "rev-parse", "--show-toplevel") or str(root), [], {}, {}
+    unread = set()  # remotes git ls-remote could not read at the URL the opener recorded
 
     def tip(remote, ref):
         if (remote, ref) not in tips:
@@ -748,6 +787,8 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
                 tips[(remote, ref)], errors[remote] = None, "its URL is not the one it had at the /push opener"
             else:
                 tips[(remote, ref)], why = _remote_tip(top, url, ref)
+                if why and tips[(remote, ref)] is None:
+                    unread.add(remote)
                 if tips[(remote, ref)] and _git(root, "cat-file", "-e", f"{tips[(remote, ref)]}^{{commit}}") is None:
                     why = f"its {ref} is at {tips[(remote, ref)]}, which this repository lacks: fetch {remote}"
                 errors.update({remote: why} if why else {})
@@ -778,6 +819,8 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
         grant = importlib.import_module("lib.merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
         if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, commit):
             continue  # Step 5: "push BLOCKED by push-analyst"
+        if again and considered and all(tip(r, f"refs/heads/{branch}") is None and r in unread for r in considered):
+            continue  # Step 5: push.sh's exit 1 met again after the owner's answer; no remote it judges reads now
         ref = up and f"refs/remotes/{up[0]}/{up[1].removeprefix('refs/heads/')}"
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
             "" if commit == head else f"; {branch} is at {head}, which does not hold it: put {branch} back at it")
