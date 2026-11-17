@@ -357,6 +357,7 @@ no per-rule budget exists.
 | S-016 | permission-layer-scratch-reach | advisory | unexercised | source-level | settings.json:167 @d1abc798 | tests/test_scratch_permissions.py | source-level |
 | S-017 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
 | S-019 | permission-layer-secret-file-denies | advisory | unexercised | source-level | settings.json:278 @79c79db1 | tests/test_secret_file_denies.py | source-level |
+| S-023 | permission-layer-home-secret-denies | advisory | unexercised | source-level | settings.json:253 @aa685f4c | tests/test_home_secret_denies.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -578,9 +579,55 @@ no per-rule budget exists.
   Only deny entries and same-list negations changed, no allow or ask rule, so no deny is downgraded by any
   rule-tier ordering. The row stays `advisory`/`source-level`: the measurement
   (a real CLI driven offline through a local stand-in API, method in the test's docstring) is recorded in
-  `tests/test_secret_file_denies.py`, not in the black-box corpus. Not covered: a file under the home
-  outside the project (`~/.aws/credentials`, `~/.env`; `**/` anchors at the current directory), and
-  contents read by an interpreter (`python3 -c 'open(".env")'`), which no Read rule reaches.
+  `tests/test_secret_file_denies.py`, not in the black-box corpus. Not covered here: a file under the home
+  outside the project (`~/.aws/credentials`, `~/.env`; `**/` anchors at the current directory), which
+  S-023 covers, and contents read by an interpreter (`python3 -c 'open(".env")'`), which no Read rule
+  reaches. Nor a Bash operand that is a shell glob or a directory read recursively (`cat .env*`,
+  `grep -r TODO .`): the CLI checks the operand as written, before the shell expands it, so no file rule
+  sees the names it reaches (see S-023, measured there for the home).
+- **S-023** — S5 (under-defence): S-019's denies anchor at the current directory, so from a project
+  they never reached the home credential stores or a sibling project's `.env`, and `Read(~/**)` with
+  `Bash(cat:*)` let them be read without a prompt. `permissions.deny` now carries, for `Read` and `Edit`
+  alike and before S-019's ordered tail, `~/`-anchored entries (docs: "`~/path` = from home"): (1)
+  `~/**/<name>` for the names S-019 never re-opens inside a project (`.env`, `secret.*`, `secrets.*`,
+  `*_secrets.*`, `*-secrets.*`, `credentials`, `credentials.*`, `password.*`, `passwords.*`,
+  `client_secret*.json`) and the valued `.env` variants spelled out (`.env.local`, `.env.dev`,
+  `.env.development`, `.env.development.local`, `.env.prod`, `.env.production`,
+  `.env.production.local`, `.env.stage`, `.env.staging`, `.env.test`, `.env.test.local`); (2) at the top
+  of the home only, the names an S-019 lift can re-open (`*_password`, `*_password.*`, `*-password.*`,
+  `*_secret.*`, `*-secret.*`, `password`, `passwords`, `secret`, `secrets`, `.password*`, `.secret*`),
+  `.env.*`, `*.key`, `*.pem`; (3) the credential stores by exact path: `~/.netrc`, `~/.pgpass`,
+  `~/.git-credentials`, `~/.docker/config.json`, `~/.kube/config`, `~/.config/gh/hosts.yml`,
+  `~/.ssh/id_rsa`, `id_dsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`, `id_ed25519_sk`, `~/.ssh/*.key`,
+  `~/.ssh/*.pem` (`~/.aws/credentials` through `~/**/credentials`). No config directory is denied as a
+  tree: `~/.config/gh/config.yml`, `~/.ssh/config`, `known_hosts`, `*.pub`, `~/.aws/config` stay
+  readable. Measured on Claude Code 2.1.326 with S-019's offline rig, the project inside a throwaway
+  HOME, cwd = project and cwd = HOME: `~/<path>` anchors at the home and does not match at depth (a bare
+  `~/.env` misses `~/sub/.env`), `~/**/<name>` does; `~/.ssh/id_*` would also refuse `id_rsa.pub`; a Bash
+  operand that names the file literally is refused in each path spelling the CLI resolves (`~/`,
+  `$HOME/`, absolute, `../../`), and `${HOME}/` is never auto-run whatever the rules; a glob operand or
+  a recursive directory read is NOT refused (below); a `!` negation lifts only matches of rules with its
+  own anchor, so S-019's `!**/.env.example` did not lift a trial `~/**/.env.*` even for the project's
+  own `.env.example`: hence no `~/**/` entry names anything an S-019 lift opens, no `~/` negation
+  exists, and S-019's tail and order are untouched. Over S-019's own 168 measured cases, run in a project
+  under HOME, every decision is unchanged; ordinary home files (`~/.bashrc`, `~/.gitconfig`,
+  `~/notes.txt`) keep their decision, so the exact-path entries upgrade nothing beyond the files they
+  name and, being denies, downgrade nothing. Refused now on purpose: `~/.env.example` (and any
+  `~/.env.<x>`) at the top of the home, through `~/.env.*`; a project's own templates stay open.
+  Deliberately open: a sibling project's `.env.example` and
+  an unlisted valued variant (`~/other/.env.foo`) below the home's top level, and below the top level
+  the names in (2) (an S-019 lift would have to be repeated per anchor). With cwd = HOME itself, a
+  top-level name in (2) stays refused where an S-019 lift would open it (`~/secrets/README.md`). Not
+  covered: (a) Bash operands that are shell globs and recursive directory reads: the CLI checks the
+  operand as written, before the shell expands it, so `cat ~/.ssh/id_rs[a]`, `cat ~/.ssh/id_*`,
+  `cat ~/.aws/cred*`, `grep -r token ~/.aws` and `grep -r x ~/work/other` return the files' content
+  (measured by the independent verifier on this branch, cwd = project; the same class exists inside a
+  project under S-019: `cat .env*`, `grep -r TODO .`). A directory-tree deny such as `~/.ssh/**` would
+  catch the literal glob operand, but it was rejected so that `~/.ssh/config`, `known_hosts` and `*.pub`
+  (and, likewise, `~/.aws/config`, `~/.config/gh/config.yml`) stay readable; (b) other home stores
+  (`~/.claude/.credentials.json`, `~/.npmrc`, `~/.pypirc`,
+  `~/.config/gcloud/application_default_credentials.json`, `~/.vault-token`, ...); (c) keys outside
+  `~/.ssh` and the home's top level; (d) interpreter reads.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
