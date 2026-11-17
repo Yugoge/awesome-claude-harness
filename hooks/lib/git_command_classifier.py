@@ -904,6 +904,21 @@ def _expansion(text, i, quoted=False):
     return None
 
 
+class _Word(tuple):
+    """A (value, runtime) word of _shell_words; decoded, when not None, is the
+    value of a word run-time only through ANSI-C `$'...'` strings, decoded."""
+    decoded = None
+
+
+def _ansi_decode(body):
+    """The value bash gives the body of a `$'...'` string (lib/shell_parse)."""
+    try:
+        from shell_parse import ansi_decode
+    except ImportError:
+        from lib.shell_parse import ansi_decode
+    return ansi_decode(body)
+
+
 def _shell_words(text, info=None):
     """Split shell text into simple commands of words, with the shell's quoting.
 
@@ -928,13 +943,18 @@ def _shell_words(text, info=None):
     # fed besides; whether a pipe feeds each command, and each open group.
     owners, piped, groups = [], [], []
     st = {'buf': [], 'runtime': False, 'inword': False, 'quoted': False,
-          'pending': None, 'sep': None, 'opener': None}
+          'pending': None, 'sep': None, 'opener': None, 'dbuf': [], 'ansi': False,
+          'other': False}
 
-    def add(part, runtime=False, quoted=False):
+    def add(part, runtime=False, quoted=False, decoded=None):
         st['buf'].append(part)
+        st['dbuf'].append(part if decoded is None else decoded)
         st['inword'] = True
         st['runtime'] = st['runtime'] or runtime or _RUNTIME in part
         st['quoted'] = st['quoted'] or quoted
+        # A word run-time only through $'...' strings: its decoded value is known.
+        st['ansi'] = st['ansi'] or decoded is not None
+        st['other'] = st['other'] or (decoded is None and (runtime or _RUNTIME in part))
         st['sep'] = None
 
     def end_word():
@@ -946,8 +966,12 @@ def _shell_words(text, info=None):
                 st['pending'] = None
             elif value.lstrip('0123456789') in ('<<', '<<-'):
                 st['pending'] = value.lstrip('0123456789')
-            words.append((value, st['runtime']))
-        st.update(buf=[], runtime=False, inword=False, quoted=False)
+            word = _Word((value, st['runtime']))
+            if st['ansi'] and not st['other']:
+                word.decoded = ''.join(st['dbuf'])
+            words.append(word)
+        st.update(buf=[], runtime=False, inword=False, quoted=False, dbuf=[],
+                  ansi=False, other=False)
 
     def end_cmd():
         end_word()
@@ -972,7 +996,10 @@ def _shell_words(text, info=None):
         if body is not None:
             bodies.append(body)
             owners.append((len(cmds), False))
-        add(_RUNTIME, runtime=True)
+        decoded = None
+        if not quoted and text[i:i + 2] == "$'":
+            decoded = _ansi_decode(text[i + 2:end - 1])
+        add(_RUNTIME, runtime=True, decoded=decoded)
         return end
 
     i, n = 0, len(text)
@@ -1200,7 +1227,9 @@ def _eval_payload(words, idx):
     words: one command's (value, runtime) words; idx: its command token
     (_command_token_index skips `eval` as a wrapper, so an eval running the
     command sits before idx). eval joins its arguments, redirections and a
-    leading `--` aside, with spaces; a run-time word stays _RUNTIME."""
+    leading `--` aside, with spaces; a word run-time only through ANSI-C
+    `$'...'` strings is read decoded (`eval $'git branch -D old'`), any other
+    run-time word stays _RUNTIME."""
     end = len(words) if idx is None else idx
     for j in range(end):
         value, runtime = words[j]
@@ -1208,7 +1237,8 @@ def _eval_payload(words, idx):
             rest = _without_redirections(words[j + 1:])
             if rest and rest[0] == ('--', False):
                 rest = rest[1:]
-            return ' '.join(v for v, _r in rest) or None
+            return ' '.join(w[0] if getattr(w, 'decoded', None) is None else w.decoded
+                            for w in rest) or None
     return None
 
 
@@ -1470,13 +1500,14 @@ def _curl_runs_runtime(args):
 def _without_redirections(words):
     """words without its redirection operators (_shell_words' own words) and their targets."""
     out, target = [], False
-    for value, runtime in words:
+    for word in words:
+        value, runtime = word
         if target:
             target = False
         elif not runtime and _REDIR_WORD_RE.fullmatch(value):
             target = True
         else:
-            out.append((value, runtime))
+            out.append(word)
     return out
 
 

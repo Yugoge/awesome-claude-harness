@@ -46,6 +46,11 @@ REFUSED = [
     'bash -c \'eval "git branch -D old"\'',
     "cat <<'EOF' | bash\ngit branch -D old\nEOF",
     'echo old | xargs git branch -D',
+    # ANSI-C quoted words are read decoded, as bash gives them to eval.
+    "eval $'git branch -D old'",
+    "eval $'git\\x20branch -D old'",
+    "eval $'\\x67it branch -D old'",
+    "eval $'git' branch -D old",
 ]
 PASSED = [
     "git branch -a",
@@ -53,6 +58,8 @@ PASSED = [
     'eval "git branch --list"',
     'grep -rn "git branch -D" docs/',
     'eval "$(ssh-agent -s)"',
+    'eval "git status"',
+    "eval $'git status'",
     'echo eval git branch -D old',
 ]
 
@@ -119,6 +126,8 @@ def test_allow_grant_still_releases_direct_form(tmp_path):
     ('eval "git branch -D old"', ("branch", ["-D", "old"])),
     ("eval 'git update-ref -d refs/heads/old'", ("update-ref", ["-d", "refs/heads/old"])),
     ('eval "git branch -m a b" >/dev/null', ("branch", ["-m", "a", "b"])),
+    ("eval $'git\\x20branch -D old'", ("branch", ["-D", "old"])),
+    ("eval $'git' branch -D old", ("branch", ["-D", "old"])),
 ])
 def test_classifier_reads_eval_payload(command, words):
     invocations, residuals = classify_git_command(command)
