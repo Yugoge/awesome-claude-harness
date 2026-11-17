@@ -7,6 +7,7 @@ a UserPromptSubmit payload with the typed prompt, through the registered hook.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -16,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -769,6 +771,75 @@ def test_a_settings_file_reached_through_a_link_is_one(guard_home, proj):
     edit = {"file_path": str(proj / ".claude" / "settings.local.json"), "old_string": '"model": "opus"',
             "new_string": '"model": "opus", "env": {"CLAUDE_COMMAND_GATE": "off"}'}
     assert gate(guard_home, proj, "Edit", edit).returncode == 2
+
+
+# A padded command: the rule reads every written word from the call's directory and every `cd`'s,
+# so `cd . && ` repeated made its work grow with the square of the command and run past its budget.
+ENV_WRITE = "echo '{\"env\": {}}' > .claude/settings.local.json"
+
+
+@functools.lru_cache(maxsize=None)
+def rule_budget(name: str) -> float:
+    """The rule's budget as the write gate's table declares it (hooks/lib/write_gate)."""
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); from lib.write_gate import RULES; "
+            "print(next(r.budget for r in RULES if r.name == sys.argv[2]))")
+    return float(run([PY, "-c", code, str(ROOT / "hooks"), name], ROOT).stdout)
+
+
+def timed_gate(home, proj, command, actor="main"):
+    start = time.monotonic()
+    proc = gate(home, proj, "Bash", {"command": command}, actor)
+    return proc, time.monotonic() - start
+
+
+@pytest.mark.parametrize("pads", [300, 1000, 5000])
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_a_padded_settings_write_is_refused_within_the_budget(guard_home, proj, pads, actor):
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + ENV_WRITE, actor)
+    assert proc.returncode == 2 and "harness-switch: this Bash command" in proc.stderr, proc.stderr
+    assert "Claude Code settings file" in proc.stderr and "budget" not in proc.stderr, proc.stderr  # its own refusal
+    assert took < rule_budget("harness-switch"), took  # the whole gate, the rule's run inside it
+
+
+@pytest.mark.parametrize("pads", [300, 1000, 5000])
+@pytest.mark.parametrize("target", ["notes.txt", "config/settings.json"])
+def test_a_padded_ordinary_write_is_still_allowed(guard_home, proj, pads, target):
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    (proj / "config").mkdir()
+    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + "echo '{\"env\": {}}' > " + target)
+    assert proc.returncode == 0 and "harness-switch" not in proc.stderr and "budget" not in proc.stderr, proc.stderr
+    assert took < rule_budget("harness-switch"), took
+
+
+@pytest.mark.parametrize("command", [
+    "echo '{\"env\": {}}' > s",  # s: a link to the settings file, a name no settings file has
+    "cd .claude && rm -rf .",
+    "cd .claude && rm -rf ./",
+    "cd .claude/sub && rm -rf ..",
+    "cd .claude/sub && rm -rf ../settings.local.json",
+])
+def test_a_padded_write_through_a_link_or_a_dot_is_refused(guard_home, proj, command):
+    """The rule resolves only a word that can name a settings file: a .json name, .claude,
+    managed-settings.d, `.`, `..`, or a link; padding does not hide one."""
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    (proj / ".claude" / "sub").mkdir()
+    (proj / "s").symlink_to(proj / ".claude" / "settings.local.json")
+    proc = gate(guard_home, proj, "Bash", {"command": "cd . && " * 300 + command})
+    assert proc.returncode == 2 and "Claude Code settings file" in proc.stderr, (command, proc.stderr)
+    assert "budget" not in proc.stderr, proc.stderr
+
+
+def test_a_command_the_rule_cannot_read_inside_its_budget_is_refused(guard_home, proj):
+    """Distinct directories times distinct .json words: work no deduplication saves, so the rule can
+    still run past its budget. It fails closed: the overrun refuses the call, never lets the env
+    write through, as a fail-open overrun did."""
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    pads = 1000
+    command = ("".join("cd d%d && " % i for i in range(pads)) + "touch " +
+               " ".join("a%d.json" % i for i in range(pads)) + " && " + ENV_WRITE)
+    proc = gate(guard_home, proj, "Bash", {"command": command}, "subagent")
+    assert proc.returncode == 2 and "harness-switch" in proc.stderr, proc.stderr
 
 
 SETTINGS_FREE = [  # reads of settings files, other JSON files, messages, other keys

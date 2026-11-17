@@ -14,6 +14,7 @@ Per event, compare() returns the differences between the two paths:
   of that hook);
 - the event's answer: the launcher's own exit status, stdout and stderr against
   lib/hook_launch.combine over the old processes' results (what the CLI makes of those hooks).
+Each side of a difference is quoted as the region around its first differing character (_region).
 
 Normalised before comparing (and only this): the replay's own ids, times and sandbox roots, as
 norm.refusal_text normalises a refusal, and the durations a hook prints ("12 ms", "0.31 s", "7h 59m"),
@@ -35,6 +36,23 @@ from . import differential, hookrun
 # A clock reading a hook prints ("Time remaining: 7h 59m", posttool-overnight-loop.py) moves when a
 # minute boundary falls between the two runs, so it is a duration too.
 _DURATION = re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b|\b\d+h \d+m\b")
+
+# A difference is quoted as the region around its first differing character: _BEFORE characters
+# ahead of it and the rest of _REGION after it, "..." where a side is cut. Quoting each side's last
+# 600 characters hid a difference further back, and old and new then read identical (replay shard
+# 6/6: a 979-character stderr whose one difference was its head). The region, markers included,
+# fits the 300 characters Replay.finish quotes of the first difference.
+_REGION, _BEFORE, _CUT = 290, 120, "..."
+
+
+def _region(a: str, b: str) -> tuple:
+    """`a` and `b`, each cut to the same window around their first difference."""
+    i = next((k for k, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+    start = max(0, i - _BEFORE)
+
+    def cut(s):
+        return (_CUT if start else "") + s[start:start + _REGION] + (_CUT if start + _REGION < len(s) else "")
+    return cut(a), cut(b)
 
 
 _LIBS: dict = {}
@@ -119,12 +137,14 @@ def compare(rp, event: str, launched: dict, old: list) -> list:
             if key != "rc":
                 a, b = n(a), n(b)
             if a != b:
-                diffs.append({"what": f"{o['hook']} {key}", "old": str(a)[-600:], "new": str(b)[-600:]})
+                a, b = _region(str(a), str(b))
+                diffs.append({"what": f"{o['hook']} {key}", "old": a, "new": b})
     code, out, err = _combine(rp.layout.harness, event, old_full)
     for key, a, b in (("rc", code, launched["rc"]), ("stdout", n(out[-tail:]), n(launched.get("stdout"))),
                       ("stderr", n(err[-tail:]), n(launched.get("stderr")))):
         if a != b:
-            diffs.append({"what": f"answer {key}", "old": str(a)[-600:], "new": str(b)[-600:]})
+            a, b = _region(str(a), str(b))
+            diffs.append({"what": f"answer {key}", "old": a, "new": b})
     return diffs
 
 

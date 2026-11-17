@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T08:01:14Z*
-**Total entries**: 397
+*Last updated: 2026-11-16T09:03:12Z*
+**Total entries**: 395
 **Convention**: kebab
 
 ## Tree
@@ -91,7 +91,6 @@ hooks/
 │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   ├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
-│   ├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   ├── `specialist_yield.py` - Public API:
@@ -266,7 +265,6 @@ hooks/
 │   ├── `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 │   ├── `test_todo_validate_after_restart.py` - A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result aft...
 │   ├── `test_todo_validate_in_flight.py` - The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
-│   ├── `test_todowrite_pin.py` - settings.json's env carries CLAUDE_CODE_ENABLE_TASKS=false and CLAUDE_CODE_ENABLE_TODO_TOOLS=1; the
 │   ├── `test_tool_policy_c_layer_writes.py` - hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 │   ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 │   ├── `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
@@ -317,7 +315,7 @@ hooks/
 ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 ├── `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-├── `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
+├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 ├── `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's

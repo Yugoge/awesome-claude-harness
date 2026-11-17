@@ -1769,9 +1769,13 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
     payload_cwd = _payload_cwd(_REQUEST_CTX.get('payload') or {})
     # The Write/Edit check's paths, for each write target the shared parser reads in the command (a
     # relative one against the payload cwd); bubblewrap's read-only rebinds keep the rest off them.
-    for t in _extract_bash_write_paths(command):
+    # The paths are resolved once for the command, so its cost does not grow with its operands.
+    write_targets = _extract_bash_write_paths(command)
+    git_config_paths = _bash_git_config_paths(main_root, worktree_path, payload_cwd or os.getcwd()) \
+        if write_targets else None
+    for t in write_targets:
         path = os.path.join(payload_cwd or os.getcwd(), t)
-        if not path.startswith('/dev/') and _targets_git_config(path):
+        if not path.startswith('/dev/') and _targets_git_config(path, git_config_paths):
             _block_git_config('Bash', path)
     # fix-3/codex#6: --git-dir / GIT_DIR / GIT_COMMON_DIR into the main repo.
     if _gitdir_into_main(command, main_real, main_git_dir):
@@ -2278,25 +2282,57 @@ def _without_harness_launches(command: str, worktree_path: str, main_root: str =
         lambda m: ' ' if _harness_script(m.group(1), worktree_path, main_root) else m.group(0), command)
 
 
-def _targets_git_config(file_path: str) -> bool:
+def _checkout_git_dirs(path: str) -> list[str]:
+    """The git dir and, last, the common dir of the checkout `path` (or its nearest existing parent)
+    lies in, by one git query; [] outside a checkout."""
+    probe = path
+    while not os.path.isdir(probe):
+        probe = os.path.dirname(probe)
+    return _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
+                      probe).splitlines()
+
+
+class _GitConfigPaths:
+    """R13's paths of some checkouts, resolved once: the config and config.worktree of each git dir
+    and common dir, and each common dir's keystone hook dir (`hold` compares a realpath with them)."""
+
+    def __init__(self, checkouts):
+        self.files: set[str] = set()
+        self.hook_dirs: set[str] = set()
+        for dirs in checkouts:
+            for d in dirs:
+                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in ('config', 'config.worktree'))
+            if dirs:
+                self.hook_dirs.add(os.path.realpath(os.path.join(os.path.realpath(dirs[-1]), _KEYSTONE_HOOKS_LEAF)))
+
+    def hold(self, real: str) -> bool:
+        return real in self.files or any(real == d or real.startswith(d.rstrip('/') + os.sep) for d in self.hook_dirs)
+
+
+def _bash_git_config_paths(main_root: str, worktree_path: str, cwd: str) -> _GitConfigPaths:
+    """R13's paths for one Bash command's write targets: those of the session's main root, its
+    worktree and the command's cwd, one git query per distinct root. Never one per target: on
+    d5eb015f a query per operand (about 3 ms) took `chmod -x f0 ... f6999 <keystone hook>` past the
+    rule's 20 s budget, and the overrun dropped both this refusal and the bwrap rewrite."""
+    roots = dict.fromkeys(os.path.realpath(r) for r in (main_root, worktree_path, cwd) if r)
+    return _GitConfigPaths(_checkout_git_dirs(r) for r in roots)
+
+
+def _targets_git_config(file_path: str, paths: _GitConfigPaths | None = None) -> bool:
     """R13: file_path is the config or config.worktree of the git dir or common dir of the
     checkout it lies in, or the keystone hook dir of that common dir or a file in it, which the
-    bwrap rebind keeps Bash off; an Edit runs outside bwrap. Read for a Write or Edit target and
-    for each write target of an actor's Bash command."""
+    bwrap rebind keeps Bash off; an Edit runs outside bwrap. Read for a Write or Edit target (its
+    checkout queried) and for each write target of an actor's Bash command (against `paths`,
+    _bash_git_config_paths resolved once for the command)."""
     real = os.path.realpath(os.path.abspath(file_path))
     parts = real.lower().split(os.sep)
     # P2-8: whatever the git dir is (also one that does not exist yet), a file of this name inside a
     # `.git` directory or a `worktrees/<name>` one is a per-worktree git config
     if parts[-1] == _WORKTREE_CONFIG_LEAF and ('.git' in parts[:-1] or 'worktrees' in parts[:-2]):
         return True
-    probe = os.path.dirname(real)
-    while not os.path.isdir(probe):
-        probe = os.path.dirname(probe)
-    dirs = _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probe)
-    *_, common = dirs.splitlines() or ['']
-    return any(real == os.path.join(os.path.realpath(d), leaf)
-               for d in dirs.splitlines() for leaf in ('config', 'config.worktree')) or (
-        bool(common) and _path_under_prefix(real, os.path.join(os.path.realpath(common), _KEYSTONE_HOOKS_LEAF)))
+    if paths is None:
+        paths = _GitConfigPaths([_checkout_git_dirs(os.path.dirname(real))])
+    return paths.hold(real)
 
 
 def _block_git_config(tool_name: str, target: str) -> None:
@@ -2449,8 +2485,10 @@ def _unattended(payload: dict) -> bool:
     return stop_contract.span_opener(latest, frozenset({'dev-overnight'})) is not None
 
 
-def main():
-    """Entry point: apply global + actor-scoped overnight enforcement (M9)."""
+def _classify_request() -> tuple[str, dict, dict, list[str], str, dict | None]:
+    """main()'s part before it knows the caller is an overnight actor: the AskUserQuestion deny, the
+    checks every session gets while an overnight session is live, and the caller's classification.
+    A `normal` caller ends here."""
     tool_name, tool_input, session_id, payload = _parse_hook_input()
     if tool_name == 'AskUserQuestion':  # R10: the deny is this hook's only rule for it
         if _unattended(payload):
@@ -2463,15 +2501,30 @@ def main():
     cwd = _payload_cwd(payload)
     wt_paths = _get_active_worktree_paths()
     classification, gov_state = _classify_actor(payload, state, wt_paths, cwd)
-    # Q2 (2026-08-09): scope the governing record's own working root to THIS
-    # request before any main-targeting predicate runs. in_place only; isolated
-    # records leave the main root fully guarded.
-    _set_governing_own_root(gov_state, payload)
-
     # M9: a `normal` concurrent user session on main is NOT enforced — exit 0 so
     # the user's main session is never false-blocked.
     if classification == 'normal':
         sys.exit(0)
+    return tool_name, tool_input, payload, wt_paths, classification, gov_state
+
+
+def main():
+    """Entry point: apply global + actor-scoped overnight enforcement (M9)."""
+    # The write gate fails this rule closed (lib/write_gate): an error past the rule's own handlers, or
+    # an overrun, refuses the call. That is for the overnight actors classified below; an error before
+    # the caller is classified stays a non-blocking error (exit 1), as when the rule failed open, so a
+    # malformed state file of the project (a non-string worktree_path raises in is_overnight_active)
+    # does not refuse every call of every other session.
+    try:
+        tool_name, tool_input, payload, wt_paths, classification, gov_state = _classify_request()
+    except Exception as exc:
+        sys.stderr.write(f'overnight-boundary: {type(exc).__name__}: {exc}; the caller was not yet '
+                         'classified, so this rule did not decide this call.\n')
+        sys.exit(1)
+    # Q2 (2026-08-09): scope the governing record's own working root to THIS
+    # request before any main-targeting predicate runs. in_place only; isolated
+    # records leave the main root fully guarded.
+    _set_governing_own_root(gov_state, payload)
 
     # M9: owner/child with a null/missing worktree = invalid isolation = BLOCK.
     if classification in ('overnight_owner', 'overnight_child'):

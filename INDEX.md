@@ -1,7 +1,7 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T08:01:13Z*
+*Last updated: 2026-11-17T01:11:18Z*
 **Total entries**: 965
 **Convention**: kebab
 
@@ -175,7 +175,6 @@ dot-claude/
 │   │   ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
 │   │   ├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 │   │   ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
-│   │   ├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 │   │   ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 │   │   ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 │   │   ├── `specialist_yield.py` - Public API:
@@ -344,7 +343,6 @@ dot-claude/
 │   │   ├── `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 │   │   ├── `test_todo_validate_after_restart.py` - A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result aft...
 │   │   ├── `test_todo_validate_in_flight.py` - The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
-│   │   ├── `test_todowrite_pin.py` - settings.json's env carries CLAUDE_CODE_ENABLE_TASKS=false and CLAUDE_CODE_ENABLE_TODO_TOOLS=1; the
 │   │   ├── `test_tool_policy_c_layer_writes.py` - hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 │   │   ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 │   │   ├── `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
@@ -395,7 +393,7 @@ dot-claude/
 │   ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 │   ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 │   ├── `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-│   ├── `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
+│   ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 │   ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 │   ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 │   ├── `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's
@@ -755,9 +753,10 @@ dot-claude/
 │   │   └── `validation-guide.md` - AI-Driven Validation Guide
 │   ├── lint/
 │   │   ├── `__main__.py` - python3 -m tests.lint [--tree DIR] [--check NAME ...]: print the findings, exit 1 on any.
-│   │   ├── `checks.py` - The six checks by name, in the order the P12 plan lists them.
+│   │   ├── `checks.py` - The checks by name: the six of the P12 plan in its order, then P15's prose-only check.
 │   │   ├── `hooks.py` - What reaches the model (the CLI's hook contract): the stderr of an exit 2; a JSON object on
 │   │   ├── `prompts.py` - The four prompt checks: hook strength, dead references, repeated blocks, emphasis.
+│   │   ├── `prose.py` - Doc text is text that comes from a string literal naming a `*.md` file, `commands/`,
 │   │   ├── `test_lint_checks.py` - These run in the ordinary suite. The checks on this repository's own tree are in
 │   │   ├── `test_lint_tree.py` - Collected only under HARNESS_LINT=1, which the baseline workflow's lint step sets; the
 │   │   └── `tree.py` - The settings and ledger parsing is scripts/check-enforcement-evidence.py's own (the gate
@@ -834,6 +833,7 @@ dot-claude/
 │   ├── `test_bootstrap_init.py` - Every case runs in its own temporary clone of this repository, synced to the
 │   ├── `test_canary_cleanup_drift.py` - The SessionStart canary compares each deployed cleanup artifact with its repo copy. A host file a...
 │   ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
+│   ├── `test_capture_hero_timing.py` - scripts/capture-hero-run.py samples its own grant path and stamps each sample before the
 │   ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
 │   ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 │   ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
@@ -858,8 +858,8 @@ dot-claude/
 │   ├── `test_cycle_records_commit_set.py` - (P10 R8 rules 2 and 3, A25; #27 comment 6737075938 item 3)
 │   ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): the orphan-agent detector asks the command files
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Each command that reads the artifact chain spells one resolver call and names the result fields i...
-│   ├── `test_dev_commands_no_phases.py` - Every requested outcome is delivered in the same cycle and the cycle ends only when all are done....
-│   ├── `test_dev_question_relay_route.py` - re-dispatch carries the answer in the same lines as Step 5's BA re-dispatch (group 3 findings on ...
+│   ├── `test_dev_commands_no_phases.py` - The frontmatter of the five /dev-family command files must parse as YAML and hold a non-empty `de...
+│   ├── `test_dev_question_relay_route.py` - re-dispatch carries the answer the same way as Step 5's BA re-dispatch (group 3 findings on #27:
 │   ├── `test_dev_todo_accounting.py` - Python script
 │   ├── `test_discover_folders.py` - INDEX per discovered folder) leaves out the harness's own directories in a project: .claude (Claude
 │   ├── `test_disposition.py` - (scripts/resolve-dev-artifact-chain.py ``disposition`` and ``--disposition``)
@@ -882,11 +882,12 @@ dot-claude/
 │   ├── `test_late_repair_route.py` - Covers AC-7..AC-10, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 │   ├── `test_launchdiff_durations.py` - A clock reading a hook prints is not a difference: posttool-overnight-loop.py prints "Time remain...
 │   ├── `test_merge_analyst_moved_tips_grant.py` - Phase 1 blocks when a tip moved between /merge Step 1 and the analysis, and writes the Phase 8 gr...
-│   ├── `test_no_phases_agent_prompts.py` - Parallel lanes inside one /dev cycle stay. Sequential phases, deferred parts and "later cycle" pl...
-│   ├── `test_no_phases_spec_command.py` - Parallel lanes inside one cycle stay. A spec, a view or a hand-off note never splits a requested ...
-│   ├── `test_no_phases_spec_template.py` - Everything the user requested is done in the cycle; Section 7 lists the actions that
+│   ├── `test_no_phases_agent_prompts.py` - Each agents/*.md (README and INDEX excepted) holds exactly one line starting "**Requirement basel...
+│   ├── `test_no_phases_spec_command.py` - Parallel lanes inside one cycle stay. A spec or a view never splits a requested outcome into sequ...
+│   ├── `test_no_phases_spec_template.py` - The nine section headings, each section's `### Cycle 1` (or `### 9.N`) subsections and placeholde...
 │   ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
+│   ├── `test_overnight_state_budget_clock.py` - The launch's start time, its end time (relative: Nm, Nh, the default 8h; or a clock time, rolled
 │   ├── `test_p10_42_hook_bytecode_env.py` - R9 set `"PYTHONDONTWRITEBYTECODE": "1"` in settings.json's env so that hooks stop writing
 │   ├── `test_p9_parts_of_p10_rows.py` - - R9 (the harness home's .gitignore): the old score store's lines stay under D28. Nothing writes
 │   ├── `test_parent_cycle_claimant_reader.py` - THE DEFECT.  Admission to a cycle's ownership-completeness claimant set was
@@ -913,7 +914,6 @@ dot-claude/
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 │   ├── `test_score_events.py` - escaped and close_catch, and the observer
 │   ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
-│   ├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
 │   ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 │   ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 │   ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
@@ -921,7 +921,7 @@ dot-claude/
 │   ├── `test_spec_check_agent_id_guard.py` - Lane b of task 20260921-134709. Self-contained and subprocess based: one scratch
 │   ├── `test_spec_check_closed_slot.py` - task 20260921-134709)
 │   ├── `test_spec_check_concurrent_marking.py` - also when hooks/pretool-cp-checkin.py runs it on a subagent's Read (harness backlog #97)
-│   ├── `test_spec_update_command_contracts.py` - Contracts for the live ``/spec-update`` command policy and its history entry.
+│   ├── `test_spec_update_command_contracts.py` - The README facts (scripts/readme_facts.py) read the command's front matter into its command row: ...
 │   ├── `test_spec_verify.py` - The overlap and uniqueness rules do not count the lines the split rules route into
 │   ├── `test_spec_write.py` - Each test runs the script as a subprocess against a throw-away project under
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file

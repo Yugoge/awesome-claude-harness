@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 183
+- **Total files**: 182
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -167,7 +167,6 @@
 - `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 - `test_todo_validate_after_restart.py` - A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result aft...
 - `test_todo_validate_in_flight.py` - The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
-- `test_todowrite_pin.py` - settings.json's env carries CLAUDE_CODE_ENABLE_TASKS=false and CLAUDE_CODE_ENABLE_TODO_TOOLS=1; the
 - `test_tool_policy_c_layer_writes.py` - hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 - `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 - `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
