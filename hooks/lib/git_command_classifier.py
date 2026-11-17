@@ -5,10 +5,11 @@ enforce policy must not read an empty invocation list as "no git runs":
 
   invocations  a GitInvocation(cmd_token, path_qualified, subcommand, args) per
                git command; cmd_token is the command word as written;
-               subcommand and args are the words as git receives them, quotes
-               and backslashes removed (`git 'push' '--force'` is push with
-               --force), a word with a run-time part as written (`"$msg"`),
-               and an abbreviated long option reads as its full name.
+               the subcommand and every option are read as git receives them,
+               quotes and backslashes removed (`git 'push' '--force'` is push
+               with --force); an operand and a word with a run-time part stay
+               as written (`'a b c'`, `"$msg"`), and an abbreviated long option
+               reads as its full name.
   residuals    (kind, text) for a command the scan cannot resolve that may be
                git: dynamic_git_token
                (`$GIT push`), substituted_git_token (`$(which git) push`) and
@@ -635,6 +636,11 @@ def _is_git_word(word):
     return not runtime and _basename(value) == 'git'
 
 
+def _is_option_word(value):
+    """True for one option as git receives it: it starts with `-` and holds no blank."""
+    return value.startswith('-') and not any(ch.isspace() for ch in value)
+
+
 def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     """The GitInvocation of a simple command whose command word is git, then its alias's.
 
@@ -651,13 +657,14 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
         return
     path_qualified = '/' in (token if _value(words[idx])[1] else values[idx])
     gvals = values[idx + 1:]
-    # Each word as git receives it, quotes and backslashes removed (`'push'`,
-    # `p\ush`, `$'\x70ush'`, `'--hard'`), so a decision never depends on how
-    # the word was quoted (OB-L26); a word the shell computes at run time stays
-    # as written (`"$msg"`).
-    words_seen = [v if not _value(w)[1] else w.raw.text
-                  for w, v in zip(words[idx + 1:], gvals)]
     k = _git_subcommand_index(gvals)
+    # The subcommand and every option as git receives them, quotes and
+    # backslashes removed (`'push'`, `p\ush`, `$'\x70ush'`, `'--hard'`), so a
+    # decision never depends on how they were quoted (OB-L26); an operand
+    # (`'a b c'`, `"/tmp/m.txt"`) and a word the shell computes at run time
+    # (`"$msg"`) stay as written.
+    words_seen = [v if not _value(w)[1] and (j == k or _is_option_word(v)) else w.raw.text
+                  for j, (w, v) in enumerate(zip(words[idx + 1:], gvals))]
     if k is None:
         yield GitInvocation(token, path_qualified, None, [])
         return

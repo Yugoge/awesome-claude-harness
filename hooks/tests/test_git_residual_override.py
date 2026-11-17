@@ -334,14 +334,15 @@ class D11_KindBinding(_RouteCase):
 
 class D12_RefusalIsJournaled(_RouteCase):
     def test_every_refusal_is_recorded(self):
-        blocked, _ = _evaluate(CMD_OBFUSCATED)
+        # OB-L26: CMD_OBFUSCATED is read as the force push it runs, no residual.
+        blocked, _ = _evaluate(CMD_DYNAMIC)
         self.assertTrue(blocked)
         recs = self.journal()
         self.assertEqual(len(recs), 1)
         rec = recs[0]
         self.assertEqual(rec["event"], "residual_refusal")
-        self.assertEqual(rec["command_sha256"], _digest(CMD_OBFUSCATED))
-        self.assertEqual(rec["residual_kinds"], ["obfuscated_git_token"])
+        self.assertEqual(rec["command_sha256"], _digest(CMD_DYNAMIC))
+        self.assertEqual(rec["residual_kinds"], ["dynamic_git_token"])
         self.assertEqual(rec["session_id"], "sid-route-test")
         self.assertEqual(rec["agent_id"], "agent-sub-1")
         self.assertTrue(rec["residual_segments"])

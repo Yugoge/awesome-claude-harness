@@ -95,7 +95,6 @@ def test_a_wrapper_running_a_run_time_word_in_a_layer_is_a_residual(command):
 
 
 @pytest.mark.parametrize("command,kind", [
-    ("$'git' push --force", "obfuscated_git_token"),
     ("`which git` push", "substituted_git_token"),
     ("$(which git) -C x push", "substituted_git_token"),
 ])

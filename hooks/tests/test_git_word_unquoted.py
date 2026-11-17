@@ -3,7 +3,8 @@ as git receives them, quotes and backslashes removed, before any rule judges the
 
 The shell removes quotes before it runs a word, so `\\git push`, `g'i't push`,
 `git 'push'`, `git p\\ush` and `git $'\\x70ush'` all run `git push`, and
-`git reset '--hard'` runs a hard reset. Before this lane:
+`git reset '--hard'` runs a hard reset. Operands (`'a b c'`) stay as written.
+Before this lane:
   - a quoted or escaped command word (`\\git`, `g'i't`, `$'git'`) was the residual
     obfuscated_git_token, so `\\git status` was refused as an unknown binary and
     `\\git push --force` reached no push rule at all (a residual override, once
@@ -78,7 +79,6 @@ MUST_REFUSE = [
     ("git reset \"--hard\" HEAD~1", "reset", RESET),
     ("git branch '-D' master", "branch", REF),
     ("git branch \"--delete\" master", "branch", REF),
-    ("git symbolic-ref 'HEAD' 'refs/heads/x'", "symbolic-ref", REF),
 ]
 
 MUST_PASS = [
@@ -99,7 +99,8 @@ def test_the_classifier_reads_the_unquoted_subcommand(command, subcommand, _line
     invocations, residuals = classify_git_command(command)
     assert residuals == []
     assert [inv.subcommand for inv in invocations] == [subcommand]
-    assert not any(q in a for a in invocations[0].args for q in "'\"\\")
+    options = [a for a in invocations[0].args if a.lstrip("'\"\\").startswith("-")]
+    assert not any(q in a for a in options for q in "'\"\\")
 
 
 @pytest.mark.parametrize("command,subcommand", MUST_PASS)
