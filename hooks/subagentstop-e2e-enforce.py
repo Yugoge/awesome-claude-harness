@@ -12,7 +12,11 @@ Activation logic:
      fails the grammar: when the dispatch carries one, it decides alone,
      whatever the registry holds and whatever form the session id takes:
      the qa-report.v2 artifact it declares is the report judged, at exactly
-     the path declared (missing: exit 2 naming that path); one that declares
+     the path declared (missing: exit 2 naming that path; holding exactly the
+     content the main agent wrote, or a QA of an earlier round, as
+     lib/report_provenance.py recorded it, with no Write of that content in
+     this QA's own transcript, or a
+     provenance ledger that cannot be trusted: exit 2, CD-6); one that declares
      none (BA validation, close QA) owes no E2E evidence here: exit 0. The
      cycle it names (lib/agent_cycle.py: the registry of its task, else of
      the session that dispatched it) only labels the message.
@@ -42,7 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type
-from lib import agent_cycle, command_span, obligation
+from lib import agent_cycle, command_span, obligation, report_provenance
 
 # Only enforce for QA agents
 ENFORCED_AGENT_TYPE = "qa"
@@ -159,6 +163,17 @@ def _enforce_e2e_status(
     sys.exit(2)
 
 
+def _session_transcript(data: dict):
+    """The session's own transcript (the payload's path, a subagent's mapped back to it)."""
+    raw = data.get("transcript_path")
+    if not isinstance(raw, str) or not raw:
+        return None
+    path = Path(raw)
+    if path.parent.name == "subagents":  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
+        path = path.parent.parent.parent / f"{path.parent.parent.name}.jsonl"
+    return path
+
+
 def _own_dispatch(data: dict, project_dir: str) -> tuple[dict, str | None]:
     """This QA's own dispatch obligation as declared, read also when the block
     fails the grammar (a pre-P1 template), {} when there is none or it cannot
@@ -183,8 +198,57 @@ def _own_dispatch(data: dict, project_dir: str) -> tuple[dict, str | None]:
     return (doc if isinstance(doc, dict) else {}), transcript
 
 
+def _enforce_own_writer(
+    rel: str, agent_id: str, project_dir: str, session_id, transcript, session_context: str,
+    session_transcript=None,
+) -> None:
+    """Exit 2 when the declared report's current content comes from the main agent
+    (lib/report_provenance.py verdict: the latest record of that content is the main
+    agent's observation, or a subagent's whose witnesses the hook did not write), or from a
+    subagent other than this QA launched before this QA was (an earlier round), and this QA's own
+    transcript holds no Write of exactly that content; exit 2 too when the
+    provenance ledger cannot be trusted (unreadable, unwritable, held locked, its chain
+    broken): the gate fails closed (CD-6)."""
+    try:
+        held = report_provenance.verdict(session_id, project_dir, rel, session_transcript, agent=agent_id,
+                                            agent_transcript=transcript)
+    except report_provenance.LedgerError as exc:
+        sys.stderr.write(
+            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
+            f"the report provenance ledger cannot be trusted ({exc}), so who wrote the QA report "
+            f"at {rel} is unknown (report provenance, CD-6; fails closed).\n"
+            f"artifact: {rel} (failing check: the provenance ledger is unreadable or tampered with)\n"
+            f"Report this refusal to the orchestrator; only the owner restores the harness state dir.\n"
+        )
+        sys.exit(2)
+    except Exception:
+        return
+    if not held:
+        return
+    if transcript and report_provenance.own_write(transcript, project_dir, rel):
+        return
+    if held != report_provenance.MAIN:
+        sys.stderr.write(
+            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
+            f"the QA report at {rel} was written by another subagent ({held}), not by this QA "
+            f"(report provenance, CD-6).\n"
+            f"artifact: {rel} (failing check: the report's writer is not the QA whose stop is judged)\n"
+            f"Perform the E2E verification and write the QA report yourself before stopping.\n"
+        )
+        sys.exit(2)
+    sys.stderr.write(
+        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
+        f"the QA report at {rel} was written by the main agent, not by this QA "
+        f"(report provenance, CD-6).\n"
+        f"artifact: {rel} (failing check: the report's writer is the orchestrator)\n"
+        f"Perform the E2E verification and write the QA report yourself before stopping.\n"
+    )
+    sys.exit(2)
+
+
 def _enforce_declared_report(
-    declared: dict, agent_id: str, project_dir: str, session_context: str
+    declared: dict, agent_id: str, project_dir: str, session_context: str,
+    session_id=None, transcript=None, session_transcript=None,
 ) -> None:
     """Judge exactly the qa-report.v2 this QA's own dispatch obligation
     declares, at the path it declares, never another report of the session or
@@ -217,6 +281,8 @@ def _enforce_declared_report(
         )
         sys.exit(2)
 
+    _enforce_own_writer(qa_artifact["path"], agent_id, project_dir, session_id, transcript, session_context,
+                        session_transcript)
     _enforce_e2e_status(qa_report_path, agent_id, ENFORCED_AGENT_TYPE, session_context)
 
 
@@ -258,7 +324,9 @@ def main() -> None:
         context = f"(task_id={declared.get('task_id')})"
         if cycle is not None:
             context = f"in session {cycle.name} {context}"
-        _enforce_declared_report(declared, agent_id, project_dir, session_context=context)
+        _enforce_declared_report(declared, agent_id, project_dir, session_context=context,
+                                 session_id=data.get("session_id"), transcript=transcript,
+                                 session_transcript=_session_transcript(data))
         sys.exit(0)
 
     # A dispatch without an obligation, of a QA a cycle's registry holds: the

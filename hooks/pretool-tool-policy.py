@@ -76,6 +76,20 @@ project's root README.md and ARCHITECTURE.md by its rule-inspector only
 Behavior:
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
+  - Every caller, before any check: who changed each docs/dev/qa-report-*.json
+    since the session last looked is recorded (lib/report_provenance.py), the
+    provenance subagentstop-e2e-enforce.py checks (CD-6). Never refuses.
+  - Main agent (no agent_id), Bash running the harness's own hook code by hand:
+    a PreToolUse/SubagentStart/SubagentStop hook entry run or exec'd (globs and
+    braces included, find -exec), or inline code importing or running a hook
+    entry or report_provenance / observe_call, writing the report-provenance
+    state dir, or importing a hooks module from the hooks directory -> exit 2
+    (_check_hook_replay, CD-6). Code that only reads them, `bash -n`, pass.
+  - Main agent (no agent_id) writing a gate-read report this reading sees for
+    certain: a Bash write of a QA or dev report (docs/dev/qa-report-*.json,
+    ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
+    of a QA or BA-QA report, declared by a dispatch yet or not -> exit 2
+    (_check_report_writes, CD-6; residuals in docs/ENFORCEMENT-LEDGER.md R-003).
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable (a NORMAL state in agent_resolver), or one
@@ -648,6 +662,708 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
             sys.exit(2)
 
 
+# -- gate-read reports: never the main agent's write (CD-6) -------------------
+# The QA and dev reports the Stop/SubagentStop gates trust: subagentstop-e2e-enforce.py
+# judges docs/dev/qa-report-*.json's e2e_enforcement.status, the obligation gate and
+# lib/obligation.py read docs/dev/ba-qa-report-*.json's verdict and the status of
+# docs/dev/dev-report-*.json (lane shards and the canonical one, lib/dev_loop_checks.py,
+# lib/dev_report_shard_patterns.py). Only the producer subagent writes one (the canonical
+# aggregate by posttool-lane-completeness-watch.py's script).
+#
+# The decision for a QA report is the e2e gate's, by provenance: every call's PreToolUse
+# records who changed each qa-report (lib/report_provenance.py, observed in main() below)
+# and the gate refuses a QA whose declared report holds what the main agent wrote, by any
+# route. What follows is the early, friendly refusal of the forms a reading of the call
+# sees for certain: a Bash write target the shared parser reads (globs and braces
+# expanded), a literal report path an interpreter's code opens for writing, a Write,
+# Edit, MultiEdit or NotebookEdit of a qa-report or ba-qa-report. A read is never refused,
+# and a target this reading cannot resolve (a computed directory, an unknown `cd`) is
+# left to the gate.
+_REPORT_NAME = re.compile(r"(?:ba-)?qa-report-[^/]+\.json|dev-report-[^/]+\.json")
+_TOOL_REPORT_NAME = re.compile(r"(?:ba-)?qa-report-[^/]+\.json")
+_REPORT_TOKEN = re.compile(r"(?<![\w.-])(?:(?:ba-)?qa|dev)-report-[^\s/'\"`;|&<>(){}\\]*\.json")
+_DOCS_DEV_REPORT_TEXT = re.compile(r"(?:\A|/)docs/+dev/+(?:(?:ba-)?qa|dev)-report-[^/]+\.json\Z")
+_CODE_INTERPRETER = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php)\Z")
+_IN_PLACE_INTERPRETER = re.compile(r"(?:perl|ruby)[\d.]*\Z")
+# A string literal (the path), then what makes the code write it: an open in a writing
+# mode, a write/copy/move/link call whose destination it is, a perl '>' open.
+_LIT = r"""(['"`])([^'"`\n]*?(?:qa|dev)-report-[^'"`\n/]*\.json)\1"""
+_WMODE = r"""\s*,\s*(?:mode\s*=\s*)?['"][rbt]*[wax+][rwaxbt+]*['"]"""
+_CODE_WRITE_FORMS = [re.compile(p) for p in (
+    r"\bopen\(\s*" + _LIT + _WMODE,                                   # python/ruby open(P, 'w')
+    r"\bfopen\(\s*" + _LIT + _WMODE,                                  # php
+    r"\bopenSync\(\s*" + _LIT + _WMODE,                               # node
+    r"\bPath\(\s*" + _LIT + r"\s*\)\s*\.\s*(?:write_text|write_bytes|touch|open\(\s*['\"][rbt]*[wax+])",
+    r"\b(?:File|IO)\s*\.\s*(?:write|binwrite)\(\s*" + _LIT,          # ruby
+    r"\bFile\s*\.\s*open\(\s*" + _LIT + _WMODE,
+    r"\b(?:file_put_contents|writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|"
+    r"truncateSync|truncate)\(\s*" + _LIT,
+    r"\b(?:copy\w*|move|rename\w*|replace|link\w*|symlink\w*|cp|cpSync|cp_r|mv|ln_s|ln|"
+    r"install)\(\s*[^;\n]*?,\s*" + _LIT + r"\s*[,)]",              # a copy/move/link's destination
+    r"""['"]\+?>{1,2}['"]\s*,\s*""" + _LIT,                            # perl open(F, '>', P)
+    r"""(['"])\+?>{1,2}\s*([^'"\n]*?(?:qa|dev)-report-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
+)]
+_DEST_MODES = ("copy-dest", "move-dest", "link")
+_WRITER_NAMES = frozenset({"tee", "cp", "mv", "install", "ln", "rsync", "dd", "truncate", "sed", "sh", "bash",
+                           "dash", "zsh", "ksh", "sponge", "sort", "uniq", "awk", "gawk", "curl", "wget", "touch"})
+_CD_LIMIT = 64
+_EXPAND_LIMIT = 64
+
+
+def _is_report(path: str, names=_REPORT_NAME) -> bool:
+    """``path`` (absolute, normalized) is a gate-read report: docs/dev/<report name>."""
+    head, name = os.path.split(path)
+    parent, folder = os.path.split(head)
+    return bool(names.fullmatch(name)) and folder == "dev" and os.path.basename(parent) == "docs"
+
+
+# The absolute paths the session's QA dispatches declare as their qa-report.v2 (wherever
+# they lie, docs/dev/qa/x.json or out/qa.json alike), set once per main-agent call by
+# _check_report_writes: a write of one is a write of a gate-read report.
+_DECLARED_REPORTS: frozenset = frozenset()
+
+
+def _report_path(path: str, names=_REPORT_NAME) -> bool:
+    """As written (normalized) or with the links that exist now resolved."""
+    path = os.path.normpath(path)
+    if _is_report(path, names) or path in _DECLARED_REPORTS:
+        return True
+    try:
+        real = os.path.realpath(path)
+        return _is_report(real, names) or real in _DECLARED_REPORTS
+    except (OSError, ValueError):
+        return False
+
+
+def _declared_reports(data: dict, tool_input) -> frozenset:
+    """The absolute (as written and real) paths of every qa-report.v2 a QA dispatch of the
+    session declares: started subagents, the ledger's watch list, this call's own dispatch."""
+    try:
+        from lib import report_provenance
+
+        root = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
+        if not root:
+            return frozenset()
+        rels = report_provenance.declared_reports(data.get("session_id"), root, _session_transcript(data))
+        if isinstance(tool_input, dict):
+            rels |= set(report_provenance.declared_in_prompt(tool_input.get("prompt")))
+        out = set()
+        for rel in rels:
+            path = os.path.normpath(os.path.join(root, rel))
+            out.add(path)
+            out.add(os.path.realpath(path))
+        return frozenset(out)
+    except Exception:
+        return frozenset()
+
+
+def _braces(text: str) -> list:
+    """``text`` with its brace alternatives expanded (`a{b,c}d`), at most _EXPAND_LIMIT."""
+    out, todo = [], [text]
+    while todo and len(out) + len(todo) <= _EXPAND_LIMIT:
+        cur = todo.pop()
+        m = re.search(r"\{([^{}]*,[^{}]*)\}", cur)
+        if not m:
+            out.append(cur)
+            continue
+        todo += [cur[:m.start()] + alt + cur[m.end():] for alt in m.group(1).split(",")]
+    return out + todo
+
+
+def _hits(cand: str, dirs: list) -> bool:
+    """``cand`` (a write target as written) names a gate-read report from one of ``dirs``: as
+    written, its brace alternatives, and the existing files its glob matches."""
+    import glob as _glob
+
+    for alt in _braces(cand):
+        bases = [alt] if os.path.isabs(alt) else [os.path.join(d, alt) for d in dirs]
+        for path in bases:
+            if _report_path(path):
+                return True
+            if any(c in alt for c in "*?["):
+                try:
+                    if any(_report_path(m) for m in _glob.glob(path)[:_EXPAND_LIMIT]):
+                        return True
+                except (OSError, ValueError, re.error):
+                    pass
+    return False
+
+
+def _known_text(text: str, cwd: str | None = None):
+    """``text`` with ~, $HOME, $CLAUDE_PROJECT_DIR and (at the call's start) $PWD expanded; None
+    when an expansion stays."""
+    known = {"HOME": os.environ.get("HOME") or os.path.expanduser("~")}
+    if cwd:
+        known["PWD"] = cwd
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
+    for name, value in known.items():
+        text = text.replace("${%s}" % name, value).replace("$" + name, value)
+    text = text.replace('"', "").replace("'", "")
+    if any(c in text for c in "$`*?["):
+        return None
+    return os.path.expanduser(text) if text.startswith("~") else text
+
+
+def _call_dirs(script, sp, cwd: str):
+    """The call's directory and every directory a `cd`/`pushd` in the command may move to, each
+    read from every directory known before it; ``unknown`` when one cannot be read (computed,
+    `cd -`, too many)."""
+    dirs, unknown, first = [cwd], False, True
+    for site in sp.walk(script):
+        r = sp.resolve(site.cmd)
+        if r.name not in ("cd", "pushd"):
+            continue
+        first, was_first = False, first
+        operands = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+        if not operands:
+            dest = os.environ.get("HOME") or os.path.expanduser("~")
+        else:
+            value = operands[0].value()
+            dest = value if value is not None else _known_text(operands[0].text, cwd if was_first else None)
+            if dest is not None and dest.startswith("~"):
+                dest = os.path.expanduser(dest)
+        if dest is None or dest == "-" or dest.startswith("+") or dest.startswith("-"):
+            unknown = True
+            continue
+        dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, dest)) for d in dirs]))
+        if len(dirs) > _CD_LIMIT:
+            unknown, dirs = True, dirs[:_CD_LIMIT]
+    return dirs, unknown
+
+
+def _code_writes_report(code: str, dirs: list) -> str | None:
+    """The literal report path an interpreter's ``code`` opens for writing, copies, moves or
+    links to, resolved from ``dirs``; None when it writes none it names literally."""
+    for form in _CODE_WRITE_FORMS:
+        for m in form.finditer(code):
+            lit = m.group(2)
+            if lit and _hits(os.path.expanduser(lit), dirs):
+                return lit
+    return None
+
+
+_SED_W = re.compile(r"(?:\A|[;\n{}])\s*w\s+(\S+)|\bs(.)(?:(?!\2).)*\2(?:(?!\2).)*\2[gpiImMe0-9]*w\s+(\S+)")
+_AWK_OUT = re.compile(r"""(?<![<>|])>{1,2}\s*"([^"\n]+)\"""")
+_PY_ARGV_WRITE = re.compile(r"\bopen\(\s*sys\.argv\[\d\]" + _WMODE)
+_PY_OS_OPEN = re.compile(r"\bos\.open\(\s*" + _LIT + r"\s*,\s*(?![^)]*\bO_RDONLY\b\s*\))(?:[^)]*\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b|\s*[1-9])")
+
+
+def _url_name(url: str) -> str:
+    return os.path.basename(url.split("?", 1)[0].split("#", 1)[0].rstrip("/"))
+
+
+def _operand_writes(name: str, values: list) -> list:
+    """The paths a writer names among its operands (as written): ``sort -o``, ``uniq IN OUT``, a
+    sed ``w`` command, an awk ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with
+    ``--output-dir``, wget's ``-O``/``-P``. Only literal operands; a read never names one."""
+    out = []
+    plain = [v for v in values if v is not None]
+    if name == "sort":
+        for i, v in enumerate(plain):
+            if v in ("-o", "--output") and i + 1 < len(plain):
+                out.append(plain[i + 1])
+            elif v.startswith("--output="):
+                out.append(v.split("=", 1)[1])
+            elif v.startswith("-o") and len(v) > 2 and not v.startswith("--"):
+                out.append(v[2:])
+    elif name == "uniq":
+        operands = [v for v in plain if not v.startswith("-") or v == "-"]
+        if len(operands) >= 2:
+            out.append(operands[1])
+    elif name in ("sed", "gsed"):
+        for v in plain:
+            for m in _SED_W.finditer(v):
+                out.append(m.group(1) or m.group(3))
+    elif name in ("awk", "gawk", "mawk", "nawk"):
+        for v in plain:
+            out += _AWK_OUT.findall(v)
+    elif name == "openssl":
+        for i, v in enumerate(plain):
+            if v == "-out" and i + 1 < len(plain):
+                out.append(plain[i + 1])
+    elif name == "curl":
+        out_dir, remote, urls = "", False, []
+        for i, v in enumerate(plain):
+            if v == "--output-dir" and i + 1 < len(plain):
+                out_dir = plain[i + 1]
+            elif v.startswith("--output-dir="):
+                out_dir = v.split("=", 1)[1]
+            elif v in ("-O", "--remote-name", "--remote-name-all") or re.fullmatch(r"-[a-zA-Z]*O[a-zA-Z]*", v):
+                remote = True
+            elif "://" in v:
+                urls.append(v)
+        if remote:
+            out += [os.path.join(out_dir, _url_name(u)) for u in urls if _url_name(u)]
+    elif name == "wget":
+        prefix, urls = "", []
+        for i, v in enumerate(plain):
+            if v in ("-P", "--directory-prefix") and i + 1 < len(plain):
+                prefix = plain[i + 1]
+            elif v.startswith("--directory-prefix="):
+                prefix = v.split("=", 1)[1]
+            elif v.startswith("-P") and len(v) > 2:
+                prefix = v[2:]
+            elif v in ("-O", "--output-document") and i + 1 < len(plain):
+                out.append(plain[i + 1])
+            elif "://" in v:
+                urls.append(v)
+        out += [os.path.join(prefix, _url_name(u)) for u in urls if _url_name(u)]
+    return [o for o in out if o and o != "-"]
+
+
+def _bash_report_writes(command: str, cwd: str) -> list:
+    """The gate-read reports ``command`` writes for certain (as written): a write target of
+    the shared parser's view, resolved from the call's directory and every `cd` it reads; a
+    literal report path an interpreter's code writes; a writer xargs/parallel runs in a
+    command that names a report."""
+    from lib import bash_write_targets as bwt
+    from lib import shell_parse as sp
+
+    script = sp.parse(command)
+    dirs, unknown = _call_dirs(script, sp, cwd)
+    tokens = list(dict.fromkeys(_REPORT_TOKEN.findall(command)))
+    writes = bwt.extract_bash_write_targets_with_modes(command)
+    # A link the same command makes to a docs/dev directory is that directory.
+    aliases = set()
+    for t in writes:
+        if t.mode == "link" and t.source and t.path:
+            for d in dirs:
+                src = os.path.normpath(os.path.join(d, os.path.expanduser(str(t.source))))
+                if os.path.basename(src) == "dev" and os.path.basename(os.path.dirname(src)) == "docs":
+                    aliases.update(os.path.normpath(os.path.join(e, os.path.expanduser(t.path))) for e in dirs)
+    found = []
+    sites = list(sp.walk(script))
+    # xargs and parallel append operands the parser cannot see: a writer they run, in a
+    # command that names a report, may write it.
+    for site in sites:
+        words = [sp.basename(w.value() or "") for w in site.cmd.words]
+        if tokens and words and words[0] in ("xargs", "parallel") and (
+                _WRITER_NAMES & set(words[1:]) or any(">" in (w.text or "") for w in site.cmd.words[1:])):
+            found.append(tokens[0])
+    for t in writes:
+        text = bwt._render(t, command)
+        if not text:
+            continue
+        candidates = [text]
+        if t.mode in _DEST_MODES:
+            if t.source:
+                candidates.append(os.path.join(text, os.path.basename(str(t.source).rstrip("/"))))
+            else:
+                candidates += [os.path.join(text, tok) for tok in tokens]
+        for cand in candidates:
+            plain = cand.replace('"', "").replace("'", "")
+            name = os.path.basename(plain.rstrip("/"))
+            if aliases and _REPORT_NAME.fullmatch(name) and any(
+                    os.path.normpath(os.path.join(d, os.path.dirname(plain))) in aliases for d in dirs):
+                hit = True
+            elif any(c in plain for c in "$`\x00") or (unknown and not os.path.isabs(plain)):
+                # A computed part, or a directory a `cd` computes: refused here only when the
+                # text itself ends in docs/dev/<report> (else the gate decides).
+                hit = bool(_DOCS_DEV_REPORT_TEXT.search(os.path.normpath(plain)))
+            else:
+                hit = _hits(plain, dirs)
+            if hit:
+                found.append(text)
+                break
+    for site in sites:
+        r = sp.resolve(site.cmd)
+        for path in _operand_writes(r.name or "", [w.value() for w in r.args]):
+            if _hits(os.path.expanduser(path), dirs if not (unknown and not os.path.isabs(path)) else []) or (
+                    _DOCS_DEV_REPORT_TEXT.search(os.path.normpath(path))):
+                found.append(path)
+                break
+    for site in sites:
+        r = sp.resolve(site.cmd)
+        name = r.name or ""
+        if not _CODE_INTERPRETER.match(name):
+            continue
+        args = [w.text for w in r.args]
+        code_args = [a for a in args if not a.startswith("-")]
+        code = " ".join(args)
+        for red in site.cmd.redirects:
+            if red.hd is not None:
+                code += "\n" + red.hd.body
+            elif red.op == "<<<" and red.target is not None:
+                code += "\n" + red.target.text
+        reads_stdin = "pipe" in site.fed and (not code_args or code_args[0] == "-") and not any(
+            re.fullmatch(r"-[A-Za-z]*[ceE]", a) or a in ("-r",) for a in args)
+        if reads_stdin:
+            code += "\n" + command  # the code it runs is what the pipe feeds it
+        lit = _code_writes_report(code, dirs)
+        if not lit:
+            m = _PY_OS_OPEN.search(code)
+            lit = m.group(2) if m and _hits(m.group(2), dirs) else None
+        if not lit and _PY_ARGV_WRITE.search(code):
+            lit = next((w.value() for w in r.args if w.value() and _hits(w.value(), dirs)), None)
+        if lit:
+            found.append(lit)
+            continue
+        if _IN_PLACE_INTERPRETER.match(name) and any(re.fullmatch(r"-[A-Za-z]*i\S*", a) for a in args):
+            for w in r.args:
+                value = w.value()
+                if value and not value.startswith("-") and _hits(value, dirs):
+                    found.append(value)
+                    break
+    return list(dict.fromkeys(found))
+
+
+def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
+    """Exit 2 on the main agent's write of a gate-read report this call's reading sees for
+    certain (CD-6): a Bash write of a QA or dev report, a Write/Edit/MultiEdit/NotebookEdit of a
+    QA or BA-QA report. A subagent's write is left to the rules above and the role rows, as
+    before. The main agent's Write tool of an undeclared dev report is not refused here
+    (test_tool_policy_derived_permission.py's test_a_dispatch_refused_at_pretooluse_declares_nothing
+    pins it as allowed; an owner decision). Whatever this misses, the e2e gate refuses by
+    provenance (lib/report_provenance.py)."""
+    global _DECLARED_REPORTS
+    if data.get("agent_id") or not isinstance(tool_input, dict):
+        return
+    cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if tool_name in WRITE_TOOLS or tool_name == "Bash":
+        _DECLARED_REPORTS = _declared_reports(data, None)
+    if tool_name == "Bash":
+        command = tool_input.get("command")
+        if not isinstance(command, str) or ("report" not in command and not _DECLARED_REPORTS):
+            return
+        try:
+            hits = _bash_report_writes(command, cwd)
+        except Exception:  # a command the reader cannot read: the gate decides (provenance)
+            hits = []
+    elif tool_name in WRITE_TOOLS:
+        hits = []
+        for target in targets:
+            if isinstance(target, str) and target:
+                path = os.path.join(cwd, os.path.expanduser(target))
+                if _report_path(path, _TOOL_REPORT_NAME):
+                    hits.append(target)
+    else:
+        return
+    if hits:
+        _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, hits[0],
+                    f"write target {hits[0]} is a gate-read report (docs/dev/qa-report-*.json, "
+                    "ba-qa-report-*.json, dev-report-*.json, or a path a QA dispatch of the session "
+                    "declares as its qa-report.v2): only the producer subagent its dispatch "
+                    "declares writes it; the main agent never writes one (CD-6)")
+        sys.exit(2)
+
+
+# -- the hook's own code path, run by hand (CD-6) --------------------------------
+# The provenance ledger is written by the PreToolUse hook entry (observe_call, through
+# hooks/pretool-launch.py -> pretool-write-gate.py -> this file). The main agent running
+# that entry by hand with payloads it makes up (a fake QA launch, a fake subagent call)
+# would have the hook write records the gate trusts. The main agent never runs a
+# PreToolUse / SubagentStart / SubagentStop hook entry in normal harness use (its
+# commands run other harness scripts: merge.sh, prompt-workflow.py, lib CLIs, sourced
+# helpers, and those still pass), so its Bash call is refused when, literally:
+#   - an interpreter (python, node, perl, ruby, php, a shell, `.`/`source`) runs such a
+#     file as its script (as written, after a `cd`, through a link, or as a glob, `?`,
+#     bracket or brace spelling that matches one on disk; a shell's `-o`/`+x` options
+#     skipped), the file is executed directly (by path, `cd` then `./x`), or
+#     `find -name <entry> -exec <interpreter> {}` (or `-exec {}`) runs it;
+#   - inline code (`-c`/`-e`/`-r`, or code an interpreter reads from a heredoc, here-string
+#     or pipe) loads or runs code (sys.path, runpy, importlib, __import__, subprocess,
+#     exec, os.system, require of a file, child_process) while naming such a file, the
+#     provenance module or the hooks directory; imports or calls report_provenance /
+#     observe_call; writes, copies, moves or removes anything it names under the
+#     report-provenance state dir; or, as python run with its directory in a hooks
+#     directory (or its lib), imports a module of that directory; or `-m` runs the
+#     provenance module or a module of a hooks directory it runs in;
+#   - PYTHONPATH is set to a hooks directory for an interpreter running inline code.
+# Passes: inline code that only opens and reads a hook entry, the provenance module or the
+# ledger (ast.parse, a count, readFileSync, json.load), and `bash -n`/`sh -n` of an entry
+# (no later `+n` / `+o noexec`).
+# A subagent is not refused here: a dev subagent testing a hook feeds it payloads by hand.
+# Not seen (accepted limit, docs/ENFORCEMENT-LEDGER.md R-003): a computed name, code staged
+# in a file by an earlier call, a copy of the hook, a subagent doing it, `xargs` running a
+# name it reads, a find `-exec sh -c '...' _ {}` script's operands.
+_HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py|sh)")
+_PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
+_RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
+                      r"source|\.)\Z")
+_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "source", "."})
+_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
+_PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
+_HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
+# Code that loads or runs other code: an import machinery, a process launch, exec. `require` of a
+# bare builtin name (`require('fs')`) loads no file and is not counted.
+_LOADS = re.compile(r"sys\.path|runpy|importlib|__import__|subprocess|\bexec\b|\bexec[lv]p?e?\b|os\.system|"
+                    r"\bpopen\b|\bspawn|require\(\s*(?![\"'`](?:node:)?\w+[\"'`]\s*\))|child_process|"
+                    r"\bsystem\(|\beval\(|\bload\(\s*[\"']/")
+# An import statement naming the provenance module or its observe_call, and a call of observe_call.
+_IMPORTS_PROVENANCE = re.compile(r"\b(?:from|import)\b[^\n;]*(?:report_provenance|observe_call)|observe_call\s*\(")
+# Code that writes, copies, moves, links or removes a file it names.
+_WRITES = re.compile(
+    r"\.write\w*\(|write_text|write_bytes|\bdump\(|shutil\.|os\.(?:rename|replace|remove|unlink|link|symlink|"
+    r"truncate|makedirs|mkdir|rmdir|open|chmod|utime)\b|\.(?:touch|mkdir|unlink|rename|replace|symlink_to|"
+    r"hardlink_to|link_to|rmdir|chmod)\(|truncate|writeFile|appendFile|createWriteStream|copyFile|cpSync|"
+    r"\bfs\.(?:rm|cp|mkdir|rename|unlink|symlink|link|open)|"
+    r"open\([^)]*,\s*(?:mode\s*=\s*)?[\"'][rbtU]*[wax+]|\.open\(\s*(?:mode\s*=\s*)?[\"'][rbtU]*[wax+]|"
+    r"[\"']\+?>{1,2}|[\"']\+<|print\([^)]*file\s*=")
+# Top-level module names an import statement in python code names.
+_PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
+_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+_FIND_NAME_OPTS = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"})
+_EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
+                            "sudo", "ionice", "chrt", "taskset", "xargs"})
+_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+
+
+def _spellings(value: str) -> list:
+    """``value`` (a word's text) with its quotes dropped, its brace alternatives expanded."""
+    out, todo = [], [value.replace('"', "").replace("'", "")]
+    while todo and len(out) < 64:
+        v = todo.pop()
+        m = _BRACE.search(v)
+        if not m:
+            out.append(v)
+            continue
+        todo.extend(v[:m.start()] + alt + v[m.end():] for alt in m.group(1).split(","))
+    return out
+
+
+def _hook_entry_path(value, dirs) -> bool:
+    """Whether ``value`` (a script operand or command head, as written) names a hook entry or the
+    provenance module: as written, after a `cd`, through an existing link, or as a glob, `?`,
+    bracket or brace spelling that matches one on disk."""
+    if not value:
+        return False
+    import glob as _glob
+
+    for v in _spellings(value):
+        if _HOOK_ENTRY.fullmatch(os.path.basename(v)) or _PROVENANCE_TEXT.search(v):
+            return True
+        for d in dirs:
+            try:
+                path = os.path.join(d, os.path.expanduser(v))
+                found = _glob.glob(path)[:64] if any(c in v for c in "*?[") else [path]
+            except (OSError, ValueError, re.error):
+                continue
+            for p in found:
+                try:
+                    real = os.path.realpath(p)
+                except (OSError, ValueError):
+                    continue
+                if _HOOK_ENTRY.fullmatch(os.path.basename(real)) or _PROVENANCE_TEXT.search(real):
+                    return True
+    return False
+
+
+def _is_hooks_dir(d: str) -> bool:
+    """A harness hooks directory (one holding a hook entry) or its ``lib``."""
+    try:
+        d = os.path.realpath(d)
+        if os.path.basename(d) == "lib":
+            d = os.path.dirname(d)
+        return os.path.basename(d) == "hooks" and any(_HOOK_ENTRY.fullmatch(n) for n in os.listdir(d))
+    except (OSError, ValueError):
+        return False
+
+
+def _imports_from(code: str, dirs: list) -> bool:
+    """Whether python ``code``, run with its directory in a hooks directory (`-c`, `-`, stdin: the
+    directory is first on its import path), imports a module of that directory or edits its path."""
+    hooks = [d for d in dirs if _is_hooks_dir(d)]
+    if not hooks:
+        return False
+    if _LOADS.search(code):
+        return True
+    for m in _PY_IMPORTED.finditer(code):
+        for name in (m.group(1) or m.group(2) or "").split(","):
+            top = name.strip().split(".")[0]
+            if top and any(os.path.exists(os.path.join(d, top + ".py")) or os.path.isdir(os.path.join(d, top))
+                           for d in hooks):
+                return True
+    return False
+
+
+def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
+    """What inline ``code`` of interpreter ``name`` does that runs hook code; None for code that
+    only reads (opens a hook entry, the provenance module or the ledger and prints)."""
+    if _LOADS.search(code) and (_HOOK_ENTRY.search(code) or _PROVENANCE_TEXT.search(code)
+                                or _HOOKS_DIR.search(code)):
+        return name + " code loading from the harness hooks directory"
+    if _IMPORTS_PROVENANCE.search(code):
+        return name + " code importing the provenance module"
+    if _PROVENANCE_TEXT.search(code) and _WRITES.search(code):
+        return name + " code writing the provenance ledger"
+    if name.startswith(("python", "pypy")) and _imports_from(code, dirs):
+        return name + " code importing from the harness hooks directory"
+    return None
+
+
+def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
+    """`find ... -name <entry> -exec <interpreter> {} ;` (or `-exec {}`): the entry run by find."""
+    words = [a if a is not None else t for a, t in zip(args, texts)]
+    starts = [i for i, w in enumerate(words) if w in _FIND_EXEC]
+    if not starts:
+        return None
+    runs = False
+    for i in starts:
+        rest = [w for w in words[i + 1:]]
+        j = 0
+        while j < len(rest) and (rest[j] in _EXEC_WRAPPERS or rest[j].startswith("-") or "=" in rest[j]
+                                 or rest[j].replace(".", "").isdigit()):
+            j += 1
+        if j < len(rest) and (rest[j] == "{}" or _RUNNERS.match(os.path.basename(rest[j]))):
+            runs = True
+    if not runs:
+        return None
+    roots = []
+    for w in words:
+        if w.startswith(("-", "(", "!")):
+            break
+        roots.append(w)
+    for i, w in enumerate(words[:-1]):
+        if w not in _FIND_NAME_OPTS:
+            continue
+        pat = words[i + 1].replace('"', "").replace("'", "")
+        if _HOOK_ENTRY.search(pat) or _PROVENANCE_TEXT.search(pat):
+            return "find -exec of " + pat
+        import fnmatch
+
+        for root in roots or ["."]:
+            for d in dirs:
+                base = os.path.join(d, os.path.expanduser(root))
+                for sub in (base, os.path.join(base, "hooks")):
+                    try:
+                        names = os.listdir(sub)
+                    except (OSError, ValueError):
+                        continue
+                    if any(_HOOK_ENTRY.fullmatch(n) and fnmatch.fnmatch(n, os.path.basename(pat)) for n in names):
+                        return "find -exec of " + pat
+    return None
+
+
+def _runs_hook_code(command: str, cwd: str) -> str | None:
+    """What part of ``command`` runs the harness's own hook code (see above); None when none."""
+    from lib import shell_parse as sp
+
+    script = sp.parse(command)
+    dirs, _unknown = _call_dirs(script, sp, cwd)
+    pythonpath_hooks = bool(re.search(r"PYTHONPATH=[\"']?[^\s;&|]*hooks\b", command))
+    for site in sp.walk(script):
+        r = sp.resolve(site.cmd)
+        name = r.name or ""
+        head = None
+        if r.head is not None:
+            head = r.head.value()
+            if head is None:
+                head = r.head.text
+        if head and ("/" in head or _HOOK_ENTRY.fullmatch(name)) and _hook_entry_path(head, dirs):
+            return head  # executed directly
+        args = [w.value() for w in r.args]
+        texts = [w.text for w in r.args]
+        if name == "find":
+            hit = _find_runs_hook(args, texts, dirs)
+            if hit:
+                return hit
+            continue
+        if not _RUNNERS.match(name):
+            continue
+        inline, operand, module, i, noexec = [], None, None, 0, False
+        while i < len(args):
+            a = args[i] if args[i] is not None else texts[i]
+            if a == "--":
+                operand = args[i + 1] if i + 1 < len(args) else None
+                break
+            if name.startswith(("python", "pypy")) and a == "-m":
+                module = args[i + 1] if i + 1 < len(args) else ""
+                break
+            if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
+                i += 2
+                continue
+            if name in _SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+                operand = None
+                break  # `sh -c CODE`: walked as commands of its own
+            if name in _SHELLS and a in _SHELL_VALUE_OPTS:
+                if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
+                    noexec = a == "-o"
+                i += 2
+                continue
+            if name in _SHELLS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
+                if "n" in a[1:]:
+                    noexec = a[0] == "-"  # `-n` reads without running; a later `+n` runs
+                i += 1
+                continue
+            if name not in _SHELLS and _INLINE_FLAGS.fullmatch(a):
+                if i + 1 < len(args):
+                    inline.append(texts[i + 1] if args[i + 1] is None else args[i + 1])
+                break
+            if a.startswith("-") and a != "-":
+                i += 1
+                continue
+            operand = a
+            break
+        if module is not None:
+            mod = module or ""
+            if _PROVENANCE_TEXT.search(mod) or _HOOK_ENTRY.search(mod.replace(".", "/") + ".py"):
+                return f"-m {module}"
+            if mod and _imports_from(f"import {mod}", dirs):
+                return f"-m {module} from the harness hooks directory"
+            continue
+        if operand not in (None, "-"):
+            if noexec and name in _SHELLS and name not in ("source", "."):
+                continue  # a syntax check (`bash -n`) runs nothing
+            if _hook_entry_path(operand, dirs):
+                return operand
+            continue
+        if name in _SHELLS:
+            continue  # a shell's code is walked as commands of its own
+        if operand == "-" or not inline:
+            for red in site.cmd.redirects:
+                if red.hd is not None:
+                    inline.append(red.hd.body)
+                elif red.op == "<<<" and red.target is not None:
+                    inline.append(red.target.text)
+            if "pipe" in site.fed:
+                inline.append(command)  # the code it runs is what the pipe feeds it
+        for code in inline:
+            hit = _inline_runs_hook(name, code or "", dirs)
+            if hit:
+                return hit
+            if pythonpath_hooks and name.startswith(("python", "pypy")):
+                return "PYTHONPATH on the harness hooks directory"
+    return None
+
+
+def _check_hook_replay(role, tool_name: str, tool_input: dict, data: dict) -> None:
+    """Exit 2 on the main agent's Bash call that runs the harness's own hook code by hand (above)."""
+    if data.get("agent_id") or tool_name != "Bash" or not isinstance(tool_input, dict):
+        return
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command:
+        return
+    cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    try:
+        what = _runs_hook_code(command, cwd)
+    except Exception:
+        what = None
+    if what:
+        _emit_block(_caller_label(role, data), tool_name, what,
+                    f"{what}: this call runs the harness's own hook code by hand (a PreToolUse, "
+                    "SubagentStart or SubagentStop hook entry, or the QA report provenance module "
+                    "report_provenance / observe_call / its report-provenance state dir). The main agent "
+                    "never runs a hook with a payload it makes up; the CLI runs hooks (CD-6)")
+        sys.exit(2)
+
+
+def _observe_reports(data: dict) -> None:
+    """Record this call in the provenance ledger's call stream (a QA dispatch's launch, a
+    subagent's call), then this call's caller as the writer of every watched QA report
+    (docs/dev/qa-report-*.json and every path a QA dispatch of the session declares, this
+    call's own dispatch included) changed since the ledger last recorded it, bound to this
+    call's tool_use_id (lib/report_provenance.observe_call; the e2e gate reads it). Never
+    refuses."""
+    try:
+        from lib import report_provenance
+
+        report_provenance.observe_call(data)
+    except Exception:
+        pass
+
+
 def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
     """Apply the derived write permission; exit 2 on another caller's write of
     a declared path. Returns the targets the caller itself declared."""
@@ -1179,6 +1895,9 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
+    provenance = os.path.join(state, "report-provenance")  # lib/report_provenance.ledger_dir
+    if _below(path, provenance) or (removed and _below(provenance, path)):
+        return "the QA report provenance ledger, which only hooks write (CD-6)"
     push = _push_input(path, state)
     if push:
         return push
@@ -1318,13 +2037,16 @@ def main() -> None:
     if not isinstance(tool_name, str):
         sys.exit(0)
     tool_input = data.get("tool_input") or {}
+    _observe_reports(data)
     role = resolve_agent_type(data)
+    _check_hook_replay(role, tool_name, tool_input, data)
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     approved = _check_clean_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)
+    _check_report_writes(role, tool_name, tool_input, targets, data)
     from lib import policy_registry
 
     if not role or policy_registry.get_role_policy(role).get("_unknown_role"):

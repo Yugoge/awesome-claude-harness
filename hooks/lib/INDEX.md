@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 72
+*Last updated: 2026-11-17T12:16:56Z*
+**Total entries**: 73
 **Convention**: kebab
 
 ## Tree
@@ -60,6 +60,7 @@ lib/
 ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
 ├── `rule_fork.py` - A launcher (lib/hook_launch.py) holds an event's Python hooks and, once its interpreter has
