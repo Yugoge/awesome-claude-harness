@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T17:58:19Z*
-**Total entries**: 985
+*Last updated: 2026-11-17T17:59:30Z*
+**Total entries**: 988
 **Convention**: kebab
 
 ## Tree
@@ -262,6 +262,7 @@ dot-claude/
 │   │   ├── `test_git_hidden_code.py` - The classifier reads shell text, so `python3 -c 'subprocess.run(["git","push"])'`
 │   │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   │   ├── `test_git_residual_override.py` - Background
+│   │   ├── `test_git_residual_shell_string_message.py` - `for d in */; do bash -c "cd $d && git status"; done` stays refused: the outer
 │   │   ├── `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
 │   │   ├── `test_git_text_owners.py` - Four readings, each with the inputs that must still be refused:
 │   │   ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
@@ -309,10 +310,12 @@ dot-claude/
 │   │   ├── `test_posttool_checkpoint_refusal.py` - Drives hooks/posttool-git-checkpoint.sh as settings.json registers it (PostToolUse on
 │   │   ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 │   │   ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
+│   │   ├── `test_privilege_guard_checkpoint_fetch.py` - The auto-commit mechanism snapshots work to `refs/checkpoints/<branch>` (see
 │   │   ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
 │   │   ├── `test_privilege_guard_fails_closed.py` - When a name the guard imports from the classifier is missing, the guard raises at
 │   │   ├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
 │   │   ├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
+│   │   ├── `test_privilege_guard_read_only_forms.py` - Its rules judge an invocation by its subcommand name, so help (`git push --help`,
 │   │   ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 │   │   ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
 │   │   ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the

@@ -980,6 +980,10 @@ def _dynamic_only_in_directory(word):
 # `unresolved_shell_string` when it is git-shaped (_may_run_git) or may run
 # run-time text as shell or code (_runs_runtime_code). `bash -c "git $SUB"` and
 # `bash -c "$CMD"` are residuals; `bash -c "cd $DIR && npm test"` runs npm.
+# The residual stays a residual when git is written literally in it
+# (`bash -c "cd $d && git status"`: a directory named `x;git push` pushes); the
+# way out is to pass the value as data, `bash -c 'cd "$1" && git status' _ "$d"`
+# or no `-c` wrapper, and the guard's refusal names it.
 # Text whose quoting the scan cannot follow is a residual when what follows its
 # shell `-c` is git-shaped; a string nested deeper than _MAX_SHELL_DEPTH always
 # is. A here-document is shell text only when a shell may read it

@@ -542,6 +542,211 @@ _COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fi
                       '--pathspec-from-file'}
 
 
+# ---------------------------------------------------------------------------
+# Read-only forms of a guarded subcommand
+#
+# The rules below judge an invocation by its subcommand name, so a form of a
+# guarded subcommand that moves nothing is lifted out first (_without_read_only):
+# help (`git push --help`, `git --help push`, `git merge -h`), a dry run
+# (`git push -n|--dry-run`, `git commit --dry-run`; commit's `-n` is
+# --no-verify) and `git rebase|am --show-current-patch`. Each invocation is
+# judged on its own, so `git push --help; git push origin master` still meets
+# the push rule. git can run a configured program for any of them (help.browser,
+# man.viewer, core.pager, core.sshCommand, a transport helper), so a form is
+# read-only only when the command cannot inject configuration: no -c,
+# --config-env or other option before the subcommand, no assignment, export or
+# function anywhere in the command, no wrapper on the invocation, nothing in a
+# nested shell. (The environment the command starts with is the host's, not the
+# agent's: an agent's export does not outlive its Bash call.)
+# ---------------------------------------------------------------------------
+
+# What can add or repoint git configuration for a later command of the same line.
+_ENV_CHANGING_CMDS = frozenset({'export', 'declare', 'typeset', 'readonly', 'local', 'set',
+                                'source', '.', 'eval', 'env', 'alias', 'shopt', 'enable',
+                                'builtin', 'trap'})
+# Builtins whose parse-options reads `-h` as its usage; `--help` right after any
+# subcommand is rewritten to `git help <sub>` by git itself (an external such as
+# filter-repo, or an alias, may read `-h` as something else).
+_DASH_H_HELP = frozenset({'push', 'merge', 'commit', 'rebase', 'am', 'cherry-pick', 'revert',
+                          'pull', 'reset', 'update-ref', 'symbolic-ref', 'branch', 'commit-tree',
+                          'fast-import', 'replace', 'filter-branch'})
+# push options whose value is the next word when not attached; those that name a
+# program to run end the dry-run reading.
+_PUSH_VALUE_LONG = frozenset({'--repo', '--push-option', '--receive-pack', '--exec'})
+_PUSH_RUNS_PROGRAM = frozenset({'--receive-pack', '--exec'})
+# commit short options that take a value (the rest of the cluster or the next
+# word), and those whose optional value can only be attached.
+_COMMIT_VALUE_SHORT = frozenset('mFCct')
+_COMMIT_ATTACHED_SHORT = frozenset('uS')
+_SHOW_CURRENT_PATCH = {'rebase': ('--show-current-patch',),
+                       'am': ('--show-current-patch', '--show-current-patch=diff',
+                              '--show-current-patch=raw')}
+
+
+def _negates_dry_run(name):
+    """True for `--no-dry-run` or a prefix of it git would take (`--no-d`)."""
+    return len(name) > 5 and 'no-dry-run'.startswith(name[2:])
+
+
+def _separate_value_is_plain(args, k):
+    """True when the word after args[k], an option's separately given value,
+    is there, static and no `<transport>::` address."""
+    return k + 1 < len(args) and args[k + 1] is not None and '::' not in args[k + 1]
+
+
+def _push_is_dry_run(args):
+    """True when push arguments ask for a dry run (`-n`, a cluster holding n,
+    `--dry-run`, not undone by a later `--no-dry-run`) and name no program git
+    would run for it: no --receive-pack/--exec, no `<transport>::` address,
+    attached, an operand or the separate value of an option (`--repo ext::...`).
+    The value of -o/--push-option/--repo is not an option; a computed word, or
+    a long option left as a prefix of one that takes a value, reads as no dry
+    run."""
+    dry = False
+    operands_only = False
+    k = 0
+    while k < len(args):
+        word = args[k]
+        if word is None or '::' in word:
+            return False
+        if operands_only or word == '--':
+            operands_only = True
+        elif word.startswith('--'):
+            name, eq, _value = word.partition('=')
+            if name in _PUSH_RUNS_PROGRAM:
+                return False
+            if name == '--dry-run' and not eq:
+                dry = True
+            elif _negates_dry_run(name):
+                dry = False
+            elif name in _PUSH_VALUE_LONG:
+                # An attached value was read with the word itself.
+                if not eq:
+                    if not _separate_value_is_plain(args, k):
+                        return False
+                    k += 1
+            elif any(opt.startswith(name) for opt in _PUSH_VALUE_LONG | _PUSH_RUNS_PROGRAM):
+                return False
+        elif word.startswith('-') and len(word) > 1:
+            letters = word[1:]
+            for n, ch in enumerate(letters):
+                if ch == 'o':
+                    if n == len(letters) - 1:
+                        if not _separate_value_is_plain(args, k):
+                            return False
+                        k += 1
+                    break
+                if ch == 'n':
+                    dry = True
+        k += 1
+    return dry
+
+
+def _commit_is_dry_run(args):
+    """True when commit arguments carry `--dry-run` as an option (not as the
+    value of -m, -F, --author and the like, not after `--`), not undone by a
+    later `--no-dry-run`. commit's `-n` is --no-verify, never a dry run."""
+    dry = False
+    k = 0
+    while k < len(args):
+        word = args[k]
+        if word is None:
+            return False
+        if word == '--':
+            break
+        if word.startswith('--'):
+            name, eq, _value = word.partition('=')
+            if name == '--dry-run' and not eq:
+                dry = True
+            elif _negates_dry_run(name):
+                dry = False
+            elif name in _COMMIT_VALUE_OPTS | {'--message', '--file'} and not eq:
+                if k + 1 >= len(args) or args[k + 1] is None:
+                    return False
+                k += 1
+        elif word.startswith('-') and len(word) > 1:
+            letters = word[1:]
+            for n, ch in enumerate(letters):
+                if ch in _COMMIT_ATTACHED_SHORT:
+                    break
+                if ch in _COMMIT_VALUE_SHORT:
+                    if n == len(letters) - 1:
+                        if k + 1 >= len(args) or args[k + 1] is None:
+                            return False
+                        k += 1
+                    break
+        k += 1
+    return dry
+
+
+def _read_only_form(inv):
+    """True when parsed invocation `inv` is a read-only form of its subcommand
+    written plainly: top level, no wrapper, assignment, configuration or GIT_*
+    variable on it, and no option before the subcommand but a lone `--help`."""
+    if (inv.unresolved is not None or inv.alias_body is not None or inv.context != ('top',)
+            or inv.config_pairs or inv.env or inv.cmd.assignments
+            or shell_parse.resolve(inv.cmd).wrappers):
+        return False
+    args = tuple(inv.args)
+    if inv.global_opts:
+        # `git --help push` is `git help push`.
+        return inv.global_opts == [('--help', None)]
+    if args and (args[0] == '--help' or (args[0] == '-h' and inv.subcommand in _DASH_H_HELP)):
+        return True
+    if inv.subcommand == 'push':
+        return _push_is_dry_run(args)
+    if inv.subcommand == 'commit':
+        return _commit_is_dry_run(args)
+    return len(args) == 1 and args[0] in _SHOW_CURRENT_PATCH.get(inv.subcommand, ())
+
+
+def _config_may_be_injected(script, sites):
+    """True when a command of the line can give a git invocation configuration
+    it would not otherwise read: an assignment (exported under `set -a`), an
+    export-like or eval-like builtin, or a function (it may shadow git)."""
+    if shell_parse._AssignScope(script).functions:
+        return True
+    return any(site.cmd.assignments or shell_parse.resolve(site.cmd).name in _ENV_CHANGING_CMDS
+               for site in sites)
+
+
+def _injection_free(script):
+    """True when `script` can be read and no command of it may inject
+    configuration (_config_may_be_injected)."""
+    if script.error is not None:
+        return False
+    return not _config_may_be_injected(script, list(shell_parse.walk(script)))
+
+
+def _read_only_parsed(command):
+    """The parser's read-only invocations of `command` (see _read_only_form), or
+    none when the command cannot be read or may inject configuration."""
+    script = shell_parse.parse(command)
+    if not _injection_free(script):
+        return []
+    return [inv for inv in shell_parse.git_invocations(script) if _read_only_form(inv)]
+
+
+def _without_read_only(command, invocations):
+    """The classifier's `invocations` less each one the parser reads as a
+    read-only form; each parsed form lifts at most one, matched by subcommand
+    and arguments (as the parser resolves them, or as written)."""
+    spare = []
+    for inv in _read_only_parsed(command):
+        spare.append((inv.subcommand, {tuple(inv.args),
+                                       tuple(w.value() for w in inv.arg_words)}))
+    kept = []
+    for inv in invocations:
+        args = tuple(_unquote_token(t) for t in inv.args)
+        hit = next((n for n, (sub, forms) in enumerate(spare)
+                    if sub == inv.subcommand and args in forms), None)
+        if hit is None:
+            kept.append(inv)
+        else:
+            del spare[hit]
+    return kept
+
+
 def _git_view(command):
     """(walk sites, git invocations) of `command` through the shared parser,
     pairing each git invocation with the index of its site in walk order; a
@@ -1110,7 +1315,10 @@ def _evaluate_push(command, invocations, data):
     # options resolved), and the classifier's, which also reads a quoted payload
     # it cannot rule out as code.
     script = shell_parse.parse(command)
-    pushes = [inv.args for inv in shell_parse.git_invocations(script) if inv.subcommand == 'push']
+    # A read-only form (a dry run, help) moves nothing whatever else it carries.
+    free = _injection_free(script)
+    pushes = [inv.args for inv in shell_parse.git_invocations(script)
+              if inv.subcommand == 'push' and not (free and _read_only_form(inv))]
     pushes += [[_unquote_token(t) for t in inv.args] for inv in invocations if inv.subcommand == 'push']
     if any(_push_forces_or_deletes(args) for args in pushes):
         _block(
@@ -1145,6 +1353,277 @@ def _evaluate_direct_ref_mutation(command, data):
         'branch force/delete/rename are forbidden.\n'
         'Command excerpt: %s\n' % command[:200]
         + 'Branch movement must go through expected-parent CAS wrappers.\n'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint refs (GIT-M3)
+#
+# The auto-commit mechanism snapshots work to refs/checkpoints/<branch>
+# (docs/reference/checkpoint-mechanism.md). A fetch or pull whose refspec maps
+# into that namespace overwrites, force-updates or (with --prune) deletes those
+# snapshots: `git fetch origin refs/checkpoints/master:refs/checkpoints/master`.
+# git takes refspecs from operands, --refmap, remote.<name>.fetch configuration
+# (-c, --config-env, GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS) and,
+# under --stdin, from stdin. All but configuration files and stdin from a file or
+# a program are text in the command, so a command that runs fetch or pull is
+# refused when any word of it, read with the parser's static values (quotes,
+# backslashes and $'...' resolved) or as written with quotes and backslashes
+# dropped (which keeps a computed tail: "x:refs/checkpoints/$b"), holds a
+# refspec whose destination is in the namespace, {a,b} and {a..b} braces
+# expanded (past _BRACE_CAP words: refused) and ${D:-x}/${D-x}/${D:=x}/${D=x}
+# defaults read in place of D, nested ones too. A destination of the fetch's own
+# refspec words (_refspec_words, remote.<name>.fetch values) still holding `{`,
+# `}` or `$` after that is refused: it cannot be shown to land elsewhere. A remote.<name>.fetch
+# value the command does not show (--config-env) is refused too. A fetch with no
+# destination (`git fetch origin refs/checkpoints/master`, FETCH_HEAD only) or
+# with one elsewhere (refs/remotes/...) passes.
+# ---------------------------------------------------------------------------
+
+_CHECKPOINT_NS = ('refs', 'checkpoints')
+_FETCHING = frozenset({'fetch', 'pull'})
+# What separates refspecs in a word: whitespace, quotes, `=` (`--refmap=`, a `-c`
+# key=value, GIT_CONFIG_PARAMETERS' 'key'='value') and printf's `\n`.
+_REFSPEC_SPLIT_RE = re.compile(r"\\n|[\s'\"=;|&()<>`]+")
+_FETCH_CONFIG_KEY_RE = re.compile(r'remote\..+\.fetch$', re.IGNORECASE)
+
+
+def _in_checkpoint_ns(dst):
+    """True when the ref (or refspec glob) `dst` names, or can match, a ref in
+    refs/checkpoints/ or refs/checkpoints itself. Read the way the namespace is
+    stored on any disk: letter case ignored (a case-blind filesystem keeps
+    refs/Checkpoints/x in the same directory), empty and `.` components dropped
+    and `..` applied; the spellings git rejects outright are refused alike."""
+    parts = []
+    for comp in dst.lstrip('+').lower().split('/'):
+        if comp in ('', '.'):
+            continue
+        if comp == '..':
+            if parts:
+                parts.pop()
+            continue
+        parts.append(comp)
+    norm = '/'.join(parts)
+    ns = '/'.join(_CHECKPOINT_NS)
+    if '*' in norm:  # a glob: `*` matches across `/`
+        head = norm.split('*', 1)[0]
+        return (ns + '/').startswith(head) or head.startswith(ns + '/')
+    return norm == ns or norm.startswith(ns + '/')
+
+
+# `${NAME:-x}`, `${NAME-x}`, `${NAME:=x}`, `${NAME=x}`: the shell may use x.
+# Applied until nothing changes (nested defaults), at most _DEFAULT_ROUNDS times.
+_PARAM_DEFAULT_RE = re.compile(r'\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=]([^{}]*)\}')
+_DEFAULT_ROUNDS = 16
+_BRACE_CAP = 256
+_BRACE_SEQ_RE = re.compile(r'^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$')
+# A repository URL, exempt from the unresolved-destination rule.
+_URL_WORD_RE = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://|[^@/:]+@[^@/:]+:')
+
+
+class _Unresolved(Exception):
+    """A refspec the guard cannot expand within its caps."""
+
+
+def _with_defaults(text):
+    """`text` with each parameter default read in place of its parameter,
+    nested ones included; past _DEFAULT_ROUNDS what remains keeps its `${`."""
+    for _round in range(_DEFAULT_ROUNDS):
+        new = _PARAM_DEFAULT_RE.sub(r'\1', text)
+        if new == text:
+            break
+        text = new
+    return text
+
+
+def _brace_sequence(inner):
+    """The words of a bash sequence expression `a..b[..step]` (integers or
+    single letters), or None when `inner` is not one. Raises _Unresolved
+    past _BRACE_CAP words."""
+    m = _BRACE_SEQ_RE.match(inner)
+    if not m:
+        return None
+    a, b, step = m.group(1), m.group(2), abs(int(m.group(3) or 1)) or 1
+    num = a.lstrip('-').isdigit() and b.lstrip('-').isdigit()
+    if not num and not (len(a) == 1 and len(b) == 1 and a.isalpha() and b.isalpha()):
+        return None
+    lo, hi = (int(a), int(b)) if num else (ord(a), ord(b))
+    span = range(lo, hi + 1, step) if lo <= hi else range(lo, hi - 1, -step)
+    if len(span) > _BRACE_CAP:
+        raise _Unresolved('brace sequence')
+    return [str(n) if num else chr(n) for n in span]
+
+
+def _brace_group(word):
+    """(start, end, alternatives) of the first brace group bash would expand in
+    `word` (`{a,b}`, nested groups kept whole in an alternative, or a sequence
+    `{a..b}`; not `${...}`), or None."""
+    for start, ch in enumerate(word):
+        if ch != '{' or (start and word[start - 1] == '$'):
+            continue
+        depth, cut = 0, [start]
+        for k in range(start, len(word)):
+            if word[k] == '{':
+                depth += 1
+            elif word[k] == '}':
+                depth -= 1
+                if not depth:
+                    if len(cut) > 1:
+                        cut.append(k)
+                        return start, k, [word[a + 1:b] for a, b in zip(cut, cut[1:])]
+                    seq = _brace_sequence(word[start + 1:k])
+                    if seq is not None:
+                        return start, k, seq
+                    break
+            elif word[k] == ',' and depth == 1:
+                cut.append(k)
+    return None
+
+
+def _brace_expand(word):
+    """The words bash brace expansion makes of `word`. Raises _Unresolved when
+    they would pass _BRACE_CAP."""
+    done, todo = [], [word]
+    while todo:
+        w = todo.pop()
+        group = _brace_group(w)
+        if group is None:
+            done.append(w)
+            continue
+        start, end, alts = group
+        todo.extend(w[:start] + alt + w[end + 1:] for alt in alts)
+        if len(done) + len(todo) > _BRACE_CAP:
+            raise _Unresolved('brace expansion')
+    return done
+
+
+def _maps_into_checkpoints(text, strict=False):
+    """True when `text` holds a refspec `[+]<src>:<dst>` whose <dst> is in the
+    checkpoint namespace (_in_checkpoint_ns), with parameter defaults read in
+    place (`${D:-x}`, `-`, `:=`, `=`, nested) and brace alternatives and
+    sequences expanded; also when that expansion passes its cap. `strict` (a
+    refspec word of fetch or pull itself): also when a <dst> still holds `{`,
+    `}` or `$` after it, a destination that cannot be shown to land elsewhere."""
+    try:
+        for token in _REFSPEC_SPLIT_RE.split(_with_defaults(text)):
+            for word in _brace_expand(token.replace('\\', '')):
+                if ':' not in word:
+                    continue
+                dst = word.rpartition(':')[2]
+                if _in_checkpoint_ns(dst) or (strict and set('{}$') & set(dst)):
+                    return True
+    except _Unresolved:
+        return True
+    return False
+
+
+def _flat_text(command):
+    """`command` as written, line continuations, quotes and backslashes dropped
+    (`\\n` kept as a separator)."""
+    flat = command.replace('\\\n', '').replace('\\n', ' ')
+    for ch in '\'"\\':
+        flat = flat.replace(ch, '')
+    return flat
+
+
+def _is_refmap(name):
+    """True for `--refmap` or a prefix of it git takes as it (`--refm`; `--ref`
+    is ambiguous with --refetch)."""
+    return len(name) >= 6 and '--refmap'.startswith(name)
+
+
+def _refspec_words(inv):
+    """The words of parsed fetch or pull `inv` that may be refspecs, as written
+    (quotes and backslashes dropped): every word that is not an option, and the
+    value of an attached `--refmap=` (or a prefix of it git takes); a separate
+    option value is a non-option word and is kept. git's option parser is not
+    modelled, so no word is exempt for being the repository; a URL is
+    (_URL_WORD_RE: `<scheme>://...`, or scp-like `user@host:path` with no `$`,
+    `{` or `}`)."""
+    out = []
+    for word in (_flat_text(w.text) for w in inv.arg_words):
+        if word.startswith('-') and word != '-':
+            name, eq, val = word.partition('=')
+            if eq and _is_refmap(name):
+                out.append(val)
+            continue
+        if _URL_WORD_RE.match(word) and not (
+                not word.partition('://')[1] and set('${}') & set(word)):
+            continue
+        out.append(word)
+    return out
+
+
+def _config_written(inv):
+    """(key, value) of each -c and --config-env of parsed `inv`: the parser's
+    static pair, or, for a word it leaves computed (an unquoted glob is one),
+    the word as written with quotes and backslashes dropped; a --config-env
+    value is `$ENV`. A GIT_CONFIG_* pair is the parser's."""
+    words = [w.text for w in shell_parse.resolve(inv.cmd).args]
+    written = [_flat_text(words[k + 1]) for k in range(len(words) - 1)
+               if _flat_text(words[k]) == '-c']
+    out, n = [], 0
+    for opt, val in inv.global_opts:
+        if opt != '-c':
+            continue
+        if val is None and n < len(written):
+            key, eq, value = written[n].partition('=')
+            out.append((key, value if eq else 'true'))
+        n += 1
+    seen = {(k, v) for k, v in out}
+    pairs = [p for p in inv.config_pairs if p[0] is not None and p not in seen]
+    return out + pairs
+
+
+def _unreadable_fetch_config(key, value):
+    """True when config `key`=`value` may set a remote.<name>.fetch refspec
+    into refs/checkpoints/ or one the guard cannot read."""
+    if key is None or set('$`') & set(key):
+        return True
+    if not _FETCH_CONFIG_KEY_RE.match(key):
+        return False
+    return value is None or _maps_into_checkpoints(value, strict=True) or (
+        value.startswith('$') and ':' not in value)
+
+
+def _writes_checkpoint_ref(command, invocations):
+    """True when `command` runs git fetch or pull (as the parser or the
+    classifier reads it) and carries a refspec into refs/checkpoints/, or gives
+    it a refspec destination or remote.<name>.fetch value the guard cannot read
+    (_maps_into_checkpoints strict)."""
+    script = shell_parse.parse(command)
+    parsed = [] if script.error is not None else shell_parse.git_invocations(script)
+    fetches = [inv for inv in parsed if inv.subcommand in _FETCHING]
+    if not fetches and not any(inv.subcommand in _FETCHING for inv in invocations):
+        return False
+    for inv in fetches:
+        if any(_unreadable_fetch_config(key, value) for key, value in _config_written(inv)):
+            return True
+        if any(_maps_into_checkpoints(w, strict=True) for w in _refspec_words(inv)):
+            return True
+    texts = [_flat_text(command)]
+    texts += [_unquote_token(t) for inv in invocations for t in inv.args]
+    for inv in fetches:
+        texts += [v for _k, v in _config_written(inv) if v]
+    if script.error is None:
+        for site in shell_parse.walk(script):
+            texts += [w.value() for w in site.cmd.words if w.value()]
+            texts += [a.static_value() for a in site.cmd.assignments if a.static_value()]
+            texts += [r.hd.body for r in site.cmd.redirects if r.hd is not None]
+    return any(_maps_into_checkpoints(t) for t in texts if t)
+
+
+def _evaluate_checkpoint_write(command, data):
+    if _check_git_allowlist(command, data):
+        return
+    _block(
+        '\nBLOCKED: agent git checkpoint ref write - a git fetch or pull whose '
+        'refspec writes under refs/checkpoints/ (an operand, --refmap, a '
+        'remote.<name>.fetch value from -c, --config-env or GIT_CONFIG_*, or '
+        '--stdin text) would overwrite or prune the auto-commit snapshots.\n'
+        'Command excerpt: %s\n' % command[:200]
+        + 'To read a remote checkpoint, fetch it without a destination '
+        '(FETCH_HEAD) or into refs/remotes/<remote>/checkpoints/<name>.\n'
     )
 
 
@@ -1385,6 +1864,53 @@ def _evaluate_hidden_git(command, data, do_consent):
         )
 
 
+def _residual_recovery(kinds, digest):
+    """Why a residual refusal fired and the routes out of it, for the kinds it names.
+
+    An unresolved_shell_string already names its binary literally; what the guard
+    cannot read is a value the outer shell splices into a `-c` string at run time
+    (a directory named `x;git push` runs a push). Its route is to pass the value as
+    data: a positional argument the `-c` string quotes, or no `-c` wrapper at all.
+    """
+    binary = [k for k in kinds if k != 'unresolved_shell_string']
+    text, routes = '', []
+    if binary:
+        text += ('A command word names its binary through a shell expansion, a '
+                 'substitution, or an escaped/quoted spelling (%s), so the guard cannot '
+                 'prove which program runs or which git subcommand it receives.\n'
+                 % ', '.join(binary))
+        routes.append('Re-issue it with the binary written literally (e.g. '
+                      '`git push` or `/usr/bin/git push`) so the policy checks can '
+                      'judge it on its merits. This needs no authorization.')
+    if 'unresolved_shell_string' in kinds:
+        text += ('A shell `-c` string runs text the guard cannot read before it runs, '
+                 'most often a value the outer shell expands into it at run time (e.g. '
+                 '`bash -c "cd $d && git status"`): that value becomes shell code, and a '
+                 'directory named `x;git push` would run a push. (Quoting the guard '
+                 'cannot follow, or shells nested too deep, are refused the same way.) Writing '
+                 'git literally inside the string does not help.\n')
+        routes.append('Pass the value as data, not as shell text, so the policy checks '
+                      'can judge the git it runs on its merits; this needs no '
+                      'authorization. Either single-quote the `-c` string and hand the '
+                      'value over as a positional argument: '
+                      'for d in */; do bash -c \'cd "$1" && git status\' _ "$d"; done '
+                      '-- or drop the `bash -c` wrapper: '
+                      'for d in */; do (cd "$d" && git status); done . For deep nesting or '
+                      'tangled quoting, run the git command outside the shell string.')
+    routes.append('If it genuinely cannot be re-written, ask your user for a residual '
+                  'override. Only the human can issue one -- you cannot authorize '
+                  'yourself and neither can another agent. It is bound to this exact '
+                  'command text, is single-use, expires, and its use is recorded in the '
+                  'transcript. The human runs:\n'
+                  '       scripts/write-git-residual-override.py \\\n'
+                  '         --command-sha256 %s \\\n' % digest
+                  + '         --residual-kinds %s \\\n' % ','.join(kinds)
+                  + '         --reason "<why this command must run as written>"\n'
+                  + '     Command sha256: %s' % digest)
+    text += '\n%s RECOVERY ROUTES, cheapest first:\n' % ('TWO' if len(routes) == 2 else 'THREE')
+    return text + ''.join('  %d. %s\n' % (n, r) for n, r in enumerate(routes, 1))
+
+
 def _evaluate_command(command, data, do_consent=False):
     # do_consent: the main agent holds /do consent, which releases the rules in
     # _DO_RELEASED and adds none: what one of them refuses stays refused when it
@@ -1393,7 +1919,8 @@ def _evaluate_command(command, data, do_consent=False):
     # guard cannot classify are judged as without it.
     invocations, residuals = classify_git_command(command)
     # A git-shaped command whose binary the classifier cannot resolve (`g\it push`,
-    # `$GIT push`, `$(which git) push`) is refused before the invocation list and
+    # `$GIT push`, `$(which git) push`), or a shell `-c` string it cannot read
+    # (`bash -c "cd $d && git status"`), is refused before the invocation list and
     # before /allow: no grant can be shown to cover an unknown binary, and the
     # grant matcher may read `git status & $GIT push --force` as one `git status`.
     if residuals:
@@ -1419,27 +1946,19 @@ def _evaluate_command(command, data, do_consent=False):
                 'Command excerpt: %s\n' % command[:200]
                 + 'Unresolvable command token(s): %s\n' % ', '.join(kinds)
                 + 'Segment(s): %s\n' % '; '.join(seg.strip()[:80] for seg in segments[:3])
-                + 'This command names its binary through a shell expansion, a '
-                'substitution, or an escaped/quoted spelling, so the guard cannot '
-                'prove which program runs or which git subcommand it receives.\n'
-                + '\nTWO RECOVERY ROUTES, cheapest first:\n'
-                + '  1. Re-issue it with the binary written literally (e.g. '
-                '`git push` or `/usr/bin/git push`) so the policy checks can '
-                'judge it on its merits. This is almost always the right fix '
-                'and needs no authorization.\n'
-                + '  2. If the binary genuinely cannot be written literally, ask '
-                'your user for a residual override. Only the human can issue '
-                'one -- you cannot authorize yourself and neither can another '
-                'agent. It is bound to this exact command text, is single-use, '
-                'expires, and its use is recorded in the transcript. The human '
-                'runs:\n'
-                + '       scripts/write-git-residual-override.py \\\n'
-                + '         --command-sha256 %s \\\n' % digest
-                + '         --residual-kinds %s \\\n' % ','.join(kinds)
-                + '         --reason "<why this command must run as written>"\n'
-                + '     Command sha256: %s\n' % digest
+                + _residual_recovery(kinds, digest)
             )
     _evaluate_hidden_git(command, data, do_consent)
+    # A fetch or pull into refs/checkpoints/ is direct ref mutation: /allow
+    # lifts it and /do releases it. Judged before the classifier's list, which
+    # may miss a fetch the parser reads.
+    if not do_consent and _writes_checkpoint_ref(command, invocations):
+        _evaluate_checkpoint_write(command, data)
+    if not invocations:
+        return
+    # A read-only form of a guarded subcommand (help, a dry run,
+    # --show-current-patch) is not judged by the subcommand's rule.
+    invocations = _without_read_only(command, invocations)
     if not invocations:
         return
     # An /allow grant settles every command but a push, whose force/delete refusal

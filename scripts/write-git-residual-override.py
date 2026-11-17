@@ -5,8 +5,11 @@ Answers the "could not be statically classified" refusal emitted by
 hooks/pretool-git-privilege-guard.py. That refusal fires before the invocation
 list and cannot be reached by an /allow grant (the command has no parseable
 operation to match), so this is the only route out of it besides re-writing the
-command with its binary spelled literally -- which is the cheaper fix and should
-always be tried first.
+command so the guard can read it -- which is the cheaper fix and should always be
+tried first: spell the binary literally for a binary residual (`$GIT push`), and
+for an unresolved_shell_string pass the run-time value to the `-c` string as a
+positional argument (`bash -c 'cd "$1" && git status' _ "$d"`) or drop the
+`bash -c` wrapper.
 
 Usage:
   write-git-residual-override.py --command-sha256 <hex> --residual-kinds <k[,k]>
