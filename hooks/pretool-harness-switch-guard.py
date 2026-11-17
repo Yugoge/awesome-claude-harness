@@ -1065,14 +1065,17 @@ def _argv(words: list) -> list:
     return words[i:]
 
 
-def _written_by(words: list, written: list, awk: bool = False, interpreter: bool = False) -> list:
+def _written_by(words: list, written: list, awk: bool = False, interpreter: bool = False,
+               members: bool = True) -> list:
     """The words of one simple command that it writes: the paths it writes (`written`), and
     for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; tar -c / -t,
     its -f archive alone; with `awk`, awk whose program has no > | or system(); with `interpreter`,
     an interpreter provably read-only, _interpreter_reads); for cp its destination and each
     source's name inside it; for any other command every word (tee, dd, sed -i, perl -i, mv, rm,
     ...), with awk's quoted strings, the text after each `w` of a sed script this reading cannot
-    follow, and mv's, ln's and install's destination and each source's name inside it."""
+    follow, and mv's, ln's and install's destination and each source's name inside it; for tar
+    that is no reader, also the settings files it may extract (_tar_extracts) unless `members` is
+    False (writes_settings_file: only a word the command spells names a settings file there)."""
     plain = _argv(words)
     if not plain:
         return list(written)
@@ -1087,7 +1090,7 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
         return list(written) + words + AWK_STRING.findall(program or " ".join(plain[1:]))
     if head == "tar":
         files = _tar(plain)
-        return list(written) + (files if files is not None else words + _tar_extracts(plain))
+        return list(written) + (files if files is not None else words + (_tar_extracts(plain) if members else []))
     if _read_only(words) or (interpreter and INTERPRETER.match(head) and _interpreter_reads(plain)):
         return list(written)
     if head == "cp":
@@ -1100,7 +1103,7 @@ def writes_settings_file(command: str) -> bool:
     """True when `command` writes a settings*.json file, in any directory: one of the words it
     writes (_written_by; an interpreter whose -c text shows no write reads) names one."""
     return any(NAMES_SETTINGS.search(w) for words, written in _commands(command, "code")
-               for w in _written_by(words, written, awk=True, interpreter=True))
+               for w in _written_by(words, written, awk=True, interpreter=True, members=False))
 
 
 def _may_name_settings(token: str) -> bool:
