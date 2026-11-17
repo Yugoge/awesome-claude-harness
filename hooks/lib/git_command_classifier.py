@@ -4,17 +4,21 @@ classify_git_command(text) returns (invocations, residuals). Callers that
 enforce policy must not read an empty invocation list as "no git runs":
 
   invocations  a GitInvocation(cmd_token, path_qualified, subcommand, args) per
-               git command; cmd_token and args are the words as written, but
-               an abbreviated long option reads as its full name.
+               git command; cmd_token is the command word as written;
+               subcommand and args are the words as git receives them, quotes
+               and backslashes removed (`git 'push' '--force'` is push with
+               --force), a word with a run-time part as written (`"$msg"`),
+               and an abbreviated long option reads as its full name.
   residuals    (kind, text) for a command the scan cannot resolve that may be
-               git: obfuscated_git_token (`g\\it push`), dynamic_git_token
+               git: dynamic_git_token
                (`$GIT push`), substituted_git_token (`$(which git) push`) and
                unresolved_shell_string (a shell `-c` string it cannot clear).
 
 Where an invocation is found:
   - a simple command whose command word, past assignments, reserved words,
     redirections and wrappers (_command_token_index), is git: `/usr/bin/git`,
-    `"git"`;
+    `"git"`, and any spelling the shell reads as git (`\\git`, `g'i't`,
+    `$'git'`; _is_git_word);
   - the commands of every substitution and process substitution, and of every
     here-document or here-string a reader may run (_here_docs_are_data: one
     only cat, tee or another data reader reads runs just its expansion's
@@ -604,6 +608,18 @@ def _values(words):
     return [_value(w)[0] for w in words]
 
 
+def _is_git_word(word):
+    """True iff the command word word runs git: its text names git once quotes are
+    removed (`"/usr/bin/git"`, `"$HOME/bin/git"`), or its value does and the shell
+    computes none of it (`\\git`, `g'i't`, `gi""t`, `$'git'`). The shell removes
+    quotes and backslashes before it runs a word, so a spelling is judged as the
+    git it runs, not refused as an unknown binary (OB-L26)."""
+    if _basename(_unquote_token(word.raw.text)) == 'git':
+        return True
+    value, runtime = _value(word)
+    return not runtime and _basename(value) == 'git'
+
+
 def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     """The GitInvocation of a simple command whose command word is git, then its alias's.
 
@@ -616,21 +632,26 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     if idx is None:
         return
     token = words[idx].raw.text
-    if _basename(_unquote_token(token)) != 'git':
+    if not _is_git_word(words[idx]):
         return
+    path_qualified = '/' in (token if _value(words[idx])[1] else values[idx])
     gvals = values[idx + 1:]
-    graws = [w.raw.text for w in words[idx + 1:]]
+    # Each word as git receives it, quotes and backslashes removed (`'push'`,
+    # `p\ush`, `$'\x70ush'`, `'--hard'`), so a decision never depends on how
+    # the word was quoted (OB-L26); a word the shell computes at run time stays
+    # as written (`"$msg"`).
+    words_seen = [v if not _value(w)[1] else w.raw.text
+                  for w, v in zip(words[idx + 1:], gvals)]
     k = _git_subcommand_index(gvals)
     if k is None:
-        yield GitInvocation(token, '/' in token, None, [])
+        yield GitInvocation(token, path_qualified, None, [])
         return
-    static = not _value(words[idx + 1 + k])[1]
-    sub = gvals[k] if static else graws[k]
+    sub = words_seen[k]
     # An abbreviated long option git accepts reads as its full name (`--har`).
-    args = [raw if full == value else full
-            for raw, value, full in ((r, v, resolve_long_option(sub, v))
-                                     for r, v in zip(graws[k + 1:], gvals[k + 1:]))]
-    yield GitInvocation(token, '/' in token, sub, args)
+    args = [seen if full == value else full
+            for seen, value, full in ((s, v, resolve_long_option(sub, v))
+                                      for s, v in zip(words_seen[k + 1:], gvals[k + 1:]))]
+    yield GitInvocation(token, path_qualified, sub, args)
     aliases = dict(aliases or {})
     i = 0
     while i < k:
@@ -646,7 +667,7 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     # git refuses an alias that reaches itself again, so a loop runs nothing more.
     if body is None or name in seen or depth >= _MAX_SHELL_DEPTH:
         return
-    rest = ' '.join(graws[k + 1:])
+    rest = ' '.join(w.raw.text for w in words[idx + 2 + k:])
     text = body[1:] + ' ' + rest if body.startswith('!') else 'git %s %s' % (body, rest)
     for cmd in _code_commands(text, nested=True)[0]:
         yield from _invocations(cmd.words, aliases, depth + 1, seen | {name})
@@ -840,9 +861,11 @@ def _segment_residual_shapes(command_text, nested=False):
     """Yield (kind, text) for command words that may be git but did not resolve.
 
     Only a command word raises one, so git in argument position (`grep git .`,
-    `echo "git status"`) raises nothing:
-      obfuscated_git_token   its value is `git` but its spelling is not
-                             (`g\\it push`, `gi""t push`, `$'git' push`);
+    `echo "git status"`) raises nothing. A word whose value is `git` with no
+    run-time part (`g\\it push`, `gi""t push`, `$'git' push`) is no residual: the
+    shell removes its quotes, so it is read as the git invocation it is and
+    judged on its merits (OB-L26; obfuscated_git_token stays a kind an override
+    may name, and is no longer raised):
       dynamic_git_token      it holds an expansion and a git verb follows
                              (`$GIT push`, `${G}it commit`), unless an
                              assignment in the text pins it to something else
@@ -868,15 +891,15 @@ def _segment_residual_shapes(command_text, nested=False):
             continue
         word = cmd.words[idx]
         raw = word.raw.text
-        if _basename(_unquote_token(raw)) == 'git':
+        # A static spelling of git (`\\git`, `g'i't`) is an invocation (_is_git_word).
+        if _is_git_word(word):
             continue
         text = ' '.join(w.raw.text for w in cmd.words)
         sub = _git_subcommand(values[idx + 1:])[0]
         kinds = {kind for kind, _src, _off in word.segs}
         if not kinds & _DYNAMIC_PARTS:
-            if _basename(values[idx]) == 'git':
-                yield ('obfuscated_git_token', text)
-        elif sub in _GIT_SUBCOMMANDS:
+            continue
+        if sub in _GIT_SUBCOMMANDS:
             if kinds <= {'sub'}:
                 yield ('substituted_git_token', text)
             elif not (_resolves_to_non_git(raw, assigns) or _dynamic_only_in_directory(word)):
