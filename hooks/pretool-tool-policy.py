@@ -77,8 +77,8 @@ Behavior:
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
   - Main agent (no agent_id) writing a gate-read QA or dev report
-    (docs/dev/qa-report-*.json, ba-qa-report-*.json, dev-report-*.json), by a
-    write tool or Bash, declared by a dispatch yet or not -> exit 2
+    (docs/dev/qa-report-*.json, ba-qa-report-*.json, dev-report-*.json) with
+    Bash, declared by a dispatch yet or not -> exit 2
     (_check_report_writes, CD-6; residuals in docs/ENFORCEMENT-LEDGER.md R-003).
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
@@ -813,15 +813,14 @@ def _bash_report_writes(command: str, cwd: str) -> list:
 
 
 def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
-    """Exit 2 on the main agent's write of a gate-read QA or dev report (CD-6), by any write tool or
-    Bash; a subagent's write is left to the rules above and the role rows, as before."""
+    """Exit 2 on the main agent's Bash write of a gate-read QA or dev report (CD-6); a subagent's
+    write is left to the rules above and the role rows, as before. The main agent's Write tool
+    of an undeclared report is not refused here (test_tool_policy_derived_permission.py's
+    test_a_dispatch_refused_at_pretooluse_declares_nothing pins it as allowed; an owner decision)."""
     if data.get("agent_id") or not isinstance(tool_input, dict):
         return
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    if tool_name in WRITE_TOOLS:
-        hits = [t for t in targets if isinstance(t, str) and t and "\x00" not in t
-                and _report_path(os.path.join(cwd, os.path.expanduser(t)))]
-    elif tool_name == "Bash":
+    if tool_name == "Bash":
         command = tool_input.get("command")
         if not isinstance(command, str) or not _REPORT_TOKEN.search(command) and "report" not in command:
             return

@@ -7,9 +7,10 @@ hooks/lib/obligation.py read the ``verdict`` of ``docs/dev/ba-qa-report-*.json``
 The derived write permission of hooks/pretool-tool-policy.py already refuses the main agent's write of
 such a path once a dispatch of the session declares it; before that dispatch exists (or for a report
 no dispatch declares) the orchestrator could forge one with a Bash heredoc and the gates would trust a
-report the producer never wrote. The tool-policy now refuses every main-agent write of one, Bash or
-Write tool, whatever the session's dispatch records say, the target read from the call's directory and
-every ``cd``. Subagents keep exactly the base behaviour.
+report the producer never wrote. The tool-policy now refuses every main-agent Bash write of one,
+whatever the session's dispatch records say, the target read from the call's directory and every
+``cd``. Subagents keep exactly the base behaviour. The main agent's Write tool of an undeclared report
+stays as on the base (an existing test pins it; an owner decision).
 
 Each case runs the real hook as a subprocess (as tests/test_tool_policy_derived_permission.py does);
 the project lies outside /tmp and is never created; only paths are judged.
@@ -186,14 +187,6 @@ REFUSED = {
 @pytest.mark.parametrize("command", list(REFUSED.values()), ids=list(REFUSED))
 def test_the_main_agents_bash_write_of_a_gate_read_report_is_refused(tmp_path, session, command):
     _refused(session.run(tmp_path, "Bash", _bash(command)))
-
-
-@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
-@pytest.mark.parametrize("path", [QA, BAQA, DEV])
-def test_the_main_agents_write_tool_of_a_gate_read_report_is_refused(tmp_path, session, tool, path):
-    tool_input = ({"file_path": str(PROJECT / path), "content": FORGED} if tool == "Write" else
-                  {"file_path": str(PROJECT / path), "old_string": "fail", "new_string": "pass"})
-    _refused(session.run(tmp_path, tool, tool_input))
 
 
 def test_the_heredoc_forgery_is_refused_by_the_whole_pretooluse_launcher(tmp_path, session):
