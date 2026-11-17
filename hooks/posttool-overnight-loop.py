@@ -66,7 +66,7 @@ def _loop_instructions(state: dict, end_time: datetime, state_path: Path) -> str
         f'Time remaining: {hours}h {minutes}m',
         f'Issues fixed this session: {fixed}',
         '',
-        'INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again.',
+        'INSTRUCTIONS: Reset your todo list to all-pending, then mark Step 0 and Step 1 completed.',
         f'State file: {state_path} (read it for current state)',
         f'Worktree: {wt} (already exists, DO NOT create another)',
         '',
