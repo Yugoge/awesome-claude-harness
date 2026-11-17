@@ -445,11 +445,11 @@ Use Agent tool with:
   "
 ```
 
-When graphify completes (or is skipped), read the `status` of its run record `.claude/dev-registry/<DEV_SESSION_ID>/graphify/graphify-run.json` and record it in the todo list. When that status is `ok` or `degraded`, add `Graph context file: .claude/dev-registry/<DEV_SESSION_ID>/graphify/focused-subgraph.json` to the dev dispatch (Step 10) and the QA dispatch (Step 13); otherwise omit the line.
+When graphify completes (or is skipped), read the `status` of its run record `.claude/dev-registry/<DEV_SESSION_ID>/graphify/graphify-run.json` and state it in your reply: the todo list cannot hold it, since past its first list a TodoWrite may change only statuses, never a step's text or the list's length (`hooks/pretool-todo-validate.py`). When that status is `ok` or `degraded`, add `Graph context file: .claude/dev-registry/<DEV_SESSION_ID>/graphify/focused-subgraph.json` to the dev dispatch (Step 10) and the QA dispatch (Step 13); otherwise omit the line.
 
 ### Step 10: Agent dispatch — Delegate to Dev Subagent
 
-**Test-writer gate.** A non-empty `_test_writer_skip_reason` in BA's context JSON is BA's explicit skip signal: skip the test-writer whatever the tier or risk, record `test_writer_expected = false` and the reason in the todo list, and never route a stale acceptance-criteria JSON to it. Otherwise `test_writer_expected = true` iff `complexity_tier` is `STANDARD` or `COMPLEX`, or `risk_level` is `high`. Pass `test_writer_expected` into the dev and QA prompts. When true, dispatch the test-writer before dev:
+**Test-writer gate.** A non-empty `_test_writer_skip_reason` in BA's context JSON is BA's explicit skip signal: skip the test-writer whatever the tier or risk, take `test_writer_expected = false`, state the reason in your reply (not in the todo list, which takes only status changes: `hooks/pretool-todo-validate.py`), and never route a stale acceptance-criteria JSON to it. Otherwise `test_writer_expected = true` iff `complexity_tier` is `STANDARD` or `COMPLEX`, or `risk_level` is `high`. Pass `test_writer_expected` into the dev and QA prompts. When true, dispatch the test-writer before dev:
 
 ```
 Use Task tool with:
