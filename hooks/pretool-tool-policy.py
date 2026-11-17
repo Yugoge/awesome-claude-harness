@@ -110,7 +110,6 @@ ends with the status and output it decided without the interpreter's teardown
 
 from __future__ import annotations
 
-import functools
 import json
 import os
 import re
@@ -126,7 +125,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # fresh clone must BLOCK (exit 2), never allow.
 WRITE_TOOLS: set
 resolve_agent_type = None  # type: ignore[assignment]
-shell_parse = None  # type: ignore[assignment]
+extract_bash_write_paths = None  # type: ignore[assignment]
+extract_bash_touched_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
 harness_state_dir = None  # type: ignore[assignment]
 
@@ -137,10 +137,11 @@ def _bootstrap_security() -> None:
     This MUST be called from main() BEFORE any authorization decision and MUST
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
-    global WRITE_TOOLS, resolve_agent_type, shell_parse, is_allowed, harness_state_dir
+    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, extract_bash_touched_paths, is_allowed, \
+        harness_state_dir
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
-        from lib import shell_parse as _sp
+        from lib.bash_write_targets import extract_bash_touched_paths as _ebtp, extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
         from lib.harness_state_dir import harness_state_dir as _hsd
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
@@ -152,7 +153,8 @@ def _bootstrap_security() -> None:
         sys.exit(2)
     WRITE_TOOLS = _wt
     resolve_agent_type = _rat
-    shell_parse = _sp
+    extract_bash_write_paths = _ebwp
+    extract_bash_touched_paths = _ebtp
     is_allowed = _ia
     harness_state_dir = _hsd
 
@@ -180,48 +182,8 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
         return [tool_input.get("file_path")]
     if tool_name == "Bash":
         command = tool_input.get("command") or ""
-        return list(dict.fromkeys(path for path, removed in _bash_writes(command) if not removed))
+        return extract_bash_write_paths(command) if isinstance(command, str) else []
     return [None]
-
-
-# -- Bash write targets --------------------------------------------------------
-@functools.lru_cache(maxsize=4)  # read by the role rows' and the protected stage's targets alike
-def _bash_writes(command) -> tuple:
-    """(path word, removed) of every write the command and each shell -c layer
-    it runs make (lib/shell_parse.write_targets): a delete, or the source of a
-    move, is removed; each source's entry in the move's destination directory
-    is removed too, since it replaces what that directory held there."""
-    found, into = [], None
-    for target in shell_parse.write_targets(command) if isinstance(command, str) else ():
-        word = _path_word(target)
-        if target.mode == shell_parse.MOVE_DEST:
-            into = word
-        if word is None:
-            continue
-        found.append((word, target.mode == shell_parse.DELETE))
-        if into and target.mechanism.endswith("-source"):
-            found.append((os.path.join(into, os.path.basename(word.rstrip("/"))), True))
-    return tuple(dict.fromkeys(found))
-
-
-def _path_word(target):
-    """The path ``target`` writes as the shell spells it, each variable the
-    hook's environment holds (the shell's, `${V:-d}` its default when unset or
-    empty) expanded; a part that stays computed keeps its `$` spelling."""
-    if target.path is not None:
-        return target.path
-    if target.word is None:
-        return None
-    out, start = [], target.word.span[0]
-    for part in target.word.parts:
-        named = re.fullmatch(r"(\w+)(:-(.*))?", part.text, re.S) if part.kind == "param" else None
-        if part.kind == "lit":
-            out.append(part.text)
-        elif named and (os.environ.get(named[1]) or named[2] is not None):
-            out.append(os.environ.get(named[1]) or os.path.expandvars(named[3]))
-        else:
-            out.append(target.word.text[part.span[0] - start:part.span[1] - start])
-    return "".join(out)
 
 
 _RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
@@ -1273,7 +1235,8 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
     from lib.harness_state_dir import harness_state_dir
 
     if tool_name == "Bash":
-        found = list(_bash_writes(tool_input.get("command") if isinstance(tool_input, dict) else None))
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        found = list(extract_bash_touched_paths(command)) if isinstance(command, str) else []
     else:
         found = [(t, False) for t in _write_targets(tool_name, targets)]
     if not found:
@@ -1282,9 +1245,10 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
     roots = (claude_home.resolve(), os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
                                                  "projects"), harness_state_dir())
     git_files = _home_git_files(roots[0])
-    for target, removed in dict.fromkeys(found):
-        path = os.path.join(base, os.path.expanduser(target))
-        what = not any(c in target for c in "$`\x00") and _protected(path, removed, *roots, git_files)
+    for target, removed in dict.fromkeys(found):  # a variable the hook's environment holds is the shell's
+        word = os.path.expandvars(re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: os.environ.get(m[1]) or m[2], target))
+        path = os.path.join(base, os.path.expanduser(word))
+        what = not any(c in word for c in "$`\x00") and _protected(path, removed, *roots, git_files)
         if what == _GRANT and not removed and data.get("agent_id") and _grant_producer(path, roots[2], data):
             continue  # the push-analyst's own Write of its grant (agents/push-analyst.md Phase 7)
         if what:

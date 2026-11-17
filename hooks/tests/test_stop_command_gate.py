@@ -203,6 +203,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     monkeypatch.setenv("CLAUDE_STATE_DIR", str(state))
     monkeypatch.setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TASKS", "false")
     monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME", raising=False)
     monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake())
     fake = Disposition()
@@ -1798,6 +1799,37 @@ def test_a11_todo_tools_disabled_is_one_gap(env, monkeypatch):
     code, text = run(env)
     assert code == 2 and "- todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)\n" in text
     assert "todo: not completed" not in text
+
+
+@pytest.mark.parametrize("value", [None, "", "1", "true", "garbage", "fal se"])
+def test_a11_task_tools_not_off_is_one_gap(env, monkeypatch, value):
+    """The CLI offers TodoWrite only while CLAUDE_CODE_ENABLE_TASKS reads false (T1, design A): unset or
+    any other value hands the session the Task tools, so the checklist the gate reads is never written."""
+    dev_span(env, done=1)
+    if value is None:
+        monkeypatch.delenv("CLAUDE_CODE_ENABLE_TASKS")
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_ENABLE_TASKS", value)
+    code, text = run(env)
+    assert code == 2 and "- task tools enabled (CLAUDE_CODE_ENABLE_TASKS is not false)\n" in text
+    assert "todo: not completed" not in text
+
+
+@pytest.mark.parametrize("value", ["false", "0", " FALSE ", "no", "off"])
+def test_a11_task_tools_off_spellings_are_no_gap(env, monkeypatch, value):
+    dev_span(env, done=1)
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TASKS", value)
+    code, text = run(env)
+    assert "CLAUDE_CODE_ENABLE_TASKS" not in text and "todo: not completed" in text
+
+
+def test_a11_both_switches_wrong_are_two_gaps(env, monkeypatch):
+    dev_span(env, done=1)
+    monkeypatch.delenv("CLAUDE_CODE_ENABLE_TODO_TOOLS")
+    monkeypatch.delenv("CLAUDE_CODE_ENABLE_TASKS")
+    code, text = run(env)
+    assert code == 2 and ("- todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)\n"
+                          "- task tools enabled (CLAUDE_CODE_ENABLE_TASKS is not false)\n") in text
 
 
 def test_a21_a_span_an_older_harness_opened_keeps_the_list_it_started_with(env):
