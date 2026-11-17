@@ -51,6 +51,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
+# Tools that only read, which the checklist-not-started lock lets through (OB-L39).
+CHECKLIST_LOCK_READ_ONLY_TOOLS = frozenset({'Read', 'Grep', 'Glob'})
 CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 
 def is_restart_helper_bash_command(data: dict) -> bool:
@@ -1193,6 +1195,11 @@ def main():
     if is_codex_runtime(data):
         cmd_name, lock_reason, next_json = _codex_lock(data, session_id, bookmark_path, project_dir)
     else:
+        # Read, Grep and Glob change nothing, so the not-started lock (the one lock on
+        # this path) does not hold them (OB-L39); the first ok TodoWrite still opens it
+        # for every other tool, Bash included, and the Stop gate still asks for it.
+        if tool_name in CHECKLIST_LOCK_READ_ONLY_TOOLS:
+            sys.exit(0)
         # Imported here: a TodoWrite, TodoRead or Codex call never reads the checklist.
         from lib.todo_canonical import checklist
         state = checklist(data.get('transcript_path'))

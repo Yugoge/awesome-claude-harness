@@ -2483,3 +2483,19 @@ def test_r7_a_session_whose_text_asks_no_round_is_not_held_to_it(env):
     env.tx.command("spec", "a new report", body="an earlier spec text")
     env.tx.say("Which report did you mean?")
     assert run(env) == (0, "")
+
+
+# ---------------------------------------------------------------- OB-L39: read-only calls start no checklist
+def test_ob_l39_stop_still_requires_the_checklist_after_read_only_calls(env):
+    """The workflow gate lets Read, Grep and Glob pass before the first TodoWrite;
+    the Stop gate still holds the /dev span whose checklist was never written."""
+    steps = canonical("dev")
+    env.tx.command("dev", "fix the build", context=f"DEV_SESSION_ID pre-initialized by hook: {DEV_ID}\n"
+                                                    f"Task id: {FAMILY}\n")
+    env.tx.tool("Read", {"file_path": "toy/__init__.py"})
+    env.tx.tool("Grep", {"pattern": "def"})
+    env.tx.tool("Glob", {"pattern": "**/*.py"})
+    code, text = run(env)
+    assert code == 2
+    assert text.startswith("COMMAND_GATE /dev: not complete\n")
+    assert f"- todo: checklist never written ({len(steps)} canonical steps)" in text
