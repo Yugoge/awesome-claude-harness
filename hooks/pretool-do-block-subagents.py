@@ -29,7 +29,25 @@ SEMANTICS (decision table, first match wins):
   4. structured /allow grant for the Agent tool exists ....... exit 0
      (human escape hatch — same match_sentinel_grant_for_tool lookup
       pretool-subagent-enforce.py already uses)
-  5. otherwise (main agent, /do active) ...................... exit 2
+  5. tool_input.subagent_type names a role that cannot write . exit 0
+     (_read_only_role; the collision above needs a writer)
+  6. otherwise (main agent, /do active) ...................... exit 2
+
+  A role that cannot write (rule 5) is decided from structure, never from the
+  dispatch prompt's wording, and fails closed:
+    - subagent_type must be a string that equals, byte for byte (no case
+      folding, no trimming), a built-in read-only agent type
+      (READ_ONLY_BUILTIN_TYPES: Explore, Plan, claude-code-guide; the runtime
+      gives them no Write, Edit or NotebookEdit), AND no agent definition the
+      runtime loads (the harness home's agents/, ~/.claude/agents/, the
+      project's .claude/agents/) declares that name, since a custom definition
+      could shadow the built-in with write tools;
+    - or it equals a role of policies/tool-policy.v1.json whose allowed_tools
+      is non-empty and lies wholly inside READ_ONLY_TOOLS (no write tool, no
+      Bash, no wildcard such as mcp__playwright__*).
+    An omitted subagent_type (the runtime's general-purpose), general-purpose
+    itself, any role holding a write tool or Bash, an unknown type, a policy
+    that cannot be read, and any error while deciding all stay blocked.
 
   Active-/do detection is the one decision every consent bypass takes:
   lib.allowlist.has_do_consent, so the block window of this hook is exactly
@@ -42,7 +60,8 @@ FAIL-OPEN, never-wedge:
 
 Exit codes:
   0 — Allow.
-  2 — Reject (main-agent Agent/Task dispatch during an active /do cycle).
+  2 — Reject (main-agent Agent/Task dispatch of a role that can write during
+      an active /do cycle).
 """
 
 from __future__ import annotations
@@ -73,6 +92,86 @@ def _parse_stdin() -> dict:
         return {}
 
 
+# Built-in agent types the runtime gives no Write, Edit or NotebookEdit tool.
+READ_ONLY_BUILTIN_TYPES = frozenset({"Explore", "Plan", "claude-code-guide"})
+# Tools that cannot write a file. Bash is absent on purpose: it writes.
+READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "WebSearch", "WebFetch"})
+_POLICY_RELPATH = "policies/tool-policy.v1.json"
+
+
+def _agent_dirs(stdin_data: dict) -> list:
+    """Every directory the runtime loads agent definitions from."""
+    dirs = []
+    try:
+        from lib import claude_home
+        home = claude_home.resolve()
+        if home is not None:
+            dirs.append(Path(home) / "agents")
+    except Exception:
+        pass
+    dirs.append(Path.home() / ".claude" / "agents")
+    for project in (os.environ.get("CLAUDE_PROJECT_DIR"), stdin_data.get("cwd")):
+        if isinstance(project, str) and project:
+            dirs.append(Path(project) / ".claude" / "agents")
+    return dirs
+
+
+def _definition_declares(name: str, stdin_data: dict) -> bool:
+    """True when an agent definition file declares `name` (case-insensitively),
+    or a definition cannot be read: either may shadow the built-in type."""
+    wanted = name.strip().casefold()
+    for directory in _agent_dirs(stdin_data):
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*.md"):
+            if path.stem.strip().casefold() == wanted:
+                return True
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return True
+            if not text.startswith("---"):
+                continue
+            for line in text.split("\n")[1:]:
+                if line.strip() == "---":
+                    break
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "name":
+                    if value.strip().strip("'\"").strip().casefold() == wanted:
+                        return True
+    return False
+
+
+def _policy_role_read_only(name: str) -> bool:
+    """True when policies/tool-policy.v1.json lists `name` with only read tools."""
+    from lib import claude_home
+    path = claude_home.resolve_optional(_POLICY_RELPATH)
+    if path is None:
+        return False
+    roles = json.loads(Path(path).read_text(encoding="utf-8")).get("roles")
+    row = roles.get(name) if isinstance(roles, dict) else None
+    tools = row.get("allowed_tools") if isinstance(row, dict) else None
+    if not isinstance(tools, list) or not tools:
+        return False
+    return all(isinstance(t, str) and t in READ_ONLY_TOOLS for t in tools)
+
+
+def _read_only_role(stdin_data: dict) -> bool:
+    """Rule 5: the dispatched role cannot write. Any doubt is False (blocked)."""
+    try:
+        tool_input = stdin_data.get("tool_input")
+        if not isinstance(tool_input, dict):
+            return False
+        name = tool_input.get("subagent_type")
+        if not isinstance(name, str) or not name:
+            return False
+        if name in READ_ONLY_BUILTIN_TYPES:
+            return not _definition_declares(name, stdin_data)
+        return _policy_role_read_only(name)
+    except Exception:
+        return False
+
+
 def _emit_block(tool_name: str, session_id: str) -> None:
     sys.stderr.write(
         '\nDO-CYCLE BLOCK (pretool-do-block-subagents):\n'
@@ -81,6 +180,8 @@ def _emit_block(tool_name: str, session_id: str) -> None:
         '  no-delegation-needed: /do means the main agent does the work DIRECTLY —\n'
         '    the orchestrator gate bypass is already active for this session, so\n'
         '    every tool the work needs is available without dispatching a subagent.\n'
+        '  read-only roles pass: Explore, Plan, claude-code-guide, or a\n'
+        '    policies/tool-policy.v1.json role with no write tool and no Bash.\n'
         '  why-forbidden: a dispatched dev/qa subagent writes its report file\n'
         '    (docs/dev/dev-report-<TASK_ID>.json) alongside the /do cycle\'s\n'
         '    do-report-<TASK_ID>.json under the same task id; /close and /commit\n'
@@ -112,6 +213,9 @@ def _main() -> None:
         # Human escape hatch: an explicit /allow grant for the Agent tool
         # overrides the block (read-only; consumption stays in PostToolUse).
         if match_sentinel_grant_for_tool(session_id, 'Agent') is not None:
+            sys.exit(0)
+        # A role that cannot write cannot leave the colliding dev-report.
+        if _read_only_role(stdin_data):
             sys.exit(0)
         _emit_block(stdin_data.get('tool_name'), session_id)
         sys.exit(2)

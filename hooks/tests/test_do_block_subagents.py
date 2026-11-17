@@ -282,3 +282,131 @@ def test_l_malformed_obligation_body_fails_closed_still_blocked():
         })
     assert result.returncode == 2
     assert BLOCK_BANNER in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# CRITIQUE A4: a role that cannot write cannot leave the colliding dev-report,
+# so during an active /do the main agent may dispatch it. "Cannot write" is
+# structural (a built-in read-only type, or a tool-policy row with only read
+# tools), never the prompt's wording; everything else stays blocked.
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+def _dispatch(sid, tool_input, tool_name="Agent", env_extra=None, cwd=None):
+    payload = {"tool_name": tool_name, "session_id": sid, "tool_input": tool_input}
+    if cwd is not None:
+        payload["cwd"] = cwd
+    env = _clean_env()
+    env.update(env_extra or {})
+    return subprocess.run(
+        [sys.executable, HOOK], input=json.dumps(payload), capture_output=True,
+        text=True, cwd=REPO_ROOT, env=env,
+    )
+
+
+@pytest.mark.parametrize("tool_name", ["Agent", "Task"])
+@pytest.mark.parametrize("role", ["Explore", "Plan", "claude-code-guide"])
+def test_m_read_only_builtin_allowed_during_do(role, tool_name, tmp_path):
+    """The A4 repro: a read-only built-in dispatch during /do -> exit 0."""
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": role, "run_in_background": False,
+                                 "prompt": "list files under docs/"},
+                           tool_name=tool_name, env_extra={"HOME": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    assert BLOCK_BANNER not in result.stderr
+
+
+@pytest.mark.parametrize("tool_input", [
+    {"prompt": "research only, list files under docs/"},                # omitted -> general-purpose
+    {"subagent_type": "general-purpose", "prompt": "research only"},
+    {"subagent_type": "dev", "prompt": "research only"},
+    {"subagent_type": "qa", "prompt": "research only"},
+    {"subagent_type": "ba", "prompt": "research only"},
+    {"subagent_type": "pull-analyst", "prompt": "read only"},           # Bash: can write
+    {"subagent_type": "graphify", "prompt": "read only"},
+    {"subagent_type": "no-such-role", "prompt": "read only"},           # unknown
+    {"subagent_type": "", "prompt": "x"},
+    {"subagent_type": None, "prompt": "x"},
+    {"subagent_type": ["Explore"], "prompt": "x"},
+    {"subagent_type": "explore", "prompt": "x"},                        # case variants
+    {"subagent_type": "EXPLORE", "prompt": "x"},
+    {"subagent_type": " Explore", "prompt": "x"},                       # whitespace variants
+    {"subagent_type": "Explore ", "prompt": "x"},
+    {"subagent_type": "Explore\n", "prompt": "x"},
+    {"subagent_type": "plan", "prompt": "x"},
+    {"subagent_type": "Claude-Code-Guide", "prompt": "x"},
+    {"subagent_type": "plugin:Explore", "prompt": "x"},
+    {"subagent_type": " dev ", "prompt": "x"},
+    {"subagent_type": "Dev", "prompt": "x"},
+])
+def test_n_writing_or_unknown_role_still_blocked_during_do(tool_input, tmp_path):
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, tool_input, env_extra={"HOME": str(tmp_path)})
+    assert result.returncode == 2, (tool_input, result.stderr)
+    assert BLOCK_BANNER in result.stderr
+
+
+def test_o_project_definition_shadowing_builtin_stays_blocked(tmp_path):
+    """A project agent definition named like a built-in may carry write tools:
+    the built-in allow no longer applies to that name."""
+    project = tmp_path / "proj"
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "my-explorer.md").write_text(
+        "---\nname: Explore\ndescription: x\ntools: Read, Write, Bash\n---\nbody\n")
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "Explore", "prompt": "x"},
+                           env_extra={"HOME": str(tmp_path)}, cwd=str(project))
+    assert result.returncode == 2, result.stderr
+    assert BLOCK_BANNER in result.stderr
+
+
+def test_p_user_definition_shadowing_builtin_stays_blocked(tmp_path):
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "plan.md").write_text("---\nname: planner\ntools: Write\n---\n")
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "Plan", "prompt": "x"},
+                           env_extra={"HOME": str(tmp_path)})
+    assert result.returncode == 2, result.stderr
+
+
+def test_q_policy_role_with_only_read_tools_allowed(monkeypatch, tmp_path):
+    """A tool-policy role whose allowed_tools are all read tools passes; one
+    with Bash, a write tool, a wildcard or no tools does not (the structural source)."""
+    spec = importlib.util.spec_from_file_location("_do_block_hook_under_test", HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    from lib import claude_home  # the module the hook resolves the policy through
+    policy = tmp_path / "tool-policy.v1.json"
+    policy.write_text(json.dumps({"roles": {
+        "reader": {"allowed_tools": ["Read", "Glob", "Grep", "WebFetch"]},
+        "basher": {"allowed_tools": ["Read", "Bash"]},
+        "writer": {"allowed_tools": ["Read", "Write"]},
+        "mcp": {"allowed_tools": ["Read", "mcp__playwright__*"]},
+        "empty": {"allowed_tools": []},
+    }}))
+    monkeypatch.setattr(claude_home, "resolve_optional", lambda rel: policy)
+    assert hook._read_only_role({"tool_input": {"subagent_type": "reader"}}) is True
+    for name in ("basher", "writer", "mcp", "empty", "missing", "Reader", " reader"):
+        assert hook._read_only_role({"tool_input": {"subagent_type": name}}) is False, name
+    monkeypatch.setattr(claude_home, "resolve_optional", lambda rel: None)
+    assert hook._read_only_role({"tool_input": {"subagent_type": "reader"}}) is False
+
+
+def test_r_every_shipped_policy_role_stays_blocked(tmp_path):
+    """Every role the shipped policy lists holds Bash or a write tool today, so
+    each stays blocked during /do."""
+    roles = json.loads((Path(REPO_ROOT) / "policies" / "tool-policy.v1.json").read_text())["roles"]
+    for role in roles:
+        sid = _unique_sid()
+        with _consent_flag(sid):
+            result = _dispatch(sid, {"subagent_type": role, "prompt": "x"},
+                               env_extra={"HOME": str(tmp_path)})
+        assert result.returncode == 2, role
