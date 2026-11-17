@@ -10,7 +10,7 @@ failures. Three faults are injected, each only inside the note:
   write   the note's own sys.stderr.write raises, after the refusal line was
           written without trouble.
   lookup  the note receives a tool_input that is not a dict, so reading the
-          command from it raises. The real _extract_targets returns [None] for
+          command from it raises. The real _extract_targets returns [] for
           such an input, so it is patched to still yield the refused target.
 
 dumps and write run the real hook, __main__ block included (runpy). lookup
@@ -100,7 +100,7 @@ def run_lookup(target):
         state["raised"] += not isinstance(data.get("tool_input"), dict)
         return real_note(data, refused)
 
-    module._extract_targets = lambda tool_name, tool_input: [None, target]
+    module._extract_targets = lambda tool_name, tool_input: [target]
     module._note_bash_write_target = note
     try:
         module.main()

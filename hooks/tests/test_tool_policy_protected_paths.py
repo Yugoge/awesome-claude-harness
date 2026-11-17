@@ -32,13 +32,13 @@ ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 HOOK = os.path.join(ROOT, "hooks", "pretool-tool-policy.py")
 SID = "0c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f"
 R3 = ("scripts/check-public-core.sh", "scripts/install/render-settings", "hooks/git-hooks/pre-commit",
-      ".git/config", ".git/hooks/pre-commit", ".gitattributes")
+      ".git/config", ".git/config.worktree", ".git/hooks/pre-commit", ".gitattributes")
 CALLERS = {"main": None, "dev": ("a0dev", "dev"), "ba": ("a0ba", "ba")}
 # A product repository outside /tmp and /var/tmp (the scratch rule denies every role there), never created.
 PRODUCT = "/nonexistent-p5-protected-paths/product"
 
 
-def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = True, cwd=None):
+def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = True, cwd=None, hook=HOOK):
     home = tmp_path / "home"
     payload = {"session_id": SID, "transcript_path": str(home / ".claude" / "projects" / "-p" / f"{SID}.jsonl"),
                "cwd": str(cwd or PRODUCT), "hook_event_name": "PreToolUse", "tool_name": tool,
@@ -50,7 +50,7 @@ def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = 
                PYTHONDONTWRITEBYTECODE="1")
     if state:
         env["CLAUDE_STATE_DIR"] = state if isinstance(state, str) else str(tmp_path / "state")
-    return subprocess.run([sys.executable, HOOK], input=json.dumps(payload), capture_output=True, text=True,
+    return subprocess.run([sys.executable, hook], input=json.dumps(payload), capture_output=True, text=True,
                           cwd=str(tmp_path), env=env, timeout=60)
 
 
@@ -364,3 +364,117 @@ def test_r6_the_round_files_and_another_log_stay_writable(tmp_path):
     for path in (f"{PRODUCT}/docs/dev/requirement-round-20261109-120000-r1.json",
                  str(tmp_path / "home" / ".claude" / "logs" / "other.jsonl")):
         assert run(tmp_path, "Write", {"file_path": path, "content": "x"}).returncode == 0
+
+
+# -- a harness home that is a linked worktree -----------------------------------------------------
+# Its .git is a file pointing at <common>/worktrees/<name>: the shared config and hooks of the common
+# dir, the worktree's own config and config.worktree, and that .git file are the home's git files as
+# .git/config and .git/hooks are a clone's. The fixture is a throwaway repository whose linked worktree
+# holds a copy of this harness, so the copied hook resolves its home to that worktree.
+def _git(*args: str) -> str:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=True, env=env).stdout.strip()
+
+
+@pytest.fixture(scope="module")
+def linked_home(tmp_path_factory):
+    import shutil
+
+    base = tmp_path_factory.mktemp("linked")
+    main, home = base / "main", base / "home" / ".claude"
+    _git("init", "-q", str(main))
+    _git("-C", str(main), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q",
+         "--allow-empty", "-m", "init")
+    _git("-C", str(main), "worktree", "add", "-q", "--detach", str(home))
+    shutil.copytree(ROOT, home, dirs_exist_ok=True,
+                    ignore=lambda d, names: [n for n in names if n in (".git", "tests", "__pycache__")])
+    git_dir = _git("-C", str(home), "rev-parse", "--path-format=absolute", "--git-dir")
+    common = _git("-C", str(home), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    return str(home), git_dir, common
+
+
+def linked_files(linked_home) -> dict:
+    home, git_dir, common = linked_home
+    return {"common config": (os.path.join(common, "config"), "the harness home's git common dir's config"),
+            "common hook": (os.path.join(common, "hooks", "pre-commit"), "the harness home's git common dir's hooks"),
+            "worktree config": (os.path.join(git_dir, "config"), "the harness home's git dir's config"),
+            "config.worktree": (os.path.join(git_dir, "config.worktree"), "the harness home's git dir's config.worktree"),
+            ".git file": (os.path.join(home, ".git"), "the harness home's .git file")}
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("form", ["Write", "Edit", "echo", "rm", "mv", "mv-in", "sed"])
+@pytest.mark.parametrize("name", ["common config", "common hook", "worktree config", "config.worktree", ".git file"])
+def test_a_linked_worktree_homes_git_files_are_denied(tmp_path, linked_home, caller, form, name):
+    path, what = linked_files(linked_home)[name]
+    hook = os.path.join(linked_home[0], "hooks", "pretool-tool-policy.py")
+    assert_denied(run(tmp_path, *forms(path)[form], CALLERS[caller], hook=hook), what)
+
+
+def test_a_linked_worktree_homes_hooks_dir_and_common_dir_cannot_be_removed(tmp_path, linked_home):
+    home, _git_dir, common = linked_home
+    hook = os.path.join(home, "hooks", "pretool-tool-policy.py")
+    assert_denied(run(tmp_path, "Bash", {"command": f"rm -rf {common}/hooks"}, hook=hook),
+                  "the harness home's git common dir's hooks")
+    proc = run(tmp_path, "Bash", {"command": f"rm -rf {common}"}, hook=hook)
+    assert proc.returncode == 2 and "a directory holding the harness home's protected files" in proc.stderr, proc.stderr
+
+
+def test_a_linked_worktree_homes_other_git_files_stay_writable(tmp_path, linked_home):
+    home, git_dir, common = linked_home
+    hook = os.path.join(home, "hooks", "pretool-tool-policy.py")
+    for path in (os.path.join(common, "description"), os.path.join(git_dir, "HEAD.bak"),
+                 os.path.join(common, "info", "exclude")):
+        proc = run(tmp_path, "Bash", {"command": f"echo x > {path}"}, hook=hook)
+        assert (proc.returncode, proc.stderr) == (0, ""), (path, proc.stderr)
+
+
+
+# -- every write form the shell has is read as `>` is -------------------------------------------------
+# The write forms below name their target as `echo x > T` does; each is refused where `>` is: on a
+# protected file for every caller, and by a role's row and the raw-temp rule.
+WRITE_FORMS = ["dd if=/dev/zero of={T}", "echo x >| {T}", "echo x &> {T}", "echo x &>> {T}", "truncate -s0 {T}",
+               "ln -sf /x {T}", "rsync -a /x {T}", "curl -o {T} http://h/f", "git checkout -- {T}",
+               "git checkout HEAD -- {T}", "git restore {T}"]
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("form", WRITE_FORMS)
+def test_every_write_form_of_a_protected_file_is_denied(tmp_path, caller, form):
+    path = os.path.join(ROOT, ".gitattributes")
+    assert_denied(run(tmp_path, "Bash", {"command": form.format(T=path)}, CALLERS[caller]),
+                  "the harness home's .gitattributes")
+
+
+@pytest.mark.parametrize("form", WRITE_FORMS)
+@pytest.mark.parametrize("caller,target,reason", [
+    ("dev", "/tmp/p14-write-form", "arbitrary /tmp and /var/tmp are denied for every role"),
+    ("ba", f"{PRODUCT}/src.py", "not in allowed_write_path_prefixes"),
+])
+def test_every_write_form_meets_the_role_row_as_a_redirect_does(tmp_path, form, caller, target, reason):
+    for command in (f"echo x > {target}", form.format(T=target)):
+        proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller])
+        assert proc.returncode == 2 and proc.stderr.startswith("BLOCKED by tool-policy.v1: "), (command, proc.stderr)
+        assert reason in json.loads(proc.stderr.splitlines()[0].split(": ", 1)[1])["deny_reason"], command
+
+
+@pytest.mark.parametrize("spelling", [
+    '"$CLAUDE_STATE_DIR/{name}"',                    # a variable the hook's environment holds
+    '"${CLAUDE_STATE_DIR}/{name}"',
+    '"${CLAUDE_STATE_DIR:-/nowhere}/{name}"',        # set: its value
+    '"${P14_UNSET_VAR:-{state}}/{name}"',            # unset: its default
+    '"${P14_UNSET_VAR:-$CLAUDE_STATE_DIR}/{name}"',  # a default that is itself a variable
+    'D={state}; rm -f "$D/{name}"',                  # an assignment earlier in the command
+])
+def test_a_path_word_is_read_with_its_variables_expanded(tmp_path, spelling):
+    name, state = f"claude-do-task-{SID}.json", str(tmp_path / "state")
+    word = spelling.replace("{name}", name).replace("{state}", state)
+    command = word if word.startswith("D=") else f"rm -f {word}"
+    assert_denied(run(tmp_path, "Bash", {"command": command}), "a /do task sidecar")
+
+
+def test_a_path_word_that_stays_computed_is_not_judged_as_a_protected_file(tmp_path):
+    name = f"claude-do-task-{SID}.json"
+    for command in (f'rm -f "$P14_UNSET_VAR/{name}"', f'rm -f "$(pwd)/{name}"'):
+        assert run(tmp_path, "Bash", {"command": command}).returncode == 0, command

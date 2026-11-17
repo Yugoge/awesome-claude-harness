@@ -263,114 +263,37 @@ def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state,
     assert not refused
 
 
-# -- in-flight compatibility: the message file of 2acc29b's changelog-analyst (train 2, A17) ------
-# COMPATIBILITY: these cases go with pretool-tool-policy.py's _check_inflight_msg_writes, once no
-# session predates train 2's landing. A session started on origin/master's text before train 1
-# landed keeps 2acc29b's agents/changelog-analyst.md (D15), whose Write tool writes its `git commit
-# -F` message file at these names (:1099 Phase 8, :557 bulk groups, :71 CP-1), placeholders bound.
-INFLIGHT_MSGFILES = [
-    "/tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt".replace("<TASK_ID-or-bulk>", "20260101-000000")
-    .replace("<short-rand>", "r0001x"),
-    "/tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt".replace("<TASK_ID-or-bulk>", "bulk")
-    .replace("<short-rand>", "a1b2"),
-    "/tmp/commit-msg-<unique>-<group index>.txt".replace("<unique>", "dev-20260101-000000").replace("<group index>", "2"),
-    "/tmp/commit-msg-<unique>.txt".replace("<unique>", "1767225600.x9"),
-]
-INFLIGHT_REFUSED = "only the changelog-analyst writes it (D8)"
+# -- a commit message file directly in /tmp holds no rule of its own --------------------------------
+# /tmp/commit-msg-<name>.txt and /tmp/recovery-commit-<name>.txt are files like any other directly in
+# /tmp: every caller's write of one, the changelog-analyst's included, is decided as its write of another
+# file there (the main agent's passes, a role's goes by its row and the raw-temp rule).
+MSG_NAMES = ["/tmp/commit-msg-20260101-000000-r0001x.txt", "/tmp/commit-msg-bulk-a1b2.txt",
+             "/tmp/commit-msg-dev-20260101-000000-2.txt", "/tmp/recovery-commit-do-20260101-000000-ab12-a1b2.txt"]
+PLAIN_TMP = "/tmp/plain-p14-message.txt"
 
 
-def test_an_in_flight_changelog_analyst_writes_its_commit_message_file(tmp_path, state):
+def _decided(result: tuple, path: str) -> tuple:
+    """A decision with its target spelled <T>, to compare the decisions on two targets."""
+    code, err = result
+    return code, err.replace(path, "<T>")
+
+
+@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "push-analyst", "changelog-analyst", PLUGIN, "general-purpose"])
+def test_a_commit_message_name_in_tmp_is_decided_as_any_tmp_file(tmp_path, caller):
     home = tmp_path / "home"
-    for path in INFLIGHT_MSGFILES:
-        assert run("Write", {"file_path": path, "content": "fix(toy): x\n\nTask-id: 1\n"}, "changelog-analyst",
-                   home, state) == (0, ""), path
-
-
-@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "push-analyst", PLUGIN, "general-purpose"])
-def test_no_other_caller_writes_the_in_flight_message_file(tmp_path, caller):
-    home = tmp_path / "home"
-    for path in INFLIGHT_MSGFILES:
+    for path in MSG_NAMES:
         for tool, tool_input in [*_writes(path), ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"})]:
-            denial = _denial(*run(tool, tool_input, caller, home))
-            assert denial["role"] == (caller or "main") and denial["target"] == path, (tool, path)
-            assert denial["deny_reason"].endswith(INFLIGHT_REFUSED), denial
+            plain = json.loads(json.dumps(tool_input).replace(path, PLAIN_TMP))
+            assert (_decided(run(tool, tool_input, caller, home), path)
+                    == _decided(run(tool, plain, caller, home), PLAIN_TMP)), (tool, path)
 
 
-def test_the_in_flight_message_file_widens_nothing_else(tmp_path):
-    """The analyst gains that one name, by the Write tool, directly in /tmp and resolving to itself;
-    every other write keeps its role row (its scratch directory and the rest refused as before)."""
-    home, path = tmp_path / "home", INFLIGHT_MSGFILES[0]
-    near = ["/tmp/commit-msg-1-r.txt.sh", "/tmp/commit-msg-1-r.json", "/tmp/sub/commit-msg-1-r.txt",
-            "/var/tmp/commit-msg-1-r.txt", "/tmp/commit-msgx.txt", "/tmp/commit-msg-.txt", "/tmp/commit-msg-1/../x.txt",
-            "/tmp/x-commit-msg-1-r.txt", f"{PROJECT}/commit-msg-1-r.txt"]
-    for target in near:
-        denial = _denial(*run("Write", {"file_path": target, "content": "x"}, "changelog-analyst", home))
-        assert INFLIGHT_REFUSED not in denial["deny_reason"], target
-    for tool, tool_input, reason in [("Bash", {"command": f"cat > {path} <<EOF\nx\nEOF"},
-                                      "not in allowed_write_path_prefixes"),
-                                     ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"},
-                                      "tool Edit not in allowed_tools")]:
-        assert reason in _denial(*run(tool, tool_input, "changelog-analyst", home))["deny_reason"], tool
-    # A link of that name leads the Write elsewhere: no message file, the role row refuses it.
-    link = Path(f"/tmp/commit-msg-{uuid.uuid4().hex}.txt")
-    link.symlink_to(tmp_path / "elsewhere.txt")
-    try:
-        denial = _denial(*run("Write", {"file_path": str(link), "content": "x"}, "changelog-analyst", home))
-        assert "not in allowed_write_path_prefixes" in denial["deny_reason"]
-    finally:
-        link.unlink()
-
-
-# COMPATIBILITY (T2-11), with the cases above: the same text's nothing_to_commit_precommitted recovery route
-# (Recovery step 3, :1887) has the Write tool write its `git commit --allow-empty -F` message file at
-# /tmp/recovery-commit-<TASK_ID>-<short-rand>.txt, placeholders bound (a /dev and a /do task id).
-INFLIGHT_RECOVERY_MSGFILES = [
-    "/tmp/recovery-commit-<TASK_ID>-<short-rand>.txt".replace("<TASK_ID>", "20260101-000000")
-    .replace("<short-rand>", "r0001x"),
-    "/tmp/recovery-commit-<TASK_ID>-<short-rand>.txt".replace("<TASK_ID>", "do-20260101-000000-ab12")
-    .replace("<short-rand>", "a1b2"),
-]
-
-
-def test_an_in_flight_changelog_analyst_writes_its_recovery_commit_message_file(tmp_path, state):
+def test_the_main_agent_writes_and_the_changelog_analyst_does_not_write_a_message_name_in_tmp(tmp_path):
     home = tmp_path / "home"
-    for path in [*INFLIGHT_RECOVERY_MSGFILES, INFLIGHT_MSGFILES[0]]:
-        assert run("Write", {"file_path": path, "content": "chore(toy): recovery commit\n\nTask-id: 1\n"},
-                   "changelog-analyst", home, state) == (0, ""), path
-
-
-@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "push-analyst", PLUGIN, "general-purpose"])
-def test_no_other_caller_writes_the_in_flight_recovery_message_file(tmp_path, caller):
-    home = tmp_path / "home"
-    for path in INFLIGHT_RECOVERY_MSGFILES:
-        for tool, tool_input in [*_writes(path), ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"})]:
-            denial = _denial(*run(tool, tool_input, caller, home))
-            assert denial["role"] == (caller or "main") and denial["target"] == path, (tool, path)
-            assert denial["deny_reason"].endswith(INFLIGHT_REFUSED), denial
-
-
-def test_the_in_flight_recovery_message_file_widens_nothing_else(tmp_path):
-    """The recovery name is that one name too: by the Write tool, directly in /tmp, resolving to itself."""
-    home, path = tmp_path / "home", INFLIGHT_RECOVERY_MSGFILES[0]
-    near = ["/tmp/recovery-commit-1-r.txt.sh", "/tmp/recovery-commit-1-r.json", "/tmp/sub/recovery-commit-1-r.txt",
-            "/var/tmp/recovery-commit-1-r.txt", "/tmp/recovery-commitx.txt", "/tmp/recovery-commit-.txt",
-            "/tmp/recovery-commit-1/../x.txt", "/tmp/x-recovery-commit-1-r.txt", "/tmp/Recovery-commit-1-r.txt",
-            "/tmp/recovery-commit-msg-1.txt.bak", f"{PROJECT}/recovery-commit-1-r.txt"]
-    for target in near:
-        denial = _denial(*run("Write", {"file_path": target, "content": "x"}, "changelog-analyst", home))
-        assert INFLIGHT_REFUSED not in denial["deny_reason"], target
-    for tool, tool_input, reason in [("Bash", {"command": f"cat > {path} <<EOF\nx\nEOF"},
-                                      "not in allowed_write_path_prefixes"),
-                                     ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"},
-                                      "tool Edit not in allowed_tools")]:
-        assert reason in _denial(*run(tool, tool_input, "changelog-analyst", home))["deny_reason"], tool
-    link = Path(f"/tmp/recovery-commit-{uuid.uuid4().hex}.txt")
-    link.symlink_to(tmp_path / "elsewhere.txt")
-    try:
-        denial = _denial(*run("Write", {"file_path": str(link), "content": "x"}, "changelog-analyst", home))
-        assert "not in allowed_write_path_prefixes" in denial["deny_reason"]
-    finally:
-        link.unlink()
+    for path in MSG_NAMES:
+        assert run("Bash", {"command": f"echo x > {path}"}, MAIN, home) == (0, ""), path
+        denial = _denial(*run("Write", {"file_path": path, "content": "x"}, "changelog-analyst", home))
+        assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), denial
 
 
 def test_this_trees_recovery_route_writes_its_message_file_under_its_prefixes(tmp_path):
@@ -388,29 +311,20 @@ def test_this_trees_recovery_route_writes_its_message_file_under_its_prefixes(tm
         assert run("Write", {"file_path": path, "content": "x"}, "changelog-analyst", tmp_path / "home") == (0, "")
 
 
-# -- in-flight compatibility: the registry entry 2acc29b's test-writer creates (train 2, A17) -----
-# COMPATIBILITY: these cases go with pretool-tool-policy.py's _check_inflight_entry_writes, once no
-# session predates train 2's landing. A session that took up origin/master's /dev text keeps its
-# test-writer dispatch (2acc29b commands/dev.md:799, D15), whose FIRST ACTION line is quoted below;
-# the train arms the registry with no sentinel in it (hooks/pretool-cp-checkin.py creates one at the
-# FIRST ACTION Read), so that test-writer may find its entry absent and create it. Here the project
-# and its armed registries exist; the session store is the CLI's (the dispatch record, the child's
-# first record and its meta).
+# -- a cycle registry's test-writer entry holds no rule of its own -----------------------------------
+# <registry>/test-writer.json is written as any other file of the registry: hooks/pretool-cp-checkin.py
+# creates it at its dispatch's FIRST ACTION Read, and a test-writer whose prompt still says to create it
+# if absent gets no write its role row refuses. Here the project and its armed registries exist; the
+# session store is the CLI's (the dispatch record, the child's first record and its meta).
 ENTRY_TASK, OTHER_TASK = "dev-20261108-150427", "dev-20261108-160000"
-MASTER_FIRST = ("FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/test-writer.json "
+CREATE_FIRST = ("FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/test-writer.json "
                 "(or create if absent with {agent_type:'test-writer', session_id:'<DEV_SESSION_ID>'}).")
-ENTRY_REFUSED = "only that test-writer writes it (D8, D24)"
 
-
-def _train_first() -> str:
-    """The FIRST ACTION line of this tree's test-writer dispatch (commands/dev.md Step 10)."""
-    text = (ROOT / "commands" / "dev.md").read_text(encoding="utf-8")
-    return next(l.strip() for l in text.splitlines() if "FIRST ACTION" in l and "/test-writer.json" in l)
 
 
 def _test_writer_prompt(first: str, task: str = ENTRY_TASK, named: str = ENTRY_TASK) -> str:
     """A test-writer dispatch prompt as the orchestrator renders it: ``first`` with its registry
-    named for ``named``, and the obligation of cycle ``task`` (2acc29b commands/dev.md:799-819)."""
+    named for ``named``, and the obligation of cycle ``task``."""
     obligation = {"task_id": task, "lane": None, "lane_set": None, "role": "test-writer", "pipeline": "dev",
                   "profile": "singular", "dispatched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   "artifacts": [{"kind": "json", "path": f"docs/dev/test-writer-report-{task}.json",
@@ -469,50 +383,27 @@ def _entry_writes(path: str):
     yield "Edit", {"file_path": path, "old_string": "a", "new_string": "b"}
 
 
-def test_an_in_flight_test_writer_creates_its_own_cycles_registry_entry(tmp_path):
+def test_a_test_writer_with_the_create_prompt_writes_its_entry_only_as_its_row_allows(tmp_path):
     cycle = _Cycle(tmp_path)
-    agent = cycle.dispatch(_test_writer_prompt(MASTER_FIRST))
+    agent = cycle.dispatch(_test_writer_prompt(CREATE_FIRST))
     content = json.dumps({"agent_type": "test-writer", "session_id": ENTRY_TASK}) + "\n"
-    assert cycle.run("Write", {"file_path": cycle.entry(), "content": content}, "test-writer", agent) == (0, "")
+    denial = _denial(*cycle.run("Write", {"file_path": cycle.entry(), "content": content}, "test-writer", agent))
+    assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), denial
 
 
-def test_the_in_flight_test_writer_writes_no_other_entry(tmp_path):
-    """Its own cycle's entry, by the Write tool, while absent, its dispatch naming that create: every
-    other write keeps its role row (another cycle's entry or another role's, the entry once the
-    hook created it, its Bash or Edit write, a dispatch from this tree's text, a prompt naming another
-    cycle's registry, an unarmed cycle)."""
+@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "ba", "test-writer", PLUGIN, "general-purpose"])
+def test_a_test_writer_entry_is_decided_as_any_registry_file(tmp_path, caller):
+    """Each caller, also dispatched with the create prompt, writes <registry>/test-writer.json as it
+    writes another file of the same registry."""
     cycle = _Cycle(tmp_path)
-    agent = cycle.dispatch(_test_writer_prompt(MASTER_FIRST))
-    write = {"content": "{}\n"}
-    for target in [cycle.entry(OTHER_TASK), cycle.entry(name="ba"), cycle.entry(name="dev"),
-                   cycle.entry(name="test-writer-2"), str(cycle.project / ".claude" / "dev-registry" / "test-writer.json")]:
-        denial = _denial(*cycle.run("Write", dict(write, file_path=target), "test-writer", agent))
-        assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), target
-    for tool, tool_input in list(_entry_writes(cycle.entry()))[1:]:
-        assert ENTRY_REFUSED not in _denial(*cycle.run(tool, tool_input, "test-writer", agent))["deny_reason"], tool
-    for prompt, target in [(_test_writer_prompt(_train_first()), cycle.entry()),
-                           (_test_writer_prompt(MASTER_FIRST, named=OTHER_TASK), cycle.entry(OTHER_TASK)),
-                           (_test_writer_prompt(MASTER_FIRST, named=OTHER_TASK), cycle.entry()),
-                           (_test_writer_prompt(MASTER_FIRST, task="dev-20261108-170000",
-                                                named="dev-20261108-170000"), cycle.entry("dev-20261108-170000"))]:
-        denial = _denial(*cycle.run("Write", dict(write, file_path=target), "test-writer", cycle.dispatch(prompt)))
-        assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), (prompt[:120], target)
-    Path(cycle.entry()).write_text("{}\n")  # the sentinel hooks/pretool-cp-checkin.py creates at a Read
-    denial = _denial(*cycle.run("Write", dict(write, file_path=cycle.entry()), "test-writer", agent))
-    assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes")
-
-
-@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "ba", PLUGIN, "general-purpose"])
-def test_no_other_caller_writes_the_test_writer_entry(tmp_path, caller):
-    """Not the main agent, dev (whose row allows '*'), qa, BA, a plugin or built-in role; also when
-    it was dispatched with the in-flight test-writer's own prompt."""
-    cycle = _Cycle(tmp_path)
-    agent = cycle.dispatch(_test_writer_prompt(MASTER_FIRST), caller or "test-writer") if caller else None
+    agent = cycle.dispatch(_test_writer_prompt(CREATE_FIRST), caller or "test-writer") if caller else None
     for task in (ENTRY_TASK, OTHER_TASK):
-        for tool, tool_input in _entry_writes(cycle.entry(task)):
-            denial = _denial(*cycle.run(tool, tool_input, caller, agent))
-            assert denial["role"] == (caller or "main") and denial["target"] == cycle.entry(task), (tool, task)
-            assert denial["deny_reason"].endswith(ENTRY_REFUSED), denial
+        entry, other = cycle.entry(task), cycle.entry(task, "p14-other")
+        for tool, tool_input in _entry_writes(entry):
+            plain = json.loads(json.dumps(tool_input).replace(entry, other))
+            assert (_decided(cycle.run(tool, tool_input, caller, agent), entry)
+                    == _decided(cycle.run(tool, plain, caller, agent), other)), (tool, task)
+
 
 
 @pytest.mark.parametrize("command", ["push", "merge"])
