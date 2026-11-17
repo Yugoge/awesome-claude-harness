@@ -113,6 +113,9 @@ flowchart TD
     ASK --> LANE
     NIGHT(["/dev-overnight 6:00"]) -.->|"nobody is asked<br/>one pipeline per real issue"| LANE
     LANE -->|"every lane's QA passes"| LAND
+    LAND ~~~ PAD["<br/><br/><br/><br/><br/>"]
+    classDef pad fill:none,stroke:none
+    class PAD pad
 ```
 
 | You type | You get |
