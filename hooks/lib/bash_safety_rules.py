@@ -953,7 +953,20 @@ _DG_DOCKER_EXEC = frozenset("run exec create start attach debug cp commit".split
 _DG_KUBECTL_EXEC = frozenset("exec run debug attach cp port-forward proxy apply replace patch".split())
 _DG_GIT_EXEC = frozenset("clean rm rebase difftool mergetool filter-branch filter-repo daemon instaweb "
                          "send-email".split())
+# git text that runs a command: an ext:: remote and the settings that enable or alias it, and the options whose
+# value is a program (`--upload-pack`, `--receive-pack`, `--exec`; `-O` of `git grep` and `-u` of the fetchers below).
+_DG_GIT_RUNS = re.compile(r"ext::|protocol\.(ext\.)?allow|insteadof|^--(upload-pack|receive-pack|exec)", re.I)
 _DG_TABLES = None
+
+
+def _dg_removal_reference():
+    """lib/pol_degraded_removal_reference.ere compiled, or None (every trailing-option line then refuses)."""
+    try:
+        with open(os.path.join(LIB, "pol_degraded_removal_reference.ere"), encoding="utf-8", errors="replace") as fh:
+            pattern = next((ln.rstrip("\n") for ln in fh if ln.strip() and not ln.lstrip().startswith("#")), "")
+        return re.compile(pattern) if pattern else None
+    except (OSError, re.error):
+        return None
 
 
 def _degraded_tables():
@@ -973,6 +986,7 @@ def _degraded_tables():
                 "docker_global": eb.DOCKER_GLOBAL, "docker_rm": frozenset(eb.DOCKER_RESOURCE_RM),
                 "find_ops": frozenset(eb.FIND_EXEC_OPS) | frozenset(eb.FIND_DELETE_OPS) | _DG_FIND_EXTRA,
                 "drop": frozenset(eb.Analyzer.DROP), "header": frozenset(eb.Analyzer.HEADER),
+                "rmref": _dg_removal_reference(),
             }
         try:
             _DG_TABLES = with_alarm(2, load)
@@ -1050,13 +1064,18 @@ def _dg_spec_reads(spec, words):
     return i
 
 
-def _dg_read_handler(t, base, words):
+def _dg_read_handler(t, base, words, depth=0):
     """git, docker, kubectl, find, hash and ssh: the forms degraded mode can read as plain."""
     if base == "git":
         i = _dg_spec_reads(t["git_global"], words[1:])
         if i is None or i + 1 >= len(words):
             return i is not None  # `git --version`: global options only
         sub = words[1 + i]
+        if any(_DG_GIT_RUNS.search(w) for w in words[1:]) or (sub == "grep" and any(
+                w.startswith(("-O", "--open-files-in-pager")) for w in words[2 + i:])) or (
+                sub in ("clone", "fetch", "ls-remote", "archive") and any(
+                    re.match(r"-[A-Za-z]*u", w) for w in words[2 + i:])):
+            return False
         return sub in t["git_subs"] and sub not in t["git_forward"] and sub not in _DG_GIT_EXEC
     if base == "docker":
         i = _dg_spec_reads(t["docker_global"], words[1:])
@@ -1065,7 +1084,7 @@ def _dg_read_handler(t, base, words):
     if base == "kubectl":  # the analyzer runs whatever follows `--` as a command; so is it read here
         if "--" in words[1:]:
             payload = words[words.index("--", 1) + 1:]
-            if payload and not _degraded_command_is_plain(t, payload, 1):
+            if payload and (depth >= _DG_MAX_NESTING or not _degraded_command_is_plain(t, payload, depth + 1)):
                 return False
             words = words[:words.index("--", 1)]
         return not set(words[1:]) & _DG_KUBECTL_EXEC
@@ -1107,6 +1126,10 @@ def _degraded_command_is_plain(t, words, depth=0):
         return True
     if words[0] in t["header"] or words[0] == "." or _DG_META.search(words[0]):
         return False
+    # The removal-reference predicate again, on each word as the shell will pass it (`r''m`, `-de''lete`): a
+    # forwarded or wrapped command (`kubectl x -- find … -de''lete`) hides behind quotes the raw text keeps.
+    if t["rmref"] is None or any(t["rmref"].search(w) for w in words):
+        return False
     for w in words[1:]:
         if _DG_META.search(w) and not _dg_value_is_plain(t, w, depth):
             return False
@@ -1126,7 +1149,8 @@ def _degraded_command_is_plain(t, words, depth=0):
         rest = base[3:]
     elif head in _DG_READ_HANDLERS:
         hashed = next((i for i, w in enumerate(words) if w.startswith("#")), len(words))
-        if not (_dg_read_handler(t, head, words) and _dg_read_handler(t, head, words[:hashed])):
+        if not _dg_read_handler(t, head, words, depth) or (
+                hashed < len(words) and not _dg_read_handler(t, head, words[:hashed], depth)):
             return False
     elif _dg_sensitive(t, head):
         return False
@@ -1139,12 +1163,7 @@ def _degraded_command_is_plain(t, words, depth=0):
             return False
     if set(_dg_last_words(words[1:])) & set(t["selectors"].get(head, ())):
         return False
-    if any(_dg_sensitive(t, w) and w not in _DG_READ_HANDLERS for w in rest):
-        return False
-    # A read-handler name past the head may start a forwarded command (`kubectl x -- find … -delete`, `nice git …`):
-    # what follows it is read as that command.
-    return all(_degraded_command_is_plain(t, words[i:], depth + 1)
-               for i in range(1, len(words)) if base[i] in _DG_READ_HANDLERS)
+    return not any(_dg_sensitive(t, w) and w not in _DG_READ_HANDLERS for w in rest)
 
 
 def _dg_commands(text):
@@ -1226,6 +1245,9 @@ def _dg_unbalanced(command):
     return True
 
 
+_DG_TIME_LIMIT = 3.0
+
+
 def degraded_refuses(command, rmref):
     """The degraded fallback's verdict: True unless the command is provably plain (see removal_policy). Once any
     line ends a command on an option, every command on every line must be plain: a newline separates commands."""
@@ -1291,7 +1313,12 @@ def removal_policy(payload_text, command):
     if not rmref:
         refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                    f"missing or empty. Denied conservatively.", f"Command: {command}")
-    if degraded_refuses(command, rmref):
+    _degraded_tables()  # loaded under its own alarm, before the bound below
+    try:
+        refused = with_alarm(_DG_TIME_LIMIT, degraded_refuses, command, rmref)
+    except (TimeoutError, RecursionError):
+        refused = True  # a fallback that cannot finish its reading refuses
+    if refused:
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
                    "usable verdict, and this command is not provably plain. Denied conservatively.",
                    f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; never widen this "

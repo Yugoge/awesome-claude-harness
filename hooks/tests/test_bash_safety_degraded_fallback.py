@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -107,6 +108,27 @@ MULTILINE_NEIGHBOURS = [
     "kubectl x -- find /dev/shm/vtest/sub -de''lete -print", "kubectl -- find /dev/shm/vtest/sub -de\"\"lete -q",
     "kubectl x -- find /dev/shm/vtest/sub -de''lete\nls -l", "ls -l\nkubectl x -- find /dev/shm/vtest/sub -de\\lete",
     "kubectl x -- kubectl y -- find /dev/shm/vtest/sub -de''lete -print", "kubectl -- ssh h find /x -de''lete -v",
+]
+
+
+# git text that runs a command: an ext:: remote (and the settings that enable or alias it), git grep's -O pager
+# and the fetchers' upload-pack options, also behind kubectl `--`.
+GIT_COMMAND_TEXT = [
+    "git -c protocol.ext.allow=always ls-remote 'ext::r''m -rf /dev/shm/v/s' -q",
+    "git -c protocol.ext.allow=always clone 'ext::r''m -rf /dev/shm/v/s' d -q",
+    "git -c protocol.ext.allow=always fetch 'ext::find /x -de''lete' -q",
+    "git -c protocol.ext.allow=always archive --remote='ext::r''m -rf /x' HEAD -v",
+    "git -c url.ext::x.insteadOf=y ls-remote y -q",
+    "kubectl x -- git -c protocol.ext.allow=always ls-remote 'ext::r''m -rf /x' -q",
+    "git grep -Or''m x -n", "git grep -O'r''m -rf /dev/shm/v/s' x -n",
+    "git ls-remote --upload-pack='touch x' origin -q", "git clone -u 'touch y' origin d -q",
+]
+
+# Mentions of a read-handler program as data: a search pattern, a name looked up, text echoed.
+MENTIONS = [
+    "grep -rn git . -i", "rg ssh -l", "rg -n 'ssh' . -i", "echo docker -n", "echo hash -n", "man ssh -a", "man git -a",
+    "apt show git -a", "grep -rn hash src -l", "ls ssh -l", "ls find git docker kubectl ssh hash -l",
+    "kubectl x -- ls -la", "git push -u origin main",
 ]
 
 
@@ -210,7 +232,7 @@ def test_degraded_fallback_is_never_laxer_than_the_live_analyzer():
 
 
 @pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED + SHELL_STRING_WORDS
-                         + MULTILINE_NEIGHBOURS)
+                         + MULTILINE_NEIGHBOURS + GIT_COMMAND_TEXT)
 def test_exec_option_and_unmodelled_program_forms_refuse_in_degraded_mode(command):
     assert R.degraded_refuses(command, _rmref()), command
 
@@ -238,7 +260,7 @@ def test_multiline_neighbours_refuse_end_to_end(mode, tmp_path):
                             encoding="utf-8")
         hook = str(dst / "pretool-bash-safety.sh")
     with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **env)), MULTILINE_NEIGHBOURS))
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **env)), MULTILINE_NEIGHBOURS + GIT_COMMAND_TEXT))
     allowed = [c for c, code, _err in results if code != 2]
     assert not allowed, (mode, allowed)
 
@@ -316,6 +338,55 @@ def test_predicate_admits_plain_lines(line):
 ])
 def test_multiline_everyday_scripts_stay_allowed(command):
     assert not R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_read_handler_mentions_stay_allowed_end_to_end(mode):
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])), MENTIONS))
+    assert not [c for c, code, _err in results if code != 0], (mode, results)
+
+
+ADVERSARIAL_LONG = {
+    "read_handler_words": "ls " + "find " * 250 + "-q\nr''m -rf /dev/shm/v/s",
+    "read_handler_words_100kb": "ls " + "find git ssh " * 8000 + "-q\nr''m -rf /dev/shm/v/s",
+    "kubectl_nesting": "kubectl -- " * 5000 + "find /x -de''lete -q",
+    "kubectl_nesting_with_comments": "kubectl -- # " * 300 + "ls -q",
+    "nested_quotes": "x '" + "a '\\''" * 3000 + "' -q\nr''m -rf /dev/shm/v/s",
+}
+
+
+@pytest.mark.parametrize("name", sorted(ADVERSARIAL_LONG))
+def test_adversarial_long_lines_are_read_in_bounded_time(name):
+    command = ADVERSARIAL_LONG[name]
+    started = time.monotonic()
+    refused = R.degraded_refuses(command, _rmref())
+    assert time.monotonic() - started < 2.0, name
+    if "r''m" in command or "-de''lete" in command:
+        assert refused, name
+
+
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_adversarial_long_line_refuses_through_the_hook_in_bounded_time(mode):
+    # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
+    command = "ls " + "git ssh hash kubectl " * 5000 + "-q\nr''m -rf /dev/shm/v/s"
+    assert len(command) > 100_000
+    started = time.monotonic()
+    code, err = run_hook(command, **MODES[mode])
+    assert code == 2 and DEGRADED in err
+    assert time.monotonic() - started < 15.0
+
+
+def test_a_degraded_reading_past_its_time_bound_refuses(monkeypatch):
+    """The fallback's own reading is time-bounded, and running out of time refuses."""
+    monkeypatch.setenv("CLAUDE_HOOK_BOUNDARY_TIMEOUT", "0.001s")
+    monkeypatch.setattr(R, "_DG_TIME_LIMIT", 0.05)
+    monkeypatch.setattr(R, "degraded_refuses", lambda command, rmref: time.sleep(5) or False)
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status --short"}})
+    started = time.monotonic()
+    with pytest.raises(SystemExit) as exit_info:
+        R.removal_policy(payload, "git status --short")
+    assert exit_info.value.code == 2 and time.monotonic() - started < 3.0
 
 
 def test_analyzer_timeout_default_leaves_headroom_under_load():
