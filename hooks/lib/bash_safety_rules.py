@@ -568,22 +568,530 @@ ARTIFACT_NS_CAPTURE_RE = r"""(^|[\s;|&(])[A-Za-z_][A-Za-z0-9_]*=['"]?"""
 ARTIFACT_VAR_WRITE_RE = r"""(>>?[&|]?\s*['"]?\$\{?[A-Za-z_]|""" + ARTIFACT_WRITE_VERB_RE + r""".*\$\{?[A-Za-z_])"""
 
 
+def _relaxed_writes_namespace(command, ns_re):
+    """A write into a namespace: a redirection whose target it is, a listed verb handed it in its own simple command,
+    a verb fed it by xargs, or the namespace captured in a variable and then written through one (the whole command
+    read as one line, so a heredoc body counts).
+
+    Positional, not semantic. Branch 2 reads each simple command lib/shell_parse.py's walk reaches (with its nested
+    payloads, its redirection targets and its heredoc bodies) on its own, so a verb in one command and the namespace
+    in another (`touch /tmp/m && cat <ns>`) is no write; `python -m json.tool <ns>` with no second positional only
+    prints (with no assignment and no env or other wrapper in front of it). A for/select word list naming the
+    namespace is a capture into the loop variable; `$_` (or BASH_REMATCH, BASH_COMMAND, BASH_ARGV) anywhere in a
+    command that names it is a write, since it hands the name on to another command. A command the parser cannot
+    read is read as one line. Residual over-block: a read is refused when an enumerated verb stands before the
+    namespace in its own command for another reason (`cp <ns> /tmp/x`), when an interpreter does the reading, or when
+    `$_` follows a read. Residual under-block: a verb not listed, or a path assembled at run time, writes through.
+    It raises the cost of a hand-written file; the barrier is hooks/pretool-git-privilege-guard.py, which honours
+    only a pipeline-minted grant claimed by the dispatched subagent that holds the matching attestation.
+    """
+    if not grep(ns_re, command):
+        return False
+    if grep(r""">>?[&|]?\s*['"]?""" + ns_re, command) or _carries_last_arg(command):
+        return True
+    sites = _simple_command_texts(command)
+    for one in (sites if sites is not None else [command.replace("\n", " ")]):
+        if grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one):
+            return True
+    one = command.replace("\n", " ")
+    listed = any(c.kind in ("for", "select") and any(grep(ns_re, w.text) for w in c.header[1:])
+                 for c in _compounds(command) or ())
+    return bool(
+        (sites is not None and _xargs_fed_writer(command))
+        or (listed and grep(ARTIFACT_VAR_WRITE_RE, one))
+        or (grep(ARTIFACT_NS_CAPTURE_RE + ns_re, one) and grep(ARTIFACT_VAR_WRITE_RE, one))
+        or grep(ARTIFACT_NS_CAPTURE_RE + ns_re + "[^;|&]*" + ARTIFACT_WRITE_VERB_RE, one))
+
+
 def writes_namespace(command, ns_re):
     """A write into a namespace: a redirection whose target it is, a listed verb handed it, or the namespace captured
-    in a variable and then written through one (the whole command read as one line, so a heredoc body counts).
+    in a variable and then written through one.
 
-    Positional, not semantic. Residual over-block: a read is refused when an enumerated verb stands before the
-    namespace for another reason, or when an interpreter does the reading. Residual under-block: a verb not listed,
-    or a path assembled at run time, writes through. It raises the cost of a hand-written file; the barrier is
+    Positional, not semantic. The per-simple-command reading (_relaxed_writes_namespace) decides alone only a
+    command of the strict shape _relaxation_shape_ok accepts, where a name cannot flow from one simple command into
+    another. Any other command (a function, a loop or other compound that carries the namespace, a capture builtin,
+    `$1`, `$_`, `${!v}` ...) also gets the whole-line reading below (the command read as one line, so a heredoc body
+    counts; a listed verb anywhere before the namespace is a write, and so is a listed verb or a redirection handed
+    any expansion, since set --, printf -v, read, getopts or ${!v} may have put the namespace in it), and a write by
+    either is a write, so no refusal of the whole-line reading is lost. Residual over-block: a read is refused when
+    an enumerated verb stands before the namespace in its own command for another reason (`cp <ns> /tmp/x`), when an
+    interpreter does the reading, and for a command outside the strict shape when a verb stands anywhere before the
+    namespace, a verb is handed any expansion, or a compound only reads it
+    (`for f in <ns>*; do python3 -m json.tool "$f"; done`). Residual under-block: a verb not listed, or a path
+    assembled at run time, writes through. It raises the cost of a hand-written file; the barrier is
     hooks/pretool-git-privilege-guard.py, which honours only a pipeline-minted grant claimed by the dispatched
     subagent that holds the matching attestation.
     """
+    if not grep(ns_re, command):
+        return False
+    if _arg_write_named(command, lambda text: grep(ns_re, text)):
+        return True
+    if _relaxation_shape_ok(command, lambda text: grep(ns_re, text)):
+        return _relaxed_writes_namespace(command, ns_re)
     one = command.replace("\n", " ")
-    return grep(ns_re, command) and (
+    return bool(
         grep(r""">>?[&|]?\s*['"]?""" + ns_re, command)
         or grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one)
         or (grep(ARTIFACT_NS_CAPTURE_RE + ns_re, one) and grep(ARTIFACT_VAR_WRITE_RE, one))
-        or grep(ARTIFACT_NS_CAPTURE_RE + ns_re + "[^;|&]*" + ARTIFACT_WRITE_VERB_RE, one))
+        or grep(ARTIFACT_NS_CAPTURE_RE + ns_re + "[^;|&]*" + ARTIFACT_WRITE_VERB_RE, one)
+        or grep(r""">>?[&|]?\s*['"]?\$|""" + ARTIFACT_WRITE_VERB_RE + r".*\$", one)
+        or _relaxed_writes_namespace(command, ns_re))
+
+
+_SHAPE_CAPTURE_BUILTINS = frozenset({"set", "read", "mapfile", "readarray", "getopts", "declare", "typeset", "local",
+                                     "export", "readonly", "let", "trap", "alias", "eval", "source", ".", "unset",
+                                     "shopt", "enable", "builtin", "hash", "coproc", "exec", "caller", "fc",
+                                     "history", "compgen", "complete", "bind", "unalias", "wait", "printf"})
+"""Builtins that store a word in a variable, positional parameter, alias, trap or function, or run text as code;
+printf only with -v (checked below)."""
+_SHAPE_PARAM_RE = re.compile(r"[#!]?([0-9@*!?$#-]|_(?![A-Za-z0-9_])|BASH|FUNCNAME|PIPESTATUS|OPTARG|OPTIND"
+                             r"|REPLY|MAPFILE|COMP_|READLINE_)|!.*|[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?@.*")
+"""Positional, special, indirect (`${!v}`) and transforming (`${v@P}`) expansions, and the variables builtins fill:
+each carries text from somewhere other than the word itself."""
+_SHAPE_HISTORY_RE = re.compile(r"!([$*^:!#]|-?[0-9])")
+"""A history expansion (`!$`, `!!`, `!-1`) outside single quotes: inert in a non-interactive shell, still read as a
+carried word."""
+
+
+def _unquoted_single(text):
+    """The text with its single-quoted and $'..' spans blanked (they are inert); double quotes are kept."""
+    out, i, n, dq = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            dq = not dq
+        elif c == "'" and not dq:
+            j = text.find("'", i + 1)
+            if j < 0:
+                return text
+            out.append("''")
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _shape_params(command):
+    """The text of every active parameter expansion (`1`, `1%/`, `!v`, `_` ...) in every simple command the walk
+    reaches, its heredoc bodies and every compound's header and redirections, nested ones included; None when the
+    text does not parse."""
+    try:
+        from lib.shell_parse import active_parts
+        sites = _parsed_sites(command)
+        compounds = _shape_compounds(command)
+        if sites is None or compounds is None:
+            return None
+        parts = []
+        for site, _res in sites:
+            for w in _site_words(site.cmd):
+                parts.extend(active_parts(w.parts))
+            for r in site.cmd.redirects:
+                if r.hd is not None:
+                    parts.extend(active_parts(r.hd.expansions))
+        for k, _piped in compounds:
+            for w in list(k.header) + [r.target for r in k.redirects if r.target is not None]:
+                parts.extend(active_parts(w.parts))
+        out, seen = [], set()
+        while parts:
+            part = parts.pop()
+            if id(part) in seen:
+                continue
+            seen.add(id(part))
+            if part.kind == "param":
+                out.append(part.text)
+            parts.extend(part.inner())
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_GIT_PROGRAM_ENV_RE = re.compile(r"(^|[^A-Za-z0-9_])(GIT_EXTERNAL_DIFF|GIT_PAGER|PAGER|GIT_EDITOR|EDITOR|VISUAL"
+                                 r"|GIT_SEQUENCE_EDITOR|GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_EXEC_PATH"
+                                 r"|GIT_[A-Za-z0-9_]*|HOME|XDG_CONFIG_HOME|LESSOPEN|LESSCLOSE|BASH_ENV|ENV)([^A-Za-z0-9_]|$)")
+"""Environment variables that make git (or a shell it starts) run a program of their choosing, or read a config
+(HOME, XDG_CONFIG_HOME, any GIT_*: GIT_DIR, GIT_COMMON_DIR, GIT_WORK_TREE, GIT_CONFIG_* ...) that names one."""
+
+
+def _shape_compounds(command):
+    """(compound, piped) for every compound command in the text (payloads, substitutions and compound bodies too),
+    piped when it is a stage of a pipeline of more than one; None when the text does not parse."""
+    try:
+        from lib.shell_parse import parse, active_parts, Compound, _nested_scripts
+        top = parse(command)
+        if top.error is not None:
+            return None
+        stack, seen, out = [top] + list(_nested_scripts(top)), set(), []
+        while stack:
+            script = stack.pop()
+            if id(script) in seen or not hasattr(script, "items"):
+                continue
+            seen.add(id(script))
+            for pl, _sep in script.items:
+                for stage in pl.stages:
+                    if not isinstance(stage, Compound):
+                        continue
+                    out.append((stage, len(pl.stages) > 1))
+                    stack.extend(b for b in stage.body if hasattr(b, "items"))
+                    for w in list(stage.header) + [r.target for r in stage.redirects if r.target is not None]:
+                        stack.extend(p.body for p in active_parts(w.parts) if p.body is not None)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _relaxation_shape_ok(command, carries):
+    """True when no protected name can flow from one simple command into another, so each may be read on its own.
+
+    `carries(text)` says whether a text names what the calling rule protects. The whole command parses and holds:
+    no function definition; no compound command (a loop, if, case, group, subshell or coproc feeds its body from a
+    word list, a redirection or a here-string) unless it is [[ ]] or (( )), or it carries no protected name (in its
+    text, with quotes and backslashes taken out), has no redirection of its own, is no pipeline stage and no heredoc
+    is in the command; no builtin that stores a word or runs text (set, read, mapfile, readarray, getopts, declare,
+    typeset, local, export, readonly, let, trap, alias, eval, source, printf -v ...); no computed or unreadable
+    command word; no positional, special, indirect or transforming expansion ($1, $@, $_, ${!v}, ${v@P}, BASH_*);
+    beside a git, no variable that makes git run a program or read another config; and the word conditions of
+    _shape_strict_ok (bare command words, no assignment or env wrapper, no directory change, no `&`, no write
+    target, no here-string carrying a name, nothing that runs a file beside the writer script's name). Fail closed:
+    anything not read is not ok.
+    """
+    if _SHAPE_HISTORY_RE.search(_unquoted_single(command)):
+        return False
+    params = _shape_params(command)
+    if params is None or any(_SHAPE_PARAM_RE.match(t) or "BASH_" in t for t in params):
+        return False
+    compounds = _shape_compounds(command)
+    if compounds is None:
+        return False
+    for k, piped in compounds:
+        if k.kind in ("cond", "arith"):
+            continue
+        text = command[k.span[0]:k.span[1]]
+        if k.kind in ("function", "coproc") or not text or piped or k.redirects or "<<" in command \
+                or "$'" in text or carries(text) or carries(re.sub(r"""[\\'"]""", "", text)):
+            return False
+    sites = _parsed_sites(command)
+    if sites is None:
+        return False
+    for site, res in sites:
+        if site.dynamic or site.templated or res.unresolved is not None or (res.name is None and site.cmd.words):
+            return False
+        if _shape_word_computed(site.cmd):
+            return False
+        heads = {res.name} | {n for n, _o in res.wrappers}
+        if site.cmd.words and site.cmd.words[0].value() is not None:
+            heads.add(site.cmd.words[0].value().rsplit("/", 1)[-1])
+        if heads & (_SHAPE_CAPTURE_BUILTINS - {"printf"}):
+            return False
+        if res.name == "git" and any(w.value() in ("config", "alias") for w in res.args):
+            return False
+        if "printf" in heads and any((w.value() or "-v").startswith("-") and "v" in (w.value() or "-v")
+                                     for w in site.cmd.words[1:]):
+            return False
+    if re.search(r"(^|[^A-Za-z0-9_])git([^A-Za-z0-9_]|$)", command) and _GIT_PROGRAM_ENV_RE.search(command):
+        return False
+    try:
+        return _shape_strict_ok(command, carries, sites)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_SHAPE_COMPUTED_PARTS = frozenset({"brace", "cmdsub", "backtick", "procsub_in", "procsub_out"})
+
+
+def _shape_word_computed(cmd):
+    """True when a word of the simple command (assignment, command, argument or redirection target) holds a brace
+    expansion or a command or process substitution: its words are not the ones written, so the strict shape does
+    not take it."""
+    from lib.shell_parse import active_parts
+    return any(p.kind in _SHAPE_COMPUTED_PARTS for w in _site_words(cmd) for p in active_parts(w.parts))
+
+
+_SHAPE_ENV_OK_RE = re.compile(r"LC_[A-Z]+|LANG|TZ|NO_COLOR|TERM")
+"""The only assignments the strict shape takes: each changes how a command prints, never what it runs or reads."""
+_SHAPE_ENV_SENSITIVE_RE = re.compile(
+    r"PATH|HOME|IFS|ENV|BASH_ENV|CDPATH|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|TMPDIR|PAGER|EDITOR|VISUAL|MANPAGER"
+    r"|SHELL|POSIXLY_CORRECT|PWD|OLDPWD|TMP|TEMP|CC|CXX|CPP|AR|AS|FC|PS[0-9]"
+    r"|(LD|PYTHON|PERL|RUBY|NODE|GIT|XDG|RIPGREP|GREP|LESS|JQ|SSH|GNUPG|GPG)[A-Z0-9_]*"
+    r"|.*(PATH|DIR|HOME|CONFIG|OPTS|OPTIONS|PROXY|_proxy)[A-Za-z0-9_]*", re.IGNORECASE)
+"""Names a program or the shell reads (case ignored): no standalone assignment to one stays in the strict shape."""
+_SHAPE_STANDALONE_RE = re.compile(r"[a-z_][a-z0-9_]*|[A-Z][A-Z0-9_]{0,2}")
+"""The standalone assignments (`x=v; cmd`) the strict shape takes besides _SHAPE_ENV_OK_RE: a lower-case shell
+variable, or an upper-case name of one to three characters (`NS`, `T`, `OUT`), that matches no
+_SHAPE_ENV_SENSITIVE_RE pattern (`http_proxy`, `dir`, `shell`, `IFS`, `PWD`, `TMP`, `CC` are refused). Any longer
+upper-case or mixed name (`SHELL`, `GLOBIGNORE`, `FOO_BAR`) takes the command out of the shape."""
+_SHAPE_WRAPPERS = frozenset({"nice", "nohup", "timeout", "command", "xargs", "sudo", "setsid", "env"})
+"""Wrappers that run their command as named (env only with no option, sudo only with _SHAPE_SUDO_OPTS)."""
+_SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve-env", "-n", "--non-interactive",
+                              "-H", "--set-home"})
+"""sudo's options that keep its command as named: -s/--shell and -i/--login run it through `$SHELL -c`, and any
+other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
+_SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
+"""A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
+_SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
+_GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
+                 "--config-env")
+_SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
+                              r"|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|tclsh|wish|expect|make|[gmn]?awk|sed"
+                              r"|gsed|exec|source|\.|eval|xargs|parallel|watch|script|su|builtin|strace|ltrace)")
+"""Commands that run a file or text they are handed: beside a mention of the writer script, the shape refuses them."""
+
+
+def _shape_scripts(command):
+    """Every script in the text: the top one, payloads, substitutions and compound bodies; None when unparsed."""
+    try:
+        from lib.shell_parse import parse, active_parts, Compound, _nested_scripts
+        top = parse(command)
+        if top.error is not None:
+            return None
+        stack, seen, out = [top] + list(_nested_scripts(top)), set(), []
+        while stack:
+            script = stack.pop()
+            if id(script) in seen or not hasattr(script, "items"):
+                continue
+            seen.add(id(script))
+            out.append(script)
+            stack.extend(_nested_scripts(script))
+            for pl, _sep in script.items:
+                for stage in pl.stages:
+                    if isinstance(stage, Compound):
+                        stack.extend(b for b in stage.body if hasattr(b, "items"))
+                        for w in list(stage.header) + [r.target for r in stage.redirects if r.target is not None]:
+                            stack.extend(p.body for p in active_parts(w.parts) if p.body is not None)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _arg_write_targets(res):
+    """The files a reader or filter writes through an argument: sort -o/--output (clustered or abbreviated), uniq's
+    second operand, tee's operands, git --output (any abbreviation) or -o. Unknown means a target."""
+    name, vals = res.name, [w.value() for w in res.args]
+    if any(v is None for v in vals):
+        return ["?"] if name in ("sort", "uniq", "tee") else []
+    out = []
+    if name == "tee":
+        out += [v for v in vals if not v.startswith("-")]
+    elif name == "sort":
+        k = 0
+        while k < len(vals):
+            v = vals[k]
+            if v == "--":
+                break
+            if v.startswith("--") and len(v) > 2:
+                key = v.split("=", 1)[0]
+                if "--output".startswith(key) and len(key) >= 3:
+                    out.append(v.split("=", 1)[1] if "=" in v else (vals[k + 1] if k + 1 < len(vals) else "?"))
+            elif v.startswith("-") and len(v) > 1 and "o" in v[1:]:
+                i = v.index("o", 1)
+                if not any(c in "kt" for c in v[1:i]):
+                    out.append(v[i + 1:] or (vals[k + 1] if k + 1 < len(vals) else "?"))
+            k += 1
+    elif name == "uniq":
+        ops, skip = [], False
+        for v in vals:
+            if skip:
+                skip = False
+            elif v in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
+                skip = True
+            elif v == "-" or not v.startswith("-"):
+                ops.append(v)
+        out += ops[1:]
+    elif name == "git":
+        for v in vals:
+            key = v.split("=", 1)[0]
+            if (key.startswith("--o") and "--output".startswith(key)) or key == "-o":
+                out.append("?")
+    return out
+
+
+def _arg_write_named(command, carries):
+    """A tee, sort -o, uniq second operand or git --output whose target names what the caller protects (or cannot
+    be read), whatever the shape: `sort -o "<sentinel with a space>"` and `uniq - <grant>` write it."""
+    for _site, res in _parsed_sites(command) or ():
+        if any(t == "?" or carries(t) for t in _arg_write_targets(res)) and carries(command):
+            return True
+    return False
+
+
+def _shape_strict_ok(command, carries, sites):
+    """The strict shape's conditions on the words themselves (see _relaxation_shape_ok).
+
+    Every command word is a bare name or /bin/<name> or /usr/bin/<name> (`./cat`, `/tmp/x/python3` run a file of the
+    caller's choosing); no prefix assignment (or one handed to env) but LC_*, LANG, TZ, NO_COLOR, TERM, no
+    standalone one but those and a lower-case name matching no _SHAPE_ENV_SENSITIVE_RE pattern (_SHAPE_STANDALONE_RE),
+    and no array, subscripted or `+=` assignment; no wrapper but nice, nohup, timeout, command, xargs, setsid, an
+    option-less env and a sudo whose options are among -u, -g, -E, -n, -H (not -s/-i); no cd, pushd, popd and no
+    git -C, --git-dir, --work-tree or other directory option; no background `&`; no heredoc or here-string whose body
+    names a protected name; no write target but /dev/null (a redirection, tee, sort -o, uniq's second operand, git
+    --output); a `git -c` only with an exact display key (_git_config_inert); and, when a word names the writer script,
+    no write target at all and no command that runs a file (an interpreter, a shell, sed, awk, make, find ...)."""
+    scripts = _shape_scripts(command)
+    if scripts is None or any(sep == "&" for sc in scripts for _pl, sep in sc.items):
+        return False
+    writer = any(n in command for n in BULK_NAMES[1:])
+    for site, res in sites:
+        c = site.cmd
+        heads = list(c.words[:1]) + ([res.head] if res.head is not None else [])
+        if any(w.value() is None or not _SHAPE_HEAD_RE.fullmatch(w.value()) for w in heads):
+            return False
+        for a in tuple(c.assignments) + tuple(res.assignments):
+            if _SHAPE_ENV_OK_RE.fullmatch(a.name or ""):
+                continue
+            if c.words or not _SHAPE_STANDALONE_RE.fullmatch(a.name or "") or \
+                    _SHAPE_ENV_SENSITIVE_RE.fullmatch(a.name) or \
+                    not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=(?!\().*", a.word.text or "", re.S):
+                return False
+        for name, opts in res.wrappers:
+            if name not in _SHAPE_WRAPPERS or (name == "env" and opts) or \
+                    (name == "sudo" and any(o not in _SHAPE_SUDO_OPTS for o, _v in opts)):
+                return False
+        if res.name in _SHAPE_DIR_CHANGE:
+            return False
+        if res.name == "git":
+            for w in res.args:
+                v = w.value() or ""
+                if v in _GIT_DIR_OPTS or v.split("=", 1)[0] in _GIT_DIR_OPTS:
+                    return False
+                if not v.startswith("-"):
+                    break
+        for r in c.redirects:
+            body = r.hd.body if r.hd is not None else (r.target.text if r.op == "<<<" and r.target is not None else None)
+            if body is not None and (carries(body) or carries(re.sub(r"""[\\'"]""", "", body)) or "$'" in body):
+                return False
+            if r.target is not None and r.writes() and r.target.value() != "/dev/null":
+                return False
+        if any(t != "/dev/null" for t in _arg_write_targets(res)):
+            return False
+        if writer:
+            names = {res.name} | {n for n, _o in res.wrappers}
+            if any(n is not None and _SHAPE_RUNS_FILE.fullmatch(n) for n in names) or \
+                    any("/" in (w.value() or "/") for w in heads) or \
+                    (res.name == "find" and any(w.value() in _BULK_FIND_ACTIONS for w in res.args)) or \
+                    (res.name in _BULK_FILTERS and not _bulk_static_args(res.name, res.args)):
+                return False
+    if writer:
+        try:
+            from lib.shell_parse import parse, write_targets
+            if any(t.path != "/dev/null" for t in write_targets(parse(command))):
+                return False
+        except Exception:  # noqa: BLE001
+            return False
+    return True
+
+
+def _site_words(cmd):
+    """A simple command's assignment, command and redirection-target words."""
+    return [a.word for a in cmd.assignments] + list(cmd.words) + [r.target for r in cmd.redirects
+                                                                 if r.target is not None]
+
+
+def _parsed_sites(command):
+    """(site, resolved) for every simple command lib/shell_parse.py's walk reaches; None when it cannot read the text."""
+    try:
+        from lib.shell_parse import parse, walk, resolve
+        script = parse(command)
+        if script.error is not None:
+            return None
+        return [(site, resolve(site.cmd)) for site in walk(script)]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_LAST_ARG_RE = re.compile(r"\$(\{[#!]?)?_(?![A-Za-z0-9_])|BASH_REMATCH|BASH_COMMAND|BASH_ARGV")
+"""`$_` (the last argument of the command before) and the shell variables that hold another command's text."""
+
+
+def _carries_last_arg(command):
+    """A use of `$_` or of a variable holding another command's text, quoted or not (fail closed)."""
+    return bool(_LAST_ARG_RE.search(command))
+
+
+def _compounds(command):
+    """Every compound command in the text (in payloads, substitutions and compound headers too); None when unparsed."""
+    try:
+        from lib.shell_parse import parse, active_parts, Compound, _nested_scripts
+        top = parse(command)
+        if top.error is not None:
+            return None
+        stack, seen, out = [top] + list(_nested_scripts(top)), set(), []
+        while stack:
+            script = stack.pop()
+            if id(script) in seen or not hasattr(script, "items"):
+                continue
+            seen.add(id(script))
+            for pl, _sep in script.items:
+                for stage in pl.stages:
+                    if not isinstance(stage, Compound):
+                        continue
+                    out.append(stage)
+                    stack.extend(b for b in stage.body if hasattr(b, "items"))
+                    for w in list(stage.header) + [r.target for r in stage.redirects if r.target is not None]:
+                        stack.extend(p.body for p in active_parts(w.parts) if p.body is not None)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_JSON_TOOL_FLAGS = ("--sort-keys", "--no-ensure-ascii", "--json-lines", "--tab", "--no-indent", "--compact")
+
+
+def _json_tool_prints_only(res):
+    """`python -m json.tool [options] infile`: one positional and no outfile, so it only prints what it reads.
+
+    Only as written: an assignment (PYTHONPATH, PYTHONSTARTUP ...) or a wrapper in front of it can change what runs."""
+    if not re.fullmatch(r"python[0-9.]*", res.name or "") or res.payload is not None:
+        return False
+    if res.assignments or res.wrappers or res.unresolved is not None:
+        return False
+    vals = res.argv()
+    if any(v is None for v in vals) or "-m" not in vals:
+        return False
+    k = vals.index("-m")
+    if vals[k + 1:k + 2] != ["json.tool"] or not all(re.fullmatch(r"-[BEIsSuqR]+", v) for v in vals[:k]):
+        return False
+    positional, rest = 0, vals[k + 2:]
+    while rest:
+        v, rest = rest[0], rest[1:]
+        if v == "--indent" and rest:
+            rest = rest[1:]
+        elif v in _JSON_TOOL_FLAGS or v.startswith("--indent="):
+            continue
+        elif v.startswith("-"):
+            return False
+        else:
+            positional += 1
+    return positional == 1
+
+
+def _simple_command_texts(command):
+    """Each simple command's own text (words, redirection targets, heredoc bodies) on one line, None when unparsed.
+
+    A `python -m json.tool <file>` that only prints is left out: it is handed the file to read."""
+    sites = _parsed_sites(command)
+    if sites is None:
+        return None
+    out = []
+    for site, res in sites:
+        if _json_tool_prints_only(res):
+            continue
+        text = " ".join([w.text for w in _site_words(site.cmd)]
+                        + [r.hd.body for r in site.cmd.redirects if r.hd is not None])
+        out.append(text.replace("\n", " "))
+    return out
+
+
+def _xargs_fed_writer(command):
+    """A listed write verb run by xargs: its operands come from its input, so whatever that names may be written."""
+    for _site, res in _parsed_sites(command) or ():
+        if res.head is not None and any(name == "xargs" for name, _opts in res.wrappers):
+            if grep(ARTIFACT_WRITE_VERB_RE, " ".join(w.text for w in (res.head,) + tuple(res.args))):
+                return True
+    return False
 
 
 COMMIT_GRANT_PREFIX = "claude-commit-grant-"  # the name scripts/write-commit-grant.py gives each grant
@@ -1997,6 +2505,240 @@ def consent_flag_rule(command, payload):
 BULK_NAMES = ("claude-bulk-commit-sentinel-", "write-bulk-commit-sentinel.py", "userprompt-bulk-commit-capability.py")
 
 
+_BULK_READERS = frozenset({"ls", "stat", "cat", "file", "wc", "head", "tail", "grep", "egrep", "fgrep", "rg", "jq",
+                           "find", "test", "[", "git"})
+"""The commands that may name the bulk sentinel or its writers: each only reads what it is handed."""
+_BULK_FILTERS = _BULK_READERS | {"sort", "uniq", "cut", "nl", "less", "more", "column", "tr"}
+"""What may read a pipe or xargs input that carries one of the names."""
+_BULK_CODE_ARG = frozenset({"sed", "gsed", "awk", "gawk", "mawk", "nawk", "eval", "source", ".", "trap", "su", "ssh",
+                            "watch", "parallel", "flock", "script", "tmux", "screen", "expect", "make"})
+"""Commands whose arguments are code: a name anywhere in them is run, not read (sed's `w` writes a file)."""
+_BULK_INTERPRETER = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|i?python[0-9.]*|node(js)?[0-9.]*|perl[0-9.]*|ruby[0-9.]*"
+                               r"|php[0-9.]*|lua[0-9.]*)")
+_BULK_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
+                                "-fls"})
+_GIT_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
+                             "--super-prefix", "--attr-source"})
+_GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit", "rm", "mv", "restore", "checkout",
+                        "switch", "reset", "blame", "annotate", "ls-files", "ls-tree", "cat-file", "rev-parse",
+                        "rev-list", "shortlog", "whatchanged", "describe", "check-ignore", "check-attr", "diff-tree",
+                        "diff-files", "diff-index", "range-diff", "reflog", "branch", "tag", "merge-base", "name-rev",
+                        "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
+"""git subcommands that take a protected name as a path or message to read, never as code or an output file."""
+_GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
+"""Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
+_BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
+"""Builtins whose arguments are assignments: a name in one is carried in a variable to a later command."""
+_BULK_FILTER_OPTS = {
+    # name: (short flags, short options taking a value, exact long flags, exact long options taking a value, digits)
+    "sort": ("bdfgiMhnRrVsuzcCm", "ktSTo", {"--ignore-leading-blanks", "--dictionary-order", "--ignore-case",
+             "--general-numeric-sort", "--ignore-nonprinting", "--month-sort", "--human-numeric-sort",
+             "--numeric-sort", "--random-sort", "--reverse", "--version-sort", "--stable", "--unique",
+             "--zero-terminated", "--merge", "--check", "--debug"},
+             {"--key", "--field-separator", "--buffer-size", "--temporary-directory", "--output", "--parallel"}, False),
+    "uniq": ("cdDiuz", "fsw", {"--count", "--repeated", "--ignore-case", "--unique", "--zero-terminated"},
+             {"--skip-fields", "--skip-chars", "--check-chars"}, True),
+    "head": ("qvz", "cn", {"--quiet", "--silent", "--verbose", "--zero-terminated"}, {"--bytes", "--lines"}, True),
+    "tail": ("qvzfF", "cns", {"--quiet", "--silent", "--verbose", "--zero-terminated", "--follow", "--retry"},
+             {"--bytes", "--lines", "--sleep-interval"}, True),
+    "wc": ("lwcmL", "", {"--lines", "--words", "--bytes", "--chars", "--max-line-length"}, set(), False),
+    "less": ("RrSNnFXEeiIMmsqQcfKwWJaBGL~", "xyzbhjpP", {"--RAW-CONTROL-CHARS", "--raw-control-chars",
+             "--chop-long-lines", "--LINE-NUMBERS", "--line-numbers", "--quit-if-one-screen", "--no-init",
+             "--ignore-case", "--IGNORE-CASE", "--squeeze-blank-lines", "--quiet", "--silent", "--no-lessopen"},
+             set(), True),
+    "more": ("dflcpsu", "n", {"--silent", "--logical", "--no-pause", "--print-over", "--clean-print", "--squeeze",
+             "--plain"}, {"--lines"}, True),
+}
+"""The options a filter (or a reader fed by a pipe or xargs) may carry while a command names the sentinel or a
+writer: none runs a program (sort --compress-program), reads a list of files or keys (--files0-from, less -k) or
+writes a file (less -o/-O/--log-file; sort -o is a write target checked apart). A long option counts only spelled in
+full, so no abbreviation (`--compress-prog`, `--c`) reaches one off the list; less takes no `+cmd` operand. cut, tr,
+nl and column have no option that runs, reads a named list or writes, so they carry any."""
+
+
+def _bulk_filter_runs(res):
+    """True when a filter's (or fed reader's) options leave its allow-list (_BULK_FILTER_OPTS), when a fed git
+    could run a program (_git_runs_bulk_name), or a fed rg, file or find runs or writes (--pre, -C, -exec ...)."""
+    name = res.name
+    vals = [w.value() for w in res.args]
+    if name == "git":
+        return _git_runs_bulk_name(res)
+    if name == "rg":
+        return any(v is None or v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals)
+    if name == "file":
+        return any(v is None or v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals)
+    if name == "find":
+        return any(v is None or v in _BULK_FIND_ACTIONS for v in vals)
+    spec = _BULK_FILTER_OPTS.get(name)
+    if spec is None:
+        return False
+    flags, valued, long_flags, long_valued, digits = spec
+    k = 0
+    while k < len(vals):
+        v = vals[k]
+        k += 1
+        if v is None:
+            return True
+        if v == "--":
+            break
+        if name == "less" and v.startswith("+"):
+            return True
+        if v.startswith("--"):
+            key = v.split("=", 1)[0]
+            if key in long_valued:
+                k += 0 if "=" in v else 1
+            elif key not in long_flags or "=" in v:
+                return True
+            continue
+        if not v.startswith("-") or v == "-":
+            continue
+        i = 1
+        while i < len(v):
+            ch = v[i]
+            if ch in valued:
+                k += 0 if i + 1 < len(v) else 1
+                break
+            if not (ch in flags or (digits and ch.isdigit())):
+                return True
+            i += 1
+    return False
+
+
+def _bulk_mentions(text):
+    return bool(text) and any(name in text for name in BULK_NAMES)
+
+
+def _bulk_word_mentions(w):
+    return _bulk_mentions(w.text) or _bulk_mentions(w.value() or "")
+
+
+_BULK_GLOB_SAFE = frozenset({"ls", "stat", "cat", "wc", "head", "tail", "grep", "egrep", "fgrep", "jq", "test", "[",
+                             "cut", "nl", "column", "tr"})
+"""Readers and filters with no option that runs a program or writes a file: a glob of theirs that could expand to
+an option (`grep -l <name> *.py`) only changes what they read or print."""
+
+
+def _bulk_static_args(name, args):
+    """True when every word is a plain literal or a glob whose option, if any, is fixed by its literal text.
+
+    A glob passes when its literal prefix is non-empty and does not start with `-` (`hooks/*.py`), spells a whole
+    long option before `=` (`--include=*.py`, its key checked as a literal), follows a `--`, or belongs to a command
+    of _BULK_GLOB_SAFE. A variable, a `${x:-..}` default, a brace expansion or a `$(..)`/backtick substitution can
+    spell an option (find -exec/-fprintf, rg --pre, file -C, git --ext-diff/--output) that no literal check sees, so
+    beside a protected name a reader or filter takes none."""
+    ended = False
+    for w in args:
+        v = w.value()
+        if v is not None:
+            ended = ended or v == "--"
+            continue
+        if any(p.kind not in ("lit", "glob") for p in w.parts):
+            return False
+        prefix = w.static_prefix()
+        if ended or (prefix and not prefix.startswith("-")) or re.fullmatch(r"--[A-Za-z0-9][A-Za-z0-9-]*=.*", prefix):
+            continue
+        if name not in _BULK_GLOB_SAFE:
+            return False
+    return True
+
+
+def _bulk_standalone(w):
+    """A word that is the protected path or a writer script, not text that merely contains the name.
+
+    A computed word that carries a name is read as the name: what it expands to is not known."""
+    v = w.value()
+    if v is None:
+        return _bulk_mentions(w.text)
+    for script in BULK_NAMES[1:]:
+        if v == script or v.endswith("/" + script):
+            return True
+    return v.rsplit("/", 1)[-1].startswith(BULK_NAMES[0]) and not any(c in v for c in " \t\n")
+
+
+_GIT_INERT_CONFIG_RE = re.compile(
+    r"color\.[a-z]+(=(never|always|auto|true|false))?"
+    r"|core\.pager=(cat|less|more)"
+    r"|core\.(quotepath|abbrev)(=[a-z0-9]+)?"
+    r"|log\.(abbrevcommit|decorate|follow|showroot|date)(=[a-z0-9:_-]*)?"
+    r"|diff\.(renames|context|algorithm|colormoved|colormovedws|noprefix|mnemonicprefix|relative|interhunkcontext"
+    r"|indentheuristic|statgraphwidth|suppressblankempty|wserrorhighlight)(=[a-z0-9,_-]*)?"
+    r"|grep\.(patterntype|linenumber|column|extendedregexp|fullname)(=[a-z0-9_-]*)?"
+    r"|status\.(showuntrackedfiles|short|branch|relativepaths|aheadbehind)(=[a-z0-9_-]*)?"
+    r"|advice\.[a-z]+(=(true|false))?", re.IGNORECASE)
+"""The exact `git -c` keys that only change how git prints: two segments, a value with no dot or path. Any other
+setting (diff.external, diff.<driver>.textconv or .command, core.pager=<program>, core.editor, core.hooksPath,
+core.sshCommand, include.path, alias.*, a filter or a credential helper, safe.directory ...) can make git run a
+program or read another repository's config, so beside a protected name it is refused."""
+_GIT_RUN_KEY_RE = re.compile(r"[^=]*\.(command|textconv|external|driver|program|cmd|helper|path)(=.*)?", re.IGNORECASE)
+
+
+def _git_config_inert(setting):
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting)) and \
+        not _GIT_RUN_KEY_RE.fullmatch(setting)
+
+
+
+def _git_runs_bulk_name(res):
+    """A git that names one of the names may run or write it.
+
+    A name in git's global options (`-c alias.x=!...`, `-c core.pager=...`) is run later. Only a subcommand of
+    _GIT_PLAIN reads what it is handed (`git config`, difftool -x, bisect run, submodule foreach, an alias, a
+    computed subcommand all do not), and only without --output, --ext-diff or grep's -O / --open-files-in-pager
+    (a long option's unique prefix counts, as git accepts it)."""
+    args = list(res.args)
+    k = 0
+    while k < len(args):
+        v = args[k].value()
+        if v is None or not v.startswith("-"):
+            break
+        if _bulk_word_mentions(args[k]):
+            return True
+        if v.startswith("--exec-path=") or v.startswith("--config-env"):
+            return True
+        if v in _GIT_VALUE_OPTS and k + 1 < len(args):
+            k += 1
+            if _bulk_word_mentions(args[k]):
+                return True
+            if v == "-c" and not _git_config_inert(args[k].value()):
+                return True
+        k += 1
+    if k >= len(args):
+        return False
+    sub = args[k].value()
+    if sub not in _GIT_PLAIN:
+        return True
+    for w in args[k + 1:]:
+        v = w.value() if w.value() is not None else w.text
+        if v == "--":
+            break
+        if v.startswith("--") and len(v.split("=", 1)[0]) >= 4 and any(
+                o.startswith(v.split("=", 1)[0]) for o in _GIT_RUN_OR_WRITE_OPTS):
+            return True
+        if sub == "grep" and v.startswith("-") and not v.startswith("--") and "O" in v:
+            return True
+    return False
+
+
+def bulk_sentinel_decision(cmd):
+    """PURE_READ, DENY or TOKENIZER_ERROR for a command naming the bulk-commit sentinel or its writers.
+
+    The per-simple-command reading (_relaxed_bulk_sentinel_decision) decides only a command of the strict shape
+    _relaxation_shape_ok accepts. Any other command gets the one-bare-read reading (_base_bulk_sentinel_decision)
+    first: its refusal stands, and when it passes the per-command reading must pass too. Residual over-block: a
+    compound, a function or a builtin capture next to a name is refused even when it only reads
+    (`for f in hooks/*.py; do grep -l write-bulk-commit-sentinel.py "$f"; done`).
+    """
+    if _arg_write_named(cmd, _bulk_mentions):
+        return 'DENY'
+    if _relaxation_shape_ok(cmd, _bulk_mentions):
+        return _relaxed_bulk_sentinel_decision(cmd)
+    verdict = _base_bulk_sentinel_decision(cmd)
+    if verdict != 'PURE_READ':
+        return verdict
+    return _relaxed_bulk_sentinel_decision(cmd)
+
+
 def _active_substitution(text):
     """True when $( <( >( or ` is live: unquoted, or $( and ` inside "..". '..' and $'..' bodies are inert."""
     unq, single, double, ansi = 0, 1, 2, 3
@@ -2049,7 +2791,7 @@ def _ansi_decode(s):
         return None
 
 
-def bulk_sentinel_decision(cmd):
+def _base_bulk_sentinel_decision(cmd):
     """PURE_READ, DENY or TOKENIZER_ERROR for a command naming the bulk-commit sentinel or its writers.
 
     Only one bare read of the protected path passes (one of ls stat cat file wc head tail grep jq find test [, or
@@ -2107,6 +2849,88 @@ def bulk_sentinel_decision(cmd):
     return 'DENY'
 
 
+
+
+def _relaxed_bulk_sentinel_decision(cmd):
+    """PURE_READ, DENY or TOKENIZER_ERROR for a command naming the bulk-commit sentinel or its writers.
+
+    Each simple command lib/shell_parse.py's walk reaches (nested payloads included) is read on its own. One that
+    names the path or a writer passes only as a reader (ls stat cat file wc head tail grep egrep fgrep rg jq find test
+    [ git): not rg --pre or --hostname-bin, not file -C, not a find write or exec action, not git outside its plain
+    read subcommands or with a run or output option (see _git_runs_bulk_name). A command whose arguments are code
+    (sed, awk, eval, source, a shell or interpreter given -c/-e or a heredoc) or assignments (export, declare, local,
+    readonly, typeset, alias, let) is refused when they carry a name; any other command when one of its words is the
+    name itself (a name inside a longer argument is text). Refused too: a name in an assignment (a prefix one or one
+    handed to env) or a wrapper's option, a for/select word list carrying one, `$_` (or BASH_REMATCH, BASH_COMMAND,
+    BASH_ARGV) anywhere in a command that names one, a computed command beside a name, a non-filter fed by a pipe or
+    xargs while the command names one, and a write target that names one or cannot be read. The
+    sentinel is minted only by the userprompt-bulk-commit-capability hook, never from Bash. A command the parser
+    cannot read is TOKENIZER_ERROR.
+    """
+    sites = _parsed_sites(cmd)
+    if sites is None:
+        return 'TOKENIZER_ERROR'
+    named = _bulk_mentions(cmd)
+    if named and _carries_last_arg(cmd):
+        return 'DENY'
+    if named:
+        compounds = _compounds(cmd)
+        if compounds is None or any(k.kind in ("for", "select") and any(_bulk_word_mentions(w) for w in k.header[1:])
+                                    for k in compounds):
+            return 'DENY'
+    for site, res in sites:
+        c = site.cmd
+        words = _site_words(c)
+        bodies = [r.hd.body for r in c.redirects if r.hd is not None]
+        name = res.name
+        bodies += [r.target.text for r in c.redirects if r.op == "<<<" and r.target is not None]
+        fed = "pipe" in site.fed or any(n == "xargs" for n, _o in res.wrappers)
+        if named and (site.dynamic or (fed and name not in _BULK_FILTERS)):
+            return 'DENY'
+        if named and (fed or name in _BULK_FILTERS - _BULK_READERS) and _bulk_filter_runs(res):
+            return 'DENY'
+        if named and name not in _BULK_FILTERS | _BULK_BENIGN and any(w.value() is None for w in res.args):
+            return 'DENY'
+        if named and name in _BULK_FILTERS and not _bulk_static_args(name, res.args):
+            return 'DENY'
+        if not (any(_bulk_word_mentions(w) for w in words) or any(_bulk_mentions(b) for b in bodies)):
+            continue
+        if any(_bulk_word_mentions(a.word) for a in tuple(c.assignments) + tuple(res.assignments)) or \
+                site.templated or name is None:
+            return 'DENY'
+        if any(v is not None and _bulk_word_mentions(v) for _n, opts in res.wrappers for _o, v in opts):
+            return 'DENY'
+        if name in _BULK_CODE_ARG or name in _BULK_DECLARE or \
+                any(_bulk_mentions(b) for b in bodies) and name not in _BULK_READERS:
+            return 'DENY'
+        if _BULK_INTERPRETER.fullmatch(name) and (res.payload is not None or any(
+                re.fullmatch(r"-[a-zA-Z]*[ce][a-zA-Z]*", w.value() or "") for w in res.args)):
+            return 'DENY'
+        if name in _BULK_READERS:
+            vals = [w.value() if w.value() is not None else w.static_prefix() for w in res.args]
+            if name == "rg" and any(v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals):
+                return 'DENY'
+            if name == "file" and any(v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals):
+                return 'DENY'
+            if name == "find" and any(v in _BULK_FIND_ACTIONS for v in vals):
+                return 'DENY'
+            if name == "git" and _git_runs_bulk_name(res):
+                return 'DENY'
+            continue
+        if any(_bulk_standalone(w) for w in [res.head] + list(res.args) + [r.target for r in c.redirects
+                                                                           if r.target is not None]):
+            return 'DENY'
+    try:
+        from lib.shell_parse import parse, write_targets
+        targets = write_targets(parse(cmd))
+    except Exception:  # noqa: BLE001
+        return 'DENY'
+    for t in targets:
+        if _bulk_mentions(t.path or "") or (t.word is not None and _bulk_word_mentions(t.word)) or not t.decidable:
+            return 'DENY'
+    return 'PURE_READ'
+
+
 def bulk_sentinel_rule(command):
     if not any(name in command for name in BULK_NAMES):
         return
@@ -2116,12 +2940,15 @@ def bulk_sentinel_rule(command):
                "quote), so it is refused (fail-closed)", f"Command: {command}", released_line())
     elif decision != 'PURE_READ':
         refuse("BLOCKED: bulk-commit-sentinel-write — Bash command references the protected bulk sentinel path or a "
-               "sentinel-writer script (write-bulk-commit-sentinel.py) in a compound, write or run context — refused",
+               "sentinel-writer script (write-bulk-commit-sentinel.py) in a write or run context — refused",
                f"Command: {command}",
                "REASON: the bulk-commit sentinel is minted only by the userprompt-bulk-commit-capability hook, never "
-               "from Bash. Only one bare 'ls|stat|cat|file|wc|head|tail|grep|jq|find|test|[' (or git) invocation "
-               "of the path, with no separator, substitution, recursive shell, redirection, tee, xargs or find write "
-               "action, passes.", released_line())
+               "from Bash. A name passes only as an argument of a reader (ls|stat|cat|file|wc|head|tail|grep|egrep|"
+               "fgrep|rg|jq|find|test|[ or a plain git read) with no rg --pre, file -C, find write or exec action, "
+               "git global option, git --output/-O/difftool/bisect/submodule-style run, no write target, code (sed, "
+               "awk, eval, -c, heredoc), assignment, env variable, for/select list or $_ carrying it, and no "
+               "non-filter fed by a pipe or xargs, and no filter option that runs a program or reads or writes a named "
+               "file (sort --compress-program, --files0-from, less -o).", released_line())
 
 
 # ── Hard-banned scripts (BS-19) ──────────────────────────────────────────────
