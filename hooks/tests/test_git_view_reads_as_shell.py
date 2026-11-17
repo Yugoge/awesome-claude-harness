@@ -64,6 +64,9 @@ def test_a_commit_message_stays_text_after_a_config_option(command):
     ("git cl''ean -fd", "clean", ["-fd"]),
     ("GIT_EXTERNAL_DIFF='/bin/rm -rf /tmp/qa-t' git diff", "diff", []),
     ("bash -c $'git commit -m y'", "commit", ["-m", "y"]),
+    ('git -C "" push --force', "push", ["--force"]),
+    ("git -C '' reset --hard", "reset", ["--hard"]),
+    ('git -c "" clean -n', "clean", ["-n"]),
 ])
 def test_words_are_read_as_the_shell_reads_them(command, subcommand, args):
     (inv,) = classify_git_command(command)[0]
