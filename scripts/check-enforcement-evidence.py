@@ -1052,7 +1052,7 @@ def check_claims(args, report):
 
     # 2. The residual classes RISK-3 names stay closed: each form still reaches git.
     missed = [form for form in CLOSED_BOUNDARY_FORMS
-              if probe_witness(form, args.classifier, "git", "git")[0] != "detected"]
+              if probe_witness(form, args.classifier, "git")[0] != "detected"]
     if not missed:
         report.ok("wrapper flags and leading redirections before git still classify as git")
     else:
