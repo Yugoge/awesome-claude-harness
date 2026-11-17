@@ -1648,9 +1648,9 @@ CHANNEL = "channel:cli-hook-output"
 # CURRENT names (tests/fixtures/cli, scripts/cli-fixture-record.sh).
 CHANNEL_FIXTURES = "tests/fixtures/cli"
 CHANNEL_DECLARATION = CHANNEL_FIXTURES + "/CURRENT/shapes.json"
-# Rules reported but not yet failing the check: the hand-built records of the tests that lane P15-L3
-# moves onto the recorded fixture. Empty this once L3 has merged: the check is then on at zero.
-REPORTED_ONLY = frozenset({"C1-synth"})
+# Rules reported but not yet failing the check. Empty since P15-L3 moved the tests' hand-built records
+# onto the recorded fixture: every channel rule fails the check.
+REPORTED_ONLY: frozenset = frozenset()
 
 
 def _production(component: str) -> bool:
