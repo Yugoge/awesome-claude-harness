@@ -1344,8 +1344,8 @@ def text_names_removal(text):
 _RM_SHORT_OPTS = frozenset("fiIrRdv")
 _RM_LONG_OPTS = frozenset(("--force", "--recursive", "--dir", "--verbose", "--one-file-system",
                            "--preserve-root", "--preserve-root=all"))
-_RM_ENTRY_CAP = 4096
-_RM_PSEUDO_FS = ("/proc", "/dev", "/sys")  # resolved per process, never a temp path  # entries one proof may read; more is "cannot prove", never allow
+_RM_ENTRY_CAP = 4096  # entries one proof may read; more is "cannot prove", never allow
+_RM_PSEUDO_FS = ("/proc", "/dev", "/sys")  # resolved per process, never a temp path
 
 
 def _rm_harness_homes():
