@@ -252,3 +252,35 @@ def test_nothing_to_say_prints_nothing(tmp_path):
     payload["tool_input"]["todos"][-1]["status"] = "in_progress"
     result = _run_loop(payload, project_dir, home)
     assert result.returncode == 0 and result.stdout == ""
+
+
+# --------------------------------------------------------------------------
+# Only the orchestrator's own list: a subagent's payload is a no-op.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("hours", [1, -1])
+def test_a_subagents_all_completed_list_is_not_the_orchestrators(tmp_path, hours):
+    """A subagent's hook payload carries its parent's session_id plus its own
+    agent_id (lib/overnight.py's module docstring), so locate() reaches the
+    orchestrator's record from it. A built-in or plugin agent allowed TodoWrite
+    finishing its own list must get neither the cycle reset nor the
+    session-complete note: empty stdout, exit 0. The same payload without
+    agent_id (the orchestrator's) still gets the text."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    session_id = "overnight-sess-subagent"
+    state_path = _state_path(project_dir, session_id)
+    fx.write_overnight_state(state_path, session_id, cycle_count=1, end_time_minutes_from_now=60 * hours)
+    _retro_reports(project_dir, session_id, 1)
+    payload = fx.all_completed_todo_payload(session_id, transcript_path="")
+
+    orchestrator = _run_loop(payload, project_dir, home)
+    assert orchestrator.returncode == 0 and _said(orchestrator)
+
+    result = _run_loop({**payload, "agent_id": "a1b2c3d4e5f6a7b8c"}, project_dir, home)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
