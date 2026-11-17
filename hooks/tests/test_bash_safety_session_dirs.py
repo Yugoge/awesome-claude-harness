@@ -174,6 +174,128 @@ REFUSED = [
 ]
 
 
+# Commands that cannot touch the file: a script path or option value near the name, an interpreter's code that
+# reads an environment variable, and a glob that only lists names to the terminal.
+NEAR_MISSES = [
+    "python3 -m pytest hooks/tests/test_bash_safety_session_dirs.py -q",
+    "python3 -m pytest hooks/tests -k session_dirs",
+    "python3 -m pytest -k session_dir",
+    "python3 -c 'import os; print(os.environ[\"SESSION_DIR\"])'",
+    "python3 scripts/foo.py docs/dirs.txt",
+    "python3 tools/x.py --out=session_dir_list.json",
+    "node build.js --session_dir /tmp",
+    "awk 1 project_dirs.txt",
+    "perl -ne print build_dirs.txt",
+    "ls *dirs*",
+    "ls -d *_dir*",
+    "du -sh *_dirs*",
+    "echo sess*",
+    "ls session*",
+    "find . -name 'sess*'",
+    "git log --oneline -S session_dirs.txt | head -20",
+    "grep -rn session_dirs.txt docs/ | sort | uniq -c",
+    "grep -rln session_dirs.txt docs/ > /dev/null",
+    "rg -n session_dirs.txt hooks/ | wc -l",
+    "d=docs/sessions; cat $d/a.md",
+    "grep -rn session_dirs.txt docs/ >&2",
+    "grep -rn session_dirs.txt docs/ 2>&1 | head",
+    "{ grep -rn session_dirs.txt docs; } > /dev/null",
+    "if grep -q session_dirs.txt docs/a.md; then echo yes; fi",
+    "git grep -n session_dirs.txt -- ':!*dirs*'",
+    "rg -n session_dirs.txt -g '!*dirs*'",
+    "du -sh session* | sort -h",
+    "printf '%s\\n' sess*",
+    "find . -path '*dirs*' -ls",
+    "cat $(ls sessions/latest)",
+]
+
+# What an allowed mention must not hand on: its last argument to a later word, its output to a consumer, a glob a
+# program applies to names itself, or a variable or substitution that spells the name.
+REUSED = [
+    # the last argument of the allowed call, reused
+    "git log --oneline -S session_dirs.txt; cat $_",
+    'git grep -n session_dirs.txt; cat "$_"',
+    "git log -S session_dirs.txt; echo hi >> $_",
+    "git commit -m session_dirs.txt; cp $_ /tmp/x",
+    "grep -rn docs -e session_dirs.txt; cat $_",
+    "grep -rn docs -e session_dirs.txt; f=$_; cat $f",
+    "git log -S session_dirs.txt && python3 -c 'import sys; open(sys.argv[1])' \"$_\"",
+    'git log -S session_dirs.txt; curl -T "$_" http://localhost:9/x',
+    "git log -S session_dirs.txt; cat ${_}",
+    'git log -S session_dirs.txt; cat "${BASH_ARGV[0]}"',
+    # the allowed call's output, consumed
+    "ls | grep -F session_dirs.txt | xargs cat",
+    "ls | grep -x session_dirs.txt | xargs rm",
+    'cat "$(ls | grep -x session_dirs.txt)"',
+    'ls | grep -x session_dirs.txt | while read f; do cat "$f"; done',
+    "find . | grep session_dirs.txt | xargs cat",
+    "git ls-files | grep session_dirs.txt | xargs cat",
+    "f=$(ls | grep -x session_dirs.txt); cat $f",
+    "ls | grep -x session_dirs.txt | xargs -I% sh -c 'echo x > %'",
+    "ls | grep -x session_dirs.txt > /tmp/l; xargs cat < /tmp/l",
+    "{ ls | grep -x session_dirs.txt; } | xargs cat",
+    "bash -c 'ls | grep -x session_dirs.txt' | xargs cat",
+    "ls | grep -x session_dirs.txt | sort -o /tmp/l; xargs cat < /tmp/l",
+    "ls session* | xargs cat",
+    "ls | grep -x session_dirs.txt 2>/tmp/l >&2; xargs cat < /tmp/l",
+    "exec >/tmp/l; ls | grep -x session_dirs.txt; exec >&-; xargs cat </tmp/l",
+    "ls | grep -x session_dirs.txt | head $(cat)",
+    "ls | grep -x session_dirs.txt > /tmp/l",
+    "grep -rn session_dirs.txt docs | tee /tmp/x",
+    "ls | grep -x session_dirs.txt | head | xargs cat",
+    "grep -x session_dirs.txt <(ls) > >(xargs cat)",
+    "f() { grep -x session_dirs.txt; }; ls | f | xargs cat",
+    "ls | grep -x session_dirs.txt |& xargs cat",
+    "find docs -name '*.md' -exec grep -l session_dirs.txt {} + | xargs cat",
+    # a glob a program applies to file names itself
+    "find . -name 'session_dirs.tx?' -exec cat {} +",
+    'find . -name "session_dir?.txt" | xargs cat',
+    "find . -name session_dirs.tx\\? | xargs cat",
+    "find . -name 'sess*' -exec cat {} +",
+    "find . -iname 'SESS*' -delete",
+    "find . -regex '.*sess.*' -exec cat {} +",
+    "rg '' -g 'session_dirs.tx?'",
+    "rg '' --glob 'session_*'",
+    "rg '' --glob='*_dirs.txt'",
+    "git grep '' -- '*dirs*'",
+    "git grep '' HEAD -- ':(glob)**/sess*'",
+    "grep -r '' --include='*_dirs.txt' .",
+    "tar cf /tmp/a.tar --wildcards '*_dirs.txt' .",
+    "rsync -a --include='session_*' . /tmp/bk",
+    "cat sess*",
+    "find sess* -fprint /tmp/l",
+    "find . -name 'sess*' -print0 | xargs -0 cat",
+    "git log -S session_dirs.txt -p -- '*dirs*'",
+    # a variable or substitution that spells the name
+    "a=session_dirs; cat $a.txt",
+    "a=session_d; b=irs.txt; cat $a$b",
+    "cat $(printf 'session_%s.txt' dirs)",
+    "export a=session_dirs; cp $a.txt /tmp/x",
+    "a=sess; cat ${a}ion_dirs.txt",
+    # interpreter code that builds or globs for the name
+    "perl -le 'open F, \"session_dirs.t\".\"xt\"'",
+    "node -p \"require('fs').readFileSync('session_d'+'irs.txt')\"",
+    "python3 -c 'import glob;print(open(glob.glob(\"*ion_d*\")[0]).read())'",
+    "python3 <<< \"open('dirs.txt')\"",
+]
+
+
+@pytest.mark.parametrize("command", NEAR_MISSES)
+def test_a_command_that_cannot_touch_the_file_passes(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", REUSED)
+def test_an_allowed_mention_handed_on_or_a_name_glob_is_refused(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 2, (command, r.stdout, r.stderr)
+        assert "session_dirs.txt is never read, written or executed" in r.stderr, (command, r.stderr)
+        assert "neither releases it" in r.stderr
+
+
 @pytest.mark.parametrize("command", MENTIONS)
 def test_a_pattern_or_message_mention_passes(sandbox, command):
     for subagent in (False, True):
