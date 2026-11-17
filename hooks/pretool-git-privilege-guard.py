@@ -588,11 +588,20 @@ def _negates_dry_run(name):
     return len(name) > 5 and 'no-dry-run'.startswith(name[2:])
 
 
+def _separate_value_is_plain(args, k):
+    """True when the word after args[k], an option's separately given value,
+    is there, static and no `<transport>::` address."""
+    return k + 1 < len(args) and args[k + 1] is not None and '::' not in args[k + 1]
+
+
 def _push_is_dry_run(args):
     """True when push arguments ask for a dry run (`-n`, a cluster holding n,
     `--dry-run`, not undone by a later `--no-dry-run`) and name no program git
-    would run for it: no --receive-pack/--exec, no `<transport>::` address.
-    The value of -o/--push-option/--repo is not an option."""
+    would run for it: no --receive-pack/--exec, no `<transport>::` address,
+    attached, an operand or the separate value of an option (`--repo ext::...`).
+    The value of -o/--push-option/--repo is not an option; a computed word, or
+    a long option left as a prefix of one that takes a value, reads as no dry
+    run."""
     dry = False
     operands_only = False
     k = 0
@@ -610,13 +619,21 @@ def _push_is_dry_run(args):
                 dry = True
             elif _negates_dry_run(name):
                 dry = False
-            elif name in _PUSH_VALUE_LONG and not eq:
-                k += 1
+            elif name in _PUSH_VALUE_LONG:
+                # An attached value was read with the word itself.
+                if not eq:
+                    if not _separate_value_is_plain(args, k):
+                        return False
+                    k += 1
+            elif any(opt.startswith(name) for opt in _PUSH_VALUE_LONG | _PUSH_RUNS_PROGRAM):
+                return False
         elif word.startswith('-') and len(word) > 1:
             letters = word[1:]
             for n, ch in enumerate(letters):
                 if ch == 'o':
                     if n == len(letters) - 1:
+                        if not _separate_value_is_plain(args, k):
+                            return False
                         k += 1
                     break
                 if ch == 'n':
@@ -644,6 +661,8 @@ def _commit_is_dry_run(args):
             elif _negates_dry_run(name):
                 dry = False
             elif name in _COMMIT_VALUE_OPTS | {'--message', '--file'} and not eq:
+                if k + 1 >= len(args) or args[k + 1] is None:
+                    return False
                 k += 1
         elif word.startswith('-') and len(word) > 1:
             letters = word[1:]
@@ -652,6 +671,8 @@ def _commit_is_dry_run(args):
                     break
                 if ch in _COMMIT_VALUE_SHORT:
                     if n == len(letters) - 1:
+                        if k + 1 >= len(args) or args[k + 1] is None:
+                            return False
                         k += 1
                     break
         k += 1
