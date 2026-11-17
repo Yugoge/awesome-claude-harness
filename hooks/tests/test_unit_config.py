@@ -113,11 +113,17 @@ def test_load_config_bad_schema_version_is_none(cfg_at):
     assert mod._load_config() is None
 
 
-def test_load_config_missing_required_key_is_none(cfg_at):
-    bad = dict(_VALID_CFG)
-    del bad["protected_cmds"]
-    mod, _ = cfg_at(bad)
-    assert mod._load_config() is None
+def test_load_config_missing_required_key_reads_as_empty(cfg_at):
+    # A schema-1 file missing a list key is read with it empty (what scripts/bootstrap
+    # writes when it repairs the file); the other declared entries are kept.
+    partial = dict(_VALID_CFG)
+    del partial["protected_cmds"]
+    partial["protected_services"] = ["demo-daemon"]
+    mod, _ = cfg_at(partial)
+    cfg = mod._load_config()
+    assert cfg["protected_cmds"] == [] and cfg["protected_services"] == ["demo-daemon"]
+    assert mod._read_config()[1:] == (None, ["protected_cmds"])
+    assert mod._config_problem() == ""
 
 
 def test_load_config_required_key_wrong_type_is_none(cfg_at):

@@ -1129,11 +1129,13 @@ def check_protected_runtime(home):
     try:
         config = _load_module(os.path.join(home, "hooks", "lib", "runtime_guard", "config.py"),
                               "_render_settings_runtime_guard_config")
-        loaded = config._load_config()
+        # The guard reads a schema-1 file lacking some keys as if they were empty; the check
+        # still fails it, so init (scripts/bootstrap --steps 4) writes the keys in.
+        loaded, problem, missing = config._read_config()
         data_path, required = config.DATA_FILE_PATH, config.REQUIRED_KEYS
     except Exception:  # any import or load failure is a failed check, never a crash
         return _ok("protected-runtime file: cannot load hooks/lib/runtime_guard/config.py", False)
-    if isinstance(loaded, dict):
+    if isinstance(loaded, dict) and not missing:
         return _ok("protected-runtime file: valid", True)
     if os.environ.get("CLAUDE_PROTECTED_RUNTIME_FILE"):
         shown = "$CLAUDE_PROTECTED_RUNTIME_FILE"
@@ -1141,8 +1143,12 @@ def check_protected_runtime(home):
         user_home = os.path.expanduser("~").rstrip("/")
         shown = "~" + data_path[len(user_home):] if data_path.startswith(user_home + "/") \
             else data_path
+    cause = problem or "it lacks %s" % ", ".join(missing)
+    fix = ("run scripts/bootstrap --steps 4, which adds them as empty lists and keeps a backup" if loaded is not None
+           else "run scripts/bootstrap --steps 4" if problem == "the file does not exist"
+           else "fix it by hand; scripts/bootstrap --steps 4 does not rewrite it and says how")
     return _ok("protected-runtime file: missing or incomplete at %s (needs schema_version 1 and "
-               "%d required lists); run scripts/bootstrap" % (shown, len(required)), False)
+               "%d required lists): %s; %s" % (shown, len(required), cause, fix), False)
 
 
 def cmd_check(home):

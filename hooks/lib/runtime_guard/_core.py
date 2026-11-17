@@ -4514,8 +4514,18 @@ def evaluate(command: str, cwd_base: Optional[str] = None, cfg: Optional[dict] =
     cfg = cfg if cfg is not None else _load_config()
     if cfg is None:
         # fail-closed must also see the peeled tails (a front-end-wrapped danger
-        # family under an absent/corrupt config still blocks).
-        return _step1_indeterminate(simple_cmds)
+        # family under an absent/corrupt config still blocks). The refusal names the
+        # file's defect and its recovery (config._config_problem), so a drifted file
+        # is repairable from the message instead of wedging every node/npm command.
+        v = _step1_indeterminate(simple_cmds)
+        if v[0] == "BLOCK":
+            try:
+                why = _config._config_problem()
+            except Exception:  # noqa: BLE001 - the diagnosis is advisory; the block stands
+                why = ""
+            if why:
+                v = _block(v[1], "%s. %s" % (v[2], why))
+        return v
 
     # Runner `-c`/`--call` payloads are shell commands the runner executes —
     # recursively evaluate each under the same cwd so a daemon launch / protected

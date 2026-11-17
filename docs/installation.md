@@ -50,7 +50,12 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
      with `"schema_version": 1` and the keys `protected_cmds`, `protected_launch_paths`,
      `protected_services`, `protected_hotfiles`, `protected_statefiles`,
      `protected_endpoint_paths`, `protected_proc_idents`, `protected_global_bins`,
-     `protected_build_workspaces` and `protected_build_paths`, each an empty list;
+     `protected_build_workspaces` and `protected_build_paths`, each an empty list. An existing
+     schema-1 file that lacks some of these keys (one written before a key existed) is the one
+     exception: init adds each missing key as an empty list, keeps every key and entry already
+     there, and first copies the original to `protected-runtime.json.bak-<UTC timestamp>`. A file
+     init cannot read safely (not JSON, not an object, another `schema_version`, a key that is not
+     a list) is left untouched, and init stops at this step naming the defect and the repair;
 5. installs the git hooks of `hooks/git-hooks/` that are marked for it (the pre-commit hook and
    the pre-push guard) where git runs hooks for the clone (`core.hooksPath` respected), keeping a
    foreign hook of the same name as `<name>.local`, which the installed hook runs last; but only into this repository's own hooks directory: under its git directory,
@@ -249,7 +254,9 @@ clean form either way.
 - every working-file entry is explained by the clean form, the enabled modules or the overlay;
   each one that is not fails the check, named by key path and count only — stage it if it is a
   public edit, or move it into the overlay;
-- `protected-runtime.json` loads with `schema_version` 1 and all its required keys.
+- `protected-runtime.json` loads with `schema_version` 1 and all its required keys (the guard
+  reads a missing list key as empty, but the check fails until `scripts/bootstrap --steps 4`
+  writes it in).
 
 It also lists, without failing, CLI-owned keys whose working value differs from the overlay.
 `scripts/doctor --strict` runs, in place of the checks above, a fresh host-capability handshake
@@ -457,7 +464,7 @@ other mention of `~/.claude` in the prompts only names the default location.
 | **`settings.json` won't load** | Validate both files: `python3 -m json.tool <harness-home>/settings.json` and `python3 -m json.tool <harness-home>/settings.machine.json` — a trailing comma or unquoted key surfaces here. Fix the overlay, then re-run init to re-render. |
 | **`git status` shows `settings.json` modified after init** | The working file holds an entry the overlay does not explain — typically a permission Claude Code wrote ("always allow"). `scripts/doctor` fails on such entries, naming their key paths; move the machine-specific ones into `settings.machine.json` and re-run init. |
 | **A commit is refused by the pre-commit hook** | It names the failed check: `settings.json` staged in machine form (register the filter with `scripts/bootstrap` and re-stage), `settings.machine.json` or `private-literals.txt` in the index (untrack it with `git rm --cached -- <path>`; the file stays on disk), a private literal at `file:line` (remove it from that file), or a missing check script. |
-| **`npm` / `node` / `kill` refused by the runtime guard** | `protected-runtime.json` is missing or invalid (`~/.config/claude/protected-runtime.json`, or `$CLAUDE_PROTECTED_RUNTIME_FILE`). Init creates it when absent; `scripts/doctor` checks it. |
+| **`npm` / `node` / `kill` refused by the runtime guard** | `protected-runtime.json` is missing or invalid (`~/.config/claude/protected-runtime.json`, or `$CLAUDE_PROTECTED_RUNTIME_FILE`); the refusal (`BLOCK STEP1`) names the defect and the repair. `scripts/bootstrap --steps 4` creates it when absent and adds keys a schema-1 file lacks; any other defect is fixed by hand; `scripts/doctor` checks it. |
 | **Helper scripts fail to import** | They expect the venv at `<harness-home>/venv`; re-run init (`scripts/bootstrap`), which creates it when it is missing. |
 | **A commit/push is being refused** | The git privilege guard (`hooks/pretool-git-privilege-guard.py`) exits 2 for an agent `git commit` or `git push` without a live grant from `/commit` or `/push`. As a human, run the git command from your own shell, or `/allow` the exact command; `/do` does not cover `git commit` or `git push`. |
 | **A command is refused and I don't know why** | The hook that refuses it writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED:` or `BLOCKED by` lines — they name the rule or the hook. Check `/tmp/claude-grants/` for any pending structured grants (`/tmp` is the default state directory; `CLAUDE_STATE_DIR` set to an absolute path replaces it). For grant-related refusals, `ls /tmp/claude-push-grant-*.json /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files. |
