@@ -31,7 +31,15 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "denied_path_prefixes": [
         "/src/",
@@ -85,7 +93,15 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -133,7 +149,13 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -181,7 +203,15 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "allowed_write_path_prefixes": [
         "*",
@@ -211,7 +241,15 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -304,7 +342,15 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -348,7 +394,15 @@
         "BashOutput",
         "TaskStop",
         "KillShell",
-        "ToolSearch"
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+        "mcp__plugin_context7_context7__resolve-library-id",
+        "mcp__plugin_context7_context7__query-docs",
+        "mcp__plugin_context7_context7__get-library-docs"
       ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
@@ -1021,5 +1075,6 @@
       "rationale": "graphify: /dev Step 9 enrichment subagent; runs graphify-enrich.py via Bash, which writes the task's run record and focused subgraph under .claude/dev-registry/<task_id>/graphify/ and never the context (the graph cache is graphify-maintain.py's). Its Write grant is scoped to that graphify sub-directory, not the whole dev-registry, so it cannot author peer artifacts. No Skill/Edit (graphify.md uses neither). No write access to protected infra."
     }
   },
-  "_read_only_and_bookkeeping_tools_note": "Every role's allowed_tools names the CLI's read-only and bookkeeping tools (OB-L22): Read, Grep and Glob (search, read-only); TodoWrite and its older read-only TodoRead, and TaskCreate, TaskGet, TaskList and TaskUpdate, which the CLI offers in TodoWrite's place while CLAUDE_CODE_ENABLE_TASKS is on (the agent's own task list); TaskOutput and its older name BashOutput (read the caller's own background task's output); TaskStop and its older name KillShell (stop the caller's own background task, starting none); ToolSearch (loads a deferred tool's schema; that tool's own call is still judged by these rows). None writes a file, runs a command, reaches the network or dispatches an agent; Grep and Glob take no target here, so denied_path_prefixes binds Read only, as before (hooks/tests/test_tool_policy_readonly_bookkeeping.py)."
+  "_read_only_and_bookkeeping_tools_note": "Every role's allowed_tools names the CLI's read-only and bookkeeping tools (OB-L22): Read, Grep and Glob (search, read-only); TodoWrite and its older read-only TodoRead, and TaskCreate, TaskGet, TaskList and TaskUpdate, which the CLI offers in TodoWrite's place while CLAUDE_CODE_ENABLE_TASKS is on (the agent's own task list); TaskOutput and its older name BashOutput (read the caller's own background task's output); TaskStop and its older name KillShell (stop the caller's own background task, starting none); ToolSearch (loads a deferred tool's schema; that tool's own call is still judged by these rows). None writes a file, runs a command, reaches the network or dispatches an agent; Grep and Glob take no target here, so denied_path_prefixes binds Read only, as before (hooks/tests/test_tool_policy_readonly_bookkeeping.py).",
+  "_docs_and_web_tools_note": "Context7, WebFetch and WebSearch (OB-L23, owner decision): dev, qa, ba and the four specialists (architect, product-owner, ui-specialist, user; agents/shared/specialist-protocol.md) name WebFetch, WebSearch and Context7's read-only documentation tools, resolve-library-id, query-docs and its older name get-library-docs, under the server prefix mcp__context7__ and the plugin prefix mcp__plugin_context7_context7__. They are named exactly, never by a wildcard, so a tool the server adds later stays refused until a row names it. They read documentation and the web; none writes a file, runs a command or dispatches an agent. Every other role keeps none of them, and no row names any mcp__github__ tool, so GitHub writes stay refused for every role (hooks/tests/test_tool_policy_docs_and_web.py)."
 }

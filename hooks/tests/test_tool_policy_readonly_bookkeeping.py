@@ -108,9 +108,10 @@ def test_the_set_holds_no_writing_running_network_or_dispatching_tool():
 
 
 def test_the_lane_opens_no_network_or_mcp_tool(monkeypatch):
-    # Context7, WebFetch and WebSearch are lane L23's; this lane leaves graphify, dev and qa without them.
+    # Context7, WebFetch and WebSearch are lane L23's, which grants them to dev and qa (owner decision,
+    # hooks/tests/test_tool_policy_docs_and_web.py); this lane leaves graphify without them.
     _use_current_policy(monkeypatch)
-    for role in ("graphify", "dev", "qa"):
+    for role in ("graphify",):
         for tool in ("WebFetch", "WebSearch", "mcp__context7__resolve-library-id", "mcp__context7__query-docs"):
             allowed, reason = policy_registry.is_allowed(role, tool, None)
             assert not allowed and reason.endswith("not in allowed_tools"), (role, tool)
