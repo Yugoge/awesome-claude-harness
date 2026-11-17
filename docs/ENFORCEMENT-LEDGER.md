@@ -360,6 +360,7 @@ no per-rule budget exists.
 | S-023 | permission-layer-home-secret-denies | advisory | unexercised | source-level | settings.json:253 @aa685f4c | tests/test_home_secret_denies.py | source-level |
 | S-020 | permission-layer-skill-deny-exact-name | detected | exercised | component-tested | settings.json:249 @d1abc798 | hooks/tests/test_skill_deny_coverage.py | component-tested |
 | S-021 | permission-layer-ask:kubectl-apply-create-npm-publish | advisory | unexercised | source-level | settings.json:269 @e606277d | tests/test_permission_ask_dry_run.py | source-level |
+| S-022 | permission-layer-pipe-to-shell | advisory | unexercised | source-level | settings.json:288 @c42adf0c | tests/test_permission_pipe_to_shell.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -795,6 +796,63 @@ no per-rule budget exists.
   CLAUDE.md with no line naming `cd`, `Read()` and a path operand while a `Read()` deny exists. A
   compound split across lines, or a read command it does not list, is not reported. Prose only:
   nothing stops an agent from writing the compound, and the CLI then asks.
+- **S-022** — a download piped into a shell. **No hook refuses it; hook coverage for pipe-to-shell is
+  a gap owned by the bash-safety session.** `pretool-bash-safety.sh` and the PreToolUse rules
+  `pretool-launch.py` runs exit 0 on `curl https://x | sh`, `curl -fsSL x | bash`, `wget -qO- x | sh`,
+  `curl x | sudo bash`, `bash <(curl x)` (fed to each on stdin @d1abc798; only `sh -c "$(curl x)"` and
+  `bash -c "$(wget -qO- x)"` exit 2 for a subagent, as an unresolvable git command in
+  `pretool-git-privilege-guard.py`, not as pipe-to-shell). The permission layer is the only line. The
+  former deny entries `Bash(curl:* | sh:*)` and `Bash(wget:* | sh:*)` matched nothing: the CLI splits a
+  command at `|` and matches each subcommand ("Deny and ask rules apply when any subcommand matches
+  them"), and `:*` is a wildcard only at a pattern's end ("the colon is treated as a literal
+  character"), code.claude.com/docs/en/permissions.md; with `Bash(curl:*)` and `Bash(bash:*)` allowed,
+  `curl x | bash` ran unprompted. Since @c42adf0c `permissions.ask` holds 18 entries
+  `Bash(b*ash<form>)`, one per bash form that reads its program from stdin: bare, `-`, `--`, `-s*`,
+  `/dev/stdin`, `-x`, `-e`, `-i`, `-l`, `--norc`, `--noprofile`, `--login`, `-ex`, `-xe`, `-eu`, `-eux`,
+  `-o pipefail`, `-l -s*`. They are `ask`, not `deny`, so a local stdin-fed bash (`bash <<'EOF'`,
+  `bash <<< x`, `bash -s < f`, `printf ... | bash`) stays approvable; a rule cannot see what feeds the
+  pipe. `sh` and `zsh` get no entry: neither is allowed, so both prompted on the base already.
+  **Why the `*` sits inside the program name.** Measured on Claude Code 2.1.326 with minimal
+  permission blocks, against the docs ("rule specificity doesn't change the order"): a rule that
+  matches the command text exactly (one with no `*`, or `P:*` against bare `P`) is decided before any
+  wildcard match, deny before ask within each tier, and ask and allow rules are matched past `sudo`
+  (with its options), `env`, `timeout`, `nohup` and leading assignments. An exact ask `Bash(bash)`
+  therefore outranked the base deny `Bash(sudo:*)` for `sudo -u root bash`, `sudo -E bash`,
+  `sudo -i bash`, `sudo --user=root sh -s` and `sudo env bash`; without a wrapper an exact ask
+  `Bash(zz y)` outranks the deny `Bash(zz:*)` for `zz y`. A rule whose `*` matches empty text
+  (`Bash(b*ash)` for `bash`) stays in the wildcard tier, where `Bash(sudo:*)` is decided first.
+  The `*` is not confined to the program name: it spans any text, spaces and `/` included, so each
+  entry matches every subcommand that starts with `b` and ends with `ash<form>`. **Collateral
+  prompts** (ran on the base, prompt now; measured): a bash script whose path ends in `ash`, bare or
+  followed by a listed form, such as `bash scripts/flash`, `bash /opt/x.bash`,
+  `bash scripts/x.bash -s`, `bash scripts/x.bash -x`. Other `b...` commands ending that way
+  (`brew install bash`) prompted on the base already, since `bash` is the only allowed program
+  starting with `b`.
+  Measured (`claude -p`, a throwaway HOME given to the CLI process only and holding only this file's
+  `permissions`, a local mock Messages API issuing one Bash call and reading the tool result): every
+  command denied on the base stays denied (`sudo bash`, `| sudo bash|sh`, `| sudo -u root bash [-x]`,
+  `| sudo -E bash`, `| sudo -i bash`, `| sudo --user=root sh -s`, `| sudo env bash`,
+  `| sudo -u root bash -l -s`, `| timeout 5 sudo bash`, `| FOO=1 sudo bash`, `su -c bash`), and no
+  command the base ran or prompted is denied. Prompted are `curl|wget ... | bash`, `|bash` unspaced,
+  each listed form after a pipe, `| bash -sx`, `| timeout 5 bash` and the local stdin forms above;
+  still run are `curl -s <url> -o out.html`, `bash scripts/x.sh`, `bash scripts/x.sh -`,
+  `bash -- x.sh`, `bash -l|-x|-e|-n x.sh`, `bash -c '<text>'`, `bash -c true`, `which bash`,
+  `curl <url> | jq .` and `/dev`'s `... | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh"
+  /dev/stdin ...`. **Under bypassPermissions** (measured on 2.1.326): these ask entries still
+  prompted, so `claude -p` refused every listed form; the CLI's own prompts for commands no rule
+  matches did not, so `curl x | sh`, `| sh -s -- <args>`, `cat x.sh | sh`, `| zsh`, `source <(curl x)`,
+  `sh -c "$(curl x)"`, `bash -c "$(curl x)"` and `eval "$(curl x)"` ran there. **Trade-off:** a prompt
+  is not a refusal; interactively the owner can approve a pipe-to-shell, a headless run refuses it
+  because nobody answers. **Under-defence that remains** (measured running unprompted in every mode):
+  option forms outside the list, `curl x | bash -euo pipefail`, `| bash -xv`, `| bash -v`,
+  `| bash -u`, `| bash -lx`, `| bash --posix`, `| bash -O extglob`, `| bash --rcfile /dev/null`, and
+  any other option combination (a wider pattern would also catch `bash -c ...` or
+  `bash -x script.sh`); operand forms naming stdin another way, `| bash /dev/fd/0`,
+  `| bash /proc/self/fd/0`, `| bash -- -`; the bypassPermissions forms just named; and
+  `curl x | doas bash`, which only prompts (doas was never denied). tests/test_permission_pipe_to_shell.py
+  models the tiers, reproduces the minimal measurements and pins all of these (KNOWN_GAPS,
+  KNOWN_COLLATERAL). The label
+  stays `advisory`: the evidence is a hand measurement, not a host-observed corpus case.
 
 ---
 
