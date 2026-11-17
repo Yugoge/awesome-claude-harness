@@ -33,7 +33,9 @@ include_scratch=True; classify() returns either kind.
 
 Pure: reads os.environ and the filesystem's symlinks and writes nothing. A
 str, bytes or os.PathLike path is accepted; any other type raises TypeError.
-Relative TMPDIR-style values count, against the cwd, for state detection
+crosses_mount() disqualifies a temp path that a bind mount under its temp root
+(invisible to realpath) carries out of temp; mount_points() reads
+/proc/self/mountinfo for it. Relative TMPDIR-style values count, against the cwd, for state detection
 but never widen temp_roots(). Control names match case-insensitively. Known
 limits (hard links, per-call variable redirects) are in the inventory doc.
 hooks/pretool-tool-policy.py's temp-write rule (_temp_write) uses it.
@@ -42,6 +44,7 @@ hooks/pretool-tool-policy.py's temp-write rule (_temp_write) uses it.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -319,3 +322,81 @@ def temp_root_of(path, *, cwd: Optional[str] = None) -> Optional[str]:
 def is_in_temp_root(path, *, cwd: Optional[str] = None) -> bool:
     """True when `path` lies strictly below a temp root in either resolved view."""
     return temp_root_of(path, cwd=cwd) is not None
+
+
+# --- Mount points -----------------------------------------------------------
+# realpath cannot see a bind mount: `mount --bind <dir> /tmp/b` makes /tmp/b
+# resolve to itself while writes and removals under it reach <dir>. A temp path
+# is only temp when no mount point lies between its temp root and it.
+
+MOUNTINFO_PATH = "/proc/self/mountinfo"
+_OCTAL = re.compile(r"\\([0-7]{3})")
+
+
+def _unescape_mount_field(field: str) -> str:
+    """Undo mountinfo's octal escapes (\\040 space, \\011 tab, \\012 newline, \\134 backslash)."""
+    return _OCTAL.sub(lambda m: chr(int(m.group(1), 8)), field)
+
+
+def parse_mountinfo(text: str) -> Tuple[str, ...]:
+    """The mount points (field 5) of mountinfo text, unescaped, in order.
+    Raises ValueError on a line with fewer than 5 fields."""
+    out = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split(" ")
+        if len(fields) < 5:
+            raise ValueError("malformed mountinfo line: %r" % line)
+        out.append(_unescape_mount_field(fields[4]))
+    return tuple(out)
+
+
+def mount_points(mountinfo: Optional[str] = None) -> Tuple[str, ...]:
+    """Realpath'd, deduplicated mount points from /proc/self/mountinfo (or the
+    file `mountinfo`). Raises OSError when it cannot be read and ValueError when
+    it is malformed or empty: there is always at least the root mount."""
+    with open(mountinfo or MOUNTINFO_PATH, encoding="utf-8", errors="surrogateescape") as handle:
+        points = parse_mountinfo(handle.read())
+    if not points:
+        raise ValueError("no mount points in %s" % (mountinfo or MOUNTINFO_PATH))
+    return _dedupe(points)
+
+
+def _strictly_below(path: str, root: str) -> bool:
+    return bool(_below(path, root))
+
+
+def crosses_mount(path, *, below: bool = False, cwd: Optional[str] = None,
+                  mountinfo: Optional[str] = None) -> bool:
+    """True when a mount point lies between `path`'s temp root and `path`
+    (the target itself included), or with below=True anywhere under `path`
+    (for a recursive removal). Mounts at or above the temp root (the one that
+    holds the temp root itself) are ignored. Checked in both resolved views.
+
+    A disqualifier only, and fail closed: True when the path is in no temp root,
+    when mountinfo cannot be read or parsed, or on any other error. It never
+    makes a path temp or not-state; callers AND it with their temp check."""
+    try:
+        views = resolved_views(path, cwd)
+        if not views:
+            return True
+        mounts = mount_points(mountinfo)
+        roots = temp_roots()
+        for view in views:
+            root = max((r for r in roots if _strictly_below(view, r)), key=len, default=None)
+            if root is None:
+                return True
+            for mount in mounts:
+                if mount == root or _strictly_below(root, mount):
+                    continue  # the mount holding the temp root, or one above it
+                if not _strictly_below(mount, root):
+                    continue  # elsewhere in the tree
+                if mount == view or _strictly_below(view, mount):
+                    return True  # on the path, or the target itself
+                if below and _strictly_below(mount, view):
+                    return True  # under the target
+        return False
+    except Exception:
+        return True
+

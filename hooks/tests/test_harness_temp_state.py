@@ -473,3 +473,161 @@ def test_real_default_roots_without_fakes(monkeypatch):
     assert hts.classify("/var/tmp/codex-outputs/codex-output-1-2.txt").name == "codex-outputs"
     assert hts.classify("/tmp/claude-scratch/qa/x").kind == hts.SCRATCH
     assert not hts.is_harness_state("/tmp/claude-scratch/qa/x")
+
+
+# --- crosses_mount / mount_points -------------------------------------------
+
+def _mountinfo(tmp_path, *points, name="mountinfo"):
+    """A mountinfo file listing `points` (already escaped as the kernel writes them)."""
+    lines = ["%d 1 0:%d / %s rw,relatime - ext4 /dev/x rw" % (20 + i, i, p) for i, p in enumerate(points)]
+    path = tmp_path / name
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+def test_parse_mountinfo_unescapes_octal():
+    text = ("36 35 98:0 /mnt1 /mnt/with\\040space rw - ext3 /dev/sda1 rw\n"
+            "37 35 98:0 / /a\\011tab\\012nl\\134bs rw shared:1 - ext3 /dev/sda1 rw\n")
+    assert hts.parse_mountinfo(text) == ("/mnt/with space", "/a\ttab\nnl\\bs")
+
+
+def test_parse_mountinfo_rejects_a_short_line():
+    with pytest.raises(ValueError):
+        hts.parse_mountinfo("1 2 3\n")
+
+
+def test_mount_points_realpaths_and_dedupes(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "alias").symlink_to(real, target_is_directory=True)
+    info = _mountinfo(tmp_path, "/", str(real), str(tmp_path / "alias"))
+    assert hts.mount_points(info) == ("/", str(real))
+
+
+def test_mount_points_unreadable_or_empty_raises(tmp_path):
+    with pytest.raises(OSError):
+        hts.mount_points(str(tmp_path / "missing"))
+    empty = tmp_path / "empty"
+    empty.write_text("")
+    with pytest.raises(ValueError):
+        hts.mount_points(str(empty))
+
+
+def test_crosses_mount_ignores_mounts_at_or_above_the_temp_root(roots, tmp_path):
+    tmp, _ = roots
+    info = _mountinfo(tmp_path, "/", str(tmp.parent), str(tmp), "/proc")
+    assert not hts.crosses_mount(str(tmp / "a" / "b"), mountinfo=info)
+    assert not hts.crosses_mount(str(tmp / "a"), below=True, mountinfo=info)
+
+
+def test_crosses_mount_at_the_target(roots, tmp_path):
+    tmp, _ = roots
+    info = _mountinfo(tmp_path, "/", str(tmp), str(tmp / "b3"))
+    assert hts.crosses_mount(str(tmp / "b3"), mountinfo=info)
+    assert hts.crosses_mount(str(tmp / "b3") + "/", mountinfo=info)
+
+
+def test_crosses_mount_on_the_path(roots, tmp_path):
+    tmp, _ = roots
+    info = _mountinfo(tmp_path, "/", str(tmp / "b3"))
+    assert hts.crosses_mount(str(tmp / "b3" / "settings.json"), mountinfo=info)
+    assert hts.crosses_mount(str(tmp / "b3" / "x" / ".." / "y"), mountinfo=info)
+    assert not hts.crosses_mount(str(tmp / "b31" / "x"), mountinfo=info)
+
+
+def test_crosses_mount_below_the_target_only_with_below(roots, tmp_path):
+    tmp, _ = roots
+    info = _mountinfo(tmp_path, "/", str(tmp / "work" / "deep" / "b3"))
+    assert not hts.crosses_mount(str(tmp / "work"), mountinfo=info)
+    assert hts.crosses_mount(str(tmp / "work"), below=True, mountinfo=info)
+    assert not hts.crosses_mount(str(tmp / "other"), below=True, mountinfo=info)
+
+
+def test_crosses_mount_escaped_mount_point(roots, tmp_path):
+    tmp, _ = roots
+    info = _mountinfo(tmp_path, "/", str(tmp / "b") + "\\040c")
+    assert hts.crosses_mount(str(tmp / "b c" / "f"), mountinfo=info)
+    assert not hts.crosses_mount(str(tmp / "b" / "f"), mountinfo=info)
+
+
+def test_crosses_mount_uses_the_deepest_temp_root(roots, tmp_path, monkeypatch):
+    _, var_tmp = roots
+    scratch = var_tmp / "claude-scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("TMPDIR", str(scratch))
+    # A mount at TMPDIR itself holds that temp root: ignored.
+    info = _mountinfo(tmp_path, "/", str(scratch))
+    assert not hts.crosses_mount(str(scratch / "x"), mountinfo=info)
+
+
+def test_crosses_mount_fails_closed(roots, tmp_path):
+    tmp, _ = roots
+    assert hts.crosses_mount(str(tmp / "x"), mountinfo=str(tmp_path / "missing"))
+    bad = tmp_path / "bad"
+    bad.write_text("garbage\n")
+    assert hts.crosses_mount(str(tmp / "x"), mountinfo=str(bad))
+    info = _mountinfo(tmp_path, "/")
+    assert hts.crosses_mount("/etc/passwd", mountinfo=info)   # in no temp root
+    assert hts.crosses_mount(str(tmp), mountinfo=info)         # the root itself
+    assert hts.crosses_mount("", mountinfo=info)
+    assert hts.crosses_mount(None, mountinfo=info)              # error -> True
+
+
+def test_crosses_mount_symlink_out_of_temp_fails_closed(roots, tmp_path):
+    tmp, _ = roots
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp / "link").symlink_to(outside, target_is_directory=True)
+    info = _mountinfo(tmp_path, "/")
+    assert hts.crosses_mount(str(tmp / "link" / "f"), mountinfo=info)
+
+
+def test_crosses_mount_never_widens(roots, tmp_path):
+    tmp, _ = roots
+    info = _mountinfo(tmp_path, "/", str(tmp / "b3"))
+    target = str(tmp / "claude-grants" / "x.json")
+    hts.crosses_mount(target, mountinfo=info)
+    assert hts.is_harness_state(target)
+    assert not hts.is_in_temp_root("/etc/passwd")
+
+
+def test_crosses_mount_reads_the_real_mountinfo(roots):
+    tmp, _ = roots
+    if not os.path.exists(hts.MOUNTINFO_PATH):
+        pytest.skip("no /proc/self/mountinfo on this platform")
+    assert "/" in hts.mount_points()
+    assert hts.crosses_mount(str(tmp / "x")) is False
+
+
+@pytest.fixture
+def bind_mount(tmp_path):
+    """Bind-mount a throwaway dir into the fake /tmp; skip where mounting is not permitted."""
+    import shutil
+    import subprocess
+    if not (shutil.which("mount") and shutil.which("umount")) or not os.path.exists(hts.MOUNTINFO_PATH):
+        pytest.skip("mount(8) or mountinfo unavailable")
+    source = tmp_path / "outside-home"
+    source.mkdir()
+    (source / "settings.json").write_text("{}")
+    target = tmp_path / "tmp" / "work" / "b3"
+    target.mkdir(parents=True)
+    done = subprocess.run(["mount", "--bind", str(source), str(target)],
+                          capture_output=True, timeout=20)
+    if done.returncode != 0:
+        pytest.skip("bind mount not permitted here")
+    try:
+        yield target
+    finally:
+        subprocess.run(["umount", str(target)], capture_output=True, timeout=20)
+
+
+def test_live_bind_mount_is_detected(roots, bind_mount):
+    target = bind_mount
+    # realpath sees nothing: the path resolves to itself.
+    assert os.path.realpath(str(target / "settings.json")) == str(target / "settings.json")
+    assert hts.is_in_temp_root(str(target / "settings.json"))
+    assert hts.crosses_mount(str(target / "settings.json"))
+    assert hts.crosses_mount(str(target))
+    assert hts.crosses_mount(str(target.parent), below=True)   # rm -rf <tmp>/work
+    assert not hts.crosses_mount(str(target.parent))
+    assert not hts.crosses_mount(str(target.parent / "sibling"), below=True)
