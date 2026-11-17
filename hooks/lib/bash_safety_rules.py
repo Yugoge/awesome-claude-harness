@@ -129,6 +129,13 @@ def runtime_guard(payload_text, command):
                     sys.stderr = err
         except BaseException:  # noqa: BLE001
             verdict = "INDETERMINATE"
+    if verdict == "BLOCK" and "[protected-runtime-guard] BLOCK STEP1: " in reason:
+        # STEP1: the policy file is unusable, not the command protected; the reason names the defect and its repair.
+        refuse(reason,
+                   "BLOCKED: protected-runtime-guard — its policy file is unusable, so this service-control/"
+                   "process-kill/package-manager/build/runtime command is refused until the file is repaired. This "
+                   "block is unbypassable (it runs before /do and /allow).",
+                   "Run the recovery named above, then retry; commands outside those families still run.")
     if verdict == "BLOCK":
         refuse(reason,
                    "BLOCKED: protected-runtime-guard — this command could restart, hand off, or kill a protected local "
