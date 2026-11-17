@@ -314,6 +314,24 @@ def test_awk_with_a_gawk_directive_is_no_reader_from_any_directory(box, command)
         assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
 
 
+AWK_INDIRECT_CALL = [
+    "awk 'BEGIN{f=\"sys\" \"tem\"; @f(\"cp /tmp/e .claude/settings.json\")}' .claude/settings.json",
+    "awk -v f=system 'NR==1{@f(\"cp /tmp/e .claude/settings.json\")}' .claude/settings.json",
+    "gawk -v f=system 'NR==1{@f(\"cp /tmp/e .claude/settings.json\")}' .claude/settings.json",
+    "awk 'NR==1{@f(\"cp /tmp/e .claude/settings.json\")}' f=system .claude/settings.json",
+    "awk 'BEGIN{f=\"sys\" \"tem\"; @f(\"sed -i s/x/y/ .claude/settings.local.json\")}' .claude/settings.local.json",
+    "awk '{@ f(1)} 1' .claude/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", AWK_INDIRECT_CALL)
+def test_awk_with_a_gawk_indirect_call_is_no_reader_of_a_projects_settings(box, command):
+    """gawk calls a built-in indirectly through `@var(...)`, so system() runs without being spelled."""
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
 @pytest.mark.parametrize("command", [
     "awk '@include \"inplace\"; 1' /tmp/a.json",
     "awk '{print}' .claude/settings.json",

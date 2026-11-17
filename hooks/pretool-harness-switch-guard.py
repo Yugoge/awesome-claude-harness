@@ -80,9 +80,10 @@ READER_OUTPUT = {  # a reader's options that write a file or run a program: it i
     "more": re.compile(r"\A\Z"),
     "rg": re.compile(r"--pre(?:=|\Z)")}
 AWKS = ("awk", "gawk", "mawk", "nawk")
-AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b|@\s*(?:include|load|namespace)\b")  # print > file, print | command,
-# system(), and gawk's @include / @load / @namespace (`@include "inplace"` is -i inplace): an awk program that
-# writes or loads another program
+AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b|@\s*[A-Za-z_]")  # print > file, print | command, system(), and
+# any gawk `@name`: the @include / @load / @namespace directives (`@include "inplace"` is -i inplace) and indirect
+# calls (`f="sys" "tem"; @f(...)` calls system() without spelling it): an awk program that writes, loads another
+# program or may call one; a harmless `@` use such as "@ind_str_asc" is refused too (fail-closed)
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
 SED_LONG = ("--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--posix",
