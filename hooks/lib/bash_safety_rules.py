@@ -1393,11 +1393,22 @@ def _restore_wide_from_ref(args):
     return source and (worktree or not staged)
 
 
+# Git global options the quote-neutralised worktree pass reads between git and the subcommand.
+_WORKTREE_GOPT_MAX = 32
+
+
 def _worktree_raw_fallback(command, globals_=False):
     """The pre-parser patterns, for a command lib/shell_parse.py cannot read (fail closed). With globals_ (the
     quote-neutralised pass over a payload the parser may not read), git global options and their values
-    (-C x, -c k=v, --git-dir=..., --no-pager ...) may stand between git and the subcommand, per the GC_GOPT grammar."""
-    g = rf"git{GC_GOPT}\s+" if globals_ else r"git\s+"
+    (-C x, -c k=v, --git-dir=..., --no-pager ...) may stand between git and the subcommand, per the GC_GOPT grammar.
+    There `git` must start a word (command position, as in GIT_CLEAN_OCCURRENCE_RE) and the option run is bounded,
+    so a long run of option words holding `git` (-Pgit, a=bgit, -C git) is scanned in linear time, not quadratic."""
+    if globals_:
+        g = rf"(^|{GC_SEP}){GC_GIT}{GC_GOPT.removesuffix('*')}{{0,{_WORKTREE_GOPT_MAX}}}\s+"
+        if not grep(g + r"(stash|checkout|restore)\b", command):  # one bounded scan before the per-form ones
+            return {"push": False, "bare": False, "checkout": False, "restore": False}
+    else:
+        g = r"git\s+"
     return {
         "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
         or grep(g + r"stash\s+-[ua]+\b", command),

@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,27 @@ MUST_REFUSE += [
     ("tcsh -c 'git -C x stash'", STASH),
 ]
 
+# The same pass with other global-option spellings, shells and command positions, and safe subcommands behind the
+# options, which keep passing.
+MUST_REFUSE += [
+    ("fish -c 'git --git-dir=.git stash'", STASH),
+    ("fish -c 'git --work-tree x stash push'", STASH),
+    ("fish -c 'git -P stash'", STASH),
+    ("zsh -c 'git -C x stash'", STASH),
+    ("ksh -c 'git -C x stash'", STASH),
+    ("csh -c 'git -C x stash'", STASH),
+    ("/usr/bin/fish -c 'git -C x stash'", STASH),
+    ("fish -c 'cd y && git -C x stash'", STASH),
+]
+STILL_PASS += [
+    "fish -c 'git -C x stash list'",
+    "fish -c 'git --no-pager stash show'",
+    "fish -c 'git -C x log --oneline'",
+    "fish -c 'git -C x checkout -- src/app.py'",
+    "tcsh -c 'git -C x stash pop'",
+]
+
+
 @pytest.mark.parametrize("command", MUST_PASS + STILL_PASS)
 def test_data_naming_a_git_subcommand_passes(sandbox, command):
     r = run(sandbox, command)
@@ -230,3 +252,22 @@ def test_a_running_git_working_tree_change_is_refused(sandbox, command, marker):
     r = run(sandbox, command)
     assert r.returncode == 2, (command, r.stderr)
     assert marker in r.stderr, (command, r.stderr)
+
+
+# The quote-neutralised pass scans git global options only from a `git` in command position, over a bounded number
+# of options: a long run of option words holding `git` (-Pgit, a=bgit) costs linear time, not quadratic.
+@pytest.mark.parametrize("command", ["git" + " -Pgit" * 10000 + " !", "git" + " -c a=bgit" * 5000])
+def test_quote_neutralised_option_scan_is_linear(command):
+    from lib.bash_safety_rules import _worktree_raw_fallback
+    start = time.monotonic()
+    _worktree_raw_fallback(command, globals_=True)
+    assert time.monotonic() - start < 1.0
+
+
+def test_shell_payload_with_long_option_run_is_fast(sandbox):
+    command = "fish -c 'git" + " -Pgit" * 3000 + "'"
+    start = time.monotonic()
+    r = run(sandbox, command)
+    elapsed = time.monotonic() - start
+    assert r.returncode in (0, 2), r.stderr
+    assert elapsed < 2.0, elapsed
