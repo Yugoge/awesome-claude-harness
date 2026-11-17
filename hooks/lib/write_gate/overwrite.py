@@ -200,12 +200,17 @@ def _in_harness_home(real: str) -> bool:
 _NO_REPO = "no-repo"
 
 
+# Two git calls at most, each well inside the rule's 5 s budget (lib/write_gate/__init__.py):
+# an overrun of this fail-open rule would let the Write through, a git timeout here refuses.
+_GIT_TIMEOUT = 2.0
+
+
 def _git(cwd: str, *args: str):
-    """(returncode, stdout, stderr), or (None, "", "") when git cannot run."""
+    """(returncode, stdout, stderr), or (None, "", "") when git cannot run or times out."""
     try:
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         p = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
-                           timeout=10, env=env)
+                           timeout=_GIT_TIMEOUT, env=env)
         return p.returncode, p.stdout, p.stderr
     except BaseException:
         return None, "", ""
