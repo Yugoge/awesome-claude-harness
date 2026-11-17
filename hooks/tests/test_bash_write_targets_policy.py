@@ -30,13 +30,14 @@ def _bounded_environment(monkeypatch):
         (f'OUT={SAFE} tee "$OUT"', ["$OUT"]),
         (f'OUT={SAFE}; (tee "$OUT")', [SAFE]),
         (f"T={SAFE}; bash -c 'tee $T'", ["$T"]),
-        ('OUT=$(producer); tee "$OUT"', ["$OUT"]),
+        ('OUT=$(producer); tee "$OUT"', ["$(producer)"]),
         (f'REF=OUT; OUT={SAFE}; tee "${{!REF}}"', ["${!REF}"]),
         ('tee "$OUT"', ["$OUT"]),
         (f'tee {SAFE}', [SAFE]),
     ],
 )
 def test_assignment_target_matrix(command, expected):
+    # A computed value names its own word, still unresolved (`$`), as the caller's check needs.
     # The last assignment before the use wins, a subshell inherits it, and a `-c` shell sees
     # only exported variables.
     assert targets.extract_bash_write_paths(command) == expected
@@ -56,7 +57,7 @@ def test_assignment_target_matrix(command, expected):
         (f'OUT={SAFE}; read OUT; tee "$OUT"', ["$OUT"]),
         (f'OUT={SAFE}; declare OUT=.claude/hooks/y; tee "$OUT"', ["$OUT"]),
         (f'OUT={SAFE}; printf -v OUT %s .claude/hooks/y; tee "$OUT"', ["$OUT"]),
-        (f'OUT={SAFE}; OUT=$(cmd); tee "$OUT"', ["$OUT"]),
+        (f'OUT={SAFE}; OUT=$(cmd); tee "$OUT"', ["$(cmd)"]),
         (f'OUT={SAFE} | tee "$OUT"', ["$OUT"]),
         (f'OUT={SAFE} & tee "$OUT"', ["$OUT"]),
         # eval runs in this shell: its assignment is the value tee writes
@@ -96,7 +97,7 @@ def test_projection_failure_fails_closed(monkeypatch):
     # here an approved expansion whose variable is unset, keeps the literal.
     monkeypatch.delenv("CLAUDE_PROJECT_DIR")
     command = 'OUT="$CLAUDE_PROJECT_DIR/docs/dev/context-x.json"; tee "$OUT"'
-    assert targets.extract_bash_write_paths(command) == ["$OUT"]
+    assert targets.extract_bash_write_paths(command) == ["$CLAUDE_PROJECT_DIR/docs/dev/context-x.json"]
 
 
 def test_projected_result_still_traverses_deny_before_allow(monkeypatch):
