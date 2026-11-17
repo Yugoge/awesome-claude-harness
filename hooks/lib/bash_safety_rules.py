@@ -6,8 +6,9 @@ Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 Exits 2 on a refusal, its message on stderr; otherwise prints ALLOW, CONSENT (main-agent /do consent) or
 SENTINEL <task id> (a structured /allow grant). The shell entry allows CONSENT and SENTINEL after the pre-clean
 snapshot guard and refuses anything else (no token, a crash, a wrong interpreter). The runtime and commit guards
-run before the /do and /allow releases and neither releases them; every later rule is released by both. A view
-that cannot be built degrades to the raw command, so a broken helper refuses more, never less.
+and the /do consent-flag rule run before the /do and /allow releases and neither releases them; every later rule
+is released by both. A view that cannot be built degrades to the raw command, so a broken helper refuses more,
+never less.
 """
 import contextlib
 import json
@@ -607,6 +608,308 @@ def commit_artifact_rules(command, state):
                    "that script (it composes the grant path itself).", released_line())
 
 
+# ── /do consent flag (before /do and /allow) ─────────────────────────────────
+
+CONSENT_PREFIX = "claude-orchestrator-consent-"  # <state dir>/<prefix><session id>.flag, hooks/prompt-workflow.py
+CONSENT_SUFFIX = ".flag"
+CONSENT_TOKEN = "orchestrator-consent"
+# Commands that only read the files they are handed (find and rg only without their run/write actions). Their
+# write redirections are still write targets.
+CONSENT_READERS = frozenset({
+    "cat", "ls", "stat", "head", "tail", "wc", "file", "test", "[", "grep", "egrep", "fgrep", "rg", "jq", "echo",
+    "printf", "readlink", "realpath", "basename", "dirname", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cmp",
+    "diff", "find", "true", ":", "cd", "pushd", "popd", "pwd"})
+_FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
+# Commands that run code they are given (argument, stdin, script) or another command: the consent token anywhere in a
+# command that runs one of these is refused, since the code can write the flag with no write the parser can see.
+_CONSENT_CODE_RE = re.compile(
+    r"^((ba|da|z|k|c|tc|fi|a|mk)?sh|busybox|python[\d.]*|pypy[\d.]*|i?python3?|node(js)?|deno|bunx?|npx|npm|pnpm|"
+    r"yarn|uvx?|poetry|pipx|perl[\d.]*|ruby|irb|php|lua[\d.]*|luajit|tclsh|wish|expect|r|rscript|osascript|"
+    r"[gmn]?awk|sed|ed|ex|n?vim?|emacs|gdb|make|xargs|parallel|watch|ssh|su|sudo|doas|script|tmux|screen|env|"
+    r"eval|exec|source|\.|command|builtin|trap|alias|git|install|dd|tee|cp|mv|ln|rm|touch|truncate|mkdir)$", re.I)
+_CONSENT_STATE_VARS = frozenset({"CLAUDE_STATE_DIR", "TMPDIR", "TMP", "TEMP", "TEMPDIR", "CLAUDE_TMPDIR"})
+_CONSENT_DIR_CREATORS = frozenset({"touch", "mkdir", "mkfifo", "mknod"})
+_CONSENT_COPIERS = frozenset({"cp", "mv", "ln", "install", "rsync", "link"})
+
+
+def _consent_norm(text):
+    """Text with quotes, backslashes, `+` and whitespace dropped, lower-cased: `"orch" + 'estrator-con' "sent"` in an
+    interpreter's code reads as the token it spells."""
+    return re.sub(r"""['"\\+\s`]""", "", text or "").lower()
+
+
+def _consent_glob(word=None, text=None):
+    """A path word as glob tokens: ('c', ch) a literal character, ('?',) one character, ('*',) any run.
+
+    Expansions (parameter, substitution, arithmetic, brace) read as `*`, a bracket class as one character, a quoted
+    glob character as a literal, so the pattern matches at least every name the word can produce. Also returns
+    whether the word begins with an expansion (its directory is then unknown) and, per token, the index of the word
+    part it came from."""
+    toks, lead, owner = [], False, []
+    parts = word.parts if word is not None else [type("P", (), {"kind": "lit", "text": text, "quote": "single"})]
+    for k, p in enumerate(parts):
+        owner.extend([k - 1] * (len(toks) - len(owner)))
+        if p.kind == "lit":
+            toks.extend(("c", ch) for ch in p.text)
+        elif p.kind == "glob":
+            t, i = p.text, 0
+            while i < len(t):
+                if t[i] == "*":
+                    toks.append(("*",))
+                elif t[i] == "?":
+                    toks.append(("?",))
+                elif t[i] == "[":
+                    j = t.find("]", i + 2)
+                    if j < 0:
+                        toks.append(("c", "["))
+                    else:
+                        toks.append(("?",))
+                        i = j
+                else:
+                    toks.append(("c", t[i]))
+                i += 1
+        else:
+            if k == 0:
+                lead = True
+            toks.append(("*",))
+    owner.extend([len(parts) - 1] * (len(toks) - len(owner)))
+    if toks and toks[0] == ("c", "~") and (len(toks) == 1 or toks[1] == ("c", "/")):
+        home = os.environ.get("HOME", "/")
+        toks, owner = [("c", ch) for ch in home] + toks[1:], [0] * len(home) + owner[1:]
+    return toks, lead, owner
+
+
+def _consent_name_may_match(toks):
+    """True when the glob tokens can match some `claude-orchestrator-consent-<id>.flag` (id: one or more characters,
+    no slash): a product walk of the glob against that name's automaton."""
+    pre, suf = CONSENT_PREFIX, CONSENT_SUFFIX
+    p = len(pre)
+    acc = p + 2 + len(suf)
+
+    def target_moves(t):  # [(literal char or None for any non-slash, next state)]; state p+1 also moves by epsilon
+        if t < p:
+            return [(pre[t], t + 1)]
+        if t in (p, p + 1):
+            return [(None, p + 1)]
+        if t < acc:
+            return [(suf[t - p - 2], t + 1)]
+        return []
+
+    def closure(t):
+        return {t, p + 2} if t == p + 1 else {t}
+
+    seen, todo = set(), [(0, s) for s in closure(0)]
+    while todo:
+        g, t = todo.pop()
+        if (g, t) in seen:
+            continue
+        seen.add((g, t))
+        if g == len(toks):
+            if t == acc:
+                return True
+            continue
+        tok = toks[g]
+        if tok[0] == "*":
+            todo.append((g + 1, t))
+        for ch, nt in target_moves(t):
+            if tok[0] == "c" and not (tok[1] == ch if ch is not None else tok[1] != "/"):
+                continue
+            for s in closure(nt):
+                todo.append((g if tok[0] == "*" else g + 1, s))
+    return False
+
+
+def _consent_same_dir(path, state):
+    try:
+        a = {os.path.normpath(path), os.path.realpath(path)}
+        return bool(a & {os.path.normpath(state), os.path.realpath(state)})
+    except (OSError, ValueError):
+        return True
+
+
+def _consent_sites(script, sp, depth=0):
+    """walk's Sites, plus those of the substitutions in an unquoted heredoc body (walk reads them as text)."""
+    for site in sp.walk(script):
+        yield site
+        if depth > 8:
+            continue
+        for red in site.cmd.redirects:
+            hd = getattr(red, "hd", None)
+            for part in (hd.expansions if hd is not None else ()):
+                if part.body is not None:
+                    yield from _consent_sites(part.body, sp, depth + 1)
+
+
+def _consent_var(part):
+    """The variable a parameter part reads (`D` for `$D`, `${D:-x}`, `${#D}`), or None."""
+    m = re.match(r"[#!]?([A-Za-z_][A-Za-z0-9_]*)", part.text or "")
+    return m.group(1) if m else None
+
+
+def consent_flag_verdict(command, cwd, state):
+    """None, or why the command can create, change, move, link, copy onto or delete the /do consent flag."""
+    from lib import shell_parse as sp
+    script = sp.parse(command)
+    sites = list(_consent_sites(script, sp))
+    named = CONSENT_TOKEN in _consent_norm(command) or any(
+        CONSENT_TOKEN in _consent_norm(w.value() or "") for s in sites for w in s.cmd.words)
+    if named and script.error is not None:
+        return "the command names the consent flag and cannot be parsed"
+    home = os.environ.get("HOME", "")
+    # Variables that can hold the state directory: the state/tmp ones, HOME when the state dir is under it, and any
+    # variable this command sets (assignment, for, read ...).
+    state_vars = set(_CONSENT_STATE_VARS)
+    state_vars |= set(re.findall(r"(?:^|[^A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\+?=", command))
+    state_vars |= set(re.findall(r"\b(?:for|select)\s+([A-Za-z_][A-Za-z0-9_]*)", command))
+    for m in re.finditer(r"\b(?:read|mapfile|readarray|printf|declare|typeset|local|export)\b([^;&|\n]*)", command):
+        state_vars |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+    if home and (one_slash(state) + "/").startswith(one_slash(home) + "/"):
+        state_vars.add("HOME")
+
+    # The directories a relative path can be read from: the call's cwd and each static cd target.
+    cwds, unknown_cwd = [cwd], False
+    for s in sites:
+        r = sp.resolve(s.cmd)
+        if r.name in ("cd", "pushd"):
+            args = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+            if not args:
+                cwds.append(home or "/")
+            elif args[0].value() in (None, "-"):
+                unknown_cwd = True
+            else:
+                v = args[0].value()
+                v = home + v[1:] if v.startswith("~") and home else v
+                cwds.extend([os.path.join(c, v) for c in cwds])
+
+    def in_cwd(rel):
+        return unknown_cwd or any(_consent_same_dir(os.path.join(c, rel), state) for c in cwds)
+
+    def dir_may_be_state(word, dtoks, owners=()):
+        """Could the directory dtoks (glob tokens, None = no directory part; owners: their word parts) of `word` be
+        the state dir?"""
+        if dtoks is None:
+            return in_cwd(".")
+        if any(t[0] != "c" for t in dtoks):
+            if word is None:
+                return True
+            for p in [word.parts[k] for k in sorted(set(owners))]:  # computed: $(...), a glob or brace, or a variable
+                if p.kind in ("cmdsub", "backtick", "glob", "brace", "procsub_in", "procsub_out"):
+                    return True
+                if p.kind == "param":
+                    var = _consent_var(p)
+                    if var in ("PWD", "OLDPWD") and in_cwd("."):
+                        return True
+                    if var in state_vars or var is None:
+                        return True
+            return False
+        d = "".join(t[1] for t in dtoks) or "/"
+        return _consent_same_dir(d, state) if d.startswith("/") else in_cwd(d)
+
+    def split(toks):
+        cut = max((i for i, t in enumerate(toks) if t == ("c", "/")), default=-1)
+        return toks[cut + 1:], (toks[:cut] if cut >= 0 else None), max(cut, 0)
+
+    def path_hits(word=None, text=None):
+        toks, lead, owner = _consent_glob(word, text)
+        base, dtoks, cut = split(toks)
+        if CONSENT_TOKEN in "".join(t[1] for t in base if t[0] == "c").lower():
+            return "its target is named like the consent flag"
+        if not base or not _consent_name_may_match(base):
+            return None
+        if lead and dtoks is None:  # a wholly computed target: anything, so refused only where the flag is named
+            return "its computed target, in a command naming the consent flag, can be the flag" if named else None
+        if dir_may_be_state(word, dtoks, owner[:cut]):
+            return "its target can match the consent flag in the state directory"
+        return None
+
+    def is_state_dir_word(word):
+        """`$CLAUDE_STATE_DIR` / `"$TMPDIR"/` and the like: the state directory itself through a variable."""
+        parts = [p for p in word.parts if not (p.kind == "lit" and p.text in ("/", ""))]
+        return len(parts) == 1 and parts[0].kind == "param" and _consent_var(parts[0]) in state_vars
+
+    # 1. Every write target: redirections and the parser's write verbs.
+    for t in sp.write_targets(script):
+        if t.path is not None:
+            norm = os.path.normpath(t.path) if t.path else t.path
+            if t.mode == "delete" and norm and norm.startswith("/") and (
+                    _consent_same_dir(norm, state) or (one_slash(state) + "/").startswith(one_slash(norm) + "/")):
+                return "it deletes or moves the state directory that holds the consent flag"
+            why = path_hits(text=t.path)
+        elif t.word is not None:
+            if t.mode == "delete" and is_state_dir_word(t.word):
+                return "it deletes or moves the state directory that holds the consent flag"
+            why = path_hits(word=t.word)
+        else:
+            why = "its target is computed" if named else None
+        if why:
+            return why
+    for s in sites:
+        r = sp.resolve(s.cmd)
+        operands = [w for w in r.args if not (w.value() or "").startswith("-")]
+        # 2. Creators the write-target table does not list: each operand is a target.
+        if r.name in _CONSENT_DIR_CREATORS:
+            for w in operands:
+                why = path_hits(word=w)
+                if why:
+                    return why
+        # 3. A copy, move or link into the state directory under a name that can be the flag's.
+        if r.name in _CONSENT_COPIERS and len(operands) > 1:
+            def into_state(w):
+                toks, _, owner = _consent_glob(w)
+                while len(toks) > 1 and toks[-1] == ("c", "/"):
+                    toks = toks[:-1]
+                return dir_may_be_state(w, toks, owner[:len(toks)]) if toks else False
+            if any(into_state(w) for w in operands):
+                for w in operands:
+                    if _consent_name_may_match(split(_consent_glob(w)[0])[0]):
+                        return ("it copies, moves or links a file that can be named like the consent flag into the "
+                                "state directory")
+    if not named:
+        return None
+    # 4. The command names the flag: only plain readers run, and nothing is handed it through a computed word.
+    for s in sites:
+        if not s.cmd.words:
+            continue
+        r = sp.resolve(s.cmd)
+        name = r.name
+        if s.dynamic or name is None:
+            return "a command whose name is computed runs where the consent flag is named"
+        if _CONSENT_CODE_RE.match(name):
+            return f"`{name}` runs code or writes files, and the command names the consent flag"
+        argv_ = [w.value() for w in r.args]
+        if name in CONSENT_READERS and not (
+                (name == "find" and any(a in _FIND_ACTIONS for a in argv_ if a))
+                or (name == "rg" and any(a and a.startswith("--pre") for a in argv_))):
+            continue
+        for w, v in zip(r.args, argv_):
+            if v is None:
+                return f"`{name}` takes a computed argument in a command naming the consent flag"
+            if CONSENT_TOKEN in _consent_norm(v) and not re.search(r"\s", v):
+                return f"`{name}` is handed a path named like the consent flag"
+    return None
+
+
+def consent_flag_rule(command, payload):
+    """The /do consent flag is written only by hooks/prompt-workflow.py when the owner types /do; no Bash call
+    writes, creates, moves, links, copies onto or deletes it. Runs before the /do and /allow releases."""
+    ti = payload.get("tool_input") if isinstance(payload, dict) else None
+    cwd = (ti.get("cwd") if isinstance(ti, dict) else None) or (payload.get("cwd") if isinstance(payload, dict) else
+                                                                 None) or os.getcwd()
+    state = state_dir()
+    try:
+        why = consent_flag_verdict(command, str(cwd), state)
+    except Exception:  # noqa: BLE001 - an analysis that cannot finish refuses a command that names the flag
+        why = "the consent-flag check could not read the command" if (
+            CONSENT_TOKEN in _consent_norm(command) or "CLAUDE_STATE_DIR" in command) else None
+    if why:
+        refuse("BLOCKED: do-consent-flag-write — this command can write, create, move, link, copy onto or delete the "
+               "/do consent flag", f"Command: {command}",
+               f"REASON: {why}. The flag <state dir>/{CONSENT_PREFIX}<session id>{CONSENT_SUFFIX} is written only by "
+               "hooks/prompt-workflow.py when the owner types /do; a Bash-written one would grant /do consent the "
+               "owner never gave. Reading it (cat, ls, grep ...) is allowed. Neither /do nor /allow releases this "
+               "rule.")
+
+
 # ── Bulk-commit sentinel (BS-17) ─────────────────────────────────────────────
 
 BULK_NAMES = ("claude-bulk-commit-sentinel-", "write-bulk-commit-sentinel.py", "userprompt-bulk-commit-capability.py")
@@ -1200,6 +1503,7 @@ def decide(payload_text):
     home = os.path.dirname(HOOKS)
     runtime_guard(payload_text, command)
     run_commit_guard(payload, command, home)
+    consent_flag_rule(command, payload)
 
     from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command
     if not get("agent_id"):
