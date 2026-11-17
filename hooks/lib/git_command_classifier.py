@@ -20,8 +20,9 @@ Where an invocation is found:
     only cat, tee or another data reader reads runs just its expansion's
     substitutions, unless the text holds a group, a compound command or an
     `exec` with redirections; one written to a file is data only when every
-    other command of the text is inert (cat, ls, grep, git status, ...) and the
-    file is no shell startup file, Makefile, `.envrc` or file under `.git/`);
+    other command of the text is inert and writes nothing (cat, ls, grep, ...)
+    and the file is no shell startup file, Makefile, `.envrc`, git config or
+    file under `.git/`);
   - every shell `-c` string, every program option's value (`rg --pre`), and
     what echo or printf print into a pipe a shell reads, each read as a
     command line of its own (_shell_layers);
@@ -430,24 +431,26 @@ def _opens_compound(cmd):
 # many ways to run a file (`sh < x.sh`, `cat x.sh | sh`, `sh x.*`, `cp x.sh y
 # && sh y`, `xargs`, `find -exec`, `make`) need no list of their own.
 #
-# Inert commands print, count, list, test or make directories, and run nothing
-# they are given. chmod is absent (its +x is the step to running a file), as
-# are cp, mv, xargs, find, make and every shell and interpreter.
+# Inert commands print, count, list, test or make directories, run nothing
+# they are given and, as _is_inert requires, write nothing. chmod is absent
+# (its +x is the step to running a file), cd (it moves the written file's
+# relative path into `.git/` or a home directory), git (its config and
+# attributes run programs: `core.fsmonitor`, `diff.external`), cp, mv, xargs,
+# find, make, tee and every shell and interpreter.
 _INERT_COMMANDS = frozenset({
     'cat', 'head', 'tail', 'wc', 'ls', 'echo', 'printf', 'test', '[',
-    'true', 'false', 'mkdir', 'cd', 'pwd',
+    'true', 'false', 'mkdir', 'pwd',
 })
-# grep and rg are inert as text owners (_is_text_only); git as one of these
-# reading subcommands, with no global option but these.
+# grep and rg are inert as text owners (_is_text_only).
 _INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
-_INERT_GIT_SUBCOMMANDS = frozenset({'status', 'diff', 'log'})
-_INERT_GIT_GLOBALS = frozenset({'--no-pager', '-P'})
-# Files run or read as code with no command naming them (by basename, any
-# case), and directories whose files are (git and husky hooks).
+# Files run or read as code with no command naming them, by basename, and
+# directories whose files are (git's and husky's); every component is compared
+# case-insensitively. A `git` directory under `.config` holds git's config.
 _CODE_FILES = frozenset({
-    '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile',
-    '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout', '.kshrc', '.envrc',
-    'makefile', 'gnumakefile', '.gitattributes', '.gitconfig', '.gitmodules',
+    '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases',
+    '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout', '.kshrc',
+    '.envrc', 'makefile', 'gnumakefile', '.gitattributes', '.gitconfig', 'gitconfig',
+    '.gitmodules',
 })
 _CODE_DIRS = frozenset({'.git', '.husky', '.githooks'})
 # Commands that copy their input to a file a word of theirs names.
@@ -482,8 +485,9 @@ def _written_paths(cmds, k, end):
 
 def _is_code_file(path):
     """True iff path names a file run or read as code by itself: _CODE_FILES, _CODE_DIRS."""
-    parts = [part for part in path.split('/') if part]
-    return bool(parts) and (parts[-1].lower() in _CODE_FILES or any(p in _CODE_DIRS for p in parts))
+    parts = [part.lower() for part in path.split('/') if part]
+    return bool(parts) and (parts[-1] in _CODE_FILES or any(p in _CODE_DIRS for p in parts)
+                            or any(a == '.config' and b == 'git' for a, b in zip(parts, parts[1:])))
 
 
 def _is_inert(cmd, written):
@@ -491,10 +495,19 @@ def _is_inert(cmd, written):
 
     It stands alone: no assignment, wrapper or reserved word before its
     command word, which is static, holds no `/` and names no written file
-    (written, basenames), and no substitution in its words.
+    (written, basenames), no substitution in its words, and it writes
+    nothing: an output redirection only to /dev/null or another descriptor
+    (`2>&1`, `>&2`).
     """
     for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
         if any(kind in ('sub', 'procsub') for kind, _src, _off in word.segs):
+            return False
+    for r in cmd.redirs:
+        target = None if r.target is None else _value(r.target)[0]
+        if r.op in _WRITE_REDIRS or r.op == '<>':
+            if target != '/dev/null':
+                return False
+        elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):
             return False
     if not cmd.words:
         return True
@@ -506,14 +519,7 @@ def _is_inert(cmd, written):
         return False
     if name in _INERT_COMMANDS:
         return True
-    if name in _INERT_TEXT_OWNERS:
-        return _is_text_only(cmd.words)
-    if name != 'git':
-        return False
-    gargs = values[1:]
-    k = _git_subcommand_index(gargs)
-    return (k is not None and gargs[k] in _INERT_GIT_SUBCOMMANDS
-            and all(v in _INERT_GIT_GLOBALS for v in gargs[:k]))
+    return name in _INERT_TEXT_OWNERS and _is_text_only(cmd.words)
 
 
 def _here_docs_are_data(toks, cmds, k):
@@ -526,7 +532,8 @@ def _here_docs_are_data(toks, cmds, k):
     with redirections counts as code, as does one whose output a substitution
     captures (see _code_commands). One whose pipe writes a file is data only
     when the file is named, is no _CODE_FILES one, and every other command of
-    the text is inert (_is_inert): `cat > x.sh <<'EOF' ... && sh < x.sh` is code.
+    the text is inert and writes nothing (_is_inert): `cat > x.sh <<'EOF' ...
+    && sh < x.sh` and `... && git status` are code.
     """
     if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(map(_opens_compound, cmds)):
         return False

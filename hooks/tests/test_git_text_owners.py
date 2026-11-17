@@ -17,10 +17,13 @@ Four readings, each with the inputs that must still be refused:
     it runs only the substitutions its expansion performs. Written to a file
     (a redirection or tee), it is data only under a closed rule: every other
     command of the line is inert (cat, head, tail, wc, ls, echo, printf,
-    test, true, false, mkdir, cd, pwd, grep/rg as text owners, git status,
-    diff or log), standing alone, and the file is no shell startup file,
-    Makefile, `.envrc`, `.gitattributes` or file under `.git/` or `.husky/`;
-    any other command keeps it code (`... && sh < x.sh`, `make`). Fed to
+    test, true, false, mkdir, pwd, grep/rg as text owners), standing alone
+    and writing nothing (an output redirection only to /dev/null or another
+    descriptor), and the file is no shell startup file, Makefile, `.envrc`,
+    git config (`.gitconfig`, `~/.config/git/`) or file under `.git/`,
+    `.husky/` or `.githooks/`, every path component compared in any case.
+    Any other command keeps it code (`... && sh < x.sh`, `make`, `cd .git`,
+    `git status`, which may run what a config names). Fed to
     bash, sh, ssh, `python3 -`, `source /dev/stdin`, a group, a compound
     command (for, while, until, if, case, select), an `exec` with
     redirections or a process substitution, copied by cp or dd, or captured
@@ -79,7 +82,9 @@ MUST_PASS = [
     # A written file the rest of the line only reads with inert commands.
     "cat > x.sh <<'EOF' && cat x.sh" + NL + "git push origin master" + NL + "EOF",
     "mkdir -p /tmp/n && cat > /tmp/n/notes.md <<'EOF' && wc -l /tmp/n/notes.md" + NL
-    + "git push origin master" + NL + "EOF" + NL + "git --no-pager diff --stat",
+    + "git push origin master" + NL + "EOF" + NL + "ls -la /tmp/n 2>/dev/null",
+    "tee x <<'EOF'" + NL + "git push origin master" + NL + "EOF" + NL + "cat x",
+    "cat <<'EOF' > x" + NL + "git push origin master" + NL + "EOF" + NL + "wc -l x",
     "grep -c x <<< 'a; git push origin master'",
 ]
 
@@ -204,6 +209,63 @@ WRITTEN_AND_RUN = [
     _doc("cat <<'EOF' | SORTOPTS=x sort"),
 ]
 
+# The verifier's l10/l11 inputs that base refuses: inert commands that write or
+# configure git, git itself, cd into a sensitive directory, sensitive
+# destinations in any case, and written files a later command runs.
+VERIFIER_L10_L11 = [
+    "cd .git && cat > hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cd .git/hooks && cat > pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cd .husky && cat > pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cd ~ && cat > .bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat > ../.git/hooks/x <<'EOF'\ngit push origin master\nEOF",
+    "cat > ./.bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat > .GIT/hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cat > .Bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat >| .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat &> .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat >> .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat 2> .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat 3> .git/hooks/pre-push <<'EOF' >&3\ngit push origin master\nEOF",
+    "exec cat > x <<'EOF'\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\necho y > .git/hooks/post-checkout",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf y >> ~/.bashrc",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit status",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit log -1",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit diff",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit -P log -1",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit --no-pager diff",
+    "cat > .git/hooks/x <<'EOF'\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nx.sh",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nls; x.sh",
+    "cat > ls <<'EOF'\ngit push origin master\nEOF\nPATH=.:$PATH ls",
+    "cat > cat <<'EOF'\ngit push origin master\nEOF\nchmod +x cat",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncd x",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\necho $(sh x)",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\necho `sh x`",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nrg --pre sh x .",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nrg --pre=./x foo .",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit log --grep=x -p --ext-diff",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --ext-diff",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit log --format=%H",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --no-index x /dev/null",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --textconv",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit log --output=.git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --output=.git/hooks/pre-commit x",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nhead -c 100 x > .git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x > .git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x >> ~/.bashrc",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x | tee .git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x > ~/.config/git/config",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nprintf '%s' x > Makefile",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncommand cat x",
+    "tee x .git/hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "tee -a ~/.bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf '[core]\\n\\tfsmonitor = sh x.sh\\n' >> .git/config\ngit status",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf '[diff]\\n\\texternal = sh x.sh\\n' > ~/.config/git/config\ngit diff",
+    "cat > x.sh <<'EOF' && echo '[diff] external = sh x.sh' >> .git/config && git diff\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF' && echo '[core] fsmonitor = sh x.sh' >> .git/config && git status\ngit push origin master\nEOF",
+]
+
 # Allowed at base too, closed on the way.
 BASE_GAPS = [
     "git grep -O\"sh -c 'git push origin master'\" foo",
@@ -215,7 +277,7 @@ BASE_GAPS = [
     "cat <<< 'git push origin master' | sh",
 ]
 
-MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + BASE_GAPS
+MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + VERIFIER_L10_L11 + BASE_GAPS
 
 # less with LESSOPEN runs any body; each is a git invocation the guard reads.
 LESS_BODIES = ["git reset --hard origin/master", "git branch -D master", "git commit -qam x"]
