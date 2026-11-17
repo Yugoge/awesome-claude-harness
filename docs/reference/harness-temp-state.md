@@ -18,12 +18,18 @@ uses it to allow a plain `rm` of temp-root paths that are not control state; `ho
   (`hooks/pretool-bash-safety.sh:17`), `CLAUDE_CODE_TMPDIR` (`settings.json` env, with `TMPDIR`
   `/var/tmp/claude-scratch`). The module realpaths each, so `/tmp` and an alias such as
   `/private/tmp` are one root.
-- **Name roots** (where the names below are matched): the state dir, every temp root, and the
-  absolute overrides `CLAUDE_USERINTENT_SENTINEL_DIR` (`hooks/pretool-wrapper-userintent.py:82`),
+  Fail closed: an unset, empty or relative value, or one resolving to `/`, is never a temp root.
+- **Name roots** (where the names below are matched): the state dir, `/tmp`, `/var/tmp`, and
+  the values of `TMPDIR`, `CLAUDE_TMPDIR`, `CLAUDE_CODE_TMPDIR`, `TMP`, `TEMP`
+  (`tempfile.gettempdir()` honours the last two, `hooks/doc_sync/notice.py:241`),
+  `CLAUDE_USERINTENT_SENTINEL_DIR` (`hooks/pretool-wrapper-userintent.py:82`),
   `CLAUDE_DAEMON_RESTART_GRANT_DIR` (`hooks/pretool-bash-safety.sh:25`) and
-  `CLAUDE_DOC_SYNC_STATE_ROOT` (`hooks/doc_sync/notice.py:238`).
+  `CLAUDE_DOC_SYNC_STATE_ROOT` (`hooks/doc_sync/notice.py:238`). A relative value is joined to
+  the cwd (the `cwd=` argument, else the process cwd), as a hook using it would, and `/` is kept:
+  `TMPDIR=/` makes `/claude-git-blessed/<tok>.grant` state without making `/` temp.
 - **Whole-directory overrides**: `CLAUDE_GIT_BLESSED_GRANT_DIR`, `CLAUDE_CAPABILITY_STATE_DIR`,
-  `$XDG_RUNTIME_DIR/claude-capability`, `CLAUDE_GRAPHIFY_CACHE_ROOT`.
+  `$XDG_RUNTIME_DIR/claude-capability`, `CLAUDE_GRAPHIFY_CACHE_ROOT` (relative values joined to
+  the cwd likewise).
 
 ## Control state (a hook trusts it)
 
@@ -79,3 +85,20 @@ uses it to allow a plain `rm` of temp-root paths that are not control state; `ho
 - State outside the temp roots: restart state (`hooks/lib/subagent_restart.py:201`, under
   `~/.claude`), the attribution journal (`hooks/lib/attribution_journal.py:92`), overnight state
   (`scripts/create-overnight-state.sh:688`, under the project's `.claude/`).
+
+## Limitations
+
+- **Case.** Control-state locations match case-insensitively, the root prefix as well as the
+  names, so on a case-insensitive filesystem (macOS APFS by default) `/TMP/Claude-Grants/x` is
+  still state. On a case-sensitive filesystem this errs toward "state". Scratch locations and
+  `temp_roots()` stay case-sensitive, so folding never widens what counts as temp.
+- **Hard links.** A hard link to a state file is a second name for the same inode that
+  realpath cannot see, so `classify()` judges it by its own name only. Detecting it would need
+  an inode comparison against the live state files, which this pure path classifier does not do.
+- **Per-call redirects.** The classifier reads the hook process's environment. An agent can set
+  `TMPDIR` or `CLAUDE_GIT_BLESSED_GRANT_DIR` (or another override above) for its own command, e.g.
+  `CLAUDE_GIT_BLESSED_GRANT_DIR=/x git ...`, and the program it runs then reads and writes state
+  in a directory no hook-side classifier knows about. Catching that means parsing the command's
+  environment assignments, which is the caller's job.
+- **Input.** A `str`, `bytes` (decoded with `os.fsdecode`) or `os.PathLike` path is accepted;
+  any other type raises `TypeError` rather than reading as "not state".

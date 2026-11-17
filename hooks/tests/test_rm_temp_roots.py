@@ -155,6 +155,24 @@ def test_harness_control_state(roots, name):
     refused("rm -rf %s/%s" % (roots["tmpdir"], name))
 
 
+def test_control_state_in_another_letter_case(roots):
+    refused("rm -rf %s/CLAUDE-GRANTS" % roots["tmp"])
+    refused("rm -f %s/Claude-Commit-Grant-s1-a.json" % roots["tmp"])
+    refused("rm -rf %s/Agentic-Commit" % roots["tmpdir"])
+
+
+def test_a_relative_or_root_tmpdir_widens_nothing(roots, monkeypatch):
+    target = roots["outside"] / "work"
+    target.mkdir()
+    monkeypatch.chdir(roots["outside"])
+    monkeypatch.setenv("TMPDIR", "work")
+    refused("rm -rf %s/x" % target)
+    refused("rm -rf %s" % target)
+    monkeypatch.setenv("TMPDIR", "/")
+    refused("rm -rf %s/x" % roots["outside"])
+    refused("rm -rf /etc/x")
+
+
 def test_a_directory_holding_control_state(roots):
     owned = roots["tmp"] / "role-scratch"
     owned.mkdir()
