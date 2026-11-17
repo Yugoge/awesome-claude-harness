@@ -53,7 +53,7 @@ The main agent is the orchestrator and delegates real work to subagents. `hooks/
 
 `hooks/pretool-read-size-guard.py` (no switch) blocks the main agent's `Read` of a file over 600 lines unless `limit` is at most 600; for such a file, delegate and ask for a summary.
 
-Pass `run_in_background: false` on every `Agent`/`Task` dispatch, since they run in the background by default. `hooks/pretool-block-background-tasks.py` (no switch; subagents and `/do` exempt) blocks a dispatch without it, a `Bash` call with `run_in_background: true`, every `Workflow` call and every `SendMessage` lesson 16 does not allow. Its one dispatch exception is `/spec`'s background `Explore` agent while a `/spec` interview's checklist has an open step.
+Pass `run_in_background: false` on every `Agent`/`Task` dispatch, since they run in the background by default. `hooks/pretool-block-background-tasks.py` (no switch; subagents and `/do` exempt) blocks a dispatch without it, a `Bash` call with `run_in_background: true`, every `Workflow` call and every `SendMessage` lesson 16 does not allow. Its one dispatch exception is `/spec`'s background `Explore` agent while a `/spec` interview is live: its checklist has an open step, and no human prompt followed the `/spec` while Steps 1-3a, the steps of its opening turn, were still open (such a span is abandoned and holds no dispatch).
 
 `/do`, `/dev`, `/redev`, `/dev-command`, `/dev-overnight`, `/close`, `/commit`, `/merge` and `/push` cannot end until code confirms their todo list and artifacts: `hooks/stop-command-gate.py`, run by the registered Stop hook `hooks/stop-launch.py`, blocks the stop unless `CLAUDE_COMMAND_GATE=off`. A command that needs the owner pauses as Hook Discipline #1 says; the gate stays armed.
 

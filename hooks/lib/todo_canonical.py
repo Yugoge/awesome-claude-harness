@@ -318,6 +318,85 @@ def checklist(transcript_path):
     return Checklist(span, canonical)
 
 
+def _spec_opening_steps():
+    """How many leading /spec steps belong to the turn that opened it:
+    scripts/todo/spec.py's get_blocking_count() (Steps 1-3a run in the opening
+    turn; Steps 4-7 are the multi-turn loop that later prompts continue)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_spec_todo', _HARNESS_TODO_DIR / 'spec.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return int(module.get_blocking_count())
+
+
+def _first_prompt_after(span):
+    """Line of the first human-typed prompt after the span's opener (a
+    task-notification is not one), or None while the opening turn runs."""
+    try:  # imported as checklist() imports it
+        from . import command_span
+    except ImportError:
+        try:
+            from lib import command_span
+        except ImportError:
+            import command_span
+    floor = span.start_line
+    with open(span.transcript_path, encoding='utf-8', errors='replace') as handle:
+        for number, line in enumerate(handle, 1):
+            if number <= floor or '"user"' not in line:
+                continue
+            try:
+                text = command_span.prompt_text(json.loads(line))
+            except ValueError:
+                continue
+            if text is not None and not text.lstrip().startswith('<task-notification>'):
+                return number
+    return None
+
+
+def spec_abandoned(state):
+    """True when the /spec span of ``state`` was abandoned: a human prompt
+    followed the opener while the checklist, as the last ok TodoWrite before
+    that prompt left it (the canonical list before the first), still had an
+    open step among the opening turn's steps (Steps 1-3a). /spec runs those
+    steps inside the turn that opened it (its questions are AskUserQuestion
+    answers, tool results, not prompts); only the Step 4 loop waits for the
+    next prompt. The state is read as of that first later prompt, so no
+    TodoWrite after it (a step set back to pending) turns a live interview
+    stale, and only a human prompt (never a scheduled one, a Skill expansion
+    or a task-notification) can end the opening turn. Any failure: False (the
+    span counts as live, as before)."""
+    try:
+        prompt = _first_prompt_after(state.span)
+        if prompt is None:
+            return False
+        then = None
+        for call, new in _ok_lists(state.span.calls('TodoWrite')):
+            if call.line >= prompt:
+                break
+            then = new
+        then = then if then is not None else state.canonical
+        opening = {s.get('content') for s in state.canonical[:_spec_opening_steps()]}
+        return any(t.get('status') != 'completed' for t in then if t.get('content') in opening)
+    except Exception:  # noqa: BLE001 -- unreadable: keep the interview's hold
+        return False
+
+
+def live_spec_checklist(transcript_path):
+    """The /spec interview's Checklist while it is live, else None: the
+    active span is /spec, its checklist (the last ok TodoWrite, or the
+    canonical list before the first) has a step not completed, and the span
+    was not abandoned (spec_abandoned). The one reading of the /spec window
+    for pretool-spec-block-foreground-agent.py and the Explore exemption of
+    pretool-block-background-tasks.py."""
+    state = checklist(transcript_path)
+    if state is None or state.command != 'spec':
+        return None
+    todos = state.todos if state.todos is not None else state.canonical
+    if all(t.get('status') == 'completed' for t in todos):
+        return None
+    return None if spec_abandoned(state) else state
+
+
 def _bookmark_text(path, encoding):
     try:
         return path.read_text(encoding=encoding)
