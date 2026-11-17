@@ -17,7 +17,7 @@
   },
   "_env": {
     "CLAUDE_HOME": "Absolute path of the harness home (this checkout). Written by scripts/bootstrap. Every hook command resolves \"${CLAUDE_HOME:-$HOME/.claude}\", so without it hooks fall back to $HOME/.claude.",
-    "TMPDIR": "Scratch directory for sessions and tools. The clean form pins /var/tmp/claude-scratch; override TMPDIR and CLAUDE_CODE_TMPDIR together. scripts/bootstrap creates the directory (mode 1777) if it is absent.",
+    "TMPDIR": "Scratch directory for sessions and tools. The clean form pins /var/tmp/claude-scratch; override TMPDIR and CLAUDE_CODE_TMPDIR together. scripts/bootstrap creates the directory (mode 1777) if it is absent. The clean form's scratch entries Read(//var/tmp/claude-scratch/**) and Edit(//var/tmp/claude-scratch/**) name the pinned root, so an overlay that moves it appends the same pair for its own root, with two leading slashes (a single one anchors at the settings source, not the filesystem root), as permissions.allow below does for /opt/demo/scratch; never /tmp as a whole, which holds the hook state root.",
     "CLAUDE_CODE_TMPDIR": "Claude Code's own scratch directory; keep it equal to TMPDIR.",
     "GIT_AUTO_PUSH": "Optional opt-in, not set in this example. The clean form sets \"0\" (no automatic push); add \"GIT_AUTO_PUSH\": \"1\" to env only if this machine wants automatic remote backup.",
     "CLAUDE_DEV_CONTAINERS": "Whitespace-separated exact names of dev containers the agent may docker stop/restart/rm/kill. Default empty: no container is whitelisted.",
@@ -57,7 +57,9 @@
     "allow": [
       "Bash(/opt/demo/bin/demo-sync.sh:*)",
       "Bash(node /opt/demo/bin/demo-healer.mjs:*)",
-      "Bash(/opt/demo/bin/demo-self-update --help:*)"
+      "Bash(/opt/demo/bin/demo-self-update --help:*)",
+      "Read(//opt/demo/scratch/**)",
+      "Edit(//opt/demo/scratch/**)"
     ],
     "deny": [
       "Bash(/opt/demo/bin/demo-wipe.sh:*)"
