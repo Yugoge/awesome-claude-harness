@@ -77,7 +77,7 @@ class ProbeFixtures:
 # cross-checks 1-5 (AC-CAPGATE-01)
 # --------------------------------------------------------------------------- #
 def _ambient_session_id(explicit: str | None) -> str:
-    return explicit or os.environ.get("CLAUDE_SESSION_ID") or ""
+    return explicit or cs.ambient_session_id()
 
 
 def transcript_offsets() -> dict[str, int]:
@@ -317,7 +317,11 @@ def observe_status_surface() -> dict:
 # --------------------------------------------------------------------------- #
 # run
 # --------------------------------------------------------------------------- #
-def run_handshake(session_id: str, home: Path, state_file: Path, timeout: int) -> dict:
+def run_handshake(session_id: str, home: Path, state_file: Path, timeout: int,
+                  on_open=None) -> dict:
+    """Run one fresh handshake. `on_open(state)`, when given, is called once the
+    PENDING state is published and the probe file exists, i.e. when receipts can
+    first be recorded. It only observes; its return value is ignored."""
     run_id = cs.new_nonce()[:16]
     nonce = cs.new_nonce()
     event_nonces = {label: cs.new_nonce() for label in cs.RELIED_UPON_EVENTS}
@@ -362,6 +366,8 @@ def run_handshake(session_id: str, home: Path, state_file: Path, timeout: int) -
         fixtures.create({"run_id": run_id, "nonce": nonce, "session_id": session_id,
                          "event_nonces": event_nonces, "window_start": window_start,
                          "transcript_offsets": offsets})
+        if on_open is not None:
+            on_open(state)
         receipts = collect_receipts(fixtures, timeout, len(cs.RELIED_UPON_EVENTS))
         probe = {"run_id": run_id, "nonce": nonce, "event_nonces": event_nonces,
                  "transcript_offsets": offsets}

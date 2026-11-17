@@ -18,8 +18,8 @@ record and re-resolved, via `_locate_unique`, against the SAME buffer it is
 about to be staged into -- immediately before each segment's real
 `git apply --cached` call in `_composed_main`.
 
-This is a git-TRACKED regression file -- .gitignore:114 excludes
-tests/generated/* from version control, so a P0-class silent-corruption
+This is a git-TRACKED regression file -- .gitignore excludes
+/tests/generated/ from version control, so a P0-class silent-corruption
 defect needs durable coverage here, not only in the test-writer skeletons
 under tests/generated/20260912-015952/. It uses the REAL lane-lanel
 commands/close.md hunk-4 shape for the live-segment case: ledger entry 2 (a
@@ -30,10 +30,11 @@ exact co-segment interaction commit 5ab61c99's own regression fixture
 (tests/generated/20260911-220120/_fixtures.py::live_plan_case, a single-
 edit-per-segment fixture) never exercised. The ledger is embedded verbatim
 below (copied from docs/dev/dev-report-20260808-035658-lanel.json) because
-docs/dev/ is gitignored (.gitignore:142); the pre-edit snapshot is instead
-fetched live from this repo's own git history (a committed object, not a
-gitignored working-tree file), keeping the fixture durable without
-depending on any local, uncommitted artifact.
+docs/dev/ is gitignored; the pre-edit snapshot is instead fetched live
+from this repo's own git history (a committed object, not a gitignored
+working-tree file), so the fixture depends on no local, uncommitted
+artifact. A clone without that history (the public copy, one commit per
+publish under D30) skips the tests that need it.
 """
 
 import hashlib

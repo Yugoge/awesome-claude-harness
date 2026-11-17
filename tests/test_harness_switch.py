@@ -574,3 +574,276 @@ def guarded_files():
 def test_every_registered_hook_asks_the_switch_first(rel):
     text = (ROOT / rel).read_text()
     assert ("harness_switch.exit_if_off()" in text) or ("harness_switch_exit_if_off" in text), rel
+
+
+# ------------------------------------------------- a Claude Code settings file's switch keys
+
+SWITCH_KEYS = {  # payload: (key, the value an agent writes, the value the file holds before)
+    "env CLAUDE_COMMAND_GATE=off": ("env", {"CLAUDE_COMMAND_GATE": "off"}, {"CLAUDE_COMMAND_GATE": "on"}),
+    "env CLAUDE_OBLIGATION_STOPGATE=off": ("env", {"CLAUDE_OBLIGATION_STOPGATE": "off"},
+                                           {"CLAUDE_OBLIGATION_STOPGATE": "block"}),
+    "env CLAUDE_COMPAT_RUNTIME=codex": ("env", {"CLAUDE_COMPAT_RUNTIME": "codex"}, {"CLAUDE_COMPAT_RUNTIME": "claude"}),
+    "hooks": ("hooks", {"PreToolUse": [{"hooks": [{"type": "command", "command": "true"}]}]},
+              {"PreToolUse": [{"hooks": [{"type": "command", "command": "false"}]}]}),
+    "permissions.allow": ("permissions", {"allow": ["Bash(rm:*)"]}, {"allow": ["Bash(ls:*)"]}),
+}
+SETTINGS_FORMS = ("Write", "Edit", "MultiEdit", "Bash >", "Bash tee", "Bash cp onto", "Bash mv onto",
+                  "Bash sed -i", "Bash rm", "Bash mv away")
+
+
+@pytest.fixture(scope="module")
+def guard_home(tmp_path_factory):
+    """One harness home (the tree's files) for the settings-file cases; each case has its own project."""
+    root = tmp_path_factory.mktemp("guard")
+    h = root / "claude"
+    for rel in tree_files():
+        dst = h / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / rel, dst)
+    (root / "state").mkdir()
+    env = dict(os.environ, HOME=str(root), CLAUDE_CONFIG_DIR=str(h), CLAUDE_HOME=str(h),
+               CLAUDE_STATE_DIR=str(root / "state"), CLAUDE_PROJECT_DIR=str(root / "proj"))
+    for name in ("CLAUDE_TASK_ID", "CLAUDE_SESSION_ID", "CLAUDE_COMPAT_RUNTIME", "CLAUDE_AGENT_ID"):
+        env.pop(name, None)
+    return Home(h, env)
+
+
+@pytest.fixture()
+def proj(tmp_path):
+    (tmp_path / "proj" / ".claude").mkdir(parents=True)
+    return tmp_path / "proj"
+
+
+def gate(home, proj, tool, tool_input, actor="main", session="S1"):
+    payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(proj), "session_id": session}
+    if actor == "subagent":
+        payload["agent_id"] = "sub-1"
+    return home.hook("hooks/pretool-write-gate.py", payload)
+
+
+def switch_call(proj, payload, fname, form):
+    """(tool, tool_input) of one A1 case, the file and its source set up as the form needs."""
+    key, value, before = SWITCH_KEYS[payload]
+    target, rel = proj / ".claude" / fname, ".claude/" + fname
+    wanted = json.dumps({"model": "opus", key: value})
+    source = proj.parent / "payload.json"
+    source.write_text(wanted)
+    if form in ("Edit", "MultiEdit"):
+        target.write_text('{"model": "opus"}')
+        edit = {"old_string": '"model": "opus"', "new_string": '"model": "opus", "%s": %s' % (key, json.dumps(value))}
+        return form, (dict(edit, file_path=str(target)) if form == "Edit" else {"file_path": str(target), "edits": [edit]})
+    if form == "Write":
+        return "Write", {"file_path": str(target), "content": wanted}
+    if form in ("Bash sed -i", "Bash rm", "Bash mv away"):
+        target.write_text(json.dumps({"model": "opus", key: before}))
+    old, new = json.dumps(before).split('"')[3], json.dumps(value).split('"')[3]  # a value inside the key, no key named
+    return "Bash", {"command": {
+        "Bash >": "echo '%s' > %s" % (wanted, rel),
+        "Bash tee": "echo '%s' | tee %s" % (wanted, rel),
+        "Bash cp onto": "cp %s %s" % (source, rel),
+        "Bash mv onto": "mv %s %s" % (source, rel),
+        "Bash sed -i": "sed -i 's/%s/%s/' %s" % (old, new, rel),
+        "Bash rm": "rm %s" % rel,
+        "Bash mv away": "mv %s /tmp/away.json" % rel}[form]}
+
+
+@pytest.mark.parametrize("form", SETTINGS_FORMS)
+@pytest.mark.parametrize("fname", ["settings.local.json", "settings.json"])
+@pytest.mark.parametrize("payload", sorted(SWITCH_KEYS))
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_an_agent_cannot_change_a_settings_files_switch_keys(guard_home, proj, payload, fname, form, actor):
+    tool, tool_input = switch_call(proj, payload, fname, form)
+    proc = gate(guard_home, proj, tool, tool_input, actor)
+    assert proc.returncode == 2 and "harness-switch:" in proc.stderr and "Claude Code settings file" in proc.stderr, \
+        (tool_input, proc.stderr)
+    assert "edit the file yourself, or type /allow" in proc.stderr
+
+
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_disable_all_hooks_stays_refused_in_a_projects_settings_file(guard_home, proj, actor):
+    target = proj / ".claude" / "settings.local.json"
+    proc = gate(guard_home, proj, "Write", {"file_path": str(target), "content": '{"disableAllHooks": true}'}, actor)
+    assert proc.returncode == 2 and "sets disableAllHooks" in proc.stderr, proc.stderr
+    proc = gate(guard_home, proj, "Bash", {"command": "echo '{\"disableAllHooks\": true}'>.claude/settings.json"}, actor)
+    assert proc.returncode == 2 and "disableAllHooks" in proc.stderr, proc.stderr  # an attached redirect too
+
+
+@pytest.mark.parametrize("name, setup, tool, tool_input", [
+    ("Edit drops permissions.deny", '{"permissions": {"deny": ["Bash(rm:*)"]}}', "Edit",
+     {"old_string": '"deny": ["Bash(rm:*)"]', "new_string": '"deny": []'}),
+    ("Edit breaks the JSON", '{"permissions": {"deny": ["Bash(rm:*)"]}}', "Edit",
+     {"old_string": "}}", "new_string": "}"}),
+    ("Edit removes hooks", '{"model": "opus", "hooks": {"Stop": []}}', "Edit",
+     {"old_string": ', "hooks": {"Stop": []}', "new_string": ""}),
+    ("Edit an old_string the file lacks", '{"env": {"A": "1"}}', "Edit", {"old_string": "nowhere", "new_string": "x"}),
+    ("NotebookEdit", '{"env": {"A": "1"}}', "NotebookEdit", {"new_source": "{}"}),
+    ("Edit a file load_settings finds unusable", '{"model": "opus", "env": []}', "Edit",
+     {"old_string": '"opus"', "new_string": '"sonnet"'}),
+    ("Write with NaN", None, "Write", {"content": '{"model": NaN}'}),
+])
+def test_a_settings_change_the_rule_cannot_prove_harmless_is_refused(guard_home, proj, name, setup, tool, tool_input):
+    target = proj / ".claude" / "settings.local.json"
+    if setup is not None:
+        target.write_text(setup)
+    key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+    proc = gate(guard_home, proj, tool, dict(tool_input, **{key: str(target)}))
+    if name == "Write with NaN":  # JSON.parse refuses NaN: no keys there to change, nothing refused
+        assert proc.returncode == 0, proc.stderr
+    else:
+        assert proc.returncode == 2 and "Claude Code settings file" in proc.stderr, (name, proc.stderr)
+
+
+@pytest.mark.parametrize("rel", ["managed-settings.json", "managed-settings.d/50-team.json", ".claude.json",
+                                 "deep/dir/.claude/settings.local.json"])
+def test_every_settings_source_the_cli_reads_is_covered(guard_home, proj, rel):
+    target = proj / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"mcpServers": {}}')
+    edit = {"file_path": str(target), "old_string": '"mcpServers": {}', "new_string": '"mcpServers": {"x": {}}'}
+    assert gate(guard_home, proj, "Edit", edit).returncode == 0  # another key: free
+    edit["new_string"] = '"mcpServers": {}, "env": {"CLAUDE_COMMAND_GATE": "off"}'
+    proc = gate(guard_home, proj, "Edit", edit)
+    assert proc.returncode == 2 and "changes env in" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+    "echo '{\"env\": {\"CLAUDE_COMMAND_GATE\": \"off\"}}'>.claude/settings.local.json",
+    "cd .claude && echo '{\"env\": {}}' > settings.json",
+    "rm -rf .claude",
+    "mv .claude /tmp/gone",
+    "cp -r /tmp/elsewhere/.claude ./",
+    "cp /tmp/settings.local.json .claude/",
+    "perl -pi -e 's/on/off/' .claude/settings.local.json",
+    "bash -c \"sed -i 's/on/off/' .claude/settings.local.json\"",
+    "git checkout HEAD~1 -- .claude/settings.local.json",
+    "dd if=/tmp/p.json of=.claude/settings.local.json",
+    "cat > .claude/settings.json <<'EOF'\n{\"model\": \"opus\"}\nEOF",
+    "bash <<'EOF'\nrm .claude/settings.local.json\nEOF",
+    "echo '{\"model\": \"opus\"}' > .claude/settings.local.json",  # the literal echo, onto a file with env
+])
+def test_bash_writes_the_rule_refuses(guard_home, proj, command):
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    (proj / ".claude" / "settings.json").write_text('{"permissions": {"deny": ["Bash(rm:*)"]}}')
+    proc = gate(guard_home, proj, "Bash", {"command": command})
+    assert proc.returncode == 2 and "Claude Code settings file" in proc.stderr, (command, proc.stderr)
+
+
+def test_a_settings_file_reached_through_a_link_is_one(guard_home, proj):
+    real = proj / "real.json"
+    real.write_text('{"model": "opus"}')
+    (proj / ".claude" / "settings.local.json").symlink_to(real)
+    edit = {"file_path": str(proj / ".claude" / "settings.local.json"), "old_string": '"model": "opus"',
+            "new_string": '"model": "opus", "env": {"CLAUDE_COMMAND_GATE": "off"}'}
+    assert gate(guard_home, proj, "Edit", edit).returncode == 2
+
+
+SETTINGS_FREE = [  # reads of settings files, other JSON files, messages, other keys
+    ("Bash", {"command": "cat .claude/settings.json .claude/settings.local.json ~/.claude.json"}),
+    ("Bash", {"command": "jq .env .claude/settings.local.json"}),
+    ("Bash", {"command": "jq '.hooks' .claude/settings.json > /tmp/hooks.json"}),
+    ("Bash", {"command": "grep -n CLAUDE_COMMAND_GATE .claude/settings.local.json"}),
+    ("Bash", {"command": "git diff .claude/settings.json && git show HEAD:.claude/settings.local.json"}),
+    ("Bash", {"command": "git log -p -- .claude/settings.json | head"}),
+    ("Bash", {"command": "python3 -c \"import json; print(json.load(open('.claude/settings.json'))['env'])\""}),
+    ("Bash", {"command": "python3 -m json.tool .claude/settings.local.json"}),
+    ("Bash", {"command": "cp .claude/settings.json /tmp/settings-backup.json"}),
+    ("Bash", {"command": "echo '{\"env\": {\"A\": \"1\"}, \"hooks\": {}}' > config/settings.json"}),
+    ("Bash", {"command": "sed -i 's/on/off/' config/settings.json package.json"}),
+    ("Bash", {"command": "cat > notes.md <<'EOF'\nrm .claude/settings.json; cp x .claude/settings.local.json\nEOF"}),
+    ("Bash", {"command": "git commit -m \"Refuse env CLAUDE_COMMAND_GATE=off in /p/.claude/settings.local.json\""}),
+    ("Bash", {"command": "git commit -m \"$(cat <<'EOF'\nGuard the settings files\n\necho '{\"env\": {\"CLAUDE_COMPAT_RUNTIME\": \"codex\"}}' > .claude/settings.json, cp x .claude/settings.local.json, sed -i, rm .claude/settings.json: refused.\nEOF\n)\""}),
+    ("Bash", {"command": "gh pr create --title t --body \"hooks and permissions of .claude/settings.json; tee /p/.claude/settings.local.json\""}),
+    ("Write", {"file_path": "{P}/config/settings.json", "content": '{"env": {"CLAUDE_COMMAND_GATE": "off"}}'}),
+    ("Write", {"file_path": "{P}/package.json", "content": '{"hooks": {"pre-commit": "x"}, "env": {}}'}),
+    ("Write", {"file_path": "{P}/.claude/settings.local.json", "content": '{"model": "opus", "statusLine": {}}'}),
+    ("Edit", {"file_path": "{P}/.claude/settings.json", "old_string": '"model": "opus"', "new_string": '"model": "sonnet"'}),
+    ("MultiEdit", {"file_path": "{P}/.claude/settings.json", "edits": [
+        {"old_string": '"model": "opus"', "new_string": '"model": "sonnet"'},
+        {"old_string": '"env"', "new_string": '"statusLine": {}, "env"'}]}),
+]
+
+
+@pytest.mark.parametrize("tool, tool_input", SETTINGS_FREE)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_reads_other_files_messages_and_other_keys_stay_free(guard_home, proj, tool, tool_input, actor):
+    (proj / ".claude" / "settings.json").write_text(
+        '{"model": "opus", "env": {"CLAUDE_COMMAND_GATE": "on"}, "permissions": {"deny": ["Bash(rm:*)"]}}')
+    (proj / "config").mkdir()
+    tool_input = json.loads(json.dumps(tool_input).replace("{P}", str(proj)))
+    proc = gate(guard_home, proj, tool, tool_input, actor)
+    assert "harness-switch:" not in proc.stderr, (tool_input, proc.stderr)
+    if actor == "main":
+        assert proc.returncode == 0, (tool_input, proc.stderr)
+
+
+def test_dev_step_15s_permission_writer_is_not_refused(guard_home, proj):
+    """/dev's Step 15 (commands/dev.md) applies QA-validated permissions to .claude/settings.json through
+    `bash scripts/apply-permissions.sh`: an interpreter, whose writes this rule does not see."""
+    line = next(ln for ln in (ROOT / "commands" / "dev.md").read_text().splitlines()
+                if "apply-permissions.sh" in ln and ln.startswith("python3"))
+    command = line.replace("<HARNESS_ROOT>", str(guard_home.path)).replace("<timestamp>", "20260101-120000")
+    (proj / ".claude" / "settings.json").write_text('{"permissions": {"allow": []}}')
+    proc = gate(guard_home, proj, "Bash", {"command": command})
+    assert "harness-switch:" not in proc.stderr and proc.returncode == 0, proc.stderr
+
+
+# ---------------------------------------------------------------- the owner's /allow, once
+
+def allow(home, proj, text, session):
+    """The owner types `/allow <text>`: the registered UserPromptSubmit hook writes the grant."""
+    payload = {"hook_event_name": "UserPromptSubmit", "prompt": "/allow " + text, "session_id": session,
+               "cwd": str(proj), "transcript_path": str(home.transcript)}
+    run(["bash", str(home.path / "hooks" / "userprompt-consent-allowlist.sh")], proj,
+        dict(home.env, CLAUDE_PROJECT_DIR=str(proj)), json.dumps(payload))
+    assert (Path(home.env["CLAUDE_STATE_DIR"]) / "claude-grants" / ("%s.json" % session)).is_file()
+
+
+def spent(home, proj, tool, tool_input, session, actor="main"):
+    """The call ran: the registered PostToolUse consumer spends the grant it used."""
+    payload = {"hook_event_name": "PostToolUse", "tool_name": tool, "tool_input": tool_input, "session_id": session,
+               "cwd": str(proj), "tool_response": {"stdout": "", "stderr": "", "interrupted": False}}
+    if actor == "subagent":
+        payload["agent_id"] = "sub-1"
+    run([PY, str(home.path / "hooks" / "posttool-allowlist-consume.py")], proj, home.env, json.dumps(payload))
+
+
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_an_allow_grant_naming_the_command_lets_one_bash_write_through(guard_home, proj, actor):
+    target = proj / ".claude" / "settings.local.json"
+    target.write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    command = "sed -i s/on/off/ .claude/settings.local.json"
+    session = "grant-bash-" + actor
+    assert gate(guard_home, proj, "Bash", {"command": command}, actor, session).returncode == 2
+    allow(guard_home, proj, command, session)
+    other = gate(guard_home, proj, "Bash", {"command": "rm .claude/settings.local.json"}, actor, session)
+    assert other.returncode == 2  # the grant names one command, not this one
+    proc = gate(guard_home, proj, "Bash", {"command": command}, actor, session)
+    assert proc.returncode == 0 and "harness-switch:" not in proc.stderr, proc.stderr  # a Bash grant reaches a subagent
+    spent(guard_home, proj, "Bash", {"command": command}, session, actor)
+    assert gate(guard_home, proj, "Bash", {"command": command}, actor, session).returncode == 2
+
+
+@pytest.mark.parametrize("tool, grant", [("Write", "Write {T}"), ("Write", "Write"), ("Edit", "Edit"), ("MultiEdit", "MultiEdit")])
+def test_an_allow_grant_lets_one_main_agent_write_through_and_never_a_subagents(guard_home, proj, tool, grant):
+    target = proj / ".claude" / "settings.json"
+    if tool == "Write":
+        tool_input = {"file_path": str(target), "content": '{"env": {"CLAUDE_COMMAND_GATE": "off"}}'}
+    else:
+        target.write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+        edit = {"old_string": '"on"', "new_string": '"off"'}
+        tool_input = dict(edit, file_path=str(target)) if tool == "Edit" else {"file_path": str(target), "edits": [edit]}
+    session = "grant-%s-%s" % (tool, grant.split()[-1] == "{T}")
+    allow(guard_home, proj, grant.replace("{T}", str(target)), session)
+    sub = gate(guard_home, proj, tool, tool_input, "subagent", session)
+    assert sub.returncode == 2 and "Claude Code settings file" in sub.stderr  # a Write or tool grant is the main agent's
+    proc = gate(guard_home, proj, tool, tool_input, "main", session)
+    assert proc.returncode == 0 and "harness-switch:" not in proc.stderr, proc.stderr
+    spent(guard_home, proj, tool, tool_input, session)
+    assert gate(guard_home, proj, tool, tool_input, "main", session).returncode == 2
+
+
+def test_an_allow_grant_does_not_open_disable_all_hooks(guard_home, proj):
+    target = proj / ".claude" / "settings.local.json"
+    allow(guard_home, proj, "Write %s" % target, "grant-dah")
+    proc = gate(guard_home, proj, "Write", {"file_path": str(target), "content": '{"disableAllHooks": true}'}, "main", "grant-dah")
+    assert proc.returncode == 2 and "sets disableAllHooks" in proc.stderr

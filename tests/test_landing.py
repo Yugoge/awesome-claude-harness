@@ -28,8 +28,8 @@ from tests.test_settings_filter import (CODE_NEW, CODE_OLD, NOTIFY_GROUP, canon,
 REPO = Path(__file__).resolve().parent.parent
 HARNESS_FILES = ("scripts/install/land", "scripts/install/render-settings", "scripts/bootstrap",
                  "hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
-                 "hooks/lib/runtime_guard/config.py", "hooks/lib/runtime_guard/shell_lex.py",
-                 "hooks/lib/runtime_guard/pathmatch.py", "hooks/git-hooks/pre-commit",
+                 "hooks/lib/runtime_guard/config.py", "hooks/lib/runtime_guard/pathmatch.py",
+                 "hooks/git-hooks/pre-commit",
                  "hooks/git-hooks/pre-push", "scripts/install/push-guard",
                  "hooks/git-hooks/post-commit-auto-push", "hooks/git-hooks/README.md")
 LEGACY_HOOK = '#!/bin/bash\n# post-commit-auto-push (pre-P0)\nif [ "${GIT_AUTO_PUSH:-1}" = "0" ]; then exit 0; fi\n' \

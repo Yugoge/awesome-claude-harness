@@ -1,7 +1,7 @@
 """Run one hook file in this process as if the CLI had run it as `python3 <file>`.
 
 A merged gate (hooks/pretool-write-gate.py) and the event dispatchers
-(hooks/lib/hook_dispatch.py) hold several hook files that each ran as their own
+(hooks/lib/hook_launch.py) hold several hook files that each ran as their own
 process. Each file keeps its own ``__main__`` block, so it decides exactly as it
 did alone; this module runs that file in the caller's process instead of a new
 interpreter, and gives back what the interpreter would have given the CLI:
@@ -12,7 +12,9 @@ interpreter, and gives back what the interpreter would have given the CLI:
   process it starts) is captured per run, at the file-descriptor level;
 - its exit status is the ``SystemExit`` it raises (0 when it returns), or the
   status it passes to ``os._exit``, which here ends the file instead of the
-  process (no atexit handler of the file runs then, as none would have);
+  process (no atexit handler of the file runs then, as none would have); in a
+  process the file forked (lib/todo_canonical runs a script that way) ``os._exit``
+  ends that process, as it did when the file ran alone;
 - an exception it does not catch goes to the ``sys.excepthook`` it installed, if
   it installed one (a hook that turns its own load failure into a refusal keeps
   doing so), else its traceback is written to its stderr and its status is 1;
@@ -34,7 +36,13 @@ interpreter, and gives back what the interpreter would have given the CLI:
   whose budget it was. ``on_stuck``, if given, is called from the watchdog thread
   when the file is still running ``grace`` seconds after the overrun was sent
   (it swallowed even that, or is stuck where no signal handler runs): the caller
-  then answers for the whole process.
+  then answers for the whole process;
+- with ``watchdog=False`` no thread is started: the run's deadline (``deadline``,
+  a ``time.monotonic()`` reading, which every process of the machine shares) is
+  kept by another process, which sends this process SIGUSR2 once it has passed
+  and ends it if it does not stop (lib/rule_fork: a forked run starts no thread
+  before the file's own code). The SIGUSR2 ends the run once its deadline has
+  passed, as the watchdog's would.
 
 The caller decides what an error or an overrun means for the file (its failure
 direction); this module only reports it.
@@ -96,10 +104,11 @@ def _status(code) -> tuple[int, str]:
 
 
 class _Frame:
-    __slots__ = ("deadline", "fired", "active")
+    __slots__ = ("deadline", "fired", "active", "watched")
 
-    def __init__(self, deadline: float):
+    def __init__(self, deadline: float, watched: bool = True):
         self.deadline, self.fired, self.active = deadline, False, True
+        self.watched = watched  # False: another process keeps the deadline (no watchdog thread)
 
 
 _STACK: list = []           # the runs in progress, outermost first
@@ -107,7 +116,10 @@ _REAL_OS_EXIT = os._exit
 
 
 def _on_overrun(signum, frame):  # pragma: no cover - timing dependent
+    now = time.monotonic()
     for f in _STACK:  # the outermost expired run: its budget covers the inner ones
+        if f.active and not f.watched and now >= f.deadline:
+            f.fired = True  # the process keeping its deadline sent this signal
         if f.active and f.fired:
             f.active = False
             raise RuleOverrun(f)
@@ -141,19 +153,31 @@ def _harness_module(mod) -> bool:
     return isinstance(f, str) and os.path.abspath(f).startswith(_HARNESS_DIRS)
 
 
-def _trim(tb, path: str):
-    """The traceback from the file's own frames on (the runner's and runpy's frames dropped)."""
+def _trim(tb, path: str, exc=None):
+    """The traceback from the file's own frames on (the runner's and runpy's frames dropped); none
+    for the file's own syntax error (it never ran: the interpreter prints no traceback then)."""
     start = tb
     while tb is not None:
         if os.path.abspath(tb.tb_frame.f_code.co_filename) == path:
             return tb
         tb = tb.tb_next
+    if isinstance(exc, SyntaxError) and exc.filename and os.path.abspath(exc.filename) == path:
+        return None
     return start
 
 
+def watched() -> bool:
+    """True while a run of this process has a watchdog thread (a fork now would copy a process
+    with a second thread: lib/rule_fork never forks then)."""
+    return any(f.watched for f in _STACK)
+
+
 def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = False,
-             on_stuck=None, grace: float = 2.0) -> RuleRun:
-    """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds."""
+             on_stuck=None, grace: float = 2.0, watchdog: bool = True,
+             deadline: float | None = None) -> RuleRun:
+    """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds (until
+    ``deadline``, a ``time.monotonic()`` reading, when given). ``watchdog=False``: no thread;
+    the caller's process keeps the deadline and sends SIGUSR2 once it has passed."""
     path = os.path.abspath(path)
     saved_env = dict(os.environ)
     saved_cwd = os.getcwd()
@@ -179,7 +203,7 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
     code, extra, error, overrun = 0, "", "", False
     exits: list = []
     start = time.monotonic()
-    frame = _Frame(start + max(budget, 0.001))
+    frame = _Frame(deadline if deadline is not None else start + max(budget, 0.001), watched=watchdog)
     outer_handler = signal.getsignal(signal.SIGUSR2) if not _STACK else None
     if not _STACK:
         signal.signal(signal.SIGUSR2, _on_overrun)
@@ -188,7 +212,8 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
     done = threading.Event()
 
     def _watch():
-        if done.wait(max(budget, 0.001)) or not frame.active:
+        wait = budget if deadline is None else frame.deadline - time.monotonic()
+        if done.wait(max(wait, 0.001)) or not frame.active:
             return
         frame.fired = True
         try:
@@ -198,7 +223,11 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
         if on_stuck is not None and not done.wait(max(grace, 0.001)) and frame.fired:
             on_stuck()
 
+    run_pid = os.getpid()
+
     def _os_exit(status):
+        if os.getpid() != run_pid:  # in a fork the file made: it ends that process, as it did alone
+            _REAL_OS_EXIT(status)
         raise _OsExit(status)
 
     def _register(func, *args, **kwargs):
@@ -208,7 +237,7 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
     def _unregister(func):
         exits[:] = [e for e in exits if e[0] != func]
 
-    watchdog = threading.Thread(target=_watch, daemon=True)
+    watcher = threading.Thread(target=_watch, daemon=True) if watchdog else None
     ended_by_os_exit = False
     outer_exit = (os._exit, atexit.register, atexit.unregister)  # an enclosing run's, when runs nest
     try:
@@ -225,7 +254,8 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
         sys.argv = [path]
         os._exit = _os_exit
         atexit.register, atexit.unregister = _register, _unregister
-        watchdog.start()
+        if watcher is not None:
+            watcher.start()
         try:
             runpy.run_path(path, run_name="__main__")
         except SystemExit as stop:
@@ -255,7 +285,7 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
                     error = ""
             else:
                 try:
-                    exc = exc.with_traceback(_trim(exc.__traceback__, path))
+                    exc = exc.with_traceback(_trim(exc.__traceback__, path, exc))
                     traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
                 except Exception:
                     pass
@@ -284,8 +314,8 @@ def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = 
         frame.active = False
         done.set()
         _STACK.remove(frame)
-        if watchdog.is_alive():
-            watchdog.join(0.5)
+        if watcher is not None and watcher.is_alive():
+            watcher.join(0.5)
         os._exit, atexit.register, atexit.unregister = outer_exit
         try:
             signal.setitimer(signal.ITIMER_REAL, 0)

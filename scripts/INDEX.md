@@ -1,13 +1,16 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-10T08:16:38Z*
-**Total entries**: 163
+*Last updated: 2026-11-16T09:03:12Z*
+**Total entries**: 167
 **Convention**: kebab
 
 ## Tree
 ```
 scripts/
+├── ci/
+│   ├── `diff-mutate.py` - Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
+│   └── `red-green.py` - Given a base and a head, the script finds their merge base and judges the diff merge-base..head:
 ├── install/
 │   ├── profiles/
 │   │   └── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
@@ -17,6 +20,7 @@ scripts/
 │   ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
 │   ├── `land` - land file
 │   ├── `preflight` - preflight file
+│   ├── `push-guard` - push-guard file
 │   ├── `render-settings` - render-settings file
 │   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
 │   ├── `tmpfiles-claude-scratch.conf` - conf file
@@ -112,6 +116,7 @@ scripts/
 ├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
 ├── `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
+├── `harness-switch` - harness-switch file
 ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 ├── `iterate-failed-pipelines.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
@@ -133,11 +138,13 @@ scripts/
 ├── `plan-style-inspection.sh` - Description: Discover auditable files and split into groups for parallel style inspection
 ├── `precommitted-recovery.sh` - Description: Recovery path helpers for nothing_to_commit_precommitted detection.
 ├── `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
+├── `publish-public` - publish-public file
 ├── `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 ├── `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 ├── `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
-├── `readme_facts.py` - Description: One module, one function per fact, one source per function. No number is typed here:
+├── `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
 ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
+├── `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 ├── `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Path-normalization and segment-boundary glob matching for the guard.
 
-Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
+Depends only on the stdlib and owns `_strip_quotes`; references nothing from
 _core. `_mutation_cand_hits` stays in _core: it forward-references the decision
 engine.
 
@@ -21,12 +21,12 @@ import os
 import re
 from typing import Optional
 
-# Only the phase-1 quote stripper is needed here. Dual-context import (INV-3; the contract
-# is stated at _core's first re-import block).
-try:
-    from .shell_lex import _strip_quotes
-except ImportError:  # executed under the top-level-script shim (no package)
-    from shell_lex import _strip_quotes  # type: ignore[no-redef]
+
+def _strip_quotes(tok: str) -> str:
+    """`tok` without one pair of enclosing single or double quotes."""
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"'):
+        return tok[1:-1]
+    return tok
 
 
 # ── Path normalization + segment-boundary suffix matching ──────────────────
