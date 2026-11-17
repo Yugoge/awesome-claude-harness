@@ -238,4 +238,4 @@ The dependency table in [Installation](installation.md#quick-dependency-referenc
 
 #### Trust model
 
-**The human is the trust root.** Every release verb (`/commit`, `/push`, `/merge`, `/close`) and every human-only command is denied to agents both via `disable-model-invocation: true` *and* an explicit `Skill(<name>:*)` entry in `permissions.deny` — the only technical barrier against an agent self-invoking a privileged command. The harness assumes the agent itself is the adversary, so guards are written as code (a `PreToolUse`/`Stop` hook that exits 2 on the covered operation), never as prose.
+**The human is the trust root.** Every release verb (`/commit`, `/push`, `/merge`, `/close`) and every human-only command is denied to agents both via `disable-model-invocation: true` *and* an explicit `Skill(<name>)` entry in `permissions.deny` — the only technical barrier against an agent self-invoking a privileged command. The harness assumes the agent itself is the adversary, so guards are written as code (a `PreToolUse`/`Stop` hook that exits 2 on the covered operation), never as prose.

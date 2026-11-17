@@ -558,7 +558,7 @@ def smudge_bytes(data, layers):
 # ------------------------------------------------------------------------- the harness switch
 
 SWITCH_HOOK = "userprompt-harness-switch.sh"  # hooks/<it>: the one hook command the off form keeps
-SWITCH_PERMISSIONS = ("Skill(harness:*)", "Edit(**/.harness-switch/**)")  # the switch's own rules
+SWITCH_PERMISSIONS = ("Skill(harness)", "Edit(**/.harness-switch/**)")  # the switch's own rules
 # Top-level keys the clean form ships that the off form keeps, because dropping them would change
 # what is not the harness: cleanupPeriodDays (365) guards the session history Claude Code would
 # otherwise delete after its default 30 days; deniedMcpServers keeps three connectors off that

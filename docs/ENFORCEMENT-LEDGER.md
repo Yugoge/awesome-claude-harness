@@ -358,6 +358,7 @@ no per-rule budget exists.
 | S-017 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
 | S-019 | permission-layer-secret-file-denies | advisory | unexercised | source-level | settings.json:278 @79c79db1 | tests/test_secret_file_denies.py | source-level |
 | S-023 | permission-layer-home-secret-denies | advisory | unexercised | source-level | settings.json:253 @aa685f4c | tests/test_home_secret_denies.py | source-level |
+| S-020 | permission-layer-skill-deny-exact-name | detected | exercised | component-tested | settings.json:249 @d1abc798 | hooks/tests/test_skill_deny_coverage.py | component-tested |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -366,9 +367,10 @@ no per-rule budget exists.
   and `permissions.ask` is empty; at `@4c33f2f5` the same three were `ask` rules beside 96 deny
   rules, none git-related. All three are **prefix-anchored** and therefore match no wrapped or
   redirected form. There is no permission-layer backstop behind the hook layer for this class.
-  Outside this class, `permissions.deny` carries a `Skill(<stem>:*)` entry for each human-only
+  Outside this class, `permissions.deny` carries a `Skill(<stem>)` entry for each human-only
   command, and `hooks/tests/test_skill_deny_coverage.py` requires one for every `commands/*.md`
-  stem outside CONTROL that no harness text calls through the Skill tool. `Skill(codex:*)` is
+  stem outside CONTROL that no harness text calls through the Skill tool; the entry's form is
+  S-020. `codex` is
   not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
   under `--codex`, and `subagentstop-codex-enforce.py` (R-022, run by the producer gate H-092)
   requires the ledger entry that call's PostToolUse (H-050) writes.
@@ -376,6 +378,15 @@ no per-rule budget exists.
   this class: they only keep the new `git -C`, `rg --files` and `make -n` allow entries from reaching
   another verb, option or evaluation. `git -C <dir> push --force` and `git -C <dir> reset --hard` still match no deny
   and ask because no allow entry covers them.
+- **S-020** — OB-L20: each human-only command's Skill deny is the exact `Skill(<stem>)`. The docs give
+  "`Skill(name)` for exact match, `Skill(name *)` for prefix match with any arguments"
+  (https://code.claude.com/docs/en/skills.md, "Restrict Claude's skill access"). Measured on CLI 2.1.326 offline
+  (throwaway HOME, local stand-in for the Messages API, `claude -p`): `Skill(do)` refuses `do` with or without
+  arguments and `/do`, and lets `docs` run; `Skill(do:*)` and `Skill(do *)` both match as a raw prefix of the name
+  and refused `docs` too (`Skill(dev:*)` `devops`, `Skill(commit:*)` `commit-message`, `Skill(test:*)` `testing`).
+  `hooks/tests/test_skill_deny_coverage.py` models that matcher and pins every Skill deny exact, the human-only
+  commands refused with and without arguments, and docs, devops, commit-message, domain-model, testing and codex
+  not denied. `scripts/install/render-settings` SWITCH_PERMISSIONS carries `Skill(harness)` to match.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
   finds no git in suppresses its own backstop.

@@ -30,7 +30,7 @@ Each subagent invocation handles exactly ONE issue. The rule binds the subagent,
 The subagent reports; the orchestrator asks in-turn; inside `/dev-overnight` nobody is asked (Hook Discipline #1).
 
 ### 15. `disable-model-invocation: true` blocks SlashCommand only, not `Skill` tool calls
-A `Skill(<name>:*)` entry in `settings.json` `permissions.deny` for every human-only command is the only real barrier against agent self-invocation; `hooks/tests/test_skill_deny_coverage.py` fails when a command lacks one.
+A `Skill(<name>)` entry in `settings.json` `permissions.deny` for every human-only command is the only real barrier against agent self-invocation; `hooks/tests/test_skill_deny_coverage.py` fails when a command lacks one.
 
 ### 16. Quota-interrupted subagents must be resumed, never replaced
 After a session or usage limit interrupts agents, recovery enumerates every recoverable child from the current parent transcript and resumes the SAME `agent_id` with `SendMessage`: through the human-only `/restart` (`commands/restart.md`), or inside `/dev-overnight` through the session's own wake while its span is open, with no human. Never create replacement `Agent` calls, never omit a child because its transcript looks nearly complete, and never claim recovery until response evidence exists for every candidate. `hooks/pretool-block-background-tasks.py` (no switch) blocks every other `SendMessage` to a candidate (one that does not begin with the exact recovery message, or a wake after `/stop`, whose typed record also revokes a grant an earlier wake minted) and every `SendMessage` to anyone but this session's own finished subagent dispatched with no obligation outside a gated command's span; `hooks/posttool-restart-sendmessage.py` journals every send.

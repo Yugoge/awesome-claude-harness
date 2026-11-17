@@ -165,7 +165,7 @@
 - `test_scratch_lifecycle.py` - Covers:
 - `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
 - `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
-- `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
+- `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>)` entry in
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 - `test_spec_flag_prose.py` - in a /dev, /redev, /dev-command or /dev-overnight prompt as the --spec flag, and
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at

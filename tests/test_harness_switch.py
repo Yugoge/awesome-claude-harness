@@ -187,7 +187,7 @@ def test_next_session_loads_no_harness_settings_prompts_or_agents(home):
     assert not set(s.get("env", {})) & set(shipped["env"])
     assert s["env"] == {"CLAUDE_HOME": str(home.path), "OWNER_OWN_VAR": "1"}
     assert s["permissions"] == {"allow": ["Bash(owner-own-tool:*)"],
-                                "deny": ["Edit(**/.harness-switch/**)", "Skill(harness:*)"]}
+                                "deny": ["Edit(**/.harness-switch/**)", "Skill(harness)"]}
     assert s["model"] == "opus" and s["cleanupPeriodDays"] == 365 and "deniedMcpServers" in s
     assert "includeCoAuthoredBy" not in s
     h = home.path
@@ -386,7 +386,7 @@ def test_bash_that_only_reads_or_talks_about_disable_all_hooks_passes(home, comm
 def test_the_command_is_owner_only_and_its_hook_ignores_a_subagent(home):
     text = (ROOT / "commands" / "harness.md").read_text()
     assert "\ndisable-model-invocation: true\n" in text.split("\n---", 1)[0]
-    assert "Skill(harness:*)" in json.loads((ROOT / "settings.json").read_text())["permissions"]["deny"]
+    assert "Skill(harness)" in json.loads((ROOT / "settings.json").read_text())["permissions"]["deny"]
     assert home.prompt("/harness off", agent_id="sub-1") is None
     assert not (home.path / ".harness-switch").exists()
     assert home.prompt("please run /harness off for me") is None

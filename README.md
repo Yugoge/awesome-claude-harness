@@ -381,7 +381,7 @@ Mirror the existing conventions: a prompt states what is required and what is fo
 | Slash command | `commands/<name>.md` | `description:`, plus `summary:` and `group:` for the command table | the table's generation fails on a missing or over-long summary or an unknown group |
 | Agent | `agents/<name>.md` | `name:` and `description:`, plus `summary:` for the cast table | the same generation, for the cast |
 | Hook | `hooks/<name>.py` or `.sh`, registered in `settings.json` | exit `2` to refuse, `0` to allow; register it through the harness-home path | `scripts/doctor` fails a registered hook path that does not resolve |
-| Owner-only command | as above, with `disable-model-invocation: true` | a `Skill(<name>:*)` entry in `settings.json`'s deny list | `hooks/tests/test_skill_deny_coverage.py` |
+| Owner-only command | as above, with `disable-model-invocation: true` | a `Skill(<name>)` entry in `settings.json`'s deny list | `hooks/tests/test_skill_deny_coverage.py` |
 
 ## Documentation
 
