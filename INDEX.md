@@ -324,6 +324,7 @@ dot-claude/
 │   │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   │   ├── `test_report_provenance_gate.py` - The orchestrator could forge ``docs/dev/qa-report-*.json`` (an ``e2e_enforcement.status`` of
 │   │   ├── `test_report_provenance_tamper.py` - hooks/tests/test_report_provenance_gate.py proves the measured writer refuses the main agent's
+│   │   ├── `test_report_provenance_replay.py` - hooks/lib/report_provenance.py against a hand-run hook entry, a replayed ledger and another QA's report
 │   │   ├── `test_report_provenance_witness.py` - hooks/lib/report_provenance.py once took a background QA launch from an ``async_launched`` result
 │   │   ├── `test_requirement_round.py` - hook that calls it
 │   │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a

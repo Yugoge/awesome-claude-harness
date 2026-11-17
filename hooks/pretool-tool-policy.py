@@ -79,6 +79,10 @@ Behavior:
   - Every caller, before any check: who changed each docs/dev/qa-report-*.json
     since the session last looked is recorded (lib/report_provenance.py), the
     provenance subagentstop-e2e-enforce.py checks (CD-6). Never refuses.
+  - Main agent (no agent_id), Bash running the harness's own hook code by hand:
+    a PreToolUse/SubagentStart/SubagentStop hook entry run or exec'd, or code
+    naming report_provenance, observe_call or the report-provenance state dir,
+    or loading from the hooks directory -> exit 2 (_check_hook_replay, CD-6).
   - Main agent (no agent_id) writing a gate-read report this reading sees for
     certain: a Bash write of a QA or dev report (docs/dev/qa-report-*.json,
     ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
@@ -1042,6 +1046,143 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
         sys.exit(2)
 
 
+# -- the hook's own code path, run by hand (CD-6) --------------------------------
+# The provenance ledger is written by the PreToolUse hook entry (observe_call, through
+# hooks/pretool-launch.py -> pretool-write-gate.py -> this file). The main agent running
+# that entry by hand with payloads it makes up (a fake QA launch, a fake subagent call)
+# would have the hook write records the gate trusts. The main agent never runs a
+# PreToolUse / SubagentStart / SubagentStop hook entry in normal harness use (its
+# commands run other harness scripts: merge.sh, prompt-workflow.py, lib CLIs, sourced
+# helpers, and those still pass), so its Bash call is refused when, literally:
+#   - an interpreter (python, node, perl, ruby, php, a shell, `.`/`source`) runs such a
+#     file as its script, or the file is executed directly (by path, `cd` then `./x`);
+#   - inline code (`-c`/`-e`/`-r`, or code an interpreter reads from a heredoc, here-string
+#     or pipe) names such a file, the provenance module (report_provenance, observe_call,
+#     the report-provenance state dir), or puts the harness hooks directory on the import
+#     path (sys.path, runpy, importlib, __import__, subprocess, exec); or `-m` runs the
+#     provenance module;
+#   - PYTHONPATH is set to a hooks directory for an interpreter running inline code.
+# A subagent is not refused here: a dev subagent testing a hook feeds it payloads by hand.
+# Not seen (accepted limit, docs/ENFORCEMENT-LEDGER.md R-003): a computed name, code staged
+# in a file by an earlier call, a copy of the hook, a subagent doing it.
+_HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py|sh)")
+_PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
+_RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
+                      r"source|\.)\Z")
+_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "source", "."})
+_INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
+_PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
+_HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
+_LOADS = re.compile(r"sys\.path|runpy|importlib|__import__|subprocess|\bexec\b|os\.system|\bpopen\b|"
+                    r"\bspawn|require\(|child_process|\bsystem\(")
+
+
+def _hook_entry_path(value, dirs) -> bool:
+    if not value:
+        return False
+    if _HOOK_ENTRY.fullmatch(os.path.basename(value)) or _PROVENANCE_TEXT.search(value):
+        return True
+    for d in dirs:
+        try:
+            real = os.path.realpath(os.path.join(d, os.path.expanduser(value)))
+        except (OSError, ValueError):
+            continue
+        if _HOOK_ENTRY.fullmatch(os.path.basename(real)) or _PROVENANCE_TEXT.search(real):
+            return True
+    return False
+
+
+def _runs_hook_code(command: str, cwd: str) -> str | None:
+    """What part of ``command`` runs the harness's own hook code (see above); None when none."""
+    from lib import shell_parse as sp
+
+    script = sp.parse(command)
+    dirs, _unknown = _call_dirs(script, sp, cwd)
+    pythonpath_hooks = bool(re.search(r"PYTHONPATH=[\"']?[^\s;&|]*hooks\b", command))
+    for site in sp.walk(script):
+        r = sp.resolve(site.cmd)
+        name = r.name or ""
+        head = r.head.value() if r.head is not None else None
+        if head and ("/" in head or _HOOK_ENTRY.fullmatch(name)) and _hook_entry_path(head, dirs):
+            return head  # executed directly
+        if not _RUNNERS.match(name):
+            continue
+        args = [w.value() for w in r.args]
+        texts = [w.text for w in r.args]
+        inline, operand, module, i = [], None, None, 0
+        while i < len(args):
+            a = args[i] if args[i] is not None else texts[i]
+            if a == "--":
+                operand = args[i + 1] if i + 1 < len(args) else None
+                break
+            if name.startswith(("python", "pypy")) and a == "-m":
+                module = args[i + 1] if i + 1 < len(args) else ""
+                break
+            if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
+                i += 2
+                continue
+            if name in _SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+                operand = None
+                break  # `sh -c CODE`: walked as commands of its own
+            if name not in _SHELLS and _INLINE_FLAGS.fullmatch(a):
+                if i + 1 < len(args):
+                    inline.append(texts[i + 1] if args[i + 1] is None else args[i + 1])
+                break
+            if a.startswith("-") and a != "-":
+                i += 1
+                continue
+            operand = a
+            break
+        if module is not None:
+            if _PROVENANCE_TEXT.search(module or "") or _HOOK_ENTRY.search((module or "").replace(".", "/") + ".py"):
+                return f"-m {module}"
+            continue
+        if operand not in (None, "-"):
+            if _hook_entry_path(operand, dirs):
+                return operand
+            continue
+        if name in _SHELLS:
+            continue  # a shell's code is walked as commands of its own
+        if operand == "-" or not inline:
+            for red in site.cmd.redirects:
+                if red.hd is not None:
+                    inline.append(red.hd.body)
+                elif red.op == "<<<" and red.target is not None:
+                    inline.append(red.target.text)
+            if "pipe" in site.fed:
+                inline.append(command)  # the code it runs is what the pipe feeds it
+        for code in inline:
+            code = code or ""
+            if _HOOK_ENTRY.search(code) or _PROVENANCE_TEXT.search(code):
+                return name + " code naming the hook entry or the provenance module"
+            if _LOADS.search(code) and _HOOKS_DIR.search(code):
+                return name + " code loading from the harness hooks directory"
+            if pythonpath_hooks and name.startswith(("python", "pypy")):
+                return "PYTHONPATH on the harness hooks directory"
+    return None
+
+
+def _check_hook_replay(role, tool_name: str, tool_input: dict, data: dict) -> None:
+    """Exit 2 on the main agent's Bash call that runs the harness's own hook code by hand (above)."""
+    if data.get("agent_id") or tool_name != "Bash" or not isinstance(tool_input, dict):
+        return
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command:
+        return
+    cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    try:
+        what = _runs_hook_code(command, cwd)
+    except Exception:
+        what = None
+    if what:
+        _emit_block(_caller_label(role, data), tool_name, what,
+                    f"{what}: this call runs the harness's own hook code by hand (a PreToolUse, "
+                    "SubagentStart or SubagentStop hook entry, or the QA report provenance module "
+                    "report_provenance / observe_call / its report-provenance state dir). The main agent "
+                    "never runs a hook with a payload it makes up; the CLI runs hooks (CD-6)")
+        sys.exit(2)
+
+
 def _observe_reports(data: dict) -> None:
     """Record this call in the provenance ledger's call stream (a QA dispatch's launch, a
     subagent's call), then this call's caller as the writer of every watched QA report
@@ -1732,6 +1873,7 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     _observe_reports(data)
     role = resolve_agent_type(data)
+    _check_hook_replay(role, tool_name, tool_input, data)
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)

@@ -24,7 +24,12 @@ writer is measured, not parsed:
   first is that QA's (its own write, /do), unless the main agent's previous call names the
   path as a write target.
 * ``observe`` (out of band: no payload) records changes but no call: its records are no
-  subagent's to the gate, whatever agent id and call it names.
+  subagent's to the gate, whatever agent id and call it names. This holds for ``observe``
+  only: ``observe_call`` and the hook entry trust the payload they are given, so code that
+  calls either with a payload it makes up writes records the gate trusts. The main agent's
+  literal forms of that (a Bash call running a PreToolUse/SubagentStart/SubagentStop hook
+  entry by hand, or code naming this module, ``observe_call`` or its state dir) are refused at
+  PreToolUse by hooks/pretool-tool-policy.py (_check_hook_replay).
 * ``verdict`` is the gate's question: does the report's current content come from the main
   agent? It finds the latest record of that content and trusts a subagent's record only when
   the hook wrote its witnesses: the call record of the observing caller's same call directly
@@ -38,21 +43,28 @@ writer is measured, not parsed:
 The ledger is one JSON file per (session, project) under the harness state dir
 (lib/harness_state_dir.py), ``report-provenance/<key>.json``; nothing is written into the
 project. Its records form a hash chain (each record's ``h`` covers its fields and the
-previous record's ``h``; the document's ``head`` is the last one). The gate fails
-closed: a ledger that cannot be read, locked or written (its directory replaced by a
+previous record's ``h``; the document's ``head`` is the last one), and a head witness
+``<key>.head`` beside it holds the length and head the hook last wrote, so a ledger older than
+the history last seen (an earlier snapshot copied back, a prefix with its head reset, the
+ledger or the witness deleted alone) is refused. The gate fails closed: a ledger that cannot be read, locked or written (its directory replaced by a
 file, made unwritable, held locked; the file unparsable; the chain broken by an edit
-or a deleted record) refuses the QA whose declared report exists. tool-policy refuses an
+or a deleted record, older than its witness) refuses the QA whose declared report exists.
+The gate also refuses a report whose trusted writer is a subagent other than the QA judged. tool-policy refuses an
 agent's write, delete or rename of the ledger directory when the target is one its Bash
 reader reads or a file tool's path; a rename or delete by an interpreter, ``find -delete``
 or a computed name is not seen there, and gains nothing: the next observation starts a new
 ledger and records the report's current content as the main agent's.
 
-Limit, stated plainly: an agent that runs arbitrary code with the user's permissions can
-rewrite any local state, this ledger included (recompute the chain, run the hook's entry
-with a payload it makes up, borrow the call of a background QA while it runs). The ledger
-makes the cheap forms detectable and refused (moving, deleting or replacing the directory,
-editing a record, a fake launch or subagent call appended to a transcript, an out-of-band
-``observe()`` under any agent id and call); it is not a cryptographic proof.
+Limit, stated plainly (accepted): code running with the user's permissions can always run
+the hook's own code path, and no local scheme can tell the records it makes apart from the
+CLI's without a secret the agent cannot read. Such code can recompute the chain, restore the
+ledger and its witness together, run the hook's entry or ``observe_call`` with a payload it
+makes up (under a computed name, from a file an earlier call staged, as a copy of the hook,
+through a subagent), or borrow the call of a background QA while it runs. The ledger makes
+the cheap forms detectable and refused (moving, deleting or replacing the directory, editing
+a record, a restored snapshot or truncated prefix, a fake launch or subagent call appended to
+a transcript, an out-of-band ``observe()`` under any agent id and call, the main agent's
+literal run of the hook entry or the module); it is not a cryptographic proof.
 """
 from __future__ import annotations
 
@@ -152,9 +164,61 @@ def _check_chain(doc) -> list:
     return records
 
 
-def _read(path: str) -> dict | None:
-    """The ledger document at ``path``; None when there is none; LedgerError when unreadable."""
+def witness_path(ledger: str) -> str:
+    """The head witness beside ``ledger``: the length and head the hook last wrote it with."""
+    return (ledger[:-len(".json")] if ledger.endswith(".json") else ledger) + ".head"
+
+
+def _witness(ledger: str) -> dict | None:
+    path = witness_path(ledger)
     if not os.path.lexists(path):
+        return None
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            raise ValueError("not a regular file")
+        with open(path, encoding="utf-8") as handle:
+            found = json.load(handle)
+        if not isinstance(found, dict) or not isinstance(found.get("seq"), int) or found["seq"] < 1 \
+                or not isinstance(found.get("head"), str):
+            raise ValueError("not a head witness")
+    except (OSError, ValueError) as exc:
+        raise LedgerError(f"the ledger's head witness cannot be read ({exc})") from exc
+    return found
+
+
+def _check_history(ledger: str, records) -> None:
+    """The ledger holds the history its head witness last saw: at least that many records, the
+    witnessed head among them at its place. A snapshot copied back over the ledger, a prefix with
+    its head reset, a deleted ledger or witness all fail it (LedgerError)."""
+    seen = _witness(ledger)
+    if records is None:
+        if seen is not None:
+            raise LedgerError("the ledger is gone while its head witness remains (the ledger deleted or moved)")
+        return
+    if seen is None:
+        if records:
+            raise LedgerError("the ledger has records but no head witness (the witness deleted)")
+        return
+    if len(records) < seen["seq"] or records[seen["seq"] - 1].get("h") != seen["head"]:
+        raise LedgerError("the ledger is older than the history last seen (an earlier snapshot restored or "
+                          "the ledger truncated)")
+
+
+def _write_witness(ledger: str, doc: dict) -> None:
+    if not doc["records"]:
+        return
+    path = witness_path(ledger)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump({"seq": len(doc["records"]), "head": doc["head"]}, handle)
+    os.replace(tmp, path)
+
+
+def _read(path: str) -> dict | None:
+    """The ledger document at ``path``; None when there is none (and no head witness); LedgerError
+    when unreadable or older than its head witness."""
+    if not os.path.lexists(path):
+        _check_history(path, None)
         return None
     if os.path.islink(path) or not os.path.isfile(path):
         raise LedgerError("the ledger is not a regular file")
@@ -163,7 +227,7 @@ def _read(path: str) -> dict | None:
             doc = json.load(handle)
     except (OSError, ValueError) as exc:
         raise LedgerError(f"the ledger cannot be read ({exc.__class__.__name__})") from exc
-    _check_chain(doc)
+    _check_history(path, _check_chain(doc))
     return doc
 
 
@@ -485,7 +549,8 @@ def _observe(session_id, project_dir, actor, call, session_transcript, declared,
             tmp = f"{ledger}.{os.getpid()}.tmp"
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(doc, handle)
-            os.replace(tmp, ledger)
+            os.replace(tmp, ledger)  # the ledger first: a crash between leaves it ahead, never behind
+            _write_witness(ledger, doc)
 
 
 def _chain(doc: dict, record: dict) -> None:
@@ -567,11 +632,13 @@ def _trusted(records: list, index: int, rel: str) -> bool:
     return by in (actor, MAIN) if spec.get("bg") is True else by == actor
 
 
-def verdict(session_id: str, project_dir, rel: str, session_transcript=None) -> str | None:
+def verdict(session_id: str, project_dir, rel: str, session_transcript=None, agent=None) -> str | None:
     """"main" when report ``rel``'s current content comes from the main agent: the latest
     record of that content is the main agent's, or a subagent's whose witnesses the hook did
-    not write (_trusted); None when it does not (or no record holds it). LedgerError when the
-    ledger cannot be trusted (the gate refuses). ``session_transcript`` is not read: no
+    not write (_trusted); with ``agent`` (the QA whose stop is judged), the trusted writer's
+    agent id when it is another subagent (a QA the main agent had write the content is not
+    this QA's evidence); None when it is ``agent`` or no record holds it. LedgerError when
+    the ledger cannot be trusted (the gate refuses). ``session_transcript`` is not read: no
     transcript content is evidence of a launch or a witness."""
     root = _root(project_dir)
     ledger = ledger_path(session_id, project_dir)
@@ -591,6 +658,8 @@ def verdict(session_id: str, project_dir, rel: str, session_transcript=None) -> 
             continue
         if record.get("actor") == MAIN or not _trusted(records, index, rel):
             return MAIN
+        if isinstance(agent, str) and agent and record.get("actor") != agent:
+            return record.get("actor")
         return None
     return None
 

@@ -13,8 +13,9 @@ Activation logic:
      whatever the registry holds and whatever form the session id takes:
      the qa-report.v2 artifact it declares is the report judged, at exactly
      the path declared (missing: exit 2 naming that path; holding exactly the
-     content the main agent wrote, as lib/report_provenance.py recorded it,
-     with no Write of that content in this QA's own transcript, or a
+     content the main agent wrote, or another subagent, as
+     lib/report_provenance.py recorded it, with no Write of that content in
+     this QA's own transcript, or a
      provenance ledger that cannot be trusted: exit 2, CD-6); one that declares
      none (BA validation, close QA) owes no E2E evidence here: exit 0. The
      cycle it names (lib/agent_cycle.py: the registry of its task, else of
@@ -203,12 +204,13 @@ def _enforce_own_writer(
 ) -> None:
     """Exit 2 when the declared report's current content comes from the main agent
     (lib/report_provenance.py verdict: the latest record of that content is the main
-    agent's observation, or a subagent's whose witnesses the hook did not write) and this
-    QA's own transcript holds no Write of exactly that content; exit 2 too when the
+    agent's observation, or a subagent's whose witnesses the hook did not write), or from a
+    subagent other than this QA (its trusted record names another writer), and this QA's own
+    transcript holds no Write of exactly that content; exit 2 too when the
     provenance ledger cannot be trusted (unreadable, unwritable, held locked, its chain
     broken): the gate fails closed (CD-6)."""
     try:
-        held = report_provenance.verdict(session_id, project_dir, rel, session_transcript)
+        held = report_provenance.verdict(session_id, project_dir, rel, session_transcript, agent=agent_id)
     except report_provenance.LedgerError as exc:
         sys.stderr.write(
             f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
@@ -220,10 +222,19 @@ def _enforce_own_writer(
         sys.exit(2)
     except Exception:
         return
-    if held != report_provenance.MAIN:
+    if not held:
         return
     if transcript and report_provenance.own_write(transcript, project_dir, rel):
         return
+    if held != report_provenance.MAIN:
+        sys.stderr.write(
+            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
+            f"the QA report at {rel} was written by another subagent ({held}), not by this QA "
+            f"(report provenance, CD-6).\n"
+            f"artifact: {rel} (failing check: the report's writer is not the QA whose stop is judged)\n"
+            f"Perform the E2E verification and write the QA report yourself before stopping.\n"
+        )
+        sys.exit(2)
     sys.stderr.write(
         f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
         f"the QA report at {rel} was written by the main agent, not by this QA "
