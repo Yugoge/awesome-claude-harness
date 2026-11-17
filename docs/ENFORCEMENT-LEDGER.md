@@ -348,7 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
-| S-014 | permission-layer-scratch-reach | advisory | unexercised | source-level | settings.json:167 @d1abc798 | tests/test_scratch_permissions.py | source-level |
+| S-016 | permission-layer-scratch-reach | advisory | unexercised | source-level | settings.json:167 @d1abc798 | tests/test_scratch_permissions.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -376,31 +376,40 @@ no per-rule budget exists.
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
-- **S-014** — OB-L09: the permission layer's scratch entries. `Read(/tmp/**)` (`settings.json:167
+- **S-016** — OB-L09: the permission layer's scratch entries. `Read(/tmp/**)` (`settings.json:167
   @d1abc798`) never reached /tmp: a single leading slash anchors a Read/Edit rule at the settings
   source, so as user settings it named `~/.claude/tmp/**` (code.claude.com/docs/en/permissions.md,
   "How path patterns match": "The single leading slash anchors at the settings source, not the
-  filesystem root. Use `//Users/alice/file` for absolute paths"). It is replaced by
-  `Read(//var/tmp/claude-scratch/**)` and `Edit(//var/tmp/claude-scratch/**)` (the session root
-  `env.TMPDIR` = `env.CLAUDE_CODE_TMPDIR`, which holds the CLI's session scratchpad, the
-  per-session dirs of `hooks/session-scratch-init.sh` and mktemp files) and `Read(//tmp/claude-scratch/**)`
-  and `Edit(//tmp/claude-scratch/**)` (the role scratch `*/tmp/claude-scratch/<role>/` of
-  `policies/tool-policy.v1.json`). Neither root holds a hook state file: the state root
+  filesystem root. Use `//Users/alice/file` for absolute paths"). It is replaced by Read and Edit
+  entries for exactly the scratch an agent writes: Claude Code's session scratchpad,
+  `//var/tmp/claude-scratch/claude-[0-9]*/*/*/scratchpad` and that path + `/**` (the CLI lays it out
+  under `env.CLAUDE_CODE_TMPDIR` = `env.TMPDIR`), and the role scratch `//tmp/claude-scratch/**`
+  (`*/tmp/claude-scratch/<role>/` in `policies/tool-policy.v1.json`; no hook or script builds a path
+  under it). The TMPDIR root is deliberately not granted: hooks read files there to decide, namely
+  the daemon-restart grant `claude-allow-daemon-restart-<target>.flag` and its lock
+  (`hooks/pretool-bash-safety.sh`, through `CLAUDE_TMPDIR`), the git blessed-token grants
+  `claude-git-blessed/<tok>.grant` (`hooks/git-keystone/reference-transaction`,
+  `scripts/mint-git-blessed-token.sh`), each session dir's `.owner` (`hooks/session-scratch-init.sh`,
+  trusted by `hooks/sessionend-scratch-sweep.sh` and `hooks/lib/scratch_owner.py`) and doc-sync's
+  dedupe state beside it (`hooks/doc_sync/notice.py`). A first spelling of this fix granted the whole
+  root and let an agent write all of those unprompted; measured, they ask again. The hook state root
   (`hooks/lib/harness_state_dir.py`, `CLAUDE_STATE_DIR`, default /tmp) keeps its files directly in it,
   and they still prompt; /tmp as a whole is never granted (no `additionalDirectories` entry, no
   `Edit(//tmp/**)`). The `Bash(cat > /tmp/*.…:*)` and `Bash(rm -f /tmp/*.…:*)` entries are left as
   they are: the CLI checks a redirect target or file operand outside the working directory before the
   Bash allow rules, and that ask is not one a Bash allow rule lifts, so they never granted a /tmp
-  write (and `Bash(cat:*)` / `Bash(rm:*)` subsume them). Measured on Claude Code 2.1.326, headless, a
-  throwaway HOME and a local Messages-API stand-in: `cat`, `ls`, `echo … >` and the Write tool on the
-  session scratchpad and the role scratch asked before and run after; `echo true >
-  /tmp/claude-orchestrator-consent-abc.flag`, `echo '{}' > /tmp/claude-tool-streak-abc.json`, the
-  Write tool on the consent flag and a scratch path that `..`-climbs to it ask both before and after.
-  The Read tool reads any path, state files included, through the bare `Read` entry, as before. Not
-  this layer's to close: a program that opens a file itself (`python3 -c "open(<consent flag>,'w')"`)
-  passes the permission layer, on the base as after (the docs: Read and Edit rules "don't apply to …
-  arbitrary subprocesses that read or write files indirectly"); that is a hook matter. The proof layer
-  is `source-level` because the test models the CLI's documented matching; the measurement is not a CI
+  write (and `Bash(cat:*)` / `Bash(rm:*)` subsume them). An overlay that moves TMPDIR appends its own
+  four scratchpad entries (`settings.machine.example.json`). Measured on Claude Code 2.1.326,
+  headless, a throwaway HOME and a local Messages-API stand-in: `cat`, `ls`, `echo … >` and the Write
+  tool on the session scratchpad and the role scratch asked before and run after; the consent flag,
+  the tool streak, the daemon-restart flag and lock, a blessed grant, another session's `.owner`,
+  doc-sync state, a CLI task output and a file at the TMPDIR root ask after, and a scratchpad path
+  that `..`-climbs out asks. The Read tool reads any path, state files included, through the bare
+  `Read` entry, as before. Not this layer's to close: a program that opens a file itself
+  (`python3 -c "open(<consent flag>,'w')"`) passes the permission layer, on the base as after (Read
+  and Edit rules "don't apply to … arbitrary subprocesses that read or write files indirectly"); that
+  is a hook matter. The proof layer is `source-level` because the test models the CLI's documented
+  matching over every gate-read path it scans from hooks/ and scripts/; the measurement is not a CI
   job.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,

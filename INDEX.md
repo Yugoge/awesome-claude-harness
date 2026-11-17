@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 980
+*Last updated: 2026-11-17T07:47:11Z*
+**Total entries**: 981
 **Convention**: kebab
 
 ## Tree
@@ -928,6 +928,7 @@ dot-claude/
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 │   ├── `test_score_events.py` - escaped and close_catch, and the observer
 │   ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
+│   ├── `test_scratch_permissions.py` - Root cause. A Read/Edit path rule with ONE leading slash is not absolute: "`/path` = relative to ...
 │   ├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
 │   ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 │   ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
