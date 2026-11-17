@@ -50,7 +50,9 @@ can run with cwd = HOME:
 Precedence tiers: every entry added here is a deny; no allow or ask rule changed. Measured, no ordinary
 home file changed its decision (`~/.bashrc`, `~/.gitconfig`, `~/notes.txt`, `~/.ssh/id_rsa.pub`,
 `~/.config/gh/config.yml`, ...: Read and `cat` still allowed, writes still `ask`), so the exact-path
-entries (no `*`) neither downgrade nor upgrade anything beyond the files they name.
+entries (no `*`) neither downgrade nor upgrade anything beyond the files they name. OB-L08 later added `~/` Edit
+asks for home dot-state (`Edit(~/.?)` ... `Edit(~/.wgetrc)`, `Edit(~/.pgpass)` among them); deny is checked before
+ask, so every file refused here stays refused under them (test_every_home_secret_deny_wins_over_any_ask).
 
 MEASURED is that run: (cwd, tool, target, decision on OB-L19's settings.json @ c0888950, decision with
 this settings.json). `deny` is a refusal by a rule, `ask` a call headless `-p` could not approve, `allow` a
@@ -283,6 +285,8 @@ def _home_regex(body: str) -> re.Pattern:
             out, i = out + "(?:.*/)?", i + 3
         elif body[i] == "*":
             out, i = out + "[^/]*", i + 1
+        elif body[i] == "?":  # one character: OB-L08's `~/.?` ... `~/.?????` asks, measured so
+            out, i = out + "[^/]", i + 1
         else:
             out, i = out + re.escape(body[i]), i + 1
     return re.compile(out, re.IGNORECASE)  # case: as OB-L19 measured for the cwd-anchored rules
@@ -298,6 +302,11 @@ def home_denied(deny: list[str], tool: str, rel: str) -> bool:
     parts = rel.split("/")
     prefixes = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
     return any(rx.fullmatch(p) for t in tools for rx in _home_rules(deny, t) for p in prefixes)
+
+
+def home_reached(rules: list[str], tool: str, rel: str) -> list[str]:
+    """The `~/` Read/Edit entries of `rules` (any tier) that reach `rel`, matched as home_denied matches a deny."""
+    return [e for e in rules if re.fullmatch(r"(?:Read|Edit)\(~/.*\)", e) and home_denied([e], tool, rel)]
 
 
 def decide(deny: list[str], cwd: str, tool: str, rel: str) -> bool:
@@ -430,8 +439,49 @@ def test_no_home_entry_refuses_a_whole_config_directory():
         assert not home_denied(deny, "Read", rel), rel
 
 
+# The secret names this lane refuses, as a `~/` rule body spells them: its deny patterns and its must-deny files.
+REFUSED_NAMES = set(TOP_LEVEL + STORES + ANY_DEPTH + SECRET_FILES) | {f"**/{p}" for p in ANY_DEPTH}
+
+
+def _home_entries(perms: dict, tier: str) -> list[str]:
+    return [e for e in perms.get(tier, []) if re.fullmatch(r"(?:Read|Edit)\(~/.*\)", e)]
+
+
 def test_no_allow_or_ask_rule_names_a_home_secret():
-    """Deny is checked first whatever a rule's tier; still, keep allow/ask free of the names refused here."""
+    """Deny is checked first whatever a rule's tier; still, keep allow/ask free of the names refused here.
+
+    The `~/` allow stays `Read(~/**)` alone, the allow MEASURED was taken under. The ask may hold other `~/`
+    rules (OB-L08's asks return writes of home dot-state, `Edit(~/.?)` ... `Edit(~/.wgetrc)`, to a prompt), but
+    none names a secret name refused here (REFUSED_NAMES) unless it repeats this lane's deny entry word for word:
+    OB-L08's `Edit(~/.pgpass)` is the deny `Edit(~/.pgpass)`, checked first, so the ask never decides
+    (test_every_home_secret_deny_wins_over_any_ask)."""
     perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
-    home = [e for e in perms.get("allow", []) + perms.get("ask", []) if re.fullmatch(r"(?:Read|Edit)\(~/.*\)", e)]
-    assert home == ["Read(~/**)"], home
+    assert _home_entries(perms, "allow") == ["Read(~/**)"], _home_entries(perms, "allow")
+    named = [e for e in _home_entries(perms, "ask") if e[e.index("(") + 3:-1] in REFUSED_NAMES]
+    unshadowed = [e for e in named if e not in perms["deny"]]
+    assert unshadowed == [], unshadowed
+
+
+def _exemplars(body: str) -> list[str]:
+    """Home-relative files a `~/` deny body refuses: `*` read as `x`; a `**/` name at the top and one level down."""
+    names = [body[3:], f"sub/{body[3:]}"] if body.startswith("**/") else [body]
+    return [n.replace("*", "x") for n in names]
+
+
+def test_every_home_secret_deny_wins_over_any_ask():
+    """Deny is checked before ask ("Rules are evaluated in order: deny, then ask, then allow", permissions.md; OB-L08
+    measured it on its own asks: with cwd = HOME a Write of `~/.aws/credentials`, which its ask `Edit(~/.???)`
+    reaches, stays `deny`). So a file one of this lane's denies refuses (one file per deny pattern, and each
+    SECRET_FILES path) stays refused, from a project and from HOME, whatever `~/` ask also reaches it. OB-L08's asks
+    reach many of them (`~/.?????` covers `~/.netrc`, `~/.config` covers `~/.config/gh/hosts.yml`, `~/.pgpass` names
+    `~/.pgpass`); without this lane's denies those asks would decide, and a write of `~/.pgpass` would prompt."""
+    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    deny, asks = perms["deny"], _home_entries(perms, "ask")
+    targets = sorted({x for p in HOME_PATTERNS for x in _exemplars(p[2:])} | set(SECRET_FILES))
+    for rel in targets:
+        for tool in ("Read", "Write"):
+            by = home_reached(asks, tool, rel)
+            for cwd in ("proj", "home"):
+                assert decide(deny, cwd, tool, rel), f"cwd={cwd} {tool} ~/{rel} is not refused (asked by {by})"
+    for cwd in ("proj", "home"):  # e.g. the ask `Edit(~/.pgpass)`: this lane's deny refuses it, OB-L19's does not
+        assert decide(deny, cwd, "Write", ".pgpass") and not decide(_l19(deny), cwd, "Write", ".pgpass"), cwd
