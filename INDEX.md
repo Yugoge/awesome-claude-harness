@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T11:26:29Z*
-**Total entries**: 973
+*Last updated: 2026-11-17T12:10:08Z*
+**Total entries**: 974
 **Convention**: kebab
 
 ## Tree
@@ -808,7 +808,7 @@ dot-claude/
 │   │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...
-│   │   ├── `test_restart_replay.py` - A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare refuses (exit 2,
+│   │   ├── `test_restart_replay.py` - A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare only says that
 │   │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
 │   │   ├── `test_score_dispatch.py` - The real hooks run under the shipped settings in a sandbox; the score log starts with the rows `s...
 │   │   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...
@@ -919,6 +919,7 @@ dot-claude/
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
+│   ├── `test_restart_grant_g1.py` - prepare (scripts/restart-subagents.py, the command commands/restart.md runs) reads the grant as
 │   ├── `test_score_events.py` - escaped and close_catch, and the observer
 │   ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
 │   ├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p

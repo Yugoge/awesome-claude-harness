@@ -1,8 +1,9 @@
 """The owner's /restart replayed (tests/replay/drivers/restart.py), shipped and armed (CLAUDE.md lesson 16).
 
-A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare refuses (exit 2,
-"no valid /restart capability for this session"), and the exact resume message /restart would hand
-the cut agent is refused by the no-background hook. Then the owner's /restart: the
+A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare only says that
+every resume send will be refused until /restart mints a grant (exit 0: it reads the grant as data),
+and the exact resume message /restart would hand the cut agent is refused by the no-background hook,
+the one decision on the grant. Then the owner's /restart: the
 authorizer mints the grant, prepare, one SendMessage with the exact resume message per candidate,
 the resumed agent's end, status with response evidence for every candidate, finalize. The same
 message sent again after finalize consumed the grant is refused. The run meets no hook error, no
@@ -32,9 +33,8 @@ def test_restart_without_grant_refused_then_recovered(replays, key):
     assert not r.hook_errors, r.explain()
 
     no_grant = r.fact("restart no-grant")
-    assert no_grant and not no_grant["prepare_ok"], f"prepare ran without a grant: {no_grant}"
-    assert no_grant["prepare_error"].startswith("Exit code 2") and \
-        "no valid /restart capability for this session" in no_grant["prepare_error"], no_grant
+    assert no_grant and no_grant["prepare_ok"], f"prepare refused without a grant: {no_grant}"
+    assert no_grant["notice"], f"prepare did not say the resume sends will be refused: {no_grant}"
     send = no_grant["send"]
     assert send["refused"] and send["text"].startswith(BLOCK) and NO_GRANT in send["text"], no_grant
 

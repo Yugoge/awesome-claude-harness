@@ -62,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = restart.finalize(session_id)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("restart_grant"):
+            # Information only: the grant is decided at SendMessage time.
+            print(result["restart_grant"], file=sys.stderr)
         return 0
     except restart.RestartError as exc:
         print(json.dumps({"error": str(exc), "command": args.command}, ensure_ascii=False), file=sys.stderr)

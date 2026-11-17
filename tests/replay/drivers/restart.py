@@ -5,10 +5,11 @@ after its first call (recovery.py's `limit`: its API-error record, the CLI's err
 call, the main agent's StopFailure). Then, in order:
 
   no-grant  before any /restart, the main agent runs commands/restart.md's prepare and sends the
-            cut agent the exact resume message /restart would hand it: prepare refuses (exit 2, "no
-            valid /restart capability for this session"), and the no-background hook refuses the send
+            cut agent the exact resume message /restart would hand it: prepare reads the grant as data
+            only, so it lists the candidates and says on stderr that every resume send will be refused
+            until /restart mints one (exit 0), and the no-background hook refuses the send
             (send_policy.decide: the cut agent resumes only through /restart; no valid /restart
-            capability)
+            capability), the one decision on the grant
   restart   the owner types /restart: the authorizer (hooks/userprompt-restart-authorize.py) mints the
             grant, and the main agent runs restart.md's procedure as written (recovery.restart_turn):
             prepare, one SendMessage per pending candidate with its exact resume message, the resumed
@@ -43,6 +44,8 @@ TASK = (
 )
 # The subagent's first call, after which the usage limit cuts it
 CUT = "restart-sub Read *"
+# What prepare says without a valid grant (hooks/lib/subagent_restart.py NO_GRANT_NOTICE)
+NO_GRANT_NOTICE = "no valid restart grant: every resume send will be refused until /restart mints one"
 
 
 def _explore(sub):
@@ -89,7 +92,9 @@ def run(rp) -> None:
     prepare = next(b.text.strip() for b in cmdtext.blocks(o.text, "Mandatory procedure", "text")
                    if re.search(r"restart-subagents\.py\"?\s+prepare", b.text))
     call = o.run(prepare, "Prepare the recovery set", "no grant Bash prepare")
-    no_grant = {"prepare_ok": bool(call.ok), "prepare_error": "" if call.ok else (call.error or "")[:600]}
+    out = (call.response.get("stdout", "") + call.response.get("stderr", "")) if call.ok else ""
+    no_grant = {"prepare_ok": bool(call.ok), "prepare_error": "" if call.ok else (call.error or "")[:600],
+                "notice": NO_GRANT_NOTICE in out}
     cut = cuts.parked[0].sub.aid
     message = _resume_message(rp, s.sid, cut)
     no_grant["send"] = _send(s, rp, cut, message, "no grant SendMessage")
@@ -110,8 +115,7 @@ def run(rp) -> None:
     fact(rp, "restart reuse", reuse)
 
     stop = s.stop("add(a, b) returns a + b.", label="Stop")
-    reached = (not no_grant["prepare_ok"] and "no valid /restart capability" in no_grant["prepare_error"]
-               and no_grant["send"]["refused"]
+    reached = (no_grant["prepare_ok"] and no_grant["notice"] and no_grant["send"]["refused"]
                and all(r["sent"] and r["resumed"] for r in recovered) and reuse["refused"])
     rp.terminal("restart", reached, stop)
 
