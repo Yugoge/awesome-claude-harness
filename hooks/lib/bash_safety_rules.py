@@ -857,9 +857,11 @@ _SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd
 _SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
 
 
-def _word_text(w):
+def _word_sensitive(w):
+    """lib/sensitive_names.py's verdict on a Word: its static value, or its raw text when computed."""
+    from lib.sensitive_names import is_sensitive_name
     v = w.value()
-    return v if v is not None else w.text
+    return is_sensitive_name(v) if v is not None else is_sensitive_name(w.text, computed=True)
 
 
 def _command_name(cmd):
@@ -871,33 +873,43 @@ def _command_name(cmd):
 
 
 def sensitive_redirect(command):
-    """'write' when a command writes a file whose name lib/sensitive_names.py lists (a redirection into it, or
-    tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming it), 'redirect' when a
-    listed file is an argument or input redirection of a command whose output goes to a file, or an operand of
-    cp, mv, install, rsync or ln; None otherwise.
+    """BS-20/21 (audit BS-10/11). 'write' when a command writes a file lib/sensitive_names.py calls sensitive (a
+    redirection into it, or tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming
+    it), 'redirect' when such a name is a word or an input redirection of a command whose output goes to a file, or
+    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise.
 
-    Names are matched exactly, by base name, against lib/shell_parse.py's parsed write targets and command words,
-    payloads included (eval, bash -c, a heredoc-fed shell), so a name inside quoted data or a heredoc body is no
-    redirection and `test_password_reset.py` is no password file. A command the parser cannot read is judged on
-    its raw text by substring, so it is refused more, never less.
+    Read from lib/shell_parse.py's parsed commands, payloads included (eval, bash -c, a heredoc-fed shell), so a
+    name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
+    by substring with lib/sensitive_names.py's narrow exemptions (URLs, test files, reports and logs, templates);
+    a computed word (`$X`, `$(...)`, a glob) and interpreter code by substring on their raw text. A command the
+    parser cannot read is judged on its raw text by substring, so it is refused more, never less.
     """
-    from lib.sensitive_names import RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_sensitive_name
+    from lib.sensitive_names import RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_sensitive_name
     try:
         from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
         for t in write_targets(script, into=_DEFAULT_INTO):
-            text = t.path if t.path is not None else (_word_text(t.word) if t.word is not None else "")
             writer = t.mechanism.startswith("redirect") or t.mechanism.split("-", 1)[0] in _SENSITIVE_WRITERS
-            if writer and t.mode != "delete" and is_sensitive_name(text):
+            if not writer or t.mode == "delete":
+                continue
+            if is_sensitive_name(t.path) if t.path is not None else (t.word is not None and _word_sensitive(t.word)):
                 return "write"
         for site in walk(script):
             redirs = [r for r in site.cmd.redirects if r.target is not None]
-            if not any(r.writes() for r in redirs) and _command_name(site.cmd) not in _SENSITIVE_COPIERS:
+            outputs = [r for r in redirs if r.writes()]
+            if any(_word_sensitive(r.target) for r in outputs):
+                return "write"
+            if outputs:
+                words = site.cmd.words[1:]
+            elif _command_name(site.cmd) in _SENSITIVE_COPIERS:
+                # A copy's source operands: a source-code file is no secret read (its destination was judged above).
+                words = [w for w in site.cmd.words[1:] if not is_code_file(w.value())]
+            else:
                 continue
-            if any(is_sensitive_name(_word_text(w)) for w in site.cmd.words[1:]) \
-                    or any(is_sensitive_name(_word_text(r.target)) for r in redirs if not r.writes()):
+            if any(_word_sensitive(w) for w in words) \
+                    or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
                 return "redirect"
         return None
     except Exception:  # noqa: BLE001
