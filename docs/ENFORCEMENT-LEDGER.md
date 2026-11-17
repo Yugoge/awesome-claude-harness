@@ -348,6 +348,7 @@ no per-rule budget exists.
 | S-011 | command-script:push.sh | advisory | unexercised | source-level | hooks/push.sh:1 @4ffb9279 | none yet | source-level |
 | S-012 | command-script:merge.sh | advisory | unexercised | source-level | hooks/merge.sh:1 @4ffb9279 | none yet | source-level |
 | S-013 | command-script:write-commit-grant.py | advisory | unexercised | source-level | scripts/write-commit-grant.py:1 @4ffb9279 | none yet | source-level |
+| S-018 | permission-layer-session-dirs-deny | advisory | unexercised | component-tested | settings.json:188 @d1abc798 | tests/test_session_dirs_permission.py | component-tested |
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
@@ -505,6 +506,48 @@ no per-rule budget exists.
   is a hook matter. The proof layer is `source-level` because the test models the CLI's documented
   matching over every gate-read path it scans from hooks/ and scripts/; the measurement is not a CI
   job.
+- **S-018** — OB-L16 (owner decision): the one deny `Bash(*session_dirs.txt*)` matched any command
+  text naming the file, so a search for the name (`grep -rn session_dirs.txt docs/`, `rg`, `git grep`,
+  `git log -S`/`-G`) and a commit message naming it were refused with the reads. An allow entry cannot
+  carve an exception out of a deny ("Rules are evaluated in order: deny, then ask, then allow ... An allow
+  rule can't carve an exception out of a deny rule", code.claude.com/docs/en/permissions.md), so it is
+  replaced by 186 deny entries: 90 stems keyed on the command word, each with two tails,
+  `Bash(<stem>session_dirs.t*)` (the name, `.tx?`, `.t*`, a `'session_dirs.t'+'xt'` split) and
+  `Bash(<stem>session_dirs?*)` (`?` in a rule is literal: a `?` glob in place of the dot). Neither tail
+  matches a name that merely contains `session_dirs` (`hooks/lib/session_dirs.py`,
+  `tests/test_session_dirs_permission.py`, `/tmp/session_dirs_backup`), which keep their base decision.
+  Stems: the shells and evaluators (`bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `eval`, `exec`, `source`,
+  `.`, `env`, `xargs`, `for`), the interpreters (`python*`, `node`, `bun`, `deno`, `perl`, `ruby`, `php`,
+  `awk`, `npm`, `npx`, `docker`), the pagers and editors (`less`, `more`, `xxd`, `vi`, `vim`, `view`,
+  `nano`, `emacs`), the file commands (`cat`, `head`, `tail`, `sed`, `sort`, `uniq`, `tee`, `cp`, `mv`,
+  `ln`, `rm`, `chmod`, `touch`, `truncate`, `md5sum`, `find`, `curl`, `wget`, `scp`, `rsync`, `install`,
+  `tar`, `zip`, `gzip`, `echo`, `printf`) and the git forms that read, write or stage a path (`add`,
+  `apply`, `blame`, `cat-file`, `checkout`, `diff`, `hash-object`, `mv`, `restore`, `rm`, `show`,
+  `stash`, `update-index`, `-c`, every `-C` form, any `--output`, `log` with `-p`/`-u`/`--patch` or a
+  `--` pathspec, `commit` with `-F`/`--file`, `-i`/`--include`, `-o`/`--only` or a `--` pathspec,
+  `notes` and `tag` with `-F`/`--file`, every `config` form), and three tail-first entries per tail,
+  `Bash(git log *session_dirs.t* -p*)`, `... --patch*)`, `... -u*)`, for a patch flag after the pickaxe
+  argument (`git log -S session_dirs.txt -p` prints the committed contents of every change that touched
+  the string). grep, rg, `git grep`, `git log -S`/`-G` without a patch flag (`--oneline`,
+  `--pretty=oneline`, `-- hooks/`) and `git commit -m` naming the file pass; their file operands,
+  `-f FILE` and every redirect target stay refused by `Read(**/session_dirs.txt)` and
+  `Edit(**/session_dirs.txt)`, which "apply to ... file commands Claude Code recognizes in Bash ... and
+  to the targets of Bash redirections" (same page); `od`, `strings`, `cut`, `nl`, `wc`, `diff`, `base64`,
+  `tac`, `jq`, `paste` on the file are refused that way. Measured on Claude Code 2.1.326 headless with a
+  throwaway HOME against a stand-in Messages API (the test's opt-in `HARNESS_LIVE_CLI=1` case re-runs
+  it): `?` in a rule is literal; rules are case-sensitive; quotes are not part of the matched text; a
+  path-qualified command word matches by its name; a heredoc body is not matched at all. Refused on the
+  base and not denied now: allowed: `git commit -m x session_dirs.txt` (a bare pathspec cannot be told
+  from the message text; it commits only a file already tracked, and `git add` of it is denied); asked:
+  `CAT session_dirs.txt` (an upper-case command word), git with a global option before the subcommand
+  (`git -p log -p -- session_dirs.txt`, `git --no-pager log -p -- session_dirs.txt`) and git subcommands
+  without a stem (`git whatchanged -p -- session_dirs.txt`, `git format-patch -1 -- session_dirs.txt`,
+  `git archive HEAD session_dirs.txt`, `git difftool -- session_dirs.txt`). Asked on the base and after:
+  `while read l; do ...; done < session_dirs.txt`. Passing this layer before and after: `bash <<EOF` /
+  `python3 - <<EOF` bodies naming the file (only `hooks/pretool-bash-safety.sh` refuses them), and a
+  glob operand to grep (`grep pat session_dirs.tx?`: grep has no stem, so the search forms pass), a glob
+  no tail spells (`cat session_dirs*`, `cat session_dir?.txt`) or a name built at run time. A text rule
+  cannot see a read that never spells the name.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
