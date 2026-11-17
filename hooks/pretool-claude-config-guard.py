@@ -248,7 +248,13 @@ def _git_settled(res, raw) -> bool:
     for v in vals[k + 1:]:
         if v is None or v.startswith(('--output', '--ext-diff', '-O', '--open-files-in-pager', '--exec')):
             return False
+        if v.startswith('--') and any(_long_prefix(v, full, least) for full, least in _GIT_RUN_OPTIONS):
+            return False  # an abbreviation (`--outp=`, `--ext-dif`, `--open-files-in=`)
     return True
+
+
+# git options that write a file or run a program, with the shortest abbreviation git would take.
+_GIT_RUN_OPTIONS = (('--output', 5), ('--ext-diff', 5), ('--open-files-in-pager', 4), ('--exec', 5))
 
 
 def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
@@ -328,6 +334,123 @@ def _perl_code(args) -> list:
 
 
 _SED_WRITE = re.compile(r'(?:^|[;{}\n\d$!]|/[gpiImMe0-9]*)\s*[wW]\s*(\S+)')
+# perl code that may write the operands it is handed (`open F, ">", shift`, unlink, rename, a shell)
+_PERL_WRITE = re.compile(r'open|unlink|rename|system|exec|`|qx|>|mkdir|rmdir|chmod|utime|truncate|link|copy|move|print\s*\{?\s*[A-Z$]')
+_FIND_RUN = ('-exec', '-execdir', '-ok', '-okdir')
+
+
+def _long_prefix(v: str, full: str, least: int) -> bool:
+    """Whether ``v`` (before any `=`) is GNU getopt's abbreviation of ``full``: at least ``least``
+    characters of it."""
+    head = v.split('=', 1)[0]
+    return len(head) >= least and full.startswith(head)
+
+
+def _sed_long_in_place(args, vals) -> list:
+    """sed's file operands when an abbreviation of --in-place (`--i`, `--in-pl`) asks for an in-place
+    edit; the parser reads only the full spelling."""
+    if not any(v.startswith('--') and _long_prefix(v, '--in-place', 3) for v in vals):
+        return []
+    script, ops, k = False, [], 0
+    while k < len(args):
+        v = vals[k]
+        if v in ('-e', '--expression', '-f', '--file', '-l', '--line-length'):
+            script = script or v in ('-e', '--expression', '-f', '--file')
+            k += 2
+            continue
+        if v.startswith(('--expression=', '--file=')) or (v.startswith('-e') and len(v) > 2):
+            script = True
+        elif not v.startswith('-') or v == '-':
+            ops.append(args[k])
+        k += 1
+    return [(w.value() or w.text, w) for w in (ops if script else ops[1:])]
+
+
+def _sort_outputs(args, vals) -> list:
+    """sort's output file: -o F, -oF, a cluster ending in o (`-no F`), --output and its
+    abbreviations (`--o`, `--outp=F`)."""
+    out, k = [], 0
+    while k < len(args):
+        v = vals[k]
+        if v == '--':
+            break
+        if v.startswith('--') and _long_prefix(v, '--output', 3):
+            if '=' in v:
+                out.append((v.split('=', 1)[1], args[k]))
+            elif k + 1 < len(args):
+                out.append((vals[k + 1] or args[k + 1].text, args[k + 1]))
+                k += 1
+        elif v.startswith('-') and not v.startswith('--') and len(v) > 1:
+            for j, c in enumerate(v[1:], 1):
+                if c in 'ktST':
+                    if j == len(v) - 1:
+                        k += 1
+                    break
+                if c == 'o':
+                    if j < len(v) - 1:
+                        out.append((v[j + 1:], args[k]))
+                    elif k + 1 < len(args):
+                        out.append((vals[k + 1] or args[k + 1].text, args[k + 1]))
+                        k += 1
+                    break
+        k += 1
+    return out
+
+
+_TAR_VALUE_LETTERS = 'fCbTXgKNVLH'
+
+
+def _tar_writes(args, vals, head) -> list:
+    """What a tar call writes: the archive (-f, --file and abbreviations, old-style `cf X`) when it
+    creates or appends one, and the extraction directory (-C, --directory and abbreviations such as
+    `--dir=`, --one-top-level=) when it extracts, the working directory when no -C is given."""
+    letters, values, k = '', {}, 0
+    first = vals[0] if vals else ''
+    if first and not first.startswith('-'):
+        letters, k = first, 1
+        for c in first:
+            if c in _TAR_VALUE_LETTERS and k < len(args):
+                values.setdefault(c, []).append((vals[k] or args[k].text, args[k]))
+                k += 1
+    longs = []
+    while k < len(args):
+        v = vals[k]
+        if v == '--':
+            break
+        if v.startswith('--'):
+            name = v.split('=', 1)[0]
+            longs.append(name)
+            target = next((full for full, least in (('--file', 4), ('--directory', 5), ('--one-top-level', 4))
+                           if _long_prefix(name, full, least)), None)
+            if target:
+                if '=' in v:
+                    values.setdefault(target, []).append((v.split('=', 1)[1], args[k]))
+                elif target != '--one-top-level' and k + 1 < len(args):
+                    values.setdefault(target, []).append((vals[k + 1] or args[k + 1].text, args[k + 1]))
+                    k += 1
+        elif v.startswith('-') and len(v) > 1:
+            for j, c in enumerate(v[1:], 1):
+                letters += c
+                if c in _TAR_VALUE_LETTERS:
+                    if j < len(v) - 1:
+                        values.setdefault(c, []).append((v[j + 1:], args[k]))
+                    elif k + 1 < len(args):
+                        values.setdefault(c, []).append((vals[k + 1] or args[k + 1].text, args[k + 1]))
+                        k += 1
+                    break
+        k += 1
+    creates = bool(set(letters) & set('cru')) or any(
+        _long_prefix(n, full, 4) for n in longs for full in ('--create', '--append', '--update'))
+    extracts = 'x' in letters or any(_long_prefix(n, '--extract', 4) or n == '--get' for n in longs)
+    out = []
+    if creates:
+        out += values.get('f', []) + values.get('--file', [])
+    if extracts:
+        dirs = values.get('C', []) + values.get('--directory', [])
+        out += dirs + values.get('--one-top-level', [])
+        if not dirs and head is not None:
+            out.append(('.', head))
+    return out
 
 
 def _site_writes(sp, raw: str, res) -> list:
@@ -367,7 +490,7 @@ def _site_writes(sp, raw: str, res) -> list:
     if name == 'touch':
         out += [(w.value() or w.text, w) for w in operands(takes=('-r', '--reference', '-d', '--date', '-t'))]
     elif name == 'perl':
-        inplace, code, ops, k = False, False, [], 0
+        inplace, code, ops, k = False, [], [], 0
         while k < len(args):
             v = vals[k]
             if v == '--':
@@ -376,29 +499,43 @@ def _site_writes(sp, raw: str, res) -> list:
             if not v.startswith('-') or v == '-':
                 ops = args[k:]
                 break
+            if v == '-I':  # `-I dir`: the directory is the option's value, not the script
+                k += 2
+                continue
             flags = v[1:]
             if not v.startswith('--') and flags[:1] not in ('M', 'm', 'I', 'x', 'C', 'd', 'D'):
                 inplace = inplace or 'i' in re.split(r'[eE]', flags, 1)[0]
                 if flags[-1:] in ('e', 'E') and k + 1 < len(args):
-                    code, k = True, k + 2
+                    code.append(args[k + 1])
+                    k += 2
                     continue
             k += 1
-        if inplace:
-            out += [(w.value() or w.text, w) for w in (ops if code else ops[1:])]
+        operand_words = ops if code else ops[1:]
+        if inplace or any(_PERL_WRITE.search(w.value() or w.text) for w in code):
+            out += [(w.value() or w.text, w) for w in operand_words]
     elif name == 'patch':
         ops = operands(takes=('-p', '-d', '--directory', '-o', '--output', '-i', '--input', '-r',
                               '-B', '-z', '-D', '-F', '-V', '-g', '-Y'))
         outputs = option_values('-o', '--output')
+        dirs = option_values('-d', '--directory')
         out += [] if outputs else [(w.value() or w.text, w) for w in ops[:1]]  # -o leaves it as is
-        out += option_values('-d', '--directory') + outputs
+        out += dirs + outputs
+        if not (outputs or dirs or ops) and res.head is not None:
+            out.append(('.', res.head))  # the files the diff names, below the working directory
     elif name in ('tar', 'bsdtar', 'gtar'):
-        first = vals[0] if vals else ''
-        extract = any(v in ('-x', '--extract', '--get') or (v.startswith('-') and not v.startswith('--') and 'x' in v)
-                      for v in vals) or (first and not first.startswith('-') and 'x' in first)
-        if extract:
-            out += option_values('-C', '--directory')
+        out += _tar_writes(args, vals, res.head)
     elif name == 'unzip':
-        out += option_values('-d')
+        dirs = option_values('-d')
+        out += dirs
+        listing = any(v.startswith('-') and not v.startswith('--') and set(v[1:]) & set('ltvpcZz') for v in vals)
+        if not dirs and not listing and res.head is not None:
+            out.append(('.', res.head))
+    elif name == 'wget':
+        if not any(v in ('-O', '--output-document') or v.startswith(('-O', '--output-document=')) for v in vals):
+            prefix = option_values('-P', '--directory-prefix')
+            out += prefix or ([('.', res.head)] if res.head is not None else [])
+    elif name == 'sort':
+        out += _sort_outputs(args, vals)
     elif name == 'git':
         k, cdir = 0, None
         while k < len(vals) and vals[k].startswith('-'):
@@ -419,15 +556,20 @@ def _site_writes(sp, raw: str, res) -> list:
         for w in _sed_scripts(args):
             for found in _SED_WRITE.finditer(w.value() or w.text):
                 out.append((found.group(1), w))
+        out += _sed_long_in_place(args, vals)
     elif name == 'find':
+        starts = []
+        for w in args:
+            if (w.value() or '-').startswith(('-', '(', '!')):
+                break
+            starts.append(w)
         for k, v in enumerate(vals):
             if v in ('-fprint', '-fprint0', '-fprintf', '-fls') and k + 1 < len(args):
                 out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
-        if '-delete' in vals:
-            for w in args:
-                if (w.value() or '-').startswith(('-', '(', '!')):
-                    break
-                out.append((w.value() or w.text, w))
+        runs = [vals[k + 1] for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
+        if '-delete' in vals or any(os.path.basename(r) not in _READERS for r in runs):
+            # what find removes, or hands to a command that may write it: every start path
+            out += [(w.value() or w.text, w) for w in starts]
     return [(text, word) for text, word in out if text]
 
 
@@ -445,6 +587,7 @@ class _CdScopes:
         self.spans = []
         self.visited = set()
         self.cdpath = 'CDPATH' in raw
+        self.functions = False  # a function or coprocess defined anywhere it walked
 
     def _target(self, cwd: str, word) -> str:
         arg = _home_spelled_out(word.text) if word is not None else '~'
@@ -500,8 +643,10 @@ class _CdScopes:
                 self.run_script(res.payload, here)
             return set(states), set(states)
         if isinstance(cmd, sp.Compound):
+            self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
             self._record(cmd.span, states)
             scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, sp.Script)]
+            self.functions = self.functions or cmd.kind in ('function', 'coproc')
             if cmd.kind in ('subshell', 'coproc'):
                 for s in scripts:
                     self.run_script(s, states)
@@ -648,19 +793,348 @@ def _parsed_kind(command: str) -> tuple:
     return kind, settled
 
 
-def _classify_bash_target(command: str) -> str:
-    """Return 'hooks', 'commands', or '' for a Bash command: the protected folder a path it writes,
-    removes or moves away lies in (each relative one also read from every `cd` target), as the
-    shared parser reads it; where the parser cannot settle it, the base reading of the raw text."""
+# The proof that lets a command the base reading refuses go through (_proven_harmless).
+# Commands that write nothing and run nothing, whatever their words say.
+_PURE_READERS = (_READERS - {'printf', 'file'}) | {'exit', 'sleep', 'wait'}
+# Write verbs whose every written path the shared parser reads (with sed -i and touch read here).
+_PROOF_WRITERS = frozenset({'cp', 'mv', 'install', 'tee', 'rm', 'rmdir', 'unlink', 'truncate', 'touch', 'sed'})
+_PROOF_WRAPPERS = frozenset({'env', 'timeout', 'nice', 'command', 'exec', 'setsid'})
+# Variables a prefix assignment (`LC_ALL=C cp ...`) may set: none of them moves a directory, names a
+# program to run, or changes where a command is looked up.
+_SAFE_VARS = re.compile(r'(?:LC_[A-Z]+|LANG|LANGUAGE|TZ|TERM|COLUMNS|LINES|NO_COLOR)\Z')
+_FIND_ACTIONS = frozenset({'-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0',
+                           '-fprintf', '-fls'})
+_UNSAFE_TARGET_CHARS = re.compile(r'[$`*?\[\]{}!]')
+# gh pr / gh issue subcommands that change nothing in the working tree (not checkout, merge).
+_GH_READS = frozenset({'create', 'view', 'list', 'comment', 'edit', 'status', 'close', 'reopen', 'diff',
+                       'checks', 'ready', 'review'})
+_SED_BOOL_LONG = frozenset({'--quiet', '--silent', '--regexp-extended', '--separate', '--unbuffered',
+                            '--null-data', '--posix', '--debug', '--sandbox'})
+
+
+_ENV_PATH_WORD = re.compile(
+    r'"(?:\$HOME|\$\{HOME\}|\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)|\$\{(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)\}'
+    r'|\$\{(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR):-\$HOME/[^"$`\\{}*?\[]*\})'
+    r'/[^"$`\\]*"\Z')
+
+
+def _env_path_word(word) -> bool:
+    """Whether ``word`` is a double-quoted path built only from the home variables
+    (`"$HOME/.claude/hooks/x"`, `"${CLAUDE_HOME:-$HOME/.claude}/commands/x.md"`): one word, an
+    absolute path the environment gives, never an option. Such a word may be a copy's source."""
+    return bool(_ENV_PATH_WORD.match(word.text))
+
+
+def _protected_roots() -> set:
+    """The protected folders as absolute paths (as written and real): the project's and the
+    harness home's hooks/ and commands/."""
+    bases = [os.path.join(str(_project_dir()), '.claude'), os.path.expanduser('~/.claude')]
+    bases += [os.environ[v] for v in _HOME_VARS if os.environ.get(v)]
+    roots = set()
+    for base in bases:
+        for sub in ('hooks', 'commands'):
+            path = os.path.normpath(os.path.join(os.path.abspath(os.path.expanduser(base)), sub))
+            roots.add(path)
+            try:
+                roots.add(os.path.realpath(path))
+            except (OSError, ValueError):
+                pass
+    return roots
+
+
+def _sed_proof(args) -> tuple:
+    """(known, in-place operand words) of a sed call the proof can read: only options it knows,
+    literal scripts with no w, W or e command or flag, no script file, a backup suffix with no `/`
+    or `*`. known is False otherwise."""
+    vals = [w.value() for w in args]
+    if any(v is None for v in vals):
+        return False, []
+    scripts, ops, inplace, k = [], [], False, 0
+    while k < len(vals):
+        v = vals[k]
+        if v == '--':
+            ops += args[k + 1:]
+            break
+        if v.startswith('--'):
+            name, _eq, val = v.partition('=')
+            if name in _SED_BOOL_LONG and not _eq:
+                pass
+            elif name == '--in-place':
+                inplace = True
+                if '/' in val or '*' in val:
+                    return False, []
+            elif name in ('--expression', '--line-length'):
+                if not _eq:
+                    if k + 1 >= len(vals):
+                        return False, []
+                    val, k = vals[k + 1], k + 1
+                if name == '--expression':
+                    scripts.append(val)
+            else:
+                return False, []
+        elif v.startswith('-') and v != '-':
+            j = 1
+            while j < len(v):
+                c = v[j]
+                if c in 'nErszu':
+                    j += 1
+                    continue
+                if c == 'i':
+                    inplace, suffix = True, v[j + 1:]
+                    if '/' in suffix or '*' in suffix:
+                        return False, []
+                    break
+                if c in 'el':
+                    val = v[j + 1:]
+                    if not val:
+                        if k + 1 >= len(vals):
+                            return False, []
+                        val, k = vals[k + 1], k + 1
+                    if c == 'e':
+                        scripts.append(val)
+                    break
+                return False, []  # -f (a script file) or an option the proof does not know
+        else:
+            ops.append(args[k])
+        k += 1
+    if not scripts:
+        if not ops:
+            return False, []
+        scripts, ops = [ops[0].value()], ops[1:]
+    if any(re.search(r'[wWe]', script) for script in scripts):
+        return False, []
+    return True, (ops if inplace else [])
+
+
+def _sort_reads(vals) -> bool:
+    """Whether a sort call writes nothing but its standard output: no -o (also in a cluster),
+    no --output, --compress-program or --temporary-directory (nor an abbreviation), no -T."""
+    for v in vals:
+        if v == '--':
+            break
+        if v.startswith('--'):
+            if v.split('=', 1)[0][:3] in ('--o', '--c', '--t'):
+                return False
+        elif v.startswith('-') and len(v) > 1 and set(v[1:]) & set('oT'):
+            return False
+    return True
+
+
+def _proven_harmless(command: str, start: str) -> bool:
+    """Whether ``command`` (run from directory ``start``) provably writes nothing into a protected
+    folder: it parses cleanly; every simple command, also in a `bash -c` or `eval` payload, is a
+    reader that writes or runs nothing (with no write or exec option) or one of the write verbs
+    whose targets are read here, run under no wrapper but env/timeout/nice/command/exec/setsid,
+    with no assignment but locale-like ones, no function, no substitution, no `source`; every
+    `cd` on the way is followed (a computed one, CDPATH or popd leaves the directory unknown);
+    and every written path is literal (no variable, `$_`, `!$`, glob or brace), resolves from the
+    directory its command runs in outside the protected folders, and (a removal, a move, a
+    recursive copy) is no ancestor of one. Anything unproven is False."""
+    sp = _shell_parse()
+    script = sp.parse(command)
+    if script.errors():
+        return False
+    start = os.path.abspath(start)
+    scopes = _CdScopes(sp, command)
+    scopes.cdpath = scopes.cdpath or bool(os.environ.get('CDPATH'))
+    scopes.run_script(script, {(start, '?')})
+    if scopes.functions:
+        return False
+    sites = []
+    for site in sp.walk(script):
+        cmd = site.cmd
+        if cmd.span not in scopes.visited or site.dynamic or site.templated:
+            return False  # a substitution's commands, a computed command name
+        res = sp.resolve(cmd)
+        if res.unresolved:
+            return False
+        assigns = list(cmd.assignments) + [a for a in res.assignments if a not in cmd.assignments]
+        if assigns and res.head is None:
+            return False  # a variable set for the rest of the command
+        for a in assigns:
+            if not _SAFE_VARS.match(a.name or '') or a.static_value() is None:
+                return False
+        for wname, opts in res.wrappers:
+            if wname not in _PROOF_WRAPPERS or (wname == 'env' and any(
+                    o not in ('-i', '--ignore-environment') for o, _v in opts)):
+                return False
+        if res.payload is not None:
+            if res.payload_kind not in ('shell_c', 'eval'):
+                return False
+            continue  # its commands are walked and judged on their own
+        if res.head is None:
+            continue  # redirects only: their targets are judged below
+        head = res.head.value()
+        name = res.name
+        if head is None or '/' in head or name is None:
+            return False
+        vals = [w.value() for w in res.args]
+        if name in _CD:
+            if assigns:
+                return False
+            continue
+        if name in _PURE_READERS:
+            sites.append((cmd, name, res, []))
+            continue
+        if any(v is None and not (name in _PROOF_WRITERS and _env_path_word(w))
+               for v, w in zip(vals, res.args)):
+            return False  # a computed word: it may split into options or other paths
+        if name == 'printf':
+            if any(v.startswith('-v') for v in vals):
+                return False
+        elif name == 'find':
+            if _FIND_ACTIONS & set(vals):
+                return False
+        elif name == 'rg':
+            if any(v.startswith('--pre') for v in vals):
+                return False
+        elif name == 'sort':
+            if not _sort_reads(vals):
+                return False
+        elif name == 'git':
+            if not _git_settled(res, command) or 'add' in vals or any(
+                    v.startswith(('--git-dir', '--work-tree', '--namespace')) for v in vals):
+                return False  # another git directory or work tree (git writes its index there), an add
+        elif name == 'gh':
+            if vals[:1] not in (['pr'], ['issue']) or len(vals) < 2 or vals[1] not in _GH_READS:
+                return False
+        elif name == 'sed':
+            known, inplace = _sed_proof(list(res.args))
+            if not known:
+                return False
+            sites.append((cmd, name, res, inplace))
+            continue
+        elif name in _PROOF_WRITERS:
+            if name in ('cp', 'mv', 'install') and any(
+                    (v or '').startswith(('-S', '--suffix', '--parents', '--su', '--pa')) for v in vals):
+                return False  # a backup suffix or --parents: a written path not read here
+            extra = []
+            if name == 'touch':
+                extra = [w for _t, w in _site_writes(sp, command, res)]
+            sites.append((cmd, name, res, extra))
+            continue
+        else:
+            return False
+        sites.append((cmd, name, res, []))
+    roots = _protected_roots()
+
+    def site_of(word):
+        found = None
+        for cmd, name, res, extra in sites:
+            if cmd.span[0] <= word.span[0] < cmd.span[1] and (found is None or cmd.span[0] >= found[0].span[0]):
+                found = (cmd, name, res, extra)
+        return found
+
+    def resolved(word, path=None):
+        """The absolute paths ``word`` names from its command's directory, or None if unknown."""
+        text = word.text
+        path = word.value() if path is None else path
+        if path is None or _UNSAFE_TARGET_CHARS.search(text) or not path:
+            return None
+        if path.startswith('~') and not (path == '~' or path.startswith('~/')):
+            return None
+        path = os.path.expanduser(path)
+        if os.path.isabs(path):
+            return {os.path.normpath(path)}
+        if command[slice(*word.span)] != text:
+            return None
+        cwds = scopes.at(word.span[0])
+        if any(c == '?' or c.startswith('~') and not (c == '~' or c.startswith('~/')) for c in cwds):
+            return None  # an unknown directory (`cd ~-`, `cd ~+/x`, `cd ~user` included)
+        return {os.path.normpath(os.path.join(os.path.expanduser(c), path)) for c in cwds}
+
+    def outside(paths, subtree) -> bool:
+        for path in paths:
+            forms = {path}
+            try:
+                forms.add(os.path.realpath(path))
+            except (OSError, ValueError):
+                pass
+            for form in forms:
+                if _protected_kind(form):
+                    return False
+                if subtree and any(r == form or r.startswith(form.rstrip('/') + '/') for r in roots):
+                    return False
+        return True
+
+    def operand_names(res, name):
+        spec = sp.VERBS[name][0]
+        _opts, ops, err = sp.split_options(list(res.args), spec, 0, permute=True)
+        return None if err else ops
+
+    for t in sp.write_targets(script):
+        if not t.decidable or t.word is None or t.path is None:
+            return False
+        word = t.word
+        if t.mechanism.startswith('redirect'):
+            paths = resolved(word, t.path)
+            if paths is None or not outside(paths, False):
+                return False
+            continue
+        owner = site_of(word)
+        if owner is None:
+            return False
+        cmd, name, res, _extra = owner
+        paths = resolved(word, t.path)
+        if paths is None:
+            return False
+        recursive = name in ('cp', 'install') and any(
+            v and (v in ('--recursive', '--archive') or (v.startswith('-') and not v.startswith('--')
+                                                        and set(v[1:]) & set('rRa')))
+            for v in (w.value() for w in res.args))
+        subtree = t.mode in (sp.DELETE, sp.MOVE_DEST) or recursive
+        written = set(paths)
+        if t.mode in (sp.COPY_DEST, sp.MOVE_DEST):
+            ops = operand_names(res, name)
+            if ops is None:
+                return False
+            for op in ops:
+                text = op.value()
+                if text is None:
+                    text = op.text.strip('"')
+                    if '$' in text.rsplit('/', 1)[-1]:
+                        return False  # a copied name the guard cannot read
+                base = os.path.basename(text.rstrip('/'))
+                if base not in ('', '.', '..'):  # `cp -r src/. dest` writes dest itself, judged above
+                    written |= {os.path.join(p, base) for p in paths}
+        if not outside(written, subtree):
+            return False
+    for cmd, name, res, extra in sites:
+        words = list(extra)
+        if name == 'mv':
+            ops = operand_names(res, name)
+            if ops is None:
+                return False
+            words += ops  # a moved source is removed: no protected folder may lie in it
+        for word in words:
+            paths = resolved(word)
+            if paths is None or not outside(paths, name == 'mv'):
+                return False
+    return True
+
+
+def _classify_bash_target(command: str, start: str = None) -> str:
+    """Return 'hooks', 'commands', or '' for a Bash command. A protected folder a path it writes,
+    removes or moves away lies in, as the shared parser (or _site_writes) reads it, refuses it.
+    Otherwise the base reading of the raw text decides, unless _proven_harmless proves from the
+    directory ``start`` that the whole command writes nothing into a protected folder."""
     if not command:
         return ''
     try:
-        kind, settled = _parsed_kind(command)
+        kind, _settled = _parsed_kind(command)
     except Exception:
-        kind, settled = '', False
-    if kind == 'hooks' or settled:
+        kind = ''
+    legacy = _legacy_kind(command)
+    if kind == 'hooks' or not legacy:
         return kind
-    return _legacy_kind(command) or kind
+    if kind:
+        return legacy if legacy == 'hooks' else kind  # a hooks write decides before a commands one
+    try:
+        if _proven_harmless(command, start or os.getcwd()):
+            return ''
+    except Exception:
+        pass
+    return legacy
 
 
 def _block(message: str) -> None:
@@ -803,7 +1277,7 @@ def _evaluate_write_edit(tool_name: str, tool_input: dict, data: dict) -> None:
 def _evaluate_bash(tool_input: dict, data: dict) -> None:
     """Apply guard for Bash tool."""
     command = tool_input.get('command', '') or ''
-    kind = _classify_bash_target(command)
+    kind = _classify_bash_target(command, data.get('cwd') or None)
     if kind and not (kind == 'commands' and _clean_approved_bash(command, data)):
         _block_bash(command, kind)
 
