@@ -15,16 +15,19 @@ One pipeline from requirement to push. Prompts ask. Hooks refuse.
 
 </div>
 
-The main session routes. It hires specialists. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.
+<a id="at-a-glance"></a>The main session is the orchestrator. It routes. One-issue agents do the work. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.
 
 ```text
 interactive   /spec (optional) → /dev → /close → /commit → /push
-overnight     /dev-overnight 6:00 → you, in the morning: /close --auto → /commit --auto → /push
+overnight     /dev-overnight 6:00
+next morning  /close --auto → /commit --auto → /push
 
 inside /dev   ask you → BA → QA → dev → QA → pass
                         ↑    │     ↑    │
-                        └────┘     └────┘   a fail goes back. No round cap.
+                        └────┘     └────┘
 ```
+
+A fail goes back. No round cap.
 
 > A dev agent used `git stash` as a scratch buffer, then a wide-path checkout. Seventeen days of UI work, gone. It reported that as an accident.
 >
@@ -46,7 +49,7 @@ python3 ~/.claude/scripts/capture-hero-run.py --check-only # sandboxed demo: a p
 
 **`~/.claude` already in use?** `git clone` refuses a target that is not empty. Move yours aside, or use [another install location](docs/installation.md#other-install-locations).
 
-After init, `git status` stays clean. Overlay values never show up as a diff and never reach a commit.
+After init, `git status` stays clean. Your machine's own values live in an overlay. They never show up as a diff and never reach a commit.
 
 The demo needs no Claude Code. It runs the real hooks in a sandbox. It writes nothing into the checkout. It prints where it saved its log. Then, in Claude Code:
 
@@ -60,19 +63,21 @@ Before any code, it asks you. Intent, scope, edge cases, acceptance, in Claude C
 
 ### Guardrails only: the installer core profile
 
-A few hooks, no agents, no overlay, no init. Run it from a checkout:
+A few hooks, no agents, no overlay, no init. Not the git kernel. Run it from a checkout:
 
 ```bash
 scripts/install/install --profile core   # guardrails in an isolated directory, hook registrations merged additively
 ```
 
-One command, `/harness-doctor`, runs the installed preflight. `scripts/install/uninstall` takes it back out.
+Its only command, `/harness-doctor`, runs the installed preflight. `scripts/install/uninstall` takes it back out.
 
 **Next:** [one cycle, step by step](#pipeline-in-action) • [the installation guide](docs/installation.md) for the settings overlay, optional modules, dependencies and troubleshooting • [what is proven](docs/status.md)
 
 ## The full pipeline
 
 You give it a requirement. It finds the root cause. It asks you only the decisions that are yours. Then it builds the change and checks it.
+
+BA, the business analyst, finds the root cause. QA, the checker, passes or fails the analysis and the build. Dev, the developer, makes the change.
 
 ```mermaid
 flowchart TD
@@ -86,7 +91,7 @@ flowchart TD
     end
     subgraph LAND["you land it, one command each"]
         direction LR
-        CLOSE["/close<br/>release readiness"] --> COMMIT["/commit<br/>QA first, then one commit"] --> PUSH["/push<br/>checked, then published"]
+        CLOSE["/close<br/>release readiness"] --> COMMIT["/commit<br/>QA first, then commits the task's files"] --> PUSH["/push<br/>checked, then published"]
     end
     REQ(["your requirement"]) --> SPEC["/spec · optional<br/>a durable spec"]
     REQ --> ASK["ask first<br/>BAs find the options, you decide"]
@@ -116,15 +121,15 @@ Each stage hands a checked artifact to the next. You start each stage with one c
 - **One cycle, parallel lanes.** `/dev` splits your requirement into outcomes that each verify alone. One lane per outcome. BA, QA, dev and QA run once per lane, in parallel. A failing lane retries alone. The cycle passes only when every lane's QA passes.
 - **A loop ends on a pass, or when you stop it.** No round cap. Your `/stop` or Esc interrupts either loop at any time. So a stubborn failure loops until you stop it.
 - **Adversarial second opinion, one loop.** Add `--codex` to `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`. An agent asks Codex once for a complete review. After that, only a capped number of fix checks. Claude classifies each finding as a real bug, a minor point, out of scope or a nitpick.
-- **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. No agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. Nothing is asked in plain text.
+- **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. No other agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. Nothing is asked in plain text.
 
 </details>
 
 ## Pipeline in action
 
-<a id="walkthrough-dev-the-login-button-is-misaligned-on-mobile"></a>A sixty-second tour of one `/dev` run, from the words you type to a pushed commit. The run takes longer than the tour.
+<a id="walkthrough-dev-the-login-button-is-misaligned-on-mobile"></a>One `/dev` run, from the words you type to a pushed commit. Reading it is quicker than running it.
 
-1. **You type it.** `/dev "the login button is misaligned on mobile"`. A hook writes your words to `docs/dev/` before any agent runs. The cycle is armed.
+1. **You type it.** `/dev the login button is misaligned on mobile`. A hook writes your words to `docs/dev/` before any agent runs. The cycle is armed.
 2. **The orchestrator plans.** One outcome, one lane. Each specialist is marked RELEVANT or SKIP, with a reason. A layout bug makes `ui-specialist` relevant. Its findings go to BA.
 3. **The BAs ask first.** No spec, so a panel of BAs analyses from separate angles. Root cause, smallest change, your intent. Panel QA drops a cause it cannot verify. Their disagreements become one round of questions. What you should see on a phone. How far the fix goes. Which screens count as done. You answer or skip.
 4. **BA analyses.** The file and the cause that actually produce the misalignment, not a plausible cousin. Cited file and line, search results, git history. Then the ticket, the context and the acceptance criteria.
@@ -199,7 +204,7 @@ graph TD
     class GATES,KER,SS,SG gate
 ```
 
-In words. You type a command. The orchestrator splits the work into lanes and dispatches one-issue agents. Every tool call, the orchestrator's and each agent's, meets the PreToolUse gates first. Allowed, the tool runs. Refused, the caller gets the rule, the reason and a remedy. Each stage writes its artifact under `docs/dev/`, and the next stage reads it. When an agent stops, the producer gate checks what it owes. The Stop gate holds a gated command until its todos are done and its artifacts check out, and the overnight run until its end time. [How it works](docs/how-it-works.md) has the long form.
+In words. You type a command. The orchestrator splits the work into lanes and dispatches one-issue agents. Every tool call, the orchestrator's and each agent's, meets the PreToolUse gates first. Allowed, the tool runs. Refused, the caller gets the rule, the reason and a remedy. Each stage writes its artifact under `docs/dev/`, and the next stage reads it. When an agent stops, the producer gate checks what it owes. The Stop gate holds a gated command until its todos are done and its artifacts check out. It holds the overnight run until its end time. [How it works](docs/how-it-works.md) has the long form.
 
 <details>
 <summary><strong>Each part, one line.</strong> What it does and where to read on.</summary>
@@ -221,17 +226,17 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 
 ## Why a harness
 
-Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs.
+<a id="why-this-exists"></a>Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs.
 
 | Without it | With the harness |
 |---|---|
 | One context does too much. Quality silently degrades. | The main session routes. A one-issue agent with a clean context does each piece of work. |
-| Agents build what they guessed you meant | It asks you first, in the question dialog. A hook writes your answers to disk. |
-| The build drifts from the requirement | Your words are on disk before any agent runs. BA cites evidence. QA checks the analysis before any code. |
-| Unfinished work is handed off as done | The Stop gate holds a gated command until every todo is done and the artifact chain passes. |
-| An irreversible git operation | Agent commit, push, merge and `reset --hard` are refused by default. Stash-as-buffer and wide-path checkout are refused by shape. |
+| Agents build what they guessed you meant. | It asks you first, in the question dialog. A hook writes your answers to disk. |
+| The build drifts from the requirement. | Your words are on disk before any agent runs. BA cites evidence. QA checks the analysis before any code. |
+| Unfinished work is handed off as done. | The Stop gate holds a gated command until every todo is done and the artifact chain passes. |
+| An irreversible git operation. | Agent commit, push, merge and `reset --hard` are refused by default. Stash-as-buffer and wide-path checkout are refused by shape. |
 
-<a id="failure-modes"></a><a id="design-philosophy"></a><a id="context-engineering-guardrails"></a>Every failure mode and its rule, the guardrails that keep the main session small, and the taste behind the rules: [How it works](docs/how-it-works.md#failure-modes-this-exists-to-prevent). Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
+<a id="failure-modes"></a><a id="failure-modes-this-exists-to-prevent"></a><a id="design-philosophy"></a><a id="context-engineering-guardrails"></a>Every failure mode and its rule, the guardrails that keep the main session small, and the taste behind the rules: [How it works](docs/how-it-works.md#failure-modes-this-exists-to-prevent). Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
 
 <details>
 <summary><a id="feature-highlights"></a><strong>Every capability.</strong> One line each.</summary>
@@ -265,7 +270,7 @@ Long chats lose context. Agents run destructive shell and git commands. They dri
 
 ## The git protection kernel
 
-Every agent commit, push, merge and hard reset is refused. Something you typed lets one through. It covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Built from the two incidents above. Scars, not hypotheticals. The code names both, with dates. The ninety-three-file push happened in an interactive session. So the guard is not limited to overnight runs.
+Every agent commit, push, merge and hard reset is refused. Something you typed lets one through. It covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Built from the two incidents above. Scars, not hypotheticals. The code names both, with dates. Interactive matters. The ninety-three-file push happened in one.
 
 - **Grants.** `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. `/do` is the main agent's, for one turn, and only where the protected branch cannot move. It never covers a commit or a push. A command that starts with `git reset --hard` also meets the `settings.json` deny, which nothing lifts.
 - **Stays free.** Read-only git, `add`, a checkout or `restore` of a single file, `stash list`, `show` and `pop`.
@@ -280,7 +285,7 @@ You are the trust root. The threat model treats the agent itself as the adversar
 |---|---|---|---|---|---|
 | You, in your own shell | yes | yes | yes | yes | not needed |
 | Main agent | Once per tool per turn. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch. Or a matching `/allow`. Never a command that starts with `git reset --hard`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
-| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
+| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant. Or a matching `/allow`. | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
 
 The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command. Never a substring of the raw text. It expires. It is consumed once the matched call ends, whatever the result.
 
@@ -311,7 +316,7 @@ The whole philosophy in miniature. Steered toward the right path. Stopped on the
 
 ## The overnight pipeline
 
-The unattended stage of [the full pipeline](#the-full-pipeline). Hand it a vague bug report at midnight. PM explores the running app. Specialists scan it. PM triages what they find. One BA → QA → dev → QA pipeline runs per real issue, in parallel, until the end time. Nobody is asked. An experiment decides, else the question's default, and the summary lists each decision. Nothing is committed. The work waits in `refs/checkpoints/<branch>`. [The git kernel](#the-git-protection-kernel) stays on all night.
+The unattended stage of [the full pipeline](#the-full-pipeline). Hand it a vague bug report at midnight. PM, the planning agent, explores the running app. Specialists scan it. PM triages what they find. One BA → QA → dev → QA pipeline runs per real issue, in parallel, until the end time. Nobody is asked. An experiment decides, else the question's default, and the summary lists each decision. Nothing is committed. The work waits in your working tree. Checkpoints snapshot it to `refs/checkpoints/<branch>`. [The git kernel](#the-git-protection-kernel) stays on all night.
 
 - **Morning.** You type `/close --auto`, `/commit --auto` and `/push`. A `--worktree` run adds `/merge` before `/push`.
 - **Rule.** The Stop gate refuses to end the session before the end time. A typed `/stop` ends the run at once.
@@ -416,7 +421,7 @@ The [status page](docs/status.md) says what is proven and what is not. The measu
 
 The [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) has one row per registered hook. It says what each hook does and how far that is proven. A script that exits `2` is evidence about the script, not about a Claude Code host honouring it.
 
-What still needs you: your answers to the requirement round at the start of a cycle, the decisions only you can make, and your rating of the work. `/close` asks for the rating after a cycle lands. You may skip it. `/dev-overnight` asks nobody. It decides by experiment, else by the question's default, and lists each decision in its summary.
+What still needs you. Your answers to the requirement round at the start of a cycle. The decisions only you can make. Your rating of the work. `/close` asks for the rating after a cycle lands. You may skip it. `/dev-overnight` asks nobody. It decides by experiment, else by the question's default, and lists each decision in its summary.
 
 ## FAQ
 

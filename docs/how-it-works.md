@@ -39,7 +39,8 @@ graph TD
 
     HL -->|PostToolUse doc-sync| IDX[INDEX files]
     TMP["/tmp/ grants<br/>commit / /allow"] -->|grant-keyed validation| HL
-    PMG["/push · /merge grants"] -->|checked before their wrapper runs git| GK
+    PMG["/push · /merge analyst grants"] -->|"checked before the wrapper runs,<br/>not by the privilege guard"| WRP["push.sh · merge.sh wrappers<br/>git in their own subprocess"]
+    WRP --> GK
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
