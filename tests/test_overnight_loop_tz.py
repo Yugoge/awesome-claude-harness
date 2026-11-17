@@ -201,6 +201,18 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_the_command_text_says_the_agent_resets_the_todos(self) -> None:
+        """commands/dev-overnight.md Rule 2 said "The todo-completion hook resets the todos" while
+        Step 21 says the hook writes no todos itself. The hook only hands the agent the instruction
+        to reset them (_loop_instructions; it never writes the todos file), so both places say the
+        agent resets them, on the hook's instruction."""
+        doc = (HOOK_PATH.parents[1] / 'commands' / 'dev-overnight.md').read_text()
+        rule2 = next(line for line in doc.splitlines() if line.startswith('2. **Loop until `end_time`.**'))
+        self.assertNotIn('hook resets the todos', rule2)
+        self.assertIn('`hooks/posttool-overnight-loop.py`', rule2)
+        self.assertIn('writes no todos itself', rule2)
+        self.assertIn('Reset your todo list to all-pending', HOOK_PATH.read_text())
+
 
 if __name__ == '__main__':
     unittest.main()
