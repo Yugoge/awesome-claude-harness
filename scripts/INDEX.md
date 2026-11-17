@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T02:12:48Z*
-**Total entries**: 168
+*Last updated: 2026-11-17T12:10:48Z*
+**Total entries**: 169
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,7 @@
 scripts/
 ├── ci/
 │   ├── `diff-mutate.py` - Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
+│   ├── `pair-check.sh` - Description: Pair check between two open PRs (P15 lane L12, plan section 2(f)). Builds the
 │   └── `red-green.py` - Given a base and a head, the script finds their merge base and judges the diff merge-base..head:
 ├── install/
 │   ├── profiles/

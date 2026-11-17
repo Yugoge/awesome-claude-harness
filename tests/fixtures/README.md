@@ -2,8 +2,8 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 5
-- **Subdirectories**: 2
+- **Total files**: 6
+- **Subdirectories**: 3
 - **Naming convention**: lower
 
 ## Files
@@ -13,6 +13,7 @@
 
 ## Subdirectories
 - `cli/`
+- `cli-todowrite-oldtodos/`
 - `late_repair_golden/`
 <!-- /AUTO:readme-stats -->
 

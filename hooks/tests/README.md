@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 188
+- **Total files**: 192
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -11,6 +11,7 @@
 - `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 - `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 - `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
+- `test_agent_end_readers.py` - the /commit --bulk Stop, the close rating and ask-first read its end as G1 does
 - `test_agent_resolver.py` - Covers the bug: cp-state files that were never checked out (crashed/
 - `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 - `test_allow_grant_quoted_separators.py` - A grant authorizes exactly one command. pretool-git-privilege-guard, pretool-bash-safety.sh and
@@ -56,6 +57,7 @@
 - `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 - `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 - `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+- `test_cp_checkin_own_role_sentinel.py` - cc3077f1's rule in hooks/pretool-cp-checkin.py (_handle_dev_sentinel): a PreToolUse
 - `test_cp_enforce_own_slot.py` - cp-state slot's pending checkpoints (P1c X6)
 - `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 - `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
@@ -99,6 +101,7 @@
 - `test_now_unreferenced_p5_p9.py` - - posttool-subagent-track.py's bookmark marker. P5 moved Gate 4 to the transcript, so
 - `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
 - `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
+- `test_obligation_gate_returns.py` - back, not only its own Agent call's result
 - `test_obligation_templates.py` - Two template forms exist: literal ``<obligation v="1">`` blocks, and the
 - `test_one_process_gates.py` - - The runner keeps each rule's decision: a rule runs as its own hook would run alone,
 - `test_orchestrator_gate_in_flight.py` - P9 reworded the gate's refusals (the Bash limit's and the non-whitelisted limit's first line, the
@@ -157,6 +160,7 @@
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 - `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
+- `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
 - `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 - `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 - `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default

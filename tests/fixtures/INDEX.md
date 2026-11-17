@@ -1,8 +1,8 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T09:09:15Z*
-**Total entries**: 21
+*Last updated: 2026-11-17T12:10:49Z*
+**Total entries**: 23
 **Convention**: kebab
 
 ## Tree
@@ -21,6 +21,8 @@ fixtures/
 │   │   ├── `subagent.meta.json` - <redacted>
 │   │   └── `transcript.jsonl` - jsonl file
 │   └── `CURRENT` - CURRENT file
+├── cli-todowrite-oldtodos/
+│   └── `stream-2.1.326.jsonl` - jsonl file
 ├── late_repair_golden/
 │   ├── `complete.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 │   ├── `fanout.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts

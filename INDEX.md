@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 980
+*Last updated: 2026-11-17T12:10:48Z*
+**Total entries**: 1015
 **Convention**: kebab
 
 ## Tree
@@ -85,6 +85,7 @@ dot-claude/
 │   │   ├── `red-test-trailer.md` - The `Red-test:` trailer and the red-then-green job
 │   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
+│   │   ├── `task-tools-migration-plan.md` - Task tools migration plan — TodoWrite → TaskCreate / TaskUpdate / TaskList / TaskGet
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 │   ├── `ADVERSARIAL-CORPUS.md` - Adversarial Bypass Corpus — claude-code-guardrails
@@ -125,6 +126,7 @@ dot-claude/
 │   │   ├── write_gate/
 │   │   ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 │   │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
+│   │   ├── `agent_returns.py` - the one reading of whether a dispatch has returned, for every hook that asks
 │   │   ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 │   │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   │   ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
@@ -190,6 +192,7 @@ dot-claude/
 │   │   ├── `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 │   │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
+│   │   ├── `test_agent_end_readers.py` - the /commit --bulk Stop, the close rating and ask-first read its end as G1 does
 │   │   ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 │   │   ├── `test_allow_grant_quoted_separators.py` - A grant authorizes exactly one command. pretool-git-privilege-guard, pretool-bash-safety.sh and
 │   │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
@@ -233,6 +236,7 @@ dot-claude/
 │   │   ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 │   │   ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 │   │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+│   │   ├── `test_cp_checkin_own_role_sentinel.py` - cc3077f1's rule in hooks/pretool-cp-checkin.py (_handle_dev_sentinel): a PreToolUse
 │   │   ├── `test_cp_enforce_own_slot.py` - cp-state slot's pending checkpoints (P1c X6)
 │   │   ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 │   │   ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
@@ -276,6 +280,7 @@ dot-claude/
 │   │   ├── `test_now_unreferenced_p5_p9.py` - - posttool-subagent-track.py's bookmark marker. P5 moved Gate 4 to the transcript, so
 │   │   ├── `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
 │   │   ├── `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
+│   │   ├── `test_obligation_gate_returns.py` - back, not only its own Agent call's result
 │   │   ├── `test_obligation_templates.py` - Two template forms exist: literal ``<obligation v="1">`` blocks, and the
 │   │   ├── `test_one_process_gates.py` - - The runner keeps each rule's decision: a rule runs as its own hook would run alone,
 │   │   ├── `test_orchestrator_gate_in_flight.py` - P9 reworded the gate's refusals (the Bash limit's and the non-whitelisted limit's first line, the
@@ -334,6 +339,7 @@ dot-claude/
 │   │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 │   │   ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 │   │   ├── `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
+│   │   ├── `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
 │   │   ├── `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 │   │   ├── `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 │   │   ├── `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
@@ -460,6 +466,7 @@ dot-claude/
 │   ├── `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
+│   ├── `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
 │   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 │   ├── `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
@@ -473,6 +480,7 @@ dot-claude/
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 │   ├── `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+│   ├── `subagentstart-launch.py` - Every Python hook registered on SubagentStart runs here, each as `python3 <file>` would have run it
 │   ├── `subagentstart-record.py` - rank's reminder (hooks/lib/score_log.py), as additionalContext of at most 3 lines and 400 bytes; ...
 │   ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 │   ├── `subagentstop-codex-enforce.py` - Activation logic:
@@ -527,6 +535,7 @@ dot-claude/
 ├── scripts/
 │   ├── ci/
 │   │   ├── `diff-mutate.py` - Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
+│   │   ├── `pair-check.sh` - Description: Pair check between two open PRs (P15 lane L12, plan section 2(f)). Builds the
 │   │   └── `red-green.py` - Given a base and a head, the script finds their merge base and judges the diff merge-base..head:
 │   ├── install/
 │   │   ├── profiles/
@@ -608,6 +617,7 @@ dot-claude/
 │   ├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
+│   ├── `cli-fixture-record.sh` - Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 │   ├── `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 │   ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
@@ -734,6 +744,7 @@ dot-claude/
 │   │   ├── `shparse.py` - dependency beyond the standard library
 │   │   ├── `shscan.py` - Words are evaluated into the same templates as Python values (variables by
 │   │   ├── `static_half.py` - `derive(tree)` reads one harness tree and returns every record the static
+│   │   ├── `test_channel.py` - produced by the CLI alone, declared by the recorded fixture's shapes; its readers derived from th...
 │   │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
 │   │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
@@ -751,6 +762,8 @@ dot-claude/
 │   │   ├── `test_combine_differential.py` - hooks/lib/write_gate/__init__.py's `combine` (cyclomatic complexity 37) was split into helpers
 │   │   └── `test_completed_codex_subagents_differential.py` - The frozen copy in completed_codex_subagents_legacy.py is the function as it was at
 │   ├── fixtures/
+│   │   ├── cli/
+│   │   ├── cli-todowrite-oldtodos/
 │   │   ├── late_repair_golden/
 │   │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
@@ -768,6 +781,7 @@ dot-claude/
 │   │   ├── `test_lint_tree.py` - Collected only under HARNESS_LINT=1, which the baseline workflow's lint step sets; the
 │   │   └── `tree.py` - The settings and ledger parsing is scripts/check-enforcement-evidence.py's own (the gate
 │   ├── replay/
+│   │   ├── base_driver/
 │   │   ├── bin/
 │   │   ├── drivers/
 │   │   ├── `__main__.py` - `python -m tests.replay ...`: see cli.py.
@@ -776,6 +790,7 @@ dot-claude/
 │   │   ├── `cmdtext.py` - Drivers never hard-code a block's text: they take it, at run time, from the
 │   │   ├── `conftest.py` - Every test that replays asks for the `replays` fixture with a marker naming what it needs:
 │   │   ├── `differential.py` - A reader decides on an artifact when re-running its recorded invocation with
+│   │   ├── `endstate.py` - pipelines; R8, the A11 checks), read once the driver has ended, before the sandbox goes
 │   │   ├── `faults.py` - --arg fault=<kind>@<label glob>[=<what>][;<kind>@<label glob>[=<what>]...]
 │   │   ├── `hookrun.py` - Selection follows the planning kit's runhook.py: a matcher that is empty or "*"
 │   │   ├── `inner.py` - cli.py starts it as `python -m replay.inner <config.json>` from the sandbox's
@@ -785,6 +800,7 @@ dot-claude/
 │   │   ├── `norm.py` - A replay's own values (session ids, agent ids, tool-use ids, task ids, lanes,
 │   │   ├── `pipeline.py` - An Orchestrator plays the main agent of one typed command, following the
 │   │   ├── `recovery.py` - --arg fault=cut@<label glob>     F5, F5f: after the first step of a subagent whose label matches
+│   │   ├── `removal.py` - with `git rm`, recoverably, or tries a forced removal that the registered hooks refuse
 │   │   ├── `replay.py` - A driver gets a Replay and works through Sessions and Actors (the main agent,
 │   │   ├── `roles.py` - Each helper returns an Act.work callable, work(sub, brief, player) -> content,
 │   │   ├── `routing.py` - No hook blocks here: the gap is what /close's disposition call (Step 0) or /commit's (Step 3) pri...
@@ -794,22 +810,34 @@ dot-claude/
 │   │   ├── `sites.py` - Nothing here lists a site, a hook or a class. Enumerator reads settings.json and follows each
 │   │   ├── `suite.py` - A scenario names one of P1b's drivers (tests/replay/drivers/) and its arguments. run() replays it
 │   │   ├── `test_a20.py` - Every compliant scenario runs with the gate blocking: test_pipelines.py's armed settings set
+│   │   ├── `test_a21_old_bookmarks.py` - A21 (prompts/short/P5.md): a session that loaded origin/master's hook list meets this tree's files,
 │   │   ├── `test_bwrap_stand_in.py` - An in-place /dev-overnight launch refuses where `bwrap --ro-bind / / -- true` cannot run
 │   │   ├── `test_codex_loop.py` - Each replay plays QA's `--codex` path against a stub Codex (tests/replay/drivers/_codex.py). The ...
+│   │   ├── `test_commit_hook_refusal.py` - drivers/commit.py variant `waits` (the owner's world: settings_filter_world). The tree's own refu...
+│   │   ├── `test_do_inflight_blocked.py` - Since P5 a /do has one terminal (commands/do.md Step 5): the Stop gate holds a /do until its do-r...
 │   │   ├── `test_faults.py` - is repaired at that producer's next round with no human action; the pipeline reaches its terminal
 │   │   ├── `test_kept_first_line.py` - hookrun keeps a hook's output tail; for a long refusal that tail is the echoed
 │   │   ├── `test_live_arming.py` - this tree's files
 │   │   ├── `test_live_landing.py` - keep running with the hook list they loaded; nothing new may block a running session or an in-fli...
+│   │   ├── `test_live_landing_p6.py` - against a toy project holding what the base master's own /dev left there (agent-index.json, the
 │   │   ├── `test_no_dead_end.py` - (i) The blocking sites are enumerated when the test runs (tests/replay/sites.py), never read from a
+│   │   ├── `test_obligation_role.py` - The role a template dispatches is its subagent_type, else the role of the obligation block it
+│   │   ├── `test_overnight_one_pipeline.py` - A16's bar for "arm-overnight, 1 pipeline": a compliant replay with the tree's settings and armed ...
+│   │   ├── `test_p10_faults.py` - the compliant pipelines leave
+│   │   ├── `test_p2_a20_overnight.py` - * the AskUserQuestion deny (hooks/pretool-overnight-hook-guard.py's AskUserQuestion branch, R10; ...
 │   │   ├── `test_pipeline_render.py` - Dispatches loaded before P13-3 still bind master's score headers after landing.
 │   │   ├── `test_pipelines.py` - reaches its terminal, with the tree's settings ("shipped") and armed (G1-G3 block)
 │   │   ├── `test_push_holds.py` - Each replay types /push after the owner's commit and the token its one writer wrote for it
+│   │   ├── `test_r14_faults.py` - Each replay (drivers/_r14.py) injects one fault at the step it names and plays commands/merge.md or
 │   │   ├── `test_refusals.py` - Each replay reaches one refusal of commands/merge.md or commands/push.md, played by its driver from
 │   │   ├── `test_regressions.py` - R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 │   │   ├── `test_requirement_round.py` - Each variant runs through the shipped settings (G1 and G2 block). The drivers assert what each on...
 │   │   ├── `test_run_to_run.py` - The artifact check (tests/test_artifact_graph.py) derives its relations from traced replays,
 │   │   ├── `test_score_dispatch.py` - The real hooks run under the shipped settings in a sandbox; the score log starts with the rows `s...
 │   │   ├── `test_score_replay.py` - The real hooks run under the shipped settings in a sandbox that has its own config directory; the...
+│   │   ├── `test_sites_answered_first.py` - A hook that answers an event first and leaves (an else-less `if` on the payload's hook_event_name
+│   │   ├── `test_sites_module_constants.py` - A refusal whose text lives in a module-level name (a string, or a dict, tuple or list of strings
+│   │   ├── `test_todowrite_recording.py` - The recording is CLI 2.1.326's own stream-json output for two TodoWrite calls: a list whose items
 │   │   ├── `test_trace_reduce.py` - Each case is a run-to-run difference two replays of one driver showed under load:
 │   │   ├── `test_typed_corrections.py` - Each replay types the command with an argument that names nothing: /close of a ticket path of ano...
 │   │   ├── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
@@ -834,6 +862,7 @@ dot-claude/
 │   │   └── `test_differential.py` - The corpus is tests/shell_parse/corpus.jsonl: the command strings of the test
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
+│   ├── `cli_shapes.py` - The rule (P15 section 2(d)):
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
 │   ├── `test_ac_deviation_fanout_consumer.py` - lanes that stop short of ``completed`` and the lifecycle row of a chain
 │   ├── `test_ac_deviation_record_chain.py` - A dev report that records an acceptance-criteria deviation is reported
@@ -856,7 +885,11 @@ dot-claude/
 │   ├── `test_ci_visibility_gate.py` - The private repository (full history) and the public one (the clean tree as one commit per
 │   ├── `test_clean_orchestrator_merge.py` - clean-merge-reports reads the three inspection reports of the request the Step 3 context
 │   ├── `test_cleaner_discard.py` - Action Types table gives and prints a DISCARDED line whose recover command restores the file. The
+│   ├── `test_cli_fixture_redaction.py` - The recorder's account rule writes 0 for a token, request or cost count and for a clock time kept...
+│   ├── `test_cli_fixture_shapes.py` - Tests built CLI records by hand, so CLI 2.1.322's change of the hook-output records (plain stdout
+│   ├── `test_cli_synthesizers.py` - The replay harness and the hook tests below wrote CLI transcript records by hand, so the records ...
 │   ├── `test_close_command_text.py` - Each test hands the text to the code that consumes it (the obligation reader, the listing script,
+│   ├── `test_close_pending_scan.py` - /close and /commit find their candidate tasks with `list-actionable`. For each task waiting to be
 │   ├── `test_close_rating_step_label.py` - 376a9ae relabelled it so that no command's dispatch template would sit under a heading of the same
 │   ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 │   ├── `test_close_report_append_lock_cleanup.py` - product repository is clean after the pipelines; R8 rule 3: a file with no consumer
@@ -874,6 +907,7 @@ dot-claude/
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Each command that reads the artifact chain spells one resolver call and names the result fields i...
 │   ├── `test_dev_commands_no_phases.py` - The frontmatter of the five /dev-family command files must parse as YAML and hold a non-empty `de...
 │   ├── `test_dev_question_relay_route.py` - re-dispatch carries the answer the same way as Step 5's BA re-dispatch (group 3 findings on #27:
+│   ├── `test_dev_record_not_in_todo_list.py` - gate goes where the hooks let it, never into the todo list
 │   ├── `test_dev_todo_accounting.py` - Python script
 │   ├── `test_discover_folders.py` - INDEX per discovered folder) leaves out the harness's own directories in a project: .claude (Claude
 │   ├── `test_disposition.py` - (scripts/resolve-dev-artifact-chain.py ``disposition`` and ``--disposition``)
@@ -904,6 +938,7 @@ dot-claude/
 │   ├── `test_overnight_state_budget_clock.py` - The launch's start time, its end time (relative: Nm, Nh, the default 8h; or a clock time, rolled
 │   ├── `test_p10_42_hook_bytecode_env.py` - R9 set `"PYTHONDONTWRITEBYTECODE": "1"` in settings.json's env so that hooks stop writing
 │   ├── `test_p9_parts_of_p10_rows.py` - - R9 (the harness home's .gitignore): the old score store's lines stay under D28. Nothing writes
+│   ├── `test_pair_check.py` - #44 required every registered hook to ask the harness switch first and #45 registered two hooks
 │   ├── `test_parent_cycle_claimant_reader.py` - THE DEFECT.  Admission to a cycle's ownership-completeness claimant set was
 │   ├── `test_paseo_daemon_ledger.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 │   ├── `test_paseo_daemon_timers.py` - scripts/paseo-daemon-timers.py (task 20260926-111239)
