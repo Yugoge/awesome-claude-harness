@@ -86,21 +86,15 @@ def _clean_env():
     return env
 
 
-def _anchor_classes():
-    """Read both anchor classes from source rather than restating them here."""
-    sh_line = next(l for l in BASH_SAFETY.read_text(encoding="utf8").split("\n")
-                   if l.startswith("GIT_CMD_RE="))
+def _anchor_class():
+    """Read the privilege guard's git anchor class from its source rather than restating it here."""
     py_line = next(l for l in GIT_GUARD.read_text(encoding="utf8").split("\n")
                    if l.startswith("GIT_COMMAND_RE"))
-
-    def first_quoted(line):
-        start = line.find("'")
-        return line[start + 1:line.find("'", start + 1)]
-
-    return first_quoted(sh_line), first_quoted(py_line)
+    start = py_line.find("'")
+    return py_line[start + 1:py_line.find("'", start + 1)]
 
 
-ERE_ANCHOR, PY_ANCHOR = _anchor_classes()
+PY_ANCHOR = _anchor_class()
 
 
 def _run_classifier(payload):
@@ -127,12 +121,15 @@ def _observe(case):
     arch = case.get("gate_architecture")
 
     if case["case_class"] in ("gate_deny", "boundary_control"):
-        script = GIT_GUARD if case["table_row"] == "H-031" else BASH_SAFETY
-        proc = _run_hook(script, payload)
+        # The PreToolUse hooks run side by side: the call is denied when any of them denies.
+        scripts = (GIT_GUARD,) if case["table_row"] == "H-031" else (BASH_SAFETY, GIT_GUARD)
+        procs = [_run_hook(script, payload) for script in scripts]
+        proc = next((p for p in procs if p.returncode == 2), None) \
+            or next((p for p in procs if p.returncode != 0), procs[0])
         verdict = "deny" if proc.returncode == 2 else (
             "allow" if proc.returncode == 0 else f"error_exit_{proc.returncode}")
         provenance = {
-            "captured_from": f"subprocess exit code + stderr of {script.name}",
+            "captured_from": "subprocess exit code + stderr of " + " and ".join(s.name for s in scripts),
             "exit_code": proc.returncode,
             "stderr_head": proc.stderr.strip().split("\n")[0][:180] if proc.stderr.strip() else "",
             "stdout_head": proc.stdout.strip().split("\n")[0][:180] if proc.stdout.strip() else "",
@@ -143,19 +140,12 @@ def _observe(case):
     proc, parsed = _run_classifier(payload)
     detected = bool(parsed)
     anchor = re.search(PY_ANCHOR, payload) is not None
-    grep = subprocess.run(["grep", "-qE", ERE_ANCHOR + "[[:space:]]+"],
-                          input=payload + "\n", capture_output=True, text=True, timeout=30)
-    ere = grep.returncode == 0
-    assert anchor == ere, (
-        f"the two anchor engines disagree on {payload!r} (python={anchor}, ere={ere}); that is "
-        f"RISK-2's drift class and must fail rather than be averaged away"
-    )
     # Architecture A suppresses the regex fallback whenever the classifier parse succeeds, so
     # reachability there is classifier-only. Architecture B ORs the two unconditionally.
     reachable = detected if arch == "A" else (detected or anchor)
     provenance = {
         "captured_from": f"subprocess exit code + stdout of {CLASSIFIER.name}, "
-                         f"plus both anchor classes read from guard source",
+                         f"plus the privilege guard's anchor class read from its source",
         "exit_code": proc.returncode,
         "classifier_detected": detected,
         "anchor_match": anchor,

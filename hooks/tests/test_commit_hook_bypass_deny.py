@@ -808,7 +808,7 @@ def test_plain_repository_and_non_repository_commits_are_allowed(sandbox, caller
 
 # ---------------- neither /do nor /allow bypasses the two rules ----------------
 
-CONTROL = {"main": "git stash", "subagent": "git rebase main"}  # blocked without consent
+CONTROL = {"main": "git stash", "subagent": "git stash"}  # blocked without consent
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))

@@ -2,7 +2,7 @@ r"""DRIFT GUARD — the shell fail-CLOSED fallback vs the engine's front-end tok
 
 WHY THIS FILE EXISTS
 ────────────────────
-`pretool-bash-safety.sh::_runtime_guard_fail_closed` is a regex approximation of the
+`lib/bash_safety_rules.py::runtime_fallback_denies` is a regex approximation of the
 verb families the ENGINE recognizes. It is the last link in the fail-CLOSED chain:
 when the decision engine returns any non-ALLOW verdict (INDETERMINATE sentinel, a
 crash, a missing deployment), the shell helper is the ONLY thing standing between a
@@ -33,7 +33,7 @@ semantic equivalence with the engine's lexer, and passing it does NOT mean any f
 is fail-CLOSED family-wide. The single authoritative account of the fallback's coverage
 and its limits (which lexical forms the regex fallback does not match, and why only full
 semantic equivalence with the engine's lexer is impossible) lives at
-`hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed`, with the residual gaps
+`hooks/lib/bash_safety_rules.py::runtime_fallback_denies`, with the residual gaps
 (STEP0/P3/P4/P7 fail-OPEN on a crash). Do not restate them here.
 
 SAFETY: every command below is a STRING fed to the helper. Nothing is executed, and no
@@ -42,8 +42,9 @@ fragments so this file's own source never types a full termination-pipeline phra
 same convention as test_runtime_guard.py.
 """
 import ast
+import json
 import os
-import re
+import shutil
 import subprocess
 import sys
 
@@ -63,6 +64,7 @@ from runtime_guard._core import (  # noqa: E402
     _is_kill_executor,
 )
 from runtime_guard.constants import KILL_VERBS  # noqa: E402
+from runtime_guard.config import REQUIRED_KEYS  # noqa: E402
 
 # ── vocabulary fragments (never a whole phrase in this file's source) ────────
 _EP = "/st" + "op"                       # a protected control-endpoint path
@@ -86,45 +88,19 @@ _EXTRA_KILL_FRONTENDS = frozenset({_FUSER})
 _KILL_WRAPPER_HEADS = frozenset({"xargs"})
 
 
-# ── shell-helper harness ────────────────────────────────────────────────────
-def _extract_helper():
-    """Lift `_runtime_guard_fail_closed` out of the hook so it can be called alone.
-
-    Sourcing the whole hook would run its top-level logic; the helper is a pure
-    text-predicate, so we extract just its definition. If the function is renamed or
-    restructured the extraction yields nothing and every test here fails loudly —
-    which is the correct outcome for a drift guard.
-    """
-    with open(HOOK, encoding="utf-8") as fh:
-        src = fh.read()
-    m = re.search(r"^_runtime_guard_fail_closed\(\)\s*\{.*?^\}", src, re.S | re.M)
-    assert m, (
-        "could not extract _runtime_guard_fail_closed from the hook — it was renamed "
-        "or restructured. The fail-CLOSED drift guard cannot verify coverage; fix the "
-        "extraction (or the helper) rather than deleting this test."
-    )
-    return m.group(0)
+# ── fallback harness ────────────────────────────────────────────────────────
+import bash_safety_rules  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def helper_path(tmp_path_factory):
-    p = tmp_path_factory.mktemp("failclosed") / "helper.sh"
-    p.write_text(_extract_helper(), encoding="utf-8")
-    # the extracted fragment must itself be valid bash
-    r = subprocess.run(["bash", "-n", str(p)], capture_output=True, text=True)
-    assert r.returncode == 0, f"extracted helper is not valid bash: {r.stderr}"
-    return str(p)
+def helper_path():
+    """The fallback predicate itself (lib/bash_safety_rules.py::runtime_fallback_denies)."""
+    return bash_safety_rules.runtime_fallback_denies
 
 
-def _denies(helper_path, cmd):
-    """True iff the shell fallback conservatively DENIES this raw command text."""
-    script = (
-        f"source {helper_path}\n"
-        '_runtime_guard_fail_closed "$1" && echo DENY || echo ALLOW\n'
-    )
-    r = subprocess.run(["bash", "-c", script, "_", cmd], capture_output=True, text=True)
-    assert r.returncode == 0, f"helper harness failed: {r.stderr}"
-    return r.stdout.strip() == "DENY"
+def _denies(helper, cmd):
+    """True iff the fallback conservatively DENIES this raw command text."""
+    return helper(cmd)
 
 
 def _invocation_forms(tok, args):
@@ -147,7 +123,7 @@ def test_shell_fallback_covers_every_engine_endpoint_client(helper_path, tok):
     """Every token in the engine's NET_HEADS must be denied by the shell fallback.
 
     Derived from `_core.NET_HEADS` itself: adding a client to the engine without
-    widening `_runtime_guard_fail_closed` fails HERE.
+    widening `runtime_fallback_denies` fails HERE.
     """
     for form, cmd in _invocation_forms(tok, _URL):
         assert _denies(helper_path, cmd), (
@@ -156,7 +132,7 @@ def test_shell_fallback_covers_every_engine_endpoint_client(helper_path, tok):
             f"    {cmd}\n"
             f"With a non-ALLOW engine verdict this command falls through to ALLOW — the "
             f"exact fail-open the fallback exists to close. Widen the endpoint-client "
-            f"line in hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed."
+            f"line in hooks/lib/bash_safety_rules.py::RUNTIME_FALLBACK."
         )
 
 
@@ -184,7 +160,7 @@ def test_shell_fallback_covers_every_engine_kill_frontend(helper_path, tok):
             f"    {cmd}\n"
             f"With a non-ALLOW engine verdict this command falls through to ALLOW. "
             f"Widen the process-termination line in "
-            f"hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed."
+            f"hooks/lib/bash_safety_rules.py::RUNTIME_FALLBACK."
         )
 
 
@@ -270,7 +246,7 @@ def test_no_unmirrored_kill_frontend_literals():
     assert not unknown, (
         f"FAIL-CLOSED DRIFT: _is_kill_executor recognizes new head(s) {sorted(unknown)} "
         f"that the shell fallback was never taught about. Either add each to the "
-        f"process-termination line in _runtime_guard_fail_closed and to "
+        f"process-termination line in runtime_fallback_denies and to "
         f"_EXTRA_KILL_FRONTENDS, or — if it is an argument-wrapper whose WRAPPED verb "
         f"is what gets denied — add it to _KILL_WRAPPER_HEADS with a note."
     )
@@ -337,53 +313,48 @@ def test_fallback_does_not_match_longer_unrelated_tokens(helper_path, cmd):
     assert not _denies(helper_path, cmd), (
         f"OVER-BLOCK: the fallback denies {cmd!r}, which merely contains a family name "
         f"as a substring of a longer, unrelated token. The token anchoring in "
-        f"_runtime_guard_fail_closed regressed."
+        f"runtime_fallback_denies regressed."
     )
 
 
-# ── the widened denial must remain reachable ONLY from the non-ALLOW branch ──
-def test_widened_denial_is_gated_behind_a_non_allow_verdict():
-    """The fallback must be called ONLY on the non-ALLOW path, never on a healthy ALLOW.
+# ── the widened denial must remain reachable ONLY from a missing engine verdict ──
+def _hook_rc(hooks_dir, command, env):
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    return subprocess.run(["bash", os.path.join(hooks_dir, "pretool-bash-safety.sh")], input=payload,
+                          capture_output=True, text=True, env=env, timeout=120).returncode
 
-    Coverage was widened, so a mis-wiring that let the helper run on the ALLOW path
-    would now deny a large set of benign commands. This asserts the call site stays
-    inside the `!= "ALLOW"` branch, structurally.
+
+def test_widened_denial_is_gated_behind_a_non_allow_verdict(tmp_path):
+    """The fallback runs only when the engine gave no verdict, never on a healthy ALLOW.
+
+    With a healthy engine and an empty valid config, an endpoint-client command the fallback
+    would deny passes; with the engine removed from a copy of the hooks directory, the same
+    command is denied by the fallback.
     """
-    with open(HOOK, encoding="utf-8") as fh:
-        src = fh.read()
-    calls = [m.start() for m in re.finditer(r"^\s*if _runtime_guard_fail_closed",
-                                            src, re.M)]
-    assert len(calls) == 1, (
-        f"expected exactly one _runtime_guard_fail_closed call site, found {len(calls)}."
-        " A second call site could invoke the widened denial outside the non-ALLOW "
-        "branch."
-    )
-    branch = src.index('elif [ "$_RUNTIME_GUARD_VERDICT" != "ALLOW" ]')
-    closing = src.index("\nelse\n", branch)
-    assert branch < calls[0] < closing, (
-        "the _runtime_guard_fail_closed call escaped the non-ALLOW branch — the widened "
-        "denial could now fire on a healthy ALLOW verdict."
-    )
+    runtime = tmp_path / "protected-runtime.json"
+    runtime.write_text(json.dumps({"schema_version": 1, **{k: [] for k in REQUIRED_KEYS}}))
+    (tmp_path / "home").mkdir()
+    env = dict(os.environ, HOME=str(tmp_path / "home"), CLAUDE_PROTECTED_RUNTIME_FILE=str(runtime),
+               CLAUDE_STATE_DIR=str(tmp_path))
+    cmd = "curl --version"
+    assert bash_safety_rules.runtime_fallback_denies(cmd)
+    assert _hook_rc(HOOKS_DIR, cmd, env) == 0, "the fallback fired on a healthy ALLOW verdict"
+    copy = tmp_path / "hooks"
+    shutil.copytree(HOOKS_DIR, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    os.remove(copy / "lib" / "runtime_guard.py")
+    assert _hook_rc(str(copy), cmd, env) == 2, "a missing engine did not reach the fallback"
 
 
 # ── sh/py mirror: the Layer 1.E3 namespace literal vs ATTEST_PREFIX ─────────
 PIPELINE_PY = os.path.join(HOOKS_DIR, "lib", "commit_pipeline.py")
 
 
-def test_attest_prefix_is_mirrored_in_the_bash_layer():
-    """`commit_pipeline.ATTEST_PREFIX` and Layer 1.E3's namespace must be one string.
+def test_attest_prefix_is_the_one_the_bash_layer_refuses(tmp_path):
+    """`commit_pipeline.ATTEST_PREFIX` is the namespace the dispatch-attestation rule refuses.
 
-    Layer 1.E3 builds `COMMIT_DISPATCH_ATTEST_RE` from a HAND-TYPED copy of the
-    attestation filename prefix, while the writer and the readers take theirs from
-    `ATTEST_PREFIX`. Renaming the constant without retyping the shell literal would
-    leave the Bash-layer interception pointed at a namespace nothing writes any more —
-    silently, with every other test green. Neither side is hardcoded here: both are
-    read, so this fails only on actual divergence.
-
-    SCOPE: this pins the NAMESPACE the layer watches. It does not claim the layer's
-    verb list is complete — Layer 1.E3 is a verb blacklist that raises the cost of
-    forging an attestation, and the structural barrier is the privilege guard's
-    consume-side identity requirement. See that layer's own comment block.
+    The prefix is read from the production module, never typed here, and a write into
+    `<state dir>/<prefix>x.json` must be refused under the rule's label. Renaming the
+    constant moves the rule with it; a rule pointed elsewhere fails here.
     """
     with open(PIPELINE_PY, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
@@ -396,24 +367,14 @@ def test_attest_prefix_is_mirrored_in_the_bash_layer():
     )
     assert prefix, (
         "ATTEST_PREFIX is no longer a module-level string literal in commit_pipeline.py "
-        "— the sh/py mirror cannot be checked; re-point this test rather than deleting it."
+        "— re-point this test rather than deleting it."
     )
-
-    with open(HOOK, encoding="utf-8") as fh:
-        hook_src = fh.read()
-    assignment = next(
-        (ln for ln in hook_src.splitlines()
-         if ln.startswith("COMMIT_DISPATCH_ATTEST_RE=")),
-        None,
-    )
-    assert assignment, (
-        "COMMIT_DISPATCH_ATTEST_RE= is gone from pretool-bash-safety.sh — Layer 1.E3's "
-        "namespace is no longer derivable; fix the extraction or the layer."
-    )
-    assert prefix in assignment, (
-        f"MIRROR DRIFT: commit_pipeline.ATTEST_PREFIX is {prefix!r}, which does not "
-        f"appear in the shell side's namespace assignment:\n  {assignment}\n"
-        "Layer 1.E3 would be watching a namespace the attesting hook never writes. "
-        "Retype the literal in the hook (it is built with shell-regex escaping, so it "
-        "cannot simply import the constant)."
-    )
+    runtime = tmp_path / "protected-runtime.json"
+    runtime.write_text(json.dumps({"schema_version": 1, **{k: [] for k in REQUIRED_KEYS}}))
+    (tmp_path / "home").mkdir()
+    env = dict(os.environ, HOME=str(tmp_path / "home"), CLAUDE_PROTECTED_RUNTIME_FILE=str(runtime),
+               CLAUDE_STATE_DIR=str(tmp_path))
+    payload = json.dumps({"tool_name": "Bash",
+                          "tool_input": {"command": f"echo x > {tmp_path}/{prefix}a-b.json"}})
+    r = subprocess.run(["bash", HOOK], input=payload, capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 2 and "commit-dispatch-attestation-write" in r.stderr, r.stderr

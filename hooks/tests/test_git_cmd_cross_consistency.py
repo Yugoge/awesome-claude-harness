@@ -1,9 +1,10 @@
-"""Cross-consistency tests for git-command detection across three mechanisms.
+"""Cross-consistency tests for git-command detection across two mechanisms.
 
-Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
-GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py), and
+Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 iter_git_invocations() (hooks/lib/git_command_classifier.py) agree on
-which commands are git invocations.
+which commands are git invocations. bash-safety holds no git regex: its git
+rules read the classifier, and the expected_bash column records what a raw
+anchor regex of the same class matches, asserted against GIT_COMMAND_RE.
 
 RISK-2: divergence between these mechanisms could mean a command blocked
 by one mechanism slips through another, creating a security bypass.
@@ -21,9 +22,7 @@ Legitimate divergence (marked xfail):
   mark known regex-only divergences as xfail.
 """
 
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -38,122 +37,7 @@ sys.path.insert(0, str(PROJECT_ROOT / 'hooks'))
 
 from lib.git_command_classifier import iter_git_invocations  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Extract GIT_CMD_RE from pretool-bash-safety.sh
-# ---------------------------------------------------------------------------
-
-_BASH_SAFETY_SH = PROJECT_ROOT / 'hooks' / 'pretool-bash-safety.sh'
 _PRIVILEGE_GUARD_PY = PROJECT_ROOT / 'hooks' / 'pretool-git-privilege-guard.py'
-
-
-# Assignments making up the git-global-option grammar. Matches a whole line of
-# the form  NAME='literal'  or  NAME="interpolating".
-_GRAMMAR_VAR_RE = re.compile(
-    r"""^(GIT_GLOBAL_[A-Z_]+)=(?:'([^']*)'|"([^"]*)")[ \t]*$""",
-    re.MULTILINE,
-)
-
-
-def _resolve_bash_grammar_vars(text: str) -> dict:
-    """Resolve the hook's git-global-option grammar to literal values.
-
-    The grammar is NOT one literal string; it is an interpolation chain:
-        GIT_GLOBAL_VALOPT_NAMES='git-dir|work-tree|...'
-        GIT_GLOBAL_OPT_ALT="...--(${GIT_GLOBAL_VALOPT_NAMES})..."
-        GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
-
-    It is factored this way because the `git clean` rule consumes the inner
-    pieces too (_GC_VALOPT_NAMES derives from GIT_GLOBAL_VALOPT_NAMES), so
-    there is exactly ONE copy of the value-taking option list.  Reading only
-    literal text would therefore be reading a form the hook no longer uses.
-
-    Single-quoted values are literal; double-quoted values interpolate earlier
-    entries.  An unresolvable reference is a hard error rather than a partial
-    expansion, because a partially expanded pattern would silently make the
-    corpus below test a regex the hook does not actually run.
-    """
-    values: dict = {}
-    for match in _GRAMMAR_VAR_RE.finditer(text):
-        name, single, double = match.group(1), match.group(2), match.group(3)
-        # Exactly-once is load-bearing, not tidiness.  The hook builds
-        # GIT_CMD_RE at the line where it appears, from whatever value is in
-        # effect THERE.  A later reassignment -- or a line that never executes
-        # at all, inside a heredoc or an uncalled function body -- would make
-        # last-wins resolution disagree with the hook.  The bash cross-check
-        # cannot catch that on its own: it replays these same selected lines,
-        # so it would faithfully agree with the wrong value.  Selection is the
-        # one thing the cross-check cannot validate, so it is asserted here.
-        assert name not in values, (
-            f"{name} is assigned more than once in pretool-bash-safety.sh; "
-            "the extracted grammar would not be the one the hook uses"
-        )
-        if single is not None:
-            values[name] = single
-            continue
-
-        def _substitute(ref, _name=name):
-            key = ref.group(1)
-            assert key in values, (
-                f"{_name} references ${{{key}}} before it is defined in "
-                "pretool-bash-safety.sh (assignment order changed?)"
-            )
-            return values[key]
-
-        resolved = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _substitute, double)
-        for known in values:
-            assert f"${known}" not in resolved, (
-                f"{name} holds an unbraced reference ${known} that this "
-                "resolver does not expand"
-            )
-        assert "${" not in resolved, (
-            f"{name} still holds an unexpanded reference after resolution: "
-            f"{resolved!r}"
-        )
-        values[name] = resolved
-    return values
-
-
-def _extract_bash_git_cmd_re() -> str:
-    """Read pretool-bash-safety.sh and reconstruct GIT_CMD_RE as a Python regex.
-
-    The bash file defines:
-      GIT_GLOBAL_OPT_RE="([[:space:]]+(${GIT_GLOBAL_OPT_ALT}))*"
-      GIT_CMD_RE='(^|[[:space:];&|()`])git'"$GIT_GLOBAL_OPT_RE"'[[:space:]]+'
-
-    We resolve GIT_GLOBAL_OPT_RE through its interpolation chain (see
-    _resolve_bash_grammar_vars) then assemble the full pattern string.
-    POSIX bracket-expression conversion:
-      - Compound anchor [[:space:];&|()`]  ->  [\\s;&|()`]
-      - Negated class [^[:space:];|&]      ->  [^\\s;|&]
-      - Remaining standalone [[:space:]]   ->  \\s  (used as char class in GOR body)
-    Order matters: replace the compound anchor FIRST so that the
-    [:space:] fragment inside it does not get replaced prematurely.
-    """
-    text = _BASH_SAFETY_SH.read_text()
-
-    grammar = _resolve_bash_grammar_vars(text)
-    assert 'GIT_GLOBAL_OPT_RE' in grammar, (
-        "Could not find GIT_GLOBAL_OPT_RE in pretool-bash-safety.sh"
-    )
-    git_global_opt_re = grammar['GIT_GLOBAL_OPT_RE']
-
-    # Assemble the raw bash regex string as bash does:
-    #   '(^|[[:space:];&|()`])git' + $GIT_GLOBAL_OPT_RE + '[[:space:]]+'
-    bash_re_raw = (
-        '(^|[[:space:];&|()`])git'
-        + git_global_opt_re
-        + '[[:space:]]+'
-    )
-
-    # Convert POSIX bracket expressions to Python equivalents.
-    # 1. Compound anchor (must go first to avoid premature [:space:] replacement)
-    py_re = bash_re_raw.replace('[[:space:];&|()`]', r'[\s;&|()`]')
-    # 2. Negated class inside GIT_GLOBAL_OPT_RE body
-    py_re = py_re.replace('[^[:space:];|&]', r'[^\s;|&]')
-    # 3. Remaining standalone [[:space:]] occurrences in the GOR body and suffix
-    py_re = py_re.replace('[[:space:]]', r'\s')
-
-    return py_re
 
 
 def _extract_python_git_command_re() -> str:
@@ -186,21 +70,13 @@ def _extract_python_git_command_re() -> str:
 
 # Build both regex objects once at module import time so failures are
 # visible as errors, not collection warnings.
-BASH_GIT_CMD_RE_STR = _extract_bash_git_cmd_re()
 PYTHON_GIT_COMMAND_RE_STR = _extract_python_git_command_re()
-
-BASH_GIT_CMD_PATTERN = re.compile(BASH_GIT_CMD_RE_STR)
 PYTHON_GIT_COMMAND_PATTERN = re.compile(PYTHON_GIT_COMMAND_RE_STR)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _bash_matches(command: str) -> bool:
-    """True iff GIT_CMD_RE (bash, converted to Python) matches the command."""
-    return BASH_GIT_CMD_PATTERN.search(command) is not None
-
 
 def _python_matches(command: str) -> bool:
     """True iff GIT_COMMAND_RE (privilege guard) matches the command."""
@@ -570,14 +446,13 @@ def test_cross_consistency(command, expected_bash, expected_python, expected_cla
     git where raw regex patterns do not fire but the classifier does).
     Non-xfail cases must have all three return the same expected value.
     """
-    bash_result = _bash_matches(command)
     python_result = _python_matches(command)
     classifier_result = _classifier_matches(command)
 
     # Each mechanism is checked against its expected value independently.
-    assert bash_result == expected_bash, (
-        f"GIT_CMD_RE (bash) mismatch for {command!r}: "
-        f"got {bash_result}, expected {expected_bash}"
+    assert python_result == expected_bash, (
+        f"anchor regex mismatch for {command!r}: "
+        f"got {python_result}, expected {expected_bash}"
     )
     assert python_result == expected_python, (
         f"GIT_COMMAND_RE (python guard) mismatch for {command!r}: "
@@ -660,48 +535,14 @@ def test_a_shell_c_string_is_seen_by_the_classifier_only():
     `nested` channel, as they read a path-qualified invocation.
     """
     command = "bash -c 'git status'"
-    assert _bash_matches(command) is False
     assert _python_matches(command) is False
     assert _classifier_matches(command) is True
 
 
 def test_regex_patterns_are_extractable():
-    """Sanity: both regex patterns could be extracted at module load time."""
-    assert BASH_GIT_CMD_RE_STR, "GIT_CMD_RE extraction returned empty string"
+    """Sanity: the regex pattern could be extracted at module load time."""
     assert PYTHON_GIT_COMMAND_RE_STR, "GIT_COMMAND_RE extraction returned empty string"
-    # Both should compile without error (already done at module level, but
-    # re-assert here so failures are reported as test failures, not import errors)
-    re.compile(BASH_GIT_CMD_RE_STR)
     re.compile(PYTHON_GIT_COMMAND_RE_STR)
-
-
-def test_grammar_resolution_matches_bash_expansion():
-    """Python-side resolution of GIT_GLOBAL_OPT_RE must equal bash's own.
-
-    The previous extractor captured a single-quoted literal, so what it read
-    WAS the hook's value by construction.  _resolve_bash_grammar_vars()
-    emulates shell interpolation instead, and an emulation that drifted from
-    bash would make every corpus row above assert against a pattern the hook
-    does not actually run -- silent wrongness, which is the exact failure mode
-    the RISK-2 guard exists to prevent.  So let bash expand the very same
-    assignment lines and require byte equality.
-    """
-    text = _BASH_SAFETY_SH.read_text()
-    assignments = [m.group(0) for m in _GRAMMAR_VAR_RE.finditer(text)]
-    assert assignments, "No GIT_GLOBAL_* grammar assignments found"
-
-    proc = subprocess.run(
-        ['bash', '-c', "\n".join(assignments) + '\nprintf %s "$GIT_GLOBAL_OPT_RE"'],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    resolved = _resolve_bash_grammar_vars(text)['GIT_GLOBAL_OPT_RE']
-    assert proc.stdout == resolved, (
-        "Python resolution diverges from bash expansion:\n"
-        f"  bash:   {proc.stdout!r}\n"
-        f"  python: {resolved!r}"
-    )
 
 
 def test_bash_and_python_patterns_agree_on_anchor():
@@ -711,47 +552,30 @@ def test_bash_and_python_patterns_agree_on_anchor():
     shell separator/operator characters. Verify the anchor character sets
     are functionally equivalent (both include ; & | ( ` and whitespace).
     """
-    assert BASH_GIT_CMD_RE_STR.startswith('('), (
-        "BASH GIT_CMD_RE does not start with a '(' group"
-    )
     assert PYTHON_GIT_COMMAND_RE_STR.startswith('('), (
         "PYTHON GIT_COMMAND_RE does not start with a '(' group"
     )
 
     # Both patterns must recognise 'git status' at the start of a string
-    assert _bash_matches("git status"), (
-        "Bash GIT_CMD_RE must match 'git status' at start of string"
-    )
     assert _python_matches("git status"), (
         "Python GIT_COMMAND_RE must match 'git status' at start of string"
     )
 
     # Both patterns must recognise 'git' after a semicolon
-    assert _bash_matches("; git status"), (
-        "Bash GIT_CMD_RE must match 'git' after ';'"
-    )
     assert _python_matches("; git status"), (
         "Python GIT_COMMAND_RE must match 'git' after ';'"
     )
 
     # Both patterns must recognise 'git' after '&&' (& is in anchor set)
-    assert _bash_matches("foo && git status"), (
-        "Bash GIT_CMD_RE must match 'git' after '&&'"
-    )
     assert _python_matches("foo && git status"), (
         "Python GIT_COMMAND_RE must match 'git' after '&&'"
     )
 
     # Neither pattern must match path-qualified /usr/bin/git at start (documented limitation)
-    assert not _bash_matches("/usr/bin/git status"), (
-        "Bash GIT_CMD_RE must NOT match /usr/bin/git at start of string "
-        "(anchor omits '/'; classifier compensates at runtime)"
-    )
     assert not _python_matches("/usr/bin/git status"), (
         "Python GIT_COMMAND_RE must NOT match /usr/bin/git at start of string "
         "(anchor omits '/'; classifier compensates at runtime)"
     )
 
     # Neither must match 'gitk' (different basename)
-    assert not _bash_matches("gitk"), "Bash GIT_CMD_RE must NOT match 'gitk'"
     assert not _python_matches("gitk"), "Python GIT_COMMAND_RE must NOT match 'gitk'"

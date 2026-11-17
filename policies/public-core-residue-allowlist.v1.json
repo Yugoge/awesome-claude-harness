@@ -393,13 +393,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# harness home -> cwd), never the author literal <author-path>.\""
     },
     {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "c31356b145e8f0ee",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "_any_git_has_subcmd() — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "hooks/pretool-cp-checkin.py",
       "fingerprint": "274a66e8ff5d5c66",
       "ordinal": 1,

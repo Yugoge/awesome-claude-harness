@@ -4443,7 +4443,8 @@ def _anchor_explicit_nonprotected_input(tokens: list, cfg: dict,
 
 # ── Top-level evaluate ───────────────────────────────────────────────────────
 
-def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
+def evaluate(command: str, cwd_base: Optional[str] = None, cfg: Optional[dict] = None) -> Verdict:
+    """The verdict on `command`; `cfg`, when given, replaces the data file (bash-safety's daemon rule passes one)."""
     if command is None:
         return ALLOW
     if len(command) > MAX_COMMAND_CHARS:
@@ -4491,7 +4492,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # payload re-evaluates to ALLOW, so this never over-blocks).
     for payload, pcwd, pcwd_det in frontend_payloads:
         if payload and payload != command:
-            pv = evaluate(payload, pcwd if pcwd_det else None)
+            pv = evaluate(payload, pcwd if pcwd_det else None, cfg)
             if pv[0] == "BLOCK":
                 return pv
 
@@ -4505,12 +4506,12 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
                    if site.context == ("top", "pipe_shell")]
     for payload in dict.fromkeys(shell_code):
         if payload != command:
-            pv = evaluate(payload, cwd_base)
+            pv = evaluate(payload, cwd_base, cfg)
             if pv[0] == "BLOCK":
                 return pv
 
     # STEP 1 — load config; fail closed if unavailable.
-    cfg = _load_config()
+    cfg = cfg if cfg is not None else _load_config()
     if cfg is None:
         # fail-closed must also see the peeled tails (a front-end-wrapped danger
         # family under an absent/corrupt config still blocks).
@@ -4524,7 +4525,7 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
         if payload and payload != command:
             # recurse under the runner's effective cwd (None when indeterminate,
             # which makes relative launch/build payloads fail closed downstream)
-            pv = evaluate(payload, pcwd if pcwd_det else None)
+            pv = evaluate(payload, pcwd if pcwd_det else None, cfg)
             if pv[0] == "BLOCK":
                 return pv
 

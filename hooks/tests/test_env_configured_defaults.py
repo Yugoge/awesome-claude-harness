@@ -1,8 +1,8 @@
-"""Built-in defaults that used to carry one owner's machine values are now empty
-or derived; such values come back only through the environment (normally the
-untracked settings overlay's env). Both halves are pinned here: with every knob
-unset the rules are generic and safe, and with synthetic stand-ins set
-explicitly each rule behaves as it did for the old built-in values.
+"""Built-in defaults carry no machine values: they are empty or derived, and
+such values come only through the environment (normally the untracked settings
+overlay's env). Both halves are pinned here: with every knob unset the rules
+are generic and safe, and with synthetic stand-ins set explicitly each rule
+applies to them.
 
 Covers hooks/pretool-bash-safety.sh, hooks/lib/checkpoint-core.sh and
 scripts/prune-orphaned-workflow-bookmarks.sh. Every run uses a scratch HOME,
@@ -75,7 +75,7 @@ def test_unset_daemon_prefix_is_inert_and_never_matches_every_command(sandbox):
     r = hook(env, "systemctl restart demo-daemon-acct-a")
     assert r.returncode == 2
     assert "daemon-restart-prohibition" not in r.stderr
-    assert "forbidden for production services" in r.stderr  # the systemctl guard still fires
+    assert "refused for production services" in r.stderr  # the systemctl guard still fires
     assert "gated by Layer 1.A" not in r.stderr
     r = hook(env, "timeout 5 bash -c 'echo restart'")
     assert "daemon-restart-wrapper" not in r.stderr
@@ -93,7 +93,7 @@ def test_stand_in_daemon_is_gated_and_grantable(sandbox):
     assert r.returncode == 2 and "daemon-restart-wrapper" in r.stderr
     r = hook(env, "systemctl restart demo-unit")
     assert r.returncode == 2
-    assert "(and demo-daemon-* is gated by Layer 1.A)" in r.stderr
+    assert "(and demo-daemon-* takes the daemon-restart grant)" in r.stderr
 
     flag = tmp_path / "grants" / "claude-allow-daemon-restart-acct-a.flag"
     flag.write_text(json.dumps({"target": "acct-a", "expires_at": "2099-01-01T00:00:00Z",
@@ -144,19 +144,18 @@ def test_unset_grant_helper_guidance_reads_sensibly(sandbox):
 
 def test_process_family_rules(sandbox):
     _, env = sandbox
-    r = hook(env, "docker restart demo-prod")
-    assert "containers is forbidden" not in r.stderr  # no family configured: inert
+    assert hook(env, "docker restart demo-prod").returncode == 0
     r = hook(env, "killall claude")
     assert r.returncode == 2 and "Killing claude/docker processes" in r.stderr
     r = hook(env, "pkill -f demo-daemon")
     assert "Killing" not in r.stderr
 
     env = {**env, **STAND_INS}
-    assert hook(env, "docker restart demo-web-dev").returncode == 0
-    r = hook(env, "docker restart demo-prod")
-    assert r.returncode == 2
-    assert "Stopping/restarting production demo containers is forbidden" in r.stderr
-    assert "Hint: only demo-web-dev is allowed." in r.stderr
+    # The family's docker stop/restart/rm rule is deleted (owner decision): a family container is not refused
+    # here; `docker rm` is settings.json's deny and `docker kill` of the family the runtime guard's.
+    for command in ("docker restart demo-web-dev", "docker restart demo-prod", "docker stop demo-prod"):
+        assert hook(env, command).returncode == 0, command
+    assert "Bash(docker rm:*)" in json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
     r = hook(env, "killall demo-daemon")
     assert r.returncode == 2 and "Killing demo/claude/docker processes" in r.stderr
 
@@ -229,7 +228,7 @@ def test_default_hard_bans_block_running_the_scripts(sandbox, command, name):
     for value in (None, ""):  # unset and empty both mean the default
         r = hook(env, command, **({} if value is None else {"CLAUDE_HARD_BANNED_SCRIPTS": value}))
         assert r.returncode == 2, (value, r.stderr)
-        assert f"hard-banned script '{name}' is PERMANENTLY FORBIDDEN" in r.stderr
+        assert f"hard-banned script '{name}' is refused" in r.stderr
 
 
 # An explicit value (e.g. one the migration wrote from the previous built-in rules) keeps the old meaning:
@@ -264,16 +263,22 @@ def test_hard_ban_empty_entries_never_match_and_session_dirs_ban_stays(sandbox):
         assert hook(env, "ls notes.txt", CLAUDE_HARD_BANNED_SCRIPTS=value).returncode == 0, value
     r = hook(env, "ls demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
     assert r.returncode == 2 and "hard-banned script 'demo-restart'" in r.stderr
-    r = hook(env, "cat session_dirs.txt")
-    assert r.returncode == 2 and "session_dirs.txt is PERMANENTLY FORBIDDEN" in r.stderr
+    # The session_dirs.txt ban is settings.json's permissions.deny, for Bash, Read and Edit alike.
+    deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    assert {"Bash(*session_dirs.txt*)", "Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
 
 
 def test_harness_home_resolves_from_the_hook_location(sandbox):
+    """The bulk-commit sentinel is minted only by its UserPromptSubmit hook: running the writer from Bash is
+    refused wherever it sits, the harness home's own copy included, while a bare read of the sentinel passes."""
     tmp_path, env = sandbox
     env = {**env, "CLAUDE_HOME": str(tmp_path / "elsewhere")}
     canonical = "source venv/bin/activate && python3 {}/scripts/write-bulk-commit-sentinel.py"
-    assert hook(env, canonical.format(REPO)).returncode == 0
+    r = hook(env, canonical.format(REPO))
+    assert r.returncode == 2 and "bulk-commit-sentinel-write" in r.stderr
     assert hook(env, canonical.format(tmp_path / "elsewhere")).returncode == 2
+    assert hook(env, "python3 {}/scripts/write-bulk-commit-sentinel.py".format(REPO)).returncode == 2
+    assert hook(env, "cat {}/claude-bulk-commit-sentinel-x.json".format(tmp_path / "state")).returncode == 0
 
 
 # ---------------- checkpoint-core.sh ----------------

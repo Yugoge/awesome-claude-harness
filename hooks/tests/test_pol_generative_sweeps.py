@@ -819,16 +819,22 @@ def _covering_keys(declared, reason, shapes):
     return keys
 
 
-def test_ac_r02_10_predicate_is_single_sourced():
+def test_ac_r02_10_predicate_is_single_sourced(tmp_path):
     """The hook must EXECUTE the same file the test READS. A copy in either
-    consumer would make the invariant vacuous."""
-    hook = open(H.HOOK, encoding="utf-8").read()
-    assert "pol_degraded_removal_reference.ere" in hook
+    consumer would make the invariant vacuous: with the analyzer gone, a plain
+    command is denied exactly when the shared file's pattern names it."""
+    rules = os.path.join(os.path.dirname(H.HOOK), "lib", "bash_safety_rules.py")
     pattern = G.degraded_removal_reference_pattern()
-    assert pattern not in hook, "hook inlines a copy of the shared predicate"
-    test_source = open(__file__, encoding="utf-8").read()
-    generator_source = open(G.__file__, encoding="utf-8").read()
-    assert pattern not in test_source and pattern not in generator_source
+    for consumer in (H.HOOK, rules, __file__, G.__file__):
+        assert pattern not in open(consumer, encoding="utf-8").read(), consumer
+    hooks = tmp_path / "hooks"
+    shutil.copytree(os.path.dirname(H.HOOK), hooks, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    os.remove(hooks / "lib" / "bash_execution_boundary.py")
+    hook = str(hooks / "pretool-bash-safety.sh")
+    marker = "ls zz-single-source-marker"
+    assert H.run_hook_command(marker, hook=hook)[0] == 0
+    (hooks / "lib" / "pol_degraded_removal_reference.ere").write_text("zz-single-source-marker\n")
+    assert H.run_hook_command(marker, hook=hook)[0] == 2
 
 
 def test_ac_r02_10_domain_is_non_vacuous(sweeps):

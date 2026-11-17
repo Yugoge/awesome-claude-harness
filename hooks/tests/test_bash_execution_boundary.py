@@ -805,6 +805,7 @@ def test_fixture_bytes_are_unchanged():
 
 
 def test_hook_consults_the_analyzer():
-    source = open(HOOK, encoding="utf-8").read()
-    assert "bash_execution_boundary.py" in source
-    assert "bash-execution-boundary.v1" in source
+    """A removal the analyzer alone can see is refused with the analyzer's own verdict."""
+    code, _out, err = run_hook_command("rm qa-consults-analyzer.txt")
+    assert code == BLOCK
+    assert "removal-policy — FORBIDDEN_REMOVAL" in err
