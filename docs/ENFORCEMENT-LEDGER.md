@@ -359,6 +359,7 @@ no per-rule budget exists.
 | S-019 | permission-layer-secret-file-denies | advisory | unexercised | source-level | settings.json:278 @79c79db1 | tests/test_secret_file_denies.py | source-level |
 | S-023 | permission-layer-home-secret-denies | advisory | unexercised | source-level | settings.json:253 @aa685f4c | tests/test_home_secret_denies.py | source-level |
 | S-020 | permission-layer-skill-deny-exact-name | detected | exercised | component-tested | settings.json:249 @d1abc798 | hooks/tests/test_skill_deny_coverage.py | component-tested |
+| S-021 | permission-layer-ask:kubectl-apply-create-npm-publish | advisory | unexercised | source-level | settings.json:269 @e606277d | tests/test_permission_ask_dry_run.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -374,8 +375,9 @@ no per-rule budget exists.
   not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
   under `--codex`, and `subagentstop-codex-enforce.py` (R-022, run by the producer gate H-092)
   requires the ledger entry that call's PostToolUse (H-050) writes.
-  Since `@263d9c7a` (OB-L07, S-014) `permissions.ask` carries nineteen rules; none is a backstop for
-  this class: they only keep the new `git -C`, `rg --files` and `make -n` allow entries from reaching
+  `permissions.ask` is no longer empty: OB-L07 (`@263d9c7a`, S-014) added nineteen rules and OB-L21
+  (`@3698c04e`, S-021) the entries for the three verbs that left deny. None of these is a backstop for
+  this class: OB-L07's only keep the new `git -C`, `rg --files` and `make -n` allow entries from reaching
   another verb, option or evaluation. `git -C <dir> push --force` and `git -C <dir> reset --hard` still match no deny
   and ask because no allow entry covers them.
 - **S-020** — OB-L20: each human-only command's Skill deny is the exact `Skill(<stem>)`. The docs give
@@ -387,6 +389,41 @@ no per-rule budget exists.
   `hooks/tests/test_skill_deny_coverage.py` models that matcher and pins every Skill deny exact, the human-only
   commands refused with and without arguments, and docs, devops, commit-message, domain-model, testing and codex
   not denied. `scripts/install/render-settings` SWITCH_PERMISSIONS carries `Skill(harness)` to match.
+- **S-021** — OB-L21 (owner decision): `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and
+  `Bash(npm publish:*)` left `permissions.deny` for `permissions.ask`, because a whole-verb deny
+  refused the harmless dry runs (`kubectl apply --dry-run=client -f k8s/deploy.yaml`,
+  `kubectl create deployment web --image=nginx --dry-run=client -o yaml`, `npm publish --dry-run`) and
+  "An allow rule can't carve an exception out of a deny rule" (code.claude.com/docs/en/permissions.md,
+  "Manage permissions"). In ask they are spelled `Bash(k*ubectl apply)`, `Bash(k*ubectl apply *)`,
+  `Bash(k*ubectl create)`, `Bash(k*ubectl create *)`, `Bash(n*pm publish)` and `Bash(n*pm publish *)`
+  (`@e606277d`). Measured on Claude Code 2.1.326, not documented: the CLI decides a rule that matches the
+  command exactly (no `*`, or `P:*` against the bare `P`) before any wildcard match, and matches ask and
+  allow rules past `sudo` (with its options) and `env`. The first spelling, `Bash(npm publish:*)` in ask
+  (`@3698c04e`), therefore matched `sudo npm publish` past `sudo` in the exact tier and outranked the
+  wildcard deny `Bash(sudo:*)`: `sudo npm publish`, `sudo -u root npm publish`, `timeout 5 sudo npm
+  publish`, `sudo env npm publish`, `nohup sudo npm publish`, `FOO=1 sudo npm publish`, `sudo kubectl
+  apply`, `sudo kubectl create`, `sudo -E kubectl create` and the piped `echo a | sudo ...` forms fell
+  from deny to ask. With a `*` inside the program name every entry sits in the wildcard tier, where
+  `Bash(sudo:*)` is decided first, and all of them are denied again (measured). The bare and the
+  with-arguments entry are both needed: after an inner `*`, a trailing ` *` no longer matches the bare
+  verb (measured: `npm publish` ran unasked with `Bash(n*pm publish *)` alone). The inner `*` adds
+  prompts only (`nXpm publish`, `npx npm publish` ask; `kubectl applyset`, `kubectl create-foo` and
+  `npm publisher` keep their base decision). The tested forms of the three verbs now prompt, a dry run or a real run
+  alike: plain, `--dry-run=none`, `--dry-run=false`, after `&&` or `;`, after `cd`, after a leading
+  assignment, under `timeout` or `nohup`, inside `$(...)` (tests/test_permission_ask_dry_run.py).
+  `Bash(npm:*)` in allow also matches `npm publish`, and the ask entries win:
+  "Rules are evaluated in order: deny, then ask, then allow ... a matching ask rule prompts even when
+  a more specific allow rule also matches the same call" (same page). No allow entry covers
+  `kubectl apply` or `kubectl create`. `Bash(kubectl delete:*)` and `Bash(yarn publish:*)` stay
+  deny. Measured gaps that still run unasked, on the base and after this change alike, outside
+  OB-L21: `bash -c "npm publish"` (allow `Bash(bash:*)`), `npm --registry=URL publish` (a flag before
+  the verb; allow `Bash(npm:*)`), `npm pub` (npm's alias; allow `Bash(npm:*)`), and
+  `echo publish | xargs npm` (allow `Bash(xargs:*)`); a prefix rule stops none of them. The test models
+  the documented order, the subcommand split and the measured tiers, and holds the model to the decisions
+  measured on Claude Code 2.1.326 (`claude -p --permission-mode default` against a local mock Messages
+  API that returns each command as a Bash tool call, with a throwaway HOME and stand-in `npm`/`kubectl`)
+  for the base, the first spelling and this one. That harness is not in this repository, so the row keeps
+  `advisory` / `source-level`: no verifying test here drives a host.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
   finds no git in suppresses its own backstop.
