@@ -369,8 +369,8 @@ OPTION_SPELLINGS_PASS = [
     "cp -t/tmp/out a.txt b.txt",
     "cp --target-directory=/tmp/out ./claude-*",
     "mv --target=/tmp/out a.txt",
-    "GIT_WORK_TREE=/tmp/w git -C /tmp/r checkout HEAD -- .",
-    "git -c core.worktree=/tmp/w -C /tmp/r checkout HEAD -- .",
+    "GIT_WORK_TREE=/tmp/w git -C /tmp/r checkout HEAD -- a.txt",
+    "git -c core.worktree=/tmp/w -C /tmp/r checkout HEAD -- a.txt",
     "tar -xC/tmp/out -f /tmp/a.tar",
     "tar -xf /tmp/a.tar --directory=/tmp/out",
     "sort -o out.txt <F>",
@@ -392,6 +392,22 @@ def test_an_option_spelling_that_writes_the_flag_is_refused(sandbox, command):
 def test_the_same_option_spellings_elsewhere_pass(sandbox, command):
     proc = run(sandbox, _spell(sandbox, command))
     assert proc.returncode == 0, (command, proc.stderr)
+
+
+# The work-tree spellings with a wide path away from the state directory do not trip the consent-flag rule; since
+# OB-L12 the working-tree git rules read `git -C <dir> checkout <ref> -- .` as the wide checkout it is and refuse it
+# under their own rule (hooks/tests/test_bash_safety_worktree_git_view.py), so only that refusal may appear.
+WIDE_CHECKOUT_ELSEWHERE = [
+    "GIT_WORK_TREE=/tmp/w git -C /tmp/r checkout HEAD -- .",
+    "git -c core.worktree=/tmp/w -C /tmp/r checkout HEAD -- .",
+]
+
+
+@pytest.mark.parametrize("command", WIDE_CHECKOUT_ELSEWHERE)
+def test_wide_checkout_elsewhere_is_not_a_consent_flag_write(sandbox, command):
+    proc = run(sandbox, _spell(sandbox, command))
+    assert RULE not in proc.stderr, (command, proc.stderr)
+    assert proc.returncode == 2 and "git checkout <ref> -- ." in proc.stderr, (command, proc.stderr)
 
 
 # Standard tools that plant the flag by writing names they read from a file (an index, a template, a stored gzip
