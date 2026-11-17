@@ -204,20 +204,43 @@ def test_explicit_report_outside_control_repo_is_rejected(tmp_path: Path) -> Non
         )
 
 
-def test_command_and_analyst_contract_expose_partial_results() -> None:
-    root = Path(__file__).parents[1]
-    command = (root / "commands" / "commit.md").read_text(encoding="utf-8")
-    analyst = (root / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
-    for text in (command, analyst):
-        assert "REPOSITORY_PLAN" in text
-        assert "partially_committed" in text
-        assert "repository_results" in text
-        assert "cross-repository atomicity" in text
-    assert "resolve-commit-repos.py" in command
-    assert "one single-use commit grant per" in command
-    assert "repository_plan_invalid" in analyst
-    assert "report-digest" in analyst
-    assert "not_attempted" in analyst
+def _analyst_status_shape() -> dict:
+    """The normal-mode status block agents/changelog-analyst.md's Output schema spells, as JSON."""
+    analyst = (Path(__file__).parents[1] / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
+    section = analyst[analyst.index("### Output schema"):analyst.index("### Structured output sentinel")]
+    return json.loads(section.split("```json\n", 1)[1].split("```", 1)[0])
+
+
+def test_the_partial_results_the_analyst_reports_pass_the_status_schema_g2_checks() -> None:
+    """Every commit_status and repository status the analyst's Output schema offers, and a partial result
+    in that shape (a landed commit, the failure, the rest not attempted, remaining_repos), pass
+    changelog-status.v1 as the producer-stop gate validates it; an unknown field does not."""
+    from hooks.lib import contract_runtime
+
+    shape = _analyst_status_shape()
+    choices = lambda value: [choice.strip() for choice in value.split("|")]  # noqa: E731
+    sha = "a" * 40
+    for status in choices(shape["commit_status"]):
+        assert contract_runtime.validate({"commit_status": status}, "changelog-status.v1")["ok"], status
+    entry_keys = set(shape["repository_results"][0])
+    statuses = choices(shape["repository_results"][0]["status"])
+    assert {"committed", "failed", "not_attempted"} <= set(statuses), statuses
+    landed = {"order": 0, "repo_root": "/r0", "status": "committed", "expected_head": sha, "commit_sha": sha,
+              "commits": [{"commit_sha": sha, "source_key": "PRIMARY", "sources": ["t"], "paths": ["a.txt"]}],
+              "push_gate_written": True}
+    failed = {"order": 1, "repo_root": "/r1", "status": "failed", "expected_head": sha, "push_gate_written": False,
+              "failure_code": "push_gate_failed", "failure_reason": "token write failed"}
+    later = {"order": 2, "repo_root": "/r2", "status": "not_attempted", "expected_head": sha,
+             "push_gate_written": False}
+    assert set(landed) <= entry_keys | {"failure_code", "failure_reason"}
+    record = {"commit_status": "partially_committed", "repository_results": [landed, failed, later],
+              "remaining_repos": ["/r1", "/r2"], "failure_code": "push_gate_failed",
+              "failure_reason": "token write failed"}
+    assert set(record) == set(shape)
+    verdict = contract_runtime.validate(record, "changelog-status.v1")
+    assert verdict["ok"] and verdict["errors"] == [], verdict
+    drifted = contract_runtime.validate({**record, "atomic": True}, "changelog-status.v1")
+    assert not drifted["ok"] and any("atomic" in error for error in drifted["errors"]), drifted
 
 
 def test_real_task_shape_is_consumable_by_control_and_nested_repos(tmp_path: Path) -> None:
