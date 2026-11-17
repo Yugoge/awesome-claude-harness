@@ -110,17 +110,53 @@ def tool_streak_path(session_id: str) -> Path:
 
 def write_tool_streak(session_id: str, state: dict | None) -> None:
     """The one writer of the tool streak: `state` replaces the record, None
-    removes it. hooks/pretool-orchestrator-gate.py calls it for its update and
-    its Agent reset, hooks/prompt-workflow.py for the reset at each prompt; it
-    lives here, the one library both import. Best-effort, never raises."""
-    path = tool_streak_path(session_id)
-    try:
-        if state is None:
+    removes it and the log of the calls that ran (tool_ran_path). hooks/
+    pretool-orchestrator-gate.py calls it for its update and its Agent reset,
+    hooks/prompt-workflow.py for the reset at each prompt; it lives here, the
+    one library both import. Best-effort, never raises."""
+    if state is not None:
+        try:
+            tool_streak_path(session_id).write_text(json.dumps(state))
+        except OSError:
+            pass
+        return
+    for path in (tool_streak_path(session_id), tool_ran_path(session_id)):
+        try:
             path.unlink()
-        else:
-            path.write_text(json.dumps(state))
+        except OSError:
+            pass
+
+
+def tool_ran_path(session_id: str) -> Path:
+    """The main agent's calls that ran this turn, one tool_use_id per line,
+    appended by hooks/posttool-orchestrator-ran.py on the CLI's PostToolUse or
+    PostToolUseFailure event. The CLI fires one of the two for every call it
+    ran, failed and interrupted runs included, and neither for a call a
+    PreToolUse hook refused."""
+    return Path(harness_state_dir(), f"claude-tool-ran-{session_id}.log")
+
+
+def record_tool_ran(session_id: str, tool_use_id) -> None:
+    """Append one ran call's tool_use_id to tool_ran_path. Best-effort, never raises."""
+    if not isinstance(tool_use_id, str) or not tool_use_id or "\n" in tool_use_id or "\r" in tool_use_id:
+        return
+    try:
+        with tool_ran_path(session_id).open("a", encoding="utf-8") as handle:
+            handle.write(tool_use_id + "\n")
     except OSError:
         pass
+
+
+def read_tool_ran(session_id: str) -> set | None:
+    """The tool_use_ids record_tool_ran appended this turn: empty when no call
+    has run, None when the log cannot be read (the caller then gives nothing
+    back). Never raises."""
+    try:
+        return {line for line in tool_ran_path(session_id).read_text(encoding="utf-8").splitlines() if line}
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ except Exception:
 
 EVENT = "PostToolUseFailure"
 RULES = (
+    Rule('orchestrator-ran', 'posttool-orchestrator-ran.py', timeout=10),  # the calls that ran (pretool-orchestrator-gate.py)
     Rule('allowlist-consume', 'posttool-allowlist-consume.py', ('Bash',)),
     Rule('codex-skill-ledger', 'posttool-codex-skill-ledger.py', ('Skill',)),
 )

@@ -38,7 +38,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 ## Implementation
 
-**Bash budget.** The orchestrator gate (`hooks/pretool-orchestrator-gate.py`) refuses a sixth Bash call since the last Agent dispatch or human prompt. Steps 1-4 use at most four before BA's dispatch: the start-function fallback (only when the hook output is gone), the spec resolver (only with a spec), Step 2's call, Step 3's one `git log`.
+**Bash budget.** The orchestrator gate (`hooks/pretool-orchestrator-gate.py`) refuses a sixth Bash call since the last Agent dispatch or human prompt; a call another hook refused (the checklist lock, bash-safety) does not count. Steps 1-4 use at most four before BA's dispatch: the start-function fallback (only when the hook output is gone), the spec resolver (only with a spec), Step 2's call, Step 3's one `git log`.
 
 ### Step 1: Parse Development Requirement
 

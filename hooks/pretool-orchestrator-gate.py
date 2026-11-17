@@ -48,9 +48,24 @@ commands/<command>.md (in flight across an update, D15; detected as
 pretool-todo-validate.py's _in_flight detects it) reads each refusal in
 origin/master's (2acc29b's) wording; the rule and the counts are the same.
 
+A counted call that did not run gives its slot back (OB-L02). The gate
+counts at PreToolUse, before the verdicts of the other hooks (the launcher's
+other rules, pretool-bash-safety.sh in its own process) are known, so each
+counted call is kept in "reserved" by the tool_use_id the CLI sets, and every
+later counted call first settles them: a call that ran is in the log
+hooks/posttool-orchestrator-ran.py appends on the CLI's PostToolUse or
+PostToolUseFailure event (fired for every call the CLI ran, a non-zero exit
+included, never for a call a PreToolUse hook refused) and stays counted; a
+call the transcript holds an is_error tool_result for (the CLI's record of a
+refused call) and that is not in the log is given back; any other call (still
+running, its result not written yet, no transcript) stays counted until a
+later settlement. No text of a result, an input or a command decides it. The
+prompt reset removes the log with the state file.
+
 State file: <state dir>/claude-tool-streak-<sid>.json --
   {"schema_version": 2, "per_tool_counts": {"Edit": 1},
-   "bash_consecutive": {"last_tool": "Bash", "count": 2}}
+   "bash_consecutive": {"last_tool": "Bash", "count": 2},
+   "reserved": [{"id": "toolu_...", "tool": "Bash"}]}
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -70,7 +85,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import is_subagent_context  # noqa: E402
 from lib.allowlist import (  # noqa: E402
-    has_do_consent, match_sentinel_grant_for_tool, tool_streak_path, write_tool_streak)
+    has_do_consent, match_sentinel_grant_for_tool, read_tool_ran, tool_streak_path, write_tool_streak)
 
 ALWAYS_ALLOWED = {
     "Agent",
@@ -137,7 +152,8 @@ def get_session_id(data: dict) -> str:
 
 
 def _fresh_state() -> dict:
-    return {"schema_version": 2, "per_tool_counts": {}, "bash_consecutive": {"last_tool": "", "count": 0}}
+    return {"schema_version": 2, "per_tool_counts": {}, "bash_consecutive": {"last_tool": "", "count": 0},
+            "reserved": []}
 
 
 def _parse_streak_state(data) -> dict:
@@ -154,7 +170,11 @@ def _parse_streak_state(data) -> dict:
     # (counts.get(tool, 0) + 1) — fail-open: drop non-int entries rather than
     # wedge the gate.
     per_tool = {k: v for k, v in per_tool.items() if isinstance(v, int) and not isinstance(v, bool)}
-    return {"schema_version": 2, "per_tool_counts": per_tool, "bash_consecutive": bash_con}
+    reserved = data.get("reserved")
+    reserved = [r for r in reserved if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]
+                and isinstance(r.get("tool"), str)] if isinstance(reserved, list) else []
+    return {"schema_version": 2, "per_tool_counts": per_tool, "bash_consecutive": bash_con,
+            "reserved": reserved}
 
 
 def read_streak_state(state_file: Path) -> dict:
@@ -166,21 +186,119 @@ def read_streak_state(state_file: Path) -> dict:
     return _fresh_state()
 
 
-def update_streak(session_id: str, tool_name: str) -> int:
+# How much of the transcript's end settle() reads: a reserved call is of this
+# turn, so its result is near the end; one not found there stays counted.
+TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024
+
+
+def refused_results(transcript_path, ids) -> dict:
+    """{tool_use_id: is_error} for the ids whose tool_result the CLI recorded
+    in the main transcript: a top-level user record (not a sidechain) whose
+    message content holds a tool_result block with that tool_use_id. Only the
+    record's structure is read, never a result's text; text a command printed
+    sits inside a block's content and is never a block of its own. Empty on
+    any error."""
+    found: dict = {}
+    if not ids or not isinstance(transcript_path, str) or not transcript_path:
+        return found
+    try:
+        with open(transcript_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
+            if size > TRANSCRIPT_TAIL_BYTES:
+                handle.readline()  # a partial first line
+            for raw in handle:
+                if not any(i.encode() in raw for i in ids):
+                    continue
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "user" or record.get("isSidechain"):
+                    continue
+                message = record.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if (isinstance(block, dict) and block.get("type") == "tool_result"
+                            and block.get("tool_use_id") in ids):
+                        found[block["tool_use_id"]] = block.get("is_error") is True
+    except (OSError, ValueError):
+        return {}
+    return found
+
+
+def settle(state: dict, session_id: str, transcript_path) -> None:
+    """Give back the slot of each reserved call that is over and did not run.
+
+    A reserved call in the ran log (hooks/posttool-orchestrator-ran.py) ran and
+    stays counted. One with an is_error tool_result in the transcript and not
+    in the log was refused before it ran (by another hook, or by this gate)
+    and is given back: its Bash streak or per-tool count goes down by one.
+    One whose result has no error but is not in the log stays counted. Any
+    other stays reserved and counted. An unreadable log gives nothing back."""
+    reserved = state.get("reserved") or []
+    if not reserved:
+        return
+    ran = read_tool_ran(session_id)
+    if ran is None:
+        return
+    ended = refused_results(transcript_path, {r["id"] for r in reserved if r["id"] not in ran})
+    keep = []
+    for r in reserved:
+        if r["id"] in ran:
+            continue
+        if r["id"] not in ended:
+            keep.append(r)
+            continue
+        if not ended[r["id"]]:
+            continue
+        if r["tool"] == "Bash":
+            bash = state["bash_consecutive"]
+            if bash["last_tool"] == "Bash" and bash["count"] > 0:
+                bash["count"] -= 1
+        else:
+            counts = state["per_tool_counts"]
+            if counts.get(r["tool"], 0) > 0:
+                counts[r["tool"]] -= 1
+    state["reserved"] = keep
+
+
+def _write_state(session_id: str, state: dict) -> None:
+    """Persist the state; "reserved" is written only while it holds a call, so
+    a state with nothing reserved is the schema-2 record it always was."""
+    if not state.get("reserved"):
+        state = {k: v for k, v in state.items() if k != "reserved"}
+    write_tool_streak(session_id, state)
+
+
+def _reserve(state: dict, tool_name: str, tool_use_id) -> None:
+    """Keep the counted call for settle(); a payload without a tool_use_id
+    (an older CLI) leaves its call counted for good."""
+    if isinstance(tool_use_id, str) and tool_use_id:
+        state["reserved"].append({"id": tool_use_id, "tool": tool_name})
+
+
+def update_streak(session_id: str, tool_name: str, data: dict | None = None) -> int:
     if tool_name in READ_ONLY_ALLOWED:
         return 1  # never blocked, never counted; no state write (NB2 no-clobber)
 
+    data = data if isinstance(data, dict) else {}
     state = read_streak_state(tool_streak_path(session_id))
 
     if tool_name in ALWAYS_ALLOWED:
         if tool_name == "Bash":
+            settle(state, session_id, data.get("transcript_path"))
             bash = state["bash_consecutive"]
             if bash["last_tool"] == "Bash":
                 bash["count"] += 1
             else:
                 bash["last_tool"] = "Bash"
                 bash["count"] = 1
-            write_tool_streak(session_id, state)
+            _reserve(state, tool_name, data.get("tool_use_id"))
+            _write_state(session_id, state)
             return bash["count"]
         else:
             # Non-Bash whitelist (incl. Agent, Read, TodoWrite, Glob, Grep,
@@ -201,9 +319,11 @@ def update_streak(session_id: str, tool_name: str) -> int:
         # leave bash_consecutive byte-identical (the unchanged value read from
         # disk) — do NOT reset or rebuild it. Persist ONLY the per_tool_counts
         # increment.
+        settle(state, session_id, data.get("transcript_path"))
         counts = state["per_tool_counts"]
         counts[tool_name] = counts.get(tool_name, 0) + 1
-        write_tool_streak(session_id, state)
+        _reserve(state, tool_name, data.get("tool_use_id"))
+        _write_state(session_id, state)
         return counts[tool_name]
 
 
@@ -343,10 +463,14 @@ def main():
         try:
             state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
+            # A reserved call whose count the reset cleared is no longer in a
+            # count settle() could give it back to.
+            state["reserved"] = [r for r in state["reserved"] if r["tool"] != "Bash"]
             if overnight_window_open(data):
                 state["per_tool_counts"] = {
                     name: n for name, n in state["per_tool_counts"].items() if name in RETRIEVAL_TOOLS}
-            write_tool_streak(sid, state)
+                state["reserved"] = [r for r in state["reserved"] if r["tool"] in RETRIEVAL_TOOLS]
+            _write_state(sid, state)
         except Exception:
             pass
         sys.exit(0)
@@ -377,7 +501,7 @@ def main():
     # for a later legitimate new-file Write. Replicate write-guard's "Write only
     # creates new files" predicate and skip counting such a call — it cannot
     # succeed via Write anyway, so it is not a real direct action. A Write that
-    # another guard blocks still counts (fail-strict).
+    # another guard blocks counts until settle() sees it was refused (OB-L02).
     if tool_name == "Write":
         target = (data.get("tool_input") or {}).get("file_path") or ""
         try:
@@ -391,7 +515,7 @@ def main():
         except OSError:
             pass
 
-    count = update_streak(sid, tool_name)
+    count = update_streak(sid, tool_name, data)
     enforce_streak_limit(tool_name, count, data)
     sys.exit(0)
 
