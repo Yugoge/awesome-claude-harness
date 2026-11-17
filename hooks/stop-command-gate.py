@@ -18,8 +18,8 @@ payload on stdin and decides, in order:
       blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
   (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
-      ending in "?" whose question the span neither asked with an answered AskUserQuestion nor recorded
-      in a file it wrote; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
+      ending in "?" with a question the span neither asked with an AskUserQuestion the owner answered
+      nor recorded in a spec it wrote through spec-write.py; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
       command's text as the span loaded it (_loaded_lacks: a step or the
       close-rating question an update added or reworded after the session
       loaded its text is not asked of it; a cycle whose loaded text names or
@@ -791,54 +791,138 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
 
 def p_text_question(span, payload) -> list[str]:
     """R7 (D28): in a /spec or /dev-family span, a turn whose last main-agent text ends with a question asks it in
-    text, unless that question was already asked or recorded in the span (_settled_question). The agent actions
-    that clear it: asking with AskUserQuestion (and getting an answer), recording the question in a file, or
-    ending without the question."""
+    text, unless every question of that line was already asked or recorded in the span (_settled). The agent
+    actions that clear it: asking with AskUserQuestion and getting the owner's answer, recording the question in
+    the spec through spec-write.py, or ending without the question."""
     text = payload.get("last_assistant_message")
     text = span.last_text() if text is None else text
-    if not _lib_round().ends_with_question(text) or _settled_question(span, payload, text):
+    if not _lib_round().ends_with_question(text) or _settled(span, payload, text):
         return []
     return [f"{span.command}: the turn ends with a question in text; ask it with AskUserQuestion, or end without it."]
 
 
-_RECORD_LIMIT = 4 << 20  # a written file larger than this is not read for a recorded question
+SPEC_WRITER = HARNESS / "scripts" / "spec-write.py"
+SPECS_DIR = "docs/dev/specs"
+_RECORD_LIMIT = 4 << 20  # a spec larger than this is not read for a recorded question
+_SHELL_OPS = frozenset(("&&", "||", ";", "|", "&"))
+_INTERPRETER = re.compile(r"(?:\S*/)?python3?(?:\.[0-9]+)?")
+_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S.*)$", re.M)
+_ITEM = re.compile(r"^(?:(?:[-*+]|[0-9]+[.)])\s+)?(?:\[[ xX]\]\s+)?")
+_EDIT_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path"}
+_UNANSWERED = re.compile(r"rejected|doesn't want to proceed|did not answer|skipped", re.I)
 
 
-def _settled_question(span, payload, text) -> bool:
-    """The question of the text's last line (requirement_round.question_sentence: after its last ": ", else the
-    whole line) is one the span already asked or recorded, so the line reports it rather than asks it:
-      asked     it equals a questions[].question of a main-agent AskUserQuestion of this span whose tool_result
-                came back ok (answered; the owner's rejection or an error asked nothing);
-      recorded  it appears verbatim in a project file the span wrote (command_span.write_set over every record
-                of the span, no tree excluded): an Edit-family target with an ok result, or a path the span's
-                Bash commands name (spec-write.py's --spec) whose file changed since the span opened.
-    A previous span's AskUserQuestion or write never counts."""
-    question = _lib_round().question_sentence(text)
-    if not question:
+def _settled(span, payload, text) -> bool:
+    """Every question the text's last line asks (requirement_round.line_questions: each "?" sentence, or the text
+    after its last ": " when the label before it asks nothing) is one the span already asked or recorded, so the
+    line reports it rather than asks it:
+      asked     a form equals a questions[].question of a main-agent AskUserQuestion of this span that the owner
+                answered (_answered);
+      recorded  a form equals a whole line, or a list item's text, of a spec this span wrote (_span_specs).
+    A previous span's AskUserQuestion or write never counts; a line with a bare "?" is never settled."""
+    questions = _lib_round().line_questions(text)
+    if not questions:
         return False
-    for call in span.calls("AskUserQuestion"):
-        asked = call.input.get("questions")
-        if call.ok and isinstance(asked, list) and any(
-                isinstance(q, dict) and str(q.get("question") or "").strip() == question for q in asked):
-            return True
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    found = command_span.write_set(span.transcript_path, root, span.start_line, excluded=(),
-                                   named_excluded=())
-    if found is None:
-        return False
-    opened = span.opened_at()
-    for rel, named in [(rel, False) for rel in sorted(found.written)] + [(rel, True) for rel in sorted(found.named)]:
-        path = Path(root) / rel
+    asked = _answered(span)
+    pending = [forms for forms in questions if not asked.intersection(forms)]
+    if not pending:
+        return True
+    root = os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
+    recorded = set()
+    for spec in _span_specs(span, root):
         try:
-            info = path.stat()
-            if not path.is_file() or info.st_size > _RECORD_LIMIT \
-                    or named and (opened is None or info.st_mtime < opened):
-                continue
-            if question in path.read_text(encoding="utf-8", errors="replace"):
-                return True
+            if os.path.getsize(spec) <= _RECORD_LIMIT:
+                recorded |= {_ITEM.sub("", line.strip(), count=1).strip()
+                             for line in Path(spec).read_text(encoding="utf-8", errors="replace").splitlines()}
         except OSError:
             continue
-    return False
+    return all(recorded.intersection(forms) for forms in pending)
+
+
+def _answered(span) -> set:
+    """The questions the owner answered in the span: each questions[].question of a main-agent AskUserQuestion with
+    an ok tool_result whose recorded response (the CLI's toolUseResult) holds a non-empty answer to it, no
+    afkTimeoutMs or followUp, no annotation marking it unanswered, and no rejection in the result text, as
+    requirement_round.handle and close_rating.handle read a response; a rejection, Skip, AFK or error answers none."""
+    found = set()
+    for use in span.uses("AskUserQuestion"):
+        if not use.ok or use.result_at is None:
+            continue
+        response = command_span.recorded_result(span.transcript_path, use)
+        answers, notes = response.get("answers"), response.get("annotations")
+        if not isinstance(answers, dict) or response.get("afkTimeoutMs") or response.get("followUp") \
+                or _UNANSWERED.search(span.result_text(use.id)):
+            continue
+        for question in use.input.get("questions") or ():
+            asked = question.get("question") if isinstance(question, dict) else None
+            note = notes.get(asked) if isinstance(notes, dict) and isinstance(asked, str) else None
+            if isinstance(asked, str) and isinstance(answers.get(asked), str) and answers[asked].strip() \
+                    and not (isinstance(note, dict) and note.get("unanswered")):
+                found.add(asked.strip())
+    return found
+
+
+def _in_specs(path: str, root: str) -> str | None:
+    """The real path of a spec monolith (a .md file directly in the project's docs/dev/specs/), else None."""
+    real = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
+    specs = os.path.join(root, SPECS_DIR)
+    return real if os.path.dirname(real) == specs and real.endswith(".md") and os.path.isfile(real) else None
+
+
+def _span_specs(span, root: str) -> set:
+    """The specs the span wrote: the --spec of each Bash call of the span with an ok result that runs the harness's
+    scripts/spec-write.py (an interpreter at a command's start, then the writer by its real path), named again by
+    the writer's own `spec-write: <create|append> <path>` line in that result; and each ok Write, Edit or MultiEdit
+    target. Each must resolve, symlinks followed, to a spec in the project's docs/dev/specs/ (_in_specs). A path
+    a command merely names is no write."""
+    found = set()
+    writer = os.path.realpath(SPEC_WRITER)
+    for call in span.calls("Bash"):
+        command = call.input.get("command")
+        if not call.ok or not isinstance(command, str):
+            continue
+        printed = {os.path.realpath(p.strip()) for p in _WRITER_LINE.findall(span.result_text(call.id))}
+        for arg in _spec_args(command, writer):
+            real = _in_specs(arg, root)
+            if real is not None and real in printed:
+                found.add(real)
+    for call in span.calls(*_EDIT_TOOLS):
+        target = call.input.get(_EDIT_TOOLS[call.name])
+        real = _in_specs(target, root) if call.ok and isinstance(target, str) and target else None
+        if real is not None:
+            found.add(real)
+    return found
+
+
+def _spec_args(command: str, writer: str) -> list[str]:
+    """The --spec values of the spec-write.py runs in a shell command's lines up to its first heredoc."""
+    found = []
+    for line in command.splitlines():
+        try:
+            tokens = shlex.split(line.split("<<", 1)[0])
+        except ValueError:
+            tokens = []
+        start = True
+        for k, token in enumerate(tokens):
+            if token in _SHELL_OPS:
+                start = True
+                continue
+            if start and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+                continue
+            if start and _INTERPRETER.fullmatch(token) and k + 1 < len(tokens) \
+                    and os.path.realpath(os.path.expanduser(tokens[k + 1])) == writer:
+                rest = tokens[k + 2:]
+                for j, arg in enumerate(rest):
+                    if arg in _SHELL_OPS:
+                        break
+                    if arg == "--spec" and j + 1 < len(rest):
+                        found.append(rest[j + 1])
+                    elif arg.startswith("--spec="):
+                        found.append(arg[len("--spec="):])
+            start = False
+        if "<<" in line:
+            break
+    return found
 
 
 def _lib_round():

@@ -369,14 +369,19 @@ no per-rule budget exists.
   asks the requirement round, a Stop whose last main-agent text (the Stop payload's `last_assistant_message`, else
   the span's last assistant text) ends with `?` or `？` on its last non-empty line is the gap `<command>: the turn ends
   with a question in text; ask it with AskUserQuestion, or end without it.` `/spec` is checked for this gap only and
-  stays out of `GATED_COMMANDS`; a `/close` span is not checked. The last line is not counted when its question
-  sentence (the text after its last `: `, else the whole line; one holding no word character never matches) was
-  already asked or recorded in the span: it equals a `questions[].question` of a main-agent AskUserQuestion of the
-  span whose tool_result came back ok (an owner's rejection or an error asks nothing), or it appears verbatim in a
-  project file of the span's write set (`command_span.write_set`, no tree excluded: an Edit-family target with an
-  ok result, or a path a Bash command names, such as `spec-write.py --spec`, whose file changed since the span
-  opened). A previous span's AskUserQuestion or write never counts. The gate still writes nothing; asking with
-  AskUserQuestion, recording the question in a file, or ending without the question, clears it.
+  stays out of `GATED_COMMANDS`; a `/close` span is not checked. The line is not counted when every question it
+  asks (`requirement_round.line_questions`: each sentence ending in `?`, or the text after its last `: ` when no
+  part of the label before it starts with an asking word; a bare `?` is never settled) was already asked or
+  recorded in the span: it equals a `questions[].question` of a main-agent AskUserQuestion of the span whose
+  recorded response holds a non-empty answer to it, with no `afkTimeoutMs`, `followUp`, unanswered annotation or
+  rejection text (a rejection, Skip, AFK or error answers nothing); or it equals a whole line, or a list item's
+  text, of a spec the span wrote: the `--spec` of an ok Bash run of the harness's `scripts/spec-write.py` that the
+  writer's own `spec-write: <create|append> <path>` line confirms, or an ok Write/Edit/MultiEdit target, each
+  resolving (symlinks followed) to a `.md` file directly in the project's `docs/dev/specs/`. A path a command
+  merely names, any other file, and a previous span's AskUserQuestion or write never count. **Its real strength:**
+  the asking-word label test is lexical, and a question the span records in its spec through the writer is
+  exempt by design. The gate still writes nothing; asking with AskUserQuestion, recording the question in the
+  spec, or ending without the question, clears it.
 - **S-010** — P13-1 R1 (D18): the code-token lint in `requirement_round.check_round` refuses a round whose question,
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level

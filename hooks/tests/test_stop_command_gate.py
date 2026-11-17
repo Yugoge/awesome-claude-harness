@@ -2486,11 +2486,13 @@ def test_r7_a_session_whose_text_asks_no_round_is_not_held_to_it(env):
 
 
 # ---------------------------------------------------------------- R7: a question already asked or recorded (A6-RC1)
-# The last line's question sentence (after its last ": ", else the whole line) is not asked in text when an
-# AskUserQuestion of the span asked it and came back answered, or when a file the span wrote holds it verbatim.
+# Every question of the last line (each "?" sentence, or the text after its last ": " when the label before it asks
+# nothing) is not asked in text when an AskUserQuestion of the span asked it and the owner answered, or when a
+# spec the span wrote through spec-write.py (or an Edit-family write in docs/dev/specs/) holds it as a whole line.
 RETRIES = "Should retries be capped?"
 RECORDED = f"Spec written.\nOpen questions recorded in section 4: {RETRIES}"
 SPEC_FILE = "docs/dev/specs/retry-policy.md"
+WRITER = str(REPO / "scripts" / "spec-write.py")
 
 
 def r7_span(env, command):
@@ -2503,25 +2505,36 @@ def r7_span(env, command):
     assert run(env) == (0, "")
 
 
-def spec_write(env, section4: str, ok: bool = True):
-    """The spec written through its one writer, a Bash command naming the spec, the file on disk."""
-    path = env.project / SPEC_FILE
+def spec_write(env, section4: str, ok: bool = True, spec: str = SPEC_FILE):
+    """The spec written through its one writer: the file on disk, the writer's Bash run and the line it prints."""
+    path = env.project / spec
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"# Retry policy\n\n## Section 4: Open questions\n\n{section4}\n\n---\n", encoding="utf-8")
-    env.tx.tool("Bash", {"command": f'python3 "/harness/scripts/spec-write.py" append --spec {SPEC_FILE} --section 4 '
+    env.tx.tool("Bash", {"command": f'python3 "{WRITER}" append --spec {spec} --section 4 '
                                     f"<<'SPEC_TEXT'\n{section4}\nSPEC_TEXT"},
-                ok=ok, result=f"spec-write: append {path}")
+                ok=ok, result=f"spec-write: append {path}" if ok else "spec-write: refused")
 
 
-def ask_retries(env, answered: bool = True):
-    env.tx.tool("AskUserQuestion", {"questions": [{"question": RETRIES, "header": "Retries", "multiSelect": False,
-                                                   "options": [{"label": "Yes", "description": "cap at 3"},
-                                                               {"label": "No", "description": "unbounded"}]}]},
-                ok=answered,
-                result=f'User has answered your questions: "{RETRIES}"="Yes". You can now continue.' if answered
-                else "The user doesn't want to proceed with this tool use. The tool use was rejected.")
+def ask_retries(env, answered: bool = True, result: str | None = None, response: dict | None = None):
+    """The main agent's AskUserQuestion of RETRIES: the CLI's result text and its recorded response."""
+    questions = [{"question": RETRIES, "header": "Retries", "multiSelect": False,
+                  "options": [{"label": "Yes", "description": "cap at 3"},
+                              {"label": "No", "description": "unbounded"}]}]
+    if result is None:
+        result = (f'User has answered your questions: "{RETRIES}"="Yes". You can now continue.' if answered
+                  else "The user doesn't want to proceed with this tool use. The tool use was rejected.")
+    if response is None:
+        response = {"questions": questions, "answers": {RETRIES: "Yes"}} if answered else None
+    env.tx.tool("AskUserQuestion", {"questions": questions}, ok=answered, result=result,
+                extra={"toolUseResult": response} if response is not None else None)
 
 
+def refused(env, command="dev"):
+    code, text = run(env)
+    return code == 2 and f"- {command}: {QUESTION_GAP}\n" in text
+
+
+# ---- allowed
 @pytest.mark.parametrize("command", ["spec", "dev"])
 def test_r7_a_question_recorded_in_a_file_the_span_wrote_is_not_asked_in_text(env, command):
     r7_span(env, command)
@@ -2534,10 +2547,11 @@ def test_r7_a_question_recorded_in_a_file_the_span_wrote_is_not_asked_in_text(en
 @pytest.mark.parametrize("command", ["spec", "dev"])
 def test_r7_a_question_recorded_through_the_write_tool_is_not_asked_in_text(env, command):
     r7_span(env, command)
-    path = env.project / "docs" / "open-questions.md"
-    path.write_text(f"1. {RETRIES}\n", encoding="utf-8")
-    env.tx.tool("Write", {"file_path": str(path), "content": f"1. {RETRIES}\n"})
-    env.tx.say(f"Recorded in docs/open-questions.md: {RETRIES}")
+    path = env.project / SPEC_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"## Section 4\n\n1. {RETRIES}\n", encoding="utf-8")
+    env.tx.tool("Write", {"file_path": str(path), "content": f"## Section 4\n\n1. {RETRIES}\n"})
+    env.tx.say(f"Recorded in {SPEC_FILE}: {RETRIES}")
     assert run(env) == (0, "")
 
 
@@ -2549,6 +2563,7 @@ def test_r7_a_question_asked_and_answered_with_askuserquestion_is_not_asked_in_t
     assert run(env) == (0, "")
 
 
+# ---- still refused
 @pytest.mark.parametrize("command", ["spec", "dev"])
 def test_r7_still_refuses_a_question_asked_nowhere_and_recorded_nowhere(env, command):
     r7_span(env, command)
@@ -2565,16 +2580,28 @@ def test_r7_still_refuses_a_question_the_owner_rejected_then_asked_in_text(env, 
     r7_span(env, command)
     ask_retries(env, answered=False)
     env.tx.say(ending)
-    code, text = run(env)
-    assert code == 2 and f"- {command}: {QUESTION_GAP}\n" in text
+    assert refused(env, command)
+
+
+@pytest.mark.parametrize("result, response", [
+    ("The user doesn't want to proceed with this tool use. The tool use was rejected.", None),  # no is_error
+    ("The user did not answer.", {"answers": {}, "afkTimeoutMs": 60000}),  # AFK
+    (f'User has answered your questions: "{RETRIES}"="".', {"answers": {RETRIES: ""}}),  # Skip: no answer
+    (f'User has answered your questions: "{RETRIES}"="Yes".', None),  # no recorded response to read
+])
+def test_r7_still_refuses_a_question_whose_askuserquestion_got_no_answer(env, result, response):
+    r7_span(env, "dev")
+    env_response = response if response is not None else {}
+    ask_retries(env, answered=True, result=result, response=env_response)
+    env.tx.say(f"Asked with AskUserQuestion: {RETRIES}")
+    assert refused(env)
 
 
 def test_r7_still_refuses_a_preference_question_ending_a_dev_turn(env):
     r7_span(env, "dev")
     spec_write(env, f"- {RETRIES}")
     env.tx.say("Two approaches fit.\nWhich approach do you prefer?")
-    code, text = run(env)
-    assert code == 2 and f"- dev: {QUESTION_GAP}\n" in text
+    assert refused(env)
 
 
 @pytest.mark.parametrize("command", ["spec", "dev"])
@@ -2582,18 +2609,15 @@ def test_r7_still_refuses_a_recorded_claim_the_file_does_not_hold(env, command):
     r7_span(env, command)
     spec_write(env, "- Should the backoff be exponential?")
     env.tx.say(RECORDED)
-    code, text = run(env)
-    assert code == 2 and f"- {command}: {QUESTION_GAP}\n" in text
+    assert refused(env, command)
 
 
 @pytest.mark.parametrize("command", ["spec", "dev"])
 def test_r7_still_refuses_a_recorded_claim_whose_spec_write_failed(env, command):
-    """A Bash write that came back in error names the file but, the file older than the span, wrote nothing."""
     r7_span(env, command)
     spec_write(env, f"- {RETRIES}", ok=False)
-    os.utime(env.project / SPEC_FILE, (T0.timestamp() - 3600,) * 2)
     env.tx.say(RECORDED)
-    assert run(env)[0] == 2
+    assert refused(env, command)
 
 
 @pytest.mark.parametrize("command", ["spec", "dev"])
@@ -2604,13 +2628,11 @@ def test_r7_still_refuses_a_question_answered_in_a_previous_span(env, command):
     assert run(env) == (0, "")
     r7_span(env, command)  # a new span of the same command
     env.tx.say(f"Asked with AskUserQuestion: {RETRIES}")
-    code, text = run(env)
-    assert code == 2 and f"- {command}: {QUESTION_GAP}\n" in text
+    assert refused(env, command)
 
 
 @pytest.mark.parametrize("command", ["spec", "dev"])
 def test_r7_still_refuses_a_question_recorded_only_before_the_span(env, command):
-    """A file the span's Bash names but did not change since the span opened is no record the span wrote."""
     path = env.project / SPEC_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"- {RETRIES}\n", encoding="utf-8")
@@ -2618,25 +2640,112 @@ def test_r7_still_refuses_a_question_recorded_only_before_the_span(env, command)
     r7_span(env, command)
     env.tx.tool("Bash", {"command": f"cat {SPEC_FILE}"}, result=f"- {RETRIES}")
     env.tx.say(RECORDED)
-    assert run(env)[0] == 2
+    assert refused(env, command)
 
 
 def test_r7_a_bare_question_mark_matches_no_record(env):
     r7_span(env, "dev")
-    spec_write(env, f"- {RETRIES}")
+    spec_write(env, f"- {RETRIES}\n- ?")
     env.tx.say("Open questions: ?")
-    assert run(env)[0] == 2
+    assert refused(env)
 
 
-@pytest.mark.parametrize("text, sentence", [
-    (RECORDED, RETRIES), (f"Asked with AskUserQuestion: {RETRIES}", RETRIES), ("Shall I go on?", "Shall I go on?"),
-    ("a: b: Which one?\n\n", "Which one?"), ("Open questions: ?", ""), ("", "")])
-def test_r7_question_sentence_is_the_text_after_the_last_colon_of_the_last_line(text, sentence):
-    assert importlib.import_module("lib.requirement_round").question_sentence(text) == sentence
+# ---- still refused: the verifier's bypasses of the first fix (B1-B9)
+@pytest.mark.parametrize("ending", ["Should I deploy to production?",
+                                    "Recorded in notes.txt: Should I deploy to production?"])
+def test_r7_b1_a_question_echoed_into_a_project_file_is_no_record(env, ending):
+    r7_span(env, "dev")
+    (env.project / "notes.txt").write_text("Should I deploy to production?\n", encoding="utf-8")
+    env.tx.tool("Bash", {"command": 'echo "Should I deploy to production?" > notes.txt'})
+    env.tx.say(ending)
+    assert refused(env)
 
 
-def test_r7_write_set_keeps_the_bookkeeping_trees_out_of_bash_names_unless_asked(env):
-    env.tx.command("spec", "x", body="the spec text: its requirement-round is asked")
-    env.tx.tool("Bash", {"command": f"python3 spec-write.py append --spec {SPEC_FILE} --section 4"})
-    assert SPEC_FILE not in command_span.write_set(env.tx.path, env.project).named
-    assert SPEC_FILE in command_span.write_set(env.tx.path, env.project, named_excluded=()).named
+def test_r7_b2_a_question_written_to_a_file_outside_the_specs_is_no_record(env):
+    r7_span(env, "dev")
+    path = env.project / "docs" / "dev" / "x.md"
+    path.write_text("Should I deploy to production?\n", encoding="utf-8")
+    env.tx.tool("Write", {"file_path": str(path), "content": "Should I deploy to production?\n"})
+    env.tx.say("Recorded in docs/dev/x.md: Should I deploy to production?")
+    assert refused(env)
+
+
+@pytest.mark.parametrize("shell", ["touch {old}", "cp {old} {new}"])
+def test_r7_b3_b4_touching_or_copying_a_spec_that_holds_the_question_is_no_record(env, shell):
+    old, new = "docs/dev/specs/old.md", "docs/dev/specs/new.md"
+    (env.project / "docs" / "dev" / "specs").mkdir(parents=True)
+    (env.project / old).write_text(f"- {RETRIES}\n", encoding="utf-8")
+    r7_span(env, "dev")
+    (env.project / new).write_text(f"- {RETRIES}\n", encoding="utf-8")
+    os.utime(env.project / old)
+    env.tx.tool("Bash", {"command": shell.format(old=old, new=new)})
+    env.tx.say(RECORDED)
+    assert refused(env)
+
+
+def test_r7_b5_a_spec_symlinked_out_of_the_project_is_no_record(env):
+    outside = env.tmp / "outside.md"
+    outside.write_text(f"- {RETRIES}\n", encoding="utf-8")
+    link = env.project / "docs" / "dev" / "specs" / "link.md"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(outside)
+    r7_span(env, "dev")
+    env.tx.tool("Write", {"file_path": str(link), "content": f"- {RETRIES}\n"})
+    env.tx.say(RECORDED)
+    assert refused(env)
+
+
+def test_r7_b6_a_bash_read_of_a_spec_changed_in_the_span_is_no_write(env):
+    r7_span(env, "dev")
+    path = env.project / SPEC_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"- {RETRIES}\n", encoding="utf-8")  # changed after the span opened, by no call of the span
+    env.tx.tool("Bash", {"command": f"cat {SPEC_FILE}"}, result=f"- {RETRIES}")
+    env.tx.say(RECORDED)
+    assert refused(env)
+
+
+def test_r7_b7_a_question_inside_a_longer_line_of_the_spec_is_no_record(env):
+    r7_span(env, "dev")
+    spec_write(env, '    answer = input("Proceed? [y/N] ")')
+    env.tx.say("Proceed?")
+    assert refused(env)
+
+
+def test_r7_b8_a_question_before_the_last_colon_is_still_asked(env):
+    r7_span(env, "dev")
+    spec_write(env, "- Ready?")
+    env.tx.say("Which option do you want, A or B, before I continue: Ready?")
+    assert refused(env)
+
+
+def test_r7_every_question_sentence_of_the_last_line_must_be_settled(env):
+    r7_span(env, "dev")
+    spec_write(env, f"- {RETRIES}")
+    env.tx.say(f"Shall I go on? Recorded in section 4: {RETRIES}")
+    assert refused(env)
+    env.tx.say(f"Done. Recorded in section 4: {RETRIES}")
+    assert run(env) == (0, "")
+
+
+def test_r7_a_spec_write_the_command_only_mentions_is_no_record(env):
+    r7_span(env, "dev")
+    path = env.project / SPEC_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"- {RETRIES}\n", encoding="utf-8")
+    env.tx.tool("Bash", {"command": f'echo python3 "{WRITER}" append --spec {SPEC_FILE} > /dev/null'},
+                result=f"spec-write: append {path}")
+    env.tx.say(RECORDED)
+    assert refused(env)
+
+
+@pytest.mark.parametrize("text, forms", [
+    (RECORDED, [[f"Open questions recorded in section 4: {RETRIES}", RETRIES]]),
+    (f"Asked with AskUserQuestion: {RETRIES}", [[f"Asked with AskUserQuestion: {RETRIES}", RETRIES]]),
+    ("Shall I go on?", [["Shall I go on?"]]),
+    ("Which option do you want, A or B, before I continue: Ready?",
+     [["Which option do you want, A or B, before I continue: Ready?"]]),
+    (f"Shall I go on? Recorded: {RETRIES}", [["Shall I go on?"], [f"Recorded: {RETRIES}", RETRIES]]),
+    ("Open questions: ?", [["Open questions: ?"]]), ("?", None), ("Done.", []), ("", [])])
+def test_r7_line_questions_gives_each_question_sentence_and_its_reported_form(text, forms):
+    assert importlib.import_module("lib.requirement_round").line_questions(text) == forms

@@ -3,7 +3,7 @@ the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskU
 the one writer of the owner's answers. ``asked`` is the one "asked" predicate (close_rating's too): asked, never
 answered (D9b), so Skip, AFK, a denial or an error result count and record nothing. The checks G1 (``ask_first``),
 G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends_with_question``,
-``question_sentence``) decide by live here."""
+``line_questions``) decide by live here."""
 from __future__ import annotations
 
 import hashlib
@@ -366,12 +366,31 @@ def ends_with_question(text) -> bool:
     return bool(lines) and lines[-1].endswith(("?", "？"))
 
 
-def question_sentence(text) -> str:
-    """R7: the question the last non-empty line of the turn's text asks: the text after its last ": ", else the
-    whole line, stripped; "" when there is no line or the sentence holds no word character (a bare "?")."""
+# The first word of a clause that asks: a label before ": " that starts with one asks a question of its own.
+_ASKING = frozenset("which what who whom whose why when where how should shall do does did can could would will "
+                    "is are was were may might must am have has had want".split())
+_SENTENCE_END = re.compile(r"(?<=[.!?？。！])\s+")
+
+
+def line_questions(text) -> list | None:
+    """R7: the questions the last non-empty line of the turn's text asks, each as the forms that settle it: every
+    sentence of the line ending in "?" or a full-width one gives [the sentence] and, when the text after its last
+    ": " is a question and no ": "-separated part before it starts with an asking word (_ASKING), [the sentence,
+    that text]; the label is then a report ("Recorded in section 4: ..."), not a question. [] when the line asks
+    nothing; None when a question holds no word character (a bare "?"), which nothing settles."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    if not lines:
-        return ""
-    _head, colon, tail = lines[-1].rpartition(": ")
-    sentence = (tail if colon else lines[-1]).strip()
-    return sentence if re.search(r"\w", sentence) else ""
+    found = []
+    for sentence in _SENTENCE_END.split(lines[-1]) if lines else ():
+        sentence = sentence.strip()
+        if not sentence.endswith(("?", "？")):
+            continue
+        if not re.search(r"\w", sentence):
+            return None
+        forms = [sentence]
+        label, colon, tail = sentence.rpartition(": ")
+        tail = tail.strip()
+        if colon and re.search(r"\w", tail) and not any(
+                (part.split() or [""])[0].lower().strip(",;") in _ASKING for part in label.split(": ")):
+            forms.append(tail)
+        found.append(forms)
+    return found
