@@ -61,6 +61,12 @@ except ImportError:  # hooks/lib itself is on sys.path
     from subagent import is_subagent_context
 
 
+# The /do consent flag, <state dir>/<prefix><session id><suffix>: written by
+# hooks/prompt-workflow.py on a typed /do, read by has_do_consent below. Its
+# one definition; lib/bash_safety_rules.py reads the name from here.
+DO_CONSENT_FLAG_PREFIX = "claude-orchestrator-consent-"
+DO_CONSENT_FLAG_SUFFIX = ".flag"
+
 # The grant directory, <state dir>/claude-grants, resolved once at import.
 SENTINEL_GRANT_DIR = harness_state_dir() + "/claude-grants"
 
@@ -97,7 +103,7 @@ def has_do_consent(payload) -> bool:
         sid = payload.get("session_id")
         if not isinstance(sid, str) or not sid:
             return False
-        flag = Path(harness_state_dir(), f"claude-orchestrator-consent-{sid}.flag")
+        flag = Path(harness_state_dir(), f"{DO_CONSENT_FLAG_PREFIX}{sid}{DO_CONSENT_FLAG_SUFFIX}")
         return flag.read_text().strip() == "true"
     except Exception:
         return False

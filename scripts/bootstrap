@@ -38,7 +38,9 @@
 #      (render-settings render).
 #   4. create only when absent: <home>/logs/, the TMPDIR named by the rendered
 #      settings (mode 1777), <home>/private-literals.txt (empty, mode 0600), the
-#      protected-runtime file of hooks/lib/runtime_guard/config.py (empty lists).
+#      protected-runtime file of hooks/lib/runtime_guard/config.py (empty lists); an
+#      existing schema-1 file missing some of its keys gets them as empty lists (the
+#      original kept as <file>.bak-<timestamp>), any other unusable one fails the step.
 #   5. git checkout: install the hooks/git-hooks/ files marked so on their second line
 #      (pre-commit, pre-push) into the hooks directory git uses, only when it is this
 #      repository's own: under its git common dir, or a core.hooksPath from its local
@@ -51,7 +53,8 @@
 #
 # Re-running is safe: an existing venv, overlay, private-literal list and
 # protected-runtime file are never rewritten (only --force re-creates the venv,
-# after a backup); the filter registration, the render and the hook install are
+# after a backup; a protected-runtime file missing keys gets them added, after a
+# backup); the filter registration, the render and the hook install are
 # idempotent.
 # Exit codes: 0 = success; 1 = a step failed (its message names it).
 set -uo pipefail
@@ -380,9 +383,15 @@ case "$(python3 "$RENDERER" literals)" in
 esac
 
 # Path and keys come from hooks/lib/runtime_guard/config.py itself
-# (CLAUDE_PROTECTED_RUNTIME_FILE, else $HOME/.config/claude/protected-runtime.json).
+# (CLAUDE_PROTECTED_RUNTIME_FILE, else $HOME/.config/claude/protected-runtime.json), and so does
+# the reading of an existing file (config._read_config). A schema-1 file that lacks some keys
+# (one written before a key existed) is repaired: each missing key is added as an empty list,
+# every existing key and entry is kept, and the original is first copied to
+# <file>.bak-<UTC timestamp> (mode 0600). Any other unusable file (not JSON, not an object,
+# another schema_version, a key that is not a list, a symlink to repair) is left untouched and
+# step 4 fails naming the defect and the repair.
 if ! python3 -B -I - "$HOME_DIR/hooks/lib/runtime_guard" <<'PY'
-import json, os, sys
+import json, os, stat, sys, tempfile, time
 sys.path.insert(0, sys.argv[1])
 import config
 path = config.DATA_FILE_PATH
@@ -392,9 +401,53 @@ if "CLAUDE_PROTECTED_RUNTIME_FILE" in os.environ:
 else:
     shown = os.path.join("~", os.path.relpath(path, os.environ.get("HOME") or os.path.expanduser("~")))
 if os.path.lexists(path):
-    print("bootstrap: protected-runtime file exists (%s)" % shown)
+    cfg, problem, missing = config._read_config()
+    if cfg is None or (missing and os.path.islink(path)):
+        sys.exit("bootstrap: protected-runtime file (%s) left untouched, the guard cannot use it: %s.\n"
+                 "  Until it is fixed the guard refuses every service-control, process-kill, package-manager,\n"
+                 "  build and runtime command (node, npm, ...). Fix it by hand: a JSON object with\n"
+                 "  \"schema_version\": %d and each of %s as a list, keeping every entry it declares;\n"
+                 "  or move it aside (keep it as your backup), re-run scripts/bootstrap --steps 4 to\n"
+                 "  create an empty one, and copy the entries back."
+                 % (shown, problem or "it is a symbolic link", config.SCHEMA_VERSION,
+                    ", ".join(config.REQUIRED_KEYS)))
+    if not missing:
+        print("bootstrap: protected-runtime file exists (%s)" % shown)
+        sys.exit(0)
+    try:
+        with open(path, "rb") as fh:
+            original = fh.read()
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        n = 0
+        while True:  # never overwrite an earlier backup
+            backup = "%s.bak-%s%s" % (path, stamp, ".%d" % n if n else "")
+            try:
+                fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                break
+            except FileExistsError:
+                n += 1
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(original)
+        doc = json.loads(original.decode("utf-8"))
+        doc.update((k, []) for k in missing)
+        fd, tmp = tempfile.mkstemp(prefix=".protected-runtime.", dir=os.path.dirname(path) or ".")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(doc, indent=2) + "\n")
+            os.chmod(tmp, mode)
+            os.replace(tmp, path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+    except OSError as exc:  # its strerror only: the exception text repeats the path
+        sys.exit("bootstrap: cannot repair the protected-runtime file (%s): %s; the file is unchanged"
+                 % (shown, exc.strerror))
+    print("bootstrap: repaired protected-runtime file (%s): added %s as empty lists, kept every "
+          "existing entry; the original is kept beside it as %s"
+          % (shown, ", ".join(missing), os.path.basename(backup)))
     sys.exit(0)
-doc = {"schema_version": 1}
+doc = {"schema_version": config.SCHEMA_VERSION}
 doc.update((k, []) for k in config.REQUIRED_KEYS)
 try:
     os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
@@ -406,7 +459,7 @@ except OSError as exc:  # its strerror only: the exception text repeats the path
 print("bootstrap: created protected-runtime file (%s, empty lists)" % shown)
 PY
 then
-  echo "bootstrap: could not create the protected-runtime file (see above)." >&2; exit 1
+  echo "bootstrap: step 4 stopped at the protected-runtime file (see above)." >&2; exit 1
 fi
 fi
 

@@ -40,11 +40,19 @@ _preclean_snapshot_guard() {
     *[!0-9.smhd]*|''|*[!0-9smhd]) _guard_timeout="5s" ;;
     [!0-9]*) _guard_timeout="5s" ;;
   esac
-  _guard_reason=$(CMD_INPUT="$COMMAND" timeout -- "$_guard_timeout" "$PYTHON_BIN" "$_guard_py" 2>/dev/null)
+  # The command goes on stdin: an exec'd environment string over the kernel's per-string limit (~128 KiB) fails
+  # with E2BIG. CMD_INPUT is emptied so an inherited value cannot stand in for the command.
+  _guard_reason=$(printf '%s' "$COMMAND" | CMD_INPUT= timeout -- "$_guard_timeout" "$PYTHON_BIN" "$_guard_py" 2>/dev/null)
   _guard_rc=$?
   case "$_guard_rc" in
     0)  return 0 ;;   # no destructive-or-uncertain `git clean`
     10) : ;;          # a destructive clean of this working directory: snapshot below
+    126|127)          # the guard process could not be started: a deployment fault, not a verdict on the command
+      echo "BLOCKED: /do or /allow release denied — the pre-clean guard could not run (rc=$_guard_rc), so the command cannot be checked for a destructive 'git clean' (fail-closed)" >&2
+      echo "Command: $COMMAND" >&2
+      echo "REASON: $PYTHON_BIN could not execute $_guard_py; repair the interpreter deployment, then re-issue the command." >&2
+      exit 2
+      ;;
     *)                # 11 = redirected or indeterminate target; any other rc = detector failure
       echo "BLOCKED: granted 'git clean' denied — no protective pre-clean WIP snapshot is possible (fail-closed)" >&2
       echo "Command: $COMMAND" >&2
