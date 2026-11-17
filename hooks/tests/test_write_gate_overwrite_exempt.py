@@ -10,6 +10,7 @@ onto its own untracked output was a dead end; that case is pinned here.
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -202,3 +203,174 @@ def test_the_refusal_message_is_unchanged(lab):
     rc, err = _write(lab, lab["proj"] / "src" / "app.py")
     assert rc == 2 and err.startswith("[Write Guard] BLOCKED: File already exists: ")
     assert "Reserve Write for files that genuinely do not exist yet." in err
+
+
+# --- verifier bypasses (each refused) ----------------------------------------------------------
+
+@pytest.mark.parametrize("rel", [
+    "docs/dev/commit-qa-report-T1.md",
+    "docs/dev/commit-qa-report-bulk.md",
+    "docs/clean/cleanliness-report-R1.json",
+    "docs/clean/style-partial-R1-group-G1.json",
+    "docs/clean/prompt-report-R1.json",
+    "docs/clean/cleanup-execution-R1.json",
+    "docs/clean/context-R1.json",
+    "tests/generated/T1/manifest.json",
+    "tests/generated/T1/test_AC1.py",
+    "docs/test/edge-case-analysis.json",
+    "docs/dev/overnight-summary-2026-11-17.md",
+    "docs/dev/ba-spec-T1.md",
+])
+def test_more_gate_read_families_still_refused(lab, rel):
+    assert _refused(_write(lab, _existing(lab["proj"] / rel)))
+
+
+def _agent_scratch_link(lab, name: str, target: Path) -> Path:
+    link = lab["state"] / "claude-scratch" / "architect" / name
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target)
+    return link
+
+
+def test_agent_scratch_symlink_to_a_file_outside_repo_and_temp_refused(lab, monkeypatch):
+    """P1: the scratch exemption is decided on the realpath, not the link's own entry."""
+    outside = Path("/dev/shm")
+    if not (outside.is_dir() and os.access(outside, os.W_OK)):
+        pytest.skip("no writable directory outside every temp root")
+    d = Path(os.path.realpath(outside)) / f"ob-l46-{os.getpid()}-{lab['tmp'].name}"
+    d.mkdir()
+    try:
+        target = _existing(d / "notes.txt")
+        assert _refused(_write(lab, _agent_scratch_link(lab, "link-out", target)))
+    finally:
+        for p in sorted(d.rglob("*"), reverse=True):
+            p.unlink()
+        d.rmdir()
+
+
+def test_agent_scratch_symlink_to_repo_dotenv_refused(lab):
+    """P2."""
+    env = _existing(lab["proj"] / ".env")
+    assert _refused(_write(lab, _agent_scratch_link(lab, "link-env", env)))
+
+
+def test_agent_scratch_symlink_to_control_state_refused(lab):
+    state = _existing(lab["state"] / f"claude-tool-streak-{SID}.json", "{}\n")
+    assert _refused(_write(lab, _agent_scratch_link(lab, "link-state", state)))
+
+
+def test_another_sessions_scratch_refused(lab):
+    """P5: one session never overwrites another session's scratch."""
+    other = lab["state"] / "claude-scratch" / "other-sess"
+    _existing(other / ".owner", json.dumps({"sid": "other-sess"}))
+    assert _refused(_write(lab, _existing(other / "report.md")))
+    other_tmp = lab["tmp"] / "scratch-root" / "other-sess"
+    _existing(other_tmp / ".owner", json.dumps({"sid": "other-sess"}))
+    assert _refused(_write(lab, _existing(other_tmp / "report.md")))
+
+
+def test_forged_own_scratch_outside_the_scratch_roots_is_not_own(lab, monkeypatch):
+    """P11/P11b: a <sid>/.owner forged anywhere is not this session's scratch."""
+    sys.path.insert(0, str(ROOT / "hooks" / "lib" / "write_gate"))
+    sys.path.insert(0, str(ROOT / "hooks" / "lib"))
+    import harness_temp_state
+    import overwrite_scope
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(lab["state"]))
+    monkeypatch.setenv("TMPDIR", str(lab["tmp"] / "scratch-root"))
+    forged = lab["proj"] / SID
+    _existing(forged / ".owner", json.dumps({"sid": SID}))
+    f = _existing(forged / "f.txt")
+    assert not overwrite_scope._own_scratch(os.path.realpath(f), SID, harness_temp_state)
+    real = _existing(lab["tmp"] / "scratch-root" / SID / "r.md")
+    _existing(real.parent / ".owner", json.dumps({"sid": SID}))
+    assert overwrite_scope._own_scratch(os.path.realpath(real), SID, harness_temp_state)
+    assert _refused(_write(lab, _existing(forged / ".env")))
+
+
+def test_docs_dev_symlinked_into_temp_still_refused(lab):
+    """P12: the gate-read rule is checked on the path as written too."""
+    devdir = lab["tmp"] / "work" / "devdir"
+    devdir.mkdir(parents=True)
+    proj2 = lab["tmp"] / "proj2"
+    (proj2 / "docs").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(proj2)], check=True)
+    (proj2 / "docs" / "dev").symlink_to(devdir)
+    _existing(devdir / "qa-report-T9.json", "{}\n")
+    assert _refused(_write(lab, proj2 / "docs" / "dev" / "qa-report-T9.json"))
+
+
+@pytest.mark.parametrize("name", [":x", "a*b", ":(glob)*"])
+def test_tracked_file_with_pathspec_magic_in_its_name_refused(lab, name):
+    """P9: the tracked check matches the name literally."""
+    f = _existing(lab["proj"] / "src" / name)
+    subprocess.run(["git", "-C", str(lab["proj"]), "add", "--", f"src/{name}"], check=True,
+                   env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"})
+    assert _refused(_write(lab, f))
+
+
+def test_hardlink_in_temp_to_a_tracked_file_refused(lab):
+    """P10: a file with more than one hard link is never exempt."""
+    link = lab["tmp"] / "work" / "hardlink-app.py"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(lab["proj"] / "src" / "app.py", link)
+    except OSError:
+        pytest.skip("hard links unsupported here")
+    assert _refused(_write(lab, link))
+
+
+# --- the gate-read set is pinned against what the harness declares and reads ------------------
+
+_DECL = re.compile(r'"kind"\s*:\s*"[a-z_-]+"\s*,\s*"path"\s*:\s*"([^"\\]+)')
+_TEMPLATED = re.compile(r"(?:docs/(?:dev|clean|test)|tests/generated)/[A-Za-z0-9_.{}<>$*/-]*[<{$*]"
+                        r"[A-Za-z0-9_.{}<>$*/-]*")
+_PLACEHOLDER = re.compile(r"<[^<>]*>|\{[^{}]*\}|\$\{[^{}]*\}|\$[A-Za-z_]+|\*")
+
+
+def _harness_sources():
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "commands", "templates", "agents",
+                          "skills", "hooks", "scripts"], capture_output=True, text=True, check=True)
+    for rel in out.stdout.splitlines():
+        if re.search(r"(^|/)tests?/", rel) or rel.endswith(("INDEX.md", "README.md")):
+            continue
+        p = ROOT / rel
+        if p.suffix in (".md", ".py", ".sh", ".json") and p.is_file():
+            yield rel, p.read_text(errors="replace")
+
+
+def _concrete(path: str) -> str:
+    path = _PLACEHOLDER.sub("T1", path).rstrip("/.")
+    return path if "." in path.rsplit("/", 1)[-1] else path + "/x.json"
+
+
+def _gate_read(rel_path: str) -> bool:
+    sys.path.insert(0, str(ROOT / "hooks" / "lib" / "write_gate"))
+    import overwrite_scope
+    return overwrite_scope.is_gate_read_artifact("/proj/" + rel_path)
+
+
+def test_every_declared_obligation_artifact_is_gate_read():
+    """Each artifact path a command, agent or hook declares in an obligation lies under an
+    artifact root and is gate-read, so a new declared artifact cannot fall outside the set."""
+    declared = {(rel, m.group(1)) for rel, text in _harness_sources() for m in _DECL.finditer(text)}
+    assert len(declared) >= 30, "the scan found too few obligation declarations"
+    missed = [(rel, path) for rel, path in declared if not _gate_read(_concrete(path))]
+    assert not missed, missed
+
+
+def test_every_templated_artifact_name_is_gate_read():
+    """Each templated artifact name a command, hook or step script refers to is gate-read."""
+    refs = {(rel, m.group(0)) for rel, text in _harness_sources() for m in _TEMPLATED.finditer(text)}
+    # A name that is nothing but a placeholder (docs/dev/<x>.md in a docstring) names no family.
+    refs = {(rel, path) for rel, path in refs
+            if not re.fullmatch(r"(<[^<>]*>|\{[^{}]*\})(\.[a-z]+)?", path.rsplit("/", 1)[-1])}
+    assert len(refs) >= 100, "the scan found too few templated artifact names"
+    missed = sorted({path for rel, path in refs if not _gate_read(_concrete(path))})
+    assert not missed, missed
+
+
+def test_a_draft_outside_every_family_is_not_gate_read():
+    assert not _gate_read("docs/dev/arch-probe.md")
+    assert not _gate_read("docs/clean/notes.md")
+    assert _gate_read("docs/dev/commit-qa-report-T1.md")
+    assert _gate_read("docs/test/edge-case-analysis.json")

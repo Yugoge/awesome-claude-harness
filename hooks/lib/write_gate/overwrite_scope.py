@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Which existing files a Write may replace wholesale (OB-L46): scratch, temp, untracked output.
+
+The overwrite rule (lib/write_gate/overwrite.py) refuses a Write onto an existing file; this
+module is its one exemption, an owner decision (F05; CRITIQUE A5: architect, product-owner,
+changelog-analyst, push-analyst, merge-analyst, graphify and user have Write but no Edit, so a
+refused second Write to their own output was a dead end). overwrite_exempt() answers True only
+when every check below passes; any doubt (an unresolvable path, git missing or slow) is False.
+
+Protected, whatever else holds (judged on every view of the path: as written, normalised
+without following links; the parent's realpath plus the entry; and the full realpath):
+
+  * harness state (lib/harness_temp_state.classify): every control location in any view, and
+    in the realpath every scratch location but the agent scratch ones (claude-scratch,
+    codex-outputs, the graphify cache); the rest are written and read back by harness
+    processes;
+  * another session's scratch: a directory below a temp or name root whose .owner record
+    names a different session;
+  * a gate-read artifact (is_gate_read_artifact): anything below an artifact root
+    (docs/dev/, docs/clean/, docs/test/, tests/generated/) except a top-level markdown draft
+    whose name carries none of GATE_READ_PREFIXES. Every artifact path a command or agent
+    declares in an obligation, and every templated artifact name a command, hook or step
+    script refers to, falls inside it: hooks/tests/test_write_gate_overwrite_exempt.py
+    scans for them, so a new declared artifact cannot fall outside the set silently;
+  * a `.claude` or `.git` component outside a `.claude/scratch/` directory, and the harness
+    home (lib/claude_home.py);
+  * a file with more than one hard link (a link in temp to a tracked file would otherwise
+    pass as a temp file);
+  * a file git tracks (in the index, matched as a literal pathspec), or one git cannot answer
+    for.
+
+Exempt, once nothing above holds, when the realpath is:
+
+  * scratch: an agent scratch location, this session's own scratch dir (<root>/<session_id>/
+    with an .owner naming it, root being $TMPDIR, /var/tmp/claude-scratch or a name root's
+    claude-scratch/, the roots hooks/session-scratch-init.sh uses), or a `.claude/scratch/`
+    directory;
+  * temp: below a temp root (harness_temp_state.temp_roots), and, inside a git work tree,
+    with no dot-named component below its top;
+  * untracked generated output: in a git work tree, not in the index (ignored or not: the
+    harness ignores docs/*/), with no dot-named component below the work tree's top (so
+    .env and .vscode/... stay protected).
+
+Own output versus gate-read artifact: the line is the reader, not the writer. A draft no gate,
+command or step script reads (docs/dev/arch-probe.md, docs/codex/notes.md, build/out.txt) may
+be replaced; a report, context, ticket, manifest or spec that a later gate trusts keeps the
+Edit-only rule even when untracked, so a Write-only role writes it once, complete.
+
+Known limit: an artifact a dispatch's obligation declares at a path no command template uses
+(the producer-stop gate reads any declared path) is protected only if it lies under an
+artifact root or is tracked.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+_HOOKS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_LIB = os.path.join(_HOOKS_DIR, "lib")
+
+# Directories whose files gates, commands and step scripts read as evidence.
+ARTIFACT_ROOTS = (("docs", "dev"), ("docs", "clean"), ("docs", "test"), ("tests", "generated"))
+# Name families of the artifacts read there (every templated name the harness refers to).
+GATE_READ_PREFIXES = (
+    "acceptance-criteria-", "ba-panel-", "ba-qa-report-", "ba-spec-", "cleanliness-inspector-report-",
+    "cleanliness-report-", "cleanup-execution-", "close-report", "combined-report-",
+    "commit-qa-report-", "completion-", "context-", "dev-report-", "do-report-", "freshness-",
+    "late-repair-run-", "overnight-log-", "overnight-summary-", "producer-answer-",
+    "producer-question-", "prompt-inspector-report-", "prompt-report-", "qa-report-",
+    "requirement-answers-", "requirement-round-", "rule-context-", "spec-",
+    "style-inspector-report-", "style-partial-", "style-plan-", "style-report-",
+    "test-writer-report-", "ticket-", "user-approvals-", "user-requirement-",
+)
+_PROTECTED_COMPONENTS = (".claude", ".git")
+# harness_temp_state scratch locations agents write their own output into.
+AGENT_SCRATCH = ("claude-scratch", "codex-outputs", "graphify-cache")
+# Two git calls at most, each well inside the rule's 5 s budget (lib/write_gate/__init__.py):
+# an overrun of this fail-open rule would let the Write through; a git timeout here refuses.
+_GIT_TIMEOUT = 2.0
+_NO_REPO = "no-repo"
+
+
+def _hts():
+    if _LIB not in sys.path:
+        sys.path.insert(0, _LIB)
+    import harness_temp_state
+    return harness_temp_state
+
+
+def is_gate_read_artifact(path: str) -> bool:
+    """True when `path` (one view, absolute) lies below an artifact root and is not a
+    top-level markdown draft outside GATE_READ_PREFIXES."""
+    parts = [p for p in path.split(os.sep) if p]
+    for i in range(len(parts) - 2):
+        if (parts[i], parts[i + 1]) in ARTIFACT_ROOTS:
+            rel = parts[i + 2:]
+            name = rel[-1]
+            if len(rel) > 1 or not name.endswith(".md") or name.startswith(GATE_READ_PREFIXES):
+                return True
+    return False
+
+
+def _views(file_path: str) -> tuple:
+    """The path as written (normalised, links not followed), the parent's realpath plus the
+    entry, and the full realpath."""
+    written = os.path.normpath(os.path.abspath(file_path))
+    head, tail = os.path.split(written)
+    return tuple(dict.fromkeys((written, os.path.join(os.path.realpath(head), tail),
+                                os.path.realpath(file_path))))
+
+
+def _scratch_roots(hts) -> tuple:
+    roots = [os.environ.get("TMPDIR") or "", "/var/tmp/claude-scratch"]
+    roots += [os.path.join(r, "claude-scratch") for r in hts.name_roots()]
+    out = []
+    for r in roots:
+        if r and os.path.isabs(r):
+            real = os.path.realpath(r)
+            if real != os.sep and real not in out:
+                out.append(real)
+    return tuple(out)
+
+
+def _owner_sid(d: str):
+    """The sid of `d`/.owner, None when there is no readable record."""
+    try:
+        with open(os.path.join(d, ".owner"), encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except Exception:
+        return None
+    return rec.get("sid") if isinstance(rec, dict) else None
+
+
+def _own_scratch(real: str, session_id: str, hts) -> bool:
+    """`real` is below <root>/<session_id>/ for a session scratch root, with an .owner
+    record naming this session (lib/scratch_owner.py)."""
+    if not session_id or os.sep in session_id or session_id in (".", ".."):
+        return False
+    for root in _scratch_roots(hts):
+        d = os.path.join(root, session_id)
+        if real.startswith(d + os.sep) and _owner_sid(d) == session_id:
+            return True
+    return False
+
+
+def _foreign_scratch(real: str, session_id: str, hts) -> bool:
+    """An ancestor below a temp or name root holds an .owner record of another session."""
+    roots = tuple(hts.temp_roots()) + tuple(hts.name_roots())
+    d = os.path.dirname(real)
+    while d and d != os.sep and any(d.startswith(r + os.sep) for r in roots):
+        sid = _owner_sid(d)
+        if sid is not None and sid != session_id:
+            return True
+        d = os.path.dirname(d)
+    return False
+
+
+def _in_harness_home(real: str) -> bool:
+    try:
+        if _LIB not in sys.path:
+            sys.path.insert(0, _LIB)
+        from claude_home import resolve
+        home = resolve()
+    except BaseException:
+        return True
+    if home is None:
+        return False
+    root = os.path.realpath(str(home))
+    return root != os.sep and (real == root or real.startswith(root + os.sep))
+
+
+def _in_project_scratch(real: str) -> bool:
+    parts = real.split(os.sep)
+    return any(parts[i] == ".claude" and parts[i + 1] == "scratch" for i in range(len(parts) - 2))
+
+
+def _git(cwd: str, *args: str):
+    """(returncode, stdout, stderr), or (None, "", "") when git cannot run or times out."""
+    try:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env["GIT_LITERAL_PATHSPECS"] = "1"
+        p = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                           timeout=_GIT_TIMEOUT, env=env)
+        return p.returncode, p.stdout, p.stderr
+    except BaseException:
+        return None, "", ""
+
+
+def _work_tree(real: str):
+    """(top, tracked): (_NO_REPO, False) outside any work tree, (None, None) when git cannot
+    answer (the caller then refuses)."""
+    d = os.path.dirname(real)
+    rc, out, err = _git(d, "rev-parse", "--is-inside-work-tree", "--show-toplevel")
+    if rc is not None and rc != 0 and "not a git repository" in err:
+        return _NO_REPO, False
+    lines = out.splitlines()
+    if rc != 0 or len(lines) < 2 or lines[0].strip() != "true":
+        return None, None
+    top = os.path.realpath(lines[1].strip())
+    rc, out, _ = _git(d, "ls-files", "-z", "--", os.path.basename(real))
+    if rc != 0:
+        return None, None
+    return top, bool(out.strip("\0"))
+
+
+def overwrite_exempt(file_path: str, session_id: str) -> bool:
+    """True when the existing file `file_path` is scratch, temp or untracked generated output
+    a Write may replace (see the module docstring). Any doubt answers False."""
+    try:
+        hts = _hts()
+        views = _views(file_path)
+        real = views[-1]
+        if not os.path.isfile(real):
+            return False
+        locs = [hts.classify(v) for v in views]
+        if any(loc is not None and loc.kind == hts.CONTROL for loc in locs):
+            return False
+        real_loc = locs[-1]
+        own = _own_scratch(real, session_id, hts)
+        agent_scratch = real_loc is not None and real_loc.name in AGENT_SCRATCH
+        if real_loc is not None and not (agent_scratch or own):
+            return False
+        if _foreign_scratch(real, session_id, hts):
+            return False
+        if any(is_gate_read_artifact(v) for v in views):
+            return False
+        project_scratch = _in_project_scratch(real)
+        if not project_scratch and (any(c in _PROTECTED_COMPONENTS for c in real.split(os.sep))
+                                    or _in_harness_home(real)):
+            return False
+        if os.stat(real).st_nlink > 1:
+            return False
+        top, tracked = _work_tree(real)
+        if tracked is not False:
+            return False
+        if own or agent_scratch or project_scratch:
+            return True
+        if top != _NO_REPO:
+            rel = os.path.relpath(real, top).split(os.sep)
+            if rel[0] == os.pardir or any(c.startswith(".") for c in rel):
+                return False  # .env, .vscode/...: configuration, in temp or not
+        if hts.is_in_temp_root(real):
+            return True
+        return top != _NO_REPO
+    except BaseException:
+        return False

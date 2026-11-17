@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T07:16:14Z*
-**Total entries**: 404
+*Last updated: 2026-11-17T14:23:22Z*
+**Total entries**: 405
 **Convention**: kebab
 
 ## Tree
@@ -37,7 +37,8 @@ hooks/
 │   │   ├── `git_cmds.py` - Depends on pathmatch (`_strip_quotes`, `_expand_leading_home`) +
 │   │   └── `pathmatch.py` - Depends only on the stdlib and owns `_strip_quotes`; references nothing from
 │   ├── write_gate/
-│   │   └── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
+│   │   ├── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
+│   │   └── `overwrite_scope.py` - The overwrite rule (lib/write_gate/overwrite.py) refuses a Write onto an existing file; this
 │   ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 │   ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
