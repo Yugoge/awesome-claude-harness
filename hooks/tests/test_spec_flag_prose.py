@@ -92,3 +92,110 @@ def test_strip_spec_arg_takes_the_first_reference_and_leaves_prose(tmp_path):
     assert pw._strip_spec_arg("fix --spec docs/s.md now") == ("fix now", "docs/s.md")
     assert pw._strip_spec_arg("about --spec parsing --spec ~/s.md") == ("about --spec parsing", "~/s.md")
     assert pw._strip_spec_arg("x –spec ./spec x") == ("x x", "./spec")
+
+
+# --- A1 verifier round: a flag read as prose never swaps in another spec -------------------
+# Each prompt below runs in a session that last wrote docs/dev/specs/foo.md. At 512cbcd these
+# lost the flag and silently ran on foo.md; at d1abc798 each was refused.
+SESSION_SPEC = "docs/dev/specs/foo.md"
+
+# The <path> is wrapped or punctuated in the prompt, and the file exists: it is the spec.
+WRAPPED_PRESENT = {
+    "trailing_comma": "x --spec real.md, then go",
+    "double_quoted": 'x --spec "real.md"',
+    "backticked": "x --spec `real.md`",
+}
+
+# The <path> names nothing readable: the prompt is refused, naming the unwrapped path.
+WRAPPED_MISSING = {
+    "trailing_comma": ("x --spec missing.md, then go", "missing.md"),
+    "single_quoted": ("x --spec 'missing.md'", "missing.md"),
+    "quoted_with_space": ('x --spec "my spec.md"', "my spec.md"),
+    "trailing_period": ("x --spec missing.md.", "missing.md"),
+    "trailing_paren": ("x --spec missing.md)", "missing.md"),
+    "parenthesized_flag": ("x (--spec missing.md)", "missing.md"),
+    "angle_brackets": ("x --spec <missing.md>", "missing.md"),
+    "directory": ("x --spec docs", "docs"),
+    "leading_bare_name": ("--spec myspec x", "myspec"),
+    "leading_bare_name_after_codex": ("--codex --spec myspec x", "myspec"),
+}
+
+COMMANDS = ["dev", "redev", "dev-command"]
+
+
+@pytest.mark.parametrize("command", COMMANDS)
+@pytest.mark.parametrize("case", sorted(WRAPPED_PRESENT))
+def test_a_wrapped_spec_path_resolves_to_that_spec(tmp_path, command, case):
+    proj, result = _submit(tmp_path, f"/{command} {WRAPPED_PRESENT[case]}",
+                           [SESSION_SPEC], [SESSION_SPEC, "real.md"])
+    assert result.returncode == 0, result.stderr
+    assert _spec_lines(result.stdout) == [f"Spec: {proj / 'real.md'} (explicit)"]
+
+
+@pytest.mark.parametrize("command", COMMANDS)
+@pytest.mark.parametrize("case", sorted(WRAPPED_MISSING))
+def test_a_wrapped_or_leading_flag_naming_no_readable_spec_refuses(tmp_path, command, case):
+    args, bad = WRAPPED_MISSING[case]
+    proj, result = _submit(tmp_path, f"/{command} {args}", [SESSION_SPEC], [SESSION_SPEC])
+    assert result.returncode == 2, result.stdout
+    assert f"Spec: {proj / bad} (unresolved)" in result.stderr.splitlines()
+    assert result.stdout == ""
+    assert not (proj / ".claude" / "dev-registry").exists()
+
+
+@pytest.mark.parametrize("case", sorted(WRAPPED_PRESENT))
+def test_a_wrapped_spec_path_resolves_for_dev_overnight(tmp_path, case):
+    proj, result = _submit(tmp_path, f"/dev-overnight 23:59 {WRAPPED_PRESENT[case]}",
+                           [SESSION_SPEC], [SESSION_SPEC, "real.md"], git=True)
+    assert result.returncode == 0, result.stderr
+    assert _spec_lines(result.stdout) == [f"Spec: {proj / 'real.md'} (explicit)"]
+    state = json.loads((proj / ".claude" / f"overnight-state-{SID}.json").read_text())
+    assert state["user_spec_path"] == str(proj / "real.md")
+
+
+@pytest.mark.parametrize("case", sorted(WRAPPED_MISSING))
+def test_a_wrapped_or_leading_flag_naming_no_readable_spec_refuses_dev_overnight(tmp_path, case):
+    args, bad = WRAPPED_MISSING[case]
+    proj, result = _submit(tmp_path, f"/dev-overnight 23:59 {args}", [SESSION_SPEC], [SESSION_SPEC],
+                           git=True)
+    assert result.returncode == 2, result.stdout
+    assert f"Spec: {proj / bad} (unresolved)" in result.stderr.splitlines()
+    assert not list((proj / ".claude").glob("overnight-state-*.json"))
+
+
+# A bare word after a mid-text --spec is prose (`add tests for --spec parsing`), so the prompt
+# runs; the run then gets no spec and a note, never the spec the session last wrote.
+DROPPED = {
+    "bare_name_last": ("x --spec myspec", "myspec"),
+    "prose_word": ("add tests for --spec parsing", "parsing"),
+    "prose_word_sentence_end": ("add tests for --spec parsing.", "parsing"),
+}
+
+
+@pytest.mark.parametrize("command", COMMANDS)
+@pytest.mark.parametrize("case", sorted(DROPPED))
+def test_a_spec_flag_read_as_prose_never_uses_the_session_spec(tmp_path, command, case):
+    args, word = DROPPED[case]
+    proj, result = _submit(tmp_path, f"/{command} {args}", [SESSION_SPEC], [SESSION_SPEC])
+    assert result.returncode == 0, result.stderr
+    assert _spec_lines(result.stdout) == ["Spec: none"]
+    assert f'NOTE: "--spec {word}" was read as text' in result.stdout
+
+
+@pytest.mark.parametrize("case", sorted(DROPPED))
+def test_a_spec_flag_read_as_prose_never_uses_the_session_spec_dev_overnight(tmp_path, case):
+    args, word = DROPPED[case]
+    proj, result = _submit(tmp_path, f"/dev-overnight 23:59 {args}", [SESSION_SPEC], [SESSION_SPEC],
+                           git=True)
+    assert result.returncode == 0, result.stderr
+    assert _spec_lines(result.stdout) == ["Spec: none"]
+    assert f'NOTE: "--spec {word}" was read as text' in result.stdout
+    state = json.loads((proj / ".claude" / f"overnight-state-{SID}.json").read_text())
+    assert (state["spec_mode"], state["user_spec_path"]) == ("autonomous", None)
+
+
+def test_a_glued_prose_dash_keeps_the_session_spec(tmp_path):
+    # `API—spec section` is no flag at all: the session's spec stays the run's spec.
+    proj, result = _submit(tmp_path, f"/dev {PROSE['em_dash_prose']}", [SESSION_SPEC], [SESSION_SPEC])
+    assert result.returncode == 0, result.stderr
+    assert _spec_lines(result.stdout) == [f"Spec: {proj / SESSION_SPEC}"]
