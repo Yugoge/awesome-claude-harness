@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 188
+- **Total files**: 189
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -85,6 +85,7 @@
 - `test_git_residual_override.py` - Background
 - `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
 - `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+- `test_gitignore_preflight_write_capability.py` - pretool-gitignore-preflight.py scopes its refusal by the dispatched agent's
 - `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 - `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
 - `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
