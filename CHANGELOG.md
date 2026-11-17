@@ -53,6 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `systemMessage`, with the exact `git worktree remove` command for each stale
   worktree. Branch deletion is left to the user. Covered by
   `hooks/tests/test_worktree_guard.py`.
+- **Listing the close-pending tasks no longer reads the transcript store once per task and gap.**
+  `scripts/dev-lifecycle.py list-actionable` (the candidates of `/close` and `/commit`) asked who
+  owes each gap of every unfinished task, and each answer (`obligation.declaring_dispatch`) read
+  every session transcript of the project anew: on a long history it ran for more than twenty
+  minutes with no output. One scan now reads each transcript at most once
+  (`obligation.transcript_scan`), the commit listing reads none, the disposition of one task reads
+  the store once for all its gaps, and a scan still running after 10 seconds prints
+  `dev-lifecycle.py: still scanning ...` lines on stderr. The listings are unchanged. Covered by
+  `tests/test_close_pending_scan.py`.
 
 ## [1.0.0] - 2026-07-05
 

@@ -1705,7 +1705,8 @@ def gap_line(gap: dict[str, Any]) -> str:
 
 def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int:
     try:
-        outcome = disposition(project_dir, task_id, stage)
+        with _harness_lib("obligation").transcript_scan():  # one read of each transcript for every gap
+            outcome = disposition(project_dir, task_id, stage)
     except Exception as exc:  # an instrument failure: never a disposition
         print(
             f"resolve-dev-artifact-chain.py: instrument failure: {type(exc).__name__}: {exc}",
@@ -1816,6 +1817,11 @@ def disposition_lines(project_root: Path | str, task_id: str, stage: str) -> lis
     per gap, where an artifact no dispatch declared yet also names the
     canonical todo step the DDR says owes it. Raises on an instrument
     failure, as disposition does; disposition and gap_line are P3's."""
+    with _harness_lib("obligation").transcript_scan():  # one read of each transcript for every gap
+        return _disposition_lines(project_root, task_id, stage)
+
+
+def _disposition_lines(project_root: Path | str, task_id: str, stage: str) -> list[str]:
     outcome = disposition(project_root, task_id, stage)
     if outcome["disposition"] == "chain_pass":
         return []
@@ -1840,10 +1846,12 @@ def unowed_gap(project_root: Path | str, task_id: str, stage: str) -> str | None
     dispatch record or canonical todo step owes such a gap, so an unattended
     run can never produce it (dev-lifecycle's --auto passes the task over on
     this verdict, used verbatim). Raises on an instrument failure, as
-    disposition does."""
+    disposition does. One transcript scan (obligation.transcript_scan) serves
+    the disposition's owner questions and these: each is read once."""
     obligation = _harness_lib("obligation")
-    return next((gap["artifact"] for gap in disposition(project_root, task_id, stage)["gaps"]
-                 if obligation.declaring_dispatch(task_id, gap["artifact"], project_root) is None), None)
+    with obligation.transcript_scan():
+        return next((gap["artifact"] for gap in disposition(project_root, task_id, stage)["gaps"]
+                     if obligation.declaring_dispatch(task_id, gap["artifact"], project_root) is None), None)
 
 
 def main(argv: list[str] | None = None) -> int:

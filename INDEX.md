@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T08:15:44Z*
-**Total entries**: 971
+*Last updated: 2026-11-17T09:27:14Z*
+**Total entries**: 972
 **Convention**: kebab
 
 ## Tree
@@ -849,6 +849,7 @@ dot-claude/
 │   ├── `test_cli_fixture_shapes.py` - Tests built CLI records by hand, so CLI 2.1.322's change of the hook-output records (plain stdout
 │   ├── `test_cli_synthesizers.py` - The replay harness and the hook tests below wrote CLI transcript records by hand, so the records ...
 │   ├── `test_close_command_text.py` - Each test hands the text to the code that consumes it (the obligation reader, the listing script,
+│   ├── `test_close_pending_scan.py` - /close and /commit find their candidate tasks with `list-actionable`. For each task waiting to be
 │   ├── `test_close_rating_step_label.py` - 376a9ae relabelled it so that no command's dispatch template would sit under a heading of the same
 │   ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 │   ├── `test_close_report_append_lock_cleanup.py` - product repository is clean after the pipelines; R8 rule 3: a file with no consumer
