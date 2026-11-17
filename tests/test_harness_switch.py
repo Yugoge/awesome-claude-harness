@@ -753,7 +753,7 @@ def test_bash_writes_the_parser_reads_are_refused(guard_home, proj, command):
     ("echo '{\"disableAllHooks\":true}' > settings.local.json", "echo '{\"disableAllHooks\":true}'>settings.local.json"),
     ("echo disableAllHooks > settings.json", "echo disableAllHooks>settings.json"),
     ("echo x > settings.json", "echo x>settings.json"),
-    ("grep -c env settings.json > /tmp/n", "grep -c env settings.json>/tmp/n"),
+    ("grep -c env /tmp/n > settings.json", "grep -c env /tmp/n>settings.json"),
 ])
 def test_an_attached_redirect_reads_as_the_spaced_one(guard_home, spaced, attached):
     """From the harness home: `x>settings.json` is the write `x > settings.json` is."""
