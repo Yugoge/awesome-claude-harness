@@ -116,6 +116,24 @@ def test_a_relative_name_is_read_from_the_working_directory(tmp_path):
                   "a directory holding the harness home's protected files or the session transcripts")
 
 
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("command, what", [
+    ('"$RM" .git/config', "the harness home's .git/config"),
+    ('sudo "$X" -f hooks/git-hooks/pre-commit', "the harness home's hooks/git-hooks/pre-commit"),
+    ('"$X" settings.machine.json', "the harness home's settings.machine.json"),
+])
+def test_a_computed_command_with_a_protected_operand_is_denied(tmp_path, caller, command, what):
+    # The command's name is computed, so what it does to each static path operand is unknown.
+    assert_denied(run(tmp_path, "Bash", {"command": command}, CALLERS[caller], cwd=ROOT), what)
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("command", ['"$PY" scripts/doctor', '"$X" "$Y"'])
+def test_a_computed_command_over_no_protected_operand_is_allowed(tmp_path, caller, command):
+    proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller], cwd=ROOT)
+    assert proc.returncode == 0, proc.stderr
+
+
 @pytest.mark.parametrize("form", ["Write", "Edit", "echo", "rm", "mv", "sed"])
 @pytest.mark.parametrize("rel", R3 + ("settings.machine.json", "private-literals.txt"))
 def test_the_same_names_in_a_product_repository_stay_writable(tmp_path, form, rel):

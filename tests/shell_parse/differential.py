@@ -62,6 +62,13 @@ def _safe(f):
         return "EXC:" + type(exc).__name__
 
 
+def _as_rendered(text):
+    """A path text as lib/bash_write_targets.py renders it: `~`, `$HOME`, `$CLAUDE_PROJECT_DIR` expanded."""
+    for name, value in WT._known().items():
+        text = text.replace("${%s}" % name, value).replace("$" + name, value)
+    return os.path.expanduser(text) if text.startswith("~") else text
+
+
 def old_facts(c):
     f = {}
     f["strip"] = _safe(lambda: CS.strip_non_executable_contexts(c))
@@ -75,19 +82,6 @@ def old_facts(c):
     f["rg_redirs"] = _safe(lambda: [t for seg in SL._split_pipeline(c) for t in SL._write_redirect_targets(seg)])
     f["census_fatal"] = _safe(lambda: C.census(c)["fatal"])
     return f
-
-
-def _resolve_path(token):
-    """A path word with its quotes dropped and ~, $HOME and $CLAUDE_PROJECT_DIR expanded."""
-    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
-        token = token[1:-1]
-    token = os.path.expanduser(token) if token.startswith("~") else token
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    token = token.replace("${HOME}", home).replace("$HOME", home)
-    cpd = os.environ.get("CLAUDE_PROJECT_DIR", "")
-    if cpd:
-        token = token.replace("${CLAUDE_PROJECT_DIR}", cpd).replace("$CLAUDE_PROJECT_DIR", cpd)
-    return token
 
 
 def new_facts(c):
@@ -305,8 +299,8 @@ def differences(c, m, n):
         if all(any(q.startswith(p.rstrip("`)")) for q in newp) for p in lost):
             label = "covered:the new path is the whole quoted word"
         elif undecidable and all(re.search(r"[$`*?\[]", p) or any(
-                p == u[0] or p in u[1] or (u[0] and _resolve_path(u[0]) == p)
-                or _resolve_path(os.path.expandvars(u[1].strip("'\""))) == p for u in undecidable)
+                p == u[0] or p in u[1] or (u[0] and _as_rendered(u[0]) == p)
+                or _as_rendered(os.path.expandvars(u[1].strip("'\""))) == p for u in undecidable)
                 for p in lost):
             label = "covered:an undecidable target"
         elif all(any(q.startswith("~") and p.endswith(q[1:]) for q in n["targets"]) for p in lost):

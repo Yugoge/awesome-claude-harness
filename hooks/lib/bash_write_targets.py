@@ -9,6 +9,7 @@ expanded, and any other expansion kept as written so a caller sees it is unresol
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Tuple
 
 try:
@@ -25,15 +26,31 @@ def _known() -> dict:
     return known
 
 
+# A command whose name is computed counts as a copy only when an operand is spelled after cp or mv
+# (`"$CP" cp-01 dest`); otherwise its last operand (`"$PY" script.py`) is no write.
+_COPY_MOVE_WORD = re.compile(r"(?:cp|mv)(?!\w)")
+
+
 def _targets(command: str) -> list:
     if not isinstance(command, str) or not command.strip():
         return []
-    return _sp.write_targets(command, env=_known())
+    script = _sp.parse(command)
+    found = _sp.write_targets(script, env=_known())
+    if not any(t.mechanism == "computed-command" for t in found):
+        return found
+    copies = set()
+    for site in _sp.walk(script):
+        words = site.cmd.words
+        if any(_COPY_MOVE_WORD.match(w.value() or "") for w in words[1:]):
+            copies.update(id(w) for w in words)
+    return [t for t in found if t.mechanism != "computed-command" or id(t.word) in copies]
 
 
 def _render(t, command: str) -> str:
     if t.path is not None:
         text = t.path
+    elif t.word is None or t.word.value() is not None:
+        return ""  # a target with no word of its own (an operand xargs appends)
     else:
         w = t.word
         text = "".join(p.text if p.kind == "lit" else w.raw.text[p.span[0] - w.start:p.span[1] - w.start]
@@ -59,10 +76,11 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
 
     A move whose words are all plain and whose destination is decidable writes the destination and
     removes ``<dest>/<basename(source)>``, the entry a directory destination loses; any other move
-    may remove its destination too.
+    may remove its destination too. A command whose name is computed may do anything to each of its
+    static path operands (`"$RM" f`), so each is touched and may be removed.
     """
     found = _targets(command)
-    out: List[Tuple[str, bool]] = []
+    out: List[Tuple[str, bool]] = _computed_command_operands(command)
     for k, t in enumerate(found):
         path = _render(t, command)
         if not path:
@@ -80,6 +98,21 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
         if plain:
             out.extend((os.path.join(path, os.path.basename(_render(s, command).rstrip("/"))), True)
                        for s in sources)
+    return out
+
+
+def _computed_command_operands(command: str) -> List[Tuple[str, bool]]:
+    if not isinstance(command, str) or not command.strip():
+        return []
+    out = []
+    for site in _sp.walk(_sp.parse(command)):
+        res = _sp.resolve(site.cmd)
+        if res.head is None or res.name is not None:
+            continue
+        for w in res.args:
+            v = w.value()
+            if v and not v.startswith("-"):
+                out.append((os.path.expanduser(v) if v.startswith("~") else v, True))
     return out
 
 
