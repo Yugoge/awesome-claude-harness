@@ -2485,34 +2485,385 @@ def _subcommands(command):
     return command.replace("&&", "\n").replace("||", "\n").replace(";", "\n").split("\n")
 
 
-SENSITIVE_NAME = re.compile(r"\.env|credentials|secret|password")
+# The write mechanisms of lib/shell_parse.write_targets that put bytes into the named file: a redirection, tee,
+# a cp, mv, install, rsync or ln destination, dd of=, curl -o, wget -O, sed -i, truncate. Removal and the mode,
+# owner and ACL verbs neither read nor write a secret's bytes, so they are not this rule's.
+_SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd", "curl", "wget", "sed", "truncate"})
+# The verbs that write what they read into another file: a listed name among their operands is a secret read
+# into a file, as an argument of a command whose output is redirected into one is.
+_SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
+# The writers the base never judged without an output redirection: a source-code or Markdown/reST document operand
+# of theirs (`sed -i ... src/password_reset.py`, `mv docs/password-reset.md docs/pw.md`) is no secret file
+# (lib/sensitive_names.is_code_or_doc_operand).
+_OPERAND_WRITERS = _SENSITIVE_COPIERS | {"sed"}
+# The network clients whose non-output arguments may be URLs: a URL there names no local file.
+_NETWORK_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "aria2c"})
+# The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
+_TEMPLATE_COPIERS = frozenset({"cp", "cat"})
+# How each network client reads its options: which long options take a value and which take none, which short
+# options take a value and which take none, and the long name of a short option whose effect matters. An option's
+# value is a local path or data, never a URL (`curl -c http://../.env URL` writes ./.env); only a positional
+# operand and curl's `--url` value are URLs. A long option may be abbreviated to a unique prefix (getopt_long,
+# argparse): an ambiguous prefix may mean any option it begins, and an option or short letter the table does not
+# know is taken as taking a value, so the word after it gets no URL role.
+_CURL_LONG_VALUES = frozenset((
+    "abstract-unix-socket alt-svc aws-sigv4 cacert capath cert cert-type ciphers config connect-timeout connect-to "
+    "continue-at cookie cookie-jar create-file-mode crlfile curves data data-ascii data-binary data-raw "
+    "data-urlencode delegation dns-interface dns-ipv4-addr dns-ipv6-addr dns-servers doh-url dump-header egd-file "
+    "engine etag-compare etag-save expect100-timeout form form-string ftp-account ftp-alternative-to-user ftp-method "
+    "ftp-port ftp-ssl-ccc-mode happy-eyeballs-timeout-ms header help hostpubmd5 hostpubsha256 hsts interface "
+    "ipfs-gateway json keepalive-time key key-type krb libcurl limit-rate local-port login-options mail-auth "
+    "mail-from mail-rcpt max-filesize max-redirs max-time netrc-file noproxy oauth2-bearer output output-dir "
+    "parallel-max pass pinnedpubkey preproxy proto proto-default proto-redir proxy proxy-cacert proxy-capath "
+    "proxy-cert proxy-cert-type proxy-ciphers proxy-crlfile proxy-header proxy-key proxy-key-type proxy-pass "
+    "proxy-pinnedpubkey proxy-service-name proxy-tls13-ciphers proxy-tlsauthtype proxy-tlspassword proxy-tlsuser "
+    "proxy-user proxy1.0 pubkey quote random-file range rate referer request request-target resolve retry "
+    "retry-delay retry-max-time sasl-authzid service-name socks4 socks4a socks5 socks5-gssapi-service "
+    "socks5-hostname speed-limit speed-time stderr telnet-option tftp-blksize time-cond tls-max tls13-ciphers "
+    "tlsauthtype tlspassword tlsuser trace trace-ascii trace-config unix-socket upload-file url url-query user "
+    "user-agent variable write-out").split())
+_CURL_LONG_FLAGS = frozenset((
+    "anyauth append basic ca-native cert-status compressed compressed-ssh create-dirs crlf digest disable "
+    "disable-eprt disable-epsv disallow-username-in-url doh-cert-status doh-insecure fail fail-early fail-with-body "
+    "false-start form-escape ftp-create-dirs ftp-pasv ftp-pret ftp-skip-pasv-ip ftp-ssl-ccc ftp-ssl-control get "
+    "globoff haproxy-clientip haproxy-protocol head http0.9 http1.0 http1.1 http2 http2-prior-knowledge http3 "
+    "http3-only ignore-content-length include insecure ipv4 ipv6 junk-session-cookies list-only location "
+    "location-trusted mail-rcpt-allowfails manual metalink negotiate netrc netrc-optional next no-alpn no-buffer "
+    "no-clobber no-keepalive no-npn no-progress-meter no-sessionid ntlm ntlm-wb parallel parallel-immediate "
+    "path-as-is post301 post302 post303 progress-bar proxy-anyauth proxy-basic proxy-ca-native proxy-digest "
+    "proxy-http2 proxy-insecure proxy-negotiate proxy-ntlm proxy-ssl-allow-beast proxy-ssl-auto-client-cert "
+    "proxy-tlsv1 proxytunnel raw remote-header-name remote-name remote-name-all remote-time remove-on-error "
+    "retry-all-errors retry-connrefused sasl-ir show-error silent socks5-basic socks5-gssapi socks5-gssapi-nec ssl "
+    "ssl-allow-beast ssl-auto-client-cert ssl-no-revoke ssl-reqd ssl-revoke-best-effort sslv2 sslv3 styled-output "
+    "suppress-connect-headers tcp-fastopen tcp-nodelay tftp-no-options tlsv1 tlsv1.0 tlsv1.1 tlsv1.2 tlsv1.3 "
+    "tr-encoding trace-ids trace-time use-ascii verbose version xattr").split())
+_WGET_LONG_VALUES = frozenset((
+    "execute output-file append-output report-speed input-file base config rejected-log tries "
+    "retry-on-http-error output-document start-pos progress timeout dns-timeout connect-timeout read-timeout wait "
+    "waitretry quota bind-address limit-rate restrict-file-names prefer-family user password use-askpass "
+    "local-encoding remote-encoding directory-prefix cut-dirs http-user http-password default-page header "
+    "compression proxy-user proxy-password referer user-agent load-cookies save-cookies post-data post-file method "
+    "body-data body-file secure-protocol certificate certificate-type private-key private-key-type ca-certificate "
+    "ca-directory crl-file pinnedpubkey random-file ciphers ftp-user ftp-password warc-file warc-header "
+    "warc-max-size warc-dedup warc-tempdir level backups accept reject accept-regex reject-regex regex-type domains "
+    "exclude-domains follow-tags ignore-tags include-directories exclude-directories hsts-file max-redirect").split())
+_WGET_LONG_FLAGS = frozenset((
+    "adjust-extension ask-password auth-no-challenge background backup-converted content-disposition "
+    "content-on-error continue convert-file-only convert-links debug delete-after follow-ftp force-directories "
+    "force-html ftps-clear-data-connection ftps-fallback-to-ftp ftps-implicit ftps-resume-ssl help https-only "
+    "ignore-case ignore-length inet4-only inet6-only keep-session-cookies mirror no-cache no-check-certificate "
+    "no-clobber no-config no-cookies no-directories no-dns-cache no-glob no-host-directories no-hsts "
+    "no-http-keep-alive no-if-modified-since no-iri no-netrc no-parent no-passive-ftp no-proxy no-remove-listing "
+    "no-use-server-timestamps no-verbose no-warc-compression no-warc-digests no-warc-keep-log page-requisites "
+    "preserve-permissions protocol-directories quiet random-wait recursive relative retr-symlinks "
+    "retry-connrefused retry-on-host-error save-headers server-response show-progress span-hosts spider "
+    "strict-comments timestamping trust-server-names unlink verbose version warc-cdx xattr").split())
+_HTTPIE_LONG_VALUES = frozenset((
+    "boundary raw pretty style response-charset response-mime format-options print history-print output session "
+    "session-read-only auth auth-type proxy max-redirects max-headers timeout verify ssl ciphers cert cert-key "
+    "cert-key-pass default-scheme bearer http-version resolve interface unix-socket generate").split())
+_HTTPIE_LONG_FLAGS = frozenset((
+    "json form multipart compress unsorted sorted headers meta body verbose all stream download continue quiet "
+    "ignore-netrc offline follow check-status path-as-is chunked ignore-stdin help manual version traceback debug "
+    "native-tls https curl curl-long ipv4 ipv6").split())
+_ARIA2C_LONG_VALUES = frozenset((
+    "out dir input-file log conf-path save-session load-cookies save-cookies header user-agent referer "
+    "max-connection-per-server split").split())
+_ARIA2C_LONG_FLAGS = frozenset("continue quiet help version check-integrity force-sequential".split())
+# Per client: (long options with a value, long options without one, short options with a value, short options
+# without one, short option -> long name where its effect matters).
+_HTTPIE_OPTIONS = (_HTTPIE_LONG_VALUES, _HTTPIE_LONG_FLAGS, "pPosaA", "jfmhbvdcqSFxI46",
+                   {"o": "output", "d": "download"})
+_CLIENT_OPTIONS = {
+    "curl": (_CURL_LONG_VALUES, _CURL_LONG_FLAGS, "EKCbcdDFPHhmoxUQreXYytzTuAw", "aqfGgI0ik46jlLMn:NZ#pJORSs231BvV",
+             {"o": "output", "O": "remote-name", "J": "remote-header-name", "g": "globoff", "K": "config"}),
+    "wget": (_WGET_LONG_VALUES, _WGET_LONG_FLAGS, "aABDeiIlOoPQRtTUwX", "VhbdqvFcNS46xErkKmpHL",
+             {"O": "output-document"}),
+    "aria2c": (_ARIA2C_LONG_VALUES, _ARIA2C_LONG_FLAGS, "dDoiIlsxkjtmuU", "cqZVhv",
+               {"o": "out", "Z": "force-sequential", "i": "input-file"}),
+    "http": _HTTPIE_OPTIONS, "https": _HTTPIE_OPTIONS, "httpie": _HTTPIE_OPTIONS, "xh": _HTTPIE_OPTIONS,
+}
+_HTTPIE_CLIENTS = frozenset({"http", "https", "httpie", "xh"})
+# curl's URL globbing (`{a,b}`, `[1-3]`) and aria2c's parameterized URIs: with them an output name may be built from
+# the URL (`curl "https://x/{.env}" -o "#1"` writes ./.env).
+_URL_GLOB = re.compile(r"[{}\[\]]")
+
+
+def _resolve_long(name, values, flags):
+    """(the long options a possibly abbreviated name may mean, whether it may take a value). An exact name is
+    itself; a prefix may mean every option it begins; a name no option begins is taken as taking a value."""
+    known = values | flags
+    if name in known:
+        return {name}, name in values
+    if name.startswith("expand-") and name[7:] in known:  # curl's --expand-<option>
+        return {name[7:]}, name[7:] in values
+    cands = {k for k in known if k.startswith(name)}
+    if not cands and name.startswith("no-") and name[3:] in flags:
+        return {name[3:]}, False
+    return cands, (not cands) or bool(cands & values)
+
+
+def _client_args(client, values):
+    """Read a network client's argument values (None for a word computed at run time) by its option table.
+
+    Returns (options, urls, closed): `options` lists (set of long names it may mean, value or None); `urls` maps the
+    index of each positional operand and of each curl `--url` value to its URL text; `closed` is True when an httpie
+    or xh short-option cluster holds `d` beside a letter the table does not know, which takes the URL exemption
+    from the whole command. A computed word may be an option taking the next word: that word gets no URL role."""
+    long_values, long_flags, short_values, short_flags, short_long = _CLIENT_OPTIONS[client]
+    options, urls, closed = [], {}, False
+    i, n, operands_only = 0, len(values), False
+    while i < n:
+        v = values[i]
+        if v is None:
+            i += 2
+            continue
+        if operands_only or v == "-" or v[:1] != "-":
+            urls[i] = v
+            i += 1
+            continue
+        if v == "--":
+            operands_only = True
+            i += 1
+            continue
+        if v.startswith("--"):
+            body, eq, inline = v[2:].partition("=")
+            cands, takes = _resolve_long(body, long_values, long_flags)
+            value = None
+            if eq:
+                value = inline
+                if cands == {"url"}:
+                    urls[i] = inline
+            elif takes:
+                value = values[i + 1] if i + 1 < n else None
+                if cands == {"url"} and value is not None:
+                    urls[i + 1] = value
+                i += 1
+            options.append((cands, value))
+            i += 1
+            continue
+        cluster, k = v[1:], 0
+        while k < len(cluster):
+            c = cluster[k]
+            if client == "wget" and c == "n":  # -nv, -nc, -nd, -nH: `n` and the letter after it
+                k += 2
+                continue
+            names = {short_long.get(c, "-" + c)}
+            if c in short_values or c not in short_flags:
+                if c not in short_values and client in _HTTPIE_CLIENTS and "d" in cluster:
+                    closed = True
+                value = cluster[k + 1:]
+                if not value:
+                    value = values[i + 1] if i + 1 < n else None
+                    i += 1
+                options.append((names, value))
+                break
+            options.append((names, None))
+            k += 1
+        i += 1
+    return options, urls, closed
+
+
+def _network_output(name, values):
+    """(writes, url_names_it, urls) for a network client's argument values: whether it writes a file of its own,
+    whether that file is named after the URL (wget without -O/--output-document or with one other than `-`; curl
+    -O, --remote-name, --remote-name-all or -J; aria2c without -o/--out; http, https, httpie or xh with -d or
+    --download, in a cluster or abbreviated, and no -o/--output), and its URL operands by word index
+    (_client_args). An option that may mean one naming the output is taken as naming it, so the caller keeps its
+    check rather than lifting it. A config file can turn such an option on (a curl config holding `remote-name`),
+    so curl -K/--config, wget --config and aria2c --conf-path name the output after the URL, and so does httpie
+    or xh without -o/--output, whose default options file can add --download."""
+    options, urls, closed = _client_args(name, values)
+
+    def may(opt):
+        return any(opt in names for names, _ in options)
+
+    def last(opt):
+        found = [val for names, val in options if names == {opt}]
+        return found[-1] if found else None
+
+    # An output value holding `#` may be a curl glob reference (`-o "#1"`): taken as naming the output after the
+    # URL, in every client. A URL holding a glob or parameter character is taken so too, unless curl's globbing is
+    # off by -g or --globoff (and no word spells a `--no-` option, which might turn it back on).
+    hashed = any(names & {"output", "output-document", "out"} and val is not None and "#" in val
+                 for names, val in options)
+    globbed = any(_URL_GLOB.search(u) for u in urls.values())
+    if name == "curl":
+        globoff = any(names == {"globoff"} for names, _ in options) \
+            and not any(v is not None and v.startswith("--no-") for v in values)
+        named = may("remote-name") or may("remote-name-all") or may("remote-header-name") or may("config") \
+            or hashed or (globbed and not globoff)
+        to_file = any("output" in names and val != "-" for names, val in options)
+        return named or to_file, named, urls
+    if name == "wget":
+        document = last("output-document")
+        unsure = any("output-document" in names and len(names) > 1 for names, _ in options)
+        return document != "-", document is None or unsure or hashed or may("config"), urls
+    if name == "aria2c":
+        # -Z/--force-sequential downloads each URI under its own name whatever -o says; -i/--input-file reads URIs
+        # and per-URI options from a file; a parameterized URI expands into several.
+        sequential = may("force-sequential") or may("input-file") or may("conf-path")
+        return True, last("out") is None or sequential or hashed or globbed, urls
+    download = may("download")
+    output = last("output") is not None
+    return download or output, closed or hashed or not output, urls
+
+
+# The options of cp, mv, ln, install and rsync that take a value as the next word (or the rest of a short cluster):
+# that value is no source operand. An option not listed is taken as taking none, so the word after it is judged.
+_COPY_OPTIONS = {
+    "cp": (frozenset({"target-directory", "suffix"}), "tS"),
+    "mv": (frozenset({"target-directory", "suffix"}), "tS"),
+    "ln": (frozenset({"target-directory", "suffix"}), "tS"),
+    "install": (frozenset({"target-directory", "suffix", "mode", "owner", "group", "strip-program"}), "tSmog"),
+    "rsync": (frozenset((
+        "exclude include exclude-from include-from files-from filter rsh rsync-path log-file log-file-format "
+        "partial-dir temp-dir compare-dest copy-dest link-dest backup-dir suffix chmod chown usermap groupmap "
+        "timeout contimeout bwlimit max-size min-size max-delete modify-window password-file port sockopts "
+        "out-format info debug protocol iconv checksum-choice compress-choice compress-level skip-compress "
+        "block-size stop-after stop-at write-batch only-write-batch read-batch outbuf remote-option address "
+        "checksum-seed max-alloc early-input").split()), "efTBM"),
+}
+
+
+def _copier_operands(name, words):
+    """(index, Word) of each operand of a cp, mv, ln, install or rsync, its option words and their values aside. A
+    computed word is kept as an operand."""
+    longs, shorts = _COPY_OPTIONS.get(name, (frozenset(), ""))
+    out, i, only = [], 0, False
+    while i < len(words):
+        v = words[i].value()
+        if only or v is None or v == "-" or v[:1] != "-":
+            out.append((i, words[i]))
+        elif v == "--":
+            only = True
+        elif v.startswith("--"):
+            body, eq, _ = v[2:].partition("=")
+            if not eq and body in longs:
+                i += 1
+        else:
+            for k, c in enumerate(v[1:], 1):
+                if c in shorts:
+                    if k + 1 == len(v):
+                        i += 1
+                    break
+        i += 1
+    return out
+
+
+def _local_url(value):
+    """True when a network client's argument is a `file:` URL, any case: a local file it reads."""
+    return bool(value) and value[:5].lower() == "file:"
+
+
+def _word_sensitive(w, **roles):
+    """lib/sensitive_names.py's verdict on a Word: its static value with the exemptions `roles` allows, or its raw
+    text when computed."""
+    from lib.sensitive_names import is_sensitive_name
+    v = w.value()
+    return is_sensitive_name(v, **roles) if v is not None else is_sensitive_name(w.text, computed=True)
+
+
+def _code_copy(t):
+    """True when a copy, move or link writes a code file from a code file (`cp src/password.ts dist/password.ts`)
+    into a directory that carries no secret word."""
+    from lib.sensitive_names import base_name, is_code_file, is_sensitive_name
+    if t.mechanism not in _SENSITIVE_COPIERS or not (t.source and is_code_file(t.source) and is_code_file(t.path)):
+        return False
+    head = t.path[:len(t.path) - len(base_name(t.path))]
+    return not is_sensitive_name(head)
+
+
+def _command_name(cmd):
+    try:
+        from lib.shell_parse import resolve
+        return resolve(cmd).name
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def sensitive_redirect(command):
-    """'write' when a command redirects its output into a file named like a secret, 'redirect' when a command that
-    names such a file (an argument or an input redirection) writes its output to a file; None otherwise.
+    """BS-20/21 (audit BS-10/11). 'write' when a command writes a file lib/sensitive_names.py calls sensitive (a
+    redirection into it, or tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming
+    it), 'redirect' when such a name is a word or an input redirection of a command whose output goes to a file, or
+    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise.
 
-    Read from lib/shell_parse.py's commands, so a name inside quoted data is not a redirection. A command the parser
-    cannot read is judged on its raw text.
+    Read from lib/shell_parse.py's parsed commands, payloads included (eval, bash -c, a heredoc-fed shell), so a
+    name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
+    by substring with lib/sensitive_names.py's narrow exemptions, each only where its role allows: a test file
+    anywhere; a report, log or template as a write target; a template as a cp or cat source; a URL as a network
+    client's positional operand or curl `--url` value whose output file it does not name (not `file:`, not
+    host-less, not host `.` or `..`; not with an output value holding `#`, a curl URL holding `{`, `}`, `[` or `]`
+    without -g/--globoff, nor aria2c without -o or with -Z/--force-sequential, -i/--input-file, --conf-path or a
+    parameterized URI, nor curl -K/--config or wget --config, nor httpie or xh without -o/--output), never as an
+    option's value, a redirection or write target or another
+    command's operand; a `file:` URL a network client reads into its own output file
+    (curl -o, wget -O) is a secret read; a code file copied onto a code-file name; a source-code or Markdown/reST
+    operand of cp, mv, install, rsync, ln or sed -i (is_code_or_doc_operand). A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
+    their raw text. A command the parser cannot read is judged on its raw text by substring, so it is refused more,
+    never less.
     """
+    from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
+                                     is_sensitive_name)
     try:
-        from lib.shell_parse import parse, walk
+        from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
+        for t in write_targets(script, into=_DEFAULT_INTO):
+            writer = t.mechanism.startswith("redirect") or t.mechanism.split("-", 1)[0] in _SENSITIVE_WRITERS
+            if not writer or t.mode == "delete":
+                continue
+            if t.path is not None:
+                if t.mechanism.split("-", 1)[0] in _OPERAND_WRITERS and is_code_or_doc_operand(t.path):
+                    continue
+                if is_sensitive_name(t.path, report=True, template=True) and not _code_copy(t):
+                    return "write"
+            elif t.word is not None and _word_sensitive(t.word):
+                return "write"
         for site in walk(script):
             redirs = [r for r in site.cmd.redirects if r.target is not None]
             outputs = [r for r in redirs if r.writes()]
-            if any(SENSITIVE_NAME.search(r.target.text) for r in outputs):
+            if any(_word_sensitive(r.target, report=True, template=True) for r in outputs):
                 return "write"
-            if outputs and (any(SENSITIVE_NAME.search(w.text) for w in site.cmd.words[1:])
-                            or any(SENSITIVE_NAME.search(r.target.text) for r in redirs if not r.writes())):
+            name = _command_name(site.cmd)
+            network = name in _NETWORK_CLIENTS
+            writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
+                                              if network else (False, False, {}))
+            if not outputs and network and writes:
+                # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
+                if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
+                    return "redirect"
+                continue
+            if outputs:
+                words = list(enumerate(site.cmd.words[1:]))
+            elif name in _SENSITIVE_COPIERS:
+                # A copy's source operands, its options and their values aside (`rsync --exclude .env`): a
+                # source-code file is no secret read (its destination was judged above).
+                words = [(i, w) for i, w in _copier_operands(name, site.cmd.words[1:])
+                         if not is_code_file(w.value()) and not is_code_or_doc_operand(w.value())]
+            else:
+                continue
+            # The destination was judged above, so a cp or cat source here is copied into a path that is not
+            # sensitive. A URL is a network client's positional operand or curl `--url` value only, never an
+            # option's value (`curl -c http://../.env URL` writes ./.env), another command's operand, nor one that
+            # names the client's output file (wget https://x/.env > /tmp/log writes ./.env).
+            url_role = network and not url_names_output
+            template = name in _TEMPLATE_COPIERS
+
+            def sensitive(i, w):
+                if url_role and i in urls and w.value() is not None:
+                    return is_sensitive_name(urls[i], url=True)
+                return _word_sensitive(w, template=template)
+
+            if any(sensitive(i, w) for i, w in words) \
+                    or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
                 return "redirect"
         return None
     except Exception:  # noqa: BLE001
-        if grep(r"(>|>>)\s*\S*(\.env|credentials|secret|password)", command):
+        if grep(RAW_FALLBACK_WRITE, command):
             return "write"
-        if grep(r"(\.env|credentials|secret|password)\S*\s*(>|>>)", command):
+        if grep(RAW_FALLBACK_READ, command):
             return "redirect"
         return None
 
