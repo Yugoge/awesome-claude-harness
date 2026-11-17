@@ -7,10 +7,15 @@ subagent, each other path by which an agent call could switch the harness or fak
 
   Skill / SlashCommand  invoking the harness command (its settings deny and its
                         disable-model-invocation say the same)
-  Bash                  running scripts/harness-switch or the switch hook; writing the switch's
+  Bash                  running scripts/harness-switch or the switch hook (an execution only:
+                        the command word, an interpreter's script operand or stdin, source / .,
+                        a text runner's operand; matched by name, real path, inode or content),
+                        or writing it; a command whose words name it passes only when it provably
+                        reads it alone (_harmless_read: sed -n, shellcheck, bash -n, ...); writing the switch's
                         state <H>/.harness-switch/ (a word the command writes, read from the call's
                         directory and every `cd`'s, as below; reading it is free); typing `/harness on|off`
-                        into a Claude Code session the command starts; writing the home's
+                        into a Claude Code session the command starts (`claude` run as a command, but
+                        --version, --help, doctor, mcp, config, with /harness anywhere in it); writing the home's
                         settings files (settings.json, settings.machine.json, settings.local.json);
                         writing disableAllHooks into any settings*.json, in any project. A command
                         writes only the words it writes (_written_by: a redirect's target, cp's
@@ -96,6 +101,7 @@ AWK_OUT_OPS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 AWK_PARAM_PLAIN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!_-]")  # $name, ${name}, $1, $@: no subscript or
 # operator (`${a[PATH=1]}`, `${PATH:=x}`, `${!x}` can assign or reach any name)
 AWK_UNSAFE = frozenset("{}*?[]$`~!")  # unquoted, a character the shell may expand (brace, glob, $, `, ~, !)
+AWK_LOADS = re.compile(r"@\s*(?:include|load|namespace)\b")  # gawk's directives that load another file
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
 SED_LONG = ("--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--posix",
@@ -299,6 +305,385 @@ def _runs_text(script) -> bool:
                     or shell_parse._SHELL_LIKE_RE.fullmatch(name):
                 return True
     return False
+
+
+SWITCH_FILES = (os.path.join(HOME, "scripts", "harness-switch"), os.path.join(HOME, "hooks", "userprompt-harness-switch.sh"))
+SESSIONLESS = ("--version", "-v", "--help", "-h", "doctor", "mcp")  # claude's forms that start no session
+CLAUDE_LOOKUPS = (("which",), ("which", "-a"), ("command", "-v"), ("command", "-V"), ("type",), ("type", "-a"),
+                  ("type", "-t"), ("type", "-p"), ("type", "-P"))  # find claude on PATH; run nothing
+PY_READERS = ("py_compile", "compileall", "tokenize", "tabnanny", "pyclbr", "dis", "ast")  # python -m: it reads
+INTERP_VALUE = {"python": "WXQ", "perl": "IM", "ruby": "IrCE", "node": "r", "nodejs": "r", "bun": "r", "php": "dc",
+                "shell": "oO"}  # short options whose value is the next word
+INTERP_CODE_OPTS = {"python": "c", "perl": "eE", "ruby": "e", "node": "ep", "nodejs": "ep", "bun": "e", "php": "rB",
+                    "shell": "c"}  # code on the command line: the script operand is no script
+STDIN_SCRIPT = ("-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0")
+
+
+def _switch_identity():
+    out = []
+    for path in SWITCH_FILES:
+        try:
+            st = os.stat(path)
+            with open(path, "rb") as fh:
+                out.append((os.path.realpath(path), (st.st_dev, st.st_ino), st.st_size, fh.read()))
+        except OSError:
+            continue
+    return out
+
+
+def _is_switch(text: str, dirs: list, ident: list) -> bool:
+    """Whether `text` names the switch program: its name, or a file with its real path, inode or content."""
+    if not text or "\0" in text:
+        return False
+    if os.path.basename(text.rstrip("/")) in SWITCH_PROGRAMS:
+        return True
+    for d in dirs:
+        path = _resolve(text, d)
+        try:
+            st = os.stat(path)
+        except (OSError, ValueError):
+            continue
+        if not os.path.isfile(path):
+            continue
+        for real, ino, size, content in ident:
+            if path == real or (st.st_dev, st.st_ino) == ino:
+                return True
+            if st.st_size == size:
+                try:
+                    with open(path, "rb") as fh:
+                        if fh.read(size + 1) == content:
+                            return True
+                except OSError:
+                    pass
+    return False
+
+
+def _feeds_switch(word, env: dict, dirs: list, ident: list) -> bool:
+    """Whether a word is the switch program or prints it: its text names it, or a substitution in it
+    (a process or command substitution) has a word that names it."""
+    if word is None:
+        return False
+    if _is_switch(_text(word, env), dirs, ident):
+        return True
+    for p in shell_parse.active_parts(word.parts):
+        if p.body is not None and _names_switch(p.body, env, dirs, ident):
+            return True
+    return False
+
+
+def _names_switch(script, env: dict, dirs: list, ident: list) -> bool:
+    """Whether any word of any command in `script` (its substitutions included) names the switch program."""
+    for site in shell_parse.walk(script):
+        for w in list(site.cmd.words) + [r.target for r in site.cmd.redirects if r.target is not None]:
+            if _is_switch(_text(w, env), dirs, ident):
+                return True
+        for r in site.cmd.redirects:
+            if r.hd is not None and any(_is_switch(t, dirs, ident) for t in r.hd.body.split()):
+                return True
+    return False
+
+
+def _prev_stage(site):
+    """The pipeline stage before `site`'s command, as a one-stage Script, or None."""
+    for pl, _sep in getattr(site.script, "items", ()):
+        for k, stage in enumerate(pl.stages):
+            if stage is site.cmd:
+                return shell_parse.Script([(shell_parse.Pipeline([pl.stages[k - 1]], []), None)],
+                                          site.script.source, None) if k else None
+    return None
+
+
+def _kind(name: str):
+    if name in shell_parse.SHELLS or shell_parse._SHELL_LIKE_RE.fullmatch(name):
+        return "shell"
+    m = INTERPRETER.match(name)
+    if not m:
+        return None
+    base = re.match(r"[a-z]+", name).group(0)
+    return "python" if base == "python" else "shell" if base in ("bash", "sh", "dash", "zsh", "ksh") else base
+
+
+def _interpreter_runs_switch(site, res, kind: str, env: dict, dirs: list, ident: list) -> bool:
+    """Whether an interpreter or shell runs the switch program: as its script operand, or on its stdin."""
+    args, i, check = list(res.args), 0, False
+    script = None
+    while i < len(args):
+        v = args[i].value()
+        if v is None or not v.startswith(("-", "+")) or v in ("-",):
+            script = args[i]
+            break
+        if v == "--":
+            script = args[i + 1] if i + 1 < len(args) else None
+            break
+        if v.startswith("--"):
+            i += 1
+            continue
+        flags = v[1:]
+        if kind == "python" and "m" in flags:
+            mod = flags.split("m", 1)[1] or (args[i + 1].value() if i + 1 < len(args) else None)
+            if mod in PY_READERS:
+                return False
+            rest = args[i + (1 if flags.split("m", 1)[1] else 2):]
+            return any(_feeds_switch(w, env, dirs, ident) for w in rest)  # a module run on the switch
+        if any(c in INTERP_CODE_OPTS.get(kind, "") for c in flags):
+            return False  # code on the command line; its operands are arguments
+        if kind == "shell" and v.startswith("-") and "n" in flags:
+            check = True  # bash -n: read, not run
+        if flags and flags[-1] in INTERP_VALUE.get(kind, ""):
+            i += 2
+            continue
+        i += 1
+    if check:
+        return False
+    if script is not None and script.value() not in STDIN_SCRIPT:
+        return _feeds_switch(script, env, dirs, ident)
+    for r in site.cmd.redirects:  # stdin: a file, a here-string, a heredoc
+        if r.fd != 0:
+            continue
+        if r.op in ("<", "<>", "<<<") and _feeds_switch(r.target, env, dirs, ident):
+            return True
+        if r.hd is not None and (any(_is_switch(t, dirs, ident) for t in r.hd.body.split()) or any(
+                p.body is not None and _names_switch(p.body, env, dirs, ident) for p in r.hd.expansions)):
+            return True
+    prev = _prev_stage(site) if "pipe" in site.fed else None
+    return prev is not None and _names_switch(prev, env, dirs, ident)
+
+
+def _executions(script, command: str, dirs: list, ident: list, depth: int = 0):
+    """The reason a command in `script` runs the switch program or starts a Claude Code session
+    given /harness, or None. Only executions count: the command word (wrappers peeled), an
+    interpreter's or shell's script operand or stdin, source / ., and a text runner's operands."""
+    env = dict(os.environ)
+    typed = bool(TYPED.search(command))
+    for site in shell_parse.walk(script):
+        cmd = site.cmd
+        for a in cmd.assignments if not cmd.words else ():
+            env.pop(a.name, None) if a.static_value() is None else env.update({a.name: a.static_value()})
+        res = shell_parse.resolve(cmd)
+        head = res.head
+        if head is None:
+            continue
+        head_text = _text(head, env)
+        if _feeds_switch(head, env, dirs, ident):
+            return "runs the switch (%s)" % os.path.basename(head_text)
+        name = os.path.basename(head_text)
+        args = [_text(w, env) for w in res.args]
+        if typed and (name == "claude" or (head.value() is None and "claude" in head.raw.text)) \
+                and (args[:1] or [""])[0] not in SESSIONLESS:
+            return "types /harness into a Claude Code session it starts"
+        if name in ("source", ".") and res.args and _feeds_switch(res.args[0], env, dirs, ident):
+            return "runs the switch (%s %s)" % (name, os.path.basename(args[0]))
+        kind = _kind(name)
+        if kind and _interpreter_runs_switch(site, res, kind, env, dirs, ident):
+            return "runs the switch (%s on it)" % name
+        if name in TEXT_RUNNERS and depth < 3:  # a program that runs its operands as commands
+            for w, t in zip(res.args, args):
+                if _feeds_switch(w, env, dirs, ident):
+                    return "runs the switch (%s %s)" % (name, os.path.basename(t))
+                if typed and os.path.basename(t) == "claude":
+                    return "types /harness into a Claude Code session it starts"
+                if any(c in t for c in " ;|&\n"):
+                    why = _executions(shell_parse.parse(t), command, dirs, ident, depth + 1)
+                    if why:
+                        return why
+            for r in cmd.redirects:
+                if r.hd is not None:
+                    why = _executions(shell_parse.parse(r.hd.body), command, dirs, ident, depth + 1)
+                    if why:
+                        return why
+    return None
+
+
+def _writes_switch(words: list, written: list) -> bool:
+    """Whether one command writes the switch program: a word it writes, or perl / ruby -i's operands."""
+    plain = _argv(words)
+    inplace = bool(plain) and os.path.basename(plain[0]) in ("perl", "ruby") and any(
+        re.match(r"-[A-Za-z]*i", w) for w in plain[1:])
+    return any(os.path.basename(w.split("=", 1)[-1].rstrip("/")) in SWITCH_PROGRAMS
+               for w in list(written) + (plain if inplace else []))
+
+
+PROOF_READERS = frozenset({"cat", "head", "tail", "wc", "ls", "stat", "file", "md5sum", "sha1sum", "sha256sum",
+                           "sha512sum", "cksum", "diff", "cmp", "nl", "od", "grep", "egrep", "fgrep",
+                           "shellcheck"})  # no interpreter: a python -m module, pylint, flake8, ruff or cp runs or
+# plants code (cwd first on sys.path, cwd rc files, a copy into a PATH dir or as <module>.py)
+RG_LONG = frozenset(("after-context", "before-context", "binary", "byte-offset", "case-sensitive", "color", "colors",
+                     "column", "context", "count", "count-matches", "crlf", "files", "files-with-matches",
+                     "files-without-match", "fixed-strings", "follow", "glob", "heading", "hidden", "iglob",
+                     "ignore-case", "invert-match", "line-number", "line-regexp", "max-columns", "max-count",
+                     "max-depth", "multiline", "multiline-dotall", "no-filename", "no-heading", "no-ignore",
+                     "no-line-number", "no-messages", "null", "only-matching", "passthru", "quiet", "regexp",
+                     "smart-case", "sort", "sortr", "stats", "text", "trim", "type", "type-not", "unrestricted",
+                     "with-filename", "word-regexp", "vimgrep", "json", "fixed-strings"))  # rg's long options
+# that run nothing: any other, an abbreviation of --pre / --pre-glob / --hostname-bin / --hyperlink-format
+# included, is no proof
+GIT_PROOF_BANNED = ("--ext-diff", "--textconv", "--open-files-in-pager", "--output", "--output-directory", "--exec",
+                    "--upload-pack", "--receive-pack", "--config-env", "--paginate")  # or an abbreviation of one
+PROOF_BANNED = frozenset({"export", "declare", "typeset", "local", "readonly", "set", "alias", "read", "mapfile",
+                          "readarray", "enable"}) | TEXT_RUNNERS  # set or export a variable, or run text
+PROOF_SINKS = ("/dev/null", "/dev/stdout", "/dev/stderr")
+
+
+def _dynamic(word, env: dict) -> bool:
+    """Whether the shell computes a word (an expansion `env` cannot read, a substitution, a glob, a brace)."""
+    return any(p.kind != "lit" and not (p.kind == "param" and p.text in env) for p in word.parts)
+
+
+def _proof_reader(res, env: dict) -> bool:
+    """Whether a resolved command only reads its operands: a reader on the allow-list, with no option
+    that runs a program or writes a file."""
+    name = res.name
+    if name is None or res.payload is not None or res.assignments:
+        return False
+    if any(w[0] in TEXT_RUNNERS for w in res.wrappers):
+        return False
+    args = [_text(w, env) for w in res.args]
+    plain = [name] + args
+    if name in PROOF_READERS:
+        return True
+    if name == "rg":
+        for a in args:
+            if a == "--":
+                break
+            if a.startswith("--"):
+                if a[2:].split("=", 1)[0] not in RG_LONG:
+                    return False
+            elif a.startswith("-") and not re.fullmatch(r"-[A-Za-y0-9]+", a):
+                return False  # -z runs decompressors
+        return True
+    if name in ("less", "more"):
+        return all(re.fullmatch(r"-[A-Za-z]+", a) and not re.search("[oOk]", a) or not a.startswith(("-", "+"))
+                   for a in args)
+    if name == "sed":
+        return _sed(plain) == []
+    if name in AWKS:
+        program = _awk(plain)  # None for -f / --file / -i / --include / -l / --load / -E / --exec
+        return (program is not None and not AWK_OUTPUT.search(program) and "getline" not in program
+                and not AWK_LOADS.search(program))
+    if name == "git":
+        return _read_only(plain) and not any(
+            a.startswith(("-O", "-c")) or a.startswith("--") and len(a.split("=", 1)[0]) > 3 and any(
+                b.startswith(a.split("=", 1)[0]) for b in GIT_PROOF_BANNED) for a in args)
+    kind = _kind(name)
+    if kind == "shell":
+        return name in ("bash", "sh") and len(args) == 2 and args[0] == "-n" and not args[1].startswith(("-", "+"))
+    return False
+
+
+def _harmless_nested(script) -> bool:
+    """Whether a command holding both /harness text and a nested `claude` provably starts no
+    session that could read the text: every simple command (substitutions and function bodies
+    included) is, with no assignment, wrapper or path-named command word, either `claude` with a
+    sessionless form alone (--version, -v, --help, -h, doctor, `mcp list` / `mcp get <name>`),
+    which / command -v|-V / type of plain names, echo, printf without -v, or a proven reader
+    (_proof_reader); and nothing writes a file but /dev/null, /dev/stdout, /dev/stderr. Anything
+    else (interpreter code, a text runner, an unknown runner, a copy or link of the binary, git with
+    -c or an alias, sed's e) keeps the parent's refusal."""
+    env = dict(os.environ)
+    for t in shell_parse.write_targets(script):
+        if t.word is None or t.path not in PROOF_SINKS:
+            return False
+    for site in shell_parse.walk(script):
+        cmd = site.cmd
+        if site.dynamic or cmd.assignments or not cmd.words:
+            return False
+        res = shell_parse.resolve(cmd)
+        if res.unresolved or res.assignments or res.wrappers or res.payload is not None or res.head is None:
+            return False
+        head = res.head.value()
+        if head is None or "/" in head or res.head is not cmd.words[0]:
+            return False
+        if head == "claude":
+            args = [w.value() for w in res.args]
+            if any(a is None for a in args) or not args:
+                return False
+            if not (len(args) == 1 and args[0] in SESSIONLESS and args[0] != "mcp"
+                    or len(args) == 2 and args == ["mcp", "list"]
+                    or len(args) == 3 and args[:2] == ["mcp", "get"] and not args[2].startswith("-")):
+                return False
+            continue
+        words = [w.value() for w in cmd.words]
+        if all(w is not None for w in words) and any(
+                tuple(words[:len(k)]) == k and words[len(k):] and all(
+                    not w.startswith("-") and "/" not in w for w in words[len(k):]) for k in CLAUDE_LOOKUPS):
+            continue
+        if head == "echo" or head == "printf" and not any(
+                (w.value() or "-v").startswith("-v") for w in res.args[:1]):
+            continue
+        if res.name == head and _proof_reader(res, env):
+            continue
+        return False
+    return True
+
+
+def _harmless_read(script, dirs: list, ident: list) -> bool:
+    """Whether a command that names the switch program only reads it: every simple command a word of
+    which names it (by text, real path, inode or content), names a file the command writes, or is
+    computed, is a reader on an allow-list (_proof_reader), as is every pipeline stage fed by such a
+    command; no command sets or exports a variable, runs text (xargs, eval, source, exec, find -exec,
+    ...), runs an interpreter or shell other than `bash -n F` / `sh -n F`, or writes a file (a
+    redirect or tee to anything but /dev/null, /dev/stdout, /dev/stderr), so no copy is made."""
+    env = dict(os.environ)
+    written = []
+    for t in shell_parse.write_targets(script):
+        if t.word is None or t.path not in PROOF_SINKS:
+            return False  # a reader writes nothing but /dev/null and its own stdout / stderr
+
+    def mentions(text: str) -> bool:
+        flat = re.sub(r"[\\'\"]", "", text)
+        return "harness-switch" in flat or any(w and w in flat for w in written)
+
+    def names(word) -> bool:
+        return _dynamic(word, env) or mentions(word.raw.text) or mentions(_text(word, env)) or _is_switch(
+            _text(word, env), dirs, ident)
+
+    fed_by = set()  # ids of the commands whose output may carry the switch program
+    for site in shell_parse.walk(script):
+        cmd = site.cmd
+        if cmd.assignments:
+            return False
+        res = shell_parse.resolve(cmd)
+        if res.unresolved or res.assignments:
+            return False
+        if res.head is not None and names(res.head):
+            return False  # the command word: a run, not a read
+        if res.name in PROOF_BANNED or any(w[0] in PROOF_BANNED for w in res.wrappers):
+            return False
+        if res.name == "find" and any(_text(a, env) in shell_parse._FIND_EXEC for a in res.args):
+            return False
+        reader = _proof_reader(res, env)
+        kind = _kind(res.name or "")
+        if (kind or res.payload is not None) and not reader:
+            return False  # an interpreter or shell that runs code
+        args = {id(w) for w in res.args}
+        named = False
+        for w in cmd.words:
+            if names(w):
+                if id(w) not in args:
+                    return False  # a wrapper's word
+                named = True
+        for r in cmd.redirects:
+            if r.hd is not None:
+                body = r.hd.body
+                named = named or mentions(body) or any(_is_switch(t, dirs, ident) for t in body.split()) or bool(
+                    r.hd.expansions)
+            elif r.target is not None and not r.writes() and r.dup is None and names(r.target):
+                if res.head is None or r.fd != 0:
+                    return False  # exec < F, a descriptor of a program's own: a script it may run
+                named = True
+        if "pipe" in site.fed:
+            prev = None
+            for pl, _sep in getattr(site.script, "items", ()):
+                for k, stage in enumerate(pl.stages):
+                    if stage is cmd and k:
+                        prev = pl.stages[k - 1]
+            if prev is None or not isinstance(prev, shell_parse.SimpleCommand) or id(prev) in fed_by:
+                named = True
+        if named:
+            if not reader:
+                return False
+            fed_by.add(id(cmd))
+    return True
 
 
 GitCall = collections.namedtuple("GitCall", "sub dirs program env source gitdirs traces")
@@ -1755,12 +2140,21 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
     if "disableAllHooks" in command and writes_settings_file(command):
         return refuse("this Bash command writes disableAllHooks into a settings file, which would switch every "
                       "hook off")
-    if TYPED.search(command) and NESTED.search(command):
+    script, sites = shell_parse.parse(command), []
+    if script.error is not None and TYPED.search(command) and NESTED.search(command):  # text the parser cannot read
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
-    script, sites = shell_parse.parse(command), []
+    if TYPED.search(command) and NESTED.search(command) and not _harmless_nested(script):  # unproven: as the parent
+        return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
+                      "the switch as a prompt")
     settings, segments = _settings_files(), list(_commands(script, "all", every_word=True, sites=sites))
     every_dir, checked = _cd_dirs(segments, cwd), set()  # the call's directory and each `cd`'s, chains read through
+    ident = _switch_identity()
+    why = _executions(script, command, every_dir, ident) if script.error is None else None
+    if why is not None:
+        return refuse("this Bash command " + why + ("" if "session" not in why else
+                                                    ", where it would reach the switch as a prompt"))
+    proof = None  # whether the command provably only reads the switch program, worked out when needed
     chain = _chain(script, cwd)  # where each command runs, read along the chain
     shared = _shared_assignments(segments)  # an export, a lone assignment, or one before a shell
     shared += _unknown_exports(segments, shared)  # exported with a value set by printf -v, read, ...
@@ -1824,10 +2218,16 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                 if git.sub is not None and _in_home([_resolve(w.split("=", 1)[-1] if w.startswith("-") else w, r)
                                                      for w in words[git.sub + 1:] for r in ran_in], settings):
                     foreign = True  # git reads a harness-home path under config the command chooses
-        for word in words + _config_attached_files(words, git):  # `git config -f<file>`, as `-f <file>`
+        for word in words + _config_attached_files(words, git):  # `git config -f<file>`, as `-f <file>`; naming the
+            # switch, unless the command provably only reads it
             token = word.split("=", 1)[-1]
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):
-                return refuse("this Bash command runs the switch (%s)" % os.path.basename(token))
+                if proof is None:
+                    proof = script.error is None and _harmless_read(script, every_dir, ident)
+                if not proof:
+                    return refuse("this Bash command runs the switch (%s)" % os.path.basename(token))
+        if _writes_switch(words, written):
+            return refuse("this Bash command writes the switch program")
         named = list(written) + words if foreign else _written_by(words, written)  # only a reader is relaxed
         for word in dict.fromkeys(named):  # the home's files
             token = word.split("=", 1)[-1]
