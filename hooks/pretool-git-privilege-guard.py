@@ -1367,10 +1367,12 @@ def _evaluate_direct_ref_mutation(command, data):
 # (-c, --config-env, GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS) and,
 # under --stdin, from stdin. All but configuration files and stdin from a file or
 # a program are text in the command, so a command that runs fetch or pull is
-# refused when any word of it, as the shell reads it (the parser's static
-# values: quotes, backslashes and $'...' resolved) or as written with quotes and
-# backslashes dropped (which keeps a computed tail: "x:refs/checkpoints/$b"),
-# holds a refspec whose destination is in the namespace. A remote.<name>.fetch
+# refused when any word of it, read with the parser's static values (quotes,
+# backslashes and $'...' resolved) or as written with quotes and backslashes
+# dropped (which keeps a computed tail: "x:refs/checkpoints/$b"), holds a
+# refspec whose destination is in the namespace, {a,b} brace alternatives
+# expanded and a ${D:-x}/${D-x}/${D:=x}/${D=x} default read in place of D. Any
+# other run-time expansion is not resolved. A remote.<name>.fetch
 # value the command does not show (--config-env) is refused too. A fetch with no
 # destination (`git fetch origin refs/checkpoints/master`, FETCH_HEAD only) or
 # with one elsewhere (refs/remotes/...) passes.
@@ -1407,13 +1409,57 @@ def _in_checkpoint_ns(dst):
     return norm == ns or norm.startswith(ns + '/')
 
 
+# `${NAME:-x}`, `${NAME-x}`, `${NAME:=x}`, `${NAME=x}`: the shell may use x.
+_PARAM_DEFAULT_RE = re.compile(r'\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=]([^{}]*)\}')
+_BRACE_CAP = 256
+
+
+def _brace_group(word):
+    """(start, end, alternatives) of the first `{a,b}` group bash would expand
+    in `word` (not `${...}`), nested groups kept whole in an alternative; None."""
+    for start, ch in enumerate(word):
+        if ch != '{' or (start and word[start - 1] == '$'):
+            continue
+        depth, cut = 0, [start]
+        for k in range(start, len(word)):
+            if word[k] == '{':
+                depth += 1
+            elif word[k] == '}':
+                depth -= 1
+                if not depth:
+                    if len(cut) > 1:
+                        cut.append(k)
+                        return start, k, [word[a + 1:b] for a, b in zip(cut, cut[1:])]
+                    break
+            elif word[k] == ',' and depth == 1:
+                cut.append(k)
+    return None
+
+
+def _brace_expand(word):
+    """The words bash brace expansion makes of `word` (`{a,b}`, nested), at most
+    _BRACE_CAP of them; past the cap the rest are not expanded."""
+    done, todo = [], [word]
+    while todo and len(done) + len(todo) <= _BRACE_CAP:
+        w = todo.pop()
+        group = _brace_group(w)
+        if group is None:
+            done.append(w)
+            continue
+        start, end, alts = group
+        todo.extend(w[:start] + alt + w[end + 1:] for alt in alts)
+    return done + todo
+
+
 def _maps_into_checkpoints(text):
     """True when `text` holds a refspec `[+]<src>:<dst>` whose <dst> is in the
-    checkpoint namespace (_in_checkpoint_ns)."""
+    checkpoint namespace (_in_checkpoint_ns), with brace alternatives expanded
+    and a parameter's default (`${D:-x}`, `-`, `:=`, `=`) read in its place."""
+    text = _PARAM_DEFAULT_RE.sub(r'\1', text)
     for token in _REFSPEC_SPLIT_RE.split(text):
-        token = token.replace('\\', '')
-        if ':' in token and _in_checkpoint_ns(token.rpartition(':')[2]):
-            return True
+        for word in _brace_expand(token.replace('\\', '')):
+            if ':' in word and _in_checkpoint_ns(word.rpartition(':')[2]):
+                return True
     return False
 
 

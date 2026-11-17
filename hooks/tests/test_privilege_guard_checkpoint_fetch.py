@@ -92,6 +92,16 @@ REFUSED = [
     "git -c alias.f=fetch f origin master:refs/checkpoints/master",
     'git fetch origin "master:refs/checkpoints/$B"',   # a computed tail
     "git fetch origin master:refs/checkpoints/master || true",
+    # brace alternatives and parameter defaults the shell expands (verifier round 1)
+    "git fetch origin master:refs/checkpoint{s,}/master",
+    "git fetch origin master:refs/{checkpoints,x}/master",
+    "git fetch origin --refmap=+refs/heads/*:refs/{checkpoints,x}/*",
+    "git -c remote.origin.fetch=+refs/heads/*:refs/{checkpoints,x}/* fetch origin",
+    "git fetch origin master:${D:-refs/checkpoints/x}",
+    "git fetch origin master:${D-refs/checkpoints/x}",
+    "git fetch origin master:${D:=refs/checkpoints/x}",
+    "git fetch origin master:${D=refs/checkpoints/x}",
+    "git fetch origin master:refs/{x,{y,checkpoints}}/master",
 ]
 
 PASSES = [
@@ -110,6 +120,8 @@ PASSES = [
     # the audit's GIT-7 inputs: they write no checkpoint ref
     "echo main:newbranch | git fetch --stdin origin",
     "git -c remote.origin.fetch=+refs/heads/*:refs/heads/* fetch origin",
+    "git fetch origin master:refs/remotes/{origin,up}/master",
+    "git fetch origin master:${D:-refs/remotes/origin/master}",
 ]
 
 
