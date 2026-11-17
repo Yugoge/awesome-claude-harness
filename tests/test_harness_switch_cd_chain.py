@@ -1,0 +1,274 @@
+"""hooks/pretool-harness-switch-guard.py: where a written word is read from, and which words are code.
+
+A Bash command's written word (test_harness_switch_written_words.py) is read from the directory in
+effect where the command runs: the call's, as each `cd` / `pushd` / `builtin cd` / `command cd`
+before it in the chain leaves it (a `cd` into a directory that is there and enterable moves the
+chain; one that may fail, or one followed by `||`, keeps the directory before it too), with a
+subshell's, a pipeline stage's and a background job's `cd` left inside it, and `env -C` / `--chdir`
+for its own command. Where the directory cannot be known (`cd -`, CDPATH, a computed target, a
+function's body, a payload a shell runs) the word is read from every directory the chain names.
+
+A quoted word is code only where a shell runs it (a -c / eval / su -c / ssh payload, a stage
+piped into a shell, a here-string a shell reads, any word of a command that is no reader); a
+reader's operand (echo, printf, grep, rg, ...) is text, so a note or a search that mentions
+`cd ~/.claude && cp x settings.json` passes, unless the same command runs a shell or an
+interpreter on a file or stdin it may have written.
+
+awk's -v / --assign / -F values, sed's bracket expressions, custom delimiters and `\\cREGEXc`
+addresses, `tar -c` / `-t` (whose operands it reads), cp / mv / ln / install's `-t<DIR>`,
+`--target=<DIR>` and a destination directory are read as the programs read them; an interpreter
+that names a settings file and is not provably read-only writes it for the disableAllHooks rule.
+
+Each case runs the hook as Claude Code does (a PreToolUse payload on stdin) from a harness home at
+~/.claude in a throwaway HOME (a copy of the tree's hooks/), with a project holding a
+.claude/settings.json.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="module")
+def box(tmp_path_factory):
+    root = tmp_path_factory.mktemp("cdchain")
+    home = root / "home"
+    h = home / ".claude"
+    shutil.copytree(ROOT / "hooks", h / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (h / "settings.json").write_text('{"env": {"A": "1"}, "hooks": {}}\n')
+    (h / ".harness-switch").mkdir()
+    (h / ".harness-switch" / "state.json").write_text("{}\n")
+    proj = root / "proj"
+    (proj / ".claude").mkdir(parents=True)
+    (proj / ".claude" / "settings.json").write_text('{"env": {"A": "1"}, "permissions": {"deny": ["Bash(rm:*)"]}}\n')
+    other = root / "other"
+    other.mkdir()
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_HOME", "CLAUDE_TASK_ID",
+                        "CLAUDE_SESSION_ID", "CLAUDE_AGENT_ID", "CDPATH", "OLDPWD") and not k.startswith("GIT_")}
+    env["HOME"] = str(home)
+    return {"home": home, "h": h, "proj": proj, "other": other, "env": env,
+            "hook": h / "hooks" / "pretool-harness-switch-guard.py"}
+
+
+def hook(box, command, cwd, actor="main"):
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd), "session_id": "S1"}
+    if actor == "subagent":
+        payload["agent_id"] = "sub-1"
+    proc = subprocess.run([sys.executable, str(box["hook"])], input=json.dumps(payload), capture_output=True,
+                          text=True, env=box["env"], cwd=str(cwd), timeout=60)
+    return proc.returncode, proc.stderr
+
+
+def cwds(box):
+    return (box["other"], box["proj"], box["h"], box["home"])
+
+
+def fill(box, command):
+    return (command.replace("{proj}", str(box["proj"])).replace("{F}", str(box["h"] / "settings.json"))
+            .replace("{H}", str(box["h"])))
+
+
+MENTIONS = [  # a quoted chain a reader only prints or searches for
+    "echo 'cd ~/.claude && cp x settings.json' > /tmp/notes.txt",
+    "printf '%s\\n' 'cd ~/.claude && touch settings.json'",
+    "grep -rn 'cd ~/.claude && sed -i x settings.json' /tmp",
+    "rg -F 'cd ~/.claude && cp /tmp/evil.json settings.json' /tmp",
+    "echo 'cd ~ && cd .claude && cp x settings.json' >> /tmp/n.md",
+    "echo 'cd ~/.claude && sed -i s/a/b/ settings.json'",
+    "grep -n 'cd ~/.claude; echo > settings.json' /tmp/x",
+    "echo \"cd ~/.claude && touch .harness-switch/off\"",
+    "printf 'touch ~/.claude/.harness-switch/off\\n' >> /tmp/n.md",
+]
+CHAIN_READS = [  # the directory a word is read from is the one in effect where it runs
+    "cd ~/.claude && cd /tmp && echo x > settings.json",
+    "cd ~/.claude && cd /tmp && cp /tmp/e settings.json",
+    "cd ~/.claude; cd /tmp; echo x > settings.json",
+    "cd ~/.claude && cat settings.json && cd /tmp && echo x > settings.json",
+    "builtin cd ~/.claude && command cd /tmp && echo x > settings.json",
+    "cd ~/.claude && tar -cf /tmp/b.tar settings.json",
+    "cd ~/.claude && tar czf /tmp/b.tgz settings.json hooks",
+    "cd ~/.claude && tar --create --file=/tmp/b.tar settings.json",
+    "tar -tvf /tmp/b.tar",
+    "sed -n '/[/]/p' ~/.claude/settings.json",
+    "sed 's/[\\/]/X/' ~/.claude/settings.json > /tmp/out",
+    "sed -n 's/[]a]/X/p' ~/.claude/settings.json",
+    "sed -n '\\,[,],p' ~/.claude/settings.json",
+    "sed -n 's/[[:space:]]*\"hooks\"/H/p' ~/.claude/settings.json > /tmp/h.txt",
+]
+
+
+@pytest.mark.parametrize("command", MENTIONS + CHAIN_READS)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_a_mention_or_a_word_read_elsewhere_passes(box, command, actor):
+    command = fill(box, command)
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 0, (command, cwd, err)
+
+
+SCOPED = [  # a `cd` a subshell, a pipeline stage, a background job or a child shell keeps
+    "(cd ~/.claude && cat settings.json) && echo x > settings.json",
+    "(cd ~/.claude); cp /tmp/e settings.json",
+    "cd ~/.claude | cat; echo x > settings.json",
+    "cd ~/.claude & echo x > settings.json",
+    "bash -c 'cd ~/.claude' && echo x > settings.json",
+]
+
+
+@pytest.mark.parametrize("command", SCOPED)
+def test_a_cd_left_inside_its_subshell_moves_nothing_after_it(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+AWK_PROJECT = [  # awk's -v / --assign values swallowed the program before
+    "awk -v a=1 '{print > \".claude/settings.json\"}' /tmp/x",
+    "awk -va=1 '{print > \".claude/settings.json\"}' /tmp/x",
+    "awk --assign a=1 '{print > \".claude/settings.json\"}' /tmp/x",
+    "awk --assign=a=1 '{print > \".claude/settings.json\"}' /tmp/x",
+    "awk -F: -v a=1 -- '{print > \".claude/settings.json\"}' /tmp/x",
+    "awk -v a=1 -f /tmp/prog.awk .claude/settings.json",
+    "sed -n '/[/]/w.claude/settings.json' /tmp/x",
+    "sed -n '/[/]/w .claude/settings.json' /tmp/x",
+    "cp -t.claude /tmp/x/settings.json",
+    "cp --target=.claude /tmp/x/settings.json",
+    "cd /tmp && cd {proj} && cp /tmp/e .claude/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", AWK_PROJECT)
+def test_a_write_of_a_projects_settings_file_is_refused(box, command):
+    command = fill(box, command)
+    rc, err = hook(box, command, box["proj"])
+    assert rc == 2 and "Claude Code settings file" in err, (command, err)
+
+
+HOME_WRITES = [
+    # awk -v / --assign
+    "cd ~/.claude && awk -v a=1 '{print > \"settings.json\"}' /tmp/x",
+    "awk -v a=1 '{print > \"{F}\"}' /tmp/x",
+    "awk -va=1 '{print > \"{F}\"}' /tmp/x",
+    "awk --assign a=1 '{print > \"{F}\"}' /tmp/x",
+    "awk -v a=1 'BEGIN{print \"{}\" > \"{H}/settings.machine.json\"}' /dev/null",
+    "awk -v a=1 '{print > \"{H}/.harness-switch/off\"}' /tmp/x",
+    # sed bracket expressions, custom delimiters, \cREGEXc
+    "cd ~/.claude && sed -n 's/[/]/X/wsettings.json' /tmp/x",
+    "sed -n 's/[/]/X/w{F}' /tmp/x",
+    "sed -n '/[/]/w{F}' /tmp/x",
+    "sed -n '/[]/]/w {F}' /tmp/x",
+    "sed -n '/[^]/]/w {F}' /tmp/x",
+    "sed -n '/[[:punct:]/]/w {F}' /tmp/x",
+    "sed -n '\\,[,],w {F}' /tmp/x",
+    "sed -n 's|[|]|X|w {F}' /tmp/x",
+    "cd ~/.claude && sed -n '/[\\]/]/wsettings.json' /tmp/x",
+    "cd ~/.claude && sed -n '/[a/wsettings.json' /tmp/x",
+    # tar that extracts or archives into the home
+    "cd ~/.claude && tar -xf /tmp/b.tar settings.json",
+    "tar -xf /tmp/b.tar -C ~/.claude",
+    "cd ~/.claude && tar -cf settings.json /tmp/x",
+    "cd ~/.claude && tar --to-command=sh -xf /tmp/b.tar",
+    "cd ~/.claude && tar cf - /tmp/x > settings.json",
+    # the chain read through
+    "cd ~/.claude; cd /no-such-dir-here; cp /tmp/e settings.json",
+    "cd ~/.claude && cd /no-such-dir-here || cp /tmp/e settings.json",
+    "cd ~/.claude; cd /tmp; cd -; sed -i x settings.json",
+    "CDPATH=~ cd .claude && sed -i x settings.json",
+    "export CDPATH=$HOME; cd .claude; cp /tmp/evil.json settings.json",
+    "d=~/.claude; cd $d && cp /tmp/evil.json settings.json",
+    "if cd ~/.claude; then cp /tmp/evil.json settings.json; fi",
+    "{ cd ~/.claude; } && cp /tmp/evil.json settings.json",
+    "f(){ cd ~/.claude; }; f; cp /tmp/evil.json settings.json",
+    "builtin cd ~/.claude && cp /tmp/evil.json settings.json",
+    "command cd ~/.claude && cp /tmp/evil.json settings.json",
+    "\\cd ~/.claude && cp /tmp/evil.json settings.json",
+    "env -C ~/.claude cp /tmp/evil.json settings.json",
+    "env --chdir=$HOME/.claude cp /tmp/evil.json settings.json",
+    "env --chdir $HOME/.claude cp /tmp/evil.json settings.json",
+    "cd ~/.claude && cd /tmp && cd ~/.claude && cp /tmp/e settings.json",
+    "cd /tmp && (cd ~/.claude && cp /tmp/e settings.json)",
+    "cd ~/.claude && (cd hooks && cp /tmp/e ../settings.json)",
+    # a quoted chain a shell runs
+    "echo 'cd ~/.claude && cp /tmp/e settings.json' | bash",
+    "printf 'cd ~/.claude && cp /tmp/e settings.json' | sh",
+    "bash <<< 'cd ~/.claude && cp /tmp/e settings.json'",
+    "su -c 'cd ~/.claude && cp /tmp/e settings.json'",
+    "echo a | xargs sh -c 'cd ~/.claude && cp /tmp/e settings.json'",
+    "watch 'cd ~/.claude && cp /tmp/e settings.json'",
+    "echo 'cd ~/.claude && cp /tmp/e settings.json' > /tmp/x.sh && bash /tmp/x.sh",
+    "grep -h 'cp /tmp/e ~/.claude/settings.json' /tmp/notes | sh",
+    # cp / mv / ln / install into the home
+    "cp -t$HOME/.claude /tmp/x/settings.json",
+    "cp -t{H} /tmp/x/settings.json",
+    "cp --target={H} /tmp/x/settings.json",
+    "cp --target {H} /tmp/x/settings.json",
+    "cp --target-dir={H} /tmp/x/settings.json",
+    "cp -vt {H} /tmp/x/settings.json",
+    "cp -rt {H} /tmp/x/settings.json",
+    "cp -vt{H} /tmp/x/settings.json",
+    "mv -t{H} /tmp/x/settings.json",
+    "cd ~/.claude && cp -t. /tmp/x/settings.json",
+    "ln -sf /tmp/x/settings.json ~/.claude/",
+    "ln -t ~/.claude /tmp/x/settings.json",
+    "install /tmp/x/settings.json ~/.claude/",
+    "install -m 644 -t ~/.claude /tmp/x/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", HOME_WRITES)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_a_write_of_the_homes_settings_is_refused(box, command, actor):
+    command = fill(box, command)
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+def test_the_lanes_two_section_5_items_stay_refused(box):
+    for command in ("cd ~/.claude && sed -i 's/block/off/' settings.json",
+                    "cd ~/.claude && cp /tmp/evil.json settings.json"):
+        for cwd in cwds(box):
+            rc, err = hook(box, command, cwd)
+            assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+DAH_WRITES = [  # an interpreter not provably read-only, naming a settings file
+    "python3 -c \"p='.claude/settings.json'; open(p,chr(119)).write('{\\\"disableAllHooks\\\": true}')\"",
+    "python3 /tmp/set.py .claude/settings.json disableAllHooks",
+    "python3 -c \"import json; m='r+'; f=open('.claude/settings.json', m); getattr(json, 'du'+'mp')"
+    "({'disableAllHooks': True}, f)\"",
+    "node /tmp/set.js .claude/settings.local.json disableAllHooks",
+    "python3 - .claude/settings.json disableAllHooks < /tmp/set.py",
+    "awk -v a=1 'BEGIN{print \"{\\\"disableAllHooks\\\":true}\" > \".claude/settings.local.json\"}' /dev/null",
+]
+
+
+@pytest.mark.parametrize("command", DAH_WRITES)
+def test_disable_all_hooks_by_an_interpreter_not_provably_read_only_is_refused(box, command):
+    rc, err = hook(box, command, box["proj"])
+    assert rc == 2 and "disableAllHooks" in err, (command, err)
+
+
+DAH_READS = [
+    "python3 -c \"import json; print(json.load(open('.claude/settings.json')).get('disableAllHooks'))\"",
+    "python3 -c \"import json; print(json.load(open('.claude/settings.json', 'r', encoding='utf-8'))"
+    ".get('disableAllHooks'))\"",
+    "python3 -m json.tool .claude/settings.json | grep disableAllHooks",
+    "grep -n disableAllHooks .claude/settings.json > /tmp/dah.txt",
+]
+
+
+@pytest.mark.parametrize("command", DAH_READS)
+def test_a_provably_read_only_interpreter_naming_disable_all_hooks_passes(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)

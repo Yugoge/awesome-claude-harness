@@ -168,16 +168,23 @@ def _text(word, env: dict) -> str:
                    else "${%s}" % (p.text if p.kind == "param" else "") for p in word.parts)
 
 
-def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 0):
+def _commands(command, bodies: str, every_word: bool = False, depth: int = 0, sites: list | None = None,
+              quoted: bool | None = None):
     """(words, written) for each simple command `command` runs, as hooks/lib/shell_parse.py reads it:
     its words as text (assignments, words, then each redirection's operator and target) and the
     paths shell_parse.write_targets says it writes. A -c or eval payload, a substitution and a
     heredoc a shell reads are commands; so is any other heredoc's body where `bodies` keeps it
     ("all"; "code": unless it feeds a commit, tag or PR message; "shell": none). With `every_word`
-    a word holding a space or ; | & is read as commands too. A $NAME is read from the call's
+    a word holding a space or ; | & is read as commands too, unless it is a reader's operand (echo,
+    printf, grep, rg, ...: _read_only; an assignment before it, LESSOPEN=..., stays read) and
+    nothing in the command runs text (_runs_text): a note that mentions a command is no command. A $NAME is read from the call's
     environment or an assignment before it; text the parser cannot read is split on whitespace,
-    a word after a redirection operator, or attached to one, written."""
-    script, env, message, targets = shell_parse.parse(command), dict(os.environ), [], {}
+    a word after a redirection operator, or attached to one, written. `command` may be a parsed
+    shell_parse.Script; `sites` collects each yield's SimpleCommand (a re-read word's own)."""
+    script = command if isinstance(command, shell_parse.Script) else shell_parse.parse(command)
+    env, message, targets = dict(os.environ), [], {}
+    if every_word and quoted is None:
+        quoted = _runs_text(script)
     for t in shell_parse.write_targets(script):
         targets.setdefault((t.context, t.word.span), []).append(t.word)
     for site in shell_parse.walk(script):
@@ -194,19 +201,50 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
         plain = [w for w in words if not ASSIGNMENT.match(w)]
         if plain and _message(plain):
             message.append(level)
+        if sites is not None:
+            sites.append(cmd)
         yield words, written
-        for w in words if every_word and depth < 3 else ():
+        reread = not every_word or quoted or not plain or not _read_only(plain)  # a reader's text is no code
+        for w in (words if reread else [w for w in words if ASSIGNMENT.match(w)]) if every_word and depth < 3 else ():
             if any(c in w for c in " ;|&\n"):
-                yield from _commands(w, bodies, every_word, depth + 1)
+                yield from _commands(w, bodies, every_word, depth + 1, sites, quoted)
         shell = shell_parse.resolve(cmd).payload_kind == "heredoc_shell"
         for r in cmd.redirects if bodies == "all" or (bodies == "code" and not message) else ():
-            if r.hd is not None and not shell and depth < 3:
-                yield from _commands(r.hd.body, bodies, every_word, depth + 1)
+            if r.hd is not None and not shell and depth < 3 and reread:
+                yield from _commands(r.hd.body, bodies, every_word, depth + 1, sites, quoted)
     for word in [w for ws in targets.values() for w in ws]:  # a redirection of a compound command
+        if sites is not None:
+            sites.append(None)
         yield [">", _text(word, env)], [_text(word, env)]
-    for line in command.splitlines() if script.error is not None else ():
+    for line in (command if isinstance(command, str) else script.source or "").splitlines() \
+            if script.error is not None else ():
         words = line.split()
+        if sites is not None:
+            sites.append(None)
         yield words, [m.group(1) or nxt for w, nxt in zip(words, words[1:] + [""]) for m in [FALLBACK_REDIRECT.match(w)] if m]
+
+
+TEXT_RUNNERS = frozenset({"source", ".", "eval", "xargs", "parallel", "watch", "ssh", "su", "sudo", "doas",
+                          "runuser", "script", "flock", "chroot", "unshare", "nsenter", "busybox", "expect",
+                          "tmux", "screen", "at", "batch", "crontab", "exec", "trap", "alias"})
+
+
+def _runs_text(script) -> bool:
+    """Whether a command in `script` may run text a reader in the same command prints: a shell or
+    an interpreter (on a payload, a file or stdin), a program that runs its operands as commands
+    (TEXT_RUNNERS), or a computed or path-named program."""
+    for site in shell_parse.walk(script):
+        head = site.cmd.head()
+        if head is None:
+            continue
+        value = head.value()
+        if site.dynamic or value is None or "/" in value:
+            return True
+        for name in {os.path.basename(value), shell_parse.resolve(site.cmd).name or ""}:
+            if name in TEXT_RUNNERS or name in shell_parse.SHELLS or INTERPRETER.match(name) \
+                    or shell_parse._SHELL_LIKE_RE.fullmatch(name):
+                return True
+    return False
 
 
 GitCall = collections.namedtuple("GitCall", "sub dirs program env source gitdirs")
@@ -357,10 +395,37 @@ def _sed_script(script: str):
             i += 2 if script[i] == "\\" else 1
         return min(i, n)
 
-    def delimited(i, delim):  # past the closing `delim` of a regex or replacement starting at i; -1: none
-        while i < n:
+    def bracket(i):  # past the `]` closing a bracket expression whose `[` is at i; -1: unsure
+        j = i + 1
+        j += 1 if j < n and script[j] == "^" else 0
+        j += 1 if j < n and script[j] == "]" else 0
+        while j < n:
+            ch = script[j]
+            if ch == "[" and j + 1 < n and script[j + 1] in ":.=":
+                close = script.find(script[j + 1] + "]", j + 2)
+                if close < 0:
+                    return -1
+                j = close + 2
+            elif ch == "]":
+                return j + 1
+            elif ch == "\\":  # GNU reads `\<delim>` as the delimiter; `\]` it reads otherwise than POSIX
+                if j + 1 >= n or script[j + 1] in "]\n":
+                    return -1
+                j += 2
+            elif ch == "\n":
+                return -1
+            else:
+                j += 1
+        return -1
+
+    def delimited(i, delim, regex=False):  # past the closing `delim` of a regex (`regex`: its bracket
+        while i < n:                        # expressions followed) or a replacement starting at i; -1: none
             if script[i] == "\\":
                 i += 2
+            elif regex and script[i] == "[":
+                i = bracket(i)
+                if i < 0:
+                    return -1
             elif script[i] == delim:
                 return i + 1
             elif script[i] == "\n" and delim != "\n":
@@ -377,7 +442,7 @@ def _sed_script(script: str):
             i += 1
         elif i < n and script[i] in "/\\":
             delim = script[i + 1] if script[i] == "\\" and i + 1 < n else "/"
-            i = delimited(i + (2 if script[i] == "\\" else 1), delim)
+            i = delimited(i + (2 if script[i] == "\\" else 1), delim, regex=True)
             while 0 <= i < n and script[i] in "IM":
                 i += 1
         return i
@@ -427,7 +492,7 @@ def _sed_script(script: str):
             if i >= n or script[i] in "\\\n":
                 return None
             delim = script[i]
-            i = delimited(i + 1, delim)
+            i = delimited(i + 1, delim, regex=c == "s")
             i = delimited(i, delim) if i >= 0 else -1
             if i < 0:
                 return None
@@ -482,36 +547,199 @@ def _sed(plain: list):
     return files
 
 
+def _sed_w_words(plain: list) -> list:
+    """For sed that is no reader: the text after each `w` / `W` in its words, to the end of the
+    line, any of which may be a file a script this reading cannot follow writes."""
+    return [w[m.end():].split("\n", 1)[0].strip() for w in plain[1:] for m in re.finditer(r"[wW]", w)]
+
+
 def _awk(plain: list):
     """An awk command's program text, or None when it is no reader: an option that loads a
-    program or rewrites its files (-f, -i inplace, -e, -l, ...), or no program."""
+    program or rewrites or writes files (-f / --file, -i inplace, -e, -l, -o, -p, ...), or no program.
+    -v / --assign and -F / --field-separator take a value (spaced, attached or after `=`); `--`
+    ends the options."""
     it = iter(plain[1:])
     for w in it:
         if w == "--":
             return next(it, None)
         if w in ("-F", "-v", "--field-separator", "--assign"):
             next(it, None)
-        elif re.fullmatch(r"-[Fv].+|--(?:field-separator|assign)=.*", w):
+        elif re.fullmatch(r"-[Fv].+|--(?:field-separator|assign)=.*", w, re.S):
             continue
-        elif w.startswith("-"):
+        elif w.startswith("-") and w != "-":
             return None
         else:
             return w
     return None
 
 
+TAR_SHORT = set("cvzjJapht")  # tar's short flags that read (create or list) and write no file but -f's
+TAR_LONG = ("--create", "--list", "--gzip", "--bzip2", "--xz", "--zstd", "--auto-compress", "--verbose",
+            "--dereference", "--preserve-permissions")
+
+
+def _tar(plain: list):
+    """tar that creates or lists an archive, reading its operands: the archive it writes (-f's,
+    none for stdout), or None for any other tar (-x, -C, --to-command, -I, an unknown option)."""
+    args, files, mode = plain[1:], [], False
+    if args and not args[0].startswith("-"):  # the old style: `tar czf out.tgz ...`
+        args = ["-" + args[0]] + args[1:]
+    it = iter(args)
+    for w in it:
+        if w == "--":
+            break
+        if w.startswith("--"):
+            name, eq, value = w.partition("=")
+            if name == "--file":
+                files.append(value if eq else next(it, ""))
+            elif name in ("--exclude",) and eq:
+                continue
+            elif w in TAR_LONG:
+                mode = mode or w in ("--create", "--list")
+            else:
+                return None
+        elif w.startswith("-") and len(w) > 1:
+            for k, ch in enumerate(w[1:], 1):
+                if ch == "f":
+                    files.append(w[k + 1:] or next(it, ""))
+                    break
+                if ch not in TAR_SHORT:
+                    return None
+                mode = mode or ch in "ct"
+        # an operand: a file tar reads
+    if not mode:
+        return None
+    return [f for f in files if f and f != "-"]
+
+
+def _tar_extracts(plain: list) -> list:
+    """For tar that is no reader (-x, -r, --to-command, ...): the settings files it may write as
+    archive members right in each directory it extracts into (-C / --directory, else its own), the
+    member names the archive holds being unknown here (a member under a subdirectory is not seen)."""
+    dirs, it = [], iter(plain[1:])
+    for w in it:
+        m = re.fullmatch(r"-[A-Za-z]*C(.*)", w, re.S)
+        if w in ("-C", "--directory") or (m and not w.startswith("--")):
+            value = (m.group(1) if m else "") or next(it, None)
+            dirs += [value] if value else []
+        elif w.startswith("--directory="):
+            dirs.append(w.split("=", 1)[1])
+    return [os.path.join(d, n) for d in dirs or ["."] for n in SETTINGS_NAMES]
+
+
+INTERP_CODE = {"python": "c", "perl": "eE", "ruby": "e", "node": "ep", "nodejs": "ep", "bun": "e", "php": "r"}
+INTERP_FLAGS = {"python": "IBsSuqEOd", "perl": "nplawsT", "ruby": "nplaw", "node": "", "nodejs": "", "bun": "",
+                "php": "n"}
+INTERP_DYNAMIC = re.compile(  # code whose effect this reading cannot see from its text
+    r"\b(?:chr|getattr|setattr|eval|exec|compile|__import__|importlib|globals|locals|vars|fromCharCode|send"
+    r"|public_send|instance_eval|class_eval|const_get|unpack|pack|decode|codecs|base64|bytes|bytearray)\b")
+OPEN_CALL = re.compile(r"\bopen\s*\(")
+OPEN_LITERAL = re.compile(  # an open() argument after the path that reads: a literal read mode or other literal
+    r"\s*(?:(?:mode\s*=\s*)?[rbuRBU]*(?:'[rbtU]*'|\"[rbtU]*\")|(?:encoding|errors|newline|buffering)\s*="
+    r"\s*(?:'[^']*'|\"[^\"]*\"|-?\d+|None)|-?\d+)\s*\Z")
+
+
+def _open_reads(code: str) -> bool:
+    """Each open( call in `code` passes the path alone or with a literal read mode."""
+    for m in OPEN_CALL.finditer(code):
+        i, depth, quote, args, start = m.end(), 1, None, [], m.end()
+        while i < len(code) and depth:
+            ch = code[i]
+            if quote:
+                quote = None if ch == quote else quote
+                i += 1 if ch != "\\" else 2
+                continue
+            if ch in "'\"":
+                quote = ch
+            elif ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif ch == "," and depth == 1:
+                args.append(code[start:i])
+                start = i + 1
+            i += 1
+        if depth:
+            return False
+        args.append(code[start:i - 1])
+        if not all(OPEN_LITERAL.match(a) for a in args[1:] if a.strip()):
+            return False
+    return True
+
+
+def _interpreter_reads(plain: list) -> bool:
+    """For disableAllHooks: an interpreter provably read-only, one whose -c / -e code shows no write
+    (WRITE_SIGN), no computed call (INTERP_DYNAMIC) and no open() with a mode other than a
+    literal read; or `python -m json.tool` with one file. A script file or stdin is never provably
+    read-only; a shell's -c code is (its commands are read on their own)."""
+    head = os.path.basename(plain[0])
+    if shell_parse._SHELL_LIKE_RE.fullmatch(head):
+        return not any(WRITE_SIGN.search(w) for w in plain[1:])
+    lang = re.sub(r"[\d.]+\Z", "", head)
+    code_opts, flags, it, code = INTERP_CODE.get(lang, ""), INTERP_FLAGS.get(lang, ""), iter(plain[1:]), None
+    for w in it:
+        if lang in ("node", "nodejs", "bun") and w in ("--eval", "--print"):
+            code = next(it, None)
+            break
+        if lang == "python" and w == "-m":
+            rest = list(it)
+            return rest[:1] == ["json.tool"] and len([r for r in rest[1:] if not r.startswith("-")]) <= 1 \
+                and all(r in ("--sort-keys", "--compact", "--no-ensure-ascii") for r in rest[1:] if r.startswith("-"))
+        if not (w.startswith("-") and len(w) > 1 and not w.startswith("--")):
+            return False  # a script file, `-` (stdin) or a long option
+        if all(ch in flags for ch in w[1:]):
+            continue
+        if not code_opts or w[-1] not in code_opts or any(ch not in flags for ch in w[1:-1]):
+            return False
+        code = next(it, None)
+        break
+    return code is not None and not WRITE_SIGN.search(code) and not INTERP_DYNAMIC.search(code) \
+        and _open_reads(code)
+
+
+CD_HEADS = ("cd", "pushd", "popd")
+
+
+def _cd_at(words: list):
+    """The index of a cd / pushd / popd word in a command's words (past its assignments and a
+    `builtin` or `command` before it), or None."""
+    i = 0
+    while i < len(words) and ASSIGNMENT.match(words[i]):
+        i += 1
+    while i < len(words) - 1 and words[i] in ("builtin", "command"):
+        i += 1
+    return i if i < len(words) and words[i] in CD_HEADS else None
+
+
+def _cd_target(words: list, at: int):
+    """The directory word a cd / pushd at `at` changes to ("~" for none), or None for one this
+    reading cannot know (popd, `cd -`, `pushd +N`)."""
+    ops, it = [], iter(words[at + 1:])
+    for w in it:
+        if w == "--":
+            ops.extend(it)
+        elif re.fullmatch(r"-[LPe@]+", w):
+            continue
+        else:
+            ops.append(w)
+    if words[at] == "popd" or (ops and re.fullmatch(r"-|[+-]\d+", ops[0])):
+        return None
+    return ops[0] if ops else "~"
+
+
 def _cd_dirs(segments: list, cwd: str) -> list:
-    """The directories a command's paths are read from: the call's, and each `cd` / `pushd`
-    target, read both from the directory the chain before it leaves (`cd ~ && cd .claude`) and
-    from the call's (a `cd` in a subshell, or one that fails, leaves the next where it was). A
-    bare `cd` is $HOME."""
+    """The directories a command's paths may be read from, all together: the call's, and each `cd` /
+    `pushd` target, read both from the directory the chain before it leaves (`cd ~ && cd .claude`)
+    and from the call's. A bare `cd` is $HOME. A word whose own directory _chain cannot tell (a
+    payload a shell runs, a function's body, a re-read word) is read from all of these."""
     out, here, seen = {cwd: None}, cwd, {}
     for words, _ in segments:
-        plain = [w for w in words if not ASSIGNMENT.match(w)]
-        if not plain or os.path.basename(plain[0]) not in ("cd", "pushd"):
+        at = _cd_at(words)
+        if at is None:
             continue
-        args = [w for w in plain[1:] if not w.startswith("-")]
-        target = args[0] if args else "~"
+        target = _cd_target(words, at)
+        if target is None:
+            continue
         for base in (here, cwd):  # each (target, directory) resolved once: a padded `cd .` costs one
             if (target, base) not in seen:
                 seen[(target, base)] = _resolve(target, base)
@@ -520,31 +748,188 @@ def _cd_dirs(segments: list, cwd: str) -> list:
     return list(out)
 
 
+def _env_chdir(words: list):
+    """The directory word an `env -C` / `--chdir` among a command's leading words runs it in, or None."""
+    for i, w in enumerate(words[:8]):
+        if os.path.basename(w) != "env":
+            continue
+        it = iter(words[i + 1:])
+        for o in it:
+            m = re.fullmatch(r"-[i0v]*C(.*)", o, re.S)
+            if m:
+                return m.group(1) or next(it, None)
+            if o.startswith("--ch") and "--chdir".startswith(o.split("=", 1)[0]):
+                return o.split("=", 1)[1] if "=" in o else next(it, None)
+            if o in ("-u", "--unset", "-S", "--split-string"):
+                next(it, None)
+            elif not o.startswith("-") or o == "--":
+                break
+    return None
+
+
+def _chain(script, cwd: str) -> dict:
+    """Where each command of `script` runs: {id(SimpleCommand), or ("r", id(a compound's first
+    redirection)): [directories]}, read along the script's own control flow. A `cd` / `pushd` (or
+    `builtin cd`, `command cd`) into a directory that is there and enterable moves the commands its
+    success reaches (`cd ~/.claude && cd /tmp && echo x > f` writes /tmp/f); one that may fail keeps
+    the directory before it for the commands its failure reaches (`||`, a later `;`); a subshell's,
+    a pipeline stage's, a background list's `cd` stays inside it; a branch or a loop body may run
+    or not; a function's body may run anywhere after it (its commands are left to _cd_dirs, and its
+    `cd` moves every command after it as may-be). A `cd` whose directory cannot be known (`cd -`,
+    popd, a computed word, a CDPATH that is set) may land in any directory the chain has seen, or in
+    each CDPATH entry. `env -C <dir>` runs its own command in <dir>. Payloads a shell runs and
+    substitutions are not mapped (_cd_dirs reads them)."""
+    out, env, seen = {}, dict(os.environ), {cwd: None}
+
+    def record(key, dirs):
+        out.setdefault(key, {}).update(dict.fromkeys(dirs))
+
+    def cd(words, at, d):  # [(directory, succeeded)] a cd at `at` run from `d` may leave
+        target = _cd_target(words, at)
+        pre = dict(a.split("=", 1) for a in words[:at] if ASSIGNMENT.match(a))
+        cdpath = pre.get("CDPATH", env.get("CDPATH", ""))
+        if target is None or "${" in target:
+            new = list(seen) + ([_resolve(target, d)] if target else [])
+            return [(n, True) for n in new] + [(d, False)]
+        bases = [d]
+        if cdpath and not re.match(r"(?:/|~|\.\.?(?:/|\Z))", target):
+            bases += [_resolve(e or ".", d) for e in cdpath.split(":")] + list(seen)
+        new = list(dict.fromkeys(_resolve(target, b) for b in bases))
+        certain = len(new) == 1 and os.path.isdir(new[0]) and os.access(new[0], os.X_OK)
+        return [(n, True) for n in new] + ([] if certain else [(d, False)])
+
+    def simple(cmd, dirs):
+        for a in cmd.assignments if not cmd.words else ():
+            env.pop(a.name, None) if a.static_value() is None else env.update({a.name: a.static_value()})
+        words = [_text(w, env) for w in [a.word for a in cmd.assignments] + list(cmd.words)]
+        chdir = _env_chdir(words)
+        record(id(cmd), [_resolve(chdir, d) for d in dirs] if chdir else dirs)
+        if words and words[0] in EXPORTS:
+            for w in words[1:]:
+                if ASSIGNMENT.match(w) and "${" not in w:
+                    env.update([w.split("=", 1)])
+        at = _cd_at(words)
+        if at is None:
+            return [(d, ok) for d in dirs for ok in (True, False)]
+        return [r for d in dirs for r in cd(words, at, d)]
+
+    def stage(cmd, dirs):  # [(directory, succeeded)] after one pipeline stage run from `dirs`
+        if isinstance(cmd, shell_parse.SimpleCommand):
+            return simple(cmd, dirs)
+        if cmd.redirects:
+            record(("r", id(cmd.redirects[0])), dirs)
+        end = list(dirs)
+        if cmd.kind in ("subshell", "coproc"):
+            for body in cmd.body:
+                script_(body, dirs)
+        elif cmd.kind == "function":
+            for body in cmd.body:
+                end += script_(body, list(dirs) + list(seen), mapped=False)
+        elif cmd.kind == "group":
+            for body in cmd.body:
+                end = script_(body, end)
+        else:  # if, while, until, for, select, case, cond, arith: each body may run, a loop's again
+            here, again = list(dirs), cmd.kind in ("while", "until", "for", "select")
+            while True:
+                before = here
+                for body in cmd.body:
+                    here = list(dict.fromkeys(here + script_(body, here)))
+                if not again or here == before:  # a loop's next turn starts where its body left
+                    break
+                again = False
+            end = here
+        return [(d, ok) for d in dict.fromkeys(end) for ok in (True, False)]
+
+    def script_(sc, dirs, mapped=True):  # the directories `sc` run from `dirs` may leave
+        nonlocal out
+        saved = out if not mapped else None
+        if not mapped:
+            out = {}
+        here = list(dirs)
+        states, op = None, None  # an and-or list's (directory, last status) paths
+        for pl, sep in sc.items:
+            if states is None:
+                start, states = here, [(d, ok) for d in here for ok in (True,)]
+                runs, passes = states, []
+            else:
+                runs = [s for s in states if s[1] == (op == "&&")]
+                passes = [s for s in states if s[1] != (op == "&&")]
+            dirs_in = list(dict.fromkeys(d for d, _ in runs))
+            if not dirs_in:
+                result = []
+            elif len(pl.stages) > 1:
+                for st in pl.stages:
+                    stage(st, dirs_in)
+                result = [(d, ok) for d in dirs_in for ok in (True, False)]
+            else:
+                result = stage(pl.stages[0], dirs_in)
+                if pl.negated:
+                    result = [(d, ok) for d, _ in result for ok in (True, False)]
+            for d, _ in result:
+                seen[d] = None
+            states = list(dict.fromkeys(passes + result))
+            if sep in ("&&", "||"):
+                op = sep
+                continue
+            here = start if sep == "&" else list(dict.fromkeys(d for d, _ in states)) or start
+            states, op = None, None
+        if states is not None:
+            here = list(dict.fromkeys(d for d, _ in states)) or here
+        if not mapped:
+            out = saved
+        return here
+
+    script_(script, [cwd])
+    return {k: list(v) for k, v in out.items()}
+
+
+def _chained(chain: dict, cmd, fallback: list) -> list:
+    """The directories `cmd` (a Site's SimpleCommand) runs in, by _chain, else `fallback`."""
+    if cmd is None:
+        return fallback
+    dirs = chain.get(id(cmd))
+    if dirs is None and not cmd.words and not cmd.assignments and cmd.redirects:
+        dirs = chain.get(("r", id(cmd.redirects[0])))
+    return dirs or fallback
+
+
+def _argv(words: list) -> list:
+    """A command's words past the assignments before it (an operand spelled NAME=VALUE stays)."""
+    i = 0
+    while i < len(words) and ASSIGNMENT.match(words[i]):
+        i += 1
+    return words[i:]
+
+
 def _written_by(words: list, written: list, awk: bool = False, interpreter: bool = False) -> list:
     """The words of one simple command that it writes: the paths it writes (`written`), and
-    for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; with `awk`, awk
-    whose program has no > | or system(); with `interpreter`, an interpreter whose words carry no
-    WRITE_SIGN); for cp its destination and each source's name inside it; for any other
-    command every word (tee, dd, sed -i, perl -i, mv, rm, ...), with awk's quoted strings and
-    sed's w files."""
-    plain = [w for w in words if not ASSIGNMENT.match(w)]
+    for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; tar -c / -t,
+    its -f archive alone; with `awk`, awk whose program has no > | or system(); with `interpreter`,
+    an interpreter provably read-only, _interpreter_reads); for cp its destination and each
+    source's name inside it; for any other command every word (tee, dd, sed -i, perl -i, mv, rm,
+    ...), with awk's quoted strings, the text after each `w` of a sed script this reading cannot
+    follow, and mv's, ln's and install's destination and each source's name inside it."""
+    plain = _argv(words)
     if not plain:
         return list(written)
     head = os.path.basename(plain[0])
     if head == "sed":
         files = _sed(plain)
-        return list(written) + (files if files is not None else words)
+        return list(written) + (files if files is not None else words + _sed_w_words(plain))
     if head in AWKS:
         program = _awk(plain)
         if awk and program is not None and not AWK_OUTPUT.search(program):
             return list(written)
         return list(written) + words + AWK_STRING.findall(program or " ".join(plain[1:]))
-    if _read_only(words) or (interpreter and INTERPRETER.match(head)
-                             and not any(WRITE_SIGN.search(w) for w in plain[1:])):
+    if head == "tar":
+        files = _tar(plain)
+        return list(written) + (files if files is not None else words + _tar_extracts(plain))
+    if _read_only(words) or (interpreter and INTERPRETER.match(head) and _interpreter_reads(plain)):
         return list(written)
     if head == "cp":
         return list(written) + [w for w, _ in _operands(plain, False)]
-    return list(written) + words + ([w for w, _ in _operands(plain, True)] if head == "mv" else [])
+    return list(written) + words + ([w for w, _ in _operands(plain, head == "mv")]
+                                    if head in ("mv", "ln", "install") else [])
 
 
 def writes_settings_file(command: str) -> bool:
@@ -601,17 +986,33 @@ def _message(plain: list) -> bool:
         head == "gh" and sub in ("pr", "issue", "release"))
 
 
+OPERAND_VALUES = {"cp": "S", "mv": "S", "ln": "S", "install": "mogS"}  # short options taking a value
+
+
 def _operands(plain: list, moves: bool) -> list:
-    """cp / mv: (word, dirs_too) for the destination, each source's name inside it, and, for mv,
-    each source (moved away); cp's sources are only read."""
+    """cp / mv / ln / install: (word, dirs_too) for the destination, each source's name inside it,
+    and, for mv, each source (moved away); cp's sources are only read. The destination is a -t
+    (spaced, attached, or ending a cluster: `-vt DIR`, `-tDIR`), a --target-directory or any
+    abbreviation of it (`--target=DIR`, `--target DIR`), else the last operand."""
     sources, dest, it = [], None, iter(plain[1:])
+    values = OPERAND_VALUES.get(os.path.basename(plain[0]), "S")
     for w in it:
+        name, eq, value = w.partition("=")
         if w == "--":
             sources.extend(it)
-        elif w in ("-t", "--target-directory"):
-            dest = next(it, None)
-        elif w.startswith("--target-directory="):
-            dest = w.split("=", 1)[1]
+        elif w.startswith("--t") and "--target-directory".startswith(name):
+            dest = value if eq else next(it, None)
+        elif w.startswith("--su") and "--suffix".startswith(name) and not eq:
+            next(it, None)
+        elif w.startswith("-") and not w.startswith("--") and len(w) > 1:
+            for k, ch in enumerate(w[1:], 1):
+                if ch == "t":
+                    dest = w[k + 1:] or next(it, None)
+                    break
+                if ch in values:
+                    if not w[k + 1:]:
+                        next(it, None)
+                    break
         elif not w.startswith("-"):
             sources.append(w)
     if dest is None and sources:
@@ -626,17 +1027,20 @@ def settings_writes(command: str, cwd: str) -> list:
     """The Claude Code settings files (and directories holding them) `command` writes, moves or
     removes: a redirect onto one (spaced or attached), and every word of a command that is not a
     reader (_written_by), an interpreter or a commit or PR message (tee, sed -i, rm, ...); cp's
-    and mv's destination, and mv's sources. A path is read from the call's directory and every
-    `cd`'s (_cd_dirs).
+    and mv's destination, and mv's sources. A path is read from the directory the command runs in
+    (_chain; else from the call's directory and every `cd`'s, _cd_dirs).
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
-    segments = list(_commands(command, "shell"))
-    dirs = list(dict.fromkeys(_cd_dirs(segments, cwd) + [d for w, _ in segments for d in _git_dirs(w, cwd)]))
+    script, sites = shell_parse.parse(command), []
+    segments = list(_commands(script, "shell", sites=sites))
+    git_dirs = [d for w, _ in segments for d in _git_dirs(w, cwd)]
+    every_dir, chain = list(dict.fromkeys(_cd_dirs(segments, cwd) + git_dirs)), _chain(script, cwd)
     out, seen, home = [], set(), _settings_files()
-    for words, written in segments:
-        plain = [w for w in words if not ASSIGNMENT.match(w)]
+    for (words, written), cmd in zip(segments, sites):
+        plain = _argv(words)
         if not plain:
             continue
+        dirs = tuple(dict.fromkeys(_chained(chain, cmd, every_dir) + git_dirs))
         head = os.path.basename(plain[0])
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
@@ -644,9 +1048,9 @@ def settings_writes(command: str, cwd: str) -> list:
                  (written if (interpreter or message or moves) else _written_by(words, written, awk=True))]
         named += _operands(plain, head == "mv") if moves else []
         for word, dirs_too in named:
-            if (word, dirs_too) not in seen:
-                seen.add((word, dirs_too))
-                out.extend(_named_settings(word, dirs, dirs_too, home))
+            if (word, dirs_too, dirs) not in seen:
+                seen.add((word, dirs_too, dirs))
+                out.extend(_named_settings(word, list(dirs), dirs_too, home))
     return list(dict.fromkeys(out))
 
 
@@ -814,11 +1218,14 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
     if TYPED.search(command) and NESTED.search(command):
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
-    settings, segments = _settings_files(), list(_commands(command, "all", every_word=True))
-    dirs, checked = _cd_dirs(segments, cwd), set()  # the call's directory and each `cd`'s, chains read through
+    script, sites = shell_parse.parse(command), []
+    settings, segments = _settings_files(), list(_commands(script, "all", every_word=True, sites=sites))
+    every_dir, checked = _cd_dirs(segments, cwd), set()  # the call's directory and each `cd`'s, chains read through
+    chain = _chain(script, cwd)  # where each command runs, read along the chain
     exported = any(GIT_CONFIG_SOURCE.match(x) for w, _ in segments  # an assignment or export of its own
                    if w and (all(ASSIGNMENT.match(x) for x in w) or os.path.basename(w[0]) in EXPORTS) for x in w)
-    for words, written in segments:
+    for (words, written), cmd in zip(segments, sites):
+        dirs = _chained(chain, cmd, every_dir)
         git, bases, foreign = _git(words), dirs, False
         if git is not None:
             bases = list(dict.fromkeys(dirs + [g for d in dirs for g in _git_dirs(words, d)]))
