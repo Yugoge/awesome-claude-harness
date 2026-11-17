@@ -56,10 +56,10 @@ harness_switch.exit_if_off()
 
 import json  # noqa: E402
 import re  # noqa: E402
-import shlex  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
+import shell_parse  # noqa: E402 -- the one reading of a Bash command
 sys.path.pop(0)
 
 HOME = harness_switch.harness_home()
@@ -76,15 +76,12 @@ TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
-REDIRECT = re.compile(r"^(?:\d*|&)>>?\|?(.*)\Z", re.S)
-HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1")
-MESSAGE = re.compile(r"\bgit\b[^\n]*\b(?:commit|tag|notes|merge|revert)\b|\bgh\b[^\n]*\b(?:pr|issue|release)\b")
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
 CLAUDE_SETTINGS = re.compile(r"(?:^|/)(?:\.claude/settings(?:\.local)?\.json|\.claude\.json|managed-settings\.json"
                              r"|managed-settings\.d/[^/]+\.json)\Z")  # the CLI's sources, by path
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh)\Z")
 LITERAL_ECHO = re.compile(r"echo((?:\s+-[nE]+)*)\s+'([^']*)'\s*(>>?|>\|)\s*([\w./~+-]+)")
-SHELL_FED = re.compile(r"(?:^|[\s;|&(/])(?:bash|sh|dash|zsh|ksh)(?:\s|<|$)")  # a shell reads the heredoc
+FALLBACK_REDIRECT = re.compile(r"(?:\d*|&)>>?\|?(.*)\Z", re.S)  # a redirection in text the parser cannot read
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 OWNER_SWITCHES = ("Only the owner switches the harness, by typing /harness off or /harness on; nothing an "
                   "agent runs, writes or schedules does")
@@ -99,8 +96,7 @@ def refuse(what: str, owner: str = OWNER_SWITCHES) -> int:
 
 
 def _resolve(path: str, cwd: str) -> str:
-    path = os.path.expanduser(os.path.expandvars(path))
-    return os.path.realpath(os.path.join(cwd, path))
+    return os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))
 
 
 def _in_state(path: str) -> bool:
@@ -128,39 +124,52 @@ def _in_harness_checkout(path: str) -> bool:
         d = parent
 
 
-def _is_shell_text(words: list, i: int) -> bool:
-    """True when words[i] is shell text a command runs: bash -c "...", eval "..."."""
-    return i > 0 and (os.path.basename(words[0]) == "eval" or bool(re.fullmatch(r"-[A-Za-z]*c", words[i - 1])))
+def _text(word, env: dict) -> str:
+    """A parsed word as text: its static parts, a $NAME `env` holds as its value, any other
+    expansion as ${...} (no file name is read from what the shell computes)."""
+    return "".join(p.text if p.kind in ("lit", "glob", "brace") else env[p.text] if p.text in env and p.kind == "param"
+                   else "${%s}" % (p.text if p.kind == "param" else "") for p in word.parts)
 
 
-def _segments(command: str, depth: int = 0, shell_text_only: bool = False) -> list:
-    """The simple commands of `command` as word lists, quotes respected; a word that is itself a
-    command (bash -c "...", sh -c, eval) is read as its own commands too. With `shell_text_only`
-    only those words are: a commit message with spaces is prose, not commands."""
-    out = []
-    for line in command.splitlines() or [""]:
-        try:
-            lex = shlex.shlex(line, posix=True, punctuation_chars=";&|")
-            lex.whitespace_split = True
-            tokens = list(lex)
-        except ValueError:
-            tokens = line.split()
-        current = []
-        for token in tokens:
-            if token and set(token) <= set(";&|"):
-                if current:
-                    out.append(current)
-                current = []
-            else:
-                current.append(token)
-        if current:
-            out.append(current)
-    if depth < 3:
-        for words in list(out):
-            for i, word in enumerate(words):
-                if any(c in word for c in " ;|&\n") and (not shell_text_only or _is_shell_text(words, i)):
-                    out.extend(_segments(word, depth + 1, shell_text_only))
-    return out
+def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 0):
+    """(words, written) for each simple command `command` runs, as hooks/lib/shell_parse.py reads it:
+    its words as text (assignments, words, then each redirection's operator and target) and the
+    paths shell_parse.write_targets says it writes. A -c or eval payload, a substitution and a
+    heredoc a shell reads are commands; so is any other heredoc's body where `bodies` keeps it
+    ("all"; "code": unless it feeds a commit, tag or PR message; "shell": none). With `every_word`
+    a word holding a space or ; | & is read as commands too. A $NAME is read from the call's
+    environment or an assignment before it; text the parser cannot read is split on whitespace,
+    a word after a redirection operator, or attached to one, written."""
+    script, env, message, targets = shell_parse.parse(command), dict(os.environ), [], {}
+    for t in shell_parse.write_targets(script):
+        targets.setdefault((t.context, t.word.span), []).append(t.word)
+    for site in shell_parse.walk(script):
+        cmd, level = site.cmd, len(site.context)
+        while message and message[-1] >= level:
+            message.pop()
+        for a in cmd.assignments if not cmd.words else ():
+            env.pop(a.name, None) if a.static_value() is None else env.update({a.name: a.static_value()})
+        words = [_text(w, env) for w in [a.word for a in cmd.assignments] + list(cmd.words)]
+        spans = {w.span for w in cmd.words} | {r.target.span for r in cmd.redirects if r.target is not None}
+        written = [_text(w, env) for span in spans for w in targets.pop((site.context, span), ())]
+        for r in cmd.redirects:
+            words += [(r.io or "") + r.op, _text(r.target, env)] if r.target is not None else []
+        plain = [w for w in words if not ASSIGNMENT.match(w)]
+        if plain and _message(plain):
+            message.append(level)
+        yield words, written
+        for w in words if every_word and depth < 3 else ():
+            if any(c in w for c in " ;|&\n"):
+                yield from _commands(w, bodies, every_word, depth + 1)
+        shell = shell_parse.resolve(cmd).payload_kind == "heredoc_shell"
+        for r in cmd.redirects if bodies == "all" or (bodies == "code" and not message) else ():
+            if r.hd is not None and not shell and depth < 3:
+                yield from _commands(r.hd.body, bodies, every_word, depth + 1)
+    for word in [w for ws in targets.values() for w in ws]:  # a redirection of a compound command
+        yield [">", _text(word, env)], [_text(word, env)]
+    for line in command.splitlines() if script.error is not None else ():
+        words = line.split()
+        yield words, [m.group(1) or nxt for w, nxt in zip(words, words[1:] + [""]) for m in [FALLBACK_REDIRECT.match(w)] if m]
 
 
 def _read_only(words: list) -> bool:
@@ -174,56 +183,22 @@ def _read_only(words: list) -> bool:
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 
 
-def _without_message_bodies(command: str, data_too: bool = False) -> str:
-    """`command` minus the bodies of heredocs that feed a commit, tag or PR message: prose, not
-    code. Every other heredoc body stays: a script a command writes, or an interpreter reads.
-    With `data_too` only a body a shell reads stays (its lines are commands; any other is data)."""
-    out, end, keep = [], None, True
-    for line in command.splitlines():
-        if end is not None:
-            if line.strip() == end:
-                end = None
-            elif keep:
-                out.append(line)
-            continue
-        out.append(line)
-        m = HEREDOC.search(line)
-        if m:
-            end, keep = m.group(2), bool(SHELL_FED.search(line)) if data_too else not MESSAGE.search(line)
-    return "\n".join(out)
-
-
-def _written_words(words: list, everything=None) -> list:
-    """The words of one simple command that name what it writes: the targets of its redirections,
-    and, for a command that is not read-only (cp, mv, tee, sed -i, python, ...), every word
-    (`everything` False: the redirections' targets alone)."""
-    plain = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+def _written_words(words: list, written: list, everything=None) -> list:
+    """The words of one simple command that name what it writes: the paths it writes, and, for a
+    command that is not read-only (cp, mv, tee, sed -i, python, ...), every word (`everything`
+    False: the paths alone)."""
+    plain = [w for w in words if not ASSIGNMENT.match(w)]
     if everything is None:
         everything = bool(plain) and not _read_only(plain)
     if everything and os.path.basename(plain[0]) == "sed":
         everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in plain[1:])
-    named, after = [], False
-    for w in words:
-        m = REDIRECT.match(w)
-        if after:
-            named.append(w)
-            after = False
-        elif m:
-            if m.group(1):
-                named.append(m.group(1))
-            else:
-                after = True
-        elif everything:
-            named.append(w)
-    return named
+    return written + (words if everything else [])
 
 
 def writes_settings_file(command: str) -> bool:
     """True when `command` writes a settings*.json file, in any directory."""
-    for words in _segments(_without_message_bodies(command), shell_text_only=True):
-        if any(NAMES_SETTINGS.search(w) for w in _written_words(words)):
-            return True
-    return False
+    return any(NAMES_SETTINGS.search(w) for words, written in _commands(command, "code")
+               for w in _written_words(words, written))
 
 
 def _may_name_settings(token: str) -> bool:
@@ -243,7 +218,7 @@ def _named_settings(word: str, dirs: list, dirs_too=False, home=None) -> list:
     path is resolved only where it can name one, so a padded command stays cheap."""
     out, home = [], _settings_files() if home is None else home
     for token in {word, word.split("=", 1)[-1]}:
-        token = os.path.expanduser(os.path.expandvars(token))
+        token = os.path.expanduser(token)
         spelled = _may_name_settings(token)
         for d in dirs:
             lexical = os.path.normpath(os.path.join(d, token))
@@ -299,11 +274,11 @@ def settings_writes(command: str, cwd: str) -> list:
     destination, and mv's sources. A path is read from the call's directory and every `cd`'s.
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
-    segments = _segments(_without_message_bodies(command, data_too=True), shell_text_only=True)
-    cds = dict.fromkeys(w[1] for w in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
+    segments = list(_commands(command, "shell"))
+    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
     dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
     out, seen, home = [], set(), _settings_files()
-    for words in segments:
+    for words, written in segments:
         plain = [w for w in words if not ASSIGNMENT.match(w)]
         if not plain:
             continue
@@ -311,10 +286,8 @@ def settings_writes(command: str, cwd: str) -> list:
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
-                 _written_words(words, False if (interpreter or message or moves) else None)]
+                 _written_words(words, written, False if (interpreter or message or moves) else None)]
         named += _operands(plain, head == "mv") if moves else []
-        named += [] if message else [(w.rsplit(">", 1)[1].lstrip("|"), False) for w in words
-                                     if ">" in w and not REDIRECT.match(w)]
         for word, dirs_too in named:
             if (word, dirs_too) not in seen:
                 seen.add((word, dirs_too))
@@ -462,7 +435,7 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
     settings = _settings_files()
-    for words in _segments(command):
+    for words, _ in _commands(command, "all", every_word=True):
         writes = bool(WRITES.search(" ".join(words))) or not _read_only(words)
         for word in words:
             token = word.split("=", 1)[-1]
