@@ -32,7 +32,10 @@ suffix (a lane, a pipeline index). A task id mentioned anywhere else in the
 prompt does not move the scope, and an obligation naming no task (a bulk
 commit-qa) scopes to no family. Only a QA dispatch without an obligation keeps
 the conservative global scan, which demands only (b)'s canonical, of each
-fan-out whose lanes have all reported.
+fan-out whose lanes have all reported. That scan blocks only inside a command
+span (lib/command_span.active_span: /dev, /dev-overnight or any other harness
+command) or when the dispatch's transcript cannot be read; outside every span
+it names no cycle, so another cycle's abandoned fan-out only warns (OB-L42).
 
 Within the dispatch's scope a due canonical must also parse, validate against
 dev-report.v2, carry its task's identity, and name in parallel_workers exactly
@@ -349,6 +352,35 @@ def _emit_block(violations, dev_dir):
     sys.exit(2)
 
 
+def _outside_any_span(data):
+    """OB-L42: True only when this dispatch's transcript is readable and holds no
+    human-typed harness command span (lib/command_span.active_span). A missing
+    or unreadable transcript leaves the span unknown: False, the conservative
+    scan. Any error reads as False too."""
+    try:
+        transcript = data.get("transcript_path") if isinstance(data, dict) else None
+        if not isinstance(transcript, str) or not transcript or not os.path.isfile(transcript):
+            return False
+        with open(transcript, "rb"):
+            pass
+        from lib import command_span
+        return command_span.active_span(transcript) is None
+    except Exception:
+        return False
+
+
+def _warn_unscoped(violations, dev_dir):
+    """OB-L42: the global scan's findings for a QA dispatch with no obligation
+    outside every command span, as a warning: no cycle is this dispatch's to
+    collect, so another cycle's abandoned fan-out never blocks it."""
+    lines = ["", "WARNING (not blocking): a fan-out in docs/dev is not collected; this QA dispatch "
+                 "carries no obligation and lies in no command span, so it is not its to collect."]
+    for code, path, problem, lane, via in violations:
+        producer = f"dev (lane {lane})" if lane is not None else CANONICAL_PRODUCER
+        lines.append(f"  [{code}] {path}: {problem} | producer: {producer}{_reached_by(via, dev_dir)}")
+    sys.stderr.write("\n".join(lines) + "\n\n")
+
+
 def _emit_canonical_findings(findings, armed, dev_dir):
     """Report row 12(b)'s findings: a block while the barrier is armed (P2), else a warning.
     Each header is a literal of its own, so the dead-end check maps a block to this site."""
@@ -642,6 +674,11 @@ def main():
             # Unarmed G3 (the code default; the shipped settings arm it) keeps master's one
             # always-on block; (a) and (b) need the switch.
             violations = [v for v in violations if v[0] == "canonical_missing"]
+        if violations and scope_task_id is None and _outside_any_span(data):
+            # OB-L42: no obligation and no command span names no cycle; inside a span
+            # (a /dev or /dev-overnight one among them) the scan still blocks.
+            _warn_unscoped(violations, dev_dir)
+            violations = []
         if violations:
             _emit_block(violations, dev_dir)
         if scope_task_id is not None:
