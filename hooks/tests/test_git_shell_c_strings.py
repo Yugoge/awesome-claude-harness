@@ -106,7 +106,6 @@ UNRESOLVED = [
     'bash -c "`cat cmd.txt`"',
     'bash -c "git $SUB"',
     "bash -c 'bash -c \"$X\"'",
-    "bash -c $'git commit -m y'",
     'bash -c "git status',
 ]
 
@@ -373,6 +372,7 @@ def test_the_classifier_yields_the_plain_invocation_inside_every_wrapper(plain, 
     'bash -c "git commit -m y">/dev/null', "xargs -I{} sh -c 'git commit -m y' < list",
     "cat <<'EOF'\nit's a note\nEOF\nbash -c 'git commit -m y'",
     'bash $OPTS -c "git commit -m y"', 'bash $X "git commit -m y"', _nest("git commit -m y", 4),
+    "bash -c $'git commit -m y'",
 ])
 def test_other_spellings_of_a_shell_string_resolve(command):
     assert ("commit", ("-m", "y")) in _calls(command), command
@@ -520,7 +520,7 @@ def test_a_run_time_value_reads_as_a_placeholder_in_its_layer():
 
 def test_a_shell_named_in_a_commit_message_is_data():
     assert _calls("git commit -m 'run bash -c \"git push\" later'") == [
-        ("commit", ("-m", "'run", "bash", "-c", '"git', 'push"', "later'"))]
+        ("commit", ("-m", "'run bash -c \"git push\" later'"))]
 
 
 def test_every_residual_kind_is_one_the_override_route_accepts():
