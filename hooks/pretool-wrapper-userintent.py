@@ -621,7 +621,8 @@ class _Scan:
         if words[0] == 'command' and len(words) > 1 and words[1] in ('-v', '-V'):
             return True
         res = _sp.resolve(cmd)
-        last_open = res.unresolved == 'computed-shell-option' and self._last_quoted_param(cmd, res.args)
+        last_open = res.unresolved == 'computed-shell-option' and (
+            self._last_quoted_param(cmd, res.args) or self._lead_open(cmd, res))
         if res.unresolved and not str(res.unresolved).startswith('xargs') and not last_open:
             return False
         if res.unresolved and not last_open and not self._xargs_safe(res):
@@ -654,7 +655,7 @@ class _Scan:
             return True
         if name in _sp.SHELLS:
             return self._shell_noexec(vals, self._last_quoted_param(cmd, res.args),
-                                       list(res.args))
+                                       list(res.args), self._lead_checker(cmd, res, res.args))
         if _PYTHON_RE.match(name):
             return self._py_reader(cmd, vals)
         if name in ('node', 'nodejs'):
@@ -685,10 +686,11 @@ class _Scan:
         return True
 
     @staticmethod
-    def _shell_noexec(vals, last_open=False, words=None) -> bool:
+    def _shell_noexec(vals, last_open=False, words=None, lead_ok=None) -> bool:
         """`bash -n` (or `-o noexec`) with no later `+n` / `+o noexec`. A computed word whose
         first character is a literal other than `-` / `+` is the script operand (every word
-        after it is an argument of the script), so it cannot turn the check into a run."""
+        after it is an argument of the script), so it cannot turn the check into a run;
+        ``lead_ok(k)`` proves the same for a computed word whose values the guard reads."""
         noexec = False
         k = 0
         while k < len(vals):
@@ -701,6 +703,8 @@ class _Scan:
                     except Exception:
                         lead = ''
                     if lead and lead[0] not in '-+':
+                        return True
+                    if lead_ok is not None and lead_ok(k):
                         return True
                 return noexec and last_open and k == len(vals) - 1
             if v in ('--', '-'):
@@ -727,6 +731,186 @@ class _Scan:
                 continue
             break
         return noexec
+
+    # -- `bash -n` with a computed operand: proven when no value can start an option ----------
+    _FIELD_CAP = 2000
+
+    def _lead_open(self, cmd, res) -> bool:
+        """A shell whose computed option word is proven a script operand under -n."""
+        head = res.head.value() if res.head is not None else None
+        if head is None or os.path.basename(head) not in _sp.SHELLS:
+            return False
+        args = list(res.args)
+        vals = [self._expand(w)[0] for w in args]
+        return self._shell_noexec(vals, False, args, self._lead_checker(cmd, res, args))
+
+    def _lead_checker(self, cmd, res, args):
+        """lead_ok(k) for _shell_noexec: the computed word args[k] gives a first field whose
+        first character is neither `-` nor `+` for every value the guard reads (the command's
+        literal assignments, loop lists, `$(echo|ls|readlink -f|realpath ...)`), so it is the
+        script operand and every later word is an argument of the script; a word that may
+        expand to no field passes only as the last word (`bash -n` then reads stdin, still
+        under -n). Never with BASH_ENV / ENV set by the command."""
+        if any(a.name in ('BASH_ENV', 'ENV') for a in
+               list(getattr(cmd, 'assignments', ())) + list(getattr(res, 'assignments', ()))):
+            return None
+        args = list(args)
+
+        def check(k):
+            try:
+                return k < len(args) and self._lead_safe(args[k], k == len(args) - 1)
+            except Exception:
+                return False
+        return check
+
+    def _lead_safe(self, word, last) -> bool:
+        for p in word.parts:
+            split = p.quote == _sp.BARE and p.kind != 'lit'
+            vals = self._part_values(p, first=p is word.parts[0])
+            if vals is None:
+                return False
+            empty = False
+            for v, complete in vals:
+                s = v.lstrip(' \t\n') if split else v
+                if not s:
+                    if not complete:
+                        return False
+                    empty = True
+                    continue
+                firsts = [s]
+                if split and p.kind != 'lit':
+                    fld = s.split()[0] if (complete or re.search(r'\s', s)) else s
+                    if any(c in fld for c in '*?['):
+                        got = self._glob_rel(fld)
+                        if got is None:
+                            return False
+                        firsts.extend(got)
+                if any(f[:1] in ('-', '+') for f in firsts):
+                    return False
+            if not empty:
+                return True
+        return last  # the word may expand to no field: `bash -n` alone reads stdin under -n
+
+    def _part_values(self, p, first=False):
+        """[(value, complete)] a word part may take; None when the guard cannot read it."""
+        if p.kind == 'lit':
+            t = p.text or ''
+            if first and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
+                t = self.home + t[1:]
+            return [(t, True)]
+        if p.kind == 'glob':
+            return [(p.text or '', True)]
+        if p.kind == 'param':
+            m = re.match(r'^\{?([A-Za-z_]\w*)\}?$', p.text or '')
+            if not m:
+                alts = self._pe_alts(p.text or '', 1)  # `${x OP ...}` on the command's values
+                if len(alts) >= self._ALT_CAP:
+                    return None
+                return [self._alt_str(a) for a in alts]
+            name = m.group(1)
+            if name == 'HOME' and self.home:
+                return [(self.home, True)]
+            out = []
+            lv = self._loop_values().get(name)
+            amap = self._assign_map()
+            if lv is None and name not in amap:
+                return None
+            if lv is not None:
+                if lv is False:
+                    return None
+                out.extend((v, True) for v in lv)
+            for val in amap.get(name, ()):
+                if val is None:
+                    return None
+                alts = self._alts(val, 1)
+                if len(alts) >= self._ALT_CAP:
+                    return None
+                out.extend(self._alt_str(alt) for alt in alts)
+            return out
+        if p.kind in ('cmdsub', 'backtick'):
+            alts = self._echo_alts(p.text or '', 0)
+            if not alts or len(alts) >= self._ALT_CAP:
+                return None
+            return [self._alt_str(a) for a in alts]
+        return None
+
+    @staticmethod
+    def _alt_str(alt):
+        s = ''
+        for x in alt:
+            if x is None:
+                return (s, False)
+            s += x
+        return (s, True)
+
+    def _glob_rel(self, v):
+        """The strings an unquoted glob expands to as the shell gives them (the pattern itself
+        too); None under an unknown cwd."""
+        if os.path.isabs(v):
+            return sorted(glob.glob(v))[:self._FIELD_CAP] + [v]
+        if self.cwd_unknown:
+            return None
+        out = [v]
+        for base in sorted(self.cwds):
+            b = base.rstrip('/') + '/'
+            out.extend(m[len(b):] for m in sorted(glob.glob(b + v))[:self._FIELD_CAP])
+        return out
+
+    def _loop_values(self) -> dict:
+        """loop variable -> the fields its list gives (False when one cannot be read)."""
+        memo = getattr(self, '_loopval_memo', None)
+        if memo is not None:
+            return memo
+        out = {}
+        self._loopval_memo = out
+        for var, items, _body in self.loops:
+            if out.get(var) is False:
+                continue
+            got = out.setdefault(var, [])
+            for w in items:
+                arr = self._array_ref(w)
+                for item in (self.arrays[arr] if arr is not None else [w]):
+                    fields = self._word_fields(item)
+                    if fields is None:
+                        out[var] = False
+                        break
+                    got.extend(fields)
+                if out[var] is False:
+                    break
+        return out
+
+    def _word_fields(self, word):
+        """The fields a loop-list word expands to (word splitting, globs); None when unread."""
+        vals = self._values(word)
+        if vals:
+            out = []
+            for v, g in vals:
+                if g:
+                    got = self._glob_rel(v)
+                    if got is None:
+                        return None
+                    out.extend(got)
+                else:
+                    out.append(v)
+            return out
+        alts = self._alts(word)
+        out = []
+        split = any(p.quote == _sp.BARE and p.kind != 'lit' for p in word.parts)
+        for alt in alts:
+            s, complete = self._alt_str(alt)
+            if not complete:
+                return None
+            for f in (s.split() if split else [s]):
+                if split and any(c in f for c in '*?['):
+                    got = self._glob_rel(f)
+                    if got is None:
+                        return None
+                    out.extend(got)
+                else:
+                    out.append(f)
+            if len(out) > self._FIELD_CAP:
+                return None
+        return out
 
     def _py_reader(self, cmd, vals) -> bool:
         k = 0
@@ -1004,7 +1188,8 @@ class _Scan:
 
     def _shell(self, site, res, args):
         vals = [self._expand(w)[0] for w in args]
-        if self._shell_noexec(vals, self._last_quoted_param(site.cmd, args), args):
+        if self._shell_noexec(vals, self._last_quoted_param(site.cmd, args), args,
+                              self._lead_checker(site.cmd, res, args)):
             return  # read, never run (bash -n with no later +n)
         k = 0
         has_c = has_s = False
@@ -1171,15 +1356,24 @@ class _Scan:
         target = self.home if not vals else vals[0]
         if target is None or target == '-' or not target:
             self.cwd_unknown = True
+            self._cwd_changed()
             return
         if self.cdpath and not os.path.isabs(target) and not target.startswith(('./', '../')) \
                 and target not in ('.', '..'):
             self.cwd_unknown = True
+            self._cwd_changed()
             return
         if os.path.isabs(target):
             self.cwds.add(os.path.normpath(target))
         else:
             self.cwds |= {os.path.normpath(os.path.join(c, target)) for c in list(self.cwds)}
+        self._cwd_changed()
+
+    def _cwd_changed(self):
+        """A `cd` widened the cwds: what was read against the old ones is read again (an rg
+        config named by a relative RIPGREP_CONFIG_PATH, the reader proofs that used it)."""
+        self._rgconf_memo = None
+        self.inert_memo = {}
 
     def _sub(self, text, cwds=None):
         """Read ``text`` as a command of its own (a command string an unknown runner may run)."""
@@ -2054,6 +2248,8 @@ class _Scan:
                 elif name in amap:
                     for val in amap[name]:
                         choices.extend(self._alts(val, depth + 1) if val is not None else [[None]])
+                elif name is None:
+                    choices = self._pe_alts(p.text or '', depth)
             elif p.kind in ('cmdsub', 'backtick'):
                 choices = self._echo_alts(p.text or '', depth) or [[None]]
             else:
@@ -2061,8 +2257,184 @@ class _Scan:
             acc = [a + c for a in acc for c in choices][:self._ALT_CAP]
         return acc
 
+    # `${x OP ...}`: the operators read on the command's own literal assignments
+    _PE_RE = re.compile(r'^([A-Za-z_]\w*)(##?|%%?|//?|\^\^?|,,?|:[-=+]|[-=+]|:)(.*)$', re.S)
+
+    def _pe_alts(self, text, depth) -> list:
+        """The values of a parameter expansion with an operator on a variable the command
+        assigns literally; a variable whose value cannot be evaluated through the operator
+        and is in or names the harness hooks/ or scripts/ dir sets _pe_fail."""
+        inner = text[1:-1] if text.startswith('{') and text.endswith('}') else text
+        m = self._PE_RE.match(inner)
+        name = m.group(1) if m else (re.match(r'^[!#]?([A-Za-z_]\w*)', inner) or [None, None])[1]
+        amap = self._assign_map()
+        if name == 'HOME' and self.home:
+            vals = [[self.home]]
+        elif name in amap:
+            vals = []
+            for val in amap[name]:
+                vals.extend(self._alts(val, depth + 1) if val is not None else [[None]])
+        else:
+            vals = None  # not set by the command: its value comes from the environment
+        if m is None or inner[:1] in '!#':
+            if vals and any(self._alt_names_harness(a) for a in vals):
+                self._pe_fail = True
+            return [[None]]
+        op, arg = m.group(2), m.group(3)
+        if op in (':-', '-', ':=', '=', ':+', '+'):
+            arg_alts = self._pe_arg_alts(arg, depth)
+            if op in (':+', '+'):
+                return (arg_alts if vals else []) + [['']]
+            return (vals or []) + ([[None]] if vals is None else []) + arg_alts
+        if vals is None:
+            return [[None]]
+        out = []
+        for alt in vals:
+            s, complete = self._alt_str(alt)
+            r = self._pe_eval(s, op, arg) if complete else None
+            if r is None:
+                if self._alt_names_harness(alt):
+                    self._pe_fail = True
+                out.append([None])
+            else:
+                out.append([r])
+        return out
+
+    def _pe_arg_alts(self, arg, depth) -> list:
+        try:
+            sites = list(_sp.walk(_sp.parse(': ' + arg)))
+            words = list(sites[0].cmd.words)[1:] if len(sites) == 1 else None
+        except Exception:
+            words = None
+        if words is None or len(words) > 1:
+            return [[None]]
+        return self._alts(words[0], depth + 1) if words else [['']]
+
+    @staticmethod
+    def _pe_pattern(pat):
+        """A regex for a literal shell pattern (`*`, `?`, `[...]`); None when it is computed."""
+        if pat is None or re.search(r'[$`"\'\\]', pat):
+            return None
+        out, i = '', 0
+        while i < len(pat):
+            c = pat[i]
+            if c == '*':
+                out += '.*'
+            elif c == '?':
+                out += '.'
+            elif c == '[':
+                j = pat.find(']', i + 2)
+                if j < 0:
+                    out += re.escape(c)
+                else:
+                    body = pat[i + 1:j]
+                    out += '[' + ('^' + re.escape(body[1:]) if body[:1] in '!^' else re.escape(body)) + ']'
+                    i = j
+            else:
+                out += re.escape(c)
+            i += 1
+        return out
+
+    def _pe_eval(self, s, op, arg):
+        """`${x OP arg}` on the literal value s; None when the guard cannot evaluate it."""
+        try:
+            if op in ('#', '##', '%', '%%'):
+                rx = self._pe_pattern(arg)
+                if rx is None:
+                    return None
+                cands = range(len(s) + 1)
+                if op in ('#', '##'):
+                    order = cands if op == '#' else reversed(cands)
+                    for i in order:
+                        if re.fullmatch(rx, s[:i], re.S):
+                            return s[i:]
+                    return s
+                order = reversed(cands) if op == '%' else cands
+                for i in order:
+                    if re.fullmatch(rx, s[i:], re.S):
+                        return s[:i]
+                return s
+            if op in ('/', '//'):
+                pat, _sl, rep = arg.partition('/')
+                anchor = ''
+                if op == '/' and pat[:1] in ('#', '%'):
+                    anchor, pat = pat[0], pat[1:]
+                rx = self._pe_pattern(pat)
+                if rx is None or re.search(r'[$`"\'\\&]', rep) or not pat:
+                    return None
+                if anchor == '#':
+                    mm = re.match('(?:' + rx + ')', s, re.S)
+                    if mm is None:
+                        return s
+                    # longest match at the start
+                    for i in range(len(s), -1, -1):
+                        if re.fullmatch(rx, s[:i], re.S):
+                            return rep + s[i:]
+                    return s
+                if anchor == '%':
+                    for i in range(len(s) + 1):
+                        if re.fullmatch(rx, s[i:], re.S):
+                            return s[:i] + rep
+                    return s
+                out, i, done = '', 0, False
+                while i <= len(s):
+                    hit = None
+                    if not done:
+                        for j in range(len(s), i, -1):
+                            if re.fullmatch(rx, s[i:j], re.S):
+                                hit = j
+                                break
+                    if hit is not None:
+                        out += rep
+                        i = hit
+                        done = op == '/'
+                        continue
+                    if i < len(s):
+                        out += s[i]
+                    i += 1
+                return out
+            if op in ('^', '^^', ',', ',,'):
+                if arg:
+                    return None
+                f = str.upper if op[0] == '^' else str.lower
+                return f(s) if len(op) == 2 else (f(s[:1]) + s[1:])
+            if op == ':':
+                mm = re.fullmatch(r'\s*(-?\d+)\s*(?::\s*(-?\d+)\s*)?', arg)
+                if mm is None:
+                    return None
+                off = int(mm.group(1))
+                if off < 0:
+                    off = max(len(s) + off, 0)
+                if mm.group(2) is None:
+                    return s[off:]
+                ln = int(mm.group(2))
+                return s[off:off + ln] if ln >= 0 else s[off:len(s) + ln]
+        except re.error:
+            return None
+        return None
+
+    def _alt_names_harness(self, alt) -> bool:
+        """A value (segments, None for a computed part) that names a wrapper or is in or
+        names the harness hooks/ or scripts/ directory."""
+        s = ''.join(x for x in alt if isinstance(x, str))
+        if _mentions(s) or self._text_names_harness(s):
+            return True
+        prefix, _c = self._alt_str(alt)
+        if '/' not in prefix:
+            return False
+        dirs = _harness_dirs()
+        bases = [''] if os.path.isabs(prefix) else sorted(self.cwds)
+        for base in bases:
+            q = os.path.normpath(os.path.join(base, prefix) if base else prefix)
+            for d in (q, os.path.dirname(q)):
+                if any(d == h or d.startswith(h + os.sep) for h in dirs):
+                    return True
+        return False
+
     def _echo_alts(self, text, depth):
-        """The output of `echo ARGS` with readable ARGS (no option); None otherwise."""
+        """The output of `echo ARGS` with readable ARGS (no option), of `ls` with no option
+        over readable names, and of `readlink -f` / `realpath` of one readable name; None
+        otherwise."""
         try:
             sites = list(_sp.walk(_sp.parse(text)))
         except Exception:
@@ -2070,6 +2442,8 @@ class _Scan:
         if len(sites) != 1 or sites[0].cmd.redirects or sites[0].cmd.assignments:
             return None
         words = list(sites[0].cmd.words)
+        if words and words[0].value() in ('ls', 'readlink', 'realpath'):
+            return self._path_cmd_alts(words)
         if not words or words[0].value() != 'echo':
             return None
         out = [[]]
@@ -2080,6 +2454,73 @@ class _Scan:
             sep = [' '] if i else []
             out = [o + sep + a for o in out for a in alts][:self._ALT_CAP]
         return out
+
+    def _path_cmd_alts(self, words):
+        """`ls NAMES` (files print as given, one directory lists its entries) and
+        `readlink -f|-e|-m NAME` / `realpath [-e|-m] NAME`, read on disk now."""
+        name = words[0].value()
+        ops, opts = [], []
+        for w in words[1:]:
+            v = w.value()
+            if v is not None and v.startswith('-') and v != '-':
+                opts.append(v)
+            else:
+                ops.append(w)
+        if name == 'ls':
+            if opts:
+                return None
+            if not ops:
+                if self.cwd_unknown:
+                    return None
+                outs = []
+                for base in sorted(self.cwds):
+                    try:
+                        outs.append([n for n in sorted(os.listdir(base)) if not n.startswith('.')])
+                    except OSError:
+                        outs.append([])
+                return [['\n'.join(o)] for o in outs]
+            fields = []
+            for w in ops:
+                got = self._word_fields(w)
+                if got is None:
+                    return None
+                fields.extend(got)
+            outs = []
+            for base in ([''] if all(os.path.isabs(f) for f in fields) else sorted(self.cwds)):
+                lines = []
+                for f in fields:
+                    full = os.path.join(base, f) if base else f
+                    if os.path.isdir(full):
+                        if len(fields) > 1:
+                            return None
+                        try:
+                            lines.extend(n for n in sorted(os.listdir(full)) if not n.startswith('.'))
+                        except OSError:
+                            return None
+                    elif os.path.lexists(full):
+                        lines.append(f)
+                outs.append(['\n'.join(sorted(lines))])
+            if self.cwd_unknown and not all(os.path.isabs(f) for f in fields):
+                return None
+            return outs
+        if name == 'readlink' and not (opts and all(re.fullmatch(r'-[fem]+n?|-n[fem]+', o) for o in opts)):
+            return None
+        if name == 'realpath' and any(o not in ('-e', '-m', '-q') for o in opts):
+            return None
+        if len(ops) != 1:
+            return None
+        outs = []
+        for alt in self._alts(ops[0], 1):
+            v, complete = self._alt_str(alt)
+            if not complete:
+                return None
+            if os.path.isabs(v):
+                outs.append([os.path.realpath(v)])
+            elif self.cwd_unknown:
+                return None
+            else:
+                outs.extend([os.path.realpath(os.path.join(b, v))] for b in sorted(self.cwds))
+        return outs
 
     def _wrapper_paths(self) -> set:
         """The paths the harness home's wrappers have (as given and by realpath)."""
@@ -2097,7 +2538,11 @@ class _Scan:
         literal start holds a `/`)."""
         dirs = _harness_dirs()
         wpaths = self._wrapper_paths()
-        for alt in self._alts(word):
+        self._pe_fail = False
+        alts = self._alts(word)
+        if self._pe_fail:
+            return True  # an operator the guard cannot evaluate on a harness-path value
+        for alt in alts:
             if all(isinstance(x, str) for x in alt):
                 v = ''.join(alt)
                 if '/' not in v:
@@ -2406,6 +2851,7 @@ class _Scan:
     # what make still runs under -n: `+` recipe lines, $(MAKE) lines, $(shell ...), `!=`
     _MAKE_DRY_RUNS = re.compile(r'(?m)(?:^\t|;)[ \t]*[@\-+ \t]*\+|\bMAKE\b|\bshell\b|!=')
     _COMPUTED_TEXT = re.compile(r'\$|`')
+    _MAKE_INCLUDE = re.compile(r'(?m)^[ \t]*(?:-include|sinclude|include)(?:[ \t]|$)')
 
     def _make(self, site, args, vals):
         """make reads a makefile from stdin (`-f -`, `-f /dev/stdin`, a heredoc or here-string)
@@ -2548,7 +2994,10 @@ class _Scan:
             texts.extend(t for t in extra if t is not None)
             if None in extra:
                 unreadable = True  # a computed variable or --eval beside a makefile read here
-        runs_dry = any(self._MAKE_DRY_RUNS.search(t) for t in texts)
+        # GNU make remakes an `include`d makefile (include / -include / sinclude) and
+        # re-executes even under -n, so its rule's recipe runs
+        runs_dry = any(self._MAKE_DRY_RUNS.search(t) or self._MAKE_INCLUDE.search(t)
+                       for t in texts)
         for t in texts:
             t = re.sub(r'\\\n\t?', '', t)
             hit = _dequoted_mentions(t) or _dequoted_mentions(self._sed_unescape(t))
@@ -2567,7 +3016,14 @@ class _Scan:
         """What a pipeline stage writes to the next one, when it is `cat FILE...` or
         `printf` / `echo` with readable arguments; None otherwise."""
         site = self.site_of.get(id(st)) if st is not None else None
-        if site is None or site.cmd.redirects:
+        if site is None:
+            return None
+        stdin_file = None
+        for red in site.cmd.redirects:
+            if red.fd == 0 and red.op == '<' and red.hd is None and red.target is not None \
+                    and stdin_file is None:
+                stdin_file = red  # `cat < FILE`: read like `cat FILE`
+                continue
             return None
         res = self.res.get(id(site))
         if res is None or res.head is None or res.unresolved:
@@ -2582,6 +3038,13 @@ class _Scan:
         if name != 'cat':
             return None
         ops = [(w, v) for w, v in zip(res.args, vals) if not v.startswith('-') or v == '-']
+        if stdin_file is not None:
+            if ops and any(v != '-' for _w, v in ops):
+                return None  # cat reads its operands; stdin only at a `-`
+            sv = self._expand(stdin_file.target)[0]
+            if sv is None:
+                return None
+            ops = [(stdin_file.target, sv)]
         if not ops or any(v == '-' for _w, v in ops):
             return None
         out = []
