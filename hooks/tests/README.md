@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 189
+- **Total files**: 190
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -191,6 +191,7 @@
 - `test_workflow_bookmark_writer.py` - <project>/.claude/workflow-<sid>.json is written by prompt-workflow.py alone (a
 - `test_worktree_guard.py` - agent worktrees
 - `test_write_gate.py` - - The gate sees what the guards saw: each rule's tool set is its guard's registered matcher
+- `test_write_gate_overwrite_exempt.py` - Each case runs the rule (lib/write_gate/overwrite.py) as a process on an architect subagent's Write
 - `test_write_gate_overwrite_parity.py` - The write gate runs the Python form. The shell hook is an exit-0 stub since the gate's registration
 - `test_write_guard_consent_process.py` - The file is an exit-0 stub since the write gate's registration landed (D15); its checks are the g...
 - `test_write_push_gate_token.py` - changelog-analyst (under /commit) and the cleaner (under /clean) both call it after

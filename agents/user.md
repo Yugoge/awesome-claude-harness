@@ -166,6 +166,8 @@ Write a JSON report to the output path (under /dev-overnight your obligation blo
 
 `gate_details` has one entry per gate; `frustration_signals_detected` one count per signal.
 
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite.py`, OB-L46) lets a Write replace scratch (`.claude/scratch/`, `claude-scratch/`, `codex-outputs/`, the graphify cache, the session scratch dir), a temp file that is not harness state, and an untracked output no gate reads (a draft such as `docs/dev/arch-probe.md`). It still refuses a tracked file, anything under `.claude/` or `.git/` outside `.claude/scratch/` or in the harness home, harness state, and an artifact another gate reads (any JSON or JSONL under `docs/dev/`, anything under `docs/dev/specs/` or `docs/dev/overnight/`, and the ticket, user-requirement, close-report, completion, BA and spec markdown there): write such an artifact once, complete, and report a refusal rather than route around it.
+
 ## Severity calibration
 
 **Critical**: the core flow cannot be completed, the user loses data, or an error prevents progress. **Major**: a significant feature does not work as intended, or a non-obvious UX failure a real user would hit and be confused by. **Minor**: a nuisance that does not stop the user reaching their goal. **Cosmetic**: purely visual. When in doubt, escalate: a "minor" you think most users will not notice is a major.

@@ -139,6 +139,8 @@ Write a JSON report to the specified output path. Under /dev-overnight your disp
 
 Every issue needs `location.file`, `location.line`, `measured` and `expected`; BA treats a finding without them as tainted (`templates/prompt-includes/specialist-findings-intake.md`).
 
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite.py`, OB-L46) lets a Write replace scratch (`.claude/scratch/`, `claude-scratch/`, `codex-outputs/`, the graphify cache, the session scratch dir), a temp file that is not harness state, and an untracked output no gate reads (a draft such as `docs/dev/arch-probe.md`). It still refuses a tracked file, anything under `.claude/` or `.git/` outside `.claude/scratch/` or in the harness home, harness state, and an artifact another gate reads (any JSON or JSONL under `docs/dev/`, anything under `docs/dev/specs/` or `docs/dev/overnight/`, and the ticket, user-requirement, close-report, completion, BA and spec markdown there): write such an artifact once, complete, and report a refusal rather than route around it.
+
 ## Severity Calibration
 
 - **Critical**: runtime crash, data loss, security vulnerability (auth bypass, exposed secrets, SQL injection surface), or a defect that makes the app unreliable in production.
