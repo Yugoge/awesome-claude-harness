@@ -1,6 +1,8 @@
 """The working-tree git rules of lib/bash_safety_rules.py (git stash, wide checkout, restore from a ref, git clean)
 judge the git invocations lib/shell_parse.py finds, not the raw text: a git subcommand named in data passes, one
-that runs (past wrappers, in a shell payload, in interpreter code that spawns it) is refused.
+that runs (past wrappers, in a shell payload, in interpreter code that spawns it) is refused. The data lift holds
+only inside the strict data shape (bash_safety_rules.data_shape); data handed on to a shell, interpreter, xargs, tee,
+at, crontab, make or a written script keeps the base refusal.
 
 Every case runs the real hook entry (pretool-bash-safety.sh fed a PreToolUse payload) with a scratch HOME, state dir,
 git config and a valid empty protected-runtime file. No command is ever executed.
@@ -52,6 +54,8 @@ MUST_PASS = [
     'git commit -m "git stash push docs"',
     "printf '%s\\n' \"git stash push\"",
     "cat > docs/clean.md <<'EOF'\nUse git clean -n to preview\nEOF\n",
+    "cat <<'EOF'\ngit clean -fdx\nEOF\n",
+    "git commit -F - <<'EOF'\navoid git stash\nEOF\n",
 ]
 
 # Still passes (pinned so the change widens nothing).
@@ -99,6 +103,37 @@ MUST_REFUSE = [
     ('python3 -c \'import subprocess; subprocess.run(["git", "clean", "-fdx"])\'', CLEAN),
     ("python3 - <<'EOF'\nimport os\nos.system(\"git clean -fdx\")\nEOF\n", CLEAN),
     ('perl -e \'system("git clean -fdx")\'', CLEAN),
+    # Data handed on to something that runs it: outside the strict data shape, so the base refusal stands.
+    ("printf '%s\\n' \"git clean -fdx\" | bash", CLEAN),
+    ('echo "git clean -fdx" > x.sh && bash x.sh', CLEAN),
+    ("echo git clean -fdx > x.sh; sh x.sh", CLEAN),
+    ('echo "git stash -u" > x.sh && bash x.sh', STASH),
+    ('grep -e "git clean -fdx" notes.txt | sh', CLEAN),
+    ('rg -o "git clean -fdx" f | sh', CLEAN),
+    ("cat > x.sh <<'EOF'\ngit clean -fdx\nEOF\nbash x.sh", CLEAN),
+    ("cat > x.sh <<'EOF'\ngit stash\nEOF\nbash x.sh", BARE),
+    ("echo git clean -fdx | cat | sh", CLEAN),
+    ("echo git clean -fdx | tee /dev/stderr | sh", CLEAN),
+    ("echo git clean -fdx > /tmp/c && sh < /tmp/c", CLEAN),
+    ("echo git clean -fdx | python3 -c 'import os,sys; os.system(sys.stdin.read())'", CLEAN),
+    ("echo git clean -fdx | at now", CLEAN),
+    ("echo git clean -fdx | batch", CLEAN),
+    ("echo '* * * * * git clean -fdx' | crontab -", CLEAN),
+    ("echo git stash | at now", BARE),
+    ("echo git clean -fdx >> ~/.bashrc", CLEAN),
+    ("make -f /dev/stdin <<'EOF'\nall:\n\tgit clean -fdx\nEOF\n", CLEAN),
+    ("echo 'exec git clean -fdx' | tclsh", CLEAN),
+    ("tclsh <<'EOF'\nexec git stash\nEOF\n", BARE),
+    ("echo git stash | xargs -I{} sh -c '{}'", BARE),
+    ("git bisect run git stash", BARE),
+    ("fish -c 'git stash'", STASH),
+    ('sh -c "$(echo git clean -fdx)"', CLEAN),
+    ("cat > .git/hooks/pre-commit <<'EOF'\ngit clean -fdx\nEOF\ngit commit -m x", CLEAN),
+    ("cat > notes.md <<'EOF'\ngit stash\nEOF\ngit -c alias.x='!sh notes.md' x", BARE),
+    ("printf 'run git clean -fdx\\n' >> notes.md", CLEAN),
+    ("tee notes.md <<'EOF'\ngit clean -fdx wipes\nEOF\n", CLEAN),
+    # A git clean named in a commit message is still refused (only stash/checkout/restore text is lifted there).
+    ('git commit -m "run git clean -fdx first"', CLEAN),
 ]
 
 

@@ -1009,7 +1009,9 @@ def kill_pid_rule(command, view):
 # nohup, timeout, a path-qualified git ...), inside shell payloads (bash -c, eval, a heredoc or pipe fed to a
 # shell, find -exec, a git alias body) and, where interpreter code hands a string to a process-spawning call,
 # inside that string. A git subcommand named in data (a grep pattern, an echo, a commit message, a heredoc a
-# non-shell reads) is no invocation. A command the parser cannot read falls back to the raw-text patterns.
+# non-shell reads) is no invocation. That reading overrules a base refusal (raw-text patterns, classifier view) only
+# when the whole command is the strict data shape (data_shape); anywhere else the verdict is the union of both, and
+# a command the parser cannot read takes the base pass alone.
 
 _INTERP_CODE_OPTS = (  # interpreter name pattern, the options whose value is the code, options taking a value
     (re.compile(r"^(python|pypy)[\d.]*$"), ("-c",), ("-W", "-X")),
@@ -1083,6 +1085,128 @@ def _interpreter_shell_texts(code):
     if run:
         texts.append(" ".join(run))
     return [t for t in dict.fromkeys(texts) if "git" in t]
+
+
+# The strict data shape: the one place the working-tree rules let the invocation view overrule a base refusal.
+_PIPE_FILTERS = frozenset({"head", "tail", "wc", "sort", "uniq", "cut", "less", "more", "grep", "rg"})
+_SHAPE_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
+_SHAPE_COMMANDS = frozenset({"echo", "printf", "cat", "ls", "true", "git"}) | _SHAPE_SEARCHERS
+_SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2"})
+_SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
+                             "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
+                             "grep", "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
+_SHAPE_GIT_GLOBALS = frozenset({"-C", "--no-pager", "-P", "--no-optional-locks"})
+_EXEC_DOC_EXT_RE = re.compile(r"\.(sh|bash|zsh|ksh|fish|csh|tcsh|command|mk|mak|make|py|pl|pm|rb|js|mjs|cjs|ts|php|"
+                              r"tcl|lua|awk|sed|ps1|bat|cmd|service|timer|desktop|cron|rc|env|envrc)$", re.I)
+_EXEC_DOC_NAMES = frozenset({"makefile", "gnumakefile", "crontab", ".bashrc", ".bash_profile", ".bash_login",
+                             ".bash_logout", ".profile", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout",
+                             ".kshrc", ".cshrc", ".tcshrc", ".login", ".logout", ".envrc", ".inputrc", "config.fish",
+                             "justfile", "rakefile", "dockerfile", "procfile", ".tclshrc"})
+
+
+def _doc_path_ok(path):
+    """A file the data shape may write: a literal path that no shell, make, cron, git or login sequence reads."""
+    if not path or path.startswith(("~", "-", "/etc/", "/usr/", "/bin/", "/sbin/", "/lib", "/opt/", "/proc/",
+                                    "/sys/", "/dev/", "/var/spool/", "/boot/", "/root/")):
+        return False
+    low = path.lower()
+    base = low.rsplit("/", 1)[-1]
+    return not (not base or base in _EXEC_DOC_NAMES or _EXEC_DOC_EXT_RE.search(base) or base.startswith(".git")
+                or "/.git/" in "/" + low or "/bin/" in "/" + low
+                or any(k in low for k in ("hook", "cron", "systemd", "autostart", "profile.d", "rc.d", "init.d")))
+
+
+def _word_is_static(w):
+    return all(p.kind not in ("cmdsub", "backtick", "procsub_in", "procsub_out") for p in w.parts)
+
+
+def _shape_redirects(cmd, may_write_doc):
+    for red in cmd.redirects:
+        if red.fd_var is not None:
+            return False
+        if red.hd is not None:
+            if red.hd.expansions:
+                return False
+            continue
+        if red.target is not None and not _word_is_static(red.target):
+            return False
+        if red.writes():
+            lit = red.target.literal() if red.target is not None else None
+            if lit not in _SAFE_DEVICES and not (may_write_doc and _doc_path_ok(lit)):
+                return False
+    return True
+
+
+def _shape_git(cmd, invs):
+    mine = [(i, ctx) for i, ctx in invs if i.cmd is not None and i.cmd.span == cmd.span and ctx == ("top",)]
+    if len(mine) != 1:
+        return False
+    inv, ctx = mine[0]
+    if inv.alias_body is not None or inv.unresolved or inv.config_pairs or inv.env \
+            or inv.path_qualified or inv.subcommand not in _SHAPE_GIT_SUBS \
+            or any(opt not in _SHAPE_GIT_GLOBALS for opt, _v in inv.global_opts):
+        return False
+    args = [a or "" for a in inv.args]
+    if inv.subcommand == "grep" and any(a.startswith(("-O", "--open-files-in-pager")) for a in args):
+        return False
+    return "--ext-diff" not in args
+
+
+def _shape_simple(cmd, invs, stage):
+    """One simple command of the data shape: a pipeline's first stage, or a later pure-filter stage."""
+    from lib.shell_parse import SimpleCommand, resolve
+    if not isinstance(cmd, SimpleCommand) or cmd.assignments or not cmd.words \
+            or not all(_word_is_static(w) for w in cmd.words):
+        return False
+    head = cmd.words[0].literal()
+    if head is None or "/" in head:
+        return False
+    res = resolve(cmd)
+    if res.wrappers or res.payload is not None or res.unresolved or res.head is not cmd.words[0]:
+        return False
+    name = res.name
+    if name not in (_PIPE_FILTERS if stage else _SHAPE_COMMANDS):
+        return False
+    args = [w.value() or "" for w in cmd.words[1:]]
+    if name == "printf" and any(a.startswith("-v") for a in args):
+        return False
+    if name in _SHAPE_SEARCHERS and any(a.startswith(("--pre", "--pager", "--hostname-bin", "--search-zip"))
+                                         or (name == "rg" and a.startswith("-") and not a.startswith("--")
+                                             and "z" in a) for a in args):
+        return False
+    if name == "sort" and any(a.startswith(("--compress-program", "-o", "--output")) for a in args):
+        return False
+    if name == "git" and not _shape_git(cmd, invs):
+        return False
+    return _shape_redirects(cmd, may_write_doc=(name == "cat" and not stage))
+
+
+def data_shape(command, invs):
+    """True when the whole command is the strict data shape, where the invocation view's verdict stands alone.
+
+    It parses cleanly into a `;` / `&&` / `||` list (nothing in the background) of pipelines. A first stage is
+    echo or printf (no -v), grep, rg, ag or ack (no --pre, --pager, --hostname-bin, decompression), cat, ls, true, or
+    a plain git invocation of a fixed subcommand set (no alias, -c, GIT_* assignment, wrapper, path-qualified git,
+    exec-taking option); a later stage is only a pure filter (head, tail, wc, sort, uniq, cut, less, more, grep, rg).
+    Output goes to stdout or a device only, except that cat may write a document path no shell, make, cron, git or
+    login sequence reads. No word holds a command or process substitution and no heredoc body expands. So no shell,
+    interpreter, xargs, tee, at, batch, crontab, make or unknown program ever runs what the command prints or
+    writes."""
+    if invs is None:
+        return False
+    try:
+        from lib.shell_parse import parse
+        script = parse(command)
+        if script.error is not None or script.errors() or not script.items:
+            return False
+        for pipeline, sep in script.items:
+            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in ("|", "|&") for p in pipeline.pipes):
+                return False
+            if not all(_shape_simple(stage, invs, k) for k, stage in enumerate(pipeline.stages)):
+                return False
+        return True
+    except Exception:  # noqa: BLE001 - anything unexpected is outside the shape
+        return False
 
 
 def git_view(command):
@@ -1180,10 +1304,28 @@ def _worktree_raw_fallback(command):
     }
 
 
-def worktree_git_rules(command, invs):
-    """git stash (push forms and bare), wide-path checkout and restore from a ref, judged per invocation."""
+def _worktree_base_hits(command, view):
+    """The base pass: the raw-text patterns OR the classifier view's outer invocations."""
+    hit = _worktree_raw_fallback(command)
+    first = (view.outer("stash") or [None])[0]
+    hit["push"] = hit["push"] or (first is not None and (not first["args"] or _stash_pushes(first["args"])))
+    hit["bare"] = hit["bare"] or any(not i["args"] for i in view.outer("stash"))
+    hit["checkout"] = hit["checkout"] or any(_wide_path_after_dashdash(i["args"]) for i in view.outer("checkout"))
+    hit["restore"] = hit["restore"] or any(
+        any(a in ("--source", "-s") or a.startswith(("--source=", "-s=")) for a in i["args"])
+        and _wide_path_after_dashdash(i["args"]) for i in view.outer("restore"))
+    return hit
+
+
+def worktree_git_rules(command, invs, view=None, shape=False):
+    """git stash (push forms and bare), wide-path checkout and restore from a ref.
+
+    The invocation view refuses what it finds running. Unless the whole command is the strict data shape
+    (data_shape), a raw-text pattern over the command's code text that no invocation accounts for still refuses,
+    and so does every base refusal (raw-text patterns, classifier view): outside that shape no base refusal is lost.
+    A command the parser cannot read takes the base pass alone."""
     if invs is None:
-        hit = _worktree_raw_fallback(command)
+        hit = _worktree_base_hits(command, view) if view is not None else _worktree_raw_fallback(command)
     else:
         def args_of(sub):
             return [list(i.args) for i, _ctx in invs if i.subcommand == sub]
@@ -1191,6 +1333,10 @@ def worktree_git_rules(command, invs):
                "bare": any(not a for a in args_of("stash")),
                "checkout": any(_checkout_wide(a) for a in args_of("checkout")),
                "restore": any(_restore_wide_from_ref(a) for a in args_of("restore"))}
+        if not shape:
+            unaccounted = _worktree_raw_fallback(code_text(command))
+            base = _worktree_base_hits(command, view) if view is not None else _worktree_raw_fallback(command)
+            hit = {k: hit[k] or unaccounted[k] or base[k] for k in hit}
     if hit["push"]:
         refuse("BLOCKED: 'git stash push/save/create/store/-u/--all' requires explicit user approval",
                    f"Command: {command}",
@@ -1366,31 +1512,44 @@ def git_clean_view_verdict(command, invs):
     return "ALLOW"
 
 
-def git_clean_rule(command, stripped, view, invs):
+def _git_clean_base(command, stripped, view):
+    """The base pass over the raw text and the classifier view: (verdict, fail_closed); verdict '' when the
+    classifier sees no clean."""
+    has_inv = view.ok and view.any_sub("clean")
+    verdict = ""
+    if has_inv:
+        try:
+            verdict = git_clean_verdict(command, view)
+        except Exception:  # noqa: BLE001
+            verdict = ""
+    probe = ""
+    if "clean" in command + stripped and grep(GC_SHELL_RE + "|" + GC_EXECCTX_RE, command + "\n" + stripped):
+        probe = (command.replace('"', ' ') + "\n" + stripped.replace('"', ' ')).replace("'", " ")
+        probe = (probe + "\n" + command.replace('"', '') + "\n" + stripped.replace('"', '')).replace("'", "")
+    fail_closed = not has_inv and bool(grep(GIT_CLEAN_OCCURRENCE_RE, command + "\n" + stripped + "\n" + probe))
+    return verdict, fail_closed
+
+
+def git_clean_rule(command, stripped, view, invs, shape=False):
     """BS-43: `git clean` passes only as a provable dry run. The invocations come from lib/shell_parse.py; a clean
     they do not account for (an exec-taking git subcommand, a launcher the parser does not read) is found by the
-    occurrence grammar over the command's code text and fails closed. A command the parser cannot read takes the
-    raw-text classifier pass."""
+    occurrence grammar over the command's code text and fails closed. The base pass (raw text and classifier view)
+    still refuses whatever it refuses unless the whole command is the strict data shape (data_shape) and runs no
+    clean; a command the parser cannot read takes the base pass alone."""
     fail_closed = False
+    verdict = ""
     if invs is not None:
         try:
             verdict = git_clean_view_verdict(command, invs)
         except Exception:  # noqa: BLE001
             verdict = "BLOCK:trust"
-        has_inv = bool(verdict)
-    else:
-        has_inv = view.ok and view.any_sub("clean")
-        verdict = ""
-        if has_inv:
-            try:
-                verdict = git_clean_verdict(command, view)
-            except Exception:  # noqa: BLE001
-                verdict = ""
-        probe = ""
-        if "clean" in command + stripped and grep(GC_SHELL_RE + "|" + GC_EXECCTX_RE, command + "\n" + stripped):
-            probe = (command.replace('"', ' ') + "\n" + stripped.replace('"', ' ')).replace("'", " ")
-            probe = (probe + "\n" + command.replace('"', '') + "\n" + stripped.replace('"', '')).replace("'", "")
-        fail_closed = not has_inv and grep(GIT_CLEAN_OCCURRENCE_RE, command + "\n" + stripped + "\n" + probe)
+    # The shape lifts a base refusal only where no clean runs: a real clean beside a mention keeps the base count.
+    lift = invs is not None and shape and not any(i.subcommand == "clean" for i, _ctx in invs)
+    if verdict in ("", "ALLOW") and not lift:
+        base_verdict, base_fc = _git_clean_base(command, stripped, view)
+        if base_fc or base_verdict not in ("", "ALLOW"):
+            verdict, fail_closed = ("" if base_fc else base_verdict), base_fc
+    has_inv = bool(verdict)
     detail = {
         "BLOCK:trust": ["DETAIL: the argument region is not a provable literal (quoting, backslash, $-expansion, brace, "
                         "~, ^, or an argument-injecting xargs wrapper), so what git receives cannot be proven to match "
@@ -1474,8 +1633,9 @@ def decide(payload_text):
     removal_policy(payload_text, command)
     kill_pid_rule(command, executable)
     invs = git_view(command)
-    worktree_git_rules(command, invs)
-    git_clean_rule(command, stripped, view, invs)
+    shape = data_shape(command, invs)
+    worktree_git_rules(command, invs, view, shape)
+    git_clean_rule(command, stripped, view, invs, shape)
     return "ALLOW"
 
 
