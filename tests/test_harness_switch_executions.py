@@ -502,3 +502,73 @@ def test_running_the_switch_or_a_session_given_harness_is_refused(box, command, 
     for cwd in (box["other"], box["h"]):
         rc, err = hook(box, command, cwd, actor)
         assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+# Batch 2: awk's and sed's program is the text a proof checks only when the shell does not compute
+# it. A program word the shell computes ($(...), backticks, $VAR, $(<file)) reads as ${} and hid
+# any >, |, system, getline, @ or sed `e` / `w`; each of these passed on the merged L34 head and a
+# program supplied at run time could switch the harness off. awk counts only with a program word
+# that is a proven literal; sed only when no script word (-e, --expression=, or the first operand
+# without -e) is computed.
+COMPUTED_PROGRAM = [
+    'awk "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'awk -v a=1 "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'awk -F: "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'awk -- "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'awk "`cat /tmp/prog`" ~/.claude/scripts/harness-switch',
+    'awk `cat /tmp/prog` ~/.claude/scripts/harness-switch',
+    'awk "$(</tmp/prog)" ~/.claude/scripts/harness-switch',
+    'awk "$UNSETVAR" ~/.claude/scripts/harness-switch',
+    'awk $UNSETVAR ~/.claude/scripts/harness-switch',
+    '\\awk "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'gawk "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'mawk "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'awk "{print}$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'shellcheck ~/.claude/scripts/harness-switch; awk "$(cat /tmp/prog)" ~/.claude/scripts/harness-switch',
+    'sed -n "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n -e "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n -e 1p -e "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -ne "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n --expression="$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n --expression "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n `cat /tmp/s` ~/.claude/scripts/harness-switch',
+    'sed -n "$(</tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n "$UNSETVAR" ~/.claude/scripts/harness-switch',
+    '\\sed -n "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n -f /tmp/s ~/.claude/scripts/harness-switch',
+    # GNU sed takes options after operands: a computed word anywhere before `--` may be -e...
+    'sed -n 1p "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n -e 1p "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+    'sed -n 1p ~/.claude/scripts/harness-switch "$(cat /tmp/s)"',
+    'sed -n -- "$(cat /tmp/s)" ~/.claude/scripts/harness-switch',
+]
+
+LITERAL_PROGRAM = [
+    "sed -n '1,60p' ~/.claude/scripts/harness-switch",
+    "sed -n -e '1,60p' ~/.claude/scripts/harness-switch",
+    "sed -n --expression='1,60p' ~/.claude/scripts/harness-switch",
+    "sed -n \"1,60p\" ~/.claude/scripts/harness-switch",
+    "awk 'NR<5' ~/.claude/scripts/harness-switch",
+    "awk \"NR<5\" ~/.claude/scripts/harness-switch",
+    "awk -v a=1 -- '{print a}' ~/.claude/scripts/harness-switch",
+    "gawk -F: '{print $1}' ~/.claude/scripts/harness-switch",
+]
+
+
+@pytest.mark.parametrize("command", COMPUTED_PROGRAM)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_batch2_computed_awk_or_sed_program_is_no_proof(box, command, actor):
+    command = fill(box, command)
+    for cwd in (box["other"], box["h"]):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", LITERAL_PROGRAM)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_batch2_literal_awk_or_sed_program_still_passes(box, command, actor):
+    command = fill(box, command)
+    for cwd in (box["other"], box["h"], box["home"]):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 0 and "harness-switch:" not in err, (command, cwd, err)

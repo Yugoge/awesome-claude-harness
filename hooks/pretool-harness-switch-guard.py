@@ -563,12 +563,18 @@ def _proof_reader(res, env: dict) -> bool:
         return all(re.fullmatch(r"-[A-Za-z]+", a) and not re.search("[oOk]", a) or not a.startswith(("-", "+"))
                    for a in args)
     if name == "sed":
-        return _sed(plain) == []
+        # a script word the shell computes reads as ${} and may hold any e or w command; before `--`
+        # any computed word may be one (-e..., --expression=...: GNU sed takes options after operands)
+        end = plain.index("--") if "--" in plain else len(plain)
+        return _sed(plain) == [] and not any(_dynamic(res.args[i - 1], env)
+                                             for i in set(_sed_script_at(plain)) | set(range(1, end)))
     if name in AWKS:
         at = _awk_at(plain)  # None for -f / --file / -i / --include / -l / --load / -E / --exec
         program = plain[at] if at is not None else None
-        return (program is not None and not AWK_OUTPUT.search(program) and "getline" not in program
-                and not AWK_LOADS.search(program))
+        # only a program word whose raw text expands to exactly itself is the program awk runs
+        return (program is not None and not _dynamic(res.args[at - 1], env)
+                and _proven_literal(res.args[at - 1].raw.text) and not AWK_OUTPUT.search(program)
+                and "getline" not in program and not AWK_LOADS.search(program))
     if name == "git":
         return _read_only(plain) and not any(
             a.startswith(("-O", "-c")) or a.startswith("--") and len(a.split("=", 1)[0]) > 3 and any(
@@ -1258,6 +1264,34 @@ def _sed(plain: list):
             return None
         files += written
     return files
+
+
+def _sed_script_at(plain: list) -> list:
+    """The indices in `plain` of sed's script words, read as _sed reads them: each -e / --expression
+    value (spaced, attached or after `=`), or the first operand when there is none."""
+    at, operands, i, n = [], [], 1, len(plain)
+    while i < n:
+        w = plain[i]
+        if w == "--":
+            operands.extend(range(i + 1, n))
+            break
+        if w == "--expression":
+            at += [i + 1] if i + 1 < n else []
+            i += 1
+        elif w.startswith("--expression="):
+            at.append(i)
+        elif w.startswith("-") and not w.startswith("--") and len(w) > 1:
+            for k, ch in enumerate(w[1:], 1):
+                if ch in "el":
+                    attached = k + 1 < len(w)
+                    if ch == "e":
+                        at += [i] if attached else ([i + 1] if i + 1 < n else [])
+                    i += 0 if attached else 1
+                    break
+        elif not w.startswith("-") or w == "-":
+            operands.append(i)
+        i += 1
+    return at or operands[:1]
 
 
 def _sed_w_words(plain: list) -> list:
