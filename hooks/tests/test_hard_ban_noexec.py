@@ -1,14 +1,20 @@
 """Default hard bans (BS-19, CLAUDE_HARD_BANNED_SCRIPTS unset): a shell that only reads the script (noexec:
-`bash -n`, `sh -n`, `bash -o noexec`, `-n` inside a short-option cluster) and a test operand (`test`, `[`,
-`[[ ... ]]`) do not run the script, so they pass; every form that runs it is still refused. The shell options
-are read as bash/dash read them: the last of `-n` / `+n` / `-o noexec` / `+o noexec` wins, an interactive
-shell ignores noexec. A noexec shell is inert only as a top-level simple command that is not verbose and whose
-output is not piped, redirected (other than to /dev/null or a dup) or substituted; a test operand is inert only
-beside a file-test or string operator, never beside `-v` or an arithmetic comparison; and nothing is inert when
-the command defines a function or alias (or runs exec, enable or hash).
+`bash -n`, `sh -n`, `bash -o noexec`, `-n` inside a short-option cluster) and a unary file test (`test`, `[`,
+`[[ ... ]]`) do not run the script, so they pass; every form that runs it is still refused.
+
+The relaxation is a strict allow-list of whole-command shapes: the entire command must parse cleanly into a list
+joined by `&&`, `||` or `;` (no pipe) of simple commands, each a noexec non-verbose bash/sh/dash written bare or as
+a system bin path, one unary file test, or echo/printf/true/false/`:` with plain literal words; no substitution,
+expansion, assignment, function, alias, here-doc or wrapper anywhere and no redirection but a dup or /dev/null.
+Any other command falls back to the base reading of the raw text, so a later command that reads the shell's own
+text back (`/proc/$$/cmdline`), a quote-split `eval` or `alias`, or a shell word that is not a system shell
+(`./bash`, `/tmp/p/bash`) is refused as before. The shell options of a shell that runs are read as bash/dash read
+them (the last of `-n` / `+n` / `-o noexec` / `+o noexec` wins, an interactive shell ignores noexec), so
+`bash -n +n x.sh` names a run.
 
 Every case goes through the real hook entry, hooks/pretool-bash-safety.sh, with a scratch HOME, config dir,
-state dir and protected-runtime data file.
+state dir and protected-runtime data file; the quote-split eval/alias forms are also checked against
+hard_ban_rule itself.
 """
 
 import json
@@ -73,12 +79,11 @@ def hook(env, command, **extra):
     "bash -n -- scripts/session-recovery.sh",
     "bash -n -O extglob scripts/session-recovery.sh",
     "bash --norc -n scripts/session-recovery.sh",
-    "sudo bash -n scripts/session-recovery.sh",
     "/bin/bash -n scripts/session-recovery.sh",
     # -c with noexec: neither the string nor the $0 operand runs
     "bash -n -c x scripts/session-recovery.sh",
     "bash -n -c 'session-recovery --all'",
-    # in a list and in a substitution
+    # in a list
     "bash -n scripts/session-recovery.sh && echo syntax-ok",
     "bash -n scripts/session-recovery.sh 2>&1",
     "bash -n scripts/session-recovery.sh >/dev/null 2>&1",
@@ -89,12 +94,22 @@ def hook(env, command, **extra):
     "if [[ -x ./scripts/session-recovery.sh ]]; then echo ok; fi",
     "[[ scripts/session-recovery.sh == *.sh ]]",
     "[ -n scripts/session-recovery.sh ]",
-    "x=$([[ -f scripts/session-recovery.sh ]] && echo y)",
 ))
 def test_noexec_shell_and_test_operand_pass(env, command):
     r = hook(env, command)
     assert r.returncode == 0, r.stderr
     assert "hard-banned script" not in r.stderr
+
+
+# eval, alias and a function name split by quotes or an escape, which a raw keyword scan does not see
+QUOTE_SPLIT = (
+    "bash -n scripts/session-recovery.sh; eva\"\"l '\"$''_\"'",
+    "bash -n scripts/session-recovery.sh; ev\\al '\"$''_\"'",
+    "shopt -s expand_aliases\nali\"\"as bash='sh -c '\\''\"$2\"'\\'' sh'\nbash -n scripts/session-recovery.sh",
+    "shopt -s expand_aliases; ali\"\"as bash='bash +n'; bash -n scripts/session-recovery.sh",
+    "bas\"\"h() { \"$2\"; }; bash -n scripts/session-recovery.sh",
+    "bash -n scripts/session-recovery.sh; e\\val \"$_\"",
+)
 
 
 @pytest.mark.parametrize("command,name", (
@@ -156,11 +171,31 @@ def test_noexec_shell_and_test_operand_pass(env, command):
     ("[[ -v 'a[$(scripts/session-recovery.sh)]' ]]", "session-recovery"),
     ("[[ 0 -lt 'a[$(scripts/session-recovery.sh)]' ]]", "session-recovery"),
     ("[[ -f x && 'a[$(scripts/session-recovery.sh)]' -ge 1 ]]", "session-recovery"),
-))
+    # the shell's own text read back by a later command and run
+    ("bash -n scripts/session-recovery.sh; tr '\\0' ' ' < /proc/$$/cmdline | grep -o 'scripts/[a-z-]*\\.sh' "
+     "| head -1 | sh", "session-recovery"),
+    ("bash -n scripts/session-recovery.sh; cat /proc/$$/cmdline | sh", "session-recovery"),
+    # a shell word that is not a system shell may be any program
+    ("/tmp/p/bash -n scripts/session-recovery.sh", "session-recovery"),
+    ("./bash -n scripts/session-recovery.sh", "session-recovery"),
+    ("sudo bash -n scripts/session-recovery.sh", "session-recovery"),
+    ("x=$(bash -n scripts/session-recovery.sh) && echo ok", "session-recovery"),
+) + tuple((c, "session-recovery") for c in QUOTE_SPLIT))
 def test_running_the_script_is_still_refused(env, command, name):
     r = hook(env, command)
     assert r.returncode == 2, r.stderr
     assert f"hard-banned script '{name}' is refused" in r.stderr
+
+
+@pytest.mark.parametrize("command", QUOTE_SPLIT)
+def test_hard_ban_rule_itself_refuses_quote_split_forms(command, monkeypatch, capsys):
+    """The hard-ban rule on its own refuses these, not only some other rule of the pipeline."""
+    from lib import bash_safety_rules
+    monkeypatch.delenv("CLAUDE_HARD_BANNED_SCRIPTS", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        bash_safety_rules.hard_ban_rule(command)
+    assert exc.value.code == 2
+    assert "hard-banned script 'session-recovery' is refused" in capsys.readouterr().err
 
 
 def test_explicit_value_keeps_match_anywhere(env):
