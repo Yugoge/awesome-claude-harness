@@ -2,25 +2,123 @@
 
 **A self-governing agent operating system for Claude Code.**
 
+<p>
+<img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
+</p>
+
+## Install
+
+You need `python3`, `git` and `jq`. You need Claude Code to use the harness. Codex is optional. Only `--codex` and `/codex` use it. They need the OpenAI Codex CLI and an isolation wrapper you supply (`CODEX_ISO_BIN`).
+
+### Full install: clone + init
+
+```bash
+git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude   # needs an empty ~/.claude
+~/.claude/scripts/bootstrap                                # init: asks once per optional module, ends with the preflight
+python3 ~/.claude/scripts/capture-hero-run.py --check-only # sandboxed demo: a push refused, allowed once by a grant, refused again
+```
+
+`git clone` refuses a target that is not empty. If `~/.claude` already holds your settings, move it aside. Or use one of the [other install locations](docs/installation.md#other-install-locations).
+
+The demo needs no Claude Code. It runs the real hooks in a sandbox. It writes nothing into the checkout. It prints where it saved its log. Then, in Claude Code, type `/dev <your requirement>`.
+
+After init, `git status` stays clean. Overlay values never show up as a diff and never reach a commit.
+
+### Guardrails only: the installer core profile
+
+This profile installs the guardrails without the agents and commands. Run it from a checkout:
+
+```bash
+scripts/install/install --profile core   # guardrails in an isolated directory, hook registrations merged additively
+```
+
+The [installation guide](docs/installation.md) covers the settings overlay, optional modules, dependencies and troubleshooting.
+
+## The full pipeline
+
+You give it a requirement. It finds the root cause. It asks you only the decisions that are yours. Then it builds the change and checks it.
+
+```
+interactive   /spec (optional) → /dev → /close → /commit → /push
+overnight     /dev-overnight 6:00 → you, in the morning: /close --auto → /commit --auto → /push
+```
+
+| You type | You get |
+|---|---|
+| `/spec` | Optional. It asks you first. Then a durable spec with per-agent briefs. `/dev` and `/dev-overnight` build from it. |
+| `/dev <requirement>` | It asks you first. BA finds the root cause. QA checks the analysis before any code. Dev builds in one-issue lanes, in parallel. QA verifies until it passes. |
+| `/close` | Release readiness. Inspectors and QA judge the diff. `CLOSE: YES` or the findings. Then it asks for your rating. |
+| `/commit` | The changelog analyst stages the task's own files and commits them under a single-use grant. |
+| `/merge` | Optional, for work on a branch. A real merge into the default branch, after a pre-merge analysis. |
+| `/push` | The push analyst checks what would go out. The wrapper publishes it. It needs a commit made by `/commit`. |
+| `/dev-overnight 6:00` | Unattended until the end time. Nobody is asked. It commits nothing. You land it in the morning. |
+
+`/redev` starts a fresh `/dev` cycle in the same conversation. `/dev-command` is `/dev` for a command, an agent or another harness file. `/do` lets the main agent do one task itself, for one turn.
+
+Each stage hands a checked artifact to the next. You start each stage with one command. Agents do the work inside it. Only `/dev-overnight` needs no command from you until its end time.
+
+- **One cycle, parallel lanes.** `/dev` splits your requirement into outcomes that each verify alone. One lane per outcome. BA, QA, dev and QA run once per lane, in parallel. A failing lane retries alone. The cycle passes only when every lane's QA passes.
+- **A loop ends on a pass, or when you stop it.** No round cap. Your `/stop` or Esc interrupts either loop at any time. So a stubborn failure loops until you stop it.
+- **Adversarial second opinion, one loop.** Add `--codex` to `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`. An agent asks Codex once for a complete review. After that, only a capped number of fix checks. Claude classifies each finding as a real bug, a minor point, out of scope or a nitpick.
+- **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. A hook writes your answers to disk. No agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. The Stop gate refuses to end a turn on a question asked in plain text.
+- **Overnight, the same pipeline unattended.** `/dev-overnight` explores and triages. It runs one BA → QA → dev → QA pipeline per real issue until the end time. Nobody is asked. It commits nothing. In the morning you type `/close --auto`, `/commit --auto` and `/push`. A `--worktree` run adds `/merge` before `/push`. [The overnight pipeline](#the-overnight-pipeline) below has the loop.
+- **Grants start from a command you type.** The [trust model](#trust-model-in-practice) below says who may use which.
+
+## Pipeline in action
+
+### Walkthrough: `/dev "the login button is misaligned on mobile"`
+
+| Step | Who acts | What happens |
+|---|---|---|
+| Capture | `UserPromptSubmit` hook | Your words go to `docs/dev/user-requirement-<id>.md` before any agent runs. |
+| Plan | Orchestrator | One outcome, one lane. Each specialist marked RELEVANT or SKIP with a reason. A layout bug makes `ui-specialist` relevant. Its findings go to BA. |
+| Ask first | BA panel, panel QA, you | No spec, so BAs analyse from separate angles. Root cause, smallest change, your intent. Panel QA drops a cause it cannot verify. Their disagreements become one round of questions. What you should see on a phone. How far the fix goes. Which screens count as done. You answer or skip. |
+| Analyse | BA | The file and the cause that actually produce the misalignment, not a plausible cousin. Cited file and line, search results, git history. The ticket, the context and the acceptance criteria. |
+| Check the analysis | QA | Before any code. Real evidence? The scope you asked for? Anything narrowed, renamed or deferred? A failing analysis goes back to BA until QA passes. |
+| Build | Dev | The smallest change that meets the acceptance criteria. A report of what it changed and ran. One dev per lane, in parallel. |
+| Verify | QA | It drives the running product against the criteria, on desktop and mobile. A warning or a failure sends dev back, until QA passes or you stop it. |
+| Hold | Stop gate | The session cannot end while a todo is open or an artifact fails its check. `/stop` ends it at any time. |
+| Land | You | `/close` has inspectors and QA judge the diff. It asks for your rating. It shows each agent's score, rank and trend. `/commit` commits the task's files under a single-use grant. `/push` publishes through the wrapper. |
+
+### Usage examples
+
+```bash
+# Orchestrated development. A vague requirement is fine.
+/dev add a --dry-run flag to the export command
+
+# Several outcomes in one cycle: parallel lanes, never phases
+/dev fix the pagination off-by-one and add a CSV export to the report page
+
+# With a Codex review of each agent's draft
+/dev --codex fix the off-by-one in pagination
+
+# Land the work
+/close
+/commit
+/push
+
+# Unattended until 6am, focused on one subsystem. Land it in the morning.
+/dev-overnight 6:00 fix flaky tests in the parser
+
+# End an overnight run early
+/stop
+```
+
+## Why a harness
+
 > **The main session routes. It hires specialists. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.**
 
 Not a prompt pack. An operating system for agents. The orchestrator schedules one-issue agents. Grants and role write paths are the permission model. `docs/dev/` is the filesystem layout. A git protection kernel guards history.
-
-You give it a requirement. It finds the root cause. It asks you only the decisions that are yours. Then it builds the change and checks it.
 
 Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. Structure, not vibes. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. QA reviews every `/commit` first. `/push` needs a commit from `/commit`.
 
 Built from real failures. Two git incidents shaped the kernel. The code names both. Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
 
-<p>
-<img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
-</p>
-
-## At a glance
-
 Hooks refuse what a prompt can only ask for.
 
 ## Feature highlights
+
+What sits under [the full pipeline](#the-full-pipeline).
 
 | Capability | What it does |
 |---|---|
@@ -91,9 +189,27 @@ Something you typed must allow each agent commit, push, merge or hard reset. `/c
 
 [The git protection kernel](docs/git-protection-kernel.md) lists what each guard does not see.
 
+### Walkthrough: a hook firing
+
+An agent tries the obvious shortcut. It sets the push wrapper's own variable on the command line:
+
+```bash
+CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
+```
+
+The git privilege guard runs before the tool executes. It finds the wrapper's variable in the raw command text. It refuses with exit code `2` and prints `BLOCKED: agent git push - inline-env injection blocked`. This check runs before the guard reads any grant. `/do` does not cover pushes. Nothing the agent can arrange lets this form through.
+
+| What the agent runs | Result |
+|---|---|
+| `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | Refused, exit `2`. Inline environment injection. Decided before any grant is read. |
+| `git push` | Refused, exit `2`. Agents may not push. The message points to `/push`. |
+| `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
+
+The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
+
 ## The overnight pipeline
 
-Hand it a vague bug report at midnight. It works while you sleep. The git kernel stays on all night. You land the work in the morning.
+The unattended stage of [the full pipeline](#the-full-pipeline). Hand it a vague bug report at midnight. It works while you sleep. The git kernel stays on all night. You land the work in the morning.
 
 ```mermaid
 flowchart LR
@@ -106,7 +222,7 @@ flowchart LR
     CP --> RT["PM retrospective"]
     RT -->|time remaining| PM
     RT -->|end time reached| SUM(["summary, then stop"])
-    SUM --> LAND["you, in the morning:<br/>/close --auto · /commit --auto<br/>/merge · /push"]
+    SUM --> LAND["you, in the morning:<br/>/close --auto · /commit --auto<br/>/merge after --worktree · /push"]
     TL[["Stop gate time-lock:<br/>refuses to end before the end time"]] -.guards.-> RT
 ```
 
@@ -115,60 +231,6 @@ flowchart LR
 Nobody is asked anything. A pipeline may need a decision. An experiment makes it, else the question's default does. The summary lists each one under "Decisions made without the owner". Nothing is committed. The work waits in `refs/checkpoints/<branch>` until you land it. A typed `/stop` ends the run at once.
 
 It runs in your checkout by default, with no worktree boundary. A `--worktree` run shares the repository's git directory. [The overnight pipeline](docs/overnight-pipeline.md) says what each mode does and does not protect.
-
-## Install
-
-You need `python3`, `git` and `jq`. You need Claude Code to use the harness. Codex is optional. Only `--codex` and `/codex` use it. They need the OpenAI Codex CLI and an isolation wrapper you supply (`CODEX_ISO_BIN`).
-
-### Full install: clone + init
-
-```bash
-git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude   # needs an empty ~/.claude
-~/.claude/scripts/bootstrap                                # init: asks once per optional module, ends with the preflight
-python3 ~/.claude/scripts/capture-hero-run.py --check-only # sandboxed demo: a push refused, allowed once by a grant, refused again
-```
-
-The demo needs no Claude Code. It runs the real hooks in a sandbox. It writes nothing into the checkout. It prints where it saved its log. Then, in Claude Code, type `/dev <your requirement>`.
-
-After init, `git status` stays clean. Overlay values never show up as a diff and never reach a commit.
-
-### Guardrails only: the installer core profile
-
-This profile installs the guardrails without the agents and commands. Run it from a checkout:
-
-```bash
-scripts/install/install --profile core   # guardrails in an isolated directory, hook registrations merged additively
-```
-
-`git clone` refuses a target that is not empty. If `~/.claude` already holds your settings, move it aside. Or use one of the [other install locations](docs/installation.md#other-install-locations). The [installation guide](docs/installation.md) covers the settings overlay, optional modules, dependencies and troubleshooting.
-
-## The full pipeline
-
-```
-   /spec                          optional: ask you first, then write a durable spec with per-agent briefs
-     │
-     ▼
-   /dev · /redev · /dev-command   ask you first → BA → QA of the analysis → dev → QA, one-issue lanes in parallel
-   /dev-overnight                 unattended until an end time, commits nothing
-   /do                            the main agent does one task itself, for one turn
-     │
-     ▼
-   /close                         release readiness: inspectors and QA judge the diff, CLOSE: YES or the findings
-     │
-     ▼
-   /commit                        the changelog analyst stages the task's own files under a single-use grant
-     │
-     ▼
-   /merge · /push                 a real merge into the default branch · the push wrapper, after the push analyst
-```
-
-Each stage hands a checked artifact to the next. You start each stage with one command. Agents do the work inside it. Only `/dev-overnight` needs no command from you until its end time.
-
-- **One cycle, parallel lanes.** `/dev` splits your requirement into outcomes that each verify alone. One lane per outcome. BA, QA, dev and QA run once per lane, in parallel. A failing lane retries alone. The cycle passes only when every lane's QA passes.
-- **A loop ends on a pass, or when you stop it.** No round cap. Your `/stop` or Esc interrupts either loop at any time. So a stubborn failure loops until you stop it.
-- **Adversarial second opinion, one loop.** Add `--codex` to `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`. An agent asks Codex once for a complete review. After that, only a capped number of fix checks. Claude classifies each finding as a real bug, a minor point, out of scope or a nitpick.
-- **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. A hook writes your answers to disk. No agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. The Stop gate refuses to end a turn on a question asked in plain text.
-- **Grants start from a command you type.** The [trust model](#trust-model-in-practice) below says who may use which.
 
 ## System architecture
 
@@ -236,64 +298,6 @@ You are the trust root. The threat model treats the agent itself as the adversar
 | Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
 
 The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command. Never a substring of the raw text. It expires. It is consumed once the matched call ends, whatever the result.
-
-## Pipeline in action
-
-### Walkthrough: `/dev "the login button is misaligned on mobile"`
-
-| Step | Who acts | What happens |
-|---|---|---|
-| Capture | `UserPromptSubmit` hook | Your words go to `docs/dev/user-requirement-<id>.md`. The cycle is armed before any agent runs. |
-| Plan | Orchestrator | It splits the requirement into outcomes. One lane here. It marks each specialist RELEVANT or SKIP with a reason. A layout bug makes `ui-specialist` relevant. Its findings go to BA. |
-| Ask first | BA panel, panel QA, you | No spec, so BAs analyse independently. One traces the root cause. One looks for the smallest change. One looks at your intent. Panel QA drops a cause it cannot verify. It turns their disagreements into one round of questions. What you should see on a phone. How far the fix goes. Which screens count as done. You answer or skip. |
-| Analyse | BA | It finds the file and the cause that actually produce the misalignment, not a plausible cousin. It cites file and line, search results and git history. It writes the ticket, the context and the acceptance criteria. |
-| Check the analysis | QA | Before any code. Is the evidence real? Is the scope the one you asked for? Was anything narrowed, renamed or deferred? A failing analysis goes back to BA until QA passes. |
-| Build | Dev | The smallest change that meets the acceptance criteria. It reports what it changed and ran. With several lanes, one dev per lane, in parallel. |
-| Verify | QA | It drives the running product against the criteria, on desktop and mobile. A warning or a failure sends dev back. This repeats until QA passes or you stop it. |
-| Hold | Stop gate | The session cannot end while a todo is open or an artifact fails its check. `/stop` ends it at any time. |
-| Land | You | `/close` has inspectors and QA judge the diff. It asks for your rating. It shows each agent's score, rank and trend. `/commit` commits the task's files under a single-use grant. `/push` publishes through the wrapper. |
-
-### Walkthrough: a hook firing
-
-An agent tries the obvious shortcut. It sets the push wrapper's own variable on the command line:
-
-```bash
-CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
-```
-
-The git privilege guard runs before the tool executes. It finds the wrapper's variable in the raw command text. It refuses with exit code `2` and prints `BLOCKED: agent git push - inline-env injection blocked`. This check runs before the guard reads any grant. `/do` does not cover pushes. Nothing the agent can arrange lets this form through.
-
-| What the agent runs | Result |
-|---|---|
-| `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | Refused, exit `2`. Inline environment injection. Decided before any grant is read. |
-| `git push` | Refused, exit `2`. Agents may not push. The message points to `/push`. |
-| `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
-
-The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
-
-### Usage examples
-
-```bash
-# Orchestrated development. A vague requirement is fine.
-/dev add a --dry-run flag to the export command
-
-# Several outcomes in one cycle: parallel lanes, never phases
-/dev fix the pagination off-by-one and add a CSV export to the report page
-
-# With a Codex review of each agent's draft
-/dev --codex fix the off-by-one in pagination
-
-# Land the work
-/close
-/commit
-/push
-
-# Unattended until 6am, focused on one subsystem. Land it in the morning.
-/dev-overnight 6:00 fix flaky tests in the parser
-
-# End an overnight run early
-/stop
-```
 
 ## The cast of agents
 
