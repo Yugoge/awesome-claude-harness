@@ -295,15 +295,14 @@ def test_guard_source_still_routes_through_the_residual_aware_entry_point():
     )
 
 
-def test_classifier_documents_the_closed_boundaries():
-    """DETECTOR 8: the module may not re-publish the closed gaps as accepted."""
-    src = CLASSIFIER_PATH.read_text(encoding="utf8")
-    head = src[:src.index("import collections")]
-    assert "CLOSED" in head, (
-        "the arch-F7 scope-boundary note must record that the wrapper-flag, "
-        "redirection and reserved-word gaps are closed; leaving them published as "
-        "accepted limitations is how this defect survived twenty-four cycles"
-    )
+@pytest.mark.parametrize("command", [
+    "env -u FOO git push", "nice -n 5 git push", "timeout 30 git push",
+    "2>/dev/null git push", "2> /dev/null git push",
+    "if ! git push; then :; fi", "while git push; do :; done",
+])
+def test_classifier_reads_the_closed_boundaries(command):
+    """DETECTOR 8: wrapper flags, redirections and reserved words before git stay closed."""
+    assert [inv.subcommand for inv in iter_git_invocations(command)] == ["push"]
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +497,7 @@ def test_a_launched_payload_is_an_invocation(command, subcommand, _reason):
     ('echo "x; git commit -m y" | xargs -I{} sh -c {}', ["commit"]),
     ('ssh host "cd x; git push origin main"', ["push"]),
     ('xargs sh -c "cd x; git push origin main"', ["push"]),
-    ('git -c core.editor=vi commit -m "a; git push origin main"', ["commit", "push"]),
+    ('git -c core.editor=vi commit -m "a; git push origin main"', ["commit"]),
     ('echo "x; git commit -m y" | grep x', []),
     ('grep -e "a; git push" notes.md', []),
     ('git -C "/r" commit -m "a; git push"', ["commit"]),
