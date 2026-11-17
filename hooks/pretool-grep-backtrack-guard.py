@@ -46,6 +46,13 @@ Design (cheap static pre-filter, then a bounded empirical probe)
      - probe killed by the memory ceiling OR the time limit  -> REJECT (exit 2).
      - probe completes within both bounds                    -> ALLOW (exit 0).
    The ceiling bounds ONLY the probe subprocess (its own transient scope).
+   Inside the scope the probe first writes a start marker into its own fresh
+   private directory, and runs the engine only once that write succeeded. When
+   the guard's outer margin runs out, the marker tells the two cases apart:
+     - no marker: the scope never came up (e.g. a delayed systemd-run launch)
+       -> an infrastructure failure, FAIL OPEN;
+     - marker present (whatever it holds): the probe started and then hung
+       (e.g. throttled at MemoryHigh)                        -> REJECT.
 
 4. FAIL OPEN. ANY internal error -> allow the command (exit 0).
 
@@ -566,13 +573,19 @@ def probe_explodes(pattern, mode):
     if not (os.path.exists("/usr/bin/systemd-run") or _which("systemd-run")):
         raise RuntimeError("systemd-run unavailable")
 
+    # A fresh private directory per probe run: no marker of an earlier run, and
+    # none planted elsewhere, can be read as this run's.
     tmpdir = tempfile.mkdtemp(prefix="grepguard-probe-")
     infile = os.path.join(tmpdir, "dense.txt")
+    marker = os.path.join(tmpdir, "started")
     try:
         _worst_case_input(infile)
-        # Inner command drives the SAME embedded engine the agent's grep would,
-        # via argv[0]=ugrep and the matching mode flag, against the dense input.
-        inner = "exec -a {a} {b} {m} {p} {f}".format(
+        # Inner command runs inside the scope: it writes the start marker, and
+        # stops with 125 (a launch failure) when it cannot, so the engine never
+        # runs unmarked. It then drives the SAME embedded engine the agent's grep
+        # would, via argv[0]=ugrep and the matching mode flag, on the dense input.
+        inner = "printf 'started\\n' > {k} || exit 125; exec -a {a} {b} {m} {p} {f}".format(
+            k=shlex.quote(marker),
             a=shlex.quote(_UGREP_ARGV0),
             b=shlex.quote(binpath),
             m=_mode_flag(mode),
@@ -599,9 +612,14 @@ def probe_explodes(pattern, mode):
             )
             rc = cp.returncode
         except subprocess.TimeoutExpired:
-            # Outer guard tripped: the probe itself ran past even the outer
-            # margin => treat as catastrophic (it could not finish in time).
-            return True
+            # Outer guard tripped. A probe that wrote its marker inside the
+            # scope started and then ran past even the outer margin => treat as
+            # catastrophic. Any file at the marker path counts, so spoiling the
+            # marker can only refuse. No marker: the scope never came up (a
+            # delayed systemd-run launch), so nothing was measured => fail open.
+            if os.path.lexists(marker):
+                return True
+            raise RuntimeError("probe never started inside its scope")
         # rc semantics:
         #   0   -> a match was found, completed fast            => safe (ALLOW)
         #   1   -> no match, completed fast                     => safe (ALLOW)
@@ -618,14 +636,7 @@ def probe_explodes(pattern, mode):
         # returned a real (non-kill) exit, so it did not explode.
         return False
     finally:
-        try:
-            os.remove(infile)
-        except Exception:
-            pass
-        try:
-            os.rmdir(tmpdir)
-        except Exception:
-            pass
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _which(name):
