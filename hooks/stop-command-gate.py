@@ -281,7 +281,10 @@ TASKS_OFF = ("0", "false", "no", "off")  # the CLI's false spellings for an env 
 
 def todo_gaps(span) -> list[str]:
     """A command with a canonical list (scripts/todo/<command>.py): the span's
-    last ok TodoWrite has its contents and every step completed. Any other
+    last ok TodoWrite that is its checklist (todo_canonical.checklist_lists: a
+    list foreign to the command, which the validator admits only after the
+    checklist is all completed, is never read in its place, OB-L40) has its
+    contents and every step completed. Any other
     gated command: its last ok TodoWrite, if any, is all completed. A step
     whose section heading, as the command's text on disk words it, the span's
     loaded text does not hold (_loaded_lacks: added or rewritten since) is not
@@ -303,6 +306,8 @@ def todo_gaps(span) -> list[str]:
         canonical = todo_canonical.run_todo_script(span.command, span.args)
         if not canonical:
             raise RuntimeError(f"{script} gave no canonical list")
+        current = next((todos for _call, todos in todo_canonical.checklist_lists(span, canonical, newest_first=True)),
+                       None)
         if current is None:
             return [f"todo: checklist never written ({len(canonical)} canonical steps)"]
         # The list the span is held to: the canonical one, or the span's first list, which

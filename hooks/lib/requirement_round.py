@@ -153,7 +153,8 @@ def runs_round(span) -> bool:
             body = (COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8")
         except OSError:
             body = ""
-    todos = " ".join(str(t.get("content", "")) for t in span.last_todos() or () if isinstance(t, dict))
+    todos = " ".join(str(t.get("content", "")) for t in _lib("todo_canonical").last_checklist(span) or ()
+                     if isinstance(t, dict))
     return any(m in body or m in todos for m in ROUND_MARKERS)
 
 

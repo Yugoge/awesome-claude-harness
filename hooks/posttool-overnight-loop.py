@@ -4,7 +4,9 @@ PostToolUse:TodoWrite Hook: Overnight Loop Detection
 
 Fires after every TodoWrite call. Checks if:
 1. This session owns an overnight state record (lib.overnight.locate)
-2. ALL todos have status "completed"
+2. ALL todos have status "completed", and the list is the span's checklist:
+   a list foreign to the command (OB-L40, lib.todo_canonical.checklist_lists)
+   ends no cycle
 3. The time-lock's window is open (lib.overnight.window_open)
 
 If all conditions met: tells the agent to reset its own todos and resume from
@@ -43,6 +45,19 @@ def _all_completed(data: dict) -> bool:
     if not todos:
         return False
     return all(t.get('status') == 'completed' for t in todos)
+
+
+def _foreign(data: dict) -> bool:
+    """True when the span holds a checklist and the TodoWrite's list shares no
+    step's text with the span's canonical list or its first list: not the
+    checklist (OB-L40; the validator admits such a list only past a checklist
+    all completed)."""
+    from lib.todo_canonical import checklist, is_foreign
+    state = checklist(data.get('transcript_path'))
+    if state is None or state.todos is None:
+        return False
+    return is_foreign(data.get('tool_input', {}).get('todos', []), state.canonical,
+                      next((t for _c, t in state.lists()), None))
 
 
 def _session_complete(state: dict) -> str:
@@ -91,7 +106,7 @@ def main() -> None:
     # Only the overnight session's own record: its file name and its own
     # session_id both name the session that wrote the todos.
     state_path, state = overnight.locate(data.get('session_id', ''), data)
-    if state is None:
+    if state is None or _foreign(data):
         sys.exit(0)
 
     end_time = overnight.state_verdicts(state).end_time
