@@ -571,24 +571,29 @@ def writes_namespace(command, ns_re):
     Positional, not semantic. Branch 2 reads each simple command lib/shell_parse.py's walk reaches (with its nested
     payloads, its redirection targets and its heredoc bodies) on its own, so a verb in one command and the namespace
     in another (`touch /tmp/m && cat <ns>`) is no write; `python -m json.tool <ns>` with no second positional only
-    prints. A command the parser cannot read is read as one line. Residual over-block: a read is refused when an
-    enumerated verb stands before the namespace in its own command for another reason (`cp <ns> /tmp/x`), or when
-    an interpreter does the reading. Residual under-block: a verb not listed, or a path assembled at run time,
-    writes through. It raises the cost of a hand-written file; the barrier is hooks/pretool-git-privilege-guard.py,
-    which honours only a pipeline-minted grant claimed by the dispatched subagent that holds the matching
-    attestation.
+    prints (with no assignment and no env or other wrapper in front of it). A for/select word list naming the
+    namespace is a capture into the loop variable; `$_` (or BASH_REMATCH, BASH_COMMAND, BASH_ARGV) anywhere in a
+    command that names it is a write, since it hands the name on to another command. A command the parser cannot
+    read is read as one line. Residual over-block: a read is refused when an enumerated verb stands before the
+    namespace in its own command for another reason (`cp <ns> /tmp/x`), when an interpreter does the reading, or when
+    `$_` follows a read. Residual under-block: a verb not listed, or a path assembled at run time, writes through.
+    It raises the cost of a hand-written file; the barrier is hooks/pretool-git-privilege-guard.py, which honours
+    only a pipeline-minted grant claimed by the dispatched subagent that holds the matching attestation.
     """
     if not grep(ns_re, command):
         return False
-    if grep(r""">>?[&|]?\s*['"]?""" + ns_re, command):
+    if grep(r""">>?[&|]?\s*['"]?""" + ns_re, command) or _carries_last_arg(command):
         return True
     sites = _simple_command_texts(command)
     for one in (sites if sites is not None else [command.replace("\n", " ")]):
         if grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one):
             return True
     one = command.replace("\n", " ")
+    listed = any(c.kind in ("for", "select") and any(grep(ns_re, w.text) for w in c.header[1:])
+                 for c in _compounds(command) or ())
     return bool(
         (sites is not None and _xargs_fed_writer(command))
+        or (listed and grep(ARTIFACT_VAR_WRITE_RE, one))
         or (grep(ARTIFACT_NS_CAPTURE_RE + ns_re, one) and grep(ARTIFACT_VAR_WRITE_RE, one))
         or grep(ARTIFACT_NS_CAPTURE_RE + ns_re + "[^;|&]*" + ARTIFACT_WRITE_VERB_RE, one))
 
@@ -611,12 +616,51 @@ def _parsed_sites(command):
         return None
 
 
+_LAST_ARG_RE = re.compile(r"\$(\{[#!]?)?_(?![A-Za-z0-9_])|BASH_REMATCH|BASH_COMMAND|BASH_ARGV")
+"""`$_` (the last argument of the command before) and the shell variables that hold another command's text."""
+
+
+def _carries_last_arg(command):
+    """A use of `$_` or of a variable holding another command's text, quoted or not (fail closed)."""
+    return bool(_LAST_ARG_RE.search(command))
+
+
+def _compounds(command):
+    """Every compound command in the text (in payloads, substitutions and compound headers too); None when unparsed."""
+    try:
+        from lib.shell_parse import parse, active_parts, Compound, _nested_scripts
+        top = parse(command)
+        if top.error is not None:
+            return None
+        stack, seen, out = [top] + list(_nested_scripts(top)), set(), []
+        while stack:
+            script = stack.pop()
+            if id(script) in seen or not hasattr(script, "items"):
+                continue
+            seen.add(id(script))
+            for pl, _sep in script.items:
+                for stage in pl.stages:
+                    if not isinstance(stage, Compound):
+                        continue
+                    out.append(stage)
+                    stack.extend(b for b in stage.body if hasattr(b, "items"))
+                    for w in list(stage.header) + [r.target for r in stage.redirects if r.target is not None]:
+                        stack.extend(p.body for p in active_parts(w.parts) if p.body is not None)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
 _JSON_TOOL_FLAGS = ("--sort-keys", "--no-ensure-ascii", "--json-lines", "--tab", "--no-indent", "--compact")
 
 
 def _json_tool_prints_only(res):
-    """`python -m json.tool [options] infile`: one positional and no outfile, so it only prints what it reads."""
+    """`python -m json.tool [options] infile`: one positional and no outfile, so it only prints what it reads.
+
+    Only as written: an assignment (PYTHONPATH, PYTHONSTARTUP ...) or a wrapper in front of it can change what runs."""
     if not re.fullmatch(r"python[0-9.]*", res.name or "") or res.payload is not None:
+        return False
+    if res.assignments or res.wrappers or res.unresolved is not None:
         return False
     vals = res.argv()
     if any(v is None for v in vals) or "-m" not in vals:
@@ -709,6 +753,15 @@ _BULK_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-delete", "-ok", "-okdir",
                                 "-fls"})
 _GIT_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
                              "--super-prefix", "--attr-source"})
+_GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit", "rm", "mv", "restore", "checkout",
+                        "switch", "reset", "blame", "annotate", "ls-files", "ls-tree", "cat-file", "rev-parse",
+                        "rev-list", "shortlog", "whatchanged", "describe", "check-ignore", "check-attr", "diff-tree",
+                        "diff-files", "diff-index", "range-diff", "reflog", "branch", "tag", "merge-base", "name-rev",
+                        "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
+"""git subcommands that take a protected name as a path or message to read, never as code or an output file."""
+_GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
+"""Builtins whose arguments are assignments: a name in one is carried in a variable to a later command."""
 
 
 def _bulk_mentions(text):
@@ -733,7 +786,12 @@ def _bulk_standalone(w):
 
 
 def _git_runs_bulk_name(res):
-    """A name in git's global options (`-c alias.x=!...`, `-c core.pager=...`) or in `git config` is run later."""
+    """A git that names one of the names may run or write it.
+
+    A name in git's global options (`-c alias.x=!...`, `-c core.pager=...`) is run later. Only a subcommand of
+    _GIT_PLAIN reads what it is handed (`git config`, difftool -x, bisect run, submodule foreach, an alias, a
+    computed subcommand all do not), and only without --output, --ext-diff or grep's -O / --open-files-in-pager
+    (a long option's unique prefix counts, as git accepts it)."""
     args = list(res.args)
     k = 0
     while k < len(args):
@@ -747,7 +805,21 @@ def _git_runs_bulk_name(res):
             if _bulk_word_mentions(args[k]):
                 return True
         k += 1
-    return k < len(args) and args[k].value() == "config" and any(_bulk_word_mentions(w) for w in args[k:])
+    if k >= len(args):
+        return False
+    sub = args[k].value()
+    if sub not in _GIT_PLAIN:
+        return True
+    for w in args[k + 1:]:
+        v = w.value() if w.value() is not None else w.text
+        if v == "--":
+            break
+        if v.startswith("--") and len(v.split("=", 1)[0]) >= 4 and any(
+                o.startswith(v.split("=", 1)[0]) for o in _GIT_RUN_OR_WRITE_OPTS):
+            return True
+        if sub == "grep" and v.startswith("-") and not v.startswith("--") and "O" in v:
+            return True
+    return False
 
 
 def bulk_sentinel_decision(cmd):
@@ -755,11 +827,14 @@ def bulk_sentinel_decision(cmd):
 
     Each simple command lib/shell_parse.py's walk reaches (nested payloads included) is read on its own. One that
     names the path or a writer passes only as a reader (ls stat cat file wc head tail grep egrep fgrep rg jq find test
-    [ git): not rg --pre, not a find write or exec action, not a name in git's global options or `git config`. A
-    command whose arguments are code (sed, awk, eval, source, a shell or interpreter given -c/-e or a heredoc) is
-    refused when they carry a name; any other command when one of its words is the name itself (a name inside a
-    longer argument is text). Refused too: a name in an assignment, a computed command beside a name, a non-filter
-    fed by a pipe or xargs while the command names one, and a write target that names one or cannot be read. The
+    [ git): not rg --pre or --hostname-bin, not file -C, not a find write or exec action, not git outside its plain
+    read subcommands or with a run or output option (see _git_runs_bulk_name). A command whose arguments are code
+    (sed, awk, eval, source, a shell or interpreter given -c/-e or a heredoc) or assignments (export, declare, local,
+    readonly, typeset, alias, let) is refused when they carry a name; any other command when one of its words is the
+    name itself (a name inside a longer argument is text). Refused too: a name in an assignment (a prefix one or one
+    handed to env) or a wrapper's option, a for/select word list carrying one, `$_` (or BASH_REMATCH, BASH_COMMAND,
+    BASH_ARGV) anywhere in a command that names one, a computed command beside a name, a non-filter fed by a pipe or
+    xargs while the command names one, and a write target that names one or cannot be read. The
     sentinel is minted only by the userprompt-bulk-commit-capability hook, never from Bash. A command the parser
     cannot read is TOKENIZER_ERROR.
     """
@@ -767,6 +842,13 @@ def bulk_sentinel_decision(cmd):
     if sites is None:
         return 'TOKENIZER_ERROR'
     named = _bulk_mentions(cmd)
+    if named and _carries_last_arg(cmd):
+        return 'DENY'
+    if named:
+        compounds = _compounds(cmd)
+        if compounds is None or any(k.kind in ("for", "select") and any(_bulk_word_mentions(w) for w in k.header[1:])
+                                    for k in compounds):
+            return 'DENY'
     for site, res in sites:
         c = site.cmd
         words = _site_words(c)
@@ -778,16 +860,22 @@ def bulk_sentinel_decision(cmd):
             return 'DENY'
         if not (any(_bulk_word_mentions(w) for w in words) or any(_bulk_mentions(b) for b in bodies)):
             continue
-        if any(_bulk_word_mentions(a.word) for a in c.assignments) or site.templated or name is None:
+        if any(_bulk_word_mentions(a.word) for a in tuple(c.assignments) + tuple(res.assignments)) or \
+                site.templated or name is None:
             return 'DENY'
-        if name in _BULK_CODE_ARG or any(_bulk_mentions(b) for b in bodies) and name not in _BULK_READERS:
+        if any(v is not None and _bulk_word_mentions(v) for _n, opts in res.wrappers for _o, v in opts):
+            return 'DENY'
+        if name in _BULK_CODE_ARG or name in _BULK_DECLARE or \
+                any(_bulk_mentions(b) for b in bodies) and name not in _BULK_READERS:
             return 'DENY'
         if _BULK_INTERPRETER.fullmatch(name) and (res.payload is not None or any(
                 re.fullmatch(r"-[a-zA-Z]*[ce][a-zA-Z]*", w.value() or "") for w in res.args)):
             return 'DENY'
         if name in _BULK_READERS:
             vals = [w.value() or "" for w in res.args]
-            if name == "rg" and any(v == "--pre" or v.startswith("--pre=") for v in vals):
+            if name == "rg" and any(v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals):
+                return 'DENY'
+            if name == "file" and any(v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals):
                 return 'DENY'
             if name == "find" and any(v in _BULK_FIND_ACTIONS for v in vals):
                 return 'DENY'
@@ -821,9 +909,10 @@ def bulk_sentinel_rule(command):
                f"Command: {command}",
                "REASON: the bulk-commit sentinel is minted only by the userprompt-bulk-commit-capability hook, never "
                "from Bash. A name passes only as an argument of a reader (ls|stat|cat|file|wc|head|tail|grep|egrep|"
-               "fgrep|rg|jq|find|test|[ or git) with no rg --pre, find write or exec action, git global option or "
-               "git config, no write target or code (sed, awk, eval, -c, heredoc) carrying it, and no non-filter "
-               "fed by a pipe or xargs.", released_line())
+               "fgrep|rg|jq|find|test|[ or a plain git read) with no rg --pre, file -C, find write or exec action, "
+               "git global option, git --output/-O/difftool/bisect/submodule-style run, no write target, code (sed, "
+               "awk, eval, -c, heredoc), assignment, env variable, for/select list or $_ carrying it, and no "
+               "non-filter fed by a pipe or xargs.", released_line())
 
 
 # ── Hard-banned scripts (BS-19) ──────────────────────────────────────────────

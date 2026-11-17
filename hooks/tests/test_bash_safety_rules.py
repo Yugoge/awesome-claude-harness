@@ -294,3 +294,89 @@ def test_a_write_or_run_of_a_protected_artifact_is_refused(sandbox, command, lab
     cmd = command.format(state=sandbox["env"]["CLAUDE_STATE_DIR"])
     r = run(sandbox, SAFETY, cmd)
     assert r.returncode == 2 and label in r.stderr, (cmd, r.stderr)
+
+
+# OB-L13 verifier round: routes that carry a protected name into another simple command (a for/select word list,
+# a declaration builtin, an env wrapper's assignment, `$_`) and git or reader options that run or write, each
+# refused through the real hook. {S} is the sandbox state dir.
+_W = "scripts/write-bulk-commit-sentinel.py"
+_SENT = "{S}/claude-bulk-commit-sentinel-x.json"
+_GRANT = "{S}/claude-commit-grant-a.json"
+OB_L13_ROUND2_BULK_REFUSALS = [
+    f"for f in {_W}; do python3 $f; done",
+    f"for f in {_W}; do . $f; done",
+    f"select f in {_W}; do python3 $f; break; done",
+    f"for f in {_SENT}; do touch $f; done",
+    f"for f in {_SENT}; do python3 /tmp/w.py $f; done",
+    f"for f in $(ls {_SENT}); do touch $f; done",
+    "export f=write-bulk-commit-sentinel.py; cd scripts; python3 $f",
+    "declare f=Xwrite-bulk-commit-sentinel.py; cd scripts; python3 ${{f#X}}",
+    "local f=Xwrite-bulk-commit-sentinel.py; cd scripts; python3 ${{f#X}}",
+    "readonly f=Xwrite-bulk-commit-sentinel.py; cd scripts; python3 ${{f#X}}",
+    "typeset f=Xwrite-bulk-commit-sentinel.py; cd scripts; python3 ${{f#X}}",
+    f"env GIT_SSH_COMMAND='python3 {_W}' git fetch origin",
+    f"env GIT_EXTERNAL_DIFF='python3 {_W}' git diff",
+    f"nice env GIT_EDITOR='python3 {_W}' git commit --amend",
+    f"env PYTHONSTARTUP={_W} python3 -i",
+    f"[ -f {_SENT} ] || touch \"$_\"",
+    f"file {_SENT} && python3 /tmp/w.py \"$_\"",
+    f"ls -d {_SENT} && touch $_",
+    f"ls -d {_SENT} && python3 /tmp/w.py ${{{{_}}}}",
+    f"git diff --output={_SENT}",
+    f"git log -1 --format='{{{{}}}}' --output={_SENT}",
+    f"git diff --output {_SENT} HEAD",
+    f"git difftool -x 'python3 {_W}'",
+    f"git difftool --extcmd='python3 {_W}'",
+    f"git bisect run python3 {_W}",
+    f"git submodule foreach python3 {_W}",
+    f"git grep -O'python3 {_W}' x",
+    f"git grep --open-files-in-pager='python3 {_W}' x",
+    f"rg --hostname-bin={_W} x",
+    f"file -C -m {_SENT}",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND2_BULK_REFUSALS)
+def test_a_protected_name_carried_into_a_run_or_write_is_refused(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 2 and "bulk-commit-sentinel-write" in r.stderr, (cmd, r.stderr)
+
+
+OB_L13_ROUND2_GRANT_REFUSALS = [
+    f"python3 -m json.tool {_GRANT}; cp /tmp/g $_",
+    f"PYTHONPATH=/tmp/evil python3 -m json.tool {_GRANT}",
+    f"env PYTHONPATH=/tmp/evil python3 -m json.tool {_GRANT}",
+    f"cat {_GRANT} && python3 /tmp/w.py \"${{{{_}}}}\"",
+    f"for f in {_GRANT}; do cp /tmp/g $f; done",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND2_GRANT_REFUSALS)
+def test_a_grant_name_carried_into_a_write_is_refused(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 2 and "commit-grant-raw-write" in r.stderr, (cmd, r.stderr)
+
+
+OB_L13_ROUND2_PASSES = [
+    f"git log --oneline -- {_W}",
+    f"git show HEAD:{_W} | head -20",
+    f"git grep -n argv -- {_W}",
+    f"git diff --stat -- {_W}",
+    f"git add {_W}",
+    "git commit -m 'fix write-bulk-commit-sentinel.py fallback'",
+    f"git log -1 --format='%H' -- {_W}",
+    f"cat {_SENT}",
+    f"[ -f {_SENT} ] && echo present",
+    f"file {_SENT}",
+    f"python3 -m json.tool {_GRANT}",
+    f"for f in a b; do echo $f; done; ls {_SENT}",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND2_PASSES)
+def test_a_plain_read_of_a_protected_name_still_passes(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 0, (cmd, r.stderr)
