@@ -183,7 +183,7 @@ def test_a_config_word_that_is_no_config_override_passes(repo, command):
     assert "CONFIG FIREWALL" not in _isolated(repo, command).stderr
 
 
-@pytest.mark.parametrize("command", ['echo "$(case x in x) rm b;; esac)"', "git log --format %(refname)", "then git status"])
+@pytest.mark.parametrize("command", ["echo $(( 1 +", "git log --format %(refname)", "then git status"])
 def test_a_command_the_parser_cannot_read_fails_closed(repo, command):
     r = _isolated(repo, command)
     assert r.returncode == 2 and "UNREADABLE COMMAND" in r.stderr, (command, r.stderr)

@@ -216,7 +216,7 @@ def _copy_source(item, c):
 
 def _value_option_before(item, c):
     m = re.search(r"\s(-[\w-]+)\s+" + re.escape(item) + r"(\s|$)", c)
-    return bool(m) and any(m.group(1) in v[0]["val"] for v in sp.VERBS.values())
+    return bool(m) and any(v[0] is not None and m.group(1) in v[0]["val"] for v in sp.VERBS.values())
 
 
 def _is_resolved_head(item, c):
