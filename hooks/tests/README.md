@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 188
+- **Total files**: 190
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -84,6 +84,8 @@
 - `test_git_prefix_enumeration.py` - THE DEFECT
 - `test_git_residual_override.py` - Background
 - `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
+- `test_git_text_owners.py` - Four readings, each with the inputs that must still be refused:
+- `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 - `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 - `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 - `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
@@ -128,7 +130,7 @@
 - `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 - `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 - `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
-- `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
+- `test_privilege_guard_fails_closed.py` - When a name the guard imports from the classifier is missing, the guard raises at
 - `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
 - `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
 - `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal

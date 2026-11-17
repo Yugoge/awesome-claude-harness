@@ -34,7 +34,7 @@
 - `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
 - `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 - `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
-- `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
+- `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
 - `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 - `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 - `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
