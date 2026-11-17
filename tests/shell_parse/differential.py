@@ -45,7 +45,9 @@ def _load(path, name):
     return mod
 
 
-SL = _load(os.path.join(LIB, "runtime_guard", "shell_lex.py"), "e1_runtime_shell_lex")
+# The runtime guard as its os.execv shim runs it: no parent package, so its sibling and
+# shell_parse imports resolve through the two sys.path entries above (the same `sp`).
+RG = _load(os.path.join(LIB, "runtime_guard", "_core.py"), "e1_runtime_core")
 GG = _load(os.path.join(HOOKS, "pretool-grep-backtrack-guard.py"), "e1_grep_guard")
 HS = _load(os.path.join(HOOKS, "pretool-harness-switch-guard.py"), "e1_switch_guard")
 
@@ -79,7 +81,8 @@ def old_facts(c):
     f["grep"] = _safe(lambda: [x[0] if isinstance(x, (list, tuple)) else x for x in GG._find_searches(c)])
     f["settings"] = _safe(lambda: HS.writes_settings_file(c))
     f["allow_subs"] = _safe(lambda: AL._bash_subcommands(c))
-    f["rg_redirs"] = _safe(lambda: [t for seg in SL._split_pipeline(c) for t in SL._write_redirect_targets(seg)])
+    f["rg_redirs"] = _safe(lambda: [t for g in RG._pipeline_groups(c) for seg in g
+                                    for t in RG._write_redirect_targets(seg)])
     f["census_fatal"] = _safe(lambda: C.census(c)["fatal"])
     return f
 
@@ -87,7 +90,6 @@ def old_facts(c):
 def new_facts(c):
     s = sp.parse(c)
     sites = list(sp.walk(s))
-    resolved = [sp.resolve(site.cmd) for site in sites]
     targets = sp.write_targets(s)
     grep_words = []
     for site, res in zip(sp.walk(s, into=("cmdsub", "backtick", "procsub", "heredoc_shell",
