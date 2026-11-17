@@ -32,7 +32,6 @@ for path in (LIB, os.path.join(LIB, "runtime_guard")):
 
 import allowlist as AL  # noqa: E402
 import bash_active_syntax_census as C  # noqa: E402
-import bash_context_strip as CS  # noqa: E402
 import bash_write_targets as WT  # noqa: E402
 import git_command_classifier as GC  # noqa: E402
 import shell_parse as sp  # noqa: E402
@@ -73,7 +72,6 @@ def _as_rendered(text):
 
 def old_facts(c):
     f = {}
-    f["strip"] = _safe(lambda: CS.strip_non_executable_contexts(c))
     f["wt_paths"] = _safe(lambda: WT.extract_bash_write_paths(c))
     f["wt_modes"] = _safe(lambda: [t.path for t in WT.extract_bash_write_targets_with_modes(c)])
     f["wt_touched"] = _safe(lambda: [p for p, _r in WT.extract_bash_touched_paths(c)])
@@ -238,11 +236,6 @@ def _label_items(reader, c, n, items):
         return "O6:old reads past the end of a substitution"
     if all(any(ch in x for ch in "'\"\\") for x in items):
         return "O6:old reads quoting characters as part of an operand"
-    if reader == "strip" and all(re.search(".{0,12}?".join(map(re.escape, x)), re.sub(r"\s+", " ", n["view"]))
-                                 for x in items):
-        return "covered:the new view keeps the whole word (old blanked a quoted piece of it)"
-    if reader == "strip" and re.search(r"(python[\d.]*|node|ruby|perl|php)\s", c):
-        return "O6:old keeps an interpreter's argv data where it misses the command word"
     if reader.startswith("wt_"):
         plain = [x for x in items if not any(ch in x for ch in "'\"\\")]
         sites = [_operand_site_names(x, c) for x in plain]
@@ -283,20 +276,6 @@ def differences(c, m, n):
         add("census", None, repr(m["census_fatal"]))
     if n["error"] is not None and n["error"] != "unterminated_heredoc" and bash_accepts(c):
         add("parse", None, n["error"])
-
-    if isinstance(m["strip"], str):
-        def toks(text):
-            return collections.Counter(t for t in re.split(r"[\s'\"\\;&|(){}<>]+", text) if t)
-        lost = toks(m["strip"]) - toks(n["view"]) - toks(re.sub(r"['\"]", "", n["view"]))
-        if lost:
-            label = None
-            if n["error"] is None and _has_comment(c):
-                label = "O4:the new view blanks a comment"
-            elif "<<" in c:
-                label = "view:heredoc data blanked"
-            elif n["dynamic"]:
-                label = "view:computed payload blanked"
-            add("strip", label, repr(sorted(lost)[:6]), list(lost))
 
     newp = set(n["resolved_targets"])
     for key in ("wt_paths", "wt_modes", "wt_touched"):

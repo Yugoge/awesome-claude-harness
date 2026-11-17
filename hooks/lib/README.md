@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 70
+- **Total files**: 69
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
@@ -14,7 +14,6 @@
 - `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 - `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
 - `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
-- `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 - `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
 - `bash_read_only.py` - ``is_read_only(command)`` is True only when every simple command in ``command``
 - `bash_safety_rules.py` - Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)

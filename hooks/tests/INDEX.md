@@ -1,7 +1,7 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:27:55Z*
+*Last updated: 2026-11-17T19:34:23Z*
 **Total entries**: 263
 **Convention**: kebab
 
@@ -38,7 +38,7 @@ tests/
 ├── `test_bash_safety_channel_script_operand.py` - script operand spelled through the quoted CLAUDE_HOME channel as the named script file it is,
 ├── `test_bash_safety_command_position.py` - command's own arguments (lib/shell_parse.py), not raw-text co-occurrence
 ├── `test_bash_safety_consent_flag.py` - The flag is <state dir>/claude-orchestrator-consent-<session id>.flag. Its one writer is hooks/pr...
-├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
+├── `test_bash_safety_context.py` - They were written for hooks/lib/bash_context_strip.py's
 ├── `test_bash_safety_context_rules.py` - hooks/pretool-bash-safety.sh that read the context-stripped view
 ├── `test_bash_safety_degraded_fallback.py` - When the execution-boundary analyzer gives no verdict (timeout, memory ceiling, crash) the fallba...
 ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)

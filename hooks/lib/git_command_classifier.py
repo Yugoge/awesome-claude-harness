@@ -46,9 +46,9 @@ CLI usage:
   CMD_INPUT='command text' python3 hooks/lib/git_command_classifier.py
   Output: JSON array of {"subcommand": str, "args": list, "path_qualified": bool,
   "nested": bool}; `nested` marks an invocation inside a shell `-c` string.
-  With CMD_RAW=stdin the input is a normalised view of the command, a NUL, then
-  the raw command: the view is read for the command's own invocations, and the
-  `-c` strings are resolved from the raw command and normalised the same way.
+  With CMD_RAW=stdin the input is a view of the command, a NUL, then the raw
+  command: the view is read for the command's own invocations, and the `-c`
+  strings are resolved from the raw command and read as they are.
 """
 
 import collections
@@ -2070,11 +2070,9 @@ if __name__ == '__main__':
 
     if os.environ.get('CMD_RAW') == 'stdin':
         cmd_text, _nul, raw = cmd_text.partition('\0')
-        try:
-            from bash_context_strip import strip_non_executable_contexts as _norm
-        except Exception:
-            _norm = str
-        layers = [cmd_text] + [_norm(text) for text in list(iter_shell_texts(raw))[1:]]
+        # Each -c string is read as it is: _segment_invocations reads it through
+        # lib/shell_parse.py, quoted text and unread here-documents as data.
+        layers = [cmd_text] + list(iter_shell_texts(raw))[1:]
     else:
         layers = list(iter_shell_texts(cmd_text))
     results = []

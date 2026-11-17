@@ -175,22 +175,24 @@ def test_bash_safety_reads_the_unquoted_reset_option(sandbox, command):
 
 
 @pytest.mark.parametrize("command,kept", [
-    ("git reset '--hard'", "git reset '--hard'"),
-    ("git 'reset' --hard HEAD~1", "git 'reset' --hard HEAD~1"),
-    ("g'i't 'push' '--force'", "g'i't 'push' '--force'"),
-    ("git -C '.' 'push' -f", "git -C '.' 'push' -f"),
+    ("git reset '--hard'", ("reset", ["--hard"])),
+    ("git 'reset' --hard HEAD~1", ("reset", ["--hard", "HEAD~1"])),
+    ("g'i't 'push' '--force'", ("push", ["--force"])),
+    ("git -C '.' 'push' -f", ("push", ["-f"])),
 ])
 def test_the_context_view_keeps_a_git_commands_own_words(command, kept):
-    # pretool-bash-safety.sh classifies this view; blanking `'--hard'` as data hid the reset.
-    from bash_context_strip import strip_non_executable_contexts
-    assert strip_non_executable_contexts(command) == kept
+    # pretool-bash-safety.sh's git rules read lib/shell_parse.py's git_invocations (the view
+    # lib/bash_context_strip.py gave them before it was deleted); reading `'--hard'` as data hid the reset.
+    from shell_parse import git_invocations, parse
+    assert [(g.subcommand, list(g.args)) for g in git_invocations(parse(command))] == [kept]
 
 
 @pytest.mark.parametrize("command,stripped", [
-    ("git commit -m 'rm -rf / and git push'", "git commit -m "),
-    ("git log --grep='x y' --oneline", "git log --grep= --oneline"),
-    ("echo 'git push --force'", "echo "),
+    ("git commit -m 'rm -rf / and git push'", ["commit"]),
+    ("git log --grep='x y' --oneline", ["log"]),
+    ("echo 'git push --force'", []),
 ])
 def test_the_context_view_still_strips_a_git_commands_text(command, stripped):
-    from bash_context_strip import strip_non_executable_contexts
-    assert strip_non_executable_contexts(command) == stripped
+    # The text a git command or echo carries is no git invocation of its own.
+    from shell_parse import git_invocations, parse
+    assert [g.subcommand for g in git_invocations(parse(command))] == stripped

@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:27:55Z*
-**Total entries**: 1103
+*Last updated: 2026-11-17T19:34:23Z*
+**Total entries**: 1102
 **Convention**: kebab
 
 ## Tree
@@ -132,7 +132,6 @@ dot-claude/
 │   │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   │   ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
 │   │   ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
-│   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   │   ├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
 │   │   ├── `bash_read_only.py` - ``is_read_only(command)`` is True only when every simple command in ``command``
 │   │   ├── `bash_safety_rules.py` - Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
@@ -215,7 +214,7 @@ dot-claude/
 │   │   ├── `test_bash_safety_channel_script_operand.py` - script operand spelled through the quoted CLAUDE_HOME channel as the named script file it is,
 │   │   ├── `test_bash_safety_command_position.py` - command's own arguments (lib/shell_parse.py), not raw-text co-occurrence
 │   │   ├── `test_bash_safety_consent_flag.py` - The flag is <state dir>/claude-orchestrator-consent-<session id>.flag. Its one writer is hooks/pr...
-│   │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
+│   │   ├── `test_bash_safety_context.py` - They were written for hooks/lib/bash_context_strip.py's
 │   │   ├── `test_bash_safety_context_rules.py` - hooks/pretool-bash-safety.sh that read the context-stripped view
 │   │   ├── `test_bash_safety_degraded_fallback.py` - When the execution-boundary analyzer gives no verdict (timeout, memory ceiling, crash) the fallba...
 │   │   ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
