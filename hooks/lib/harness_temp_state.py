@@ -32,7 +32,8 @@ graphify cache, ...). is_harness_state() answers for "control" unless
 include_scratch=True; classify() returns either kind.
 
 Pure: reads os.environ and the filesystem's symlinks, writes nothing, and
-answers None/False for a path it cannot resolve. No hook uses it yet.
+answers None/False for a path it cannot resolve. hooks/lib/bash_execution_boundary.py
+uses it to allow a plain rm of temp-root paths that are not control state.
 """
 
 from __future__ import annotations

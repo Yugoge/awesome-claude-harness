@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:49:14Z*
-**Total entries**: 402
+*Last updated: 2026-11-17T05:48:08Z*
+**Total entries**: 403
 **Convention**: kebab
 
 ## Tree
@@ -245,6 +245,7 @@ hooks/
 │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   ├── `test_requirement_round.py` - hook that calls it
 │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
+│   ├── `test_rm_temp_roots.py` - Owner decision (lane rm-temp): every role may remove (rm, -r, -f, -rf) paths under /tmp, /var/tmp,
 │   ├── `test_role_from_cli.py` - The role is the payload's agent_type when it carries an agent_id, else the agentType of
 │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   ├── `test_runtime_guard.py` - Two layers:
