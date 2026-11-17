@@ -9,7 +9,7 @@ definition of this list: `LOCATIONS` holds one entry per row below (the **Locati
 state, `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root, and
 `crosses_mount(path)` whether a mount point under the temp root carries the path elsewhere.
 `hooks/pretool-tool-policy.py` (`_temp_write`) uses it: a policy role writes the temp roots except the control
-state below and any path a mount under the temp root carries (`hooks/tests/test_tool_policy_temp_writes.py`);
+state below and any path a mount under the temp root carries or that holds such a mount (`below=True`) (`hooks/tests/test_tool_policy_temp_writes.py`);
 `hooks/tests/test_harness_temp_state.py` pins every row.
 
 ## Roots

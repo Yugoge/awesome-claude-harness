@@ -540,3 +540,60 @@ def test_the_registered_pipeline_refuses_a_write_through_a_bind_mount(tmp_path, 
     tool, tool_input = cases[case]
     got, _ = pipeline(tmp_path, tool, tool_input, role, binds=binds)
     assert got == "refused", case
+
+
+# -- a directory target holding a mount (verifier finding on 3a3fd0c7) ---------------------------------------------
+# `cp a /tmp/d` names /tmp/d as its target; a file bind-mounted at /tmp/d/settings.json is written through it.
+# crosses_mount is asked with below=True for every target: a mount under the target disqualifies it too.
+
+DIR_FORMS = ["cp {src} {d}", "cp {src} {d}/", "mv {src} {d}", "install {src} {d}", "ln -f {src} {d}"]
+
+
+@pytest.mark.parametrize("form", DIR_FORMS)
+def test_a_mount_under_a_directory_target_disqualifies_it(tmp_path, monkeypatch, form):
+    hook = _hook_module(tmp_path, monkeypatch)
+    d, src = "/tmp/tmp-writes-md", "/tmp/tmp-writes-msrc/settings.json"
+    data = {"tool_name": "Bash", "tool_input": {"command": form.format(src=src, d=d)}, "cwd": PRODUCT}
+    mounted = _mountinfo(tmp_path, d + "/settings.json")
+    got, why = hook._temp_write("qa", d, data, mountinfo=mounted)
+    assert got is False and "mount" in why, why
+    # Without the mount the same directory target qualifies.
+    assert hook._temp_write("qa", d, data, mountinfo=_mountinfo(tmp_path))[0] is True
+
+
+def _bound_file(tmp_path: Path) -> tuple:
+    """A stand-in settings.json bind-mounted onto a file inside a temp directory: (binds, d, src)."""
+    stand_in = tmp_path / "home" / ".claude" / "settings.json"
+    stand_in.parent.mkdir(parents=True, exist_ok=True)
+    stand_in.write_text("{}")
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "settings.json").write_text("")
+    src = tmp_path / "src" / "settings.json"
+    src.parent.mkdir()
+    src.write_text("{}")
+    return [(stand_in, d / "settings.json")], d, src
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_directory_target_holding_a_bind_mount_keeps_the_base_verdict(tmp_path, role):
+    if not _can_bind(tmp_path):
+        pytest.skip("mounting is not permitted here")
+    binds, d, src = _bound_file(tmp_path)
+    decided = {f: verdict(run(tmp_path, "Bash", {"command": f.format(src=src, d=d)}, role, binds=binds))
+               for f in DIR_FORMS}
+    assert decided == {f: "refused" for f in DIR_FORMS}, decided
+    # A directory beside it, holding no mount, is still a plain temp target.
+    other = tmp_path / "other"
+    other.mkdir()
+    assert verdict(run(tmp_path, "Bash", {"command": f"cp {src} {other}"}, role, binds=binds)) == "allowed"
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("form", DIR_FORMS)
+def test_the_registered_pipeline_refuses_a_directory_target_holding_a_bind_mount(tmp_path, role, form):
+    if not _can_bind(tmp_path):
+        pytest.skip("mounting is not permitted here")
+    binds, d, src = _bound_file(tmp_path)
+    got, _ = pipeline(tmp_path, "Bash", {"command": form.format(src=src, d=d)}, role, binds=binds)
+    assert got == "refused", form

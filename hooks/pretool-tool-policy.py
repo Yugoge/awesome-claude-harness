@@ -119,7 +119,8 @@ Temp writes (owner decision 2026-11-17; _temp_write):
     command, renames away harness state or a directory that may hold it, or
     names a directory between a temp root and the target as an operand; and
     any target qualifies only when no mount point lies between its temp root
-    and it (crosses_mount; an unreadable mount table qualifies nothing).
+    and it or under it (crosses_mount with below=True: `cp a /tmp/d` must not
+    reach a file mounted in /tmp/d; an unreadable mount table qualifies nothing).
   - Any other target keeps the verdict the role rows and the raw-temp rule
     give it: the rule lifts refusals, it adds none.
 
@@ -566,7 +567,8 @@ def _temp_write(role: str, target, data: dict, *, mountinfo=None) -> tuple:
     under a wrapper and none may move the target off the path checked here
     (_bash_temp_hazard: links, tree writers, harness state renamed away, an
     ancestor named as an operand); and no mount point lies between its temp
-    root and it (harness_temp_state.crosses_mount, fail closed; ``mountinfo``
+    root and it, on it or under it (harness_temp_state.crosses_mount with
+    below=True, so a directory target holding a mount is out; fail closed; ``mountinfo``
     names another mount table, for tests). Never raises: a failure qualifies nothing."""
     try:
         if not isinstance(target, str) or not os.path.isabs(target) or set(target) & _UNRESOLVED_CHARS:
@@ -583,10 +585,12 @@ def _temp_write(role: str, target, data: dict, *, mountinfo=None) -> tuple:
             return (False, f"{target} does not resolve below a temp root")
         if hts.is_harness_state(target):
             return (False, f"{target} is harness state ({hts.classify(target).name})")
-        if hts.crosses_mount(target, mountinfo=mountinfo):
+        if hts.crosses_mount(target, below=True, mountinfo=mountinfo):
             # A bind mount below the temp root keeps realpath and st_dev as they were: neither shows
-            # the path lands elsewhere (~/.claude, a repository, grants). Fail closed (an unread table too).
-            return (False, f"{target} is carried by a mount point below its temp root, or the mount table "
+            # the path lands elsewhere (~/.claude, a repository, grants). below=True for every target:
+            # `cp a /tmp/d` names the directory, and a file mounted at /tmp/d/settings.json is written
+            # through it. Fail closed (an unread table too).
+            return (False, f"{target} is or holds a mount point below its temp root, or the mount table "
                            "could not be read")
         roles = set((policy_registry.load_policy() or {}).get("roles") or {})
         kept = _kept_trees(data)
