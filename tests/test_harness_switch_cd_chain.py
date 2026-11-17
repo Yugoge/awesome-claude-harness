@@ -516,3 +516,84 @@ def test_awk_beside_a_reader_that_writes_or_runs_a_program_is_no_reader(box, com
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+D = " <<< '{\"disableAllHooks\":true}'"
+AWK_NOT_PLAIN = [  # each wrote {"disableAllHooks":true} into a project's settings file under real bash
+    # a path-named awk is whatever program that path holds
+    "./awk 'NR<=1' .claude/settings.json" + D,
+    "/tmp/x/awk 'NR<=1' .claude/settings.json" + D,
+    "cd /tmp/x && ./awk 'NR<=1' {proj}/.claude/settings.json" + D,
+    "/usr/bin/awk 'NR<=1' .claude/settings.json" + D,
+    # a for loop binds PATH
+    "for PATH in /tmp/x; do awk 'NR<=1' .claude/settings.json" + D + "; done",
+    "for PATH in /tmp/x; do :; done; awk 'NR<=1' .claude/settings.json" + D,
+    "select PATH in /tmp/x; do break; done; awk 'NR<=1' .claude/settings.json" + D,
+    # arithmetic assigns PATH (or BASH_CMDS)
+    ": $((PATH=1)); awk 'NR<=1' .claude/settings.json" + D,
+    "((PATH=1)); awk 'NR<=1' .claude/settings.json" + D,
+    "echo ${a[PATH=1]}; awk 'NR<=1' .claude/settings.json" + D,
+    "[[ PATH=1 -eq 1 ]]; awk 'NR<=1' .claude/settings.json" + D,
+    "echo $[PATH=1]; awk 'NR<=1' .claude/settings.json" + D,
+    "echo $((PATH=1)); awk 'NR<=1' .claude/settings.json" + D,
+    ": $((BASH_CMDS[awk]=1)); awk 'NR<=1' .claude/settings.json" + D,
+    "echo ${PATH:=/tmp/x}; awk 'NR<=1' .claude/settings.json" + D,
+    "awk 'NR<=1' .claude/settings.json $((PATH=1))" + D,
+    "cat <<< $((PATH=1)); awk 'NR<=1' .claude/settings.json" + D,
+    "cat <<E\n$((PATH=1))\nE\nawk 'NR<=1' .claude/settings.json" + D,
+    "cat {PATH}</dev/null; awk 'NR<=1' .claude/settings.json" + D,
+    # sed w / W overwrites the awk binary
+    "sed -n 'w /tmp/x/bin/awk' /usr/bin/tee; awk 'NR<=1' .claude/settings.json" + D,
+    "sed -n 'W /tmp/x/bin/awk' /usr/bin/tee; awk 'NR<=1' .claude/settings.json" + D,
+    "sed -e '' -n -e 'w /tmp/x/bin/awk' /usr/bin/tee; awk 'NR<=1' .claude/settings.json" + D,
+    "sed -n 'w /usr/bin/mawk' /usr/bin/tee; awk 'NR<=1' .claude/settings.json" + D,
+    "sed -n '1w /tmp/x/bin/awk' /usr/bin/tee && awk 'NR<=1' .claude/settings.json" + D,
+    # an output redirect onto a file
+    "cat /usr/bin/tee >& /tmp/x/bin/awk; awk 'NR<=1' .claude/settings.json" + D,
+    "cat /usr/bin/tee >& /usr/bin/mawk; awk 'NR<=1' .claude/settings.json" + D,
+    "cat /usr/bin/tee &> /tmp/x/bin/awk; awk 'NR<=1' .claude/settings.json" + D,
+    "cat /usr/bin/tee >| /tmp/x/bin/awk; awk 'NR<=1' .claude/settings.json" + D,
+    "cat /usr/bin/tee 1<> /tmp/x/bin/awk; awk 'NR<=1' .claude/settings.json" + D,
+    "cat /usr/bin/tee > /tmp/x/bin/a; awk 'NR<=1' .claude/settings.json" + D,
+    # any other compound command
+    "while false; do :; done; awk 'NR<=1' .claude/settings.json" + D,
+    "if true; then awk 'NR<=1' .claude/settings.json" + D + "; fi",
+    "case x in x) awk 'NR<=1' .claude/settings.json" + D + ";; esac",
+    "(awk 'NR<=1' .claude/settings.json" + D + ")",
+    "{ awk 'NR<=1' .claude/settings.json" + D + "; }",
+    "coproc awk 'NR<=1' .claude/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", AWK_NOT_PLAIN)
+def test_awk_in_a_path_compound_arithmetic_or_writing_chain_is_no_reader(box, command):
+    command = fill(box, command)
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk 'NR<=1' .claude/settings.json 2>/dev/null | head -n 1",
+    "awk 'NR<=1' .claude/settings.json 2>&1 >/dev/null",
+    "awk 'NR<=1' .claude/settings.json | head",
+    "cat .claude/settings.json | nl | awk 'NR<=1'",
+    "awk -v x=1 -- 'NR<=1' .claude/settings.json",
+    "POSIXLY_CORRECT=1 awk 'NR<=1' .claude/settings.json",
+])
+def test_awk_in_a_plain_chain_still_reads(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk '{print}' /usr/bin/tee > /tmp/x/bin/awk; awk 'NR<=1' .claude/settings.json" + D,
+    "awk 'NR<=1' .claude/settings.json > /tmp/k | awk 'NR<=1' .claude/settings.json" + D,
+    "awk 'NR<=1' .claude/settings.json $(cat /usr/bin/tee > /tmp/x/bin/awk) > /tmp/k",
+    "awk 'NR<=1' .claude/settings.json > /tmp/k &",
+])
+def test_a_file_written_before_another_command_runs_makes_awk_no_reader(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)

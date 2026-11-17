@@ -90,9 +90,11 @@ AWK_NAME_SAFE = frozenset({  # the commands that cannot change which program the
     "cat", "grep", "egrep", "fgrep", "head", "tail", "wc", "ls", "echo", "printf", "sed", "test", "[", "true",
     "false", ":", "cd", "pwd"} | set(AWKS))  # (printf without -v, sed that only reads, awk proven a reader), any
 AWK_NAME_READERS = READ_ONLY - {"find", "less", "more", "printf"}  # other reader _read_only passes (nl, cut, ...), no
-# assignment word (POSIXLY_CORRECT=1 before a command aside), no function definition and no output redirection
-# onto an awk name or a computed name, anywhere in the command, an awk in it is the program it names (_awk_trusted)
-AWK_OUT_OPS = (">", ">>", ">|", "&>", "&>>", "<>")
+# assignment word (POSIXLY_CORRECT=1 before a command aside), no compound command, no arithmetic, no `$` expansion
+# outside awk's own words, and no output redirection but to /dev/null or onto a numbered fd (_awk_trusted)
+AWK_OUT_OPS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
+AWK_PARAM_PLAIN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!_-]")  # $name, ${name}, $1, $@: no subscript or
+# operator (`${a[PATH=1]}`, `${PATH:=x}`, `${!x}` can assign or reach any name)
 AWK_UNSAFE = frozenset("{}*?[]$`~!")  # unquoted, a character the shell may expand (brace, glob, $, `, ~, !)
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
@@ -922,33 +924,48 @@ def _proven_literal(raw: str) -> bool:
     return True
 
 
-def _has_function(script) -> bool:
-    """Whether `script`, or a compound command in it, defines a function."""
-    for pl, _sep in script.items:
-        for stage in pl.stages:
-            if isinstance(stage, shell_parse.Compound) and (
-                    stage.kind == "function" or any(_has_function(b) for b in stage.body)):
-                return True
-    return False
+def _awk_parts_safe(parts, own: bool) -> bool:
+    """Whether a word's parts expand without assigning: no arithmetic, and outside awk's own words
+    (`own`) no `$` expansion at all; in them a parameter only plain (AWK_PARAM_PLAIN)."""
+    for p in shell_parse.active_parts(parts):
+        if p.kind == "arith" or p.kind == "arraylit":
+            return False
+        if p.kind == "param" and not (own and AWK_PARAM_PLAIN.fullmatch(p.text or "")):
+            return False
+        if p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and not own:
+            return False
+    return True
 
 
-def _awk_name_safe(site) -> bool:
-    """Whether one simple command leaves the name `awk` resolving as before (AWK_NAME_SAFE)."""
+def _awk_name_safe(site, final=None) -> bool:
+    """Whether one simple command leaves the name `awk` resolving as before (AWK_NAME_SAFE). `final`
+    is the command's last simple command when it runs alone after every other: nothing is looked up
+    after it opens its redirects, so it alone may also write a static file target with `>` / `>>`
+    (`awk -F: '{print $1}' F > /tmp/keys.txt`)."""
     cmd = site.cmd
     if site.dynamic or site.templated:
         return False
     if any(not (a.name == "POSIXLY_CORRECT" and a.static_value() == "1" and cmd.words) for a in cmd.assignments):
         return False
+    own = bool(cmd.words) and cmd.words[0].value() in AWKS
     for r in cmd.redirects:
-        if r.op in AWK_OUT_OPS and r.target is not None:
-            target = r.target.value()
-            if target is None or os.path.basename(target) in AWKS:
-                return False
+        if r.fd_var is not None:  # {NAME}>x assigns NAME
+            return False
+        if r.op in AWK_OUT_OPS and not (r.op == ">&" and r.dup is not None) and not (
+                r.op in (">", ">>") and r.target is not None and r.target.value() is not None
+                and (r.target.value() == "/dev/null" or cmd is final)):
+            return False
+        if r.target is not None and not _awk_parts_safe(r.target.parts, own):
+            return False
+        if r.hd is not None and not _awk_parts_safe(r.hd.expansions, own):
+            return False
+    if not all(_awk_parts_safe(w.parts, own) for w in cmd.words):
+        return False
     if not cmd.words:
         return True
     plain = [w.value() for w in cmd.words]
     head = plain[0]
-    if head is None or ("/" in head and os.path.basename(head) not in AWKS):
+    if head is None or "/" in head:  # a path names any program, never the awk the name resolves to
         return False
     name = os.path.basename(head)
     if ASSIGNMENT.match(head):
@@ -960,7 +977,7 @@ def _awk_name_safe(site) -> bool:
     if name == "printf":
         return not (len(plain) > 1 and plain[1] is not None and plain[1].startswith("-") and plain[1] != "--")
     if name == "sed":
-        return None not in plain and _sed(plain) is not None
+        return None not in plain and _sed(plain) == []  # writes nothing at all
     if name in AWKS:
         at = _awk_at([w if w is not None else "-" for w in plain])
         return at is not None and plain[at] is not None and _proven_literal(cmd.words[at].raw.text) \
@@ -970,17 +987,29 @@ def _awk_name_safe(site) -> bool:
 
 def _awk_trusted(command) -> bool:
     """Whether every awk in `command` runs the awk program: the command names no AWK_ENV variable, the
-    parser reads all of it, it defines no function, and every simple command in it, nested ones too
-    (substitutions, payloads), is _awk_name_safe. An allow rule: hash, export, declare, typeset,
-    readonly, local, read, mapfile, printf -v, eval, source, ., alias, enable, set, shopt, any
-    assignment or any other command makes every awk in it no reader."""
+    parser reads all of it, it and every script nested in it are _simple_list, and every simple
+    command in it, nested ones too (substitutions, payloads), is _awk_name_safe. An allow rule: a
+    path-named awk, hash, export, declare, typeset, readonly, local, read, mapfile, printf -v, eval,
+    source, ., alias, enable, set, shopt, a sed that writes, any assignment, arithmetic, `$` outside
+    awk's words, an output redirect but to /dev/null or a numbered fd, or any other command makes
+    every awk in it no reader."""
     text = command.source if isinstance(command, shell_parse.Script) else command
     if AWK_ENV.search(text or ""):
         return False
     script = command if isinstance(command, shell_parse.Script) else shell_parse.parse(command)
-    if script.errors() or _has_function(script) or any(_has_function(s) for s in shell_parse._nested_scripts(script)):
+    if script.errors() or not all(_simple_list(s) for s in (script, *shell_parse._nested_scripts(script))):
         return False
-    return all(_awk_name_safe(site) for site in shell_parse.walk(script))
+    last = script.items[-1][0] if script.items else None
+    final = last.stages[0] if last is not None and len(last.stages) == 1 else None
+    return all(_awk_name_safe(site, final) for site in shell_parse.walk(script))
+
+
+def _simple_list(script) -> bool:
+    """Whether `script` is only simple commands joined by pipes and `;` / `&&` / `||` / newlines:
+    no compound command of any kind (for, select, while, until, case, if, a subshell, a group,
+    coproc, `((`, `[[`, a function) and no background `&`."""
+    return all(sep != "&" and all(isinstance(st, shell_parse.SimpleCommand) for st in pl.stages)
+               for pl, sep in script.items)
 
 
 def _raw_words(cmd) -> list | None:
