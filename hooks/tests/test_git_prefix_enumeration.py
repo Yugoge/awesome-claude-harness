@@ -214,7 +214,8 @@ def test_empty_invocation_list_is_not_silently_equivalent_to_no_git():
     A git-shaped command the parser cannot resolve must be refused, not dropped
     through the early return.
     """
-    for command in ("g\\it commit -m x", "$GIT commit -m x", "$(which git) push --force"):
+    # OB-L26: `g\\it commit` is read as the git commit it runs, so it is no residual.
+    for command in ("${G}it commit -m x", "$GIT commit -m x", "$(which git) push --force"):
         invocations, residuals = classify_git_command(command)
         assert not invocations, f"{command!r} unexpectedly parsed cleanly"
         assert residuals, (

@@ -519,7 +519,9 @@ def test_a_shell_named_in_a_commit_message_is_data():
 def test_every_residual_kind_is_one_the_override_route_accepts():
     samples = ['g\\it push', '$GIT push', '$(which git) push', 'bash -c "$X"']
     kinds = {kind for cmd in samples for kind, _seg in classify_git_command(cmd)[1]}
-    assert kinds == set(git_command_classifier.RESIDUAL_KINDS)
+    # OB-L26: `g\\it push` is read as git push, so obfuscated_git_token is no longer
+    # raised; it stays a kind an override may name.
+    assert kinds | {"obfuscated_git_token"} == set(git_command_classifier.RESIDUAL_KINDS)
     spec = importlib.util.spec_from_file_location(
         "override", ROOT / "scripts" / "write-git-residual-override.py")
     module = importlib.util.module_from_spec(spec)
