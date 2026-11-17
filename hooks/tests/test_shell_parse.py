@@ -532,3 +532,28 @@ class TestAuditViews:
     @pytest.mark.parametrize("text", ["echo x &>(rm q)", "true | ! rm a", "echo x >#o7", "f() rm x"])
     def test_what_bash_rejects_is_an_error(self, text):
         assert sp.parse(text).error is not None
+
+
+class TestComputedShellOptions:
+    @pytest.mark.parametrize("text,path", [
+        ('bash $OPT -c "rm -f /r/.git/hooks/pre-commit"', "/r/.git/hooks/pre-commit"),
+        ('sh "$X" -xc "rm a"', "a"), ('zsh $O -c "rm b"', "b"),
+    ])
+    def test_a_computed_option_before_c_still_reads_the_string(self, text, path):
+        assert path in [t.path for t in sp.write_targets(text)]
+        shell = [s for s in sp.walk(sp.parse(text)) if s.context == ("top",)][0]
+        assert sp.resolve(shell.cmd).unresolved == "computed-shell-option"
+
+    @pytest.mark.parametrize("text", ['ksh93 -c "rm b"', 'mksh -c "rm b"', 'yash -c "rm b"'])
+    def test_more_shells(self, text):
+        assert ["rm", "b"] in argvs(text)
+
+    def test_an_unknown_shell_given_c_is_read_and_unresolved(self):
+        assert ["rm", "c"] in argvs('foosh -c "rm c"')
+        assert sp.resolve(cmds('foosh -c "rm c"')[0]).unresolved == "unknown_shell"
+        assert sp.resolve(cmds("hash -r")[0]).unresolved is None
+
+    def test_env_computed_option_before_split_string(self):
+        site = cmds('env $O -S "rm d"')[0]
+        r = sp.resolve(site)
+        assert (r.name, r.unresolved) == ("rm", "computed-env-option")
