@@ -400,13 +400,20 @@ def _parse_time(raw: Any) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+GRANT_ORIGINS = ("restart", "overnight-wake")
+
+
 def mint_grant(
     session_id: str,
     transcript_path: str,
     *,
     ttl_seconds: int | None = None,
+    origin: str = "restart",
 ) -> dict[str, Any]:
-    """Issue the intended session-bound recovery capability."""
+    """Issue the intended session-bound recovery capability. ``origin`` records which prompt
+    minted it: the owner's ``/restart`` or the /dev-overnight wake (revoke_wake_grant)."""
+    if origin not in GRANT_ORIGINS:
+        raise RestartError("unknown restart grant origin")
     sid = _safe_session_id(session_id)
     transcript = Path(transcript_path).expanduser().resolve()
     if transcript.name != f"{sid}.jsonl" or not transcript.is_file():
@@ -425,9 +432,30 @@ def mint_grant(
         "transcript_path": str(transcript),
         "issued_at": _iso(now),
         "expires_at": _iso(now + timedelta(seconds=ttl)),
+        "origin": origin,
     }
     _atomic_write_json(grant_path(sid), grant)
     return grant
+
+
+def revoke_wake_grant(session_id: str) -> bool:
+    """The owner's /stop: unlink this session's grant unless the owner's own /restart minted it
+    (origin "restart"); a grant the wake minted, or one with no recorded origin, dies with the
+    overnight run. True when a grant was removed."""
+    sid = _safe_session_id(session_id)
+    path = grant_path(sid)
+    grant = _load_json(path)
+    if grant is None and not path.exists():
+        return False
+    if isinstance(grant, dict) and grant.get("origin") == "restart":
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise RestartError(f"cannot revoke the wake's restart grant: {exc}") from exc
+    return True
 
 
 def load_valid_grant(session_id: str) -> dict[str, Any]:

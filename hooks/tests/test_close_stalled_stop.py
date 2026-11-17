@@ -90,6 +90,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     monkeypatch.setenv("CLAUDE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TASKS", "false")
     monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME", raising=False)
     overnight = types.ModuleType("lib.overnight")  # no overnight session
     overnight.session_state_file = lambda session_id, starts: (None, None)

@@ -80,6 +80,7 @@ def _git(*args: str, cwd: Path) -> None:
 def _run(hook: Path, payload: dict, env: dict | None = None, project: Path | None = None):
     environment = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "CLAUDE_COMMAND_GATE")}
     environment["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
+    environment["CLAUDE_CODE_ENABLE_TASKS"] = "false"
     if project is not None:
         environment["CLAUDE_PROJECT_DIR"] = str(project)
     environment.update(env or {})

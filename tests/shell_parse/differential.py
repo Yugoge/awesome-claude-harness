@@ -62,6 +62,13 @@ def _safe(f):
         return "EXC:" + type(exc).__name__
 
 
+def _as_rendered(text):
+    """A path text as lib/bash_write_targets.py renders it: `~`, `$HOME`, `$CLAUDE_PROJECT_DIR` expanded."""
+    for name, value in WT._known().items():
+        text = text.replace("${%s}" % name, value).replace("$" + name, value)
+    return os.path.expanduser(text) if text.startswith("~") else text
+
+
 def old_facts(c):
     f = {}
     f["strip"] = _safe(lambda: CS.strip_non_executable_contexts(c))
@@ -100,7 +107,7 @@ def new_facts(c):
         "error": s.error.code if s.error else None,
         "view": sp.executable_view(c),
         "targets": [t.path for t in targets if t.path],
-        "resolved_targets": [WT._resolve_path(t.path) for t in targets if t.path],
+        "resolved_targets": [WT._render(t, c) for t in targets if t.path],
         "undecidable": [(t.path, t.word.text if t.word is not None else "") for t in targets if not t.decidable],
         "dynamic": any(site.dynamic or site.templated for site in sites),
         "git": [[g.subcommand, g.unresolved] for g in sp.git_invocations(s, strings=True)],
@@ -292,8 +299,8 @@ def differences(c, m, n):
         if all(any(q.startswith(p.rstrip("`)")) for q in newp) for p in lost):
             label = "covered:the new path is the whole quoted word"
         elif undecidable and all(re.search(r"[$`*?\[]", p) or any(
-                p == u[0] or p in u[1] or (u[0] and WT._resolve_path(u[0]) == p)
-                or WT._resolve_path(os.path.expandvars(u[1].strip("'\""))) == p for u in undecidable)
+                p == u[0] or p in u[1] or (u[0] and _as_rendered(u[0]) == p)
+                or _as_rendered(os.path.expandvars(u[1].strip("'\""))) == p for u in undecidable)
                 for p in lost):
             label = "covered:an undecidable target"
         elif all(any(q.startswith("~") and p.endswith(q[1:]) for q in n["targets"]) for p in lost):

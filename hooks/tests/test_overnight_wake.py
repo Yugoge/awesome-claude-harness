@@ -9,7 +9,8 @@ CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and CLAUDE_PROJECT_DIR are tmp_path's own.
   the span;
 * userprompt-restart-authorize.py issues the /restart capability to the wake's text only inside an open
   /dev-overnight span, never after the owner's /stop, and to every prompt starting with /restart as before
-  (X8: the hook cannot tell a scheduled prompt from a typed one);
+  (X8: the hook cannot tell a scheduled prompt from a typed one); the owner's /stop revokes a capability
+  an earlier wake minted (the exact recovery SendMessage is refused after it) and leaves the owner's own;
 * prompt-workflow.py hands over commands/restart.md's recovery for the wake inside that span only;
 * the Stop gate's time-lock (stop-command-gate.py's step 4, P5) refuses a Stop after end_time, its closeout
   met, while the transcript's wake has no later CronDelete, naming the id, whatever span is active; a
@@ -193,6 +194,59 @@ def test_every_restart_prompt_keeps_the_capability(night):
     # X8: the hook cannot tell a scheduled /restart from a typed one, so both keep it, as before.
     night.typed("/stop")
     assert _issued(night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt="/restart"))
+
+
+def _cut_candidate(s, monkeypatch):
+    """A child the session dispatched and never got back, prepared as a /restart candidate under the
+    live grant (lib/subagent_restart.prepare_state, as restart-subagents.py prepare runs it)."""
+    s.use("Agent", {"subagent_type": "general-purpose", "prompt": "x", "description": "cut"}, result=None)
+    sub = s.path.with_suffix("") / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-agent-cut.meta.json").write_text(json.dumps(
+        {"agentType": "general-purpose", "description": "cut", "toolUseId": f"toolu_{s.ids:04d}", "spawnDepth": 1}))
+    (sub / "agent-agent-cut.jsonl").write_text(json.dumps(
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "partial"}]}}) + "\n")
+    from hooks.lib import subagent_restart as restart
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(s.home / ".claude"))
+    for name in ("CLAUDE_RESTART_GRANT_DIR", "CLAUDE_RESTART_STATE_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    view = restart.prepare_state(s.sid)
+    return next(c for c in view["candidates"] if c["agent_id"] == "agent-cut")
+
+
+def _resume(s, cand):
+    return s.hook("pretool-block-background-tasks.py", "PreToolUse", tool_name="SendMessage",
+                  tool_input={"to": cand["agent_id"], "message": cand["resume_message"]})
+
+
+def _stop(s):
+    """The owner types /stop: UserPromptSubmit runs on it, then the CLI records the prompt."""
+    p = s.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt="/stop")
+    s.typed("/stop")
+    return p
+
+
+def test_the_owners_stop_revokes_the_grant_an_earlier_wake_minted(night, monkeypatch):
+    """Lesson 16: a wake after /stop is refused. A grant the wake minted before /stop is that wake's
+    too, so /stop makes it unusable: the exact recovery message no longer passes."""
+    assert _issued(night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt=WAKE))
+    cand = _cut_candidate(night, monkeypatch)
+    assert _resume(night, cand).returncode == 0  # inside the open span the wake's grant works
+    assert _stop(night).returncode == 0
+    refused = _resume(night, cand)
+    assert refused.returncode == 2 and "no valid /restart capability" in refused.stderr, refused.stderr
+    assert not list((night.home / ".claude" / "restart-state").glob("grants/claude-restart-grant-*"))
+    # the owner's own /restart after /stop issues a fresh grant, and the exact message passes again
+    assert _issued(night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt="/restart"))
+    assert _resume(night, cand).returncode == 0
+
+
+def test_the_owners_stop_leaves_the_owners_own_restart_grant(night, monkeypatch):
+    """/stop revokes the wake's grant only: a grant the owner's typed /restart minted stands."""
+    assert _issued(night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt="/restart"))
+    cand = _cut_candidate(night, monkeypatch)
+    assert _stop(night).returncode == 0
+    assert _resume(night, cand).returncode == 0
 
 
 def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):

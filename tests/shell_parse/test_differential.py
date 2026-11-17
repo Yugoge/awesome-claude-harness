@@ -46,8 +46,8 @@ def test_no_unexplained_difference(shard, tmp_path, monkeypatch):
 @pytest.mark.parametrize("command,reader,label", [
     ("echo hi # don't", "census", None),
     ("git commit -m a\\; rm x", "allow_subs", "old splits at an escaped separator, `>|` or `|&`"),
-    ("tail rm.log", "wt_touched", "O6:old reads an argument word as the write verb"),
-    ("/bin/rm 2>/dev/null qa-target-1.txt", "wt_touched", "O6:old reads a redirection's fd as an operand"),
+    ("tail rm.log", "wt_touched", None),
+    ("/bin/rm 2>/dev/null qa-target-1.txt", "wt_touched", None),
 ])
 def test_labels_are_reached(command, reader, label, tmp_path, monkeypatch):
     """The labeller is live: these differences exist and get the label shown (None: no difference)."""
@@ -58,6 +58,17 @@ def test_labels_are_reached(command, reader, label, tmp_path, monkeypatch):
         assert diffs == []
     else:
         assert diffs and all(d[1] == label for d in diffs), diffs
+
+
+@pytest.mark.parametrize("command,items,label", [
+    ("tail rm.log", ["rm.log"], "O6:old reads an argument word as the write verb"),
+    ("/bin/rm 2>/dev/null qa-target-1.txt", ["2"], "O6:old reads a redirection's fd as an operand"),
+])
+def test_write_target_labels_name_what_the_retired_reader_misread(command, items, label, tmp_path, monkeypatch):
+    """lib/bash_write_targets.py is the parser's shim, so the paths its regex reader misread here are
+    given to the labeller directly."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert E1._label_items("wt_touched", command, E1.new_facts(command), items) == label
 
 
 def test_an_unlabelled_difference_fails(monkeypatch):
