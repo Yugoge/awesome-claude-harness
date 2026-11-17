@@ -27,6 +27,14 @@ Two failure classes are distinguished so the deny surface stays proportionate:
     redirect with no target, an option whose required value is missing, a
     command head that cannot be resolved to a literal name) are UNRESOLVED
     unconditionally.  You cannot authorize what you cannot even identify.
+    The one reading they do not bind is the DATA READING of a value word
+    (``payload_is_not_provably_inert``), which asks a narrower question: could
+    any shell reading of this argument put a removal front end in command
+    position?  There a static glob or brace head PROVEN unable to produce a
+    removal front end's name (`https://h/a?x=1&y=2`, `count(*)`) is an
+    unmodelled program whose argv is still read, and text the lexer cannot
+    read counts only when it names, patterns or (above the failing line)
+    assembles a removal.  A parse failure alone is not a removal reference.
   * REMOVAL-SCOPED failures (an unknown option inside a known dispatcher, an
     unknown git subcommand, interpreter code whose removal token cannot be
     proven inert) are UNRESOLVED only when the command carries removal
@@ -1056,10 +1064,143 @@ def word_chunks(w):
     return chunks, dynamic
 
 
+# ---------------------------------------------------------------------------
+# Can a static PATTERN be proven unable to name a removal front end?
+#
+# ``chunks_name_removal`` answers "does this argv word NAME a removal front
+# end?" and is lenient by design in ways that are right for an argument and
+# wrong for a word about to be EXCUSED from command position: a basename made
+# only of wildcards (`??`, `[r][m]`) is "not a reference", and glob syntax its
+# translator does not model reads as "cannot match" (extglob `@(rm|ls)`, a
+# POSIX class `r[[:alpha:]]`, a sequence `{r..s}m`, a brace list past the
+# expansion cap). The predicate below asks the converse question, so each of
+# those answers "it could".
+# ---------------------------------------------------------------------------
+
+_PATTERN_SEGS = ("lit", "glob", "brace")
+# Glob or brace text whose meaning ``_glob_to_regex`` / ``_brace_alternatives``
+# do not model: an extglob group, a POSIX bracket class / equivalence class /
+# collating symbol, a sequence expression, and any expansion, substitution or
+# escape carried inside the pattern text itself.
+_UNMODELLED_PATTERN_RE = re.compile(r"^[?*+@!]\(|\[[:=.]|[$`\\]|\.\.")
+_PATTERN_BRACE_CAP = 48
+
+
+def pattern_word_could_name_removal(w):
+    """Could the word ``w``, read as a COMMAND HEAD, expand to a removal name?
+
+    ``w`` is a head whose ``literal()`` is None. This says "no" only when it is
+    PROVEN: every segment is a literal, a glob or a brace whose syntax is
+    modelled, and no candidate the expansion can yield names a member of
+    REMOVAL_EXES. It says "it could" for:
+
+      * any other segment — an expansion, substitution, arithmetic, process
+        substitution or ANSI-C string is an ASSEMBLY CHANNEL and can build any
+        name (`${R}${M}`, `$(printf rm)`, `$'\\x72m'`);
+      * glob or brace syntax this module does not model (see above);
+      * a brace expansion that reaches the cap, whose remaining alternatives
+        were never examined;
+      * a candidate whose basename is a removal front end or a glob matching
+        one, compared without case (nocaseglob and a case-insensitive file
+        system are both readings a shell can have);
+      * a basename made only of `?` and bracket classes (`??`, `[r][m]`), and
+        any wildcard anchored by a directory (`/bin/*`, `/bin/r?`).
+
+    The ONE wildcard it excuses is a basename made only of `*` with no
+    directory: the standing rule ``chunks_name_removal`` applies to `du -sh *`,
+    and the shape `count(*)` puts in the walk's command position.
+    """
+    for kind, s, _ in w.segs:
+        if kind not in _PATTERN_SEGS:
+            return True
+        if kind != "lit" and _UNMODELLED_PATTERN_RE.search(s.text):
+            return True
+    return _chunks_could_name_removal(word_chunks(w)[0])
+
+
+def _chunks_could_name_removal(chunks):
+    """The candidate test of ``pattern_word_could_name_removal``, on chunks."""
+    cands = _brace_expand(chunks, limit=_PATTERN_BRACE_CAP)
+    if len(cands) >= _PATTERN_BRACE_CAP:
+        return True
+    for cand in cands:
+        _dir, sep, base = cand.rpartition("/")
+        if not any(ch in base for ch in _GLOB_META):
+            if base.lower() in REMOVAL_EXES:
+                return True
+            continue
+        if not sep and not base.strip("*"):
+            continue
+        try:
+            rx = re.compile(_glob_to_regex(base), re.IGNORECASE)
+        except re.error:
+            return True
+        if any(rx.match(name) for name in REMOVAL_EXES):
+            return True
+    return False
+
+
+# Pattern text taken from RAW text that the chunk test above does not model.
+# `(` and `)` already split such text into separate tokens, so an extglob group
+# arrives here only in pieces; a POSIX class and a sequence brace do not.
+_UNMODELLED_TEXT_PATTERN_RE = re.compile(r"\[[:=.]|\{[^{}]*\.\.[^{}]*\}")
+_QUOTE_ESCAPE_RE = re.compile(r"[\"'\\]")
+_LENIENT_WORD_SPLIT_RE = re.compile(r"[\s;&|()<>]+")
+
+
+def unparsed_text_could_reach_removal(text, offset=-1):
+    """THE DATA READING of value text this module's lexer cannot read.
+
+    A parse failure alone is not a removal reference. bash reads a whole line
+    before it runs any of it, so the line holding the syntax error runs
+    nothing, and a non-interactive shell stops there. The COMPLETE LINES
+    BEFORE IT do run: those are re-entered as the command lines they are
+    (``offset`` is where the lexer failed; the cut is the last newline before
+    it), so `ok; $X` or `x; find . -delete` above an unbalanced quote is judged
+    by the walk, not excused by the error below it.
+
+    The rest of the text is judged by what survives any re-tokenization, both
+    as written and with every quote and backslash removed (`r''m`, `r\\m`):
+      * a removal front end's name that no word character joins to its
+        neighbours (``_REMOVAL_EVIDENCE_RE``: `rm`, `/bin/rm`, `rm.txt`);
+      * a library removal written as an expression (`shutil.rmtree(p)`);
+      * a pattern that could expand to a removal front end's name (`/bin/r?`,
+        `{r,}m`, `??`), by the test ``pattern_word_could_name_removal`` uses.
+
+    A bare mention of some OTHER removal-related word — `don't delete it` — is
+    not one of these, and no longer refuses a comment that merely holds an
+    apostrophe.
+    """
+    if not text or not text.strip():
+        return False
+    plain = _QUOTE_ESCAPE_RE.sub("", text)
+    for variant in (text, plain):
+        if _REMOVAL_EVIDENCE_RE.search(variant):
+            return True
+        if _expression_names_removal_api(variant) is not None:
+            return True
+        for tok in _LENIENT_WORD_SPLIT_RE.split(variant):
+            if not tok:
+                continue
+            if _UNMODELLED_TEXT_PATTERN_RE.search(tok):
+                return True
+            if _chunks_could_name_removal(_text_token_chunks(tok)):
+                return True
+    cut = text.rfind("\n", 0, offset if offset >= 0 else len(text))
+    if cut > 0 and text[:cut].strip():
+        return Analyzer.payload_is_not_provably_inert(text[:cut])
+    return False
+
+
 def text_token_names_removal(tok):
     """Same question for a token taken from RAW TEXT (a quoted payload word)."""
     if not tok:
         return False
+    return chunks_name_removal(_text_token_chunks(tok))
+
+
+def _text_token_chunks(tok):
+    """A RAW-TEXT token reduced to the (is_pattern, text) chunks recognition reads."""
     chunks = []
     i = 0
     n = len(tok)
@@ -1111,7 +1252,7 @@ def text_token_names_removal(tok):
         plain.append(c)
         i += 1
     flush_plain()
-    return chunks_name_removal(chunks)
+    return chunks
 
 
 # ---------------------------------------------------------------------------
@@ -1285,18 +1426,19 @@ def _text_is_nested_command_line(text):
     the same bytes forever.
 
     A text the lexer CANNOT read is not proven to be a lone word, so it is
-    treated as a nested command line whenever it mentions a removal front end
-    at all. That guard is this module's standing policy-scope rule (see
-    ``Analyzer.scoped``), not a second model of what executes: with no removal
-    name anywhere there is no removal for this policy to authorize, and the
-    text is outside the degraded predicate's domain by construction.
+    treated as a nested command line exactly when its data reading could still
+    reach a removal front end (``unparsed_text_could_reach_removal``): the
+    complete lines above the failure are re-entered, and the rest counts only
+    when it names a removal front end, writes a library removal, or carries a
+    pattern that could expand to one. The parse failure alone is no evidence;
+    a nested reading the walk then cannot finish still fails closed.
     """
     if not text or not text.strip():
         return False
     try:
         toks = lex(Src.from_raw(text))
-    except LexError:
-        return text_mentions_removal_name(text)
+    except LexError as exc:
+        return unparsed_text_could_reach_removal(text, exc.offset)
     return not (len(toks) == 1 and toks[0][0] == "W")
 
 
@@ -1311,8 +1453,12 @@ def text_names_removal(text):
         though the shell's own tokenizer would collapse them to something the
         walk cannot re-derive;
       * as SHELL CODE — the text is handed back to the one evaluation
-        procedure, which re-lexes it and walks it exactly as a top-level
-        command line.
+        procedure, which re-lexes it and walks it as a command line in its
+        DATA READING: the same walk, except that a static pattern head proven
+        unable to name a removal front end is judged as an unmodelled program
+        rather than taken for evidence, and text the lexer cannot read counts
+        only when ``unparsed_text_could_reach_removal`` says it could still
+        reach a removal front end.
 
     Nothing decides which reading applies: a value that is dangerous under
     EITHER reading is not proven inert.
@@ -1355,6 +1501,11 @@ class Analyzer:
         # of a COND_DISABLING_BUILTINS builtin, switches it off for the rest.
         self._cond = False
         self._cond_disabled = "alias" in raw.lower()
+        # True for the walk ``payload_is_not_provably_inert`` runs: the DATA
+        # READING of a value, which asks whether any shell reading of the text
+        # could put a removal front end in command position. Only that walk
+        # sets it, so the walk of a command line itself never changes.
+        self.data_reading = False
 
     def note_removal_position(self, shape, text):
         """Record EVERY parse-derived position a removal NAME was placed in.
@@ -1627,10 +1778,21 @@ class Analyzer:
         Re-entering the procedure leaves no second model to fall behind.
 
         FAIL-CLOSED, ALWAYS. Anything that stops the procedure short of a
-        terminal-safe verdict — a lex failure, a census fatal, an unnamed head,
-        a boundary overflow, an exhausted work budget — resolves the payload as
-        NOT PROVABLY INERT. A bound that denies on exhaustion is a work bound;
-        a bound that returns "inert" on exhaustion is a bypass.
+        terminal-safe verdict — a lex failure, a census fatal, an unnamed head
+        that could name a removal front end, a boundary overflow, an exhausted
+        work budget — resolves the payload as NOT PROVABLY INERT. A bound that
+        denies on exhaustion is a work bound; a bound that returns "inert" on
+        exhaustion is a bypass.
+
+        THE DATA READING. The text is a VALUE, so the walk below runs with
+        ``data_reading`` set and asks only whether some reading of it could
+        put a removal front end in command position. A head that is a static
+        glob or brace (`a?x=1`, the `*` of `count(*)`) and is proven by
+        ``pattern_word_could_name_removal`` unable to expand to one is an
+        unmodelled program, so its argv is still read; any head that could, or
+        that carries an expansion, substitution or ANSI-C string, stays
+        UNRESOLVED. Whether a text the lexer cannot read reaches this point at
+        all is decided by ``unparsed_text_could_reach_removal``.
         """
         if not text or not text.strip():
             return False
@@ -1648,6 +1810,7 @@ class Analyzer:
                 return True
             sub = Analyzer(text)
             sub.depth = _PAYLOAD_NESTING[0]
+            sub.data_reading = True
             try:
                 sub.analyze_code(Src.from_raw(text), Env())
             except Exception:
@@ -2067,6 +2230,16 @@ class Analyzer:
         args = words[1:]
         name = head.literal()
         if name is None:
+            # THE DATA READING of a value: the head is a static glob or brace
+            # PROVEN unable to produce a removal front end's name — the `a?x=1`
+            # of `https://h/a?x=1&y=2`, the `*` of `count(*)`. That reading
+            # cannot put a removal front end here, so the head is an unmodelled
+            # program like any other: the leaf below still asks whether its
+            # argv names one, so `x&a?b rm T` does not pass.
+            if self.data_reading and not pattern_word_could_name_removal(head):
+                self._terminal_inert("data_reading_pattern_head",
+                                     head.raw.text[:80], words)
+                return
             # The program that will execute cannot be named. Nothing about it
             # can be proven, so it is UNRESOLVED regardless of removal tokens.
             self.structural("dynamic_command_head", head.raw.text[:80])
