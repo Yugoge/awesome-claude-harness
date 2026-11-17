@@ -1192,7 +1192,8 @@ def _dg_quoted_head(line):
 
 
 def degraded_trailing_option_is_plain(line):
-    """True when every command on a line that ends on an option (_dg_ends_on_option) is provably plain."""
+    """True when every command on the line is provably plain (degraded_refuses asks it of every line once any line
+    ends a command on an option)."""
     t = _degraded_tables()
     parsed = _dg_commands(line) if t is not None else None
     if parsed is None:
@@ -1216,10 +1217,13 @@ def _dg_unbalanced(command):
 
 
 def degraded_refuses(command, rmref):
-    """The degraded fallback's verdict: True unless the command is provably plain (see removal_policy)."""
+    """The degraded fallback's verdict: True unless the command is provably plain (see removal_policy). Once any
+    line ends a command on an option, every command on every line must be plain: a newline separates commands."""
     return bool(grep(rmref, command) or grep(r"[\]$`\[?*{}!]|<<", command) or grep(r"\\$", command)
-                or any(_dg_ends_on_option(ln) and not degraded_trailing_option_is_plain(ln) or _dg_quoted_head(ln)
-                       for ln in lines_of(command)) or grep(r"[<>|&;][ \t]*$", command) or _dg_unbalanced(command))
+                or any(_dg_quoted_head(ln) for ln in lines_of(command))
+                or (any(_dg_ends_on_option(ln) for ln in lines_of(command))
+                    and not all(degraded_trailing_option_is_plain(ln) for ln in lines_of(command)))
+                or grep(r"[<>|&;][ \t]*$", command) or _dg_unbalanced(command))
 
 
 def removal_policy(payload_text, command):

@@ -98,6 +98,15 @@ SHELL_STRING_WORDS = [
 ]
 
 
+# A non-plain line beside a line ending on an ordinary option (\n is a real newline).
+MULTILINE_NEIGHBOURS = [
+    "r''m -rf x\nls -l", "ls -l\nr''m -rf x", "\"r\"m -rf x\ngit status --short", "r\\m -rf x\ndate -u",
+    "un''link x\nls -l", "sh''red x\nls -l", "python3 -c 'import os; getattr(os,\"un\"+\"link\")(\"x\")'\nls -l",
+    "hyperfine 'bash -c'\nls -l", "ls -l\nhyperfine 'bash -c'", "hyperfine 'bash -c'\n-N",
+    "x --pager 'sh -c'\ngit status --short", "r''m -rf x\n\nls -l", "r''m -rf x\r\nls -l",
+]
+
+
 # Degraded-only refusals the live analyzer does not make: unmodelled shells, interpreters and wrappers, a `-c
 # key=value` or `--to-command=` naming a shell, g-prefixed removal programs, and python -m on a code-running package.
 DEGRADED_ONLY_REFUSED = [
@@ -149,6 +158,16 @@ def analyzer_corpus():
         for o in opts | {"-c", "-e", "-S"}:
             cmds.update((f"{p} {o} 2>/dev/null", f"{p} {o} >x", f"{p} {o} # c", f"({p} {o})", f"{p} {o}''",
                          f"{p} '{o}'"))
+    # A command on another line: a newline separates commands, so the plain line beside it must not carry it.
+    stems = {"r''m -rf x", "\"r\"m -rf x", "r\\m -rf x", "un''link x", "sh''red x", "hyperfine 'bash -c'",
+             "x --pager 'sh -c'", "python3 -c 'import os; getattr(os,\"un\"+\"link\")(\"x\")'"}
+    for p, opts in progs.items():
+        for o in opts | {"-c", "-e", "-S"}:
+            stems.update((f"{p} {o}", f"hyperfine '{p} {o}'", f"{p}''"))
+    for stem in stems:
+        for other in ("ls -l", "git status --short"):
+            cmds.update((f"{stem}\n{other}", f"{other}\n{stem}", f"{stem}\n\n{other}", f"{stem}\r\n{other}",
+                         f"{other}\r\n{stem}", f"{stem} \\\n{other}"))
     for sub in eb.GIT_SUBCOMMANDS:
         for o in set(common) | set(eb.GIT_DATA_OPTIONS):
             cmds.update((f"git {sub} {o}", f"git -C . {sub} x {o}"))
@@ -175,7 +194,8 @@ def test_degraded_fallback_is_never_laxer_than_the_live_analyzer():
     assert not laxer, "%d analyzer-refused forms pass the degraded fallback: %r" % (len(laxer), laxer[:20])
 
 
-@pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED + SHELL_STRING_WORDS)
+@pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED + SHELL_STRING_WORDS
+                         + MULTILINE_NEIGHBOURS)
 def test_exec_option_and_unmodelled_program_forms_refuse_in_degraded_mode(command):
     assert R.degraded_refuses(command, _rmref()), command
 
@@ -185,6 +205,25 @@ def test_analyzer_refused_exec_options_refuse_end_to_end(mode):
     with ThreadPoolExecutor(8) as ex:
         results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])),
                               ANALYZER_REFUSED_EXEC_OPTIONS + SHELL_STRING_WORDS))
+    allowed = [c for c, code, _err in results if code != 2]
+    assert not allowed, (mode, allowed)
+
+
+@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
+def test_multiline_neighbours_refuse_end_to_end(mode, tmp_path):
+    hook = None
+    env = MODES.get(mode, {})
+    if mode == "crash":
+        dst = tmp_path / "hooks"
+        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        analyzer = dst / "lib" / "bash_execution_boundary.py"
+        src = analyzer.read_text(encoding="utf-8")
+        # The tables stay importable; only running the analyzer crashes.
+        analyzer.write_text(src.replace('if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'),
+                            encoding="utf-8")
+        hook = str(dst / "pretool-bash-safety.sh")
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **env)), MULTILINE_NEIGHBOURS))
     allowed = [c for c, code, _err in results if code != 2]
     assert not allowed, (mode, allowed)
 
