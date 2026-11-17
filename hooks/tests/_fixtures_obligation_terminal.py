@@ -25,28 +25,25 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 from lib import obligation  # type: ignore  # noqa: E402
 
+if str(_HOOKS_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_DIR.parent))
+from tests.cli_shapes import synthesize  # noqa: E402
+
 
 def user_record(text: str) -> dict:
-    """A transcript JSONL record for a type=="user" turn (plain-string
-    content, the shape read_first_record_prompt documents as observed live
-    on this store)."""
-    return {"type": "user", "message": {"role": "user", "content": text}}
+    """A transcript JSONL record for a type=="user" turn: the recorded CLI's
+    typed-prompt record (plain-string content, the shape
+    read_first_record_prompt documents as observed live on this store)."""
+    return synthesize("user", "prompt", turnOrigin="human", message__content=text)
 
 
 def agent_dispatch_record(tool_use_id: str, prompt: str, name: str = "Agent") -> dict:
     """A transcript JSONL record for an assistant turn containing one
     Agent/Task tool_use dispatch block -- the exact shape
     subagent_restart._read_parent_calls scans for."""
-    return {
-        "type": "assistant",
-        "message": {
-            "role": "assistant",
-            "content": [
-                {"type": "tool_use", "id": tool_use_id, "name": name,
-                 "input": {"prompt": prompt}},
-            ],
-        },
-    }
+    return synthesize("assistant", "tool_use", message__content=[
+        {"type": "tool_use", "id": tool_use_id, "name": name, "input": {"prompt": prompt}},
+    ])
 
 
 def build_obligation_doc(

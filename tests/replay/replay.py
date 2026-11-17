@@ -51,6 +51,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from . import cmdtext, hookrun, launchdiff, norm
+try:
+    from .. import cli_shapes  # tests.replay, as the test suite imports it
+except ImportError:  # the sandbox's top-level `replay`, which carries the recorded fixture (sandbox.copy_framework)
+    import importlib.util as _importlib_util
+    _spec = _importlib_util.spec_from_file_location(
+        "cli_shapes", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cli", "cli_shapes.py"))
+    cli_shapes = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(cli_shapes)
 
 MODEL = "claude-opus-5-5"
 CLI_VERSION = "2.1.295"
@@ -155,25 +163,38 @@ class Dispatch(Call):
     final_line: str = ""
 
 
-def hook_record(event: str, h: dict, context: str, n: int = 0, count: int = 1) -> dict:
-    """The transcript record the CLI (2.1.325) writes for one hook run whose output reaches the model:
-    plain stdout is a hook_success record (content: the stripped stdout; command: "command hook", with
-    the hook's 1-based number when the event has several, as the CLI names it, never the command text);
-    a JSON additionalContext is a hook_additional_context record whose content is a list of strings
-    and which carries no command. hookName is the event, with ":<matcher>" for a tool event."""
+def hook_record(event: str, h: dict, context: str, n: int = 0, count: int = 1, agent: bool = False) -> dict:
+    """The transcript record the CLI writes for one hook run whose output reaches the model, built from
+    the recorded CLI fixture (tests/fixtures/cli, tests/cli_shapes.py) with this run's values: plain
+    stdout is a hook_success record (content: the stripped stdout; command: "command hook", with the
+    hook's 1-based number when the event has several, as the CLI names it, never the command text); a
+    JSON additionalContext is a hook_additional_context record whose content is a list of strings and
+    which carries no command. hookName is the event, with ":<matcher>" for a tool event. ``agent``: the
+    record of a subagent's transcript. The envelope (uuid, parentUuid, cwd, ...) is left to
+    Session.append, which writes this session's values."""
     out = h.get("stdout") or ""
+    source = "subagent:" if agent else ""
     tool_use = h.get("tool_use_id") or f"hook-{uuid.uuid4()}"
     name = f"{event}:{h['matcher']}" if h.get("matcher") and event in TOOL_EVENTS else event
     if out.strip().startswith("{"):
-        attachment = {"type": "hook_additional_context", "content": [context], "hookName": name,
-                      "toolUseID": tool_use, "hookEvent": event}
+        rec = cli_shapes.synthesize(f"{source}attachment/hook_additional_context", attachment__content=[context],
+                                    attachment__hookName=name, attachment__toolUseID=tool_use,
+                                    attachment__hookEvent=event)
     else:
-        attachment = {"type": "hook_success", "hookName": name, "toolUseID": tool_use, "hookEvent": event,
-                      "content": context, "stdout": out, "stderr": h.get("stderr") or "",
-                      "exitCode": h.get("rc") if isinstance(h.get("rc"), int) else 0,
-                      "command": "command hook" + (f" {n + 1}" if count > 1 else ""),
-                      "durationMs": int(h.get("ms") or 0)}
-    return {"type": "attachment", "attachment": attachment}
+        rec = cli_shapes.synthesize(
+            f"{source}attachment/hook_success", attachment__hookName=name, attachment__toolUseID=tool_use,
+            attachment__hookEvent=event, attachment__content=context, attachment__stdout=out,
+            attachment__stderr=h.get("stderr") or "",
+            attachment__exitCode=h.get("rc") if isinstance(h.get("rc"), int) else 0,
+            attachment__command="command hook" + (f" {n + 1}" if count > 1 else ""),
+            attachment__durationMs=int(h.get("ms") or 0))
+    for key in ENVELOPE:
+        rec.pop(key, None)
+    return rec
+
+
+# The keys Session.append writes with this session's values.
+ENVELOPE = ("uuid", "parentUuid", "isSidechain", "agentId", "userType", "cwd", "sessionId", "version", "timestamp")
 
 
 TOOL_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"}
@@ -577,7 +598,7 @@ class Session:
         for n, h in enumerate(ev.hooks):
             out = hookrun.context(ev.event, h)
             if out:
-                self.append(hook_record(ev.event, h, out, n, len(ev.hooks)), agent_id)
+                self.append(hook_record(ev.event, h, out, n, len(ev.hooks), bool(agent_id)), agent_id)
                 texts.append(out)
         return "\n".join(texts)
 
