@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `queued_command`, remove); it wrote a lone queue-operation answering the cut Agent call.
   `requirement_round.asked` and `spec_path` read only the main agent's own calls and are unchanged.
   Covered by `hooks/tests/test_agent_end_readers.py`.
+- **The prose-only lint no longer runs out of stack on a recursive test helper.** `tests/lint/prose.py`
+  ran a helper again inside itself whenever its arguments differed, so `tests/cli_shapes.py`'s
+  `_walk`, whose key path grows at each level, raised RecursionError and failed the `prose-only`
+  check (already on the branch this builds on). A helper being run is now not run again inside
+  itself. Covered by `tests/lint/test_lint_checks.py`.
 - **The worktree guard can no longer lock a session.** `hooks/pretool-worktree-guard.sh`
   runs before every tool and exited 2 while any agent worktree was behind the main
   branch. That blocked the `git worktree remove` it recommended, and every Read,

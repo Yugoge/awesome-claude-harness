@@ -506,6 +506,25 @@ def test_prose_only_counts_an_imported_harness_module_as_a_consumer_and_a_test_h
     assert [f.message.split()[0] for f in found] == ["test_helper_reads_only"]
 
 
+def test_prose_only_runs_a_recursive_helper_whose_arguments_grow_once(tmp_path):
+    """A helper that calls itself with a longer key path each level (tests/cli_shapes.py's _walk, which
+    hooks/tests/test_obligation_gate_returns.py reaches) is run once, not again inside itself until the
+    interpreter's stack runs out."""
+    found = prose(tmp_path, """
+        def walk(value, path, out):
+            out.add(path)
+            for child in value:
+                walk(child, path + "[]", out)
+
+        def test_doc():
+            text = (REPO / "commands" / "x.md").read_text()
+            out = set()
+            walk([[[]]], "items", out)
+            assert "runs the gate" in text
+    """)
+    assert [(f.path, "runs no code" in f.message) for f in found] == [("tests/test_t.py", True)]
+
+
 # ---------------------------------------------------------------- the registry
 
 
