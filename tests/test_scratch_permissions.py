@@ -202,9 +202,15 @@ def test_no_tmp_or_tmpdir_wide_grant(layer):
 
 
 def test_no_single_slash_path_rule():
-    """No Read/Edit rule spelled with one leading slash: it would anchor at the settings source."""
+    """No Read/Edit allow or deny rule spelled with one leading slash: it would anchor at the settings
+    source, so an allow would grant, and a deny would guard, a path under the harness home instead of the
+    absolute path it spells (the old `Read(/tmp/**)`).
+
+    `ask` is exempt: OB-L08 ships one `Edit(/<entry>)` ask per top-level harness-home entry, anchored at the
+    settings source on purpose (tests/test_project_write_permissions.py). Ask is checked after deny and
+    before allow, so an anchored ask narrows and never grants."""
     perms = SHIPPED["permissions"]
-    bad = [f"{t}({s})" for kind in ("allow", "deny", "ask") for t in ("Read", "Edit")
+    bad = [f"{t}({s})" for kind in ("allow", "deny") for t in ("Read", "Edit")
            for s in _specifiers(perms, t, kind) if re.match(r"/[^/]", s)]
     assert bad == []
 
