@@ -15,12 +15,18 @@ Where an invocation is found:
   - a simple command whose command word, past assignments, reserved words,
     redirections and wrappers (_command_token_index), is git: `/usr/bin/git`,
     `"git"`;
-  - the commands of every substitution, process substitution and here-document;
-  - every shell `-c` string, read as a command line of its own (_shell_layers);
+  - the commands of every substitution and process substitution, and of every
+    here-document a reader may run (_here_docs_are_data: one only cat, tee or
+    another data reader reads runs just its expansion's substitutions);
+  - every shell `-c` string, every program option's value (`rg --pre`), and
+    what echo or printf print into a pipe a shell reads, each read as a
+    command line of its own (_shell_layers);
   - quoted text after a separator, given to a command that may run it
     (`python3 -c "x; git push"`), unless that command is known to leave its
-    words unexecuted (_is_text_only), the command is one line with no
-    substitution, and no pipe feeds a command that is not.
+    words unexecuted (_is_text_only: echo, printf, grep, rg, `git commit`,
+    `git grep`, `git log --grep`), the command is one line with no
+    substitution, and no pipe feeds a command that is neither text-only nor
+    a stdin consumer (_is_stdin_consumer: head, sort, wc, ...).
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
@@ -335,7 +341,9 @@ def _group(toks):
                 cmds.append(_Cmd(words, redirs, opener))
                 words, redirs = [], []
                 opener = tok[1]
-            elif tok[1] != '(':  # a group opened after a pipe is fed by it
+            elif tok[1] != '(' and not (tok[1] == '\n' and opener in ('|', '|&', '&&', '||')):
+                # A group opened after a pipe is fed by it; a line ending in
+                # an operator goes on to the next line's command.
                 opener = tok[1]
     if words or redirs:
         cmds.append(_Cmd(words, redirs, opener))
@@ -359,24 +367,83 @@ def _value(word):
     return value, runtime or _RUNTIME in value
 
 
-def _bodies(cmd):
-    """The texts cmd runs as commands of their own: substitutions, then here-documents."""
+def _subst_bodies(cmd):
+    """The substitution bodies of cmd's words and redirection targets."""
     out = []
     for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
         out.extend(src.text for kind, src, _off in word.segs if kind in _BODY_PARTS)
-    out.extend(r.heredoc[2].text for r in cmd.redirs if r.heredoc is not None)
     return out
 
 
-def _code_commands(text, depth=0):
-    """(commands, exact): every simple command text runs, its bodies' commands after it."""
+def _bodies(cmd):
+    """The texts cmd runs as commands of their own: substitutions, then here-documents."""
+    return _subst_bodies(cmd) + [r.heredoc[2].text for r in cmd.redirs if r.heredoc is not None]
+
+
+def _here_doc_code(redir, code):
+    """The texts a here-document runs as commands: its body when code, else its substitutions.
+
+    An unquoted delimiter has the outer shell expand the body first, running its
+    substitutions whoever reads it; a body whose expansions the lexer cannot
+    read counts as code.
+    """
+    _delim, quoted, body = redir.heredoc
+    if code:
+        return [body.text]
+    if quoted:
+        return []
+    try:
+        return _expand_here_doc(body.text)[1]
+    except LexError:
+        return [body.text]
+
+
+def _here_docs_are_data(toks, cmds, k):
+    """True iff the here-documents of cmds[k] are read as data.
+
+    They are when every command of the pipe cmds[k] starts reads its input as
+    data (_reads_input_as_data): `cat > notes.md <<'EOF'`, `cat <<'EOF' | sort`.
+    A here-document in a text with a group (`{ cat <<'EOF'; } | bash`) counts
+    as code, as does one whose output a substitution captures (see _code_commands).
+    """
+    if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(
+            _values(cmd.words[:1]) == ['{'] for cmd in cmds):
+        return False
+    j = k
+    while True:
+        if not _reads_input_as_data(cmds[j]):
+            return False
+        j += 1
+        if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
+            return True
+
+
+def _code_commands(text, depth=0, captured=False):
+    """(commands, exact): every simple command text runs, its bodies' commands after it.
+
+    A here-document read as data (_here_docs_are_data) runs only the
+    substitutions its expansion performs. captured: text is a substitution's
+    body, whose output the outer command may run (`eval "$(cat <<'EOF' ...)"`),
+    so its here-documents count as code. A substitution's output is data when
+    its command is text-only and keeps its input as data, as is every command
+    a pipe feeds from it (`git commit -m "$(cat <<'EOF' ...)"`).
+    """
     toks, exact = _lex(text)
+    cmds = _group(toks)
     out = []
-    for cmd in _group(toks):
+    for k, cmd in enumerate(cmds):
         out.append(cmd)
         if depth < _MAX_DATA_DEPTH:
-            for body in _bodies(cmd):
-                out.extend(_code_commands(body, depth + 1)[0])
+            subst = _subst_bodies(cmd)
+            held = bool(subst) and (captured or not (_is_text_only(cmd.words)
+                                                     and _here_docs_are_data(toks, cmds, k)))
+            for body in subst:
+                out.extend(_code_commands(body, depth + 1, held)[0])
+            docs = [r for r in cmd.redirs if r.heredoc is not None]
+            code = bool(docs) and (captured or not _here_docs_are_data(toks, cmds, k))
+            for redir in docs:
+                for body in _here_doc_code(redir, code):
+                    out.extend(_code_commands(body, depth + 1, captured)[0])
     return out, exact
 
 
@@ -435,25 +502,107 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
 # Commands known to leave their arguments and their standard input unexecuted:
 # echo and printf print them, grep reads its pattern as text. Every other
 # command, a launcher (`python3 -c`, `su -c`, `find -exec`, `ssh`) included, may
-# run quoted text it is given.
+# run quoted text it is given. ag and ack are absent: their `--pager` runs a
+# shell.
 _TEXT_ONLY_COMMANDS = frozenset({'echo', 'printf', 'grep'})
 # git subcommands whose quoted arguments are text (`git commit -m "a; git push"`).
 _TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
+# git subcommands whose quoted arguments are text when git is given no
+# configuration on its command line (a `-c` value may name a program git runs):
+# `git grep` without `-O`/`--open-files-in-pager` (that option runs a pager),
+# and `git log` reading a `--grep` pattern.
+_TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
+_GIT_CONFIG_OPTS = ('-c', '--config-env')
+# rg reads its pattern as text, unless a preprocessor runs (`--pre`,
+# `--pre-glob`) or a config file it is pointed at may add one.
+_RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
+# Commands that read what a pipe feeds them as text and never run it. They are
+# not text-only: their own arguments may name a program (`sort
+# --compress-program`), so only their place in a pipe is relaxed.
+_STDIN_CONSUMERS = frozenset({
+    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'less', 'column', 'nl',
+})
+
+
+def _long_opt_named(value, names):
+    """True iff value is one of the long options names, or an abbreviation of one, `=value` aside."""
+    opt = value.split('=', 1)[0]
+    return len(opt) > 2 and opt.startswith('--') and any(name.startswith(opt) for name in names)
+
+
+def _command_name(words, values):
+    """(index, name) of the command word of words, or (None, None) when eval reads the line again."""
+    idx = _command_token_index(values)
+    if idx is None:
+        return None, None
+    # `eval echo "x; git push"` reads echo's quoted text again as shell code.
+    if any(_basename(v) == 'eval' for v in values[:idx]):
+        return None, None
+    return idx, _basename(_unquote_token(words[idx].raw.text))
 
 
 def _is_text_only(words):
     """True iff the command of words is known to leave its arguments and input unexecuted."""
     values = _values(words)
-    idx = _command_token_index(values)
+    idx, name = _command_name(words, values)
     if idx is None:
         return False
-    # `eval echo "x; git push"` reads echo's quoted text again as shell code.
-    if any(_basename(v) == 'eval' for v in values[:idx]):
-        return False
-    name = _basename(_unquote_token(words[idx].raw.text))
+    if name == 'rg':
+        if any(_ENV_ASSIGN_RE.match(v) and v.startswith('RIPGREP_CONFIG_PATH') for v in values[:idx]):
+            return False
+        return _basename(values[idx]) == 'rg' and not any(
+            _long_opt_named(v, _RG_PROGRAM_OPTS) for v in values[idx + 1:])
     if name != 'git':
         return _basename(values[idx]) in _TEXT_ONLY_COMMANDS
-    return _git_subcommand(values[idx + 1:])[0] in _TEXT_ONLY_GIT_SUBCOMMANDS
+    gargs = values[idx + 1:]
+    k = _git_subcommand_index(gargs)
+    sub = None if k is None else gargs[k]
+    if sub in _TEXT_ONLY_GIT_SUBCOMMANDS:
+        return True
+    if sub not in _TEXT_SEARCH_GIT_SUBCOMMANDS:
+        return False
+    if any(v in _GIT_CONFIG_OPTS or v.startswith('--config-env=') for v in gargs[:k]):
+        return False
+    rest = gargs[k + 1:]
+    if sub == 'grep':
+        return not any((v.startswith('-') and not v.startswith('--') and 'O' in v)
+                       or _long_opt_named(v, ('--open-files-in-pager',)) for v in rest)
+    return any(v == '--grep' or v.startswith('--grep=') for v in rest)
+
+
+def _is_stdin_consumer(words):
+    """True iff the command of words reads what a pipe feeds it as text: _STDIN_CONSUMERS."""
+    values = _values(words)
+    idx, name = _command_name(words, values)
+    return idx is not None and name in _STDIN_CONSUMERS and _basename(values[idx]) == name
+
+
+def _reads_input_as_data(cmd):
+    """True iff the simple command cmd keeps its standard input as data.
+
+    A text-only command, a _DATA_ONLY_COMMANDS one (`cat`, `tee`), a stdin
+    consumer, `git commit` (`-F -`), and a command of redirections alone do;
+    a shell, an interpreter (`python3 -`), `source /dev/stdin`, `ssh`, a
+    command named at run time and every command not known do not. A command
+    that hands its input to a process substitution (`tee >(sh)`, `> >(sh)`) or
+    to a descriptor of its own (`>&3`) does not either.
+    """
+    for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
+        if any(kind == 'procsub' for kind, _src, _off in word.segs):
+            return False
+    for r in cmd.redirs:
+        if r.op in ('>&', '<&', '&>', '&>>') and r.target is not None:
+            if _value(r.target)[0] not in ('1', '2', '-') and r.op in ('>&', '<&'):
+                return False
+    if not cmd.words:
+        return True
+    values = _values(cmd.words)
+    idx, name = _command_name(cmd.words, values)
+    if idx is None or _value(cmd.words[idx])[1]:
+        return False
+    if _is_text_only(cmd.words) or _is_stdin_consumer(cmd.words):
+        return True
+    return name in _DATA_ONLY_COMMANDS and _basename(values[idx]) == name
 
 
 def _data_invocations(value, depth=0):
@@ -504,7 +653,7 @@ def _segment_invocations(command_text, tagged=False):
     cmds, exact = _code_commands(command_text)
     droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
                  and not any(cmd.opener in ('|', '|&') and not _is_text_only(cmd.words)
-                             for cmd in cmds))
+                             and not _is_stdin_consumer(cmd.words) for cmd in cmds))
     for cmd in cmds:
         for inv in _invocations(cmd.words):
             yield (inv, False) if tagged else inv
@@ -901,7 +1050,7 @@ def _shell_c_strings(text, fed=False):
     input. built_by_code: a 'runtime' operand the outer shell built by running
     a substitution that runs run-time code (`-c "y=$(echo $X | sh)"`).
     """
-    if not _SHELL_HINT_RE.search(text):
+    if not (_SHELL_HINT_RE.search(text) or _PROGRAM_HINT_RE.search(text)):
         return
     info = {}
     try:
@@ -914,7 +1063,14 @@ def _shell_c_strings(text, fed=False):
     for k, (words, feeds) in enumerate(zip(cmds, info['feeds'])):
         values = [v for v, _runtime in words]
         idx = _command_token_index(values)
-        if idx is None or words[idx][1] or not _SHELL_NAME_RE.match(_basename(values[idx])):
+        if idx is None or words[idx][1]:
+            continue
+        for value, runtime in _program_option_values(words, idx):
+            yield ('runtime' if runtime else 'text'), value, fed or bool(feeds), False
+        printed = _printed_to_shell(cmds, info['feeds'], k, idx)
+        if printed is not None:
+            yield ('runtime' if _RUNTIME in printed else 'text'), printed, fed or bool(feeds), False
+        if not _SHELL_NAME_RE.match(_basename(values[idx])):
             continue
         op = _shell_c_operand(words, idx + 1)
         if op is None:
@@ -926,6 +1082,73 @@ def _shell_c_strings(text, fed=False):
         yield ('runtime' if runtime else 'text'), value, fed or bool(feeds), built_by_code
     for body, body_fed in zip(bodies, info['body_fed']):
         yield from _shell_c_strings(body, fed or body_fed)
+
+
+# Options whose value is a program the command runs, read as a command line of
+# its own: rg's preprocessor, ag's and ack's pager (run by a shell), and
+# sort's compressor. A long option may be abbreviated.
+_PROGRAM_OPTIONS = {
+    'rg': ('--pre',),
+    'ag': ('--pager',),
+    'ack': ('--pager',),
+    'sort': ('--compress-program',),
+}
+_PROGRAM_HINT_RE = re.compile(r'(?:\A|[\s/;&|(`\'"])(?:rg|ag|ack|sort)\b')
+# Commands that print their arguments, and the shell reads what they print
+# when a pipe feeds it (`echo "git push" | sh`).
+_PRINTERS = frozenset({'echo', 'printf'})
+
+
+def _program_option_values(words, idx):
+    """Yield (value, runtime) for each option of words[idx] whose value is a program it runs."""
+    names = _PROGRAM_OPTIONS.get(_basename(words[idx][0]))
+    if not names:
+        return
+    i = idx + 1
+    while i < len(words):
+        value, runtime = words[i]
+        if value == '--':
+            return
+        if _long_opt_named(value, names):
+            if '=' in value:
+                yield value.split('=', 1)[1], runtime
+            elif i + 1 < len(words):
+                i += 1
+                yield words[i]
+        i += 1
+
+
+def _runs_c_string(words):
+    """True iff the simple command `words` is a shell given a `-c` string, which it runs instead of its input.
+
+    What that string does with the input is the string's own reading (_shell_layers, fed).
+    """
+    values = [value for value, _runtime in words]
+    idx = _command_token_index(values)
+    return (idx is not None and not words[idx][1] and bool(_SHELL_NAME_RE.match(_basename(values[idx])))
+            and _shell_c_operand(words, idx + 1) is not None)
+
+
+def _printed_to_shell(cmds, feeds, k, idx):
+    """The text cmds[k], an echo or printf, prints into a pipe that a shell reads, else None.
+
+    The pipe runs on from cmds[k] through each command a pipe feeds (a shell
+    given a `-c` string runs that string, not its input); a printf's or `echo -e`'s escapes are read as the characters they stand for,
+    a newline included.
+    """
+    words = cmds[k]
+    if _basename(words[idx][0]) not in _PRINTERS:
+        return None
+    j = k + 1
+    while j < len(cmds) and 'pipe' in feeds[j]:
+        if _reads_as_shell(cmds[j]) and not _runs_c_string(cmds[j]):
+            args = [value for value, _runtime in words[idx + 1:]]
+            while args and _basename(words[idx][0]) == 'echo' and re.fullmatch(r'-[neE]+', args[0]):
+                args = args[1:]
+            text = ' '.join(args)
+            return text.replace('\\n', '\n').replace('\\t', '\t')
+        j += 1
+    return None
 
 
 def _may_run_git(text, runtime_re=_RUNTIME_PLACEHOLDER_RE):

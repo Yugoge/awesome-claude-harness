@@ -57,6 +57,8 @@ Note: `pretool-bulk-commit-detector.py` is warn-only — it exits 0 and never bl
 
 Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` listing, `stash list/show`) stays freely available. `add`, single-file working-tree `restore`, and `stash pop` are also permitted — they mutate the index or working tree but never history or the remote.
 
+The privilege guard reads only what the shell may run as git (`hooks/lib/git_command_classifier.py`). Text is not an invocation: the quoted pattern of `grep`, `rg` (without `--pre`/`--pre-glob`), `git grep` (without `-O`) or `git log --grep` (both with no `-c`/`--config-env`), a pipe of that output into `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `less`, `column` or `nl`, a comment, and a here-document only `cat`, `tee` or another data reader reads, or that is redirected to a file (`cat > notes.md <<'EOF'` with `git push origin master` in its body), all pass. Code stays code: `ag` and `ack` are not text owners (their `--pager` runs a shell); a here-document fed to `bash`, `sh`, `ssh`, `python3 -`, `source /dev/stdin`, a group, a process substitution or a substitution's output is read as commands; the value of `rg --pre`, `ag`/`ack --pager` or `sort --compress-program` is read as a command line; and what `echo` or `printf` print into a pipe a shell reads (`echo "git push" | sh`) is read as shell text.
+
 #### Grant lifecycle comparison
 
 | Grant type | Written by | Key fields | Expiry | Consumed on | Honored for |
