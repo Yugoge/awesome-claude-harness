@@ -226,16 +226,36 @@ def writes_settings_file(command: str) -> bool:
     return False
 
 
-def _named_settings(word: str, dirs: list, dirs_too=False) -> list:
+def _may_name_settings(token: str) -> bool:
+    """Whether `token` can name a settings file or a directory holding one by its spelling alone,
+    wherever it is read from: its last component as written is a .json name, .claude,
+    managed-settings.d, or `.`, `..` or nothing, which only the directory it is read from resolves.
+    Any other word names one only when its real path's last component does (_named_settings)."""
+    last = os.path.basename(token.rstrip("/"))
+    return last in ("", ".", "..", ".claude", "managed-settings.d") or last.endswith(".json")
+
+
+def _named_settings(word: str, dirs: list, dirs_too=False, home=None) -> list:
     """The Claude Code settings files `word` names, read from each directory in `dirs`, as written
     and with links resolved; with `dirs_too` (None: when no directory is there now) also a
-    directory holding them. The home's own settings files are the rule above's, not these."""
-    out, home = [], _settings_files()
+    directory holding them. The home's own settings files are the rule above's, not these.
+    Each path is resolved once (os.path.realpath), and a word whose spelling names none
+    (_may_name_settings) is judged further only where its real path's name can, so a padded
+    command stays cheap. The rule decides on names, as written and resolved, and tests no file
+    itself: an os.path.islink of a word would make it a decider on every file a word can name,
+    the subagent meta.json the write gate's other rules decide on included (the artifact
+    check's rule (4))."""
+    out, home = [], _settings_files() if home is None else home
     for token in {word, word.split("=", 1)[-1]}:
+        token = os.path.expanduser(os.path.expandvars(token))
+        spelled = _may_name_settings(token)
         for d in dirs:
-            lexical = os.path.normpath(os.path.join(d, os.path.expanduser(os.path.expandvars(token))))
-            for p in (lexical, os.path.realpath(lexical)):
-                if os.path.realpath(p) not in home and (CLAUDE_SETTINGS.search(p) or _settings_dir(p, dirs_too)):
+            lexical = os.path.normpath(os.path.join(d, token))
+            real = os.path.realpath(lexical)
+            if not spelled and not _may_name_settings(real):
+                continue  # neither its name as written nor its real path's is a settings name
+            for p, p_real in ((lexical, real), (real, os.path.realpath(real))):
+                if p_real not in home and (CLAUDE_SETTINGS.search(p) or _settings_dir(p, dirs_too)):
                     out.append(p)
     return out
 
@@ -280,10 +300,13 @@ def settings_writes(command: str, cwd: str) -> list:
     """The Claude Code settings files (and directories holding them) `command` writes, moves or
     removes: a redirect onto one (spaced or attached), and every word of a command that is not a
     reader, an interpreter or a commit or PR message (tee, sed -i, rm, ...); cp's and mv's
-    destination, and mv's sources. A path is read from the call's directory and every `cd`'s."""
+    destination, and mv's sources. A path is read from the call's directory and every `cd`'s.
+    Each directory, and each word with its kind, is read once: a command padded with repeated
+    `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = _segments(_without_message_bodies(command, data_too=True), shell_text_only=True)
-    dirs = [cwd] + [_resolve(w[1], cwd) for w in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd")]
-    out = []
+    cds = dict.fromkeys(w[1] for w in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
+    dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
+    out, seen, home = [], set(), _settings_files()
     for words in segments:
         plain = [w for w in words if not ASSIGNMENT.match(w)]
         if not plain:
@@ -297,8 +320,10 @@ def settings_writes(command: str, cwd: str) -> list:
         named += [] if message else [(w.rsplit(">", 1)[1].lstrip("|"), False) for w in words
                                      if ">" in w and not REDIRECT.match(w)]
         for word, dirs_too in named:
-            out.extend(_named_settings(word, dirs, dirs_too))
-    return out
+            if (word, dirs_too) not in seen:
+                seen.add((word, dirs_too))
+                out.extend(_named_settings(word, dirs, dirs_too, home))
+    return list(dict.fromkeys(out))
 
 
 def _settings_path(path: str):

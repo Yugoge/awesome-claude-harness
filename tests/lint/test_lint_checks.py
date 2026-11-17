@@ -13,6 +13,7 @@ import pytest
 
 from tests.lint import hooks as H
 from tests.lint import prompts as P
+from tests.lint import prose as PR
 from tests.lint.checks import CHECKS, run
 from tests.lint.tree import Tree, script_of
 
@@ -367,10 +368,148 @@ def test_two_writers_without_the_artifact_check_is_a_finding_not_a_pass(tmp_path
     assert len(found) == 1 and "artifact check" in found[0].message
 
 
+# ---------------------------------------------------------------- 7. prose-only
+
+DOC = "commands/x.md"
+DOC_FILES = {DOC: "# x\n\nThe step runs the gate.\n"}
+HEAD = "from pathlib import Path\nimport subprocess, sys, json, os, re\nimport pytest\n" \
+       "REPO = Path(__file__).resolve().parents[1]\n"
+
+
+def prose(tmp_path, test_src: str, **files) -> list:
+    """The prose-only findings of a tree holding commands/x.md, tests/test_t.py and these files."""
+    tree = dict(DOC_FILES, **{"tests/test_t.py": HEAD + textwrap.dedent(test_src)})
+    tree.update({k.replace("__", "/").replace("_DOT_", "."): v for k, v in files.items()})
+    return PR.check_prose_only(make_tree(tmp_path, tree))
+
+
+def test_prose_only_flags_a_test_that_asserts_doc_text_and_runs_no_code(tmp_path):
+    found = prose(tmp_path, """
+        def test_doc():
+            text = (REPO / "commands" / "x.md").read_text()
+            assert "runs the gate" in text
+    """)
+    assert [(f.path, f.line) for f in found] == [("tests/test_t.py", 6)]
+    assert "commands/x.md" in found[0].message and "runs no code" in found[0].message
+
+
+def test_prose_only_is_exempt_when_the_test_runs_a_consumer_whose_source_names_the_doc(tmp_path):
+    found = prose(tmp_path, """
+        SCRIPT = REPO / "scripts" / "consume.py"
+
+        def test_doc():
+            text = (REPO / "commands" / "x.md").read_text()
+            subprocess.run([sys.executable, str(SCRIPT)], check=True)
+            assert "runs the gate" in text
+    """, scripts__consume_DOT_py="print(open('commands/x.md').read())\n")
+    assert found == []
+
+
+def test_prose_only_flags_a_test_whose_resolved_code_does_not_name_the_doc(tmp_path):
+    found = prose(tmp_path, """
+        def test_doc():
+            text = (REPO / "commands" / "x.md").read_text()
+            subprocess.run([sys.executable, str(REPO / "scripts" / "other.py")], check=True)
+            assert "runs the gate" in text
+    """, scripts__other_DOT_py="print('unrelated')\n")
+    assert len(found) == 1 and "scripts/other.py" in found[0].message and "does not name" in found[0].message
+
+
+def test_prose_only_fails_closed_when_the_consumer_cannot_be_resolved(tmp_path):
+    found = prose(tmp_path, """
+        def test_doc():
+            text = (REPO / "commands" / "x.md").read_text()
+            subprocess.run([sys.executable, os.environ["SOME_SCRIPT"]], check=True)
+            assert "runs the gate" in text
+    """)
+    assert len(found) == 1 and "cannot be resolved" in found[0].message and "fails closed" in found[0].message
+
+
+def test_prose_only_does_not_flag_an_assertion_on_parsed_structure(tmp_path):
+    found = prose(tmp_path, """
+        def _front_matter(text):
+            return dict(line.split(": ", 1) for line in text.split("---")[1].strip().splitlines())
+
+        def test_json():
+            data = json.loads((REPO / "templates" / "t.json.md").read_text())
+            assert "key" in data
+
+        def test_front_matter():
+            meta = _front_matter((REPO / "commands" / "x.md").read_text())
+            assert "description" in meta
+    """, templates__t_DOT_json_DOT_md='{"key": 1}\n')
+    assert found == []
+
+
+def test_prose_only_follows_doc_text_through_loops_helpers_fixtures_and_with(tmp_path):
+    found = prose(tmp_path, """
+        DOCS = ("commands/x.md", "agents/a.md")
+
+        def _text(rel):
+            return (REPO / rel).read_text()
+
+        def _check(text, needle):
+            assert needle in text
+
+        @pytest.fixture
+        def doc():
+            yield _text("commands/x.md")
+
+        def test_loop():
+            for rel in DOCS:
+                _check(_text(rel), "gate")
+
+        def test_fixture(doc):
+            assert doc.count("gate") == 1
+
+        def test_with():
+            with open(REPO / "commands" / "x.md") as fh:
+                body = fh.read()
+            m = re.search(r"runs (\\w+)", body)
+            assert m and not body.startswith("x")
+    """, agents__a_DOT_md="gate\n")
+    assert [f.message.split()[0] for f in found] == ["test_loop", "test_fixture", "test_with"]
+    assert "agents/a.md, commands/x.md" in found[0].message
+
+
+def test_prose_only_does_not_flag_a_test_with_an_assertion_on_what_code_returns(tmp_path):
+    found = prose(tmp_path, """
+        def test_doc_and_run():
+            text = (REPO / "commands" / "x.md").read_text()
+            proc = subprocess.run([sys.executable, "-c", "print(1)"], capture_output=True, text=True)
+            assert "gate" in text
+            assert proc.returncode == 0
+
+        def test_equality_is_not_presence():
+            assert (REPO / "commands" / "x.md").read_text() == "# x"
+    """)
+    assert found == []
+
+
+def test_prose_only_counts_an_imported_harness_module_as_a_consumer_and_a_test_helper_as_text(tmp_path):
+    found = prose(tmp_path, """
+        sys.path.insert(0, str(REPO / "hooks"))
+        import reader
+        from tests.docs import close_text
+
+        def test_reader_runs():
+            text = (REPO / "commands" / "x.md").read_text()
+            reader.main()
+            assert "gate" in text
+
+        def test_helper_reads_only():
+            assert "gate" in close_text()
+    """, hooks__reader_DOT_py="def main():\n    return open('commands/x.md').read()\n",
+        tests__docs_DOT_py="from pathlib import Path\n\ndef close_text():\n"
+                           "    return (Path(__file__).parents[1] / 'commands' / 'x.md').read_text()\n",
+        tests____init___DOT_py="")
+    assert [f.message.split()[0] for f in found] == ["test_helper_reads_only"]
+
+
 # ---------------------------------------------------------------- the registry
 
 
-def test_the_six_checks_run_by_name_and_a_clean_tree_has_no_findings(tmp_path, monkeypatch):
+def test_the_seven_checks_run_by_name_and_a_clean_tree_has_no_findings(tmp_path, monkeypatch):
     monkeypatch.setattr(H, "derive_artifacts", lambda tree: [artifact("<state>/x.json", ["hooks/ok.py"])])
     t = make_tree(tmp_path, {
         "settings.json": settings(("PreToolUse", "Bash", "hooks/ok.py")),
@@ -381,5 +520,14 @@ def test_the_six_checks_run_by_name_and_a_clean_tree_has_no_findings(tmp_path, m
         "commands/dev.md": "One CRITICAL rule.\n",
     })
     assert list(CHECKS) == ["hook-strength", "dead-reference", "repeated-block", "emphasis",
-                            "unreachable-output", "two-writers"]
+                            "unreachable-output", "two-writers", "prose-only"]
     assert run(t) == {name: [] for name in CHECKS}
+
+
+def test_the_cli_runs_one_check_by_name_and_exits_1_on_a_finding(tmp_path, capsys):
+    from tests.lint.__main__ import main
+    make_tree(tmp_path, dict(DOC_FILES, **{"tests/test_t.py": HEAD + "def test_doc():\n"
+                                            "    assert 'gate' in (REPO / 'commands' / 'x.md').read_text()\n"}))
+    assert main(["--tree", str(tmp_path), "--check", "prose-only"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("prose-only: 1\n") and "tests/test_t.py:5: [prose-only] test_doc" in out

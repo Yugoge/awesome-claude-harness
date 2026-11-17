@@ -1,19 +1,24 @@
-"""templates/spec-template.md carries the owner's "no phases" ruling (D33) in Section 7.
+"""templates/spec-template.md keeps the structure its consumers parse.
 
-Everything the user requested is done in the cycle; Section 7 lists the actions that
-finish it and never phases, a "phase 2", an MVP first, deferred parts or work for a
-later cycle. Parallel lanes inside one cycle stay. The second half of the file pins the
-structure the spec consumers parse (scripts/spec-write.py, the spec resolver, the
-split/verify tooling, the replay drivers), so the rule is added without moving it.
+The nine section headings, each section's `### Cycle 1` (or `### 9.N`) subsections and placeholders, and the one-line
+comments are what scripts/spec-write.py, the spec resolver, the split/verify tooling and the replay drivers read. The
+writer is run here: a spec created from the template takes an append to each placeholder-only section in place of
+its `_Not yet populated._` line, which holds only while every comment of that section is a single `<!-- ... -->` line.
 
-SPEC_TEMPLATE_UNDER_TEST=<path> points the file at another copy of the template; the
-default is templates/spec-template.md. Pointing it at the pre-ruling text must fail the
-rule tests and pass the structure tests.
+This file used to also grep Section 7's comment for the owner's no-phases ruling (D33). No hook, script or replay
+reads that comment, so those greps were deleted (P15-L8); the ruling lives in prompt text only (agents/shared/
+no-phases.md and the lines that point at it). Its one code consumer, the replay /spec driver's split-QA check, is run
+by tests/test_no_phases_spec_command.py.
+
+SPEC_TEMPLATE_UNDER_TEST=<path> points the file at another copy of the template; the default is
+templates/spec-template.md.
 """
 from __future__ import annotations
 
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +26,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE_PATH = Path(os.environ.get("SPEC_TEMPLATE_UNDER_TEST") or REPO / "templates" / "spec-template.md")
 TEXT = TEMPLATE_PATH.read_text(encoding="utf-8")
+SPEC_WRITE = REPO / "scripts" / "spec-write.py"
 
 HEADINGS = [
     "## Section 1: Before",
@@ -35,15 +41,8 @@ HEADINGS = [
 ]
 CYCLE_SECTIONS = {1, 2, 3, 4, 6, 7}  # each holds "### Cycle 1" + the placeholder
 PLACEHOLDER = "_Not yet populated._"
-
-# What Section 7 must forbid, each as the pattern that names it.
-FORBIDDEN = {
-    "phases": r"\bphases\b",
-    "phase 2": r"\bphase 2\b",
-    "MVP first": r"\bMVP first\b",
-    "deferred parts": r"\bdeferred parts\b",
-    "a later cycle": r"\b(?:a|for a) later cycle\b",
-}
+# The sections whose only body is the placeholder: spec-write.py's append replaces it there.
+PLACEHOLDER_ONLY = {"5": "## Section 5:", "8": "## Section 8:", "9.1": "### 9.1:", "9.2": "### 9.2:"}
 
 
 def _section(n: int) -> str:
@@ -52,48 +51,9 @@ def _section(n: int) -> str:
     return TEXT[start:end if end != -1 else len(TEXT)]
 
 
-def _comments(block: str) -> list[str]:
-    return [l.strip() for l in block.split("\n") if l.strip().startswith("<!--")]
-
-
-def _rule_sentence() -> str:
-    """The sentence of Section 7's comments that forbids (the one holding 'never')."""
-    comments = " ".join(c[len("<!--"):-len("-->")].strip() for c in _comments(_section(7)))
-    sentences = [s for s in re.split(r"(?<=[.;])\s+", comments) if re.search(r"\bnever\b", s, re.I)]
-    assert sentences, "Section 7's comments hold no 'never ...' sentence"
-    return sentences[0]
-
-
-# --------------------------------------------------------------- the ruling (D33)
-
-def test_section_7_says_everything_requested_is_done_in_this_cycle():
-    comments = " ".join(_comments(_section(7)))
-    assert re.search(r"everything the user requested is done in this cycle", comments, re.I)
-
-
-@pytest.mark.parametrize("name", FORBIDDEN)
-def test_section_7_forbids(name):
-    sentence = _rule_sentence()
-    never_at = re.search(r"\bnever\b", sentence, re.I).end()
-    assert re.search(FORBIDDEN[name], sentence[never_at:], re.I), (
-        f"Section 7 does not forbid {name!r}: {sentence!r}")
-
-
-def test_section_7_keeps_parallel_lanes_inside_the_cycle():
-    comments = " ".join(_comments(_section(7)))
-    assert re.search(r"parallel lanes inside the cycle are fine", comments, re.I)
-
-
-def test_no_other_comment_invites_deferral():
-    """Only Section 7's rule may name a phase or a deferral, and only to forbid it. A retry of a
-    failed cycle ("the next cycle's Dev must not repeat it") or a baseline "later cycles can compare"
-    against is not a deferral and is not matched."""
-    invites = re.compile(r"phase|\bMVP\b|defer|follow-?up|for (?:a|the) (?:later|next) cycle|backlog", re.I)
-    for n in range(1, 10):
-        for comment in _comments(_section(n)):
-            if invites.search(comment):
-                assert n == 7 and re.search(r"\bnever\b", comment, re.I), (
-                    f"Section {n} comment invites deferral: {comment!r}")
+def _spec_write(*args: str, stdin: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(SPEC_WRITE), *args], input=stdin, capture_output=True, text=True,
+                          check=False)
 
 
 # ------------------------------------------- the structure the consumers parse
@@ -117,27 +77,20 @@ def test_section_cycle_subsections_and_placeholders(n):
         assert PLACEHOLDER in block
 
 
-def test_every_section_but_the_last_closes_with_a_rule_line():
-    for n in range(1, 9):
-        assert _section(n).rstrip("\n").endswith("\n---"), n
-    assert _section(9).rstrip("\n").endswith(PLACEHOLDER)
-
-
-def test_each_comment_is_one_line_that_opens_and_closes_itself():
-    """scripts/spec-write.py treats a line that does not start with '<!--' as section body when it
-    decides whether the placeholder is the section's only content; the splitter must copy each line."""
-    for line in TEXT.split("\n"):
-        if "<!--" in line or "-->" in line:
-            assert line.startswith("<!--") and line.endswith("-->"), line
-
-
-def test_section_7_keeps_its_writer_comment_for_the_consumers():
-    who = [c for c in _comments(_section(7)) if "WHO WRITES" in c]
-    assert len(who) == 1
-    for needle in ("scripts/spec-write.py only", "qa.spec_section_updates.section_7", "unresolved_issues"):
-        assert needle in who[0]
-    assert any(c.startswith("<!-- WHAT:") for c in _comments(_section(7)))
-    assert any(c.startswith("<!-- Example:") for c in _comments(_section(7)))
+@pytest.mark.parametrize("section", sorted(PLACEHOLDER_ONLY))
+def test_spec_write_appends_in_place_of_the_placeholder(tmp_path, section):
+    """scripts/spec-write.py treats a line that does not start with '<!--' as section body when it decides whether
+    the placeholder is the section's only content: a comment spread over two lines makes the append land below the
+    placeholder instead of replacing it."""
+    spec = tmp_path / "docs" / "dev" / "specs" / "toy.md"
+    spec.parent.mkdir(parents=True)
+    created = _spec_write("create", "--spec", str(spec), stdin=TEXT)
+    assert created.returncode == 0, created.stderr
+    line = f"Appended to {section} by the test."
+    appended = _spec_write("append", "--spec", str(spec), "--section", section, stdin=line + "\n")
+    assert appended.returncode == 0, appended.stderr
+    at = TEXT.index(PLACEHOLDER, TEXT.index(PLACEHOLDER_ONLY[section]))
+    assert spec.read_text(encoding="utf-8") == TEXT[:at] + line + TEXT[at + len(PLACEHOLDER):]
 
 
 def test_the_overnight_spec_path_consumers_copy_reaches_the_same_text():

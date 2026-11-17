@@ -113,7 +113,7 @@ Before a controller session ends, pending inbox events MUST be either drained (c
 
 ## Timer fleet stop/drain
 
-Stopping all four timer schedules together, a distinct operation from the per-event inbox drain above, is safety-ordered: run `python3 "<HARNESS_ROOT>/scripts/paseo-daemon-timers.py" drain --registry-dir <registry> --ledger-root <ledger>`. The watchdog is paused FIRST (a watchdog fire mid-teardown would judge the controller dead and escalate), then sweep, tick, reinject. Each timer is paused, never deleted; `resume` undoes a pause. The final step calls the ledger's `teardown-declare` exactly once, journaling the fleet teardown alongside the session-end declaration above.
+Stopping all four timer schedules together, a distinct operation from the per-event inbox drain above, is safety-ordered: run `python3 "<HARNESS_ROOT>/scripts/paseo-daemon-timers.py" --registry-dir <registry> drain --ledger-root <ledger>`. The watchdog is paused FIRST (a watchdog fire mid-teardown would judge the controller dead and escalate), then sweep, tick, reinject. Each timer is paused, never deleted; `resume` undoes a pause. The final step calls the ledger's `teardown-declare` exactly once, journaling the fleet teardown alongside the session-end declaration above.
 
 ## Three-account scheduling state
 

@@ -162,6 +162,8 @@ def _spec_lines(text: str) -> list:
 CASES = {
     "session_write": ([SPECS / "foo.md"], [SPECS / "foo.md"], "", "Spec: @P/docs/dev/specs/foo.md"),
     "no_write": ([], [], "", "Spec: none"),
+    # A spec on disk that this session did not write is not chosen: no listing or mtime rule decides (A3).
+    "unwritten_present": ([], [SPECS / "foo.md"], "", "Spec: none"),
     "index_only": ([SPECS / "INDEX.md"], [SPECS / "INDEX.md"], "", "Spec: none"),
     "explicit_present": ([SPECS / "foo.md"], [SPECS / "foo.md", SPECS / "bar.md"],
                          "--spec @P/docs/dev/specs/bar.md", "Spec: @P/docs/dev/specs/bar.md (explicit)"),
@@ -217,10 +219,3 @@ def test_dev_overnight_prints_the_spec_and_its_state_follows_the_line(tmp_path, 
         assert (state["spec_mode"], state["user_spec_path"]) == ("autonomous", None)
     else:
         assert (state["spec_mode"], state["user_spec_path"]) == ("user-provided", printed)
-
-
-def test_no_mtime_rule_chooses_a_spec():
-    """A3's grep: the hook's line is the one spec decision; no listing or mtime rule is left."""
-    rule = re.compile(r"stat -c %Y|ls -t docs/dev/specs|sort -rn")
-    for rel in ("commands/dev.md", "commands/dev-command.md", "scripts/create-overnight-state.sh"):
-        assert not rule.search((REPO / rel).read_text(encoding="utf-8")), rel
