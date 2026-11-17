@@ -26,8 +26,8 @@ decidable; redirect RESOLUTION is not.
 ONE parse feeds every predicate. `_lex` is a small bash-aware static-word
 extractor: it joins adjacent quoted/escaped fragments into a single word
 (`--no-""dry-run` -> `--no-dry-run`, `g''it` -> `git`), decodes `$'...'`,
-honours line continuations, comments and redirections, and marks command
-substitution. The clean detector, the dry-run predicate, the git-global scan
+honours line continuations, comments and redirections, reads heredoc bodies as
+stdin content of the command owning the `<<`, and marks command substitution. The clean detector, the dry-run predicate, the git-global scan
 and the cwd-mutation scan all consume THAT word list, so a splice can no longer
 hide a negation, a `--work-tree` or a `cd` from one predicate while another
 sees it.
@@ -107,12 +107,19 @@ generator gap that shows up as an untested axis rather than as silent coverage:
     in every quoting form - previously dropped with the redirection operand.
 
 Accepted over-blocks (cost usability under an active grant, never data):
-  - Argument text that reduces to a destructive clean denies wherever it sits -
-    behind a non-git command (`echo git clean -fd`, `grep -r "git clean" .`)
-    AND behind a git one (`git commit -m 'add git clean guard'`,
-    `git log --grep='git clean -fd'`). The asymmetry between those two was not
-    a design choice, it was the third fail-open: the same text executes under
-    `git rebase -x`.
+  - Argument text that reduces to a destructive clean denies wherever it sits
+    behind a git command (`git commit -m 'add git clean guard'`,
+    `git log --grep='git clean -fd'`) or any command not PROVEN to execute
+    nothing: the same text executes under `git rebase -x`. Since OB-L30 the
+    one exception is a command proven inert by _inert_data_commands (echo,
+    grep, rg, cat ... at the top level, with no substitution, no rebinding of
+    the name, no pipe into anything else and no file written beside another
+    command): its arguments and its heredoc / here-string content are data, so
+    `grep -rn "git clean -fd" docs/` and `cat > notes.md <<'EOF'` with a body
+    naming a clean are NONE. Anything that proof cannot establish is scanned
+    exactly as before, so `echo '<clean>' | sh` and `$(echo <clean>)` still
+    deny. A heredoc fed to a git command (`git commit -F - <<EOF`) or to a
+    substitution (`"$(cat <<'EOF' ...)"`) stays in the argument-text class.
   - A `cd`/`pushd`/`popd` word anywhere in a command that ALSO contains a
     destructive clean denies, even when the clean textually precedes it.
   - A command nested more than `_MAX_EMBED_DEPTH` embedded payloads deep denies
@@ -186,14 +193,17 @@ _MAX_EMBED_DEPTH = 3
 class _Word:
     """One static shell word plus the provenance the predicates need."""
 
-    __slots__ = ("text", "dynamic", "redir_target", "stdin_script")
+    __slots__ = ("text", "dynamic", "redir_target", "stdin_script", "quoted")
 
-    def __init__(self, text, dynamic=False, redir_target=False):
+    def __init__(self, text, dynamic=False, redir_target=False, quoted=False):
         self.text = text
         self.dynamic = dynamic
         self.redir_target = redir_target
-        # True only for a here-string/heredoc operand: stdin CONTENT, not a file.
+        # True only for a here-string operand: stdin CONTENT, not a file.
         self.stdin_script = False
+        # True when any quote or escape contributed to the word. Used only for
+        # a heredoc delimiter, where it decides whether the body is expanded.
+        self.quoted = quoted
 
     def __repr__(self):  # pragma: no cover - debugging aid
         return f"_Word({self.text!r}, dynamic={self.dynamic})"
@@ -209,11 +219,77 @@ def _decode_ansi_c(inner: str) -> str:
         return inner
 
 
+def _static_heredoc_delimiter(text: str, j: int) -> bool:
+    """True when the heredoc delimiter starting at text[j] is free of `$` and
+    backquote. bash matches the terminator against the delimiter AFTER quote
+    removal but WITHOUT expansion, so a delimiter carrying an expansion has a
+    literal spelling this lexer would mis-compute; such a heredoc is not
+    captured, and its body is then lexed inline as command text, exactly as
+    before heredoc bodies were modelled."""
+    n = len(text)
+    while j < n and text[j] in " \t":
+        j += 1
+    k = j
+    while k < n and not text[k].isspace() and text[k] not in ";|&<>()":
+        k += 1
+    raw = text[j:k]
+    return bool(raw) and "$" not in raw and "`" not in raw
+
+
+def _read_heredoc_bodies(text: str, i: int, tokens: list, pending: list, info: dict) -> int:
+    """Consume the bodies of the heredocs opened on the line that just ended.
+
+    Bodies are read in operator order, one per pending `<<`/`<<-`, each up to
+    the line equal to its delimiter (leading tabs stripped for `<<-`); a body
+    with no terminator runs to the end of the text, as bash reads it. Each body
+    becomes a ("heredoc", (body, delimiter_quoted, body_tokens)) token placed
+    right after its delimiter word, so it stays attached to the command that
+    owns the redirection. The body is lexed here once; its substitution and
+    subshell markers are merged into `info` so every later predicate sees them
+    exactly as it did when bodies were lexed inline.
+
+    Returns the index just past the last body consumed."""
+    n = len(text)
+    delimiters = []
+    for idx in pending:
+        nxt = tokens[idx + 1] if idx + 1 < len(tokens) else None
+        if nxt is None or nxt[0] != "word" or nxt[1].dynamic or not nxt[1].text:
+            # One unresolvable delimiter makes every body boundary on this line
+            # unknown: capture nothing and let the lines lex inline as before.
+            return i
+        delimiters.append(nxt[1])
+    captured = []
+    for idx, delim_word in zip(pending, delimiters):
+        delim = delim_word.text
+        strip_tabs = tokens[idx][1] == "<<-"
+        lines = []
+        while i < n:
+            end = text.find("\n", i)
+            line = text[i:] if end < 0 else text[i:end]
+            i = n if end < 0 else end + 1
+            if (line.lstrip("\t") if strip_tabs else line) == delim:
+                break
+            lines.append(line)
+        captured.append(("\n".join(lines), delim_word.quoted))
+    for idx, body in reversed(list(zip(pending, captured))):
+        body_tokens, body_info = _lex(body[0])
+        info["substitution"] = info["substitution"] or body_info["substitution"]
+        info["subshell"] = info["subshell"] or body_info["subshell"]
+        tokens.insert(idx + 2, ("heredoc", (body[0], body[1], body_tokens)))
+    return i
+
+
 def _lex(text: str):
     """Return (tokens, info) for one command string.
 
-    tokens: list of ("word", _Word) / ("op", str) / ("redir", str)
+    tokens: list of ("word", _Word) / ("op", str) / ("redir", str) /
+            ("heredoc", (body, delimiter_quoted, body_tokens))
     info:   {"substitution": bool, "subshell": bool}
+
+    A heredoc body is read as stdin CONTENT, not as command text: it is held in
+    one ("heredoc", ...) token attached to the command owning the `<<`, with its
+    own pre-lexed tokens. Whether that content is then analysed as a script is
+    decided by the caller (see _inert_data_commands); by default it is.
 
     Adjacent quoted/escaped fragments join into ONE word, which is what defeats
     the whole splice class (`g''it`, `--no-""dry-run`, `--work-'tree'=<B>`).
@@ -223,13 +299,17 @@ def _lex(text: str):
     buf = []
     dynamic = False
     started = False
+    quoted = False
+    # Indices in `tokens` of `<<` / `<<-` operators whose body starts at the
+    # next unquoted newline.
+    pending_heredocs = []
     i, n = 0, len(text)
 
     def flush():
-        nonlocal buf, dynamic, started
+        nonlocal buf, dynamic, started, quoted
         if started or buf:
-            tokens.append(("word", _Word("".join(buf), dynamic)))
-        buf, dynamic, started = [], False, False
+            tokens.append(("word", _Word("".join(buf), dynamic, quoted=quoted)))
+        buf, dynamic, started, quoted = [], False, False, False
 
     def at_command_position():
         if started or buf:
@@ -254,7 +334,7 @@ def _lex(text: str):
                 continue
             if i + 1 < n:
                 buf.append(text[i + 1])
-                started = True
+                started = quoted = True
                 i += 2
                 continue
             i += 1
@@ -271,7 +351,7 @@ def _lex(text: str):
                     break
                 j += 1
             buf.append(_decode_ansi_c(text[i + 2:j]))
-            started = True
+            started = quoted = True
             i = min(j + 1, n)
             continue
 
@@ -316,11 +396,11 @@ def _lex(text: str):
             j = text.find("'", i + 1)
             if j < 0:
                 buf.append(text[i + 1:])
-                started = True
+                started = quoted = True
                 i = n
                 continue
             buf.append(text[i + 1:j])
-            started = True
+            started = quoted = True
             i = j + 1
             continue
 
@@ -344,7 +424,7 @@ def _lex(text: str):
                     continue
                 buf.append(text[j])
                 j += 1
-            started = True
+            started = quoted = True
             i = j + 1
             continue
 
@@ -354,10 +434,15 @@ def _lex(text: str):
             while j < n and text[j] in "<>&" and len(op) < 3:
                 op += text[j]
                 j += 1
+            if op == "<<" and j < n and text[j] == "-":
+                op += "-"       # `<<-`: heredoc with leading tabs stripped
+                j += 1
             if buf and all(ch.isdigit() for ch in buf):
-                buf, started = [], False    # the fd belongs to the redirection
+                buf, started, quoted = [], False, False  # fd of the redirection
             else:
                 flush()
+            if op in ("<<", "<<-") and _static_heredoc_delimiter(text, j):
+                pending_heredocs.append(len(tokens))
             tokens.append(("redir", op))
             i = j
             continue
@@ -372,6 +457,9 @@ def _lex(text: str):
             flush()
             tokens.append(("op", c))
             i += 1
+            if c == "\n" and pending_heredocs:
+                i = _read_heredoc_bodies(text, i, tokens, pending_heredocs, info)
+                pending_heredocs = []
             continue
 
         if c == "(":
@@ -436,22 +524,64 @@ def _split_segments(tokens):
     Deliberately NOT keyed on whether the command word is a shell: deciding which
     programs execute their stdin is the enumeration mistake in a new costume. The
     operand is scanned like any other unprovable region, so one that reduces to a
-    destructive clean denies wherever it sits and an inert one costs nothing."""
-    segments, current, stdin_scripts = [], [], []
+    destructive clean denies wherever it sits and an inert one costs nothing.
+
+    A heredoc body is expanded back into the segments of its own pre-lexed
+    tokens, which is what it produced when bodies were lexed inline. decide()
+    alone calls _segments_of with the commands _inert_data_commands proved
+    inert; those contribute no segment, since their arguments and stdin content
+    are data that nothing executes."""
+    return _segments_of(_split_commands(tokens))
+
+
+def _split_commands(tokens):
+    """Group the token stream into simple commands, keeping each command's
+    redirections, here-string operands and heredoc bodies attached to it.
+
+    Each command is a dict: words (argument words, command word included),
+    stdin (here-string / heredoc-delimiter operand words), heredocs (body
+    tuples), redirs ([operator, operand word or None]) and next_op (the
+    separator that ended it, None for the last)."""
+    commands = []
+
+    def fresh():
+        return {"words": [], "stdin": [], "heredocs": [], "redirs": [], "next_op": None}
+
+    current = fresh()
     for kind, payload in tokens:
         if kind == "op":
-            segments.append(current)
-            current = []
+            current["next_op"] = payload
+            commands.append(current)
+            current = fresh()
             continue
         if kind == "redir":
+            current["redirs"].append([payload, None])
+            continue
+        if kind == "heredoc":
+            current["heredocs"].append(payload)
             continue
         if payload.redir_target:
+            if current["redirs"] and current["redirs"][-1][1] is None:
+                current["redirs"][-1][1] = payload
             if payload.stdin_script:
-                stdin_scripts.append([payload])
+                current["stdin"].append(payload)
             continue
-        current.append(payload)
-    segments.append(current)
+        current["words"].append(payload)
+    commands.append(current)
+    return commands
+
+
+def _segments_of(commands, exempt=()):
+    segments, stdin_scripts, bodies = [], [], []
+    for command in commands:
+        if id(command) in exempt:
+            continue
+        segments.append(command["words"])
+        stdin_scripts.extend([word] for word in command["stdin"])
+        for _body, _quoted, body_tokens in command["heredocs"]:
+            bodies.extend(_split_segments(body_tokens))
     segments.extend(stdin_scripts)
+    segments.extend(bodies)
     return [seg for seg in segments if seg]
 
 
@@ -763,6 +893,155 @@ def _cwd_indeterminate(words, info, raw: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Argument DATA versus executed command words (OB-L30).
+#
+# The region scan above treats every argument as possibly-executed text, and it
+# must: `git rebase -x`, `timeout`, `flock` and any unknown name run their
+# arguments. What it may not do is read the arguments of a command that is
+# PROVEN to execute nothing, whose output provably reaches nothing that
+# executes either. That proof is positive and narrow; every condition below
+# that cannot be established leaves the command scanned exactly as before.
+#
+#   - The command word is a literal, unshadowed name from _ARG_INERT_COMMANDS:
+#     programs whose operands are patterns, text or file names and that have no
+#     option which runs a program (rg only without any `--pre*` option and
+#     without an expansion that could supply one). Membership can only ever
+#     REMOVE a scan; an unlisted name keeps the scan, so the list is not the
+#     wrapper-enumeration mistake turned around.
+#   - Only reserved words and the option-free `command`/`builtin`/`time` may
+#     precede it: an assignment or a wrapper option ends the proof.
+#   - The command text is analysed at the TOP level only. Inside an embedded
+#     payload (`bash -c '...'`, `git rebase -x '...'`) the text is already being
+#     executed by something whose output use is unknown, so nothing is exempt.
+#   - No command or process substitution anywhere: `$(echo git clean -fd)` runs
+#     the echoed text, and so does a substitution fed by a heredoc.
+#   - Nothing in the text can rebind the name: no function definition, no
+#     alias/unalias/enable/hash/shopt/source/./eval word, no PATH, BASH_ENV or
+#     ENV assignment or operand.
+#   - Every pipe consumer anywhere in the text is itself such a command, so
+#     `echo '<clean>' | sh` and `{ echo '<clean>'; } | bash` keep the scan.
+#   - If anything writes a file (an output redirection other than /dev/null or
+#     an fd duplication, or a `tee` operand), EVERY command in the text must be
+#     such a command, so `echo '<clean>' > x.sh && sh x.sh` keeps the scan.
+#
+# A command proven inert contributes nothing to the clean scan: neither its
+# argument words nor its here-string / heredoc content. A heredoc fed to any
+# other command (`bash <<EOF`, `git commit -F - <<EOF`) is still scanned.
+# ---------------------------------------------------------------------------
+_ARG_INERT_COMMANDS = frozenset({
+    "echo", "cat", "grep", "egrep", "fgrep", "rg",
+    "head", "tail", "wc", "cut", "tr", "nl", "tee",
+})
+_FILE_WRITING_DATA_COMMANDS = frozenset({"tee"})
+_DATA_PREFIX = frozenset({
+    "!", "{", "then", "else", "elif", "do", "if", "while", "until",
+    "time", "command", "builtin",
+})
+_SHADOWING_WORDS = frozenset({
+    "alias", "unalias", "enable", "hash", "function", "shopt",
+    "source", "eval",
+})
+_SHADOWING_NAMES = ("PATH", "BASH_ENV", "ENV")
+
+
+def _data_head(words):
+    """Index of the first word after the reserved-word / option-free prefix."""
+    i = 0
+    while i < len(words) and not words[i].dynamic and words[i].text in _DATA_PREFIX:
+        i += 1
+    return i
+
+
+def _is_inert_data_command(command) -> bool:
+    words = command["words"]
+    i = _data_head(words)
+    if i >= len(words):
+        return False
+    head = words[i]
+    if head.dynamic or head.text not in _ARG_INERT_COMMANDS:
+        return False
+    if head.text == "rg":
+        for word in words[i + 1:]:
+            if word.dynamic or word.text.startswith("--pre"):
+                return False
+    return True
+
+
+def _writes_a_file(command) -> bool:
+    for op, target in command["redirs"]:
+        if ">" not in op:
+            continue
+        if target is None or target.dynamic:
+            return True
+        if target.text == "/dev/null":
+            continue
+        if op.endswith("&") and (target.text.isdigit() or target.text == "-"):
+            continue
+        return True
+    words = command["words"]
+    i = _data_head(words)
+    if i < len(words) and words[i].text in _FILE_WRITING_DATA_COMMANDS:
+        operands = [w for w in words[i + 1:] if not w.text.startswith("-")]
+        if any(w.text != "/dev/null" for w in operands):
+            return True
+    return False
+
+
+def _is_shadowing(tokens, commands, inert_ids) -> bool:
+    """True when anything in the text could rebind a command name: a function
+    definition anywhere, or - in any command NOT itself proven inert, whose
+    words are therefore not known to be mere data - a rebinding builtin word or
+    a PATH / BASH_ENV / ENV name or assignment. `.` counts only as a command
+    word, so `grep -rn '<text>' .` keeps its search root."""
+    prev = None
+    for kind, payload in tokens:
+        if kind == "op" and payload == ")" and prev == ("op", "("):
+            return True     # `name() { ... }` - a function definition
+        prev = (kind, payload if kind != "word" else None)
+    for command in commands:
+        if id(command) in inert_ids:
+            continue
+        words = command["words"]
+        head = _data_head(words)
+        if head < len(words) and words[head].text == ".":
+            return True
+        for word in words:
+            text = word.text
+            if text in _SHADOWING_WORDS:
+                return True
+            for name in _SHADOWING_NAMES:
+                if text == name or text.startswith(name + "=") or text.startswith(name + "+="):
+                    return True
+    return False
+
+
+def _inert_data_commands(commands, tokens, info, raw: str):
+    """Return the ids of the commands whose arguments and stdin content are
+    data, under the conditions set out above; an empty set whenever any of the
+    whole-text conditions cannot be established."""
+    if info["substitution"] or any(marker in raw for marker in _SUBST_MARKERS):
+        return frozenset()
+    inert = {id(c) for c in commands if _is_inert_data_command(c)}
+    if not inert:
+        return frozenset()
+    if _is_shadowing(tokens, commands, inert):
+        return frozenset()
+    for idx, command in enumerate(commands):
+        if command["next_op"] == "|":
+            consumer = commands[idx + 1] if idx + 1 < len(commands) else None
+            if consumer is None or id(consumer) not in inert:
+                return frozenset()
+    if any(_writes_a_file(c) for c in commands):
+        for command in commands:
+            if id(command) in inert:
+                continue
+            if all(w.text in _RESERVED_DECORATORS for w in command["words"]):
+                continue
+            return frozenset()
+    return frozenset(inert)
+
+
 def decide(command_text: str):
     """Return (verdict, reason) for one Bash command.
 
@@ -772,8 +1051,13 @@ def decide(command_text: str):
     working directory is provably the hook's own. Every other reducible clean
     - including one behind a prefix this guard does not model - denies."""
     tokens, info = _lex(command_text)
-    segments = _split_segments(tokens)
-    words = _all_words(segments)
+    commands = _split_commands(tokens)
+    # The cwd and environment-redirect predicates below keep reading EVERY word,
+    # data included: they only run once a clean was found, and an inert command
+    # never moving the cwd is not something this module needs to prove.
+    words = _all_words(_segments_of(commands))
+    segments = _segments_of(
+        commands, _inert_data_commands(commands, tokens, info, command_text))
 
     destructive = False
     provable = True
