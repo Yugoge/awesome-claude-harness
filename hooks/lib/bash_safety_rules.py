@@ -1169,7 +1169,9 @@ def _shape_git(cmd, invs):
             or inv.path_qualified or inv.subcommand not in _SHAPE_GIT_SUBS \
             or any(opt not in _SHAPE_GIT_GLOBALS for opt, _v in inv.global_opts):
         return False
-    args = [a or "" for a in inv.args]
+    if any(a is None for a in inv.args):
+        return False  # a glob or expansion (`-- *`, `$x`) the view cannot read: the base verdict stands
+    args = list(inv.args)
     if any(_long_prefix_of(a, ("--output",)) for a in args):
         return False  # git writes the named file (log, show, diff, reflog ... --output / --outp / --ou)
     return "--ext-diff" not in args
@@ -1189,6 +1191,32 @@ def _uniq_writes(args):
             k += 1
         k += 1
     return operands >= 2
+
+
+_ACK_AG_SHORT = frozenset("iIsSvwlLcnhHQFk1")
+_ACK_AG_LONG = frozenset({"--ignore-case", "--smart-case", "--case-sensitive", "--invert-match", "--word-regexp",
+                          "--literal", "--count", "--files-with-matches", "--files-without-matches", "--nocolor",
+                          "--no-color", "--color", "--noheading", "--no-heading", "--heading", "--nogroup",
+                          "--no-group", "--group", "--column", "--nopager", "--noenv", "--no-filename",
+                          "--with-filename", "--ignore-dir", "--type"})
+
+
+def _ack_ag_options_ok(args):
+    """Every option of an ack or ag word list is on a small allow-list: short clusters of plain matching flags,
+    -A/-B/-C with a number, and exact long names (with an `=value` only for --ignore-dir and --type). Any other
+    option (a --pager / --ackrc abbreviation, --search-zip, -z ...) leaves the data shape."""
+    for a in args:
+        if a == "--":
+            return True
+        if not a.startswith("-") or a == "-":
+            continue
+        if a.startswith("--"):
+            name, eq, _val = a.partition("=")
+            if name not in _ACK_AG_LONG or (eq and name not in ("--ignore-dir", "--type")):
+                return False
+        elif not (all(c in _ACK_AG_SHORT for c in a[1:]) or re.fullmatch(r"-[ABC]\d*", a)):
+            return False
+    return True
 
 
 def _shape_simple(cmd, invs, stage, state):
@@ -1213,6 +1241,8 @@ def _shape_simple(cmd, invs, stage, state):
                                          or (name == "rg" and a.startswith("-") and not a.startswith("--")
                                              and "z" in a) for a in args):
         return False
+    if name in ("ack", "ag") and not _ack_ag_options_ok(args):
+        return False  # ack/ag take any unique abbreviation (--pag=, --pa, --ackr=): only listed options stay inside
     if name == "sort" and any(_long_prefix_of(a, ("--output", "--compress-program"))
                               or (a.startswith("-") and not a.startswith("--") and "o" in a) for a in args):
         return False  # -o / -uoFILE / --output / --outp= / --o write a file; --compress-program runs one
@@ -1229,8 +1259,9 @@ def data_shape(command, invs):
     """True when the whole command is the strict data shape, where the invocation view's verdict stands alone.
 
     It parses cleanly into a `;` / `&&` / `||` list (nothing in the background) of pipelines. A first stage is
-    echo or printf (no -v), grep, rg, ag or ack (no --pre, --pager, --hostname-bin, decompression), cat, ls, true, or
-    a plain git invocation of a fixed subcommand set (no alias, -c, GIT_* assignment, wrapper, path-qualified git,
+    echo or printf (no -v), grep or rg (no --pre, --pager, --hostname-bin, decompression), ag or ack with listed
+    options only (_ack_ag_options_ok), cat, ls, true, or a plain git invocation (every argument a literal) of a fixed
+    subcommand set (no alias, -c, GIT_* assignment, wrapper, path-qualified git,
     exec-taking option); a later stage is only a pure filter (head, tail, wc, sort, uniq, cut, less, more, grep, rg).
     Output goes to stdout or a device only, except that cat may write a document path no shell, make, cron, git or
     login sequence reads (_doc_path_ok); a command that writes any file runs no git at all, so no hook it could
@@ -1331,9 +1362,13 @@ def _stash_pushes(args):
 
 
 def _checkout_wide(args):
+    """A wide path after `--` and any word before it: a ref (`HEAD -- .`) or an option alone (`--ours -- .`,
+    `--theirs`, `-m`/`--merge`, `--conflict=...`, `-f`/`--force`, `-p`/`--patch`, `--no-overlay`,
+    `--ignore-skip-worktree-bits` ...), each of which overwrites the working tree or its conflict resolutions.
+    Only the plain `git checkout -- <wide path>` keeps the base verdict (allowed)."""
     if not _wide_path_after_dashdash(args):
         return False
-    return any(a is None or not a.startswith("-") for a in args[:args.index("--")])
+    return len(args[:args.index("--")]) > 0
 
 
 def _restore_wide_from_ref(args):

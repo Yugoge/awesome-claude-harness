@@ -172,6 +172,36 @@ MUST_REFUSE = [
     ("echo 'git stash -u' | sort -uo.git/hooks/pre-commit && git commit -qm x", STASH),
     ("echo 'git stash -u' | sort --outp=.git/hooks/pre-commit && git commit -qm x", STASH),
     ("echo 'git stash -u' | sort --o .git/hooks/pre-commit && git commit -qm x", STASH),
+] + [
+    # Round 4: an option alone before `--` with a wide path overwrites the tree or its conflict resolutions.
+    (f"git checkout {opt} -- {path}", CHECKOUT)
+    for opt, path in [("--ours", "."), ("--theirs", "."), ("-m", "."), ("--merge", "."), ("--conflict=diff3", "."),
+                      ("-f", "."), ("-p", "."), ("--no-overlay", "."), ("--ignore-skip-worktree-bits", "."),
+                      ("--theirs", "src/"), ("-f", "src/"), ("--force", "*"), ("-q", "."), ("--patch", "."),
+                      ("--conflict=merge", "src/")]
+] + [
+    ("git status && git checkout --ours -- .", CHECKOUT),
+    ('echo "see git stash"; git checkout --theirs -- .', CHECKOUT),
+    ("git checkout -m -- . | head", CHECKOUT),
+    ("git checkout HEAD -- *", CHECKOUT),
+    # Round 4: ack/ag take any unique abbreviation of a long option; only listed options stay in the data shape.
+    ("ack --pag=\"sh -c 'git stash -u'\" a", STASH),
+    ("ack --pa=\"sh -c 'git stash -u'\" a", STASH),
+    ("ag --pag \"sh -c 'git stash -u'\" a", STASH),
+    ("ag --pa=\"sh -c 'git stash -u'\" a", STASH),
+    ('ag --pa=less "git stash push" docs/', STASH),
+    ('ack --ackrc=x.rc "git stash push" docs/', STASH),
+    ('ack --ackr=x.rc "git stash push" docs/', STASH),
+]
+
+# Round 4: the plain checkout of a wide path and listed ack/ag options keep passing.
+STILL_PASS += [
+    "git checkout -- .",
+    "git checkout -- src/",
+    "git checkout --ours -- src/app.py",
+    'ack -i --type=md "git stash push" docs/',
+    'ag -i "git stash push" docs/',
+    'ack -A 3 "git stash" docs',
 ]
 
 
