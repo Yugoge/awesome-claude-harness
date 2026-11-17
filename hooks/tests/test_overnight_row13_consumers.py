@@ -4,7 +4,8 @@
 - The PM test plan, triage and retro reports and the specialists' reports are
   declared by their dispatch obligations (commands/dev-overnight.md) with a
   registered schema each; G2 checks them at the producer's stop, so the prose
-  validations, the Step 6 legacy fallback and check-overnight-reports.py go.
+  validations, the Step 6 legacy fallback and check-overnight-reports.py go
+  (no code reads the removed text, so its absence has no test).
   The retro report's faults are also stopped at its collection by G3
   (posttool-overnight-file-check.py, the cycle contract's Step 20 entry), so
   Step 20 checks it no second time. Each schema admits the report its
@@ -32,7 +33,7 @@ import pytest
 HOOKS = Path(__file__).resolve().parents[1]
 REPO = HOOKS.parent
 sys.path.insert(0, str(HOOKS))
-from lib import contract_runtime, schema_registry  # noqa: E402
+from lib import contract_runtime, obligation, schema_registry  # noqa: E402
 
 COMMAND = REPO / "commands" / "dev-overnight.md"
 STATUS = REPO / "scripts" / "overnight-status.sh"
@@ -189,40 +190,26 @@ def test_missing_report_fails(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_pm_and_specialist_dispatches_declare_their_reports():
-    text = COMMAND.read_text(encoding="utf-8")
-    for path, schema in (
-        ("docs/dev/overnight/<session_id>/test-plan.json", "test-plan.v1"),
-        ("docs/dev/overnight/<session_id>/<specialist.type>-report.json", "specialist-report.v1"),
-        ("docs/dev/overnight/<session_id>/triage-report-cycle<N>.json", "triage-report.v1"),
-        ("docs/dev/overnight/<session_id>/retro-report-cycle<N>.json", "retro-report.v1"),
-    ):
-        declared = re.search(r'"path":\s*"%s",\s*"schema":\s*"%s"' % (re.escape(path), re.escape(schema)),
-                             text)
-        assert declared, (path, schema)
-
-
-def test_prose_rechecks_and_the_legacy_fallback_are_gone():
-    text = COMMAND.read_text(encoding="utf-8")
-    for gone in ("**Validate test plan**", "**Validate triage report**", "**Validate retro report**",
-                 "**Sanity checks on each report**", "check-overnight-reports",
-                 "**If triage report is missing or invalid**", "**If triage report exists and is valid**",
-                 "Issues do not overlap with `addressed_issues`",
-                 "Check JSON syntax after modification", "settings.json has syntax error"):
-        assert gone not in text, gone
-
-
-def test_the_retro_report_is_checked_at_its_collection_and_not_again_at_step_20():
-    """The PM retrospective's dispatch is its cycle contract's Step 20 entry, so G3
-    (posttool-overnight-file-check.py) checks its report against the obligation's schema when
-    it returns, with the shipped settings (test_overnight_one_state_reader.py runs the hook on
-    a missing, an invalid and a valid report). Step 20 then runs no second check of it (E4: a
-    re-check goes once the producer side stops its faults with the shipped settings)."""
-    text = COMMAND.read_text(encoding="utf-8")
-    step20 = text.split("### Step 20:", 1)[1].split("### Step 21:", 1)[0]
-    assert "check-overnight-reports" not in step20
-    assert "**Validate retro report**" not in text
-    assert "hooks/posttool-overnight-file-check.py" in step20
-    assert "re-invoke PM-Retro (a fresh dispatch" in step20
+    """The obligation templates commands/dev-overnight.md writes, as lib/obligation.py reads them (the
+    reader the dispatch obligations come from), declare each report with its registered schema. The PM
+    retrospective's template sits under Step 20, the cycle contract's entry whose return G3
+    (posttool-overnight-file-check.py) checks against that schema at the report's collection
+    (test_overnight_one_state_reader.py::test_collection_checks_the_retrospective_that_ends_the_cycle).
+    Nothing reads the deleted prose checks or a second check of the retro report at Step 20, so their
+    absence has no test; the one script that did, check-overnight-reports, is an exit-0 stub
+    (test_check_overnight_reports_is_an_exit_zero_stub)."""
+    declared = {(t["role"], t["step"], a.get("path"), a.get("schema"))
+                for t in obligation.command_templates("dev-overnight") for a in t["artifacts"]}
+    wanted = {
+        ("pm", "2", "docs/dev/overnight/<session_id>/test-plan.json", "test-plan.v1"),
+        ("<specialist.type>", "3", "docs/dev/overnight/<session_id>/<specialist.type>-report.json",
+         "specialist-report.v1"),
+        ("pm", "4", "docs/dev/overnight/<session_id>/triage-report-cycle<N>.json", "triage-report.v1"),
+        ("pm", "20", "docs/dev/overnight/<session_id>/retro-report-cycle<N>.json", "retro-report.v1"),
+    }
+    assert wanted <= declared, sorted(wanted - declared)
+    for *_, schema in wanted:
+        assert schema_registry.get_schema(schema) is not None, schema
 
 
 # --------------------------------------------------------------------------

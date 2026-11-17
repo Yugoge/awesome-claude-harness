@@ -1,16 +1,31 @@
 """commands/dev.md: a relayed producer question has one route when it goes unanswered, and the dev
-re-dispatch carries the answer in the same lines as Step 5's BA re-dispatch (group 3 findings on #27:
-c6735512020 item 2, c6737075938 item 2). The replay's /dev devquestion and P5 A20's ask=skip|decline|none
-runs play this text: the question's `default` taken as a recorded assumption, and the dev re-dispatch's
-`Clarification round:` / `Previous answers:` lines after `Context file:`. Since P13-1 (#38) the answer of
-record is the file the AskUserQuestion hook writes (`Previous answers:` names it), so an unanswered
-question, which writes none, is carried as `Previous answers: none`."""
+re-dispatch carries the answer the same way as Step 5's BA re-dispatch (group 3 findings on #27:
+c6735512020 item 2, c6737075938 item 2). Since P13-1 (#38) the answer of record is the file the
+AskUserQuestion hook writes, so an unanswered question, which writes none, is carried as
+`Previous answers: none`.
+
+Each case runs that hook (hooks/posttool-close-rating.py, lib/requirement_round.py's handle) with the
+question file, `metadata.source` and answer path that Step 5 (BA) and Step 12 (dev) spell: an answered
+relay writes the answer file the step names, and a skipped or declined one writes none. Where the
+re-dispatch lines sit (`Clarification round:` / `Previous answers:` after `Context file:`) is played by
+the replay's /dev devquestion run (tests/replay/drivers/dev.py), and agents/dev.md's sentence about that
+line is read by no code, so neither has a test here."""
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+HOOK = ROOT / "hooks" / "posttool-close-rating.py"
+TASK = "20261109-120000"
+UNANSWERED = {"skipped": {"answers": {}}, "declined": "User declined to answer questions"}
 
 
 def _step(text: str, n: int) -> str:
@@ -19,32 +34,54 @@ def _step(text: str, n: int) -> str:
     return m.group(0)
 
 
-def test_step5_names_the_unanswered_route():
-    step5 = _step((ROOT / "commands" / "dev.md").read_text(encoding="utf-8"), 5)
-    relay = next(l for l in step5.splitlines() if l.startswith("1. Relay it with ONE AskUserQuestion"))
-    for form in ("skipped", "denied", "no AskUserQuestion offered"):
-        assert form in relay, f"Step 5's relay names no route for an unanswered question ({form})"
-    assert "take the artifact's `default` as an assumption" in relay
-    assert "the call is made all the same and its error result counts as asked" in relay  # P13-1's asked (A10)
-    assert "writes no answer file" in relay and "re-dispatch with `Previous answers: none`" in relay
-    # where the producer records it: the fields agents/ba.md and agents/dev.md name
-    assert "the `assumptions` list it returns" in relay and "`implementation_notes`" in relay
-    assert "`Clarification round:` and `Previous answers:` lines" in step5
+def _spelled(step: str, role: str) -> dict:
+    """The question file, the relay's metadata.source and the answer file the step spells for `role`."""
+    bind = {"<timestamp>": TASK}
+    found = {
+        "question": re.search(rf"`(docs/dev/producer-question-<timestamp>-{role}\.json)`", step),
+        "source": re.search(rf"`(producer-question:<timestamp>:{role})`", step),
+        "answer": re.search(rf"`(docs/dev/producer-answer-<timestamp>-{role}-<q8>\.json)`", step),
+    }
+    assert all(found.values()), {k: bool(v) for k, v in found.items()}
+    spelled = {}
+    for key, match in found.items():
+        value = match.group(1)
+        for slot, bound in bind.items():
+            value = value.replace(slot, bound)
+        spelled[key] = value
+    return spelled
 
 
-def test_step12_dev_redispatch_carries_step5_lines():
-    step12 = _step((ROOT / "commands" / "dev.md").read_text(encoding="utf-8"), 12)
-    line = next(l for l in step12.splitlines() if l.startswith("If dev wrote its question artifact"))
-    assert "right after its `Context file:` line" in line
-    previous = "Previous answers: <the producer answer file the hook wrote, or none when the owner gave no answer>"
-    assert "`Clarification round: <N>`" in line and f"`{previous}`" in line
-    assert "`producer-question:<timestamp>:dev`" in line
-    # the lines it names are Step 5's own, and Step 10's template has the `Context file:` anchor
-    text = (ROOT / "commands" / "dev.md").read_text(encoding="utf-8")
-    assert f"  Clarification round: <N>\n  {previous}" in _step(text, 5)
-    assert "  Context file: docs/dev/context-<timestamp>.json" in _step(text, 10)
+def _relay(project: Path, source: str, questions: list, response) -> None:
+    payload = {"session_id": "s", "transcript_path": "/nonexistent.jsonl", "cwd": str(project),
+               "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+               "tool_input": {"questions": questions, "metadata": {"source": source}},
+               "tool_use_id": "toolu_ask", "tool_response": response}
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(project.parent),
+           "CLAUDE_CONFIG_DIR": str(project.parent / "config"), "CLAUDE_PROJECT_DIR": str(project),
+           "LANG": "C.UTF-8"}
+    run = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), env=env, capture_output=True,
+                         text=True, timeout=60)
+    assert (run.returncode, run.stdout, run.stderr) == (0, "", "")
 
 
-def test_dev_agent_reads_previous_answers():
-    agent = (ROOT / "agents" / "dev.md").read_text(encoding="utf-8")
-    assert "re-dispatches dev with the answer in its `Previous answers:` line" in agent
+@pytest.mark.parametrize("role,n", [("ba", 5), ("dev", 12)])
+def test_the_relay_writes_the_answer_file_the_step_names_and_none_unanswered(tmp_path, role, n):
+    spelled = _spelled(_step((ROOT / "commands" / "dev.md").read_text(encoding="utf-8"), n), role)
+    project = tmp_path / "project"
+    question = project / spelled["question"]
+    question.parent.mkdir(parents=True)
+    question.write_text(json.dumps({"task_id": TASK, "role": role, "need": "one decision", "default": "A"}))
+    q8 = hashlib.sha256(question.read_bytes()).hexdigest()[:8]
+    asked = [{"question": "Which?", "header": "Decision", "multiSelect": False,
+              "options": [{"label": "A", "description": ""}, {"label": "B", "description": ""}]}]
+
+    for response in UNANSWERED.values():
+        _relay(project, spelled["source"], asked, response)
+    assert sorted(p.name for p in question.parent.iterdir()) == [question.name]
+
+    _relay(project, spelled["source"], asked, {"questions": asked, "answers": {"Which?": "B"}})
+    answer = project / spelled["answer"].replace("<q8>", q8)
+    record = json.loads(answer.read_text(encoding="utf-8"))
+    assert (record["source"], record["answers"]) == (spelled["source"], {"Which?": "B"})
+    assert sorted(p.name for p in question.parent.iterdir()) == sorted([question.name, answer.name])

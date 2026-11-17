@@ -29,8 +29,13 @@ No child outlives the run that keeps its deadlines: when ``run_at_once`` ends ea
 SIGHUP, whose default action ends this process: the CLI ending the hook; an overrun of the run
 around it, a merged gate's in a launcher's fork; a fault), each child still running is sent
 SIGTERM, and SIGKILL ``ENDING`` seconds later, each alone, before the run ends (by that signal,
-as this process ended before it forked). A child closes the pipe its own parent's result goes
-back on, so a fork it makes never holds it open.
+as this process ended before it forked). A run nested in a child of another run (a merged gate
+in a launcher's fork) gives its own children half the wait of the run around it (``ending_wait``),
+so it has killed and reaped them before that run kills it: a fork that ignores SIGTERM never
+outlives both as an orphan. A child closes the pipe its own parent's result goes back on, so a
+fork it makes never holds it open. A fault of this module's own code ends every child the same
+way and is raised to the caller; ``finished(index, result)``, if given, has already been called
+for each job that ended before it, so the caller can run only the others another way.
 
 ``can_fork`` says when forking is safe: ``os.fork`` and ``select.poll`` exist (POSIX), this is
 the main thread, no other thread is alive (the threading module's count and, where /proc gives
@@ -60,6 +65,7 @@ ENDING = 0.5  # seconds the children of a run that ends early (below) have betwe
 # children are ended first, then this process ends by the same signal, as it did before it forked.
 ENDING_SIGNALS = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n))
 _HAND_BACK = None  # in a child: the pipe its result goes back on (a fork of its own must not hold it)
+_DEPTH = 0  # how many runs this process is a child of (a merged gate in a launcher's fork: 1)
 
 
 class _Ended(BaseException):
@@ -89,6 +95,13 @@ def _kernel_threads() -> int:
         return 1
 
 
+def ending_wait() -> float:
+    """The SIGTERM-to-SIGKILL wait this process gives its children when its run ends early: ENDING,
+    halved for each run this process is itself a child of, so an inner run always ends its
+    children before the run around it ends this process."""
+    return ENDING / (2 ** _DEPTH)
+
+
 def can_fork() -> bool:
     """True when this process may fork its jobs: POSIX, the main thread, and no other thread."""
     if not hasattr(os, "fork") or not hasattr(select, "poll"):
@@ -107,7 +120,7 @@ def _write_all(fd: int, data: bytes) -> None:
 
 def _child(job: Job, deadline: float, wfd: int, inherited, mark, dispositions=None) -> None:
     """In the forked child: run the file, hand back its result, end. Never returns."""
-    global _HAND_BACK
+    global _HAND_BACK, _DEPTH
     me = os.getpid()
     try:
         try:
@@ -116,6 +129,7 @@ def _child(job: Job, deadline: float, wfd: int, inherited, mark, dispositions=No
             for fd in inherited:  # the other children's pipes, and the one this process's parent
                 os.close(fd)      # hands back on (a merged gate run as a job): they end with their own
             _HAND_BACK = wfd
+            _DEPTH += 1
             del rule_runner._STACK[:]  # an enclosing run's frames belong to the parent process
             if mark is not None:
                 mark(True)
@@ -211,14 +225,14 @@ def _put_back(dispositions: dict) -> None:
             pass
 
 
-def _end_all(pids, wait: float = ENDING) -> None:
+def _end_all(pids, wait: float | None = None) -> None:
     """End each child (SIGTERM, as the CLI ended a hook; SIGKILL past ``wait``), each alone."""
     for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
-    end = time.monotonic() + wait
+    end = time.monotonic() + (ending_wait() if wait is None else wait)
     left = list(pids)
     while left:
         left = [pid for pid in left if _reap(pid, 0) is None]
@@ -234,11 +248,13 @@ def _end_all(pids, wait: float = ENDING) -> None:
             time.sleep(0.005)
 
 
-def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE) -> list:
+def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE, finished=None) -> list:
     """Run every job at once (each after its ``after`` jobs), each in a fork of this process; their
     results (lib/rule_runner.RuleRun, or what ``fallback(index)`` gave) in the jobs' order.
     ``mark(index, running)``, if given, is called in each child before (True) and after (False)
-    its file runs. The caller checks ``can_fork()`` first."""
+    its file runs. ``finished(index, result)``, if given, is called in this process as each job's
+    result is settled (so a caller whose run raised knows which jobs ended). The caller checks
+    ``can_fork()`` first."""
     jobs = list(jobs)
     n = len(jobs)
     results: list = [None] * n
@@ -249,6 +265,8 @@ def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE) -> list
     def finish(i, result):
         results[i] = result
         state[i] = "done"
+        if finished is not None:
+            finished(i, result)
 
     def other(i):
         if fallback is not None:

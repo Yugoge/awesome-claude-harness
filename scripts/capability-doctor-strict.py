@@ -26,16 +26,24 @@ Three results, never more. PASS certifies only what this run MEASURED:
   PASS               every check was measured here and passed. On this tree that is
                      not reachable yet: blocking capability and the four deep checks
                      have no probe, so they are always "not provable here".
-  FAIL               a check was measured here and failed: a lifecycle event whose
-                     canary is not registered in any settings layer (named), a
-                     receipt that failed its cross-checks, or an unusable binding.
+  FAIL               a check was measured here and failed: a lifecycle event with no
+                     receipt whose canary no settings layer this run reads registers
+                     (named), a canary that fired on another host event
+                     (misregistered), a receipt that failed an identity or session
+                     cross-check, or an unusable binding.
   NOT_PROVABLE_HERE  nothing failed, but at least one check could not be measured
                      from where doctor runs. Each such check is named, with the one
                      action that would prove it. Never reported as PASS or FAIL.
 
-The registration read only ever moves a check toward FAIL (no canary registered,
-so no receipt can exist); it never moves anything toward PASS, which still needs
-the live receipt and the unchanged aggregate formula. The state file the run
+A live receipt that passes every cross-check AND whose host event name matches its
+label is taken as proof the event is wired, wherever the registration lives (a
+layer this run does not read: managed settings, a plugin). Doctor cannot tell host
+dispatch from a hand-run canary; the handshake names that residual too. A receipt
+whose host event name differs from its label is a misregistration (FAIL); one with
+no host event name still needs a registration in a layer this run reads. A receipt that arrived but is not tied to
+this window (the run's nonce is not in that session's transcript, or the
+transcript did not change in the window) proves nothing either way, so it is
+NOT_PROVABLE_HERE, not FAIL. The state file the run
 writes, and therefore every --route decision, is exactly what the handshake
 produces; the three-way result is a reading of it, not a new input to it.
 
@@ -48,7 +56,8 @@ Exit codes: 0 = PASS (under --route: PERMIT);
             3 = --route only: NOT_PROTECTED, i.e. the route is outside the
                 protected surface. Distinct from 0 so a mistyped route cannot be
                 misread as approval;
-            4 = NOT_PROVABLE_HERE (never under --route).
+            4 = NOT_PROVABLE_HERE (never under --route; an empty --route is a
+                route like any other, outside the protected surface, so exit 3).
 """
 from __future__ import annotations
 
@@ -70,6 +79,10 @@ MAX_DEFAULT_LINES = 20
 PASS, FAIL, NOT_PROVABLE = "PASS", "FAIL", "NOT_PROVABLE_HERE"
 EXIT_CODES = {PASS: 0, FAIL: 1, NOT_PROVABLE: 4}
 CANARY = "capability-canary.py"
+# Cross-check failures that say only that the receipt is not bound to THIS window,
+# not that the host misidentified the event or the session. Not a measurement.
+WINDOW_REASONS = ("transcript_missing_run_nonce", "transcript_mtime_stale")
+NO_SESSION = "<a running session's id>"
 DEEP_ACTIONS = {
     "identity_propagation": "a probe following a real subagent's host-issued identity across live callbacks",
     "permission_deny": "a probe with an actually-denied operation and an allowed control, both live",
@@ -79,7 +92,7 @@ DEEP_ACTIONS = {
 }
 
 
-def canary_registrations(home) -> dict[str, list[str]]:
+def canary_registrations(home, project: Path | None = None) -> dict[str, list[str]]:
     """{event: [settings layer, ...]} for every layer that registers the canary
     under that event key with that event as its label argument.
 
@@ -88,8 +101,8 @@ def canary_registrations(home) -> dict[str, list[str]]:
     handshake rejects, so it does not count as wired.
     """
     out: dict[str, list[str]] = {}
-    for layer in cs.SETTINGS_LAYERS:
-        settings, _err = cs.load_settings(home / layer)
+    for layer in settings_layers_read(home, project):
+        settings, _err = cs.load_settings(layer)
         hooks = (settings or {}).get("hooks") or {}
         for event in cs.RELIED_UPON_EVENTS:
             for group in hooks.get(event) or []:
@@ -98,28 +111,125 @@ def canary_registrations(home) -> dict[str, list[str]]:
                     tokens = [t for t in re.split(r"[\s'\"]+", cmd) if t]
                     idx = next((i for i, t in enumerate(tokens) if t.endswith(CANARY)), None)
                     if idx is not None and event in tokens[idx + 1:]:
-                        out.setdefault(event, []).append(layer)
+                        out.setdefault(event, []).append(str(layer))
     return out
 
 
-def _event_actions(in_session: bool, sid: str) -> dict[str, str]:
+def _transcript_cwd(sid: str | None) -> Path | None:
+    """The working directory a session's own transcript records, or None."""
+    if not sid:
+        return None
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    try:
+        for tp in root.glob(f"*/{sid}.jsonl"):
+            with open(tp, encoding="utf-8", errors="replace") as fh:
+                for _ in range(200):
+                    line = fh.readline()
+                    if not line:
+                        break
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
+                        return Path(rec["cwd"])
+    except OSError:
+        return None
+    return None
+
+
+def _project_root(start: Path, exclude: tuple = ()) -> Path | None:
+    """Nearest ancestor of `start` (itself included) holding .claude/settings*.json,
+    else the git toplevel above it, else None. A directory in `exclude` (the user's
+    HOME, the harness home) is never taken as the project, and the walk does not
+    pass a git toplevel."""
+    skip = {os.path.realpath(x) for x in exclude}
+    for d in (start, *start.parents):
+        is_git = (d / ".git").exists()
+        if os.path.realpath(d) in skip:
+            if is_git:
+                return None
+            continue
+        if (d / ".claude" / "settings.json").is_file() or \
+                (d / ".claude" / "settings.local.json").is_file():
+            return d
+        if is_git:
+            return d
+    return None
+
+
+def resolve_project(real_sid: str | None, probing_other: bool, home: Path) -> Path | None:
+    """The session's project directory, or None when it cannot be known.
+
+    Order: the cwd the probed session's own transcript records (a recorded cwd that
+    no longer exists leaves the project unknown); then, only when doctor does not
+    probe another session, CLAUDE_PROJECT_DIR and the nearest project root above
+    doctor's own working directory, never the user's HOME or the harness home, so
+    a run's verdict does not depend on where it runs. A deleted working directory
+    is skipped, never a crash."""
+    tcwd = _transcript_cwd(real_sid)
+    if tcwd is not None:
+        if not tcwd.is_dir():
+            return None
+        return _project_root(tcwd) or tcwd
+    if probing_other:
+        return None
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    if env:
+        return Path(env)
+    try:
+        cwd = Path(os.getcwd())
+    except OSError:
+        return None
+    return _project_root(cwd, exclude=(Path.home(), home))
+
+
+def settings_layers_read(home, project: Path | None) -> list:
+    """The settings files the registration read covers: the harness home's layers
+    (cs.SETTINGS_LAYERS), the home's .claude/settings.json, and, when the session's
+    project is known, its two .claude layers. Managed settings and plugins are not
+    read; a receipt whose host event name matches proves those."""
+    layers = [home / layer for layer in cs.SETTINGS_LAYERS]
+    layers.append(home / ".claude" / "settings.json")
+    if project is not None:
+        layers += [project / ".claude" / "settings.json",
+                   project / ".claude" / "settings.local.json"]
+    seen, out = set(), []
+    for layer in layers:
+        key = os.path.realpath(layer)
+        if key not in seen:
+            seen.add(key)
+            out.append(layer)
+    return out
+
+
+def _event_actions(in_session: bool, sid: str | None) -> dict[str, str]:
+    """The one proving action per event. `sid` is None when no real session id is
+    known (a terminal run without --session-id); no synthetic id is ever printed."""
+    if sid is None:
+        rerun = (f"rerun doctor --strict inside a session as a background task, or with "
+                 f"--session-id {NO_SESSION} --timeout 120")
+        return {label: rerun for label in cs.RELIED_UPON_EVENTS}
+    nonce = "; the probe-open line must reach that session's transcript inside the window"
     tool = ("run doctor --strict as a background task in this session and read its output "
-            "once while it waits" if in_session else "have that session run one tool call")
+            "once while it waits" if in_session
+            else "have that session run one tool call that prints the probe-open line")
     return {
-        "SessionStart": f"resume that session (claude --resume {sid}) while the probe is open",
-        "UserPromptSubmit": "send that session one prompt while the probe is open "
-                            "(pasting the probe-open line also puts the nonce in its transcript)",
+        "SessionStart": f"resume that session (claude --resume {sid}) while the probe is open{nonce}",
+        "UserPromptSubmit": "send that session the probe-open line as one prompt while the "
+                            "probe is open",
         "PreToolUse": tool,
         "PostToolUse": tool,
         "Notification": "let that session raise one notification (a permission prompt) "
-                        "while the probe is open",
-        "Stop": "let one turn of that session end while the probe is open",
-        "SubagentStop": "have that session run one subagent to completion while the probe is open",
+                        f"while the probe is open{nonce}",
+        "Stop": f"let one turn of that session end while the probe is open{nonce}",
+        "SubagentStop": "have that session run one subagent to completion while the probe "
+                        f"is open{nonce}",
     }
 
 
 def classify(state: dict, registrations: dict[str, list[str]], in_session: bool,
-             sid: str) -> list[dict]:
+             sid: str | None, project_known: bool = True, project_desc: str = "") -> list[dict]:
     """One record per check: {check, result, detail}. `detail` is the failure
     reason for FAIL and the proving action for NOT_PROVABLE_HERE."""
     checks: list[dict] = []
@@ -132,14 +242,44 @@ def classify(state: dict, registrations: dict[str, list[str]], in_session: bool,
     by_label = {e.get("event_label"): e for e in state.get("events") or []}
     for label in cs.RELIED_UPON_EVENTS:
         ev = by_label.get(label) or {}
-        if label not in registrations:
-            res, detail = FAIL, f"not_wired: no {CANARY} {label} registration in any settings layer"
+        reason = ev.get("failure_reason")
+        hen = (ev.get("host_receipt") or {}).get("hook_event_name")
+        host_named = bool(hen) and hen != cs.ABSENT
+        unknown = (f"the session's project is not known here (layers read: {project_desc})"
+                   if not project_known else "")
+        arrived = bool(ev.get("host_receipt")) and reason != "missing_event_record"
+        if arrived and host_named and hen != label:
+            # The canary for `label` ran on another host event: a registration under
+            # the wrong key, whatever its nonce says.
+            res, detail = FAIL, f"misregistered: {label} canary fired on {hen}"
         elif ev.get("outcome") == "PASS":
-            res, detail = PASS, ""
-        elif ev.get("failure_reason") in (None, "missing_event_record"):
-            res, detail = NOT_PROVABLE, f"no receipt in this window; proves it: {actions[label]}"
+            if host_named or label in registrations:
+                # Host event name matches (checked above), or a read layer registers it.
+                res, detail = PASS, ""
+            else:
+                res, detail = NOT_PROVABLE, ("receipt names no host event and no read layer "
+                                             f"registers it; proves it: {actions[label]}")
+        elif not arrived:
+            if label in registrations:
+                res, detail = NOT_PROVABLE, f"no receipt in this window; proves it: {actions[label]}"
+            elif not project_known and not registrations:
+                # Nothing read wires the canary at all: the wiring may live in the
+                # unknown project's layers, so absence here proves nothing.
+                res, detail = NOT_PROVABLE, (f"no receipt, and {unknown}; proves it: "
+                                             f"{actions[label]}")
+            elif not project_known:
+                # The layers read wire the canary for other events but not this one:
+                # a partial wiring, measured where doctor reads, whatever the cwd.
+                res, detail = FAIL, (f"not_wired: no receipt, and the layers read ({project_desc}) "
+                                     f"register the {CANARY} for other events but not {label}")
+            else:
+                res, detail = FAIL, (f"not_wired: no receipt, and no {CANARY} {label} "
+                                     f"registration in the settings layers read ({project_desc})")
+        elif reason in WINDOW_REASONS:
+            res, detail = NOT_PROVABLE, (f"receipt not tied to this window ({reason}); "
+                                         f"proves it: {actions[label]}")
         else:
-            res, detail = FAIL, str(ev.get("failure_reason"))
+            res, detail = FAIL, str(reason)
         checks.append({"check": label, "result": res, "detail": detail})
 
     events = list(by_label.values())
@@ -203,7 +343,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     home = cs.harness_home(args.home)
-    session_id = args.session_id or cs.ambient_session_id() or f"noninteractive-{os.getpid()}"
+    real_sid = args.session_id or cs.ambient_session_id() or None
+    session_id = real_sid or f"noninteractive-{os.getpid()}"
     # Where doctor runs decides only the WORDING of a proving action, never a result.
     in_session = bool(cs.ambient_session_id()) and session_id == cs.ambient_session_id()
     state_file = cs.state_path(session_id)
@@ -212,7 +353,7 @@ def main(argv=None) -> int:
     # state rather than producing it, so a protected workflow can consult the
     # handshake without the 25s cost of a fresh run and without overwriting a PASS
     # that another consumer is relying on.
-    if args.route:
+    if args.route is not None:
         rec = cs.evaluate_activation(args.route, home=home, session_id=session_id,
                                      state_file=state_file, component="preflight_consumer")
         print(json.dumps(rec, indent=1, sort_keys=True))
@@ -242,7 +383,7 @@ def main(argv=None) -> int:
         # session proves its own PreToolUse/PostToolUse: reading it from a
         # background run is a tool call inside the window, and its result puts
         # the nonce in the transcript (cross-check 4).
-        sys.stderr.write(f"probe open: session={session_id} run={st['run_id']} "
+        sys.stderr.write(f"probe open: session={real_sid or 'none'} run={st['run_id']} "
                          f"nonce={st['nonce']} window={args.timeout}s\n")
         sys.stderr.flush()
 
@@ -258,7 +399,12 @@ def main(argv=None) -> int:
                                        session_id=session_id, state_file=state_file)
             )
 
-    checks = classify(state, canary_registrations(home), in_session, session_id)
+    probing_other = bool(args.session_id) and args.session_id != cs.ambient_session_id()
+    project = resolve_project(real_sid, probing_other, home)
+    project_desc = (f"harness home and project {project}" if project is not None
+                    else "harness home only")
+    checks = classify(state, canary_registrations(home, project), in_session, real_sid,
+                      project_known=project is not None, project_desc=project_desc)
     result, _first = overall_result(checks, state)
     code = EXIT_CODES[result]
 
@@ -284,7 +430,7 @@ def main(argv=None) -> int:
     for c in checks:
         lines.append(f"{c['check']:<29}{c['result']:<18}{c['detail']}".rstrip())
     if any(c["result"] == NOT_PROVABLE and c["check"] in cs.RELIED_UPON_EVENTS for c in checks):
-        lines.append(f"probe window: scripts/doctor --strict --session-id {session_id} "
+        lines.append(f"probe window: scripts/doctor --strict --session-id {real_sid or NO_SESSION} "
                      "--timeout 120 (its stderr 'probe open' line must reach that session's transcript)")
     b = state.get("binding") or {}
     lines.append(f"VERDICT {overall}  host={b.get('host_build')} harness={b.get('harness_version')}"
