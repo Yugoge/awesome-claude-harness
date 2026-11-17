@@ -265,3 +265,51 @@ def test_start_refuses_a_scratch_reached_through_a_planted_symlink(env_base, tmp
     (project / ".claude" / "scratch" / SID / "qa").symlink_to(elsewhere)
     assert "Your scratch" not in _context(run_start(env_base, "qa", "aplant1"))
     assert list(elsewhere.iterdir()) == []
+
+
+# --- verifier round 2: export status, removals at base behaviour --------------------------------------------------
+
+GRANT_MKTEMP = 'f=$(mktemp --tmpdir claude-grants/g.XXXXXX) && echo x > "$f"'
+
+
+@pytest.mark.parametrize("prefix,env_tmp", [("TMPDIR={own};", None),
+                                            ("export -n TMPDIR={own};", None),
+                                            ("export -n TMPDIR={own};", "own"),
+                                            ("declare -x TMPDIR=/tmp;", "own")])
+def test_mktemp_sees_only_an_exported_tmpdir(env_base, prefix, env_tmp):
+    # an unexported TMPDIR stays in the shell: mktemp makes the name in /tmp, here grant control state
+    _, project = env_base
+    own = own_scratch(project, "qa", "aqa1") / "tmp"
+    extra = {"TMPDIR": str(own)} if env_tmp else {}
+    refused(run_policy(env_base, "qa", "aqa1", prefix.format(own=own) + " " + GRANT_MKTEMP, extra_env=extra))
+
+
+@pytest.mark.parametrize("prefix,env_tmp", [("export TMPDIR={own};", None),
+                                            ("TMPDIR={own}; export TMPDIR;", None),
+                                            ("TMPDIR={own};", "/tmp")])
+def test_an_exported_tmpdir_reaches_mktemp(env_base, prefix, env_tmp):
+    _, project = env_base
+    own = own_scratch(project, "qa", "aqa1") / "tmp"
+    extra = {"TMPDIR": env_tmp} if env_tmp else {}
+    allowed(run_policy(env_base, "qa", "aqa1", prefix.format(own=own) + ' f=$(mktemp) && echo x > "$f"',
+                       extra_env=extra))
+
+
+@pytest.mark.parametrize("role", ["dev", "qa"])
+@pytest.mark.parametrize("victim", ["{sid}", "{sid}/qa/aqa-other", "", "{sid}/qa/aqa1", "{sid}/qa/aqa1/tmp"])
+def test_removals_keep_their_base_behaviour(env_base, role, victim):
+    # the scratch gate judges what is written, not what is removed: own cleanup and the base's
+    # removals of the namespace and of other dispatches' directories stay as they were
+    _, project = env_base
+    (project / ".claude" / "scratch" / SID / "qa" / "aqa-other").mkdir(parents=True)
+    path = (".claude/scratch/" + victim.format(sid=SID)).rstrip("/")
+    allowed(run_policy(env_base, role, "aqa1", f"rm -rf {path}"))
+
+
+def test_a_link_or_a_moved_directory_directly_in_scratch_is_no_flat_file(env_base):
+    _, project = env_base
+    (project / "adir").mkdir()
+    refused(run_policy(env_base, "dev", "adev1", "ln -s /tmp .claude/scratch/l"))
+    refused(run_policy(env_base, "dev", "adev1", "mv adir .claude/scratch/moved"))
+    (project / "afile").write_text("x")
+    allowed(run_policy(env_base, "dev", "adev1", "mv afile .claude/scratch/moved"))

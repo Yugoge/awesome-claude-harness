@@ -404,23 +404,42 @@ def _check_scratch_actor_exactness(role: str, target, data: dict, unique: bool =
     return (True, "ok")
 
 
-def _check_scratch_removals(role: str, tool_name: str, tool_input, data: dict) -> None:
-    """A Bash delete or rename-away of a scratch entry no write may reach: a sibling
-    dispatch's, or the namespace above the dispatches (the scratch root, a session- or
-    role-level entry). The caller's own entries and a flat file stay removable."""
+def _check_scratch_namespace_moves(role: str, tool_name: str, tool_input, data: dict) -> None:
+    """A file directly in .claude/scratch/ is no dispatch's only while it is a regular file:
+    a Bash link made there (`ln -s`), or a move there of a directory, a symlink or an entry of
+    the namespace above the dispatches (a session- or role-level entry), is refused. Deletes keep
+    their base behaviour (the scratch gate judges write targets, not removals)."""
     if tool_name != "Bash" or not isinstance(tool_input, dict):
         return
     command = tool_input.get("command")
-    if not isinstance(command, str):
+    if not isinstance(command, str) or not command.strip():
         return
-    for target, removed in extract_bash_touched_paths(command):
-        if not removed or not isinstance(target, str) or any(c in target for c in "$`\x00"):
+    from lib import bash_write_targets
+
+    found = bash_write_targets._targets(command)
+    for k, t in enumerate(found):
+        if t.mechanism not in ("ln", "mv", "git-mv"):
             continue
-        if _scratch_depth(target) < 0 or _scratch_status(role, target, data) != "sibling":
+        dest = bash_write_targets._render(t, command)
+        if not dest or any(c in dest for c in "$`\x00") or _scratch_depth(dest) != 1:
             continue
-        _emit_block(role, "Write", target, "a sibling dispatch's scratch or the scratch namespace is not removed "
-                                           "or renamed away: actor-exact namespace; " + _OWN_SCRATCH_HINT)
-        sys.exit(2)
+        refused = t.mechanism == "ln"
+        for s in found[k + 1:]:
+            if s.mechanism != t.mechanism + "-source":
+                break
+            src = bash_write_targets._render(s, command)
+            if not src or any(c in src for c in "$`\x00"):
+                refused = True
+                continue
+            path = src if os.path.isabs(os.path.expanduser(src)) else os.path.join(str(_project_root()), src)
+            depth = _scratch_depth(src)
+            if os.path.islink(path) or os.path.isdir(path) or 0 <= depth < 3 and not _flat_scratch_file(src):
+                refused = True
+        if refused:
+            _emit_block(role, "Write", dest, "only a regular file directly in .claude/scratch/ is no dispatch's: "
+                                             "no link, directory or namespace entry is made or moved there; "
+                                             + _OWN_SCRATCH_HINT)
+            sys.exit(2)
 
 
 def _expanded_target(tool_name: str, target, data: dict):
@@ -1448,7 +1467,7 @@ def main() -> None:
         # rows: the checks above are all that applies to them.
         sys.exit(0)
     _check_targets(role, tool_name, targets, data, own, approved)
-    _check_scratch_removals(role, tool_name, tool_input, data)
+    _check_scratch_namespace_moves(role, tool_name, tool_input, data)
     sys.exit(0)
 
 

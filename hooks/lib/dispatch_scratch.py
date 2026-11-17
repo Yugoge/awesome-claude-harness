@@ -199,6 +199,8 @@ def _mktemp(word, scope, cwd: str) -> Optional[Value]:
             template = a
         i += 1
     env_tmp = scope.get("TMPDIR")
+    if env_tmp is _UNKNOWN and (tflag or pdir == "" or (pdir is None and template is None)):
+        return None  # the directory is $TMPDIR's, and its value or export is not known
     env_tmp = env_tmp.path if isinstance(env_tmp, Value) else env_tmp
     env_tmp = env_tmp if isinstance(env_tmp, str) and env_tmp else None
     # GNU mktemp: with -t, $TMPDIR, else -p DIR, else /tmp; without -t, -p DIR (or --tmpdir=DIR) wins,
@@ -243,7 +245,7 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
     script = _sp.parse(command)
     if script.errors():
         return scope
-    top, conditional = [], set()
+    top, conditional, exports = [], set(), []
     # Chains: the top-level items joined by && or ||. An assignment in a later element of a chain
     # runs only when the elements before it succeed (&&) or fail (||). Under a pure && chain every
     # later element runs only if it did, so it binds there; a use outside that chain (after ; or a
@@ -276,9 +278,19 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
         if not cmd.words:
             found.extend(cmd.assignments)
         elif cmd.words[0].value() == "export":
-            for w in cmd.words[1:]:
-                if re.match(r"[A-Za-z_]\w*=", w.raw.text):
+            words = cmd.words[1:]
+            flagged = any((w.value() or "-").startswith("-") for w in words)
+            for w in words:
+                m = re.match(r"([A-Za-z_]\w*)(=?)", w.raw.text)
+                if not m:
+                    continue
+                if flagged:  # export -n, -f, -p ...: what reaches a child is not modelled
+                    conditional.add(m.group(1))
+                elif m.group(2):
                     found.append(_sp.Assignment(w))
+                    exports.append((w.span[0], m.group(1)))
+                else:
+                    exports.append((w.span[0], m.group(1)))
         if not maybe and k > 0:
             # a later element of a pure && chain: every use of the name must lie in this chain, after it
             span = chain["span"]
@@ -304,9 +316,20 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
                 m = re.match(r"([A-Za-z_]\w*)=", w.raw.text)
                 if m:
                     counted[m.group(1)] = counted.get(m.group(1), 0) + 1
+    if re.search(r"(?:^|[\s;&|(`])(?:source|\.|eval)\s", command):
+        # a sourced or eval'd text can bind and export anything
+        out = {name: _UNKNOWN for name in scope}
+        out["TMPDIR"] = _UNKNOWN
+        return out
+    # Names a binder (read, declare, unset ...) or an unmodelled export touches: unknown in the
+    # shell and to a child, before any assignment's value is computed.
+    for m in re.finditer(r"(?:^|[\s;&|(`])(?:%s)\s+([^;&|\n]*)" % "|".join(map(re.escape, _BINDERS)), command):
+        conditional.update(re.findall(r"[A-Za-z_]\w*", m.group(1)))
     names = {}
     for a in top:
         names[a.name] = names.get(a.name, 0) + 1
+    for name in conditional:
+        scope[name] = _UNKNOWN
     for name, n in counted.items():
         if nested or names.get(name) != n or n != 1 or name in conditional:
             scope[name] = _UNKNOWN
@@ -317,13 +340,23 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
         if first_ref is not None and first_ref.start() < a.word.span[0]:
             scope[a.name] = _UNKNOWN
             continue
-        scope[a.name] = _assignment_value(a, scope, cwd)
-    if re.search(r"(?:^|[\s;&|(`])(?:source|\.|eval)\s", command):
-        return {name: _UNKNOWN for name in scope}  # a sourced or eval'd text can bind anything
-    for m in re.finditer(r"(?:^|[\s;&|(`])(?:%s)\s+([^;&|\n]*)" % "|".join(map(re.escape, _BINDERS)), command):
-        for name in re.findall(r"[A-Za-z_]\w*", m.group(1)):
-            scope[name] = _UNKNOWN
+        # a child process (mktemp) sees a shell variable only once it is exported: an
+        # assignment to a name the environment did not export, before an `export` of it,
+        # stays in the shell
+        exported = set(env) | {name for at, name in exports if at <= a.word.span[0]}
+        scope[a.name] = _assignment_value(a, _child(scope, exported), cwd)
+    scope[_EXPORTED] = frozenset(set(env) | {name for _, name in exports})
     return scope
+
+
+_EXPORTED = "\0exported"  # bindings(): the names exported by the end of the command
+
+
+def _child(scope: Mapping, exported) -> dict:
+    """The variables a child process sees: the exported names' current values, and every
+    name whose value or export is unknown (as unknown)."""
+    return {name: value for name, value in scope.items()
+            if name != _EXPORTED and (name in exported or value is _UNKNOWN)}
 
 
 def _substituted_mktemp(target: str, scope, cwd: str) -> Optional[Value]:
@@ -360,7 +393,7 @@ def resolve_target(target: str, command: str, env: Mapping[str, str], cwd: str) 
         return None
     scope = bindings(command, env, cwd)
     if target.startswith(("$(", "`")):  # the parser put an assigned $(mktemp ...) in its variable's place
-        return _substituted_mktemp(target, scope, cwd)
+        return _substituted_mktemp(target, _child(scope, scope.get(_EXPORTED, ())), cwd)
     if "`" in target or "$(" in target:
         return None
     whole = re.fullmatch(r"\$\{?([A-Za-z_]\w*)\}?(/.*)?", target)
