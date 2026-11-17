@@ -255,7 +255,7 @@ Two narrow, human-authorized escape hatches:
 
 ### 6.4 Branch / PR / worktree firewall
 
-Creating a branch, PR, or worktree is forbidden by default everywhere (`CLAUDE.md` §No branch/PR/worktree). `hooks/pretool-block-branch-pr-worktree.py` (matcher `Bash`) blocks `git branch <name>`, `checkout -b`, `switch -c` (plus `--orphan`/copy/path-qualified/clustered-short-option forms), `git worktree add`, and `gh pr create`. `hooks/pretool-block-enterworktree.sh` blocks the `EnterWorktree` tool. List/delete/rename/info forms stay allowed. Bypass: a live `/dev-overnight` session, `/do`, or `/allow`.
+Creating a branch or a PR is allowed; creating a worktree is refused outside a live `/dev-overnight` session, `/do` consent (main agent) or an `/allow` grant for the command (`CLAUDE.md` §Branches, PRs and worktrees). `hooks/pretool-block-branch-pr-worktree.py` (matcher `Bash`) refuses every `git worktree add` the command runs as `hooks/lib/shell_parse.py` reads it: in command position, inside a shell `-c` string, behind a wrapper or a git global option; text that only mentions it runs nothing and passes. `hooks/pretool-block-enterworktree.sh` refuses the `EnterWorktree` tool (an `/allow EnterWorktree` grant passes the main agent only). Deleting or renaming a branch is refused as a direct ref mutation by `hooks/pretool-bash-safety.sh` and `hooks/pretool-git-privilege-guard.py` unless an `/allow` grant names the command.
 
 ### 6.5 Checkpoints (`refs/checkpoints/*`)
 
