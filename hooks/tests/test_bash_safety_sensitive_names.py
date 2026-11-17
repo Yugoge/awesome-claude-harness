@@ -1,7 +1,9 @@
 """OB-L14: bash-safety's sensitive-file rule BS-20/21 (audit BS-10/11) keeps the base's case-insensitive substring
 check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write target and each word or
-read source of a command that writes a file, lifted only by hooks/lib/sensitive_names.py's narrow exemptions (URLs,
-test files, reports and logs, templates); quoted data and heredoc bodies are data, computed words keep the check.
+read source of a command that writes a file, lifted only by hooks/lib/sensitive_names.py's narrow exemptions, each in
+its role (test files; reports, logs and templates written; a template read by cp or cat; a URL given to a network
+client; a code file copied onto a code-file name); quoted data and heredoc bodies are data, computed words keep the
+check.
 
 Every hook call runs pretool-bash-safety.sh with a scratch HOME, state dir and git config, an empty
 protected-runtime file, and a throwaway repository as its working directory. No command is ever executed.
@@ -134,11 +136,20 @@ def test_the_list_is_one_reusable_definition():
               "PASSWORD.TXT", "password-policy", "secrets.py", "password_reset.md", ".env-prod", ".env_prod",
               "prod.env.bak", "my.secret", "x.secret.json", "secrets/prod.yaml", "config/secrets/db",
               ".password-store/foo.gpg", "topsecret", "secrets.yaml.j2", "~/.ssh/id_rsa.bak", "tests/secrets/test_x.py"]
-    unlisted = ["test_password_reset.py", "test_auth_password.py", "secret-scan-report.txt", "config.ts", "pytest.log",
-                "policy.html", "id_rsa.pub", "environment.ts", "venv", "", "https://example.com/docs/password-policy",
-                ".env.example", "src/password.test.ts", "auth_password_test.go", "/tmp/secret-build.log"]
+    unlisted = ["test_password_reset.py", "test_auth_password.py", "config.ts", "pytest.log", "policy.html",
+                "id_rsa.pub", "environment.ts", "venv", "", "src/password.test.ts", "auth_password_test.go"]
     assert [n for n in listed if not is_sensitive_name(n)] == []
     assert [n for n in unlisted if is_sensitive_name(n)] == []
+    # The URL, report/log and template exemptions hold only in the role the caller names.
+    roled = [("https://example.com/docs/password-policy", {"url": True}),
+             ("secret-scan-report.txt", {"report": True}), ("/tmp/secret-build.log", {"report": True}),
+             (".env.example", {"template": True})]
+    assert [n for n, roles in roled if is_sensitive_name(n, **roles)] == []
+    assert [n for n, _ in roled if not is_sensitive_name(n)] == []
+    # A report or log whose stem is the secret word, a `report` inside another word, and `.dist` are no exemption.
+    never = [".env.report", ".env.log", "credentials.report", "password.log", "secret.log", "secrets-report.yaml",
+             "reporter-secret.txt", "password_reporter.py", "secret-reporting.txt", ".env.dist", "secrets.yaml.dist"]
+    assert [n for n in never if not is_sensitive_name(n, report=True, template=True)] == []
     # A word computed at run time keeps the substring check on its raw text, with no exemption.
     computed = ['"$HOME/.env"', ".env$X", "$(echo .env)", "report-$(cat .env).log", "https://$H/password"]
     assert [n for n in computed if not is_sensitive_name(n, computed=True)] == []
@@ -184,3 +195,63 @@ def test_a_name_the_base_refused_by_substring_is_still_refused(sandbox, command,
 def test_an_exempt_name_passes(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 0, (command, r.stderr)
+
+
+# A URL is no file name only as a network client's argument: a redirection or write target, or another command's
+# operand, is a local path whatever its spelling.
+URL_AS_LOCAL_PATH = [
+    ("echo x > http://x/.env", WRITE),
+    ("echo x > HTTP://x/.env", WRITE),
+    ("echo x > file:///tmp/.env", WRITE),
+    ("cat x > ftp://h/.aws/credentials", WRITE),
+    ("cat x > HTTP://h/.aws/credentials", WRITE),
+    ("mkdir -p http:/x && echo k > http://x/.env", WRITE),
+    ("cat http://x/.env > /tmp/y", READ),
+    ("cat file:///home/u/.env > /tmp/y", READ),
+    ("cat https://x/.aws/credentials > /tmp/y", READ),
+]
+
+
+@pytest.mark.parametrize("command,label", URL_AS_LOCAL_PATH)
+def test_a_url_spelled_local_path_is_still_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A report or log is exempt only as a write target with `report` as a whole token and a stem that is not the secret
+# word itself; a template only without `.dist`, and as a read only for a cp or cat source.
+NARROW_EXEMPTIONS = [
+    ("echo x > .env.report", WRITE),
+    ("echo x > .env.log", WRITE),
+    ("echo x > credentials.report", WRITE),
+    ("echo x > password.log", WRITE),
+    ("echo x > secret.log", WRITE),
+    ("echo x > secrets-report.yaml", WRITE),
+    ("echo x > reporter-secret.txt", WRITE),
+    ("echo x > password_reporter.py", WRITE),
+    ("echo x > .env.dist", WRITE),
+    ("cat credentials.report > /tmp/x", READ),
+    ("cat .env.dist > /tmp/x", READ),
+    ("grep KEY .env.example > /tmp/x", READ),
+]
+
+
+@pytest.mark.parametrize("command,label", NARROW_EXEMPTIONS)
+def test_a_name_outside_the_narrowed_exemptions_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "cp src/password.ts dist/password.ts",
+    "cat .env.example > /tmp/x",
+    "curl -s https://example.com/.well-known/password-policy > /tmp/x.html",
+])
+def test_a_code_copy_a_template_read_or_a_network_url_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+def test_a_code_copy_into_a_secret_directory_is_still_refused(sandbox):
+    r = run(sandbox, "cp src/password.ts secrets/password.ts")
+    assert r.returncode == 2 and WRITE in r.stderr, r.stderr

@@ -855,13 +855,28 @@ _SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd
 # The verbs that write what they read into another file: a listed name among their operands is a secret read
 # into a file, as an argument of a command whose output is redirected into one is.
 _SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
+# The network clients whose non-output arguments may be URLs: a URL there names no local file.
+_NETWORK_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "aria2c"})
+# The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
+_TEMPLATE_COPIERS = frozenset({"cp", "cat"})
 
 
-def _word_sensitive(w):
-    """lib/sensitive_names.py's verdict on a Word: its static value, or its raw text when computed."""
+def _word_sensitive(w, **roles):
+    """lib/sensitive_names.py's verdict on a Word: its static value with the exemptions `roles` allows, or its raw
+    text when computed."""
     from lib.sensitive_names import is_sensitive_name
     v = w.value()
-    return is_sensitive_name(v) if v is not None else is_sensitive_name(w.text, computed=True)
+    return is_sensitive_name(v, **roles) if v is not None else is_sensitive_name(w.text, computed=True)
+
+
+def _code_copy(t):
+    """True when a copy, move or link writes a code file from a code file (`cp src/password.ts dist/password.ts`)
+    into a directory that carries no secret word."""
+    from lib.sensitive_names import base_name, is_code_file, is_sensitive_name
+    if t.mechanism not in _SENSITIVE_COPIERS or not (t.source and is_code_file(t.source) and is_code_file(t.path)):
+        return False
+    head = t.path[:len(t.path) - len(base_name(t.path))]
+    return not is_sensitive_name(head)
 
 
 def _command_name(cmd):
@@ -880,9 +895,12 @@ def sensitive_redirect(command):
 
     Read from lib/shell_parse.py's parsed commands, payloads included (eval, bash -c, a heredoc-fed shell), so a
     name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
-    by substring with lib/sensitive_names.py's narrow exemptions (URLs, test files, reports and logs, templates);
-    a computed word (`$X`, `$(...)`, a glob) and interpreter code by substring on their raw text. A command the
-    parser cannot read is judged on its raw text by substring, so it is refused more, never less.
+    by substring with lib/sensitive_names.py's narrow exemptions, each only where its role allows: a test file
+    anywhere; a report, log or template as a write target; a template as a cp or cat source; a URL as a network
+    client's argument, never as a redirection or write target or another command's operand; a code file copied
+    onto a code-file name. A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
+    their raw text. A command the parser cannot read is judged on its raw text by substring, so it is refused more,
+    never less.
     """
     from lib.sensitive_names import RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_sensitive_name
     try:
@@ -894,21 +912,28 @@ def sensitive_redirect(command):
             writer = t.mechanism.startswith("redirect") or t.mechanism.split("-", 1)[0] in _SENSITIVE_WRITERS
             if not writer or t.mode == "delete":
                 continue
-            if is_sensitive_name(t.path) if t.path is not None else (t.word is not None and _word_sensitive(t.word)):
+            if t.path is not None:
+                if is_sensitive_name(t.path, report=True, template=True) and not _code_copy(t):
+                    return "write"
+            elif t.word is not None and _word_sensitive(t.word):
                 return "write"
         for site in walk(script):
             redirs = [r for r in site.cmd.redirects if r.target is not None]
             outputs = [r for r in redirs if r.writes()]
-            if any(_word_sensitive(r.target) for r in outputs):
+            if any(_word_sensitive(r.target, report=True, template=True) for r in outputs):
                 return "write"
+            name = _command_name(site.cmd)
             if outputs:
                 words = site.cmd.words[1:]
-            elif _command_name(site.cmd) in _SENSITIVE_COPIERS:
+            elif name in _SENSITIVE_COPIERS:
                 # A copy's source operands: a source-code file is no secret read (its destination was judged above).
                 words = [w for w in site.cmd.words[1:] if not is_code_file(w.value())]
             else:
                 continue
-            if any(_word_sensitive(w) for w in words) \
+            # The destination was judged above, so a cp or cat source here is copied into a path that is not
+            # sensitive; a URL is a network client's argument, never another command's operand.
+            roles = {"url": name in _NETWORK_CLIENTS, "template": name in _TEMPLATE_COPIERS}
+            if any(_word_sensitive(w, **roles) for w in words) \
                     or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
                 return "redirect"
         return None
