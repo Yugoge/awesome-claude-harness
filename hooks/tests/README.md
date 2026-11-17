@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 186
+- **Total files**: 187
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -12,6 +12,7 @@
 - `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 - `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
 - `test_agent_resolver.py` - Covers the bug: cp-state files that were never checked out (crashed/
+- `test_agent_tool_name_pin.py` - The CLI renamed its subagent tool from Task to Agent and still accepts "Task" as an alias. The
 - `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 - `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a
 - `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants

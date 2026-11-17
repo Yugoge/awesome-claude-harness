@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T02:01:25Z*
-**Total entries**: 401
+*Last updated: 2026-11-17T07:38:13Z*
+**Total entries**: 403
 **Convention**: kebab
 
 ## Tree
@@ -103,6 +103,7 @@ hooks/
 ├── tests/
 │   ├── fixtures/
 │   │   ├── `adversarial_corpus.json` - json config
+│   │   ├── `cli-agent-dispatch-hook-payloads.json` - JSON config: _doc, cli_version, recorded, runs
 │   │   ├── `pol_benign_strictness_exceptions.json` - JSON config: schema, criterion, task_id, iteration, _doc
 │   │   ├── `pol_installed_program_allow_set.json` - JSON config: allowing, allowing_count, criterion, probe_shape, program_set_size
 │   │   ├── `pol_iteration5_qa_matrix.v1.json` - JSON config: schema, schema_descriptor, provenance_key, digests, counts
@@ -112,6 +113,7 @@ hooks/
 │   ├── `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
+│   ├── `test_agent_tool_name_pin.py` - The CLI renamed its subagent tool from Task to Agent and still accepts "Task" as an alias. The
 │   ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 │   ├── `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants

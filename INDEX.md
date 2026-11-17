@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T05:12:57Z*
-**Total entries**: 970
+*Last updated: 2026-11-17T07:38:13Z*
+**Total entries**: 971
 **Convention**: kebab
 
 ## Tree
@@ -190,6 +190,7 @@ dot-claude/
 │   │   ├── `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 │   │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
+│   │   ├── `test_agent_tool_name_pin.py` - The CLI renamed its subagent tool from Task to Agent and still accepts "Task" as an alias. The
 │   │   ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 │   │   ├── `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a
 │   │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
