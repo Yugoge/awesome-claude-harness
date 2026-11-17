@@ -1239,17 +1239,18 @@ _SD_GIT_GREP = ("efABCm", "aiIwvhHEGFPnlLcopWzqr",
 _SD_GIT_GLOBAL_FLAGS = {"--no-pager", "-p", "--paginate", "-P", "--no-optional-locks", "--no-replace-objects",
                         "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}
 # git log options. A value option takes the next word (or its `=value`); a flag takes nothing; an attached option
-# takes a value only after `=`. An option on none of these lists (a new one included) leaves no allowed mention, since
+# takes a value only after `=` (git reads an optional or `=`-only value, as `--unified[=<n>]` or `--orderfile=<f>`, never
+# from the next word, so such an option is a flag or attached-only, never a value option). An option on none of these lists (a new one included) leaves no allowed mention, since
 # one that takes the next word would shift `-S` into value position and the name after it into a pathspec.
 _SD_LOG_VALUES = {"-n", "--max-count", "--skip", "--since", "--after", "--until", "--before", "--author",
-                  "--committer", "--grep-reflog", "--find-object", "-L", "--min-parents", "--max-parents", "-O",
+                  "--committer", "--grep-reflog", "--find-object", "-L", "-O",
                   "-I", "--ignore-matching-lines", "--exclude", "--word-diff-regex", "--anchored", "--rotate-to",
                   "--skip-to", "--line-prefix", "--src-prefix", "--dst-prefix", "--max-age", "--min-age",
                   "--since-as-filter", "--decorate-refs", "--decorate-refs-exclude", "--diff-algorithm",
                   "--inter-hunk-context", "--output-indicator-new", "--output-indicator-old",
                   "--output-indicator-context", "--ws-error-highlight", "--stat-width", "--stat-name-width",
-                  "--stat-graph-width", "--stat-count", "--date", "--encoding", "--diff-merges", "--orderfile",
-                  "--default", "--unified", "--exclude-hidden"}
+                  "--stat-graph-width", "--stat-count", "--date", "--encoding", "--diff-merges", "--default",
+                  "--exclude-hidden"}
 _SD_LOG_FLAGS = {"-p", "-u", "--patch", "-s", "--no-patch", "-i", "--regexp-ignore-case", "-E", "--extended-regexp",
                  "-F", "--fixed-strings", "-P", "--perl-regexp", "--basic-regexp", "--all-match", "--invert-grep",
                  "--oneline", "--all", "--branches", "--tags", "--remotes", "--reverse", "--graph", "--no-graph",
@@ -1271,12 +1272,13 @@ _SD_LOG_FLAGS = {"-p", "-u", "--patch", "-s", "--no-patch", "-i", "--regexp-igno
                  "--word-diff", "--color-words", "--color", "--color-moved", "--no-color-moved", "--submodule",
                  "--relative", "--no-relative", "--abbrev", "--notes", "--show-notes", "--standard-notes",
                  "--no-standard-notes", "--dirstat", "--cumulative", "--indent-heuristic", "--no-indent-heuristic",
-                 "--find-renames", "--find-copies", "--find-copies-harder", "--break-rewrites"}
+                 "--find-renames", "--find-copies", "--find-copies-harder", "--break-rewrites", "--unified"}
 _SD_LOG_ATTACHED = {"--format", "--pretty", "--abbrev", "--decorate", "--color", "--color-moved", "--word-diff",
                     "--color-words", "--stat", "--dirstat", "--diff-filter", "--relative", "--notes", "--show-notes",
                     "--submodule", "--branches", "--tags", "--remotes", "--glob", "--expand-tabs",
                     "--show-linear-break", "--no-walk", "--color-moved-ws", "--ignore-submodules", "--simplify-merges",
-                    "--ancestry-path", "--find-renames", "--find-copies", "--break-rewrites"}
+                    "--ancestry-path", "--find-renames", "--find-copies", "--break-rewrites", "--unified",
+                    "--min-parents", "--max-parents", "--orderfile"}
 _SD_LOG_SHORT_ATTACHED = "nUMCBlIO"  # a short option whose value may follow it in the same word, as `-n5` or `-U3`
 _SD_COMMIT_SHORT_VALUES = "mFCct"
 _SD_COMMIT_SHORT_OPTIONAL = "Su"

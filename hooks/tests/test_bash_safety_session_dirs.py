@@ -66,6 +66,9 @@ MENTIONS = [
     "git -C /tmp/repo log --oneline -S session_dirs.txt",
     "git log --oneline -Ssession_dirs.txt",
     "git log --grep=session_dirs.txt",
+    "git log -p --unified -S session_dirs.txt",
+    "git log -p --unified=5 -S session_dirs.txt",
+    "git log --min-parents=2 -S session_dirs.txt",
     'git commit -am "docs: explain session_dirs.txt"',
     'git commit --message="session_dirs.txt notes"',
     'git commit -q -m "a" -m "b: session_dirs.txt"',
@@ -463,6 +466,12 @@ SHIFTED = [
     "git log -p --dst-prefix -S session_dirs.txt",
     "git log --some-future-option -S session_dirs.txt",
     "git log -Q -S session_dirs.txt",
+    "git log -p --unified -I -S session_dirs.txt",
+    "git log -p --unified --exclude -S session_dirs.txt",
+    "git log -p --unified -S -S session_dirs.txt",
+    "git log --min-parents -I -S session_dirs.txt",
+    "git log --max-parents -I -S session_dirs.txt",
+    "git log -p --orderfile -I -S session_dirs.txt",
 ]
 
 
