@@ -80,9 +80,11 @@ Behavior:
     since the session last looked is recorded (lib/report_provenance.py), the
     provenance subagentstop-e2e-enforce.py checks (CD-6). Never refuses.
   - Main agent (no agent_id), Bash running the harness's own hook code by hand:
-    a PreToolUse/SubagentStart/SubagentStop hook entry run or exec'd, or code
-    naming report_provenance, observe_call or the report-provenance state dir,
-    or loading from the hooks directory -> exit 2 (_check_hook_replay, CD-6).
+    a PreToolUse/SubagentStart/SubagentStop hook entry run or exec'd (globs and
+    braces included, find -exec), or inline code importing or running a hook
+    entry or report_provenance / observe_call, writing the report-provenance
+    state dir, or importing a hooks module from the hooks directory -> exit 2
+    (_check_hook_replay, CD-6). Code that only reads them, `bash -n`, pass.
   - Main agent (no agent_id) writing a gate-read report this reading sees for
     certain: a Bash write of a QA or dev report (docs/dev/qa-report-*.json,
     ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
@@ -1055,41 +1057,183 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
 # commands run other harness scripts: merge.sh, prompt-workflow.py, lib CLIs, sourced
 # helpers, and those still pass), so its Bash call is refused when, literally:
 #   - an interpreter (python, node, perl, ruby, php, a shell, `.`/`source`) runs such a
-#     file as its script, or the file is executed directly (by path, `cd` then `./x`);
+#     file as its script (as written, after a `cd`, through a link, or as a glob, `?`,
+#     bracket or brace spelling that matches one on disk; a shell's `-o`/`+x` options
+#     skipped), the file is executed directly (by path, `cd` then `./x`), or
+#     `find -name <entry> -exec <interpreter> {}` (or `-exec {}`) runs it;
 #   - inline code (`-c`/`-e`/`-r`, or code an interpreter reads from a heredoc, here-string
-#     or pipe) names such a file, the provenance module (report_provenance, observe_call,
-#     the report-provenance state dir), or puts the harness hooks directory on the import
-#     path (sys.path, runpy, importlib, __import__, subprocess, exec); or `-m` runs the
-#     provenance module;
+#     or pipe) loads or runs code (sys.path, runpy, importlib, __import__, subprocess,
+#     exec, os.system, require of a file, child_process) while naming such a file, the
+#     provenance module or the hooks directory; imports or calls report_provenance /
+#     observe_call; writes, copies, moves or removes anything it names under the
+#     report-provenance state dir; or, as python run with its directory in a hooks
+#     directory (or its lib), imports a module of that directory; or `-m` runs the
+#     provenance module or a module of a hooks directory it runs in;
 #   - PYTHONPATH is set to a hooks directory for an interpreter running inline code.
+# Passes: inline code that only opens and reads a hook entry, the provenance module or the
+# ledger (ast.parse, a count, readFileSync, json.load), and `bash -n`/`sh -n` of an entry
+# (no later `+n` / `+o noexec`).
 # A subagent is not refused here: a dev subagent testing a hook feeds it payloads by hand.
 # Not seen (accepted limit, docs/ENFORCEMENT-LEDGER.md R-003): a computed name, code staged
-# in a file by an earlier call, a copy of the hook, a subagent doing it.
+# in a file by an earlier call, a copy of the hook, a subagent doing it, `xargs` running a
+# name it reads, a find `-exec sh -c '...' _ {}` script's operands.
 _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py|sh)")
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
 _SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "source", "."})
+_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
 _HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
-_LOADS = re.compile(r"sys\.path|runpy|importlib|__import__|subprocess|\bexec\b|os\.system|\bpopen\b|"
-                    r"\bspawn|require\(|child_process|\bsystem\(")
+# Code that loads or runs other code: an import machinery, a process launch, exec. `require` of a
+# bare builtin name (`require('fs')`) loads no file and is not counted.
+_LOADS = re.compile(r"sys\.path|runpy|importlib|__import__|subprocess|\bexec\b|\bexec[lv]p?e?\b|os\.system|"
+                    r"\bpopen\b|\bspawn|require\(\s*(?![\"'`](?:node:)?\w+[\"'`]\s*\))|child_process|"
+                    r"\bsystem\(|\beval\(|\bload\(\s*[\"']/")
+# An import statement naming the provenance module or its observe_call, and a call of observe_call.
+_IMPORTS_PROVENANCE = re.compile(r"\b(?:from|import)\b[^\n;]*(?:report_provenance|observe_call)|observe_call\s*\(")
+# Code that writes, copies, moves, links or removes a file it names.
+_WRITES = re.compile(
+    r"\.write\w*\(|write_text|write_bytes|\bdump\(|shutil\.|os\.(?:rename|replace|remove|unlink|link|symlink|"
+    r"truncate|makedirs|mkdir|rmdir|open|chmod|utime)\b|\.(?:touch|mkdir|unlink|rename|replace|symlink_to|"
+    r"hardlink_to|link_to|rmdir|chmod)\(|truncate|writeFile|appendFile|createWriteStream|copyFile|cpSync|"
+    r"\bfs\.(?:rm|cp|mkdir|rename|unlink|symlink|link|open)|"
+    r"open\([^)]*,\s*(?:mode\s*=\s*)?[\"'][rbtU]*[wax+]|\.open\(\s*(?:mode\s*=\s*)?[\"'][rbtU]*[wax+]|"
+    r"[\"']\+?>{1,2}|[\"']\+<|print\([^)]*file\s*=")
+# Top-level module names an import statement in python code names.
+_PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
+_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+_FIND_NAME_OPTS = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"})
+_EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
+                            "sudo", "ionice", "chrt", "taskset", "xargs"})
+_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+
+
+def _spellings(value: str) -> list:
+    """``value`` (a word's text) with its quotes dropped, its brace alternatives expanded."""
+    out, todo = [], [value.replace('"', "").replace("'", "")]
+    while todo and len(out) < 64:
+        v = todo.pop()
+        m = _BRACE.search(v)
+        if not m:
+            out.append(v)
+            continue
+        todo.extend(v[:m.start()] + alt + v[m.end():] for alt in m.group(1).split(","))
+    return out
 
 
 def _hook_entry_path(value, dirs) -> bool:
+    """Whether ``value`` (a script operand or command head, as written) names a hook entry or the
+    provenance module: as written, after a `cd`, through an existing link, or as a glob, `?`,
+    bracket or brace spelling that matches one on disk."""
     if not value:
         return False
-    if _HOOK_ENTRY.fullmatch(os.path.basename(value)) or _PROVENANCE_TEXT.search(value):
-        return True
-    for d in dirs:
-        try:
-            real = os.path.realpath(os.path.join(d, os.path.expanduser(value)))
-        except (OSError, ValueError):
-            continue
-        if _HOOK_ENTRY.fullmatch(os.path.basename(real)) or _PROVENANCE_TEXT.search(real):
+    import glob as _glob
+
+    for v in _spellings(value):
+        if _HOOK_ENTRY.fullmatch(os.path.basename(v)) or _PROVENANCE_TEXT.search(v):
             return True
+        for d in dirs:
+            try:
+                path = os.path.join(d, os.path.expanduser(v))
+                found = _glob.glob(path)[:64] if any(c in v for c in "*?[") else [path]
+            except (OSError, ValueError, re.error):
+                continue
+            for p in found:
+                try:
+                    real = os.path.realpath(p)
+                except (OSError, ValueError):
+                    continue
+                if _HOOK_ENTRY.fullmatch(os.path.basename(real)) or _PROVENANCE_TEXT.search(real):
+                    return True
     return False
+
+
+def _is_hooks_dir(d: str) -> bool:
+    """A harness hooks directory (one holding a hook entry) or its ``lib``."""
+    try:
+        d = os.path.realpath(d)
+        if os.path.basename(d) == "lib":
+            d = os.path.dirname(d)
+        return os.path.basename(d) == "hooks" and any(_HOOK_ENTRY.fullmatch(n) for n in os.listdir(d))
+    except (OSError, ValueError):
+        return False
+
+
+def _imports_from(code: str, dirs: list) -> bool:
+    """Whether python ``code``, run with its directory in a hooks directory (`-c`, `-`, stdin: the
+    directory is first on its import path), imports a module of that directory or edits its path."""
+    hooks = [d for d in dirs if _is_hooks_dir(d)]
+    if not hooks:
+        return False
+    if _LOADS.search(code):
+        return True
+    for m in _PY_IMPORTED.finditer(code):
+        for name in (m.group(1) or m.group(2) or "").split(","):
+            top = name.strip().split(".")[0]
+            if top and any(os.path.exists(os.path.join(d, top + ".py")) or os.path.isdir(os.path.join(d, top))
+                           for d in hooks):
+                return True
+    return False
+
+
+def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
+    """What inline ``code`` of interpreter ``name`` does that runs hook code; None for code that
+    only reads (opens a hook entry, the provenance module or the ledger and prints)."""
+    if _LOADS.search(code) and (_HOOK_ENTRY.search(code) or _PROVENANCE_TEXT.search(code)
+                                or _HOOKS_DIR.search(code)):
+        return name + " code loading from the harness hooks directory"
+    if _IMPORTS_PROVENANCE.search(code):
+        return name + " code importing the provenance module"
+    if _PROVENANCE_TEXT.search(code) and _WRITES.search(code):
+        return name + " code writing the provenance ledger"
+    if name.startswith(("python", "pypy")) and _imports_from(code, dirs):
+        return name + " code importing from the harness hooks directory"
+    return None
+
+
+def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
+    """`find ... -name <entry> -exec <interpreter> {} ;` (or `-exec {}`): the entry run by find."""
+    words = [a if a is not None else t for a, t in zip(args, texts)]
+    starts = [i for i, w in enumerate(words) if w in _FIND_EXEC]
+    if not starts:
+        return None
+    runs = False
+    for i in starts:
+        rest = [w for w in words[i + 1:]]
+        j = 0
+        while j < len(rest) and (rest[j] in _EXEC_WRAPPERS or rest[j].startswith("-") or "=" in rest[j]
+                                 or rest[j].replace(".", "").isdigit()):
+            j += 1
+        if j < len(rest) and (rest[j] == "{}" or _RUNNERS.match(os.path.basename(rest[j]))):
+            runs = True
+    if not runs:
+        return None
+    roots = []
+    for w in words:
+        if w.startswith(("-", "(", "!")):
+            break
+        roots.append(w)
+    for i, w in enumerate(words[:-1]):
+        if w not in _FIND_NAME_OPTS:
+            continue
+        pat = words[i + 1].replace('"', "").replace("'", "")
+        if _HOOK_ENTRY.search(pat) or _PROVENANCE_TEXT.search(pat):
+            return "find -exec of " + pat
+        import fnmatch
+
+        for root in roots or ["."]:
+            for d in dirs:
+                base = os.path.join(d, os.path.expanduser(root))
+                for sub in (base, os.path.join(base, "hooks")):
+                    try:
+                        names = os.listdir(sub)
+                    except (OSError, ValueError):
+                        continue
+                    if any(_HOOK_ENTRY.fullmatch(n) and fnmatch.fnmatch(n, os.path.basename(pat)) for n in names):
+                        return "find -exec of " + pat
+    return None
 
 
 def _runs_hook_code(command: str, cwd: str) -> str | None:
@@ -1102,14 +1246,23 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
     for site in sp.walk(script):
         r = sp.resolve(site.cmd)
         name = r.name or ""
-        head = r.head.value() if r.head is not None else None
+        head = None
+        if r.head is not None:
+            head = r.head.value()
+            if head is None:
+                head = r.head.text
         if head and ("/" in head or _HOOK_ENTRY.fullmatch(name)) and _hook_entry_path(head, dirs):
             return head  # executed directly
-        if not _RUNNERS.match(name):
-            continue
         args = [w.value() for w in r.args]
         texts = [w.text for w in r.args]
-        inline, operand, module, i = [], None, None, 0
+        if name == "find":
+            hit = _find_runs_hook(args, texts, dirs)
+            if hit:
+                return hit
+            continue
+        if not _RUNNERS.match(name):
+            continue
+        inline, operand, module, i, noexec = [], None, None, 0, False
         while i < len(args):
             a = args[i] if args[i] is not None else texts[i]
             if a == "--":
@@ -1124,6 +1277,16 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if name in _SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
                 operand = None
                 break  # `sh -c CODE`: walked as commands of its own
+            if name in _SHELLS and a in _SHELL_VALUE_OPTS:
+                if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
+                    noexec = a == "-o"
+                i += 2
+                continue
+            if name in _SHELLS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
+                if "n" in a[1:]:
+                    noexec = a[0] == "-"  # `-n` reads without running; a later `+n` runs
+                i += 1
+                continue
             if name not in _SHELLS and _INLINE_FLAGS.fullmatch(a):
                 if i + 1 < len(args):
                     inline.append(texts[i + 1] if args[i + 1] is None else args[i + 1])
@@ -1134,10 +1297,15 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             operand = a
             break
         if module is not None:
-            if _PROVENANCE_TEXT.search(module or "") or _HOOK_ENTRY.search((module or "").replace(".", "/") + ".py"):
+            mod = module or ""
+            if _PROVENANCE_TEXT.search(mod) or _HOOK_ENTRY.search(mod.replace(".", "/") + ".py"):
                 return f"-m {module}"
+            if mod and _imports_from(f"import {mod}", dirs):
+                return f"-m {module} from the harness hooks directory"
             continue
         if operand not in (None, "-"):
+            if noexec and name in _SHELLS and name not in ("source", "."):
+                continue  # a syntax check (`bash -n`) runs nothing
             if _hook_entry_path(operand, dirs):
                 return operand
             continue
@@ -1152,11 +1320,9 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if "pipe" in site.fed:
                 inline.append(command)  # the code it runs is what the pipe feeds it
         for code in inline:
-            code = code or ""
-            if _HOOK_ENTRY.search(code) or _PROVENANCE_TEXT.search(code):
-                return name + " code naming the hook entry or the provenance module"
-            if _LOADS.search(code) and _HOOKS_DIR.search(code):
-                return name + " code loading from the harness hooks directory"
+            hit = _inline_runs_hook(name, code or "", dirs)
+            if hit:
+                return hit
             if pythonpath_hooks and name.startswith(("python", "pypy")):
                 return "PYTHONPATH on the harness hooks directory"
     return None
