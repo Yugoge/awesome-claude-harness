@@ -548,6 +548,22 @@ class TestComputedShellOptions:
     def test_more_shells(self, text):
         assert ["rm", "b"] in argvs(text)
 
+    @pytest.mark.parametrize("shell", ["ksh93", "mksh", "yash"])
+    def test_a_named_shell_reads_its_c_payload_as_bash_does(self, shell):
+        """A shell SHELLS names reads like bash: the same sites, write targets and executable
+        view, and a resolved reading. The `*sh` fallback finds the same sites, so only the
+        unknown_shell mark and the view, which blanks the payload as data, tell them apart."""
+        def reading(sh):
+            text = '%s -c "rm b" > o' % sh
+            sites = [s.cmd.argv()[1:] if s.context == ("top",) else (s.context, s.cmd.argv())
+                     for s in sp.walk(sp.parse(text))]
+            targets = [(t.path, t.mode, t.decidable) for t in sp.write_targets(text)]
+            view = sp.executable_view(text)[len(sh):]
+            top = sp.resolve(cmds(text)[0])
+            return sites, targets, view, (top.payload_kind, top.unresolved)
+        assert reading(shell) == reading("bash")
+        assert reading(shell)[3] == ("shell_c", None)
+
     def test_an_unknown_shell_given_c_is_read_and_unresolved(self):
         assert ["rm", "c"] in argvs('foosh -c "rm c"')
         assert sp.resolve(cmds('foosh -c "rm c"')[0]).unresolved == "unknown_shell"
