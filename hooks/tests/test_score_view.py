@@ -147,7 +147,9 @@ def test_the_hook_prints_the_agents_view_as_start_context(tmp_path: Path) -> Non
     done = _start(tmp_path, "dev", "dev", _at("dev", 38))
     out = json.loads(done.stdout)["hookSpecificOutput"]
     assert out["hookEventName"] == "SubagentStart" and out["additionalContext"].startswith("Your record (dev, this project): 38 [Rank: Journeyman, 21-40]")
-    assert len(out["additionalContext"].split("\n")) <= 3 and len(out["additionalContext"].encode()) <= 400
+    record, scratch = out["additionalContext"].rsplit("\n", 1)  # OB-L05: the dispatch's own scratch line follows the record
+    assert scratch.startswith("Your scratch, this dispatch's alone: ")
+    assert len(record.split("\n")) <= 3 and len(record.encode()) <= 400
 
 
 @pytest.mark.parametrize("command", ["spec", "dev", "redev", "dev-command", "dev-overnight", None])
@@ -157,7 +159,9 @@ def test_the_hook_runs_outside_the_close_commit_merge_and_push_spans(tmp_path: P
 
 @pytest.mark.parametrize("command", ["close", "commit", "merge", "push"])
 def test_the_hook_prints_nothing_in_a_close_commit_merge_or_push_span(tmp_path: Path, command: str) -> None:
-    assert _context(_start(tmp_path, "qa", command, _at("qa", 30))) == ""
+    # no record; OB-L05: only the line naming the dispatch's own scratch
+    text = _context(_start(tmp_path, "qa", command, _at("qa", 30)))
+    assert "\n" not in text and text.startswith("Your scratch, this dispatch's alone: ") and "record" not in text.lower()
 
 
 def test_the_hook_prints_nothing_for_an_agent_outside_the_roster_and_nothing_on_an_error(tmp_path: Path) -> None:

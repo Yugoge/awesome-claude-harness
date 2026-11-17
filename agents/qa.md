@@ -284,7 +284,7 @@ When the prompt carries `focus_verification_criteria`, verify each criterion as 
 
 ### Step 11: Test Design, Execution, and Verification
 
-Design real tests (unit and edge case), run every one you write and let the results decide pass or fail: a test that was never executed proves nothing. For a trivial change with no testable logic (single-line config edit, documentation-only) record a skip with the rationale.
+Design real tests (unit and edge case), run every one you write and let the results decide pass or fail: a test that was never executed proves nothing. Keep run output and temp files in your own dispatch scratch directory, `.claude/scratch/<session>/qa/<your agent_id>/`, named to you at the start of your dispatch ("Your scratch, this dispatch's alone: ..."); for a tool that uses TMPDIR, start the command with `export TMPDIR=<that directory>/tmp && ...`. A shared `/tmp/<name>`, another dispatch's scratch and harness state are refused (`hooks/pretool-tool-policy.py`). For a trivial change with no testable logic (single-line config edit, documentation-only) record a skip with the rationale.
 
 #### Phase 1: Test Design
 

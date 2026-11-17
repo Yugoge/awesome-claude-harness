@@ -96,11 +96,21 @@ Bash write targets:
 Scratch namespace actor-exactness:
   - Every write target the prefix layer admits is additionally classified as
     owner scratch / sibling scratch / arbitrary system temp.
-  - Owner scratch is allowed for every role; a SIBLING's scratch directory is
-    denied for every role; arbitrary /tmp and /var/tmp are denied for every
-    role INCLUDING one holding a bare '*' grant, which no prefix list can deny.
+  - Owner scratch (.claude/scratch/<session>/<role>/<agent_id>/, named to the
+    dispatch at its start: hooks/subagentstart-record.py, lib/dispatch_scratch)
+    is allowed for every role; a SIBLING's scratch directory is denied for
+    every role; a flat .claude/scratch/<file> belongs to no dispatch and is
+    allowed; arbitrary /tmp and /var/tmp are denied for every role INCLUDING
+    one holding a bare '*' grant, which no prefix list can deny, except a name
+    mktemp creates (unique: no parallel dispatch can collide on it).
   - Each role's OWN pre-existing exact temp prefixes are generated from the
     policy file and survive verbatim.
+  - Harness control state (lib/harness_temp_state) is denied wherever the
+    state dir is, except under one of those exact prefixes.
+  - A Bash write target spelled with $VAR is judged, here and in the role
+    rows, as the path the command's own top-level assignments and the shared
+    environment give it (lib/dispatch_scratch.resolve_target); a word they
+    cannot fix is judged as written.
 
 Fail-safe: any unexpected exception logs to stderr and exits 0 to
 avoid bricking the tool pipeline on a hook bug. Run as a script, the process
@@ -261,8 +271,23 @@ def _owner_binding(role: str, data: dict):
         return None
 
 
+def _scratch_depth(target: str) -> int:
+    """How many components a target lies below <project>/.claude/scratch/ (-1: not below it)."""
+    from pathlib import Path
+
+    scratch_root = Path(_project_root()).resolve(strict=False) / ".claude" / "scratch"
+    try:
+        return len(_resolved(target).relative_to(scratch_root).parts)
+    except ValueError:
+        return -1
+
+
 def _scratch_status(role: str, target: str, data: dict) -> str:
-    """Classify a write target as owner / sibling / system_temp / outside.
+    """Classify a write target as owner / sibling / unowned / system_temp / outside.
+
+    A path below .claude/scratch/ is a dispatch's only from the dispatch level
+    down (<session>/<role>/<dispatch_id>/...); a flat file or a session- or
+    role-level entry above it belongs to no dispatch ("unowned").
 
     Authoritative path: session_resources.classify_target, which owns the
     namespace layout.  When no resource session is provisioned (or the module
@@ -278,9 +303,12 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
         try:
             from lib import session_resources
 
-            return session_resources.classify_target(
+            status = session_resources.classify_target(
                 _project_root(), binding, target
             )["status"]
+            if status == "sibling" and 0 <= _scratch_depth(target) < 3:
+                return "unowned"
+            return status
         except Exception:
             pass
     resolved = _resolved(target)
@@ -294,24 +322,37 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
                 return "system_temp"
         return "outside"
     dispatch_id = data.get("agent_id")
-    if len(rel) >= 3 and rel[1] == role and dispatch_id and rel[2] == dispatch_id:
+    if len(rel) < 3:
+        return "unowned"
+    if rel[1] == role and dispatch_id and rel[2] == dispatch_id:
         return "owner"
     return "sibling"
 
 
-def _check_scratch_actor_exactness(role: str, target, data: dict):
+_OWN_SCRATCH_HINT = ("write under your own dispatch scratch, .claude/scratch/<session>/<role>/<agent_id>/ "
+                     "(named to you at dispatch; its tmp/ is your TMPDIR), or to a $(mktemp) name")
+
+
+def _check_scratch_actor_exactness(role: str, target, data: dict, unique: bool = False):
     """Actor-exact scratch namespace + all-role raw-temp denial.
 
-    Three decisions, taken for every write target:
+    The decisions, taken for every write target:
       owner scratch        -> allow (every role)
       sibling scratch      -> DENY  (every role)
+      unowned scratch      -> allow (a flat .claude/scratch/<file>: no dispatch's)
       arbitrary /tmp,/var/tmp -> DENY (every role, INCLUDING a role holding a
                                bare '*' grant, which no prefix list can deny)
                                unless the target matches one of that role's
-                               OWN pre-existing exact temp prefixes.
+                               OWN pre-existing exact temp prefixes, or is a
+                               name mktemp creates (``unique``: no other
+                               dispatch can hold it).
+      harness control state (lib/harness_temp_state), wherever the state dir
+                               is -> DENY, unless one of the role's own exact
+                               prefixes holds it (an analyst's grant).
 
-    Returns (True, "ok") or (False, reason).  A target the gate cannot resolve
-    (dynamic/unexpanded) is left to the prefix layer.
+    Returns (True, "ok") or (False, reason).  ``target`` is a static path, or
+    the path an expanded Bash word names (lib/dispatch_scratch); a target the
+    gate cannot resolve is left to the prefix layer.
     """
     if not isinstance(target, str) or not target:
         return (True, "ok")
@@ -319,16 +360,39 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
         return (True, "ok")
     status = _scratch_status(role, target, data)
     if status == "sibling":
-        return (False, "sibling scratch target denied: actor-exact namespace")
+        return (False, "sibling scratch target denied: actor-exact namespace; " + _OWN_SCRATCH_HINT)
+    if status in ("system_temp", "outside"):
+        from lib import harness_temp_state
+
+        location = harness_temp_state.classify(str(_resolved(target)))
+        if location is not None and location.kind == harness_temp_state.CONTROL \
+                and not _matches_role_exception(role, target):
+            return (False, f"write target is harness state ({location.name}): no subagent writes it")
+        if unique and status == "system_temp":
+            return (True, "ok")
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
         return (
             False,
-            "arbitrary /tmp and /var/tmp are denied for every role; use the "
-            "managed scratch namespace .claude/scratch/<session>/<role>/<dispatch>/",
+            "arbitrary /tmp and /var/tmp are denied for every role (a shared name collides "
+            "between parallel dispatches); " + _OWN_SCRATCH_HINT,
         )
     return (True, "ok")
+
+
+def _expanded_target(tool_name: str, target, data: dict):
+    """The path a Bash write-target word with a $VAR names (lib/dispatch_scratch), or None."""
+    if tool_name != "Bash" or not isinstance(target, str) or not any(c in target for c in "$`"):
+        return None
+    try:
+        from lib import dispatch_scratch
+
+        command = (data.get("tool_input") or {}).get("command") or ""
+        cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or str(_project_root())
+        return dispatch_scratch.resolve_target(target, command, os.environ, cwd)
+    except Exception:
+        return None
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -1067,12 +1131,18 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     """
     check_tool = "Write" if tool_name == "Bash" else tool_name
     for target in targets:
+        # A $VAR word is judged as the path it names when the command and the
+        # shared environment fix it (lib/dispatch_scratch); otherwise as written.
+        expansion = _expanded_target(tool_name, target, data)
+        judged = expansion.path if expansion is not None else target
         if check_tool in WRITE_TOOLS and target in approved and target not in own:
             allowed, reason = _approved_write_allowed(role, check_tool, target)
         elif check_tool in WRITE_TOOLS and target in own:
             allowed, reason = _declared_write_allowed(role, check_tool, target)
         else:
-            allowed, reason = is_allowed(role, check_tool, target)
+            allowed, reason = is_allowed(role, check_tool, judged)
+            if not allowed and expansion is not None:
+                reason = f"{reason} (expanded from {target})"
         if not allowed:
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash":
@@ -1080,7 +1150,10 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS:
-            allowed, reason = _check_scratch_actor_exactness(role, target, data)
+            allowed, reason = _check_scratch_actor_exactness(
+                role, judged, data, unique=bool(expansion and expansion.unique))
+            if not allowed and expansion is not None:
+                reason = f"{reason}; {target} names {judged}"
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
                 if tool_name == "Bash":
