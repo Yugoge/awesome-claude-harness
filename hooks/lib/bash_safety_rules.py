@@ -984,16 +984,23 @@ def _plain_word(w, params=False):
     return all(p.kind in kinds for p in w.parts) and not w.substitutions()
 
 
+def _abs_norm(path, cwd="/"):
+    """The absolute normal form of a path: normpath keeps a leading `//` (POSIX leaves its meaning to the system;
+    Linux reads it as `/`), so the leading slashes are collapsed too."""
+    p = os.path.normpath(path if path.startswith("/") else os.path.join(cwd, path))
+    return "/" + p.lstrip("/") if p.startswith("/") else p
+
+
 def _plain_file(w, sv):
     """An ordinary file (not under /dev, /proc, /sys, /etc ...) or /dev/null, named statically."""
     v = w.value() if _plain_word(w) else None
     if not v or v.startswith("~"):
         return False
-    p = os.path.normpath(v if v.startswith("/") else os.path.join(sv.cwd, v))
+    p = _abs_norm(v, sv.cwd)
     if not v.startswith("/") and sv.named("cd", "pushd", "popd"):
         return False
     return all(q == "/dev/null" or q.startswith("/dev/shm/") or not (q + "/").startswith(_PLAIN_UNSAFE_DIRS)
-               for q in (p, os.path.realpath(p)))
+               for q in (p, _abs_norm(os.path.realpath(p))))
 
 
 def _plain_redirects(cmd, sv, reads_ok=True):
@@ -1033,11 +1040,11 @@ def _plain_dd(vals, sv):
         if not v.startswith("of="):
             continue
         path = v[3:]
-        if path in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+        if path.startswith("/") and _abs_norm(path) in ("/dev/null", "/dev/stdout", "/dev/stderr"):
             continue
         if not path or path.startswith("~") or (not path.startswith("/") and sv.named("cd", "pushd", "popd")):
             return False
-        p = os.path.normpath(path if path.startswith("/") else os.path.join(sv.cwd, path))
+        p = _abs_norm(path, sv.cwd)
         if re.match(r"^/dev/fd/[0-9]+$", p):
             continue  # its command's redirections are plain (fd 1 and 2 only), so N is inherited or stdout/stderr
         if (p + "/").startswith(_PLAIN_UNSAFE_DIRS) and not p.startswith("/dev/shm/"):
@@ -1075,8 +1082,8 @@ def _plain_simple(cmd, sv, piped):
     vals = [w.value() if _plain_word(w) else None for w in args]
     if piped and name not in _PLAIN_FILTERS:
         return False
-    if name == "kill":  # a probe or a listing: a parameter after it is a PID or signal it only names
-        return bool(vals) and vals[0] in ("-0", "-l", "-L") and all(_plain_word(w, params=True) for w in args) \
+    if name == "kill":  # a probe or a listing of literal words, or `kill -0 "$PID"` alone
+        return bool(vals) and vals[0] in ("-0", "-l", "-L") and _plain_kill_args(args[1:]) \
             and _plain_redirects(cmd, sv, reads_ok=False)
     if name == "dd":
         return _plain_dd(vals, sv) and _plain_redirects(cmd, sv, reads_ok=False)
@@ -1098,6 +1105,17 @@ def _plain_simple(cmd, sv, piped):
                 or not _SED_PRINT.match(rest[0]):
             return False
     return _plain_redirects(cmd, sv)
+
+
+def _plain_kill_args(words):
+    """bash's kill reads -s SIG and -n NUM (attached too) after -0, -l or -L, so `kill -0 ${X:--s} KILL 4242` and
+    `kill -0 "$A" 4242` (A=-sKILL) send SIGKILL: only literal words stay plain, or one double-quoted bare parameter
+    as the sole word (one word, so it cannot be an option and a PID)."""
+    if all(p.kind == "lit" for w in words for p in w.parts) and not any(w.substitutions() for w in words):
+        return True
+    return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
+        and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
+        and not words[0].substitutions()
 
 
 def _plain_script(script, sv):
@@ -1164,8 +1182,7 @@ def _daemon_json_write(sv):
                 v = w.value()
                 if v is None and DOCKER_DAEMON_JSON in w.text:
                     return True
-                if v is not None and v.startswith("of=") and os.path.normpath(
-                        os.path.join(sv.cwd, v[3:])) == DOCKER_DAEMON_JSON:
+                if v is not None and v.startswith("of=") and _abs_norm(v[3:], sv.cwd) == DOCKER_DAEMON_JSON:
                     return True
             continue
         if not any(DOCKER_DAEMON_JSON in w.text for w in args):
@@ -1221,9 +1238,9 @@ def _dd_target_refused(path, sv):
     descriptor (/proc/<pid>/fd/N), or a path it cannot read."""
     if not path:
         return True
-    if _dd_fd_of(path) is not None:
+    if _dd_fd_of(_abs_norm(path) if path.startswith("/") else path) is not None:
         return False  # a descriptor: the command's own redirections are checked as dd's targets
-    if re.match(r"^/proc/[^/]+/fd(/|$)", os.path.normpath(path if path.startswith("/") else "/x/" + path)):
+    if re.match(r"^/proc/[^/]+/fd(/|$)", _abs_norm(path, "/x")):
         return True  # /proc/<pid>/fd/N of a process other than this shell: its file cannot be read here
     if path.startswith("~"):
         path = os.path.expanduser(path)  # bash expands a tilde after of= too
@@ -1233,9 +1250,9 @@ def _dd_target_refused(path, sv):
         if sv.named("cd", "pushd", "popd"):
             return True  # relative to a directory the command moves to
         path = os.path.join(sv.cwd, path)
-    paths = [os.path.normpath(path)]
+    paths = [_abs_norm(path)]
     with contextlib.suppress(Exception):
-        paths.append(os.path.realpath(paths[0]))
+        paths.append(_abs_norm(os.path.realpath(paths[0])))
     for p in paths:
         if p == "/dev" or p.startswith("/dev/"):
             rel = p[5:]
@@ -1294,8 +1311,8 @@ def _destructive_disk(sv):
                 if lead.startswith("of="):
                     if _dd_target_refused(v[3:] if v is not None else None, sv):
                         return True
-                    if v[3:].startswith("/") and _dd_fd_of(os.path.normpath(v[3:])) is not None:
-                        fds.add(_dd_fd_of(os.path.normpath(v[3:])))
+                    if v[3:].startswith("/") and _dd_fd_of(_abs_norm(v[3:])) is not None:
+                        fds.add(_dd_fd_of(_abs_norm(v[3:])))
                 elif v is None and not lead.startswith(_DD_OPERANDS):
                     return True  # a computed operand may be of=
             if any(_dd_target_refused(t, sv) for t in _dd_redirect_targets(site, fds, sv.exec_redirects)):

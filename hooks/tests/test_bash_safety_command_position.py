@@ -249,3 +249,31 @@ MUST_REFUSE_ROUND3 = [
 def test_round3_a_launcher_or_descriptor_form_is_refused(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# Verifier round 4. bash's kill reads -s SIG and -n NUM (attached too) after -0, -l or -L, so a computed word after
+# the probe can make it a signal: only literal words (or one double-quoted bare parameter alone) keep kill plain.
+# normpath keeps a leading `//`, which Linux reads as `/`, so dd's of= is compared with the slashes collapsed.
+DAEMON_JSON = "Modifying Docker daemon config"
+MUST_REFUSE_ROUND4 = [
+    ("kill -0 ${X:--s} KILL 4242", KILL_SIG),
+    ("kill -0 ${X:--s KILL} 4242", KILL_SIG),
+    ("kill -0 ${X:--n} 9 4242", KILL_SIG),
+    ('kill -0 "$A" 4242', KILL_SIG),
+    ("dd if=/dev/zero of=//etc/docker/daemon.json", DAEMON_JSON),
+    ("dd if=/dev/zero of=//sys/x", DISK),
+    ("dd if=/dev/zero of=//proc/1/fd/1", DISK),
+]
+
+
+@pytest.mark.parametrize("command,label", MUST_REFUSE_ROUND4)
+def test_round4_a_computed_kill_word_or_double_slash_dd_target_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", ['kill -0 "$SERVER_PID" 2>/dev/null && echo running',
+                                     "dd if=in.bin of=//dev/stdout"])
+def test_round4_the_probe_and_a_double_slash_stdout_still_pass(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
