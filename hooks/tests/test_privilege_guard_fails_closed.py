@@ -1,12 +1,9 @@
-"""The git-privilege guard fails closed, and the classifier's old option name still loads.
+"""The git-privilege guard fails closed, and the classifier names its callers import load.
 
-P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
-stream's guard and branch hook still import it as `_GIT_GLOBAL_VALUE`. Without the
-old name the guard raised at load, Python exited 1, and the harness ran the command
-unjudged: the guard failed open. The classifier keeps the old name as the table, and
-the guard turns any error it did not expect into exit 2 for a Bash call that may run
-git, naming the error. Another tool's call and a command that cannot run git still
-exit 0.
+When a name the guard imports from the classifier is missing, the guard raises at
+load; Python would exit 1 and the harness would run the command unjudged. The guard
+turns any error it did not expect into exit 2 for a Bash call that may run git,
+naming the error. Another tool's call and a command that cannot run git still exit 0.
 
 The guard runs as a subprocess with a scratch HOME, a scratch CLAUDE_STATE_DIR and a
 scratch git repository under the test's temp dir. The broken cases run a copy of the
@@ -33,25 +30,25 @@ CORPUS = HOOKS / "tests" / "fixtures" / "adversarial_corpus.json"
 SID = "fail-closed-session-0001"
 IDENTITY = ("-c", "user.name=sandbox", "-c", "user.email=sandbox@example.invalid")
 
-# The other stream's import forms, verbatim: the guard's commit reads, the branch hook.
-OLD_NAME_IMPORTS = (
+# The callers' import forms: the guard's commit reads, the branch hook.
+CALLER_IMPORTS = (
     "from lib.git_command_classifier import (\n"
     "    _unquote_token,\n"
     "    _segments as _shell_segments,\n"
     "    _command_token_index as _cmd_token_index,\n"
     "    _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,\n"
-    "    _GIT_GLOBAL_VALUE as _GIT_GLOBAL_VALUE,\n"
+    "    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,\n"
     ")\n"
     "from lib.git_command_classifier import (\n"
     "    _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,\n"
-    "    _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand,\n"
+    "    _command_token_index, _git_subcommand, iter_shell_texts,\n"
     ")\n"
 )
 
 # Ways the classifier can break, each appended to a copy of it.
 BREAKAGES = {
-    # The merge-train case: the guard imports the old name, the classifier lacks it.
-    "lacks-old-name": "\nglobals().pop('_GIT_GLOBAL_VALUE', None)\n",
+    # The guard imports a name the classifier lacks.
+    "lacks-imported-name": "\nglobals().pop('_segments', None)\n",
     "lacks-current-name": "\ndel GIT_GLOBAL_VALUE_OPTS\n",
     "raises-at-import": "\nraise RuntimeError('simulated classifier failure')\n",
     "raises-when-called": ("\ndef classify_git_command(command_text):\n"
@@ -109,19 +106,18 @@ class Sandbox:
         return subprocess.run([sys.executable, "-B", str(guard)], input=raw, text=True,
                               capture_output=True, cwd=str(self.repo), env=self.env, timeout=120)
 
-    def hooks_copy(self, name: str, breakage: str = "", old_name_import: bool = False) -> Path:
+    def hooks_copy(self, name: str, breakage: str = "", caller_imports: bool = False) -> Path:
         """A copy of the guard and hooks/lib, its classifier broken by `breakage`.
 
-        old_name_import adds the other stream's import of `_GIT_GLOBAL_VALUE` to the
-        guard, as the merge of the two streams carries it."""
+        caller_imports adds the callers' import forms to the guard."""
         dest = self.tmp / f"hooks-{name}"
         shutil.copytree(HOOKS / "lib", dest / "lib", ignore=shutil.ignore_patterns("__pycache__"))
         guard = dest / GUARD.name
         source = GUARD.read_text()
-        if old_name_import:
+        if caller_imports:
             anchor = "\nif __name__ == '__main__':\n    main()"
             assert source.count(anchor) == 1
-            source = source.replace(anchor, "\n" + OLD_NAME_IMPORTS + anchor)
+            source = source.replace(anchor, "\n" + CALLER_IMPORTS + anchor)
         guard.write_text(source)
         classifier = dest / CLASSIFIER
         classifier.write_text(classifier.read_text() + breakage)
@@ -142,14 +138,14 @@ def _module(path: Path, name: str):
     return module
 
 
-# (i) The old name loads, in both import forms, and means the value-option table.
+# (i) The callers' names load, as a package and as a script path, and the table
+# answers which options take the next word.
 
-def test_the_old_name_imports_in_both_forms(box):
-    code = ("import sys; sys.path.insert(0, sys.argv[1])\n" + OLD_NAME_IMPORTS
-            + "from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS\n"
-            "assert _GIT_GLOBAL_VALUE is GIT_GLOBAL_VALUE_OPTS\n"
-            "sys.path.insert(0, sys.argv[1] + '/lib')\n"
-            "from git_command_classifier import _GIT_GLOBAL_VALUE as bare\n"
+def test_the_callers_imports_load_in_both_forms(box):
+    code = ("import sys; sys.path.insert(0, sys.argv[1])\n" + CALLER_IMPORTS
+            + "sys.path.insert(0, sys.argv[1] + '/lib')\n"
+            "from git_command_classifier import GIT_GLOBAL_VALUE_OPTS as bare\n"
+            "assert bare == GIT_GLOBAL_VALUE_OPTS\n"
             "print(sorted(bare))\n")
     proc = subprocess.run([sys.executable, "-B", "-c", code, str(HOOKS)], capture_output=True,
                           text=True, env=box.env, cwd=str(box.tmp))
@@ -157,10 +153,10 @@ def test_the_old_name_imports_in_both_forms(box):
     assert "--attr-source" in proc.stdout
 
 
-def test_the_old_name_answers_which_options_take_the_next_word():
-    classifier = _module(HOOKS / CLASSIFIER, "classifier_old_name")
-    old = classifier._GIT_GLOBAL_VALUE
-    # The set before the split, but --exec-path, whose value git takes only as `=<dir>`.
+def test_the_table_answers_which_options_take_the_next_word():
+    classifier = _module(HOOKS / CLASSIFIER, "classifier_table")
+    old = classifier.GIT_GLOBAL_VALUE_OPTS
+    # --exec-path takes its value only as `=<dir>`.
     for opt in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
                 "--config-env", "--attr-source", "--shallow-file"):
         assert opt in old, opt
@@ -170,7 +166,7 @@ def test_the_old_name_answers_which_options_take_the_next_word():
 
 
 def test_the_merged_guard_loads_and_judges(box):
-    guard = box.hooks_copy("merged", old_name_import=True)
+    guard = box.hooks_copy("merged", caller_imports=True)
     box.grant()
     assert box.run(guard, box.commit).returncode == 0
     assert box.run(guard, "ls -la").returncode == 0
@@ -191,7 +187,7 @@ def test_a_granted_commit_is_allowed_and_an_ungranted_one_refused(box):
 
 @pytest.mark.parametrize("name", sorted(BREAKAGES))
 def test_a_broken_classifier_refuses_a_git_command(box, name):
-    guard = box.hooks_copy(name, BREAKAGES[name], old_name_import=(name == "lacks-old-name"))
+    guard = box.hooks_copy(name, BREAKAGES[name], caller_imports=(name == "lacks-imported-name"))
     box.grant()
     for command in (box.commit, "git status", "$GIT push origin HEAD"):
         proc = box.run(guard, command)
@@ -202,7 +198,7 @@ def test_a_broken_classifier_refuses_a_git_command(box, name):
 
 @pytest.mark.parametrize("name", sorted(BREAKAGES))
 def test_a_broken_classifier_lets_a_non_git_call_through(box, name):
-    guard = box.hooks_copy(name, BREAKAGES[name], old_name_import=(name == "lacks-old-name"))
+    guard = box.hooks_copy(name, BREAKAGES[name], caller_imports=(name == "lacks-imported-name"))
     for command in ("ls -la", "echo hello world"):
         proc = box.run(guard, command)
         assert proc.returncode == 0, (command, proc.returncode, proc.stderr)
