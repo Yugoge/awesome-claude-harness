@@ -27,9 +27,13 @@ without following links; the parent's realpath plus the entry; and the full real
     directory, and the harness home (lib/claude_home.py), its own .claude/scratch/ included;
   * a file with more than one hard link (a link in temp to a tracked file would otherwise
     pass as a temp file);
-  * a file git tracks (in the index, matched as a literal pathspec), one git cannot answer
-    for, and any file in a work tree nested inside another (a `git init` or a `.git` file in
-    a project subdirectory would otherwise hide the project's index).
+  * a file ANY enclosing work tree tracks, in its index or its HEAD (literal pathspec), and
+    any file git cannot answer for. The work trees are found by walking up from the file to
+    every directory holding a .git entry (never by asking git, whose core.worktree, core.bare
+    or GIT_* settings could point elsewhere), and git runs on each with an explicit git dir
+    and work tree, no system or global config. A .git file counts only as a linked
+    worktree whose git dir links back to it; a symlinked .git, a submodule's .git file or
+    one swapped to point at another repository is doubt.
 
 Exempt, once nothing above holds, when the realpath is:
 
@@ -51,7 +55,8 @@ Edit-only rule even when untracked, so a Write-only role writes it once, complet
 
 Known limits: an artifact a dispatch's obligation declares at a path no command template uses
 (the producer-stop gate reads any declared path) is protected only if it lies under an
-artifact root or is tracked; a file in a submodule or other nested work tree is never exempt.
+artifact root or is tracked; a file below a submodule's .git file is never exempt; a
+project's moved-away .git dir leaves no index to ask.
 """
 from __future__ import annotations
 
@@ -84,9 +89,13 @@ GATE_READ_PREFIXES = (
 _PROTECTED_COMPONENTS = (".claude", ".git")
 # harness_temp_state scratch locations agents write their own output into.
 AGENT_SCRATCH = ("claude-scratch", "codex-outputs", "graphify-cache")
-# Three git calls at most, together inside the rule's 5 s budget (lib/write_gate/__init__.py):
-# an overrun of this fail-open rule would let the Write through; a git timeout here refuses.
-_GIT_TIMEOUT = 1.4
+# Git runs once per enclosing work tree (twice when one has no commit yet), each call capped
+# by what remains of a 2.5 s budget, so the rule stays well inside its 5 s budget
+# (lib/write_gate/__init__.py): an overrun of this fail-open rule would let the Write through,
+# while a timeout here refuses. At most _MAX_TREES enclosing work trees are consulted.
+_GIT_BUDGET = 2.5
+_GIT_CALL_CAP = 1.2
+_MAX_TREES = 4
 _NO_REPO = "no-repo"
 
 
@@ -195,48 +204,102 @@ def _in_project_scratch(real: str) -> bool:
             and not _in_harness_home(real))
 
 
-def _git(cwd: str, *args: str):
-    """(returncode, stdout, stderr), or (None, "", "") when git cannot run or times out."""
+class _Doubt(Exception):
+    """Git cannot answer for certain: the caller refuses."""
+
+
+def _git(deadline: float, git_dir: str, work_tree: str, *args: str):
+    """(returncode, stdout, stderr) of git on an explicit git dir and work tree, so no
+    discovery, core.worktree, core.bare or GIT_* variable redirects it; system and global
+    config are not read. Raises _Doubt when git cannot run or the budget runs out."""
+    import time
+    left = deadline - time.monotonic()
+    if left <= 0.05:
+        raise _Doubt("git budget spent")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_LITERAL_PATHSPECS="1", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_OPTIONAL_LOCKS="0")
     try:
-        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        env["GIT_LITERAL_PATHSPECS"] = "1"
-        p = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
-                           timeout=_GIT_TIMEOUT, env=env)
-        return p.returncode, p.stdout, p.stderr
-    except BaseException:
-        return None, "", ""
+        p = subprocess.run(["git", "--git-dir=" + git_dir, "--work-tree=" + work_tree,
+                            "-c", "core.bare=false", "-C", work_tree, *args],
+                           capture_output=True, text=True, timeout=min(_GIT_CALL_CAP, left),
+                           env=env, stdin=subprocess.DEVNULL)
+    except BaseException as exc:
+        raise _Doubt(str(exc))
+    return p.returncode, p.stdout, p.stderr
 
 
-def _top(d: str):
-    """The work tree top holding directory `d`: _NO_REPO outside any, None when git cannot
-    answer."""
-    rc, out, err = _git(d, "rev-parse", "--is-inside-work-tree", "--show-toplevel")
-    if rc is not None and rc != 0 and "not a git repository" in err:
-        return _NO_REPO
-    lines = out.splitlines()
-    if rc != 0 or len(lines) < 2 or lines[0].strip() != "true":
-        return None
-    return os.path.realpath(lines[1].strip())
+def _git_dir_of(top: str):
+    """The git dir behind `top`/.git: the directory itself, or a linked worktree's git dir
+    named by a `gitdir:` file whose back-link (<gitdir>/gitdir) names this .git. Raises
+    _Doubt for anything else (a symlinked .git, a gitdir file without that back-link, such as
+    a submodule's or one swapped to point at another repository)."""
+    entry = os.path.join(top, ".git")
+    if os.path.islink(entry):
+        raise _Doubt("symlinked .git")
+    if os.path.isdir(entry):
+        return entry
+    try:
+        with open(entry, encoding="utf-8") as fh:
+            line = fh.readline(4096).strip()
+    except OSError as exc:
+        raise _Doubt(str(exc))
+    if not line.startswith("gitdir:"):
+        raise _Doubt("unreadable .git file")
+    git_dir = os.path.realpath(os.path.join(top, line[len("gitdir:"):].strip()))
+    try:
+        with open(os.path.join(git_dir, "gitdir"), encoding="utf-8") as fh:
+            back = fh.readline(4096).strip()
+    except OSError as exc:
+        raise _Doubt("gitdir file without a back-link")
+    if os.path.realpath(os.path.join(git_dir, back)) != os.path.realpath(entry):
+        raise _Doubt("gitdir back-link names another work tree")
+    return git_dir
+
+
+def _enclosing_trees(real: str):
+    """[(top, git dir)] for every directory above `real` holding a .git entry, innermost
+    first. The work tree is where the .git entry sits, never what git reports for it."""
+    out = []
+    d = os.path.dirname(real)
+    while True:
+        if os.path.lexists(os.path.join(d, ".git")):
+            if len(out) >= _MAX_TREES:
+                raise _Doubt("too many enclosing work trees")
+            out.append((d, _git_dir_of(d)))
+        parent = os.path.dirname(d)
+        if parent == d:
+            return out
+        d = parent
+
+
+def _tracks(deadline: float, top: str, git_dir: str, rel: str) -> bool:
+    """Whether the work tree at `top` has `rel` in its index or in HEAD (a `git rm --cached`
+    leaves it in HEAD)."""
+    rc, out, err = _git(deadline, git_dir, top, "ls-files", "-z", "--with-tree=HEAD", "--", rel)
+    if rc != 0 and "HEAD" in err:  # no commit yet: the index alone
+        rc, out, err = _git(deadline, git_dir, top, "ls-files", "-z", "--", rel)
+    if rc != 0:
+        raise _Doubt(err.strip()[:200] or f"git exit {rc}")
+    return bool(out.strip("\0"))
 
 
 def _work_tree(real: str):
-    """(top, tracked): (_NO_REPO, False) outside any work tree, (None, None) when git cannot
-    answer or the work tree is nested inside another (the caller then refuses). A nested
-    work tree (a `git init` or a `.git` file in a project subdirectory) would answer for
-    its own index alone, so a file the enclosing project tracks would read as untracked."""
-    d = os.path.dirname(real)
-    top = _top(d)
-    if top == _NO_REPO:
-        return _NO_REPO, False
-    if top is None:
+    """(innermost top, tracked): (_NO_REPO, False) outside every work tree; tracked is True
+    when ANY enclosing work tree tracks the file (index or HEAD), None on doubt."""
+    import time
+    try:
+        trees = _enclosing_trees(real)
+        if not trees:
+            return _NO_REPO, False
+        deadline = time.monotonic() + _GIT_BUDGET
+        for top, git_dir in trees:
+            rel = os.path.relpath(real, top)
+            if _tracks(deadline, top, git_dir, rel):
+                return trees[0][0], True
+        return trees[0][0], False
+    except _Doubt:
         return None, None
-    parent = os.path.dirname(top)
-    if parent != top and _top(parent) != _NO_REPO:
-        return None, None  # nested in (or unsure of) an enclosing work tree
-    rc, out, _ = _git(d, "ls-files", "-z", "--", os.path.basename(real))
-    if rc != 0:
-        return None, None
-    return top, bool(out.strip("\0"))
 
 
 def overwrite_exempt(file_path: str, session_id: str) -> bool:

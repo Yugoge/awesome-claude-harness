@@ -86,7 +86,9 @@ def test_overwrite_of_session_scratch_report_passes(lab):
 
 
 def test_overwrite_of_a_temp_file_that_is_not_harness_state_passes(lab):
-    assert _passes(lab, _existing(lab["tmp"] / "work" / "notes.txt"))
+    # Below $TMPDIR (the lab's scratch root), a temp root wherever pytest's basetemp lives
+    # (a --basetemp under /dev/shm is no temp root).
+    assert _passes(lab, _existing(lab["tmp"] / "scratch-root" / "work" / "notes.txt"))
 
 
 def test_architect_rewrites_its_own_untracked_output(lab):
@@ -444,3 +446,85 @@ def test_harness_home_scratch_is_not_project_scratch(lab, monkeypatch, tmp_path)
     assert not overwrite_scope.overwrite_exempt(str(f), SID)
     g = _existing(lab["proj"] / ".claude" / "scratch" / "n.md")
     assert overwrite_scope._in_project_scratch(os.path.realpath(g))
+
+
+# --- round 3: git cannot be pointed away from the file's own work trees -------------------------
+
+def _gc(*args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                   check=True, capture_output=True)
+
+
+def _committed_project(base: Path) -> Path:
+    proj = base
+    (proj / "src").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+    (proj / "src" / "app.py").write_text("app\n")
+    _gc("-C", str(proj), "add", "src/app.py")
+    _gc("-C", str(proj), "commit", "-qm", "base")
+    _existing(proj / "build" / "out.txt")
+    return proj
+
+
+@pytest.mark.parametrize("value", ["parent", "/", "src"])
+def test_core_worktree_does_not_redirect_the_tracked_check(lab, value):
+    proj = _committed_project(lab["tmp"] / "w1" / "p")
+    target = {"parent": str(proj.parent), "/": "/", "src": str(proj / "src")}[value]
+    _gc("-C", str(proj), "config", "core.worktree", target)
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+def test_worktree_config_core_worktree_does_not_redirect_the_tracked_check(lab):
+    proj = _committed_project(lab["tmp"] / "w2" / "p")
+    _gc("-C", str(proj), "config", "extensions.worktreeConfig", "true")
+    _gc("-C", str(proj), "config", "--worktree", "core.worktree", str(proj.parent))
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+def test_core_bare_does_not_hide_the_index(lab):
+    proj = _committed_project(lab["tmp"] / "w3")
+    _gc("-C", str(proj), "config", "core.bare", "true")
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+def test_project_git_dir_swapped_for_a_gitdir_file_refused(lab):
+    proj = _committed_project(lab["tmp"] / "w4")
+    other = lab["tmp"] / "other4"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    (proj / ".git").rename(lab["tmp"] / "w4-realgit")
+    (proj / ".git").write_text(f"gitdir: {other / '.git'}\n")
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+    assert _refused(_write(lab, proj / "build" / "out.txt"))  # no back-link: doubt
+
+
+def test_git_rm_cached_leaves_the_file_tracked_by_head(lab):
+    proj = _committed_project(lab["tmp"] / "w5")
+    _gc("-C", str(proj), "rm", "-q", "--cached", "src/app.py")
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+def test_linked_worktree_is_its_own_work_tree(lab):
+    proj = _committed_project(lab["tmp"] / "w6")
+    wt = lab["tmp"] / "wt6"
+    _gc("-C", str(proj), "worktree", "add", "-q", str(wt))
+    assert _refused(_write(lab, wt / "src" / "app.py"))
+    assert _passes(lab, _existing(wt / "build" / "x.txt"))
+
+
+def test_project_nested_in_a_parent_work_tree_keeps_its_exemptions(lab):
+    """A project inside another work tree (a git-init'd HOME): its untracked outputs, docs/codex
+    drafts and .claude/scratch still pass; a file the parent work tree tracks stays refused."""
+    home = lab["tmp"] / "dotfiles"
+    home.mkdir()
+    subprocess.run(["git", "init", "-q", str(home)], check=True)
+    _existing(home / ".bashrc")
+    _existing(home / "code" / "proj" / "notes.md")  # tracked by HOME before proj had a repo
+    _gc("-C", str(home), "add", ".bashrc", "code/proj/notes.md")
+    _gc("-C", str(home), "commit", "-qm", "dotfiles")
+    proj = _committed_project(home / "code" / "proj")
+    assert _passes(lab, proj / "build" / "out.txt")
+    assert _passes(lab, _existing(proj / "docs" / "codex" / "note.md"))
+    assert _passes(lab, _existing(proj / ".claude" / "scratch" / SID / "architect" / "a1" / "n.md"))
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+    assert _refused(_write(lab, proj / "notes.md"))  # tracked by the parent work tree only
+    assert _refused(_write(lab, home / ".bashrc"))
