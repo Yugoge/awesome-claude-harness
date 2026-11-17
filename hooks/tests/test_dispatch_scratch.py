@@ -200,3 +200,68 @@ def test_start_names_no_scratch_for_an_unlisted_role_a_role_without_write_or_an_
     assert "Your scratch" not in _context(run_start(env_base, "pull-analyst", "apull1"))
     assert "Your scratch" not in _context(run_start(env_base, "dev", "../escape"))
     assert not (project / ".claude" / "scratch" / SID / "Explore").exists()
+
+
+# --- verifier round 1: closed bypasses ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("chain", ["false && TMPDIR={own};", "true || TMPDIR={own};", "true && true && TMPDIR={own};",
+                                   "export TMPDIR={own} &", "false || true && TMPDIR={own} &&"])
+@pytest.mark.parametrize("name", ["claude-grants/g.json", "hits.txt"])
+def test_a_conditional_assignment_binds_nothing(env_base, chain, name):
+    # the shell keeps TMPDIR=/tmp when the assignment does not run: the word names /tmp/<name>
+    _, project = env_base
+    own = own_scratch(project, "qa", "aqa1") / "tmp"
+    command = chain.format(own=own) + f" echo x > $TMPDIR/{name}"
+    done = run_policy(env_base, "qa", "aqa1", command, extra_env={"TMPDIR": "/tmp"})
+    refused(done)
+
+
+def test_an_unconditional_first_assignment_still_binds(env_base):
+    _, project = env_base
+    own = own_scratch(project, "qa", "aqa1") / "tmp"
+    allowed(run_policy(env_base, "qa", "aqa1", f"TMPDIR={own} && echo x > $TMPDIR/out.txt",
+                       extra_env={"TMPDIR": "/tmp"}))
+
+
+@pytest.mark.parametrize("command", ['f=$(mktemp -p src) && echo x > "$f"',
+                                     'd=$(mktemp -d -p src) && echo x > "$d/y"',
+                                     'f=$(mktemp -p /tmp/claude-grants) && echo x > "$f"',
+                                     'f=$(mktemp --tmpdir=src) && echo x > "$f"'])
+def test_mktemp_p_dir_wins_over_tmpdir_without_t(env_base, command):
+    # GNU mktemp: without -t, -p DIR (or --tmpdir=DIR) is where the name is made, whatever TMPDIR says
+    _, project = env_base
+    refused(run_policy(env_base, "qa", "aqa1", command,
+                       extra_env={"TMPDIR": str(own_scratch(project, "qa", "aqa1") / "tmp")}))
+
+
+def test_mktemp_t_takes_tmpdir_and_p_into_own_scratch_passes(env_base):
+    _, project = env_base
+    own = own_scratch(project, "qa", "aqa1") / "tmp"
+    allowed(run_policy(env_base, "qa", "aqa1", 'f=$(mktemp -t -p src x.XXXXXX) && echo x > "$f"',
+                       extra_env={"TMPDIR": str(own)}))
+    allowed(run_policy(env_base, "qa", "aqa1", f'f=$(mktemp -p {own}) && echo x > "$f"', extra_env={"TMPDIR": "/tmp"}))
+
+
+@pytest.mark.parametrize("command", ["ln -sfn /tmp/claude-grants .claude/scratch/{sid}/dev",
+                                     "mv .claude/scratch/{sid}/qa .claude/scratch/old",
+                                     "echo x > .claude/scratch/{sid}/notes.txt",
+                                     "echo x > .claude/scratch/{sid}/qa/notes.txt",
+                                     "echo x > .claude/scratch/somedir",
+                                     "echo x > .claude/scratch/alink"])
+def test_the_namespace_above_the_dispatches_is_no_flat_file(env_base, command):
+    _, project = env_base
+    scratch = project / ".claude" / "scratch"
+    (scratch / SID / "qa" / "aqa1").mkdir(parents=True)
+    (scratch / "somedir").mkdir()
+    (scratch / "alink").symlink_to(project)
+    refused(run_policy(env_base, "qa", "aqa1", command.format(sid=SID)))
+
+
+def test_start_refuses_a_scratch_reached_through_a_planted_symlink(env_base, tmp_path):
+    _, project = env_base
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (project / ".claude" / "scratch" / SID).mkdir(parents=True)
+    (project / ".claude" / "scratch" / SID / "qa").symlink_to(elsewhere)
+    assert "Your scratch" not in _context(run_start(env_base, "qa", "aplant1"))
+    assert list(elsewhere.iterdir()) == []

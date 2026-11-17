@@ -29,8 +29,9 @@ def scratch_line(payload):
     policy = policy_registry.get_role_policy(role) if role else {"_unknown_role": True}
     if policy.get("_unknown_role") or policy_registry._check_tool_lists(policy, "Write") is not None:
         return None  # no role row, or a role that writes nothing (its Bash writes are judged as Write)
-    path = dispatch_scratch.scratch_dir(claude_home.project_dir(), payload.get("session_id"), role, payload.get("agent_id"))
-    if path is None or not dispatch_scratch.ensure_scratch(path):
+    project = claude_home.project_dir()
+    path = dispatch_scratch.scratch_dir(project, payload.get("session_id"), role, payload.get("agent_id"))
+    if path is None or not dispatch_scratch.ensure_scratch(path, project):
         return None
     return (f"Your scratch, this dispatch's alone: {path}/ -- put temp files and logs there; for a tool that uses TMPDIR (mktemp included) "
             f"start the command with: export TMPDIR={path}/tmp && ... Shared /tmp names, other dispatches' scratch and harness state are refused.")

@@ -64,13 +64,24 @@ def scratch_dir(project_dir, session_id: str, role: str, agent_id: str) -> Optio
     return os.path.join(os.path.abspath(os.fspath(project_dir)), ".claude", "scratch", session, role, agent_id)
 
 
-def ensure_scratch(path: str) -> bool:
-    """Create the dispatch's directory and its tmp/; False when it cannot."""
+def _inside(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def ensure_scratch(path: str, project_dir) -> bool:
+    """Create the dispatch's directory and its tmp/; False when it cannot, or when the
+    directory would not lie, symlinks resolved, at its own place below the project's
+    .claude/scratch/ (a planted symlink on the way leads elsewhere)."""
+    root = os.path.realpath(os.path.join(os.path.abspath(os.fspath(project_dir)), ".claude", "scratch"))
+    rel = os.path.relpath(path, os.path.join(os.path.abspath(os.fspath(project_dir)), ".claude", "scratch"))
+    expected = os.path.join(root, rel)
+    if rel.startswith(os.pardir) or os.path.realpath(path) != expected or not _inside(expected, root):
+        return False
     try:
         os.makedirs(os.path.join(path, "tmp"), exist_ok=True)
-        return True
     except OSError:
         return False
+    return os.path.realpath(os.path.join(path, "tmp")) == os.path.join(expected, "tmp")
 
 
 class Value(NamedTuple):
@@ -190,16 +201,19 @@ def _mktemp(word, scope, cwd: str) -> Optional[Value]:
     env_tmp = scope.get("TMPDIR")
     env_tmp = env_tmp.path if isinstance(env_tmp, Value) else env_tmp
     env_tmp = env_tmp if isinstance(env_tmp, str) and env_tmp else None
-    if template is None:
-        template, tflag = "tmp.XXXXXXXXXX", True
+    # GNU mktemp: with -t, $TMPDIR, else -p DIR, else /tmp; without -t, -p DIR (or --tmpdir=DIR) wins,
+    # else $TMPDIR, else /tmp, when a directory is in play (-p/--tmpdir given, or no template at all);
+    # a template alone is taken from the current directory.
     if tflag:
-        if "/" in template:
+        if template is not None and "/" in template:
             return None
         base = env_tmp or pdir or "/tmp"
-    elif pdir is not None:
+    elif pdir is not None or template is None:
         base = pdir or env_tmp or "/tmp"
     else:
         base = cwd
+    if template is None:
+        template = "tmp.XXXXXXXXXX"
     if not re.search(r"X{3,}[^X/]*\Z", template):
         return None
     path = os.path.join(base, template + suffix)
@@ -229,17 +243,52 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
     script = _sp.parse(command)
     if script.errors():
         return scope
-    top = []
-    for pl, _sep in script.items:
+    top, conditional = [], set()
+    # Chains: the top-level items joined by && or ||. An assignment in a later element of a chain
+    # runs only when the elements before it succeed (&&) or fail (||). Under a pure && chain every
+    # later element runs only if it did, so it binds there; a use outside that chain (after ; or a
+    # newline), any || chain and a backgrounded element (a subshell) leave the name unknown.
+    chains, prev_sep = [], None
+    for pl, sep in script.items:
+        if prev_sep in ("&&", "||") and chains:
+            chains[-1]["items"].append((pl, sep))
+        else:
+            chains.append({"items": [(pl, sep)]})
+        prev_sep = sep
+    for chain in chains:
+        seps = [sep for _, sep in chain["items"][:-1]]
+        chain["and_only"] = all(sep == "&&" for sep in seps)
+        stages = [st for pl, _ in chain["items"] for st in pl.stages]
+        chain["span"] = (stages[0].span[0], stages[-1].span[1]) if stages and all(
+            getattr(st, "span", None) for st in stages) else None
+    where = {id(pl): (chain, k) for chain in chains for k, (pl, _) in enumerate(chain["items"])}
+    prev_sep = None
+    for pl, sep in script.items:
+        chain, k = where[id(pl)]
+        maybe = sep == "&"
+        if k > 0 and not maybe:
+            maybe = not chain["and_only"] or chain["span"] is None
+        prev_sep = sep
         if len(pl.stages) != 1 or not isinstance(pl.stages[0], _sp.SimpleCommand):
             continue
         cmd = pl.stages[0]
+        found = []
         if not cmd.words:
-            top.extend(cmd.assignments)
+            found.extend(cmd.assignments)
         elif cmd.words[0].value() == "export":
             for w in cmd.words[1:]:
                 if re.match(r"[A-Za-z_]\w*=", w.raw.text):
-                    top.append(_sp.Assignment(w))
+                    found.append(_sp.Assignment(w))
+        if not maybe and k > 0:
+            # a later element of a pure && chain: every use of the name must lie in this chain, after it
+            span = chain["span"]
+            for a in found:
+                refs = [m.start() for m in re.finditer(r"\$\{?%s\b" % re.escape(a.name), command)]
+                if any(not (a.word.span[1] <= r < span[1]) for r in refs):
+                    conditional.add(a.name)
+        if maybe:
+            conditional.update(a.name for a in found)
+        top.extend(found)
     counted, nested = {}, False
     for site in _sp.walk(script):
         # A target read from a shell the command starts (-c, a fed script, eval, an alias) does not
@@ -259,7 +308,7 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
     for a in top:
         names[a.name] = names.get(a.name, 0) + 1
     for name, n in counted.items():
-        if nested or names.get(name) != n or n != 1:
+        if nested or names.get(name) != n or n != 1 or name in conditional:
             scope[name] = _UNKNOWN
     for a in top:
         if scope.get(a.name) is _UNKNOWN:

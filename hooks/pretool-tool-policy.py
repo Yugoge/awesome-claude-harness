@@ -99,8 +99,9 @@ Scratch namespace actor-exactness:
   - Owner scratch (.claude/scratch/<session>/<role>/<agent_id>/, named to the
     dispatch at its start: hooks/subagentstart-record.py, lib/dispatch_scratch)
     is allowed for every role; a SIBLING's scratch directory is denied for
-    every role; a flat .claude/scratch/<file> belongs to no dispatch and is
-    allowed; arbitrary /tmp and /var/tmp are denied for every role INCLUDING
+    every role, and so is the namespace above the dispatches (the scratch
+    root, a session- or role-level entry); a regular file directly in
+    .claude/scratch/ belongs to no dispatch and is allowed; arbitrary /tmp and /var/tmp are denied for every role INCLUDING
     one holding a bare '*' grant, which no prefix list can deny, except a name
     mktemp creates (unique: no parallel dispatch can collide on it).
   - Each role's OWN pre-existing exact temp prefixes are generated from the
@@ -282,12 +283,33 @@ def _scratch_depth(target: str) -> int:
         return -1
 
 
+def _flat_scratch_file(target: str) -> bool:
+    """A target one level below .claude/scratch/, as written and resolved, that is
+    no symlink and no directory: a flat file no dispatch owns."""
+    from pathlib import Path
+
+    path = Path(target).expanduser()
+    if not path.is_absolute():
+        path = Path(_project_root()) / path
+    lexical = Path(os.path.normpath(str(path)))
+    root = Path(os.path.normpath(str(Path(_project_root()) / ".claude" / "scratch")))
+    try:
+        parts = lexical.relative_to(root).parts
+    except ValueError:
+        return False
+    if len(parts) != 1 or _scratch_depth(target) != 1:
+        return False
+    return not (os.path.islink(lexical) or os.path.isdir(lexical))
+
+
 def _scratch_status(role: str, target: str, data: dict) -> str:
     """Classify a write target as owner / sibling / unowned / system_temp / outside.
 
     A path below .claude/scratch/ is a dispatch's only from the dispatch level
-    down (<session>/<role>/<dispatch_id>/...); a flat file or a session- or
-    role-level entry above it belongs to no dispatch ("unowned").
+    down (<session>/<role>/<dispatch_id>/...). A file directly in
+    .claude/scratch/ (one level down, not a symlink or a directory) belongs to
+    no dispatch ("unowned"); the scratch root itself and every session- or
+    role-level entry are the namespace that holds the dispatches ("sibling").
 
     Authoritative path: session_resources.classify_target, which owns the
     namespace layout.  When no resource session is provisioned (or the module
@@ -306,7 +328,7 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
             status = session_resources.classify_target(
                 _project_root(), binding, target
             )["status"]
-            if status == "sibling" and 0 <= _scratch_depth(target) < 3:
+            if status == "sibling" and _flat_scratch_file(target):
                 return "unowned"
             return status
         except Exception:
@@ -323,7 +345,7 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
         return "outside"
     dispatch_id = data.get("agent_id")
     if len(rel) < 3:
-        return "unowned"
+        return "unowned" if _flat_scratch_file(target) else "sibling"
     if rel[1] == role and dispatch_id and rel[2] == dispatch_id:
         return "owner"
     return "sibling"
@@ -339,7 +361,8 @@ def _check_scratch_actor_exactness(role: str, target, data: dict, unique: bool =
     The decisions, taken for every write target:
       owner scratch        -> allow (every role)
       sibling scratch      -> DENY  (every role)
-      unowned scratch      -> allow (a flat .claude/scratch/<file>: no dispatch's)
+      unowned scratch      -> allow (a file directly in .claude/scratch/, no
+                               symlink or directory: no dispatch's)
       arbitrary /tmp,/var/tmp -> DENY (every role, INCLUDING a role holding a
                                bare '*' grant, which no prefix list can deny)
                                unless the target matches one of that role's
@@ -379,6 +402,25 @@ def _check_scratch_actor_exactness(role: str, target, data: dict, unique: bool =
             "between parallel dispatches); " + _OWN_SCRATCH_HINT,
         )
     return (True, "ok")
+
+
+def _check_scratch_removals(role: str, tool_name: str, tool_input, data: dict) -> None:
+    """A Bash delete or rename-away of a scratch entry no write may reach: a sibling
+    dispatch's, or the namespace above the dispatches (the scratch root, a session- or
+    role-level entry). The caller's own entries and a flat file stay removable."""
+    if tool_name != "Bash" or not isinstance(tool_input, dict):
+        return
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return
+    for target, removed in extract_bash_touched_paths(command):
+        if not removed or not isinstance(target, str) or any(c in target for c in "$`\x00"):
+            continue
+        if _scratch_depth(target) < 0 or _scratch_status(role, target, data) != "sibling":
+            continue
+        _emit_block(role, "Write", target, "a sibling dispatch's scratch or the scratch namespace is not removed "
+                                           "or renamed away: actor-exact namespace; " + _OWN_SCRATCH_HINT)
+        sys.exit(2)
 
 
 def _expanded_target(tool_name: str, target, data: dict):
@@ -1406,6 +1448,7 @@ def main() -> None:
         # rows: the checks above are all that applies to them.
         sys.exit(0)
     _check_targets(role, tool_name, targets, data, own, approved)
+    _check_scratch_removals(role, tool_name, tool_input, data)
     sys.exit(0)
 
 
