@@ -1417,12 +1417,8 @@ _PARAM_DEFAULT_RE = re.compile(r'\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=]([^{}]*)\}')
 _DEFAULT_ROUNDS = 16
 _BRACE_CAP = 256
 _BRACE_SEQ_RE = re.compile(r'^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$')
-# fetch/pull options whose value is the next word when not attached.
-_FETCH_VALUE_OPTS = frozenset({'--depth', '--deepen', '--shallow-since', '--shallow-exclude',
-                               '--refmap', '--upload-pack', '-j', '--jobs', '-o',
-                               '--server-option', '--negotiation-tip', '--filter',
-                               '--recurse-submodules-default', '--submodule-prefix',
-                               '-s', '--strategy', '-X', '--strategy-option'})
+# A repository URL, exempt from the unresolved-destination rule.
+_URL_WORD_RE = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://|[^@/:]+@[^@/:]+:')
 
 
 class _Unresolved(Exception):
@@ -1537,42 +1533,24 @@ def _is_refmap(name):
 
 
 def _refspec_words(inv):
-    """The words of parsed fetch or pull `inv` that git reads as refspecs, as
-    written (quotes and backslashes dropped): each operand after the
-    repository (none under --all or --multiple, where every operand is a
-    repository) and each --refmap value."""
-    words = [_flat_text(w.text) for w in inv.arg_words]
-    vals = list(inv.args)
-    out, operands, k = [], 0, 0
-    many = any(v in ('--all', '--multiple') for v in vals if v)
-    while k < len(words):
-        v = vals[k] if k < len(vals) else None
-        if v is None and not set('$`') & set(words[k]):
-            v = words[k]  # an unquoted glob (`refs/heads/*`) reads as written
-        if v == '--':
-            rest = words[k + 1:]
-            if not many:
-                out += rest if operands else rest[1:]
-            break
-        opt = v if v is not None else words[k]  # `--refm="...$D"`: an option still
-        if opt.startswith('-') and opt != '-':
-            name, eq, val = opt.partition('=')
-            if v is None:
-                val = words[k].partition('=')[2]
-            if _is_refmap(name):
-                if eq:
-                    out.append(val)
-                elif k + 1 < len(words):
-                    out.append(words[k + 1])
-            if not eq and (_is_refmap(name) or name in _FETCH_VALUE_OPTS or (
-                    name.startswith('--') and len(name) > 3
-                    and any(o.startswith(name) for o in _FETCH_VALUE_OPTS))):
-                k += 1
-        else:
-            if operands and not many:
-                out.append(words[k])
-            operands += 1
-        k += 1
+    """The words of parsed fetch or pull `inv` that may be refspecs, as written
+    (quotes and backslashes dropped): every word that is not an option, and the
+    value of an attached `--refmap=` (or a prefix of it git takes); a separate
+    option value is a non-option word and is kept. git's option parser is not
+    modelled, so no word is exempt for being the repository; a URL is
+    (_URL_WORD_RE: `<scheme>://...`, or scp-like `user@host:path` with no `$`,
+    `{` or `}`)."""
+    out = []
+    for word in (_flat_text(w.text) for w in inv.arg_words):
+        if word.startswith('-') and word != '-':
+            name, eq, val = word.partition('=')
+            if eq and _is_refmap(name):
+                out.append(val)
+            continue
+        if _URL_WORD_RE.match(word) and not (
+                not word.partition('://')[1] and set('${}') & set(word)):
+            continue
+        out.append(word)
     return out
 
 

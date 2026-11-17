@@ -118,6 +118,11 @@ REFUSED = [
     "git fetch --refm 'refs/heads/*:$D/*' origin master",
     "git fetch --refma=+refs/heads/*:refs/checkpoints/* origin master",
     "git fetch origin master --refm +refs/heads/*:refs/checkpoints/*",
+    # an option the guard might misread as taking the next word (verifier round 4)
+    "git fetch --recurse-submodules origin master:$D",
+    "git fetch --st origin master:$D",
+    "git fetch --depth 1 origin master:$D",
+    "git fetch git@example.com:repo.git master:$D",
 ]
 
 PASSES = [
@@ -143,6 +148,8 @@ PASSES = [
     'git fetch "https://$HOST/repo.git" master:refs/remotes/h/master',
     'git fetch origin "$BRANCH"',                      # no destination written
     "git fetch --multiple origin upstream",
+    "git fetch git@example.com:org/repo.git master:refs/remotes/e/master",
+    "git fetch --depth 1 origin master",
 ]
 
 
