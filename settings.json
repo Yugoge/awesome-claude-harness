@@ -271,7 +271,18 @@
       "Skill(stop:*)",
       "Skill(test:*)"
     ],
-    "ask": []
+    "ask": [
+      "Edit(/CLAUDE.md)",
+      "Edit(/agents/**)",
+      "Edit(/commands/**)",
+      "Edit(/hooks/**)",
+      "Edit(/policies/**)",
+      "Edit(/schemas/**)",
+      "Edit(/settings*.json)",
+      "Edit(/skills/**)",
+      "Edit(~/.*)",
+      "Edit(~/.*/**)"
+    ]
   },
   "deniedMcpServers": [
     {

@@ -348,7 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
-| S-015 | permission-layer-project-writes | advisory | unexercised | source-level | settings.json:153 @d1abc798 | tests/test_project_write_permissions.py | source-level |
+| S-015 | permission-layer-project-writes | advisory | unexercised | component-tested | settings.json:158 @c1f2e447 | tests/test_project_write_permissions.py | component-tested |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -377,20 +377,28 @@ no per-rule budget exists.
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
 - **S-015** — OB-L08 (owner decision: `Edit(./**)`, not `defaultMode: acceptEdits`): `permissions.allow` carries
-  `Edit(./**)`, so a write under the session's current directory (Write `src/newmodule.py`, `echo hi > notes.md`, a
-  heredoc written to a project file) no longer asks in default mode; before it, the Edit allow entries covered only
-  manifests, `.claude/agents|commands`, `.review`, `docs`, `scripts` and `tests/generated`. The older Edit allow
-  entries stay (no test shows their removal changes nothing). What stays stopped, and by which layer: deny rules
-  are evaluated before allow ("An allow rule can't carve an exception out of a deny rule",
-  code.claude.com/docs/en/permissions.md), so `Edit(.claude/settings.json)`, `Edit(.claude/hooks/**)`,
-  `Edit(.claude/scripts/**)`, `Edit(.claude/CLAUDE.md)` and the `.env`/secret Edit and Read denies keep refusing,
-  for a Bash output redirect too ("the check covers your `Edit` allow and deny rules"); `Edit(.claude/settings.local.json)`
-  is added to deny, because `hooks/pretool-harness-switch-guard.py` refuses a write of that file only when it changes
-  `env`, `hooks`, `disableAllHooks` or `permissions`, and nothing else refused one of any other key. `.claude/` and
-  `.git/` writes are protected paths, which "`permissions.allow` rules ... do not pre-approve" (the safety check runs
-  before allow rules; code.claude.com/docs/en/permission-modes.md), so `Edit(./**)` widens neither; writes to
-  `.claude/hooks/` and `.claude/commands/` are also refused by `hooks/pretool-claude-config-guard.py`. The CLI
-  decision is modelled from the documentation in the test, not observed on a host; the two hooks are run.
+  `Edit(./**)` (settings.json:158 @c1f2e447), so a write under the session's current directory (Write
+  `src/newmodule.py`, `echo hi > notes.md`, a heredoc written to a project file) no longer asks in default mode;
+  before it the Edit allow entries covered only manifests, `.claude/agents|commands`, `.review`, `docs`, `scripts`
+  and `tests/generated`, which all stay. `./**` anchors at the current directory, so with it at a harness clone used
+  as `CLAUDE_CONFIG_DIR` (docs/installation.md, "Other install locations") or at the home directory it also allowed
+  harness-control and account dot-state writes that asked before. `permissions.ask` returns the Write/Edit route to
+  those to a prompt: `Edit(/CLAUDE.md)`, `Edit(/agents/**)`, `Edit(/commands/**)`, `Edit(/hooks/**)`,
+  `Edit(/policies/**)`, `Edit(/schemas/**)`, `Edit(/settings*.json)`, `Edit(/skills/**)` (a single leading slash
+  anchors at the settings source, the harness home in both layouts) and `Edit(~/.*)`, `Edit(~/.*/**)`. Ask is checked
+  after deny ("Rules are evaluated in order: deny, then ask, then allow", code.claude.com/docs/en/permissions.md), and
+  every base deny was measured still denying, `sudo tee` forms included. `Edit(.claude/settings.local.json)` is added
+  to deny: `hooks/pretool-harness-switch-guard.py` refuses a write there only when it changes `env`, `hooks`,
+  `disableAllHooks` or `permissions`. The decisions are measured on Claude Code 2.1.326's own permission check run
+  headless against a mock API (the test's MEASURED matrix: base, first commit, now), not on a hook. **Open, an owner
+  decision:** ask does not reach a Bash output redirect (the redirect check "covers your `Edit` allow and deny rules,
+  protected paths, and the working directories", same page; measured, and a Bash ask rule sees the command without its
+  redirect), so `echo x >> hooks/x.py` in such a clone and `echo x >> .ssh/authorized_keys` from HOME are allowed by
+  `Edit(./**)`; only a deny, a narrower allow or a hook closes them. `/scripts/**` is not asked, since base allowed
+  `scripts/**` from the clone, so `harness/scripts/` from HOME and a new top-level file in the clone stay allowed; and
+  `~/.*/**` newly asks base-allowed `.review/**` and manifest files under a home dot directory when the current
+  directory is HOME. Writes to `.claude/hooks/` and `.claude/commands/` are also refused by
+  `hooks/pretool-claude-config-guard.py`; `.claude/` and `.git/` stay protected paths.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
