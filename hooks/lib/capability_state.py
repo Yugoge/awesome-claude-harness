@@ -212,6 +212,17 @@ def state_dir() -> Path:
     return d
 
 
+def ambient_session_id() -> str:
+    """The id of the Claude Code session this process runs inside, or "".
+
+    Claude Code exports CLAUDE_CODE_SESSION_ID to the processes a session starts;
+    CLAUDE_SESSION_ID is the older name and stays the fallback. Reading only the
+    old name made every in-session run fall back to a synthetic id, so the probe
+    file was keyed to a session no host would ever deliver receipts for.
+    """
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or ""
+
+
 def state_path(session_id: str, directory: Path | None = None) -> Path:
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id or "unknown-session")
     return (directory or state_dir()) / f"capability-handshake-{safe}.json"
@@ -606,7 +617,7 @@ def evaluate_activation(
     input-attribution corollary. Acceptance/runtime trust evidence only; this is
     not a public logging or audit interface.
     """
-    sid = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
+    sid = session_id or ambient_session_id()
     sp = Path(state_file) if state_file else state_path(sid)
     record = {
         "component": component,

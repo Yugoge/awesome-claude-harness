@@ -175,10 +175,26 @@ def test_a_gate_that_reads_the_cycle_holds_the_stall_and_names_the_open_steps(en
     assert "gate instrument failure" not in text, text
 
 
-def test_the_release_is_close_md_steps_own(env):
-    """The text the release follows: close.md Step 0 says the turn ends there, and what a held Stop asks."""
+def _step0_as_close_md_spells_it() -> tuple[str, str]:
+    """Step 0's disposition call (its one bash fence) and the stall line its non-zero-exit bullet prescribes,
+    each filled in for TASK."""
     text = (REPO / "commands" / "close.md").read_text(encoding="utf-8")
     step0 = text.split("### Step 0:", 1)[1].split("\n### ", 1)[0]
-    assert "the Stop gate lets it end while its own reading of the cycle fails too" in step0
-    assert "When the gate reads the cycle and holds that Stop, the call works again" in step0
-    assert "`OPERATION_STALLED: <the stderr reason>`" in step0 and "run the same call once more" in step0
+    [call] = [fence.split("```", 1)[0].strip() for fence in step0.split("```bash\n")[1:]]
+    bullet = next(line for line in step0.splitlines() if line.startswith("- **Non-zero exit**"))
+    [stall] = [c for c in bullet.split("`")[1::2] if c.startswith("OPERATION_STALLED:")]
+    return (call.replace('"$TASK_ID"', f'"{TASK}"').replace("<PROJECT_ROOT>", "/p"),
+            stall.replace("<the stderr reason>", "SyntaxError: unmatched ')'"))
+
+
+def test_the_stall_close_md_spells_is_the_one_the_gate_releases(env):
+    """close.md Step 0's own call failing twice, then its own OPERATION_STALLED line: the gate ends the turn
+    while its reading of the cycle fails too, and holds it, naming Step 0, when it reads the cycle."""
+    call, stall = _step0_as_close_md_spells_it()
+    env.monkeypatch.setitem(globals(), "CALL", call)
+    broken_resolver(env)
+    stalled_span(env, line=stall)
+    assert gate.decide(env.payload, "block") == (0, "")
+    reading_resolver(env)
+    code, text = gate.decide(env.payload, "block")
+    assert code == 2 and "todo: not completed: Step 0" in text, text
