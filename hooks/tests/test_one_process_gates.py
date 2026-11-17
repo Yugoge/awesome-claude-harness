@@ -225,11 +225,18 @@ def _witnesses(env: dict) -> list:
 
 
 def test_a_refused_dispatch_leaves_no_witness(env):
-    """G1 refuses a malformed obligation block; alone, the attest hook would still
-    have written its witness beside it."""
-    payload = _analyst("Commit the task.\n<obligation v=\"1\">{not json</obligation>\n")
+    """G1 refuses an obligation block naming another role; alone, the attest hook would
+    still have written its witness beside it. (A malformed block on a dispatch no span
+    requires one of is no obligation since OB-L41, so a block that parses carries the
+    refusal.)"""
+    from datetime import datetime, timezone
+    block = json.dumps({"task_id": "20261019-103000", "role": "dev", "pipeline": "dev",
+                        "profile": "singular",
+                        "dispatched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "artifacts": [{"kind": "response_line", "terminal_line_regex": "^DONE$"}]})
+    payload = _analyst(f'Commit the task.\n<obligation v="1">{block}</obligation>\n')
     alone = _run(str(HOOKS / "pretool-obligation-gate.py"), payload, env)
-    assert alone.returncode == 2
+    assert alone.returncode == 2 and "reason=role_mismatch" in alone.stderr, alone.stderr
     gate = _run(str(HOOKS / "pretool-dispatch-gate.py"), payload, env)
     assert gate.returncode == 2 and gate.stderr.strip() == alone.stderr.strip()
     assert _witnesses(env) == []

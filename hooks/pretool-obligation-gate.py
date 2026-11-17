@@ -34,7 +34,10 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
        - NoBlock (a dispatch step 2 requires a block of): missing_block.
        - Rejection (malformed block, unregistered schema id, OR
          tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
-         bad_prompt case): UNCONDITIONAL.
+         bad_prompt case): a violation only on a dispatch whose span requires
+         a block of it (_block_required). Elsewhere the prompt carries no
+         obligation -- it only mentions the tag, e.g. an Explore prompt about
+         "<obligation> blocks" (OB-L41) -- and the dispatch passes untouched.
      On a violation advisory mode prints the reason on one stderr line
      (OBLIGATION GATE ADVISORY) and exits 0; block mode prints the
      three-element stderr message and exits 2.
@@ -59,8 +62,9 @@ grammar or field validation (ticket-20260930-132644-l1 constraint).
 Exit codes:
   0 -- allow (pass-through, valid block, or a violation in advisory mode,
        its reason on stderr; nothing is written).
-  2 -- reject (block mode only: missing block where step 2 requires one, or any
-       malformed/invalid block, role mismatch, out-of-bound clock, bad prompt).
+  2 -- reject (block mode only: missing, malformed or invalid block or bad
+       prompt where step 2's span requires a block; on any dispatch, a block
+       that parses but has a role mismatch or an out-of-bound clock).
 """
 
 from __future__ import annotations
@@ -252,7 +256,13 @@ def _evaluate(data: dict, mode: str) -> None:
             return
     elif isinstance(parsed, NoBlock):  # reached only where a block is required
         reason = "missing_block"
-    else:  # Rejection -- unconditional, whatever the span; the field it failed named
+    else:  # Rejection; the field it failed named
+        # OB-L41: a prompt that only mentions the tag ('<obligation> blocks', an unterminated
+        # '<obligation v="1">' in prose) parses to a Rejection and carries no obligation; it is
+        # refused only on a dispatch its span requires a block of. A block that parses is held
+        # to role and clock above on every dispatch.
+        if not _block_required(data.get("transcript_path"), subagent_type):
+            return
         reason = parsed.reason + (f" at {parsed.field}" if getattr(parsed, "field", "") else "")
     if mode == "block":
         _emit_block(session_id, subagent_type, reason)
