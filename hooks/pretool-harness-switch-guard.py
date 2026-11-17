@@ -7,11 +7,15 @@ subagent, each other path by which an agent call could switch the harness or fak
 
   Skill / SlashCommand  invoking the harness command (its settings deny and its
                         disable-model-invocation say the same)
-  Bash                  running scripts/harness-switch or the switch hook; touching the switch's
-                        state <H>/.harness-switch/ other than reading it; typing `/harness on|off`
+  Bash                  running scripts/harness-switch or the switch hook; writing the switch's
+                        state <H>/.harness-switch/ (a word the command writes, read from the call's
+                        directory and every `cd`'s, as below; reading it is free); typing `/harness on|off`
                         into a Claude Code session the command starts; writing the home's
                         settings files (settings.json, settings.machine.json, settings.local.json);
-                        writing disableAllHooks into any settings*.json, in any project
+                        writing disableAllHooks into any settings*.json, in any project. A command
+                        writes only the words it writes (_written_by: a redirect's target, cp's
+                        destination, sed's w file, every word of any command but a reader), never
+                        a `>` elsewhere: `grep x ~/.claude/settings.json > /tmp/out` reads
   Write / Edit / MultiEdit / NotebookEdit
                         a file under <H>/.harness-switch/; the home's settings files; any
                         settings*.json that would set disableAllHooks; a script outside a harness
@@ -68,7 +72,22 @@ SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
 READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "ls", "stat",
              "file", "jq", "diff", "cmp", "md5sum", "sha256sum", "test", "[", "echo", "printf", "realpath",
-             "readlink", "basename", "dirname", "find"}
+             "readlink", "basename", "dirname", "find", "nl", "cut", "tr", "column", "od"}  # no output operand
+READER_OUTPUT = {  # a reader's options that write a file or run a program: it is no reader with one
+    "find": re.compile(r"-(?:delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)\Z"),
+    "less": re.compile(r"-[A-Za-z]*[oO]|--(?:log-file|LOG-FILE)(?:=|\Z)"),
+    "more": re.compile(r"\A\Z"),
+    "rg": re.compile(r"--pre(?:=|\Z)")}
+AWKS = ("awk", "gawk", "mawk", "nawk")
+AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b")  # print > file, print | command, system(): an awk program that writes
+AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
+SED_LONG = ("--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--posix",
+            "--debug", "--sandbox", "--follow-symlinks", "--binary")
+WRITE_SIGN = re.compile(  # an interpreter's -c / -e text that may write a file or run a program
+    r"write|dump|replace|rename|copy|move|unlink|remove|rmtree|truncate|chmod|chown|link|mkdir|touch|system"
+    r"|popen|subprocess|spawn|exec|eval|shutil|pathlib|Path|import\s+os|from\s+os|\bos\.|fs\.|child_process"
+    r"|[>`|]|\$\(|[\"'][rwaxbt+]*[wax][rwaxbt+]*[\"']")
 GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
                  "grep", "rev-parse", "stash"}
 GIT_WRAPPERS = ("env", "command", "exec", "nohup", "setsid", "nice", "ionice", "stdbuf", "timeout", "time")
@@ -83,7 +102,6 @@ GIT_RUNS_OR_WRITES = re.compile(  # a reader's option that writes a file or runs
     r"--output(?:=|\Z)|--ext-diff\Z|--textconv\Z|--filters\Z|-O|--open-files-in-pager(?:=|\Z)")
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
-WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
@@ -269,25 +287,216 @@ def _read_only(words: list) -> bool:
     if not words:
         return True
     head = os.path.basename(words[0])
-    return head in READ_ONLY and "-delete" not in words and "-exec" not in words
+    output = READER_OUTPUT.get(head)
+    return (head in READ_ONLY and "-delete" not in words and "-exec" not in words
+            and not (output and any(output.match(w) for w in words[1:])))
 
 
-def _written_words(words: list, written: list, everything=None) -> list:
-    """The words of one simple command that name what it writes: the paths it writes, and, for a
-    command that is not read-only (cp, mv, tee, sed -i, python, ...), every word (`everything`
-    False: the paths alone)."""
+def _sed_script(script: str):
+    """The files a sed script writes (w, W, an s command's w flag), or None when it runs a
+    command (e, an s command's e flag) or is text this reading cannot follow."""
+    i, n, files = 0, len(script), []
+
+    def until(i, stop):  # the index of the first unescaped char in `stop` from i (n: none)
+        while i < n and script[i] not in stop:
+            i += 2 if script[i] == "\\" else 1
+        return min(i, n)
+
+    def delimited(i, delim):  # past the closing `delim` of a regex or replacement starting at i; -1: none
+        while i < n:
+            if script[i] == "\\":
+                i += 2
+            elif script[i] == delim:
+                return i + 1
+            elif script[i] == "\n" and delim != "\n":
+                return -1
+            else:
+                i += 1
+        return -1
+
+    def address(i):
+        if i < n and script[i] in "0123456789":
+            while i < n and script[i] in "0123456789~":
+                i += 1
+        elif i < n and script[i] == "$":
+            i += 1
+        elif i < n and script[i] in "/\\":
+            delim = script[i + 1] if script[i] == "\\" and i + 1 < n else "/"
+            i = delimited(i + (2 if script[i] == "\\" else 1), delim)
+            while 0 <= i < n and script[i] in "IM":
+                i += 1
+        return i
+
+    while True:
+        while i < n and script[i] in " \t\n;":
+            i += 1
+        if i >= n:
+            return files
+        if script[i] == "#":
+            i = until(i, "\n")
+            continue
+        i = address(i)
+        if i < 0:
+            return None
+        if i < n and script[i] == ",":
+            i += 1
+            while i < n and script[i] in " \t":
+                i += 1
+            if i < n and script[i] in "+~":
+                i += 1
+                while i < n and script[i] in "0123456789":
+                    i += 1
+            else:
+                i = address(i)
+                if i < 0:
+                    return None
+        while i < n and script[i] in " \t!":
+            i += 1
+        if i >= n:
+            return None
+        c, i = script[i], i + 1
+        if c in "{}=dDgGhHnNpPxzF":
+            pass
+        elif c in "qQlL":
+            while i < n and script[i] in " \t0123456789":
+                i += 1
+        elif c in ":btTv":
+            i = until(i, ";\n") if c != ":" else until(i, "\n;")
+        elif c in "aicrR":
+            i = until(i, "\n")
+        elif c in "wW":
+            j = until(i, "\n")
+            files.append(script[i:j].strip())
+            i = j
+        elif c in "sy":
+            if i >= n or script[i] in "\\\n":
+                return None
+            delim = script[i]
+            i = delimited(i + 1, delim)
+            i = delimited(i, delim) if i >= 0 else -1
+            if i < 0:
+                return None
+            while c == "s" and i < n and script[i] in "gpiImM0123456789":
+                i += 1
+            if c == "s" and i < n and script[i] == "w":
+                j = until(i + 1, "\n")
+                files.append(script[i + 1:j].strip())
+                i = j
+        else:
+            return None  # e, or a command this reading does not know
+        while i < n and script[i] in " \t":
+            i += 1
+        if i < n and script[i] not in ";\n}#":
+            return None
+
+
+def _sed(plain: list):
+    """sed's written files (its w commands) when it writes nothing else; None when it is no
+    reader: -i / --in-place, a script file (-f), an e command, an unknown option or text."""
+    scripts, operands, it = [], [], iter(plain[1:])
+    for w in it:
+        if w == "--":
+            operands.extend(it)
+        elif w in ("-e", "--expression"):
+            scripts.append(next(it, ""))
+        elif w.startswith("--expression="):
+            scripts.append(w.split("=", 1)[1])
+        elif w.startswith("--line-length=") or w in SED_LONG:
+            continue
+        elif w.startswith("--"):
+            return None  # --in-place, --file, or an option this reading does not know
+        elif w.startswith("-") and len(w) > 1:
+            for k, ch in enumerate(w[1:], 1):
+                if ch in SED_FLAGS:
+                    continue
+                if ch in "el":
+                    value = w[k + 1:] or next(it, "")
+                    scripts += [value] if ch == "e" else []
+                    break
+                return None  # -i, -f, or an option this reading does not know
+        else:
+            operands.append(w)
+    if not scripts and operands:
+        scripts.append(operands[0])
+    files = []
+    for script in scripts:
+        written = _sed_script(script)
+        if written is None:
+            return None
+        files += written
+    return files
+
+
+def _awk(plain: list):
+    """An awk command's program text, or None when it is no reader: an option that loads a
+    program or rewrites its files (-f, -i inplace, -e, -l, ...), or no program."""
+    it = iter(plain[1:])
+    for w in it:
+        if w == "--":
+            return next(it, None)
+        if w in ("-F", "-v", "--field-separator", "--assign"):
+            next(it, None)
+        elif re.fullmatch(r"-[Fv].+|--(?:field-separator|assign)=.*", w):
+            continue
+        elif w.startswith("-"):
+            return None
+        else:
+            return w
+    return None
+
+
+def _cd_dirs(segments: list, cwd: str) -> list:
+    """The directories a command's paths are read from: the call's, and each `cd` / `pushd`
+    target, read both from the directory the chain before it leaves (`cd ~ && cd .claude`) and
+    from the call's (a `cd` in a subshell, or one that fails, leaves the next where it was). A
+    bare `cd` is $HOME."""
+    out, here, seen = {cwd: None}, cwd, {}
+    for words, _ in segments:
+        plain = [w for w in words if not ASSIGNMENT.match(w)]
+        if not plain or os.path.basename(plain[0]) not in ("cd", "pushd"):
+            continue
+        args = [w for w in plain[1:] if not w.startswith("-")]
+        target = args[0] if args else "~"
+        for base in (here, cwd):  # each (target, directory) resolved once: a padded `cd .` costs one
+            if (target, base) not in seen:
+                seen[(target, base)] = _resolve(target, base)
+            out[seen[(target, base)]] = None
+        here = seen[(target, here)]
+    return list(out)
+
+
+def _written_by(words: list, written: list, awk: bool = False, interpreter: bool = False) -> list:
+    """The words of one simple command that it writes: the paths it writes (`written`), and
+    for a reader nothing else (READ_ONLY, git's readers, sed without -i, -f or e; with `awk`, awk
+    whose program has no > | or system(); with `interpreter`, an interpreter whose words carry no
+    WRITE_SIGN); for cp its destination and each source's name inside it; for any other
+    command every word (tee, dd, sed -i, perl -i, mv, rm, ...), with awk's quoted strings and
+    sed's w files."""
     plain = [w for w in words if not ASSIGNMENT.match(w)]
-    if everything is None:
-        everything = bool(plain) and not _read_only(plain)
-    if everything and os.path.basename(plain[0]) == "sed":
-        everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in plain[1:])
-    return written + (words if everything else [])
+    if not plain:
+        return list(written)
+    head = os.path.basename(plain[0])
+    if head == "sed":
+        files = _sed(plain)
+        return list(written) + (files if files is not None else words)
+    if head in AWKS:
+        program = _awk(plain)
+        if awk and program is not None and not AWK_OUTPUT.search(program):
+            return list(written)
+        return list(written) + words + AWK_STRING.findall(program or " ".join(plain[1:]))
+    if _read_only(words) or (interpreter and INTERPRETER.match(head)
+                             and not any(WRITE_SIGN.search(w) for w in plain[1:])):
+        return list(written)
+    if head == "cp":
+        return list(written) + [w for w, _ in _operands(plain, False)]
+    return list(written) + words + ([w for w, _ in _operands(plain, True)] if head == "mv" else [])
 
 
 def writes_settings_file(command: str) -> bool:
-    """True when `command` writes a settings*.json file, in any directory."""
+    """True when `command` writes a settings*.json file, in any directory: one of the words it
+    writes (_written_by; an interpreter whose -c text shows no write reads) names one."""
     return any(NAMES_SETTINGS.search(w) for words, written in _commands(command, "code")
-               for w in _written_words(words, written))
+               for w in _written_by(words, written, awk=True, interpreter=True))
 
 
 def _may_name_settings(token: str) -> bool:
@@ -342,7 +551,9 @@ def _operands(plain: list, moves: bool) -> list:
     each source (moved away); cp's sources are only read."""
     sources, dest, it = [], None, iter(plain[1:])
     for w in it:
-        if w in ("-t", "--target-directory"):
+        if w == "--":
+            sources.extend(it)
+        elif w in ("-t", "--target-directory"):
             dest = next(it, None)
         elif w.startswith("--target-directory="):
             dest = w.split("=", 1)[1]
@@ -359,14 +570,13 @@ def _operands(plain: list, moves: bool) -> list:
 def settings_writes(command: str, cwd: str) -> list:
     """The Claude Code settings files (and directories holding them) `command` writes, moves or
     removes: a redirect onto one (spaced or attached), and every word of a command that is not a
-    reader, an interpreter or a commit or PR message (tee, sed -i, rm, ...); cp's and mv's
-    destination, and mv's sources. A path is read from the call's directory and every `cd`'s.
+    reader (_written_by), an interpreter or a commit or PR message (tee, sed -i, rm, ...); cp's
+    and mv's destination, and mv's sources. A path is read from the call's directory and every
+    `cd`'s (_cd_dirs).
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = list(_commands(command, "shell"))
-    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
-    dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]
-                              + [d for w, _ in segments for d in _git_dirs(w, cwd)]))
+    dirs = list(dict.fromkeys(_cd_dirs(segments, cwd) + [d for w, _ in segments for d in _git_dirs(w, cwd)]))
     out, seen, home = [], set(), _settings_files()
     for words, written in segments:
         plain = [w for w in words if not ASSIGNMENT.match(w)]
@@ -376,7 +586,7 @@ def settings_writes(command: str, cwd: str) -> list:
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
         message, moves = _message(plain), head in ("cp", "mv")
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
-                 _written_words(words, written, False if (interpreter or message or moves) else None)]
+                 (written if (interpreter or message or moves) else _written_by(words, written, awk=True))]
         named += _operands(plain, head == "mv") if moves else []
         for word, dirs_too in named:
             if (word, dirs_too) not in seen:
@@ -526,11 +736,11 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                       "the switch as a prompt")
     settings, segments = _settings_files(), list(_commands(command, "all", every_word=True))
     cds = [_resolve(".", cwd)] + [_resolve(w[1], cwd) for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd")]
-    for words, _ in segments:
-        writes = bool(WRITES.search(" ".join(words))) or not _read_only(words)
-        git, bases = _git(words), [cwd]
+    dirs, checked = _cd_dirs(segments, cwd), set()
+    for words, written in segments:
+        git, bases = _git(words), dirs
         if git is not None:
-            bases += _git_dirs(words, cwd)
+            bases = list(dict.fromkeys(dirs + [g for d in dirs for g in _git_dirs(words, d)]))
             homes = {os.path.dirname(f) for f in settings}
             ran_in = [(_git_dirs(words, d) or [d])[-1] for d in dict.fromkeys(cds)]  # from each `cd`
             if git[2] and any(d == h or d.startswith(h + os.sep) for d in ran_in for h in homes):
@@ -541,11 +751,19 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
             token = word.split("=", 1)[-1]
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):
                 return refuse("this Bash command runs the switch (%s)" % os.path.basename(token))
-            if harness_switch.DIR_NAME in token and writes:
+        for word in dict.fromkeys(_written_by(words, written)):  # the home's files: only a reader is relaxed
+            token = word.split("=", 1)[-1]
+            if harness_switch.DIR_NAME in token:
                 return refuse("this Bash command changes the switch's state (%s)" % harness_switch.DIR_NAME)
-            if os.path.basename(token) in SETTINGS_NAMES and writes and not _allow_settings(cwd):
-                if any(_resolve(token, base) in settings for base in bases):
-                    return refuse("this Bash command writes the harness home's %s" % os.path.basename(token))
+            for base in bases:
+                if (token, base) in checked:
+                    continue
+                checked.add((token, base))
+                path = _resolve(token, base)
+                if _in_state(path):
+                    return refuse("this Bash command changes the switch's state (%s)" % harness_switch.DIR_NAME)
+                if path in settings and not _allow_settings(cwd):
+                    return refuse("this Bash command writes the harness home's %s" % os.path.basename(path))
     for path in settings_writes(command, cwd):
         before = _current(path)
         change = _settings_change(_held(path), _echo_result(command, path, cwd, before))
