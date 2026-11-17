@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:24:03Z*
-**Total entries**: 74
+*Last updated: 2026-11-17T03:49:14Z*
+**Total entries**: 75
 **Convention**: kebab
 
 ## Tree
@@ -53,6 +53,7 @@ lib/
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
 ├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
+├── `harness_temp_state.py` - Is a resolved path harness temp state, and which temp root is it in: the one definition
 ├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
 ├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
