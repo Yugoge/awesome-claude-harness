@@ -895,8 +895,248 @@ def all_targets_whitelisted(command, verb_re, whitelist, strip_service=False):
     return True
 
 
-def service_rules(command, view, env):
-    """BS-20/21, BS-23, BS-25..BS-31: secrets, docker, disks, kills, units, workflow state (`view`: executable view)."""
+# The command-position reading (OB-L11): each rule reads the command word lib/shell_parse.py resolves (wrappers
+# such as sudo, xargs, env, timeout and path forms peeled; eval, `bash -c`, heredoc shells, find -exec read as
+# commands) and that simple command's own arguments and redirections, so a search for the words is data. Text the
+# parser hands on unread keeps the raw reading: an interpreter's code (python -c, node -e, a heredoc fed to one)
+# for the raw-text rules, a runner's command line (watch, tmux, docker exec ...) for every rule. A command the parser
+# cannot read statically (a parse error, a computed command word or payload) is read as before, on its raw text.
+
+_CODE_CARRIER = re.compile(r"^(python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*|lua[\d.]*"
+                           r"|luajit|tclsh[\d.]*|wish|osascript|Rscript|[gmn]?awk)$")
+_CODE_OPTS = frozenset({"-c", "-e", "-E", "-p", "-r", "--eval", "--print", "-x"})
+_OPAQUE_RUNNERS = frozenset({"watch", "parallel", "script", "bwrap", "machinectl", "start-stop-daemon", "coproc",
+                             "tmux", "screen", "at", "batch", "docker", "podman", "nerdctl", "kubectl", "lxc", "incus",
+                             "vagrant", "expect", "gdb", "entr", "dtach", "abduco", "busctl", "dbus-send", "su", "sg",
+                             "runuser", "ssh", "pkexec", "sudoedit"})
+DOCKER_DAEMON_JSON = "/etc/docker/daemon.json"
+WORKFLOW_STATE_RE = r"(workflow-[^/]*\.json|\.claude/todos/)"
+DD_DEV_OK = ("null", "zero", "stdout", "stderr")
+
+
+class ServiceView:
+    """The simple commands of a command, resolved, for the service, disk, process and workflow rules.
+
+    raw: True when the parser cannot read the command statically; the rules then read the raw text as before.
+    sites: (name, args Words, Site, Resolved) per simple command that has a command word; redirect_sites: every Site.
+    code: interpreter code texts; runners: opaque runners' command lines (both read by the raw-text rules).
+    """
+
+    def __init__(self, command, cwd=None):
+        self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
+        self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+        try:
+            from lib.shell_parse import parse, resolve, walk
+            script = parse(command)
+            if script.error is not None:
+                raise ValueError(script.error.code)
+            for site in walk(script):
+                r = resolve(site.cmd)
+                if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
+                    self.raw = True
+                self.redirect_sites.append(site)
+                name = r.name
+                if name is None:
+                    continue
+                args = list(r.args)
+                self.sites.append((name, args, site, r))
+                bodies = [x.hd.body for x in site.cmd.redirects if x.hd is not None] + \
+                         [x.target.text for x in site.cmd.redirects if x.op == "<<<" and x.target is not None]
+                line = " ".join([r.head.text] + [w.text for w in args] + bodies)
+                if _CODE_CARRIER.match(name):
+                    self.code.append(line)
+                    vals = [w.value() for w in args]
+                    reads_stdin = not any(v is None or v in _CODE_OPTS or not v.startswith("-") for v in vals)
+                    if reads_stdin and ({"pipe", "file"} & set(site.fed)):
+                        self.raw = True  # its program is another command's output
+                elif name in _OPAQUE_RUNNERS:
+                    self.runners.append(line)
+        except Exception:  # noqa: BLE001 - the parser unavailable or the text unreadable: the raw reading
+            self.raw = True
+
+    def named(self, *names):
+        return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
+
+
+# The raw-text readings the rules had before OB-L11: `text` is the command, an interpreter's code or a runner's
+# command line; `view` the command's executable view, or that code or line itself.
+def _raw_daemon_json(text):
+    return grep(r"(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.json", text)
+
+
+def _raw_compose(text):
+    return grep(r"docker.compose\s+(down|restart|stop)", text)
+
+
+def _raw_prune(text):
+    return grep(r"docker\s+system\s+prune\s+-a", text)
+
+
+def _raw_disk(view):
+    return grep(r"^\s*(dd|mkfs|fdisk|shred)\b", view)
+
+
+def _raw_killall(view, family):
+    return grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", view)
+
+
+def _raw_kill_signal(view):
+    return grep(r"(^|[ \t;|&])(kill)[ \t]+-", view)
+
+
+def _raw_kill_pid(view):
+    return grep(r"(^|[;&|]\s*)kill\s+[0-9]", view)
+
+
+def _raw_systemctl(text, env):
+    return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", text) \
+        and not all_targets_whitelisted(text, r"systemctl\s+(stop|restart)", env["dev_systemd"], strip_service=True)
+
+
+def _raw_workflow(text, view):
+    return grep(r"(rm|mv)\s", view) and grep(WORKFLOW_STATE_RE, text)
+
+
+# The command-position readings.
+def _daemon_json_write(sv):
+    """A redirection into daemon.json; tee, cp or mv naming it; sed or awk editing it in place or naming it in code."""
+    for site in sv.redirect_sites:
+        if any(x.writes() and x.target is not None and DOCKER_DAEMON_JSON in x.target.text for x in site.cmd.redirects):
+            return True
+    for name, args, _s, _r in sv.sites:
+        if not any(DOCKER_DAEMON_JSON in w.text for w in args):
+            continue
+        if name in ("tee", "cp", "mv"):
+            return True
+        if name in ("sed", "gsed", "awk", "gawk", "mawk", "nawk"):
+            vals = [w.value() for w in args]
+            in_place = any(v is not None and (re.match(r"^-[A-Za-z]*i", v) or v.startswith("--in-place")
+                                              or v in ("inplace", "--include=inplace")) for v in vals)
+            in_code = any(DOCKER_DAEMON_JSON in w.text and w.value() != DOCKER_DAEMON_JSON for w in args)
+            if in_place or in_code:
+                return True
+    return False
+
+
+def _docker_compose_stop(sv):
+    for name, args, _s, _r in sv.named("docker", "docker-compose"):
+        vals = [w.value() for w in args]
+        if name == "docker":
+            if "compose" not in vals:
+                continue
+            vals = vals[vals.index("compose") + 1:]
+        if any(v in ("down", "restart", "stop") for v in vals):
+            return True
+    return False
+
+
+def _docker_prune_all(sv):
+    for _n, args, _s, _r in sv.named("docker"):
+        vals = [w.value() or "" for w in args]
+        if "system" in vals and "prune" in vals[vals.index("system") + 1:] and any(
+                v.startswith("--all") or re.match(r"^-[A-Za-z]*a", v) for v in vals):
+            return True
+    return False
+
+
+def _dd_target_refused(path, sv):
+    """True when dd writes a device other than /dev/null, zero, stdout, stderr or fd/*, or a path it cannot read."""
+    if not path:
+        return True
+    if not path.startswith("/"):
+        if sv.named("cd", "pushd", "popd"):
+            return True  # relative to a directory the command moves to
+        path = os.path.join(sv.cwd, path)
+    paths = [os.path.normpath(path)]
+    with contextlib.suppress(Exception):
+        paths.append(os.path.realpath(paths[0]))
+    for p in paths:
+        if p == "/dev" or p.startswith("/dev/"):
+            rel = p[5:]
+            if not (rel in DD_DEV_OK or rel.startswith("fd/")):
+                return True
+    return False
+
+
+_DD_OPERANDS = ("if=", "of=", "bs=", "ibs=", "obs=", "cbs=", "count=", "skip=", "seek=", "iseek=", "oseek=",
+                "conv=", "iflag=", "oflag=", "status=")
+_FDISK_READS = ("-l", "--list", "-x", "--list-details", "-V", "--version", "-h", "--help")
+
+
+def _destructive_disk(sv):
+    """dd writing a device or an unreadable of=; any mkfs, mkfs.* or shred; fdisk other than a listing."""
+    for name, args, site, _r in sv.sites:
+        if name == "dd":
+            for w in args:
+                v = w.value()
+                lead = v if v is not None else w.text
+                if lead.startswith("of="):
+                    if _dd_target_refused(v[3:] if v is not None else None, sv):
+                        return True
+                elif v is None and not lead.startswith(_DD_OPERANDS):
+                    return True  # a computed operand may be of=
+            for x in site.cmd.redirects:
+                if x.writes() and x.target is not None and x.fd == 1 and _dd_target_refused(x.target.value(), sv):
+                    return True
+        elif name in ("mkfs", "shred") or name.startswith("mkfs."):
+            return True
+        elif name == "fdisk":
+            if not any(v in _FDISK_READS or (v is not None and re.match(r"^-[A-Za-z]*l[A-Za-z]*$", v))
+                       for v in (w.value() for w in args)):
+                return True
+    return False
+
+
+def _kill_protected_family(sv, family):
+    rx = re.compile("(" + (re.escape(family) + "|" if family else "") + "claude|docker)")
+    return any(rx.search(w.value() if w.value() is not None else w.text)
+               for _n, args, _s, _r in sv.named("killall", "pkill") for w in args)
+
+
+def _kill_signal(sv):
+    """kill with an option other than the exact -0 (probe), -l or -L (list): -09 is SIGKILL."""
+    return any(v is not None and v.startswith("-") and v not in ("-0", "-l", "-L")
+               for _n, args, _s, _r in sv.named("kill") for v in (w.value() for w in args))
+
+
+def _kill_pid(sv):
+    return any(args and args[0].value() is not None and re.match(r"[0-9]", args[0].value())
+               for _n, args, _s, _r in sv.named("kill"))
+
+
+def _production_systemctl(sv, env):
+    for _n, args, _s, _r in sv.named("systemctl"):
+        vals = [w.value() for w in args]
+        if vals and vals[0] in ("stop", "restart") and any(
+                v is None or not v.startswith("-") and (v[:-8] if v.endswith(".service") else v)
+                not in env["dev_systemd"].split() for v in vals[1:]):
+            return True
+    return False
+
+
+def _workflow_state_removal(command, sv):
+    """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
+    for name, args, site, r in sv.sites:
+        if name == "git":
+            pos = next((v for v in (w.value() for w in args) if v is None or not v.startswith("-")), "")
+            if pos not in ("rm", "mv"):
+                continue
+        elif name not in ("rm", "mv"):
+            continue
+        if any(re.search(WORKFLOW_STATE_RE, w.text) for w in args):
+            return True
+        elsewhere = any(w.value() in (None, "{}") for w in args) \
+            or any(wr[0] == "xargs" for wr in r.wrappers) or "exec_argv" in site.context
+        if elsewhere and grep(WORKFLOW_STATE_RE, command):
+            return True
+    return False
+
+
+def service_rules(command, view, env, sv=None):
+    """BS-20/21, BS-23, BS-25..BS-31: secrets, docker, disks, kills, units, workflow state (`view`: executable view).
+
+    Read at command position through ServiceView (OB-L11); a command it cannot read keeps the raw-text reading."""
+    sv = sv if sv is not None else ServiceView(command)
     family = env["family"]
     sensitive = sensitive_redirect(command)
     if sensitive == "write":
@@ -905,29 +1145,40 @@ def service_rules(command, view, env):
     elif sensitive == "redirect":
         refuse("BLOCKED: Attempting to redirect from/to sensitive file via Bash", f"Command: {command}",
                "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
-    if grep(r"(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.json", command):
+
+    def reads(raw_rule, structural):  # a raw-text rule: interpreter code and runner lines keep it
+        if sv.raw:
+            return raw_rule(command)
+        return structural() or any(raw_rule(t) for t in sv.code + sv.runners)
+
+    def reads_view(view_rule, structural):  # an executable-view rule: runner lines keep it
+        if sv.raw:
+            return view_rule(view)
+        return structural() or any(view_rule(t) for t in sv.runners)
+
+    if reads(_raw_daemon_json, lambda: _daemon_json_write(sv)):
         refuse("BLOCKED: Modifying Docker daemon config is refused", f"Command: {command}", released_line())
-    if grep(r"docker.compose\s+(down|restart|stop)", command):
+    if reads(_raw_compose, lambda: _docker_compose_stop(sv)):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
-    if grep(r"docker\s+system\s+prune\s+-a", command):
+    if reads(_raw_prune, lambda: _docker_prune_all(sv)):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
-    if grep(r"^\s*(dd|mkfs|fdisk|shred)\b", view):
+    if reads_view(_raw_disk, lambda: _destructive_disk(sv)):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
-    if grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", view):
+    if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if grep(r"(^|[ \t;|&])(kill)[ \t]+-", view):
+    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
-    if grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) \
-            and (not prefix or not grep(re.escape(prefix), command)) \
-            and not all_targets_whitelisted(command, r"systemctl\s+(stop|restart)", env["dev_systemd"], strip_service=True):
+    if (not prefix or not grep(re.escape(prefix), command)) \
+            and reads(lambda t: _raw_systemctl(t, env), lambda: _production_systemctl(sv, env)):
         refuse("BLOCKED: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart is refused "
                    "for production services", f"Command: {command}",
                    f"Hint: only {env['dev_systemd']} is allowed{f' (and {prefix}-* takes the daemon-restart grant)' if prefix else ''}.",
                    released_line())
-    if grep(r"(rm|mv)\s", view) and grep(r"(workflow-[^/]*\.json|\.claude/todos/)", command):
+    if _raw_workflow(command, view) if sv.raw else (
+            _workflow_state_removal(command, sv) or any(_raw_workflow(t, t) for t in sv.runners)):
         refuse("BLOCKED: Deleting/moving workflow state files is refused", f"Command: {command}",
                    "These files are required by the workflow enforcement system.", released_line())
 
@@ -995,9 +1246,10 @@ def removal_policy(payload_text, command):
                    f"fallback to allow.")
 
 
-def kill_pid_rule(command, view):
-    """BS-35: kill <pid>."""
-    if grep(r"(^|[;&|]\s*)kill\s+[0-9]", view):
+def kill_pid_rule(command, view, sv=None):
+    """BS-35: kill <pid>, read at command position (OB-L11); a command ServiceView cannot read keeps the view's reading."""
+    sv = sv if sv is not None else ServiceView(command)
+    if _raw_kill_pid(view) if sv.raw else (_kill_pid(sv) or any(_raw_kill_pid(t) for t in sv.runners)):
         refuse("BLOCKED: kill with PIDs is refused — verify the target is safe before killing", f"Command: {command}",
                    "REASON: Killing a PID can cascade to unrelated processes. Use a scoped restart instead.",
                    released_line())
@@ -1224,9 +1476,10 @@ def decide(payload_text):
     bulk_sentinel_rule(command)
     hard_ban_rule(command)
     executable = executable_view_or_raw(command)
-    service_rules(command, executable, env)
+    sv = ServiceView(command, get("cwd"))
+    service_rules(command, executable, env, sv)
     removal_policy(payload_text, command)
-    kill_pid_rule(command, executable)
+    kill_pid_rule(command, executable, sv)
     worktree_git_rules(command, view)
     git_clean_rule(command, stripped, view)
     return "ALLOW"

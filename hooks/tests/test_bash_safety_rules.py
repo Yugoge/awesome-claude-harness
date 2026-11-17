@@ -139,7 +139,7 @@ RELEASED = [
     ("cp a /etc/docker/daemon.json", "Modifying Docker daemon config"),
     ("docker compose down", "docker-compose down/stop/restart"),
     ("docker system prune -a", "docker system prune -a"),
-    ("dd if=/dev/zero of=/dev/null", "Destructive disk operation"),
+    ("dd if=/dev/zero of=/dev/sda", "Destructive disk operation"),
     ("systemctl restart nginx", "refused for production services"),
     ("mv workflow-x.json /tmp/", "workflow state files"),
     ("rm -rf build", "removal-policy"),
