@@ -224,8 +224,9 @@ def test_five_changed_hook_files_take_the_predicate_under_a_second(tmp_path, har
 
 
 # A6-RC3: a parser fixture nothing executes may be invalid on purpose. A file
-# whose realpath lies in a `fixtures` directory directly under a `tests`
-# directory below hooks/ or scripts/ is not parsed, unless pytest collects it
+# whose realpath and every path it was written by (normalised, unresolved) lie
+# in a `fixtures` directory directly under a `tests` directory below hooks/ or
+# scripts/ is not parsed, unless pytest collects it
 # (test_*.py, *_test.py, conftest.py) or it has another hard link.
 
 def test_deliberately_invalid_parser_fixtures_under_tests_fixtures_are_not_checked(tmp_path, harness):
@@ -294,4 +295,17 @@ def test_hard_link_inside_fixtures_to_a_live_hook_is_still_refused(tmp_path, har
     os.link(live, fixtures / "hard.py")
     calls = [_write(fixtures / "hard.py", BROKEN_PY)]
     x = fixtures / "hard.py"
+    _blocked(_stop(s, harness, calls), x, _compiled(x))
+
+
+def test_live_hook_that_is_a_symlink_into_fixtures_is_still_refused(tmp_path, harness):
+    """hooks/live.py is a symlink to hooks/tests/fixtures/impl.py: the path the
+    dev wrote is live, so the file is parsed although its realpath is a fixture."""
+    home, s = harness[0], _agent(tmp_path, "dev")
+    live, fixtures = home / "hooks" / "live.py", home / "hooks" / "tests" / "fixtures"
+    base._write(fixtures / "impl.py", "x = 1\n")
+    live.symlink_to(fixtures / "impl.py")
+    calls = [_write(live, BROKEN_PY)]
+    x = fixtures / "impl.py"
+    assert x.read_text(encoding="utf-8") == BROKEN_PY
     _blocked(_stop(s, harness, calls), x, _compiled(x))
