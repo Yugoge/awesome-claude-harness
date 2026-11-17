@@ -47,8 +47,8 @@ overnight     /dev-overnight 6:00 → you, in the morning: /close --auto → /co
 |---|---|
 | `/spec` | Optional. It asks you first. Then a durable spec with per-agent briefs. `/dev` and `/dev-overnight` build from it. |
 | `/dev <requirement>` | It asks you first. BA finds the root cause. QA checks the analysis before any code. Dev builds in one-issue lanes, in parallel. QA verifies until it passes. |
-| `/close` | Release readiness. Inspectors and QA judge the diff. `CLOSE: YES` or the findings. Then it asks for your rating. |
-| `/commit` | The changelog analyst stages the task's own files and commits them under a single-use grant. |
+| `/close` | Release readiness. Inspectors and QA judge the diff. `CLOSE: YES` or the findings. After `CLOSE: YES` it asks for your rating. |
+| `/commit` | QA reviews the commit first. The changelog analyst stages the task's own files and commits them. |
 | `/merge` | Optional, for work on a branch. A real merge into the default branch, after a pre-merge analysis. |
 | `/push` | The push analyst checks what would go out. The wrapper publishes it. It needs a commit made by `/commit`. |
 | `/dev-overnight 6:00` | Unattended until the end time. Nobody is asked. It commits nothing. You land it in the morning. |
@@ -60,9 +60,8 @@ Each stage hands a checked artifact to the next. You start each stage with one c
 - **One cycle, parallel lanes.** `/dev` splits your requirement into outcomes that each verify alone. One lane per outcome. BA, QA, dev and QA run once per lane, in parallel. A failing lane retries alone. The cycle passes only when every lane's QA passes.
 - **A loop ends on a pass, or when you stop it.** No round cap. Your `/stop` or Esc interrupts either loop at any time. So a stubborn failure loops until you stop it.
 - **Adversarial second opinion, one loop.** Add `--codex` to `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`. An agent asks Codex once for a complete review. After that, only a capped number of fix checks. Claude classifies each finding as a real bug, a minor point, out of scope or a nitpick.
-- **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. A hook writes your answers to disk. No agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. The Stop gate refuses to end a turn on a question asked in plain text.
+- **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. No agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. Nothing is asked in plain text.
 - **Overnight, the same pipeline unattended.** `/dev-overnight` explores and triages. It runs one BA → QA → dev → QA pipeline per real issue until the end time. Nobody is asked. It commits nothing. In the morning you type `/close --auto`, `/commit --auto` and `/push`. A `--worktree` run adds `/merge` before `/push`. [The overnight pipeline](#the-overnight-pipeline) below has the loop.
-- **Grants start from a command you type.** The [trust model](#trust-model-in-practice) below says who may use which.
 
 ## Pipeline in action
 
@@ -70,7 +69,7 @@ Each stage hands a checked artifact to the next. You start each stage with one c
 
 | Step | Who acts | What happens |
 |---|---|---|
-| Capture | `UserPromptSubmit` hook | Your words go to `docs/dev/user-requirement-<id>.md` before any agent runs. |
+| Capture | `UserPromptSubmit` hook | Your words go to `docs/dev/user-requirement-<id>.md`. The cycle is armed before any agent runs. |
 | Plan | Orchestrator | One outcome, one lane. Each specialist marked RELEVANT or SKIP with a reason. A layout bug makes `ui-specialist` relevant. Its findings go to BA. |
 | Ask first | BA panel, panel QA, you | No spec, so BAs analyse from separate angles. Root cause, smallest change, your intent. Panel QA drops a cause it cannot verify. Their disagreements become one round of questions. What you should see on a phone. How far the fix goes. Which screens count as done. You answer or skip. |
 | Analyse | BA | The file and the cause that actually produce the misalignment, not a plausible cousin. Cited file and line, search results, git history. The ticket, the context and the acceptance criteria. |
@@ -113,6 +112,8 @@ Not a prompt pack. An operating system for agents. The orchestrator schedules on
 Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. Structure, not vibes. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. QA reviews every `/commit` first. `/push` needs a commit from `/commit`.
 
 Built from real failures. Two git incidents shaped the kernel. The code names both. Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
+
+Grants start from a command you type. The [trust model](#trust-model-in-practice) below says who may use which.
 
 Hooks refuse what a prompt can only ask for.
 
