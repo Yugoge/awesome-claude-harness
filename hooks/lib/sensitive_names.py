@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """The one definition of a path or word that may name a secret file.
 
-The default is the substring rule bash-safety has always had, made case-insensitive: a text is sensitive when it
+The default is the substring rule bash-safety has always had, case-sensitive as it was: a text is sensitive when it
 contains `.env`, `credentials`, `secret` or `password` anywhere, the full path included, not only the base name
-(`secrets/prod.yaml`, `.password-store/foo.gpg`, `.env-prod`, `prod.env.bak`, `mysecrets.yaml`, `credentials.py`).
+(`secrets/prod.yaml`, `.password-store/foo.gpg`, `.env-prod`, `prod.env.bak`, `mysecrets.yaml`, `credentials.py`;
+not `src/auth/ForgotPassword.tsx` or `SECRET_KEY`), plus a base name that is exactly `.env` or a key name below
+in any case (`.ENV`, `ID_RSA`).
 An SSH private key name (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, their `_sk` forms) is sensitive too, alone or
 followed by a suffix that is no `.pub` and leaves no source-code or document extension (`id_rsa.bak`,
 `~/.ssh/id_ed25519` are keys; `id_rsa.pub`, `id_rsa.test.py`, `docs/id_rsa.md`, `id_rsa_backup.txt` are not).
@@ -14,10 +16,11 @@ role the name plays:
 
 - a test file, always: a base name `test_*.<code>`, `*_test.<code>`, `*.test.<code>` or `*.spec.<code>`
   (`test_password_reset.py`, `auth_password_test.go`);
-- a URL (`scheme://host...`), with `url=True`: only for a non-output argument of a network client (curl, wget,
-  http, https, httpie, xh, aria2c) whose output file the URL does not name (the caller decides that). A `file:`
-  URL in any case (`file:///home/u/.env`, `FILE://localhost/...`, `file:/x/.env`) and a URL with no host
-  (`http:///x/.env`) name a local file and are never exempt. A redirection target, a write target or another
+- a URL (`scheme://host...`), with `url=True`: only for a positional URL operand or curl `--url` value of a
+  network client (curl, wget, http, https, httpie, xh, aria2c) whose output file the URL does not name (the caller
+  decides that); an option's value is a local path (`curl -c http://../.env URL`). A `file:` URL in any case
+  (`file:///home/u/.env`, `FILE://localhost/...`, `file:/x/.env`) and a URL whose host is empty, `.` or `..`
+  (`http:///x/.env`, `http://../.env`) name a local file and are never exempt. A redirection target, a write target or another
   command's operand is a local path, so `echo x > http://x/.env` and `cat file:///home/u/.env > /tmp/y` stay
   sensitive;
 - a report or log, with `report=True`: only for a write target, a base name with `report` as a whole token
@@ -40,9 +43,11 @@ Callers: hooks/lib/bash_safety_rules.py (sensitive_redirect).
 """
 import re
 
-SECRET_SUBSTRING = re.compile(r"\.env|credentials|secret|password", re.IGNORECASE)
-PRIVATE_KEY = re.compile(r"^id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?(?!.*\.pub$)", re.IGNORECASE)
-# A network URL: a scheme other than `file`, then `//` and a host.
+SECRET_SUBSTRING = re.compile(r"\.env|credentials|secret|password")
+PRIVATE_KEY = re.compile(r"^id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?(?!.*\.pub$)")
+# An exact env-file or key name in any case (`.ENV`, `ID_RSA`): sensitive although the substring check is not.
+EXACT_ANY_CASE = re.compile(r"^(?:\.env|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?)$", re.IGNORECASE)
+# A network URL: a scheme other than `file`, then `//` and a host (checked by _url_host).
 URL = re.compile(r"^(?!file:)[a-z][a-z0-9+.-]*://[^/\s]\S*$", re.IGNORECASE)
 # A plain static path: nothing a shell would still expand or split.
 PLAIN_PATH = re.compile(r"^[A-Za-z0-9_.+@%,:=~/-]+$")
@@ -58,10 +63,8 @@ SECRET_TOKENS = frozenset({"env", "credentials", "secret", "secrets", "password"
 TEMPLATE = re.compile(r"\.(?:example|sample|template)$", re.IGNORECASE)
 DOC_FILE = re.compile(r"\.(?:md|markdown|rst|txt|adoc|asciidoc|org|html?|pdf)$", re.IGNORECASE)
 
-RAW_FALLBACK_WRITE = re.compile(r"(>|>>)\s*\S*(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)",
-                                re.IGNORECASE)
-RAW_FALLBACK_READ = re.compile(r"(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)\S*\s*(>|>>)",
-                               re.IGNORECASE)
+RAW_FALLBACK_WRITE = re.compile(r"(>|>>)\s*\S*(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)")
+RAW_FALLBACK_READ = re.compile(r"(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)\S*\s*(>|>>)")
 
 
 def base_name(text):
@@ -85,6 +88,13 @@ def _private_key(name):
     return bool(PRIVATE_KEY.match(name)) and not CODE_FILE.search(name) and not DOC_FILE.search(name)
 
 
+def _url_host(text):
+    """True when a URL's host is a real one: not empty and not `.`, `..` or only dots (`http://../.env`)."""
+    authority = re.split(r"[/?#]", text.split("://", 1)[1], maxsplit=1)[0].rsplit("@", 1)[-1]
+    host = authority if authority.startswith("[") else authority.split(":", 1)[0]
+    return bool(host.strip("."))
+
+
 def _exempt(name, report, template):
     return bool(TEST_FILE.match(name) or (report and _report_or_log(name)) or (template and TEMPLATE.search(name)))
 
@@ -103,14 +113,15 @@ def is_sensitive_name(text, computed=False, url=False, report=False, template=Fa
     """
     if not text:
         return False
-    if url and not computed and URL.match(text):
+    if url and not computed and URL.match(text) and _url_host(text):
         return False
     if computed or not PLAIN_PATH.match(text):
-        return bool(SECRET_SUBSTRING.search(text) or any(_private_key(p) for p in re.split(r"[/\s'\"=]", text)))
+        parts = re.split(r"[/\s'\"=]", text)
+        return bool(SECRET_SUBSTRING.search(text) or any(_private_key(p) or EXACT_ANY_CASE.match(p) for p in parts))
     name = base_name(text)
     head = text[:len(text.rstrip("/")) - len(name)]
     if SECRET_SUBSTRING.search(head):
         return True
-    if _private_key(name):
+    if _private_key(name) or EXACT_ANY_CASE.match(name):
         return True
     return bool(SECRET_SUBSTRING.search(name)) and not _exempt(name, report, template)

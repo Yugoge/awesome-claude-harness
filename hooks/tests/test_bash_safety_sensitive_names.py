@@ -1,4 +1,4 @@
-"""OB-L14: bash-safety's sensitive-file rule BS-20/21 (audit BS-10/11) keeps the base's case-insensitive substring
+"""OB-L14: bash-safety's sensitive-file rule BS-20/21 (audit BS-10/11) keeps the base's case-sensitive substring
 check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write target and each word or
 read source of a command that writes a file, lifted only by hooks/lib/sensitive_names.py's narrow exemptions, each in
 its role (test files; reports, logs and templates written; a template read by cp or cat; a URL given to a network
@@ -133,11 +133,13 @@ def test_the_list_is_one_reusable_definition():
     listed = [".env", ".env.local", "config/prod.env", ".envrc", "credentials", "/home/u/.aws/credentials",
               ".git-credentials", ".credentials.json", "client_secret.json", "secrets.yaml", "secret.txt",
               "secrets.enc.yaml", "id_rsa", "id_ed25519", "~/.ssh/id_ecdsa", "db_password", "passwords.csv",
-              "PASSWORD.TXT", "password-policy", "secrets.py", "password_reset.md", ".env-prod", ".env_prod",
+              ".ENV", "ID_RSA", "password-policy", "secrets.py", "password_reset.md", ".env-prod", ".env_prod",
               "prod.env.bak", "my.secret", "x.secret.json", "secrets/prod.yaml", "config/secrets/db",
               ".password-store/foo.gpg", "topsecret", "secrets.yaml.j2", "~/.ssh/id_rsa.bak", "tests/secrets/test_x.py"]
     unlisted = ["test_password_reset.py", "test_auth_password.py", "config.ts", "pytest.log", "policy.html",
-                "id_rsa.pub", "environment.ts", "venv", "", "src/password.test.ts", "auth_password_test.go"]
+                "id_rsa.pub", "environment.ts", "venv", "", "src/password.test.ts", "auth_password_test.go",
+                # Case-sensitive as on the base: an upper-case word in a code or doc name is no secret file.
+                "PASSWORD.TXT", "src/auth/ForgotPassword.tsx", "SECRET_KEY", "docs/SecretSauce.md"]
     assert [n for n in listed if not is_sensitive_name(n)] == []
     assert [n for n in unlisted if is_sensitive_name(n)] == []
     # The URL, report/log and template exemptions hold only in the role the caller names.
@@ -346,3 +348,85 @@ def test_the_url_exemption_excludes_local_file_urls_and_keys_are_exact():
     assert [n for n in keys if not is_sensitive_name(n)] == []
     not_keys = ["id_rsa.pub", "id_rsa.test.py", "docs/id_rsa.md", "id_rsa_backup.txt", "id_rsa_parser.go"]
     assert [n for n in not_keys if is_sensitive_name(n)] == []
+
+
+# A network client's option values are local paths (a cookie jar, a trace or header dump, an upload, a config
+# file, `--data @file`), never URLs: `curl -c http://../.env URL` writes ./.env. Only a positional operand or a
+# `--url` value is a URL, and a URL whose host is `.`, `..` or empty is a local path too.
+OPTION_VALUES_ARE_PATHS = [
+    "curl -s --trace-ascii http://../.env https://example.com > /tmp/log",
+    "mkdir -p http: && curl -s -c http://../.env https://example.com > /tmp/log",
+    "curl -s --cookie-jar http://x/.env https://example.com > /tmp/log",
+    "curl -s -D http://x/.env https://example.com > /tmp/log",
+    "curl -s --dump-header http://x/credentials https://example.com > /tmp/log",
+    "curl -s --trace http://x/.env https://example.com > /tmp/log",
+    "curl -s --libcurl http://x/.env https://example.com > /tmp/log",
+    "curl -s --etag-save http://x/.env https://example.com > /tmp/log",
+    "curl -s --stderr http://x/.env https://example.com > /tmp/log",
+    "curl -s -T http://x/.env https://example.com > /tmp/log",
+    "curl -s --upload-file http://x/.env https://example.com > /tmp/log",
+    "curl -s -b http://x/.env https://example.com > /tmp/log",
+    "curl -s --cookie http://x/.env https://example.com > /tmp/log",
+    "curl -s -K http://x/.env https://example.com > /tmp/log",
+    "curl -s --config http://x/.env https://example.com > /tmp/log",
+    "curl -s --data @http://x/.env https://example.com > /tmp/log",
+    "curl -sc http://x/.env https://example.com > /tmp/log",
+    "curl -s --trace-asc http://x/.env https://example.com > /tmp/log",
+    "curl -s http://../.env > /tmp/log",
+    "curl -s http://./.env > /tmp/log",
+    "curl -s --url http://../.env > /tmp/log",
+]
+
+
+@pytest.mark.parametrize("command", OPTION_VALUES_ARE_PATHS)
+def test_a_network_clients_option_value_is_a_local_path(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and READ in r.stderr, (command, r.stderr)
+
+
+# httpie and xh read short-option clusters and unique long prefixes: each of these downloads ./.env. A cluster
+# holding `d` beside a letter the table does not know takes the URL exemption away.
+HTTPIE_DOWNLOADS = [
+    "http -db https://x/.env > /tmp/log",
+    "http -bd https://x/.env > /tmp/log",
+    "http -dc https://x/.env > /tmp/log",
+    "http --downl https://x/.env > /tmp/log",
+    "xh -dF https://x/.env > /tmp/log",
+    "http -dZ https://x/.env > /tmp/log",
+]
+
+
+@pytest.mark.parametrize("command", HTTPIE_DOWNLOADS)
+def test_an_httpie_download_in_a_cluster_or_abbreviated_is_refused(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and READ in r.stderr, (command, r.stderr)
+
+
+# Case-sensitive as on the base, and an option of a copy (`--exclude .env`) is no source operand.
+@pytest.mark.parametrize("command", [
+    "cat > src/auth/ForgotPassword.tsx <<'EOF'\nexport const ForgotPassword = () => null;\nEOF",
+    "cat > src/components/SecretBanner.tsx <<'EOF'\nexport const SecretBanner = () => null;\nEOF",
+    "git diff > /tmp/Password-change.diff",
+    "grep -rn SECRET_KEY src/ > /tmp/hits.txt",
+    "echo x > docs/SecretSauce.md",
+    "rsync -a --exclude=.env ./ /tmp/backup/",
+    "rsync -a --exclude .env ./ /tmp/backup/",
+    "curl -s --url https://example.com/docs/password-policy > /tmp/p.html",
+    "curl -sSL --compressed -H 'Accept: text/html' https://example.com/docs/password-policy > /tmp/p.html",
+    "xh -do /tmp/p.html https://example.com/docs/password-policy > /tmp/log",
+])
+def test_an_upper_case_word_or_a_copy_option_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command,label", [
+    ("echo x > .ENV", WRITE),
+    ("echo x > ID_RSA", WRITE),
+    ("rsync -a .env /tmp/backup/", READ),
+    ("rsync -a --exclude .git .env /tmp/backup/", READ),
+    ("cp -t /tmp .env", READ),
+])
+def test_an_exact_name_in_any_case_or_a_copy_operand_is_still_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
