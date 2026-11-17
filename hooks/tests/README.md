@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 182
+- **Total files**: 185
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -108,7 +108,7 @@
 - `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
 - `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
 - `test_overnight_inplace_bubblewrap.py` - Replayed in a bwrap-less in-place toy session, every removal of the git
-- `test_overnight_keystone_hook_dir.py` - Measured on 1ace5ee4: in both isolation modes a `chmod -x` of
+- `test_overnight_keystone_hook_dir.py` - In both isolation modes neither a `chmod -x` of `<common>/keystone-hooks/reference-transaction`
 - `test_overnight_one_state_reader.py` - cycle contract's one writer (P1b row 13, E13)
 - `test_overnight_operand_scan_channel.py` - The commands run harness scripts as `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/x.sh"`. For an
 - `test_overnight_qa_sentinel_bind.py` - P1b E7 removed the one RW exception the boundary had under main's
@@ -139,6 +139,7 @@
 - `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 - `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 - `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+- `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 - `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 - `test_requirement_round.py` - hook that calls it
 - `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
@@ -148,6 +149,7 @@
 - `test_score_view.py` - hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/lib/score_view.py r...
 - `test_scratch_lifecycle.py` - Covers:
 - `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
+- `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
 - `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
@@ -167,6 +169,7 @@
 - `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 - `test_todo_validate_after_restart.py` - A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result aft...
 - `test_todo_validate_in_flight.py` - The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
+- `test_todowrite_pin.py` - settings.json's env carries CLAUDE_CODE_ENABLE_TASKS=false and CLAUDE_CODE_ENABLE_TODO_TOOLS=1; the
 - `test_tool_policy_c_layer_writes.py` - hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 - `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 - `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
