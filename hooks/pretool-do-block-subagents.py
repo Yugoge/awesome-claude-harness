@@ -48,9 +48,13 @@ SEMANTICS (decision table, first match wins):
       (_definition_declares: the harness home's agents/, ~/.claude/agents/,
       and .claude/agents/ of CLAUDE_PROJECT_DIR, of the payload cwd and of
       every directory above them; subdirectories and symlinks followed with a
-      cycle guard; frontmatter read with a YAML loader after a BOM; a file
-      whose stem or `name` matches case-insensitively, or any candidate file
-      that cannot be read or parsed, keeps the call blocked);
+      cycle guard; bytes decoded as UTF-8 with replacement after a BOM;
+      frontmatter read with a YAML loader, and where it rejects the text (the
+      runtime's loader is lenient) by a line scan for a top-level `name:`
+      that strips quotes and a ` #` comment and reads a block scalar; dangling
+      symlinks skipped. A file whose stem or name matches case-insensitively,
+      a leniently read name with a matching token, or a file or directory
+      that cannot be read keeps the call blocked, and the block names it);
     - a policies/tool-policy.v1.json role whose allowed_tools is non-empty
       and lies wholly inside READ_ONLY_TOOLS (no write tool, no Bash, no
       wildcard such as mcp__playwright__*): it cannot write at all.
@@ -85,6 +89,7 @@ finally:
     sys.path.pop(0)
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -108,6 +113,7 @@ READ_ONLY_BUILTIN_TYPES = frozenset({"Explore", "Plan", "claude-code-guide"})
 # Tools that cannot write a file. Bash is absent on purpose: it writes.
 READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "WebSearch", "WebFetch"})
 _POLICY_RELPATH = "policies/tool-policy.v1.json"
+_SHADOWED_BY: list = []
 
 
 def _agent_dirs(stdin_data: dict) -> list:
@@ -155,45 +161,93 @@ def _raise(error):
     raise error
 
 
-def _declared_name(text: str):
-    """The frontmatter `name` of a definition (None when it has none).
-    Raises on frontmatter a YAML loader cannot parse."""
-    import yaml
-    text = text.lstrip("\ufeff")
-    lines = text.splitlines()
+_BLOCK_SCALAR = re.compile(r"^[>|][+-]?[0-9]?[+-]?$")
+_NAME_TOKEN = re.compile(r"[A-Za-z0-9_:.-]+")
+
+
+def _plausibly(value, wanted: str) -> bool:
+    """A leniently read `name` value could be `wanted`: one of its name-like
+    tokens equals it (case-insensitively). "Plan" is not "planner"."""
+    return any(t.casefold() == wanted for t in _NAME_TOKEN.findall(str(value)))
+
+
+def _lenient_names(lines: list) -> list:
+    """Every top-level `name:` value a line scan finds: quotes and a trailing
+    ` #` comment stripped, a block scalar (>, >-, |, |-) read from the
+    indented lines after it."""
+    names = []
+    for index, line in enumerate(lines):
+        key, sep, value = line.partition(":")
+        if not sep or key != "name":
+            continue
+        value = value.strip()
+        if " #" in value:
+            value = value.split(" #", 1)[0].strip()
+        if value.startswith("#"):
+            value = ""
+        if _BLOCK_SCALAR.match(value) or not value:
+            following = []
+            for nxt in lines[index + 1:]:
+                if nxt.strip() and not nxt[:1].isspace():
+                    break
+                following.append(nxt.strip())
+            value = " ".join(x for x in following if x)
+        names.append(value.strip().strip("'\"").strip())
+    return names
+
+
+def _shadows(text: str, wanted: str) -> bool:
+    """True when a definition's frontmatter could declare `wanted`. Strict
+    YAML first; frontmatter it rejects (Claude Code's loader is lenient) is
+    read by a line scan, and only a plausible name blocks."""
+    lines = text.lstrip("\ufeff").splitlines()
     if not lines or lines[0].strip() != "---":
-        return None
-    for index, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            data = yaml.safe_load("\n".join(lines[1:index]))
-            break
-    else:
-        raise ValueError("unterminated frontmatter")
+        return False
+    end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+               len(lines))
+    body = lines[1:end]
+    try:
+        import yaml
+        data = yaml.safe_load("\n".join(body))
+    except Exception:
+        data = Ellipsis  # unparsable or no loader: the line scan decides
+    if isinstance(data, dict):
+        declared = data.get("name")
+        if declared is None:
+            return False
+        if isinstance(declared, str):
+            return declared.strip().casefold() == wanted
+        return _plausibly(declared, wanted)
     if data is None:
-        return None
-    if not isinstance(data, dict):
-        raise ValueError("frontmatter is not a mapping")
-    return data.get("name")
+        return False
+    return any(_plausibly(value, wanted) for value in _lenient_names(body))
 
 
-def _definition_declares(name: str, stdin_data: dict) -> bool:
-    """True when an agent definition declares `name` (case-insensitively), or
-    any candidate definition cannot be read or parsed: either may shadow the
-    built-in type."""
+def _definition_declares(name: str, stdin_data: dict):
+    """The definition file (or directory) that may shadow the built-in type
+    `name`, else None: a file whose stem or frontmatter name matches
+    case-insensitively, a file whose bytes cannot be read, or a directory
+    that cannot be walked. A dangling symlink is no loadable definition."""
     wanted = name.strip().casefold()
     for directory in _agent_dirs(stdin_data):
         try:
             if not directory.is_dir():
                 continue
-            for path in _agent_files(directory):
+            files = _agent_files(directory)
+            for path in files:
+                if not path.exists():
+                    continue
                 if path.stem.strip().casefold() == wanted:
-                    return True
-                declared = _declared_name(path.read_text(encoding="utf-8"))
-                if declared is not None and str(declared).strip().casefold() == wanted:
-                    return True
+                    return str(path)
+                try:
+                    raw = path.read_bytes()
+                except OSError:
+                    return str(path)
+                if _shadows(raw.decode("utf-8", errors="replace"), wanted):
+                    return str(path)
         except Exception:
-            return True
-    return False
+            return str(directory)
+    return None
 
 
 def _policy_role_read_only(name: str) -> bool:
@@ -211,7 +265,8 @@ def _policy_role_read_only(name: str) -> bool:
 
 
 def _read_only_role(stdin_data: dict) -> bool:
-    """Rule 5: the dispatched role is allowed during /do. Any doubt is False."""
+    """Rule 5: the dispatched role is allowed during /do. Any doubt is False;
+    a shadowing definition is kept in _SHADOWED_BY for the block message."""
     try:
         tool_input = stdin_data.get("tool_input")
         if not isinstance(tool_input, dict):
@@ -220,7 +275,11 @@ def _read_only_role(stdin_data: dict) -> bool:
         if not isinstance(name, str) or not name:
             return False
         if name in READ_ONLY_BUILTIN_TYPES:
-            return not _definition_declares(name, stdin_data)
+            shadow = _definition_declares(name, stdin_data)
+            if shadow is not None:
+                _SHADOWED_BY.append(shadow)
+                return False
+            return True
         return _policy_role_read_only(name)
     except Exception:
         return False
@@ -237,7 +296,9 @@ def _emit_block(tool_name: str, session_id: str) -> None:
         '  roles that pass: the built-ins with no Write/Edit/NotebookEdit tool\n'
         '    and no dev-report duty (Explore, Plan, claude-code-guide), or a\n'
         '    policies/tool-policy.v1.json role with no write tool and no Bash.\n'
-        '  why-forbidden: a dispatched dev/qa subagent writes its report file\n'
+        + (f'  shadowed-by: {_SHADOWED_BY[0]} may define this type with\n'
+           '    other tools, so the built-in allow does not apply.\n' if _SHADOWED_BY else '')
+        + '  why-forbidden: a dispatched dev/qa subagent writes its report file\n'
         '    (docs/dev/dev-report-<TASK_ID>.json) alongside the /do cycle\'s\n'
         '    do-report-<TASK_ID>.json under the same task id; /close and /commit\n'
         '    route purely on the canonical dev-report filename, flip the cycle onto\n'

@@ -422,8 +422,11 @@ _SHADOW_TEXTS = {
     "single-quoted": "---\nname: 'Explore'\n---\n",
     "quoted-padded": '---\nname: " explore "\n---\n',
     "bom": "﻿---\nname: Explore\ntools: Write\n---\n",
-    "unparsable": "---\nname: [unclosed\n---\n",
-    "unterminated": "---\nname: someone\n",
+    "unparsable": "---\nname: [Explore\n---\n",
+    "unparsable-description": ("---\nname: Explore\ndescription: Use it. Examples: "
+                               "<example>Context: x</example>\ntools: Write\n---\n"),
+    "lenient-folded": "---\nname: >-\n  Explore # shadow\ndescription: a: b: c\n---\n",
+    "unterminated": "---\nname: Explore\n",
 }
 
 
@@ -491,3 +494,49 @@ def test_v_unrelated_definitions_and_a_symlink_cycle_still_allow(tmp_path):
         result = _dispatch(sid, {"subagent_type": "Explore", "prompt": "x"},
                            env_extra={"HOME": str(tmp_path / "home")}, cwd=str(project))
     assert result.returncode == 0, result.stderr
+
+
+def test_w_block_message_names_the_shadowing_file(tmp_path):
+    project = tmp_path / "proj"
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "custom-role.md").write_text("---\nname: Explore\n---\n")
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": "Explore", "prompt": "x"},
+                           env_extra={"HOME": str(tmp_path / "home")}, cwd=str(project))
+    assert result.returncode == 2
+    assert "shadowed-by:" in result.stderr and "custom-role.md" in result.stderr
+
+
+def _write_helper_definition(agents, label):
+    if label == "non-strict-yaml":
+        (agents / "helper.md").write_text(
+            "---\nname: helper\ndescription: Use this agent when the user asks for help. "
+            "Examples: <example>Context: the user wants X</example>\ntools: Read\n---\n")
+    elif label == "dangling-symlink":
+        (agents / "gone.md").symlink_to(agents / "does-not-exist.md")
+    elif label == "latin-1":
+        (agents / "cafe.md").write_bytes(b"---\nname: caf\xe9\ntools: Read\n---\n")
+    elif label == "unparsable-unrelated":
+        (agents / "odd.md").write_bytes(b"---\nname: [unclosed\n---\n")
+    elif label == "planner-is-not-plan":
+        (agents / "planner.md").write_text("---\nname: planner\ntools: Write\n---\n")
+
+
+@pytest.mark.parametrize("label", ["non-strict-yaml", "dangling-symlink", "latin-1",
+                                   "unparsable-unrelated", "planner-is-not-plan"])
+@pytest.mark.parametrize("role", ["Explore", "Plan", "claude-code-guide"])
+def test_x_unrelated_odd_definitions_still_allow(label, role, tmp_path):
+    """An unrelated definition the strict loader rejects, a dangling symlink
+    and a non-UTF-8 file do not block the built-in (verifier repro)."""
+    project = tmp_path / "proj"
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    _write_helper_definition(agents, label)
+    sid = _unique_sid()
+    with _consent_flag(sid):
+        result = _dispatch(sid, {"subagent_type": role, "run_in_background": False,
+                                 "prompt": "list files under docs/"},
+                           env_extra={"HOME": str(tmp_path / "home")}, cwd=str(project))
+    assert result.returncode == 0, (label, result.stderr)
