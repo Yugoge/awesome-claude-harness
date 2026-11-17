@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 980
+*Last updated: 2026-11-17T07:40:33Z*
+**Total entries**: 981
 **Convention**: kebab
 
 ## Tree
@@ -908,6 +908,7 @@ dot-claude/
 │   ├── `test_paseo_daemon_ledger.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 │   ├── `test_paseo_daemon_timers.py` - scripts/paseo-daemon-timers.py (task 20260926-111239)
 │   ├── `test_paseo_usage_read.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
+│   ├── `test_permission_ask_dry_run.py` - `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and `Bash(npm publish:*)` were whole-verb deny ...
 │   ├── `test_permission_coverage.py` - entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn)
 │   ├── `test_pre_commit_dev_command_files.py` - dev-family command files as the tree holds them
 │   ├── `test_private_literal_rule.py` - pre-commit hook hooks/git-hooks/pre-commit
