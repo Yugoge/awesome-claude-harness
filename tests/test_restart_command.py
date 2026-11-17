@@ -720,7 +720,7 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert "## Why this preserves content" not in command
     config = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
     assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
-    assert "Skill(restart:*)" in config["permissions"]["deny"]
+    assert "Skill(restart)" in config["permissions"]["deny"]
     hooks = _expanded(config)["hooks"]  # each launcher read as the hooks it runs
     pretool_commands = json.dumps(hooks["PreToolUse"])
     posttool_commands = json.dumps(hooks["PostToolUse"])

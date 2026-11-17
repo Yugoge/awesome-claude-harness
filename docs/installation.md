@@ -230,7 +230,7 @@ for those who enable it. With it on, the module adds the allow entries `mcp__pas
 `Bash(node scripts/paseo-usage-read.mjs:*)`, the `UserPromptSubmit` hook
 `hooks/userprompt-usage-snapshot.py`, and the `mcp__paseo__browser_run_code` matcher on the
 runcode-watchdog groups; its accounts and model go into the overlay's `env`
-(`PASEO_DAEMON_ACCOUNTS`, `PASEO_DAEMON_MODEL`). The `Skill(paseo-daemon:*)` deny stays in the
+(`PASEO_DAEMON_ACCOUNTS`, `PASEO_DAEMON_MODEL`). The `Skill(paseo-daemon)` deny stays in the
 clean form either way.
 
 ## Doctor

@@ -114,7 +114,7 @@ never an error to retry.
 ## Prohibitions
 
 - **DO NOT self-invoke.** The command is human-only in both forms, the zero-candidate continuation
-  included (frontmatter `disable-model-invocation: true` and the `Skill(restart:*)` deny in
+  included (frontmatter `disable-model-invocation: true` and the `Skill(restart)` deny in
   `settings.json`; CLAUDE.md lesson 15). An agent that wants continuation asks the operator; it
   never issues the directive to itself.
 - **DO NOT call `Agent` or `Task`** to replace an interrupted subagent or to stand in for the main

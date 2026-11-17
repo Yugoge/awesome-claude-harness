@@ -29,7 +29,7 @@ supported without a project-root override.
 | `--codex` | Step 6's QA adds a Codex round on the planned per-file changes (each `PLAN_GROUPS` path vs HEAD). Without it QA reviews once itself. |
 | `--auto` | Walk every `commit_pending` parent task-id, one at a time, through Steps 3-8 (`--auto` mode below). Not `--bulk`. |
 
-`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit:*)` deny in
+`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit)` deny in
 `settings.json`.
 
 ## Step-by-step workflow

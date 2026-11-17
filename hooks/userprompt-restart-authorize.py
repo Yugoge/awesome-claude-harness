@@ -139,7 +139,7 @@ def _persist_guidance(grant: dict, args: str) -> Path | None:
 
 
 def is_stop(prompt: object) -> bool:
-    """The prompt is the owner's /stop (only a human types it: Skill(stop:*) is denied)."""
+    """The prompt is the owner's /stop (only a human types it: Skill(stop) is denied)."""
     found = command_span.slash_command(prompt) if isinstance(prompt, str) else None
     return bool(found) and found[0] == "stop"
 

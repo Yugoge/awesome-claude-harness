@@ -163,7 +163,7 @@ def test_the_command_is_human_only_and_denied_to_the_skill_tool() -> None:
     front, _ = _command()
     assert front["disable-model-invocation"] == "true" and front["description"].strip()
     settings = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
-    assert "Skill(rating:*)" in settings["permissions"]["deny"]
+    assert "Skill(rating)" in settings["permissions"]["deny"]
     assert not [rule for rule in settings["permissions"]["allow"] if "rating" in rule]
 
 
