@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-10T08:16:38Z*
-**Total entries**: 64
+*Last updated: 2026-11-17T02:01:25Z*
+**Total entries**: 73
 **Convention**: kebab
 
 ## Tree
@@ -51,21 +51,28 @@ lib/
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)
 ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
+├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
+├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
+├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
+├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
+├── `launch_settings.py` - A launcher (hooks/<event>-launch.py, lib/hook_launch.py) is one registration that runs an
 ├── `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
-├── `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) holds several rules that were
+├── `rule_fork.py` - A launcher (lib/hook_launch.py) holds an event's Python hooks and, once its interpreter has
+├── `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) and the event dispatchers
 ├── `runtime_guard.py` - This file exists for backwards-compatibility with callers that invoke
 ├── `schema_registry.py` - Reads schemas/registry.json once and lazily loads referenced schema files
 ├── `score_events.py` - Score events from facts: sweep() appends the active span's events to the score log; observe() is the dispatch hook's entry.
 ├── `score_log.py` - and views are computed on read, never stored. Rows: event {kind, ts, project, task_id, role, even...
-├── `score_view.py` - What a score shows at a dispatch and what a low one costs (D29, D32): the readers of the score log that hooks call. They read the log and the
+├── `score_view.py` - transcript and write nothing. ``as_of`` is the active span opener's time, so one command sees one...
 ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
-├── `send_policy.py` - The main agent's SendMessage policy (CLAUDE.md lesson 16, Orchestrator-Only Rule).
+├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 ├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 ├── `specialist_yield.py` - Public API:

@@ -37,7 +37,7 @@ def main() -> int:
     if not isinstance(payload, dict):
         payload = {}
 
-    session_id = str(payload.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or "")
+    session_id = str(payload.get("session_id") or cs.ambient_session_id())
     try:
         probe_file = cs.state_dir() / f"probe-{cs.state_path(session_id).stem}.json"
         probe = json.loads(probe_file.read_text(encoding="utf-8"))

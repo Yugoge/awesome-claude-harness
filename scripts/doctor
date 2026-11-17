@@ -4,18 +4,27 @@
 # message, BEFORE the first pipeline run. Exits nonzero when any required
 # dependency is missing; exits 0 when every required dependency is present.
 #
-# Usage: scripts/doctor [--venv <venv-dir>] [--strict [--verbose]]
+# Usage: scripts/doctor [--venv <venv-dir>] [--strict [--verbose] [--session-id <id>] [--timeout <s>]]
 #   --venv <dir>   Inspect this venv instead of the resolved <home>/venv.
 #   --strict       Run a FRESH host-capability handshake (never trusts a cached or
-#                  preseeded PASS) and print a SHORT compatibility report; exits
-#                  non-zero unless that fresh run is a full PASS.
+#                  preseeded PASS) and print a SHORT compatibility report with one of
+#                  three results: PASS (every check measured here and passed), FAIL
+#                  (a check measured here failed, named), or NOT_PROVABLE_HERE (no
+#                  failure, but named checks cannot be measured from where it runs,
+#                  each with the one action that proves it). PASS needs blocking and
+#                  deep-check probes this harness does not run yet, so today a strict
+#                  run ends in FAIL or NOT_PROVABLE_HERE, never PASS.
+#   --session-id   With --strict: probe this session instead of the ambient one
+#                  (CLAUDE_CODE_SESSION_ID, else CLAUDE_SESSION_ID).
+#   --timeout <s>  With --strict: how long the probe window stays open (default 5).
 #   --verbose      With --strict: print the full per-check detail instead of the
 #                  short report. The short report is the default so it stays short.
-# Exit codes: 0 = all required deps present (and, under --strict, the fresh
-#             handshake passed); 1 = one or more required checks failed;
+# Exit codes: 0 = all required deps present (under --strict: PASS);
+#             1 = one or more required checks failed (under --strict: FAIL);
 #             3 = the harness is switched off (/harness off), or a switch was cut
 #             halfway: the switch's status is printed and nothing else is checked,
-#             since every hook is meant to be silent then. /harness on, then re-run.
+#             since every hook is meant to be silent then. /harness on, then re-run;
+#             4 = --strict only: NOT_PROVABLE_HERE.
 #
 # Required checks:
 #   - python3 + git           (base prerequisites, on PATH)
@@ -52,11 +61,14 @@ fi
 VENV_DIR="$HOME_DIR/venv"
 STRICT=0
 VERBOSE=0
+STRICT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --venv) VENV_DIR="${2:?--venv needs a directory}"; shift 2 ;;
     --strict) STRICT=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
+    --session-id) STRICT_ARGS+=(--session-id "${2:?--session-id needs an id}"); shift 2 ;;
+    --timeout) STRICT_ARGS+=(--timeout "${2:?--timeout needs seconds}"); shift 2 ;;
     -h|--help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "doctor: unknown argument '$1'" >&2; exit 1 ;;
   esac
@@ -69,7 +81,7 @@ done
 # alone would blow the bound. Nothing is lost: --verbose carries the detail.
 # --------------------------------------------------------------------------- #
 if [ "$STRICT" -eq 1 ]; then
-  STRICT_VERBOSE="$VERBOSE" "$HOME_DIR/scripts/capability-doctor-strict.py" --home "$HOME_DIR"
+  STRICT_VERBOSE="$VERBOSE" "$HOME_DIR/scripts/capability-doctor-strict.py" --home "$HOME_DIR" ${STRICT_ARGS[@]+"${STRICT_ARGS[@]}"}
   exit $?
 fi
 

@@ -1,8 +1,8 @@
 # runtime_guard
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-07-17T18:35:20Z*
-**Total entries**: 10
+*Last updated: 2026-11-16T02:46:58Z*
+**Total entries**: 9
 **Convention**: kebab
 
 ## Tree

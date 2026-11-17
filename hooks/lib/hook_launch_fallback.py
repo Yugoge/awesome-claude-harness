@@ -22,9 +22,9 @@ TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionReq
 class Rule:
     """A dispatcher's table row when lib/hook_launch.py cannot load (the same fields)."""
 
-    def __init__(self, name, path, tools=None, timeout=60.0, matcher_spelling=None):
+    def __init__(self, name, path, tools=None, timeout=60.0, matcher_spelling=None, after=()):
         self.name, self.path, self.tools, self.timeout = name, path, tools, timeout
-        self.matcher_spelling = matcher_spelling
+        self.matcher_spelling, self.after = matcher_spelling, after  # in order here: `after` always holds
 
     def applies(self, tool) -> bool:
         return self.tools is None or tool in self.tools

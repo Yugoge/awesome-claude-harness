@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """PreToolUse (every tool): the event's Python hooks in one process (lib/hook_launch.py).
 
-Every Python hook registered on PreToolUse runs here, in its old registration order, each as
-`python3 <file>` would have run it (its own timeout and failure direction), and the answer is
-the one the CLI gave for those hooks together. A new PreToolUse Python hook is one Rule line below,
-at the place its registration would have had: its file, its matcher's tool names, its timeout
-(default 60 s); this file's registered timeout in settings.json is the sum of the rules'.
+Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
+(its own timeout and failure direction), those a call matches at the same time, each in a fork
+of this process (a rule with ``after`` starts once the earlier rules it names have ended), and
+the answer is the one the CLI gave for those hooks together, read in the table's order (their
+old registration order). A new PreToolUse Python hook is one Rule line below, at the place its
+registration would have had: its file, its matcher's tool names, its timeout (default 60 s),
+and ``after`` when it reads what an earlier rule of the same call writes (or writes what one
+reads); this file's registered timeout in settings.json is the sum of the rules'.
 """
 from __future__ import annotations
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
@@ -38,7 +41,7 @@ RULES = (
     Rule('write-gate', 'pretool-write-gate.py', None, timeout=70, matcher_spelling='*'),
     Rule('wrapper-userintent', 'pretool-wrapper-userintent.py', ('Bash',)),
     Rule('grep-backtrack-guard', 'pretool-grep-backtrack-guard.py', ('Bash',)),
-    Rule('cp-checkin', 'pretool-cp-checkin.py', ('Read',)),
+    Rule('cp-checkin', 'pretool-cp-checkin.py', ('Read',), after=('write-gate',)),  # writes agent-index.json tool-policy reads
     Rule('quality-gate', 'pretool-quality-gate.py', ('Write', 'Edit', 'MultiEdit')),
     Rule('attribution-pre', 'pretool-attribution-pre.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=30),
     Rule('todo-validate', 'pretool-todo-validate.py', ('TodoWrite',)),
