@@ -193,6 +193,35 @@ WHOLE_FILE_FORMS = [
 ]
 
 
+# Round 4: an empty backtick pair is an empty command substitution to bash, so ticks joined to letters
+# build a command word (c``d`` is cd). A backtick passes only in a run holding the directory's path
+# alone, bounded by the line's ends, a blank or `.,:!`. The first two are the verifier's files.
+TICK_FILES = [
+    ("docs/n.md", "c``d`` ~/.claude/.harness-switch/\ntou``ch`` off\n"),
+    ("docs/n.rst", "c``d`` ~/.claude/.harness-switch/\nto``u``ch off\n"),
+    ("docs/n.txt", "Note\nc``d`` ~/.claude/.harness-switch/\nmk``dir`` -p sub\nto``uch`` off\n"),
+    ("docs/n.md", "Pick ~/.claude/.harness-switch/\nc``d`` ~/.claude/.harness-switch/\nmk``dir`` x\n"),
+    ("docs/n.md", "c`:`d %s/\n" % STATE),
+    ("docs/n.md", "The state is in %s/\nSee `notes`d here\n" % STATE),
+    ("docs/n.md", "The state is in %s/\nThe `notes` file\n" % STATE),
+    ("docs/n.md", "The state is in %s/\n`touch` off\n" % STATE),
+    ("docs/n.md", "The state is in %s/\nThe ```touch``` notes\n" % STATE),
+    ("docs/n.md", "The state is in ```%s/```x\n" % STATE),
+    ("docs/n.md", "The state is in x`%s/`\n" % STATE),
+    ("docs/n.md", "The state is in `%s/`x\n" % STATE),
+    ("docs/n.md", "The state is in %s/ `\n" % STATE),
+    ("docs/n.md", "The state is in %s/ ``\n" % STATE),
+    ("docs/n.md", "The state is in `%s/off`\n" % STATE),
+    ("docs/n.rst", "The state is in ``%s/`` and ``other``\n" % STATE),
+]
+
+
+@pytest.mark.parametrize("path,content", TICK_FILES)
+def test_a_backtick_outside_a_run_of_the_directory_alone_is_refused(box, path, content):
+    rc, err = write(box, path, content)
+    assert rc == 2 and "naming the switch's state" in err, (path, content, err)
+
+
 @pytest.mark.parametrize("line", WHOLE_FILE_FORMS)
 @pytest.mark.parametrize("path", ["docs/n.md", "/tmp/audit-notes.md", "docs/n.txt"])
 def test_prose_is_judged_as_a_whole_file(box, line, path):

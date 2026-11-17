@@ -1935,7 +1935,10 @@ def _new_text(tool: str, ti: dict) -> str:
 
 PROSE = (".md", ".txt", ".rst")  # a file kind no shell or interpreter runs: naming the state there is prose
 PROSE_META = re.compile(r"[$<>|;&\\(){}*?\[\]=`\"']")  # shell syntax: a prose file holding any on a line is no proven mention
-PROSE_TICKED = re.compile(r"(`+)([^`\s]+)\1")  # Markdown / reST inline code, a command substitution to bash
+# The one inline-code run a plain line may hold: the directory's own path alone, bounded on both sides
+# by the line's start or end, a blank, or one of `.,:!`, so no letter joins its (empty) output.
+PROSE_DIR_RUN = re.compile(r"(?:(?<=[\s.,:!])|^)(`+)((?:[^`\s]*/)?%s/?)\1(?=[\s.,:!]|$)"
+                           % re.escape(harness_switch.DIR_NAME))
 PROSE_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # bash ends a line at \n alone: \r, \f, \v ... hide one
 PROSE_DIR_WORD = re.compile(r"(`*)([^\s`]*%s)/?\1[.,:!]?" % re.escape(harness_switch.DIR_NAME))
 PROSE_FENCE = re.compile(r"\A {0,3}(?:```|~~~)")
@@ -1974,9 +1977,10 @@ def _runs_nothing(word: str) -> bool:
 
 def _plain_line(line: str) -> bool:
     """Whether bash, reading `line` anywhere in a file, provably runs nothing and opens nothing that a
-    later line continues: no control character, no shell metacharacter (an inline-code run of one
-    word that runs nothing excepted), and its first word, also after Markdown list or heading markers
-    and after inline-code runs (which print nothing), runs nothing."""
+    later line continues: no control character, no shell metacharacter (a backtick only in an
+    inline-code run holding the directory's path alone, PROSE_DIR_RUN: any other backtick, an empty
+    run or a run joined to a letter is a command substitution that can build a command), and its
+    first word, also after Markdown list or heading markers and after those runs, runs nothing."""
     if PROSE_CTRL.search(line):
         return False
     ticked_ok = [True]
@@ -1985,17 +1989,17 @@ def _plain_line(line: str) -> bool:
         ok = not PROSE_META.search(m.group(2)) and _runs_nothing(m.group(2))
         ticked_ok[0] = ticked_ok[0] and ok
         return "" if ok else m.group(0)
-    if PROSE_META.search(PROSE_TICKED.sub(drop, line)) or not ticked_ok[0]:
+    if PROSE_META.search(PROSE_DIR_RUN.sub(drop, line)) or not ticked_ok[0]:
         return False
     words = [w for w in re.split(r"[ \t]+", line) if w]
     if not words:
         return True
     lead = [words[0]]
-    bare = [w for w in (PROSE_TICKED.sub("", w) for w in words) if w]
+    bare = [w for w in (PROSE_DIR_RUN.sub("", w) for w in words) if w]
     lead += bare[:1]
     after = [w for w in bare if not PROSE_MARKER.fullmatch(w)]
     lead += after[:1]
-    return all(_runs_nothing(PROSE_TICKED.sub("", w)) for w in lead)
+    return all(_runs_nothing(PROSE_DIR_RUN.sub("", w)) for w in lead)
 
 
 def _dir_mention(line: str) -> bool:
