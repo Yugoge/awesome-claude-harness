@@ -925,24 +925,34 @@ def _proven_literal(raw: str) -> bool:
 
 
 def _awk_parts_safe(parts, own: bool) -> bool:
-    """Whether a word's parts expand without assigning: no arithmetic, and outside awk's own words
-    (`own`) no `$` expansion at all; in them a parameter only plain (AWK_PARAM_PLAIN)."""
+    """Whether a word's parts expand without assigning and run nothing the shell does not wait for: no
+    arithmetic, no process substitution anywhere (bash does not wait for one, so its code may look up
+    `awk` after the last command's redirect has overwritten the awk binary), and outside awk's own
+    words (`own`) no `$` expansion at all; in them a parameter only plain (AWK_PARAM_PLAIN)."""
     for p in shell_parse.active_parts(parts):
-        if p.kind == "arith" or p.kind == "arraylit":
+        if p.kind in ("arith", "arraylit", "procsub_in", "procsub_out"):
             return False
         if p.kind == "param" and not (own and AWK_PARAM_PLAIN.fullmatch(p.text or "")):
             return False
-        if p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and not own:
+        if p.kind in ("cmdsub", "backtick") and not own:
             return False
     return True
 
 
 def _awk_name_safe(site, final=None) -> bool:
     """Whether one simple command leaves the name `awk` resolving as before (AWK_NAME_SAFE). `final`
-    is the command's last simple command when it runs alone after every other: nothing is looked up
-    after it opens its redirects, so it alone may also write a static file target with `>` / `>>`
-    (`awk -F: '{print $1}' F > /tmp/keys.txt`)."""
+    is the command's last simple command when it runs alone after every other: it alone may also
+    write a static file target with `>` / `>>` (`awk -F: '{print $1}' F > /tmp/keys.txt`), and then
+    none of its redirects (targets, here-strings, here-documents) holds a command substitution, the
+    one code bash runs after it opens that file (its words are expanded before, with no process
+    substitution, background job, coproc or trap anywhere in the command)."""
     cmd = site.cmd
+    if cmd is final and any(r.op in (">", ">>") and r.target is not None and r.target.value() is not None
+                            and r.target.value() != "/dev/null" for r in cmd.redirects) and any(
+            p.kind in ("cmdsub", "backtick") for r in cmd.redirects
+            for p in shell_parse.active_parts(
+                [*(r.target.parts if r.target is not None else ()), *(r.hd.expansions if r.hd is not None else ())])):
+        return False
     if site.dynamic or site.templated:
         return False
     if any(not (a.name == "POSIXLY_CORRECT" and a.static_value() == "1" and cmd.words) for a in cmd.assignments):

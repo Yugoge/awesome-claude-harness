@@ -597,3 +597,67 @@ def test_a_file_written_before_another_command_runs_makes_awk_no_reader(box, com
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+P = "(head -c 3000000000 /dev/zero | wc -c; awk 'NR<=1' .claude/settings.json > /dev/null" + D + ")"
+AWK_PROCESS_SUBSTITUTION = [  # bash does not wait for a process substitution: its code may look up `awk`
+    # after the last command's `>` has overwritten the awk binary
+    "awk 'BEGIN{exit}' <" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "awk 'BEGIN{exit}' >" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "awk 'BEGIN{exit}' <" + P + " && awk '{print}' /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "awk 'NR<=1' .claude/settings.json <(true)" + D,
+    "awk 'NR<=1' .claude/settings.json >(true)" + D,
+    # in another command's words
+    "cat <" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "wc -c >" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "cat /tmp/k/evil.sh > /tmp/k/bin/awk <" + P,
+    "echo <(true); awk 'NR<=1' .claude/settings.json" + D,
+    # in a redirect target
+    "awk 'BEGIN{exit}' < <" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "awk 'BEGIN{exit}' > >" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "cat < <" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "echo x > >" + P + "; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "cat /tmp/k/evil.sh > /tmp/k/bin/awk 2> >" + P,
+    # in a nested script
+    "echo \"$(cat <" + P + ")\"; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+    "awk 'BEGIN{exit}' \"$(cat <" + P + ")\"; cat /tmp/k/evil.sh > /tmp/k/bin/awk",
+]
+
+
+@pytest.mark.parametrize("command", AWK_PROCESS_SUBSTITUTION)
+def test_a_process_substitution_anywhere_makes_awk_no_reader(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+S = "awk 'NR<=1' .claude/settings.json" + D
+AWK_AFTER_LAST_REDIRECT = [  # a redirect the last command opens after its `>` onto a file: its expansion runs then
+    "awk '{print}' /tmp/k/evil.sh > /tmp/k/bin/awk 2> \"$(" + S + ")\"",
+    "awk '{print}' /tmp/k/evil.sh > /tmp/k/bin/awk 2> `" + S + "`",
+    "awk '{print}' /tmp/k/evil.sh > /tmp/k/bin/awk <<< \"$(" + S + ")\"",
+    "awk '{print}' /tmp/k/evil.sh > /tmp/k/bin/awk <<E\n$(" + S + ")\nE",
+    "awk '{print}' /tmp/k/evil.sh >> /tmp/k/bin/awk <<E\n`" + S + "`\nE",
+    # a trap's code runs after every command
+    "trap \"" + S.replace('"', '\\"') + "\" EXIT; awk '{print}' /tmp/k/evil.sh > /tmp/k/bin/awk",
+]
+
+
+@pytest.mark.parametrize("command", AWK_AFTER_LAST_REDIRECT)
+def test_code_the_last_command_runs_after_opening_its_file_makes_awk_no_reader(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk -F: '{print $1}' {proj}/.claude/settings.json > /tmp/keys.txt 2>/dev/null",
+    "awk 'NR<=1' .claude/settings.json > /tmp/keys.txt <<< \"$HOME\"",
+    "awk -F: '{print $1}' \"$(echo .claude/settings.json)\" > /tmp/keys.txt",
+    "diff <(cat .claude/settings.json) /tmp/k/a",
+])
+def test_awk_last_redirect_and_a_process_substitution_without_awk_still_pass(box, command):
+    command = fill(box, command)
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
