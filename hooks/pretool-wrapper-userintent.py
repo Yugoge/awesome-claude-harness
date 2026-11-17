@@ -326,6 +326,59 @@ def _wrapper_index() -> tuple[dict, dict]:
     return by_path, by_name
 
 
+# A file of this size or more that has the wrapper's exact content IS the wrapper (a
+# copy made earlier); a smaller one is too generic to tell apart from a project stub.
+_CONTENT_MATCH_MIN = 64
+_IDENTITY = None
+
+
+def _wrapper_identity() -> tuple[dict, dict]:
+    """(st_dev, st_ino) -> command-name and (size, sha256) -> command-name of the wrappers."""
+    global _IDENTITY
+    if _IDENTITY is None:
+        import hashlib
+        inodes, digests = {}, {}
+        for name, files in _GUARDED_WRAPPERS.items():
+            for rel in files:
+                for home in _harness_homes():
+                    p = os.path.join(home, *rel)
+                    try:
+                        st = os.stat(p)
+                        inodes[(st.st_dev, st.st_ino)] = name
+                        if st.st_size >= _CONTENT_MATCH_MIN:
+                            with open(p, 'rb') as fh:
+                                digests[(st.st_size, hashlib.sha256(fh.read()).hexdigest())] = name
+                    except OSError:
+                        continue
+        _IDENTITY = (inodes, digests)
+    return _IDENTITY
+
+
+def _wrapper_of(path: str, by_path: dict) -> str | None:
+    """The command-name when ``path`` is a guarded wrapper: the same path, the same
+    file (a hard link), or a file with the wrapper's exact content (a copy)."""
+    name = by_path.get(os.path.realpath(path))
+    if name is not None:
+        return name
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    inodes, digests = _wrapper_identity()
+    name = inodes.get((st.st_dev, st.st_ino))
+    if name is not None:
+        return name
+    import stat as _stat
+    if not _stat.S_ISREG(st.st_mode) or not any(size == st.st_size for size, _d in digests):
+        return None
+    import hashlib
+    try:
+        with open(path, 'rb') as fh:
+            return digests.get((st.st_size, hashlib.sha256(fh.read()).hexdigest()))
+    except OSError:
+        return None
+
+
 def _writes_file(red) -> bool:
     """A redirection that writes a file (not /dev/null, not an fd duplicate)."""
     try:
@@ -365,6 +418,9 @@ class _Scan:
         self.site_of = {}
         self.covered = []          # spans of the command text whose mentions are accounted for
         self.word_mention = False
+        self.lessopen = False      # LESSOPEN / LESSCLOSE set by the command: less runs it
+        self.computed_run = False  # a run target built at run time ($(...), xargs, a loop)
+        self.loops = []            # (variable, list words, body script) of for/select loops
         script = _sp.parse(command)
         if script.error is not None:
             self.unsure = True
@@ -384,12 +440,18 @@ class _Scan:
                 if sp_ is not None:
                     self.nested.append((sp_, len(site.context), site))
         for site in self.sites:
+            self._lessopen_scan(site)
+        for site in self.sites:
             self._collect(site)
         for site in self.sites:
             self._site(site)
+        for loop in self.loops:
+            self._loop(*loop)
         for site in self.sites:
             self._classify(site)
         self._uncovered()
+        if self.computed_run and self.match is None and self._harness_context():
+            self.match = 'stop'  # fail closed: a run built at run time beside the wrapper
 
     # -- structure -----------------------------------------------------------
     def _map_script(self, script, consumer, writes):
@@ -402,6 +464,10 @@ class _Scan:
                 cons = pl.stages[k + 1] if k + 1 < n else consumer
                 if isinstance(st, _sp.Compound):
                     w = writes or any(_writes_file(r) for r in st.redirects)
+                    if st.kind in ('for', 'select') and st.header and st.body:
+                        var = st.header[0].value()
+                        if var and re.match(r'^[A-Za-z_]\w*$', var):
+                            self.loops.append((var, list(st.header[1:]), st.body))
                     for h in st.header:
                         sp_ = self._span(h)
                         if _mentions(self._own_text(h)):
@@ -413,6 +479,9 @@ class _Scan:
                         self._map_script(body, cons, w)
                 else:
                     self.outflow[id(st)] = (cons, writes)
+
+    def _wrapper_file(self, path):
+        return _wrapper_of(path, self.by_path)
 
     def _span(self, word):
         try:
@@ -525,7 +594,10 @@ class _Scan:
         if words[0] == 'command' and len(words) > 1 and words[1] in ('-v', '-V'):
             return True
         res = _sp.resolve(cmd)
-        if res.unresolved and not str(res.unresolved).startswith('xargs'):
+        last_open = res.unresolved == 'computed-shell-option' and self._last_quoted_param(cmd, res.args)
+        if res.unresolved and not str(res.unresolved).startswith('xargs') and not last_open:
+            return False
+        if res.unresolved and not last_open and not self._xargs_safe(res):
             return False
         if res.head is None:
             return not res.args
@@ -536,7 +608,10 @@ class _Scan:
         vals = [w.value() for w in res.args]
         sv = [v for v in vals if v is not None]
         if name in _PLAIN_READERS:
-            if name == 'rg' and any(v.startswith('--pre') and not v.startswith('--pre-glob') for v in sv):
+            if name == 'rg' and any((v.startswith('--pre') and not v.startswith('--pre-glob')) or
+                                    v.startswith('--hostname-bin') for v in sv):
+                return False
+            if name == 'less' and self.lessopen:
                 return False
             if name == 'sort' and any(v.startswith('--compress-program') for v in sv):
                 return False
@@ -549,7 +624,7 @@ class _Scan:
                 return False
             return True
         if name in _sp.SHELLS:
-            return self._shell_noexec(vals)
+            return self._shell_noexec(vals, self._last_quoted_param(cmd, res.args))
         if _PYTHON_RE.match(name):
             return self._py_reader(cmd, vals)
         if name in ('node', 'nodejs'):
@@ -569,15 +644,25 @@ class _Scan:
                 sv[1] in ('create', 'edit', 'comment', 'view', 'list', 'diff', 'checks', 'status')
         return False
 
+    def _last_quoted_param(self, cmd, args) -> bool:
+        """The last argument is one double-quoted variable (a single operand word) and the
+        shell reads no stdin a `+n` in it could turn into a run."""
+        if not args or not re.match(r'^"\$\{?[A-Za-z_]\w*\}?"$', args[-1].text or ''):
+            return False
+        site = self.site_of.get(id(cmd))
+        if site is None or 'pipe' in site.fed or any(r.fd == 0 for r in cmd.redirects):
+            return False
+        return True
+
     @staticmethod
-    def _shell_noexec(vals) -> bool:
+    def _shell_noexec(vals, last_open=False) -> bool:
         """`bash -n` (or `-o noexec`) with no later `+n` / `+o noexec`."""
         noexec = False
         k = 0
         while k < len(vals):
             v = vals[k]
             if v is None:
-                return False
+                return noexec and last_open and k == len(vals) - 1
             if v in ('--', '-'):
                 break
             if v.startswith('--'):
@@ -807,6 +892,8 @@ class _Scan:
             values = self._values(word)
         if not values:
             self.unsure = True
+            if word is not None and self._built(word):
+                self.computed_run = True
             return
         found_all, risky = [], False
         for value, is_glob in values:
@@ -819,7 +906,7 @@ class _Scan:
                 joined = os.path.join(base, value) if base else value
                 found.extend(glob.glob(joined) if is_glob else ([joined] if os.path.exists(joined) else []))
             for f in found:
-                name = self.by_path.get(os.path.realpath(f))
+                name = self._wrapper_file(f)
                 if name is not None:
                     self.match = self.match or name
             if word is not None and self._named_elsewhere(word, value):
@@ -836,7 +923,7 @@ class _Scan:
         """A command word without a slash, looked up on PATH."""
         found = shutil.which(value)
         if found is not None:
-            name = self.by_path.get(os.path.realpath(found))
+            name = self._wrapper_file(found)
             if name is not None:
                 self.match = self.match or name
         if value in self.by_name and (found is None or self.path_assigned):
@@ -875,7 +962,7 @@ class _Scan:
 
     def _shell(self, site, res, args):
         vals = [self._expand(w)[0] for w in args]
-        if self._shell_noexec(vals):
+        if self._shell_noexec(vals, self._last_quoted_param(site.cmd, args)):
             return  # read, never run (bash -n with no later +n)
         k = 0
         has_c = has_s = False
@@ -883,6 +970,8 @@ class _Scan:
             v = vals[k]
             if v is None:
                 self.unsure = True
+                if self._built(args[k]):
+                    self.computed_run = True  # a script operand built at run time
                 return
             if v in ('--', '-'):
                 k += 1
@@ -929,6 +1018,7 @@ class _Scan:
         if any(p.kind.startswith('procsub') for p in word.parts):
             if res.payload is None or res.unresolved:
                 self.unsure = True
+                self.computed_run = True
             return
         self._path_target(word)
 
@@ -941,6 +1031,8 @@ class _Scan:
             v = vals[k]
             if v is None:
                 self.unsure = True
+                if self._built(args[k]):
+                    self.computed_run = True  # a script operand built at run time
                 return
             if v == '-':
                 self._stdin(site, res, shell=False, inert=_py_inert)
@@ -1001,7 +1093,7 @@ class _Scan:
                 self.unsure = True
             for d in dirs:
                 f = os.path.join(d, mod.replace('.', '/') + '.py')
-                name = self.by_path.get(os.path.realpath(f)) if os.path.exists(f) else None
+                name = self._wrapper_file(f) if os.path.exists(f) else None
                 if name is not None:
                     self.match = self.match or name
             if self.match is None:
@@ -1025,7 +1117,7 @@ class _Scan:
                     joined = os.path.join(base, v) if base else v
                     for f in (glob.glob(joined) if is_glob else [joined]):
                         if os.path.exists(f):
-                            name = self.by_path.get(os.path.realpath(f))
+                            name = self._wrapper_file(f)
                             if name is not None:
                                 self.match = self.match or name
 
@@ -1166,9 +1258,13 @@ class _Scan:
                                                      'script_file_computed', 'generated_code'):
             if not (str(res.unresolved).startswith('xargs') and self._reader(cmd)):
                 self.unsure = True
+                if str(res.unresolved).startswith('xargs'):
+                    self.computed_run = True  # xargs hands its input to a command that may run it
         head, is_glob = self._expand(res.head)
         if head is None or (res.unresolved == 'dynamic_head' and _sp._ASSIGN_RE.match(head)):
             self.unsure = True  # a computed command word, or `env` stopped at an assignment
+            if self._built(res.head):
+                self.computed_run = True
             return
         name = os.path.basename(head)
         args = list(res.args)
@@ -1214,6 +1310,12 @@ class _Scan:
             self.persist = True
         if name == 'git':
             self._git(vals)
+        if name == 'rg':
+            self._rg(args)
+        if name == 'sed':
+            self._sed(site, args)
+        if name == 'less' and self.lessopen:
+            self._less(args)
         if name in _NO_EXEC:
             return
         if name == 'parallel' and ':::' in vals:
@@ -1270,6 +1372,490 @@ class _Scan:
         if sub in ('rebase', 'bisect', 'submodule', 'filter-branch', 'difftool', 'mergetool'):
             if any(_mentions(r) for r in rest):
                 self.unsure = True
+
+    # -- runs built at run time, rg --pre, sed e, LESSOPEN, loops -----------------
+    # Readers that stay readers whatever words xargs appends (no option of theirs runs
+    # a program or names one: not find, rg, ag, sort, sed, awk, git, less ...).
+    _XARGS_SAFE = frozenset((
+        'grep', 'egrep', 'fgrep', 'cat', 'tac', 'nl', 'head', 'tail', 'wc', 'ls', 'stat',
+        'file', 'du', 'sha1sum', 'sha224sum', 'sha256sum', 'sha384sum', 'sha512sum', 'md5sum',
+        'b2sum', 'cksum', 'sum', 'cmp', 'comm', 'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump',
+        'strings', 'readlink', 'realpath', 'basename', 'dirname', 'column', 'paste', 'fold',
+        'fmt', 'expand', 'unexpand', 'rev', 'echo', 'printf', 'true', 'false', 'test', '[',
+        'shellcheck', 'type', 'which', 'whereis', 'pwd', ':', 'diff', 'jq', 'tree'))
+    _RG_VALUE_SHORT = 'efgtTmABCMjrEd'
+    _RG_VALUE_LONG = frozenset((
+        '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--max-count',
+        '--after-context', '--before-context', '--context', '--max-columns', '--threads',
+        '--pre', '--pre-glob', '--type-add', '--type-clear', '--replace', '--colors',
+        '--encoding', '--sort', '--sortr', '--max-depth', '--maxdepth', '--max-filesize',
+        '--path-separator', '--ignore-file', '--dfa-size-limit', '--regex-size-limit',
+        '--context-separator', '--field-match-separator', '--field-context-separator',
+        '--engine', '--hostname-bin', '--hyperlink-format', '--color', '--generate'))
+
+    @staticmethod
+    def _built(word) -> bool:
+        """The word is built at run time by a command substitution or backticks."""
+        try:
+            return any(p.kind in ('cmdsub', 'backtick') for p in word.parts)
+        except Exception:
+            return False
+
+    def _xargs_safe(self, res) -> bool:
+        if res.head is None:
+            return False
+        hv = res.head.value()
+        if hv is None:
+            return False
+        name = os.path.basename(hv)
+        if name in self._XARGS_SAFE:
+            return True
+        if _PYTHON_RE.match(name):
+            vals = [w.value() for w in res.args]
+            return len(vals) >= 2 and vals[0] == '-m' and vals[1] in _PY_READER_MODULES
+        return False
+
+    def _lessopen_scan(self, site):
+        cmd = site.cmd
+        res = self.res[id(site)]
+        for a in tuple(cmd.assignments) + tuple(res.assignments):
+            if a.name in ('LESSOPEN', 'LESSCLOSE'):
+                self.lessopen = True
+        for w in cmd.words:
+            t = w.value()
+            t = w.text if t is None else t
+            if re.match(r'''^["']?(?:LESSOPEN|LESSCLOSE)\+?=''', t or ''):
+                self.lessopen = True
+
+    def _existing(self, value, is_glob):
+        """Existing paths a word value names (relative to every known cwd); None when the cwd is unknown."""
+        if not os.path.isabs(value) and self.cwd_unknown:
+            return None
+        bases = [''] if os.path.isabs(value) else sorted(self.cwds)
+        out = []
+        for base in bases:
+            joined = os.path.join(base, value) if base else value
+            if is_glob:
+                out.extend(glob.glob(joined)[:500])
+            elif os.path.exists(joined):
+                out.append(joined)
+        return out
+
+    def _tree_holds_wrapper(self, path) -> bool | None:
+        """True when ``path`` is a wrapper or a directory holding one; None past the walk cap."""
+        if os.path.isfile(path):
+            return self._wrapper_file(path) is not None
+        if not os.path.isdir(path):
+            return False
+        real = os.path.realpath(path)
+        for wp in self.by_path:
+            if wp == real or wp.startswith(real.rstrip(os.sep) + os.sep):
+                return True
+        seen = 0
+        for dp, dns, fns in os.walk(path):
+            seen += len(dns) + len(fns)
+            if seen > _FIND_CAP:
+                return None
+            for fn in fns:
+                if self._wrapper_file(os.path.join(dp, fn)) is not None:
+                    return True
+        return False
+
+    def _words_hold_wrapper(self, words, trees=False) -> None:
+        """Set match when a word names the wrapper (a directory holding it with ``trees``);
+        unsure when a word cannot be read."""
+        for w in words:
+            vals = self._values(w)
+            if not vals:
+                self.unsure = True
+                if self._built(w):
+                    self.computed_run = True
+                continue
+            for v, g in vals:
+                found = self._existing(v, g)
+                if found is None:
+                    self.unsure = True
+                    continue
+                for f in found:
+                    hit = self._tree_holds_wrapper(f) if trees else (
+                        os.path.isfile(f) and self._wrapper_file(f) is not None)
+                    if hit is None:
+                        self.unsure = True
+                    elif hit:
+                        self.match = self.match or 'stop'
+
+    def _rg(self, args):
+        """`rg --pre PROG` runs PROG on every searched file (and --hostname-bin runs a program)."""
+        progs, positional, given, k = [], [], False, 0
+        vals = [self._expand(w)[0] for w in args]
+        while k < len(args):
+            v = vals[k]
+            if v is None:
+                positional.append(args[k])
+                k += 1
+                continue
+            if v == '--':
+                positional.extend(args[k + 1:])
+                break
+            if v.startswith('--'):
+                name, eq, val = v.partition('=')
+                takes = name in self._RG_VALUE_LONG
+                vw = None if eq else (args[k + 1] if takes and k + 1 < len(args) else None)
+                if name in ('--pre', '--hostname-bin'):
+                    progs.append(vw if not eq else val)
+                if name in ('--regexp', '--file'):
+                    given = True
+                k += 1 if (eq or not takes) else 2
+                continue
+            if v.startswith('-') and len(v) > 1:
+                for j, ch in enumerate(v[1:], 1):
+                    if ch in self._RG_VALUE_SHORT:
+                        if ch in 'ef':
+                            given = True
+                        k += 1 if v[j + 1:] else 2
+                        break
+                else:
+                    k += 1
+                continue
+            positional.append(args[k])
+            k += 1
+        if not progs:
+            return
+        for p in progs:
+            if p is None:
+                self.unsure = True
+                self.computed_run = True
+                continue
+            pv = p if isinstance(p, str) else self._expand(p)[0]
+            if pv is None:
+                self.unsure = True
+                self.computed_run = True
+                continue
+            if '/' in pv:
+                pv = self.home + pv[1:] if pv[:1] == '~' and (len(pv) == 1 or pv[1] == '/') else pv
+                for f in self._existing(pv, False) or []:
+                    if self._wrapper_file(f) is not None:
+                        self.match = self.match or 'stop'
+            else:
+                found = shutil.which(pv)
+                if found is not None and self._wrapper_file(found) is not None:
+                    self.match = self.match or 'stop'
+                if pv in self.by_name:
+                    self.unsure = True
+        paths = positional if given else positional[1:]
+        if not paths:
+            if self.cwd_unknown:
+                self.unsure = True
+            for c in sorted(self.cwds):
+                hit = self._tree_holds_wrapper(c)
+                if hit is None:
+                    self.unsure = True
+                elif hit:
+                    self.match = self.match or 'stop'
+            return
+        self._words_hold_wrapper([w for w in paths if w.value() != '-'], trees=True)
+
+    @staticmethod
+    def _sed_has_e(s: str) -> bool:
+        """The sed script has an `e` command or an `s///e` flag (True too when it cannot be read)."""
+        i, n = 0, len(s)
+
+        def regex_end(i, delim):
+            while i < n:
+                c = s[i]
+                if c == '\\':
+                    i += 2
+                    continue
+                if c == delim:
+                    return i + 1
+                if c == '\n' and delim != '\n':
+                    return -1
+                i += 1
+            return -1
+
+        def to_eol(i):
+            while i < n and s[i] != '\n':
+                i += 2 if s[i] == '\\' else 1
+            return i
+
+        def address(i):
+            if i < n and s[i].isdigit():
+                while i < n and (s[i].isdigit() or s[i] == '~'):
+                    i += 1
+            elif i < n and s[i] == '$':
+                i += 1
+            elif i < n and s[i] in '/\\':
+                delim = '/'
+                if s[i] == '\\':
+                    if i + 1 >= n:
+                        return -1
+                    delim, i = s[i + 1], i + 1
+                i = regex_end(i + 1, delim)
+                if i < 0:
+                    return -1
+                while i < n and s[i] in 'IM':
+                    i += 1
+            return i
+
+        while i < n:
+            c = s[i]
+            if c in ' \t\n;{}!':
+                i += 1
+                continue
+            if c == '#':
+                i = to_eol(i)
+                continue
+            j = address(i)
+            if j < 0:
+                return True
+            if j != i:
+                i = j
+                while i < n and s[i] in ' \t':
+                    i += 1
+                if i < n and s[i] == ',':
+                    i += 1
+                    while i < n and s[i] in ' \t':
+                        i += 1
+                    if i < n and s[i] in '+~':
+                        i += 1
+                        while i < n and s[i].isdigit():
+                            i += 1
+                    else:
+                        j = address(i)
+                        if j < 0 or j == i:
+                            return True
+                        i = j
+                while i < n and s[i] in ' \t!':
+                    i += 1
+                continue
+            if c == 'e':
+                return True
+            if c in 'sy':
+                if i + 1 >= n or s[i + 1] in '\n\\':
+                    return True
+                delim = s[i + 1]
+                k = regex_end(i + 2, delim)
+                k = regex_end(k, delim) if k >= 0 else -1
+                if k < 0:
+                    return True
+                i = k
+                if c == 's':
+                    while i < n and (s[i].isalnum()):
+                        if s[i] == 'e':
+                            return True
+                        if s[i] in 'wW':
+                            i = to_eol(i)
+                            break
+                        i += 1
+                while i < n and s[i] in ' \t':
+                    i += 1
+                if i < n and s[i] not in ';\n}#':
+                    return True
+                continue
+            if c in 'aic:btTrRwWv':
+                if c in ':btTv':
+                    while i < n and s[i] not in ';\n':
+                        i += 1
+                else:
+                    i = to_eol(i)
+                continue
+            if c in 'qQlL':
+                i += 1
+                while i < n and (s[i].isdigit() or s[i] in ' \t'):
+                    i += 1
+                continue
+            if c in '=dDgGhHnNpPxzF':
+                i += 1
+                continue
+            return True
+        return False
+
+    def _sed_scripts(self, vals):
+        """(scripts, operands) of a sed call; scripts is None when one cannot be read."""
+        scripts, files, ops, k, given = [], [], [], 0, False
+        while k < len(vals):
+            v = vals[k]
+            if v is None:
+                if not given and not scripts and not files:
+                    return None, ops
+                ops.append(None)
+                k += 1
+                continue
+            if v == '--':
+                rest = vals[k + 1:]
+                if not given and rest:
+                    scripts.append(rest[0])
+                    rest = rest[1:]
+                ops.extend(rest)
+                break
+            if v.startswith('--'):
+                name, eq, val = v.partition('=')
+                if name in ('--expression', '--file'):
+                    given = True
+                    val = val if eq else (vals[k + 1] if k + 1 < len(vals) else None)
+                    if val is None:
+                        return None, ops
+                    (scripts if name == '--expression' else files).append(val)
+                    k += 1 if eq else 2
+                    continue
+                k += 2 if (name == '--line-length' and not eq) else 1
+                continue
+            if v.startswith('-') and len(v) > 1:
+                adv = 1
+                for j, ch in enumerate(v[1:], 1):
+                    if ch in 'efl':
+                        rest = v[j + 1:]
+                        val = rest if rest else (vals[k + 1] if k + 1 < len(vals) else None)
+                        if not rest:
+                            adv = 2
+                        if ch != 'l':
+                            given = True
+                            if val is None:
+                                return None, ops
+                            (scripts if ch == 'e' else files).append(val)
+                        break
+                    if ch == 'i':
+                        break  # -i[SUFFIX]
+                k += adv
+                continue
+            if not given and not scripts:
+                scripts.append(v)
+            else:
+                ops.append(v)
+            k += 1
+        for f in files:
+            if f == '-':
+                return None, ops
+            f = self.home + f[1:] if f[:1] == '~' and (len(f) == 1 or f[1] == '/') else f
+            found = self._existing(f, False)
+            if not found:
+                return None, ops
+            try:
+                with open(found[0], errors='replace') as fh:
+                    scripts.append(fh.read(1 << 20))
+            except OSError:
+                return None, ops
+        return scripts, ops
+
+    @staticmethod
+    def _sed_unescape(text: str) -> str:
+        """sed's own escapes (\\xHH, \\oNNN, \\dNNN, \\cX) decoded, as sed would before it runs a line."""
+        def one(m):
+            for grp, base in ((1, 16), (2, 8), (3, 10)):
+                if m.group(grp) is not None:
+                    return chr(int(m.group(grp), base))
+            return m.group(0)
+        return re.sub(r'\\(?:x([0-9A-Fa-f]{1,2})|o([0-7]{1,3})|d([0-9]{1,3}))', one, text)
+
+    def _sed(self, site, args):
+        """sed with an `e` command or `s///e` flag runs text as a shell command: when the
+        command names the wrapper anywhere (escaped forms included, or an input file that
+        is the wrapper or names it) it is a run; otherwise it is not proven harmless."""
+        vals = [w.value() for w in args]
+        scripts, ops = self._sed_scripts(vals)
+        if scripts is not None and not any(self._sed_has_e(s) for s in scripts):
+            return
+        self.unsure = True
+        text = self._sed_unescape(self.command)
+        if _dequoted_mentions(text) or any(_dequoted_mentions(self._sed_unescape(s))
+                                           for s in (scripts or [])):
+            self.match = self.match or 'stop'
+            return
+        for v in ops:
+            if v is None:
+                self.computed_run = True
+                continue
+            v = self.home + v[1:] if v[:1] == '~' and (len(v) == 1 or v[1] == '/') else v
+            for f in self._existing(v, False) or []:
+                if not os.path.isfile(f):
+                    continue
+                if self._wrapper_file(f) is not None:
+                    self.match = self.match or 'stop'
+                    return
+                try:
+                    with open(f, errors='replace') as fh:
+                        if _dequoted_mentions(self._sed_unescape(fh.read(1 << 20))):
+                            self.match = self.match or 'stop'
+                            return
+                except OSError:
+                    continue
+
+    def _less(self, args):
+        """less with a LESSOPEN/LESSCLOSE the command sets runs it over each file it opens."""
+        ops = [w for w in args if not (w.value() or 'x').startswith(('-', '+'))]
+        self._words_hold_wrapper(ops)
+
+    def _loop(self, var, items, body):
+        """`for v in LIST; do ... $v ...; done`: a body that runs the loop variable runs
+        every file the list expands to."""
+        pat = re.compile(r'^\{?[#!]?' + re.escape(var) + r'(?!\w)')
+        runs = False
+        for scr in body:
+            for site in _sp.walk(scr):
+                cmd = site.cmd
+                uses = False
+                for w in self._words(cmd):
+                    try:
+                        parts = w.parts
+                    except Exception:
+                        continue
+                    if any(p.kind == 'param' and pat.match(p.text or '') for p in parts):
+                        uses = True
+                        break
+                if uses and not self._inert(cmd):
+                    runs = True
+                    break
+            if runs:
+                break
+        if not runs:
+            return
+        for w in items:
+            vals = self._values(w)
+            if not vals:
+                self.unsure = True
+                self.computed_run = True
+                continue
+            for v, g in vals:
+                for f in self._existing(v, g) or []:
+                    if os.path.isfile(f) and self._wrapper_file(f) is not None:
+                        self.match = self.match or 'stop'
+
+    def _harness_context(self) -> bool:
+        """The command runs in the harness home's hooks/ or scripts/ directory, names one of
+        them or a name directly in one, or names a file that is a wrapper."""
+        dirs = set()
+        for home in _harness_homes():
+            for sub in ('hooks', 'scripts'):
+                d = os.path.join(home, sub)
+                dirs.add(os.path.normpath(d))
+                dirs.add(os.path.realpath(d))
+
+        def inside(p):
+            """The directory itself, or a non-directory name directly in it."""
+            for q in (os.path.normpath(p), os.path.realpath(p)):
+                if q in dirs or (os.path.dirname(q) in dirs and not os.path.isdir(q)):
+                    return True
+            return False
+
+        if any(os.path.normpath(c) in dirs or os.path.realpath(c) in dirs for c in self.cwds):
+            return True
+        words = []
+        for site in self.sites:
+            words.extend(self._words(site.cmd))
+        for _v, items, _b in self.loops:
+            words.extend(items)
+        for w in words:
+            vals = self._values(w) if w is not None else None
+            for v, g in vals or ():
+                bases = [''] if os.path.isabs(v) else sorted(self.cwds)
+                for base in bases:
+                    cand = os.path.join(base, v) if base else v
+                    if inside(cand):
+                        return True
+                for f in self._existing(v, g) or []:
+                    if os.path.isfile(f) and self._wrapper_file(f) is not None:
+                        return True
+        return False
 
     # -- mentions ------------------------------------------------------------
     def _transparent(self, word, site) -> bool:
@@ -1346,7 +1932,7 @@ class _Scan:
             bases = [''] if os.path.isabs(v) else sorted(self.cwds)
             for base in bases:
                 f = os.path.join(base, v) if base else v
-                if not os.path.exists(f) or self.by_path.get(os.path.realpath(f)) is not None:
+                if not os.path.exists(f) or self._wrapper_file(f) is not None:
                     return False
             if self._named_elsewhere(word, v):
                 return False
