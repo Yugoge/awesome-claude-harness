@@ -387,3 +387,60 @@ def test_a_read_write_or_run_of_the_file_is_refused(sandbox, command):
         assert r.returncode == 2, (command, r.stdout, r.stderr)
         assert "session_dirs.txt is never read, written or executed" in r.stderr, (command, r.stderr)
         assert "neither releases it" in r.stderr
+
+
+# An allowed mention counts only inside a plain command: a list of allowed calls and harmless commands with literal
+# words, output shown and redirected to /dev/null at most. A variable that changes how a program reads its words,
+# a shell variable read back without `$_`, the call's own stderr kept in a file, a replaced program, or a git
+# editor or hook route each leave the name standing where it is read or run.
+NOT_PLAIN = [
+    # POSIXLY_CORRECT turns the word after the pattern into a file operand
+    "export POSIXLY_CORRECT=1; grep '' -e session_dirs.txt",
+    "export POSIXLY_CORRECT=; grep '' -e session_dirs.txt",
+    "POSIXLY_CORRECT=1; export POSIXLY_CORRECT; grep '' -e session_dirs.txt",
+    "declare -x POSIXLY_CORRECT=1; grep -h '' -e session_dirs.txt",
+    "export POSIXLY_CORRECT=1 && grep '' -e session_dirs.txt",
+    # the last argument read back through `_` without `$_`
+    "git log --oneline -S session_dirs.txt >/dev/null; typeset -p _ | cut -d'\"' -f2 | xargs cat",
+    "git log --oneline -S session_dirs.txt >/dev/null; declare -p _ | cut -d'\"' -f2 | xargs cat",
+    "git log --oneline -S session_dirs.txt >/dev/null; declare -p | grep '^declare -- _=' | cut -d'\"' -f2 | xargs cat",
+    "git log --oneline -S session_dirs.txt >/dev/null; set | grep '^_=' | cut -d= -f2 | xargs cat",
+    # the allowed call's own stderr kept in a file
+    "rg 'session_dirs.txt(' docs 2>n.txt; grep -o 's[a-z_]*[.]txt' n.txt | head -1 | xargs cat",
+    "git grep -P 'session_dirs.txt(' 2>n.txt; grep -o 's[a-z_]*[.]txt' n.txt | head -1 | xargs cat",
+    "grep -rn session_dirs.txt docs/ 2>/tmp/e",
+    # a search program replaced, or the commit handed to an editor or a hook
+    "cp /bin/cat /usr/local/bin/grep; grep session_dirs.txt",
+    "unset GIT_EDITOR; git config core.editor sh; git commit --allow-empty -e -m 'cat session_dirs.txt'",
+    "unset GIT_EDITOR; export EDITOR=sh; git commit --allow-empty -e -m 'cat session_dirs.txt'",
+    "unset GIT_EDITOR; git config core.hooksPath h; git commit --allow-empty -m 'cat session_dirs.txt'",
+    "git config core.editor sh && git commit --allow-empty -e -m 'cat session_dirs.txt'",
+]
+
+
+@pytest.mark.parametrize("command", NOT_PLAIN)
+def test_a_mention_outside_a_plain_command_is_refused(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 2, (command, r.stdout, r.stderr)
+        assert "session_dirs.txt is never read, written or executed" in r.stderr, (command, r.stderr)
+        assert "neither releases it" in r.stderr
+
+
+# A glob in a directory component lands on no file named session_dirs.txt, and interpreter code that names another
+# file ending in `dirs.txt`, or a session directory and another .txt file, cannot build the name.
+NOT_THE_FILE = [
+    "tail -n 50 logs/session*/out.log",
+    "cat /tmp/sess*/meta.json",
+    "python3 -c \"print(open('build_dirs.txt').read())\"",
+    "python3 -c \"open('project_dirs.txt')\"",
+    "perl -e 'open F, \"build_dirs.txt\"'",
+    "python3 -c \"import os; d = os.environ['SESSION_DIR']; print(open(d + '/notes.txt').read())\"",
+]
+
+
+@pytest.mark.parametrize("command", NOT_THE_FILE)
+def test_a_directory_glob_or_another_dirs_file_passes(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 0, (command, r.stderr)

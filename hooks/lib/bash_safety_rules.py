@@ -1540,8 +1540,8 @@ def _sd_variants(word, env):
 
 
 def _sd_glob_hit(word, env=None):
-    """True when a word with a glob or an expansion can resolve to the file: one path component that is not a bare
-    expansion matches the name, and the component's written text carries a piece of it. A variable the command
+    """True when a word with a glob or an expansion can resolve to the file: the last component of one of its paths
+    (split at `=` and `:`), not a bare expansion, matches the name, and its written text carries a piece of it. A variable the command
     assigns a literal value reads as that value, and a command substitution whose text carries a strong piece of
     the name counts as a hit."""
     import fnmatch
@@ -1553,7 +1553,8 @@ def _sd_glob_hit(word, env=None):
             if kind == "lit":
                 for ch in text:
                     if ch in "/=:":
-                        comps.append(("".join(pat), "".join(frag)))
+                        if ch != "/":  # a directory component is not the file; only a path's last one is tested
+                            comps.append(("".join(pat), "".join(frag)))
                         pat, frag = [], []
                     else:
                         pat.append("[%s]" % ch if ch in "*?[]" else ch)
@@ -1767,11 +1768,49 @@ def _sd_interpreter_code(res, cmd):
     return code
 
 
+_SD_LITERAL = re.compile(r"""'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`""", re.S)
+# What splits a string literal where a value is interpolated (`{p}`, `${p}`, `$p`, `#{p}`, `%s`).
+_SD_INTERPOLATION = re.compile(r"\{[^{}]*\}|\$\{[^}]*\}|\$[a-z_][a-z0-9_]*|#\{[^}]*\}|%[-0-9.]*[a-z]")
+# What joins two literals into one string: `+`, `.`, `..`, `~` and juxtaposition.
+_SD_JOIN = re.compile(r"[\s+.~]*")
+
+
+def _sd_literal_runs(code):
+    """The strings interpreter code writes: consecutive string literals joined by a concatenation operator, split
+    where a value is interpolated or another expression stands between them."""
+    runs, cur, last = [], None, 0
+    for m in _SD_LITERAL.finditer(code):
+        body = next(g for g in m.groups() if g is not None)
+        pieces = _SD_INTERPOLATION.split(body)
+        if cur is not None and not _SD_JOIN.fullmatch(code[last:m.start()]):
+            runs.append(cur)
+            cur = None
+        cur = (cur or "") + pieces[0]
+        for piece in pieces[1:]:
+            runs.append(cur)
+            cur = piece
+        last = m.end()
+    if cur is not None:
+        runs.append(cur)
+    return runs
+
+
 def _sd_code_names(code):
-    """True when interpreter code names the file, builds its name from pieces, or globs for it."""
-    low = sd_normalize(code)
-    bare = re.sub(r"[^a-z0-9_]", "", low)  # `"session_dirs.t"."xt"`, `'session_d' + 'irs.txt'`
-    if SD_NAME in low or "dirs.txt" in low or ("session_dir" in bare and "txt" in bare):
+    """True when interpreter code names the file, builds exactly its name from pieces (a literal run that is the
+    name, a strong tail of it a computed head can complete, or a head and a tail that together cover it), or globs
+    for it. A run naming another file that merely ends in `dirs.txt` (`build_dirs.txt`) is no hit."""
+    if SD_NAME in sd_normalize(code):
+        return True
+    low = code
+    for rx, base in _SD_DECODE:
+        low = rx.sub(lambda m: chr(int(m.group(1), base) % 0x110000), low)
+    runs = [r for r in _sd_literal_runs(low.lower()) if r]
+    tails = [r for r in runs if SD_NAME.endswith(r)]
+    if any(len(t) >= len("dirs.txt") for t in tails):
+        return True
+    heads = [r.rsplit("/", 1)[-1] for r in runs]
+    heads = [h for h in heads if h and SD_NAME.startswith(h)]
+    if any(len(h) + len(t) >= len(SD_NAME) for h in heads for t in tails):
         return True
     return any(_sd_pattern_hits(g) for g in re.findall(r"""[^\s'"`(),;\[\]]*[*?][^\s'"`(),;\[\]]*""", code))
 
@@ -2006,10 +2045,127 @@ def _sd_reads_back(site, res):
     return None
 
 
+# The whole command an allowed mention may stand in: a `;`/`&&`/`||` list (groups, subshells and `if` at most) of
+# allowed search, log or commit calls and a few harmless commands, each with literal words, its output piped only
+# into display filters and redirected only to /dev/null or between stdout and stderr. Nothing in it assigns or
+# exports a variable, defines, configures or reads back anything, or writes a file.
+_SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
+_SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
+_SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
+# git options of those subcommands that run a program or write a file (taken in any abbreviation).
+_SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
+_SD_PLAIN_COMPOUNDS = frozenset({"group", "subshell", "if"})
+
+
+def _sd_quiet_redirects(redirects, stdin_doc=False):
+    """True when every redirection sends stdout or stderr to /dev/null or to each other; a quoted heredoc or a
+    literal here-string on stdin only where the call reads its message from it (stdin_doc)."""
+    for r in redirects:
+        if r.fd_var is not None:
+            return False
+        if r.op in ("<<", "<<-"):
+            if not (stdin_doc and r.fd == 0 and r.hd is not None and (r.hd.quoted or not r.hd.expansions)):
+                return False
+            continue
+        if r.op == "<<<":
+            if not (stdin_doc and r.fd == 0 and r.target is not None and r.target.value() is not None
+                    and all(p.kind == "lit" for p in r.target.parts)):
+                return False
+            continue
+        if r.op == ">&" and r.dup is not None:
+            if r.fd not in (1, 2) or r.dup not in (1, 2):
+                return False
+            continue
+        if not r.writes() or r.target is None or r.target.value() != "/dev/null" or \
+                any(p.kind != "lit" for p in r.target.parts):
+            return False
+    return True
+
+
+def _sd_plain_git(vals):
+    """True when a git call is status, diff, log, show, push or fetch with plain global options and nothing that
+    runs a program or writes a file."""
+    if _sd_git_sub(vals) not in _SD_PLAIN_GIT:
+        return False
+    for v in vals:
+        name = v.partition("=")[0].lower()
+        if _sd_writes_output(v) or (name.startswith("--") and len(name) >= 4 and
+                                    any(r.startswith(name) for r in _SD_PLAIN_GIT_REFUSED)):
+            return False
+    return True
+
+
+def _sd_plain_command(cmd):
+    """True when one simple command fits the plain shape: an allowed search, log or commit call, or a harmless
+    command (echo, printf, true, false, :, pwd, cd, ls, git status/diff/log/show/push/fetch), with plain wrappers at
+    most, literal words and quiet redirections; or a shell -c or a find -exec whose code is itself plain."""
+    from types import SimpleNamespace
+    from lib.shell_parse import Script, resolve
+    if cmd.assignments or not cmd.words:
+        return False
+    try:
+        res = resolve(cmd)
+    except Exception:  # noqa: BLE001
+        return False
+    if res.unresolved or res.assignments or res.head is None:
+        return False
+    if any(w[0] not in _SD_PLAIN_WRAPPERS for w in res.wrappers):
+        return False
+    hv = res.head.value()
+    if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
+        return False
+    literal = all(w.value() is not None and all(p.kind == "lit" for p in w.parts) for w in cmd.words)
+    name = res.name
+    if res.payload is None and _sd_allowed(SimpleNamespace(cmd=cmd, templated=False)):
+        commit = name == "git" and _sd_git_sub([w.value() or "" for w in res.args]) == "commit"
+        return (literal or commit) and _sd_quiet_redirects(cmd.redirects, stdin_doc=commit)
+    if not literal or not _sd_quiet_redirects(cmd.redirects):
+        return False
+    vals = [w.value() for w in res.args]
+    if name in _SD_PLAIN_SHELLS:
+        return len(vals) == 2 and vals[0] == "-c" and isinstance(res.payload, Script) and \
+            _sd_plain_script(res.payload)
+    if name == "find":
+        actions = [v for v in vals if v in _SD_FIND_ACTIONS]
+        return set(actions) <= {"-exec", "-execdir"} and len(actions) <= 1 and \
+            (not actions or (isinstance(res.payload, Script) and _sd_plain_script(res.payload)))
+    if res.payload is not None:
+        return False
+    if name in ("echo", "true", "false", ":", "pwd", "ls", "cd"):
+        return True
+    if name == "printf":
+        return bool(vals) and vals[0] != "-v"
+    return name == "git" and _sd_plain_git(vals)
+
+
+def _sd_plain_script(script):
+    """True when every command of a parsed list fits the plain shape (see _sd_plain_command): no background job,
+    no loop, function, case or coproc, and every later pipeline stage a display filter with quiet redirections."""
+    from lib.shell_parse import Compound, SimpleCommand
+    if script.error is not None:
+        return False
+    for pl, sep in script.items:
+        if sep == "&" or any(p not in ("|", "|&") for p in pl.pipes):
+            return False
+        for k, st in enumerate(pl.stages):
+            if k > 0:
+                if not (_sd_display(st) and _sd_quiet_redirects(st.redirects)):
+                    return False
+            elif isinstance(st, Compound):
+                if st.kind not in _SD_PLAIN_COMPOUNDS or st.header or not _sd_quiet_redirects(st.redirects) or \
+                        not all(_sd_plain_script(b) for b in st.body):
+                    return False
+            elif not (isinstance(st, SimpleCommand) and _sd_plain_command(st)):
+                return False
+    return True
+
+
 def session_dirs_rule(command):
     """session_dirs.txt is never read, written or executed: its name may stand only as the pattern of grep, rg or
-    git grep, the -S/-G/--grep value of git log, or a git commit message, and only while what that call prints
-    reaches the terminal (through display filters at most) and no later word can reuse its last argument. Every
+    git grep, the -S/-G/--grep value of git log, or a git commit message, only when the whole command is plain (see
+    _sd_plain_script: literal words, no variable, configuration or file write, quiet redirections), and only while
+    what that call prints reaches the terminal (through display filters at most) and no later word can reuse its
+    last argument. Every
     other mention, a glob or expansion written to land on the file where a program reads, writes or runs it, a glob
     a program applies to names itself (find -name with an action, rg -g, grep --include, git pathspecs, tar, rsync)
     that matches it, and interpreter code naming it are refused; a call the parser cannot read keeps every mention
@@ -2025,8 +2181,9 @@ def session_dirs_rule(command):
         broken = bool(script.errors())
         sites = list(walk(script))
         streams = _sd_output_safety(script, _sd_traces(sites)) if not broken else {}
+        plain = not broken and _sd_plain_script(script)
     except Exception:  # noqa: BLE001
-        broken, sites, streams = True, [], {}
+        broken, sites, streams, plain = True, [], {}, False
     redefined = _SD_FUNCTION.search(low) is not None or any(_sd_redefines(site) for site in sites)
     env = _sd_env(sites)
     blank, others, committed, mentioned = [], [], False, False
@@ -2034,7 +2191,7 @@ def session_dirs_rule(command):
         cmd = site.cmd
         key = _sd_key(site.context, cmd)
         out_safe = streams.get(key, (False, False))[0]
-        allowed = [] if redefined or not out_safe else _sd_allowed(site)
+        allowed = [] if redefined or not out_safe or not plain else _sd_allowed(site)
         allowed_ids = {id(src) for src in allowed}
         try:
             res = resolve(cmd)
