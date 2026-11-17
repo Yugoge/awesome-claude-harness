@@ -583,12 +583,22 @@ def _segment_residual_shapes(command_text):
 # (_SAFE_ENV_VARS), and a bare one to an unsafe name reaches a later command;
 # and a run-time `-c` value the outer shell built by running code
 # (`bash -c "y=$(echo $X | sh)"`) is a residual too.
+#
+# `eval` is a shell that takes its command line as its arguments: it joins them
+# with spaces and parses the result again, so `eval "git branch -D x"` runs the
+# git command its quoted word holds. _command_token_index skips `eval` as a
+# wrapper and then meets the word `git branch -D x`, which is no command name,
+# so the scan reads eval's arguments as a layer of their own, exactly as a `-c`
+# string (BS-26). An ANSI-C `$'...'` word is read decoded, as _value reads it.
+# A run-time value in them is a placeholder, and the static words around it are
+# read (`eval "git branch -D $B"`); the layer is no residual on that account
+# alone, so `eval "$(ssh-agent -s)"` keeps the decision it had.
 
 _MAX_SHELL_DEPTH = 4
 # A shell is known by the shape of its name (bash, sh, dash, zsh, ksh93, ...).
 # No dot before `sh`: `deploy.sh` is a script.
 _SHELL_NAME_RE = re.compile(r'[^/\s.]*sh[0-9.]*\Z')
-_SHELL_HINT_RE = re.compile(r'sh[0-9.]*["\']?\s')
+_SHELL_HINT_RE = re.compile(r'sh[0-9.]*["\']?\s|\beval\b')
 # A shell word, its options, then an option cluster holding `c`.
 _SHELL_C_SHAPE_RE = re.compile(r'sh[0-9.]*["\']?\s+(?:[-+]\S*\s+(?:\w+\s+)?)*-[A-Za-z]*c')
 # Commands that hand their standard input to a shell, besides the shells.
@@ -891,6 +901,25 @@ def _shell_c_operand(words, i):
     return i if (seen_c or maybe_c) and i < len(words) else None
 
 
+def _eval_payload(words, idx):
+    """The command line an `eval` in a command's prefix runs, else None.
+
+    words: one command's (value, runtime) words, redirections left out
+    (_shell_words); idx: its command token (_command_token_index skips `eval`
+    as a wrapper, so an eval running the command sits before idx). eval joins
+    its arguments, a leading `--` aside, with spaces; an ANSI-C `$'...'` word is
+    already decoded (_value), any other run-time part stays _RUNTIME."""
+    end = len(words) if idx is None else idx
+    for j in range(end):
+        value, runtime = words[j]
+        if not runtime and value == 'eval':
+            rest = words[j + 1:]
+            if rest and rest[0] == ('--', False):
+                rest = rest[1:]
+            return ' '.join(value for value, _runtime in rest) or None
+    return None
+
+
 def _shell_c_strings(text, fed=False):
     """Yield (kind, string, fed, built_by_code) for each shell `-c` string text runs.
 
@@ -914,6 +943,10 @@ def _shell_c_strings(text, fed=False):
     for k, (words, feeds) in enumerate(zip(cmds, info['feeds'])):
         values = [v for v, _runtime in words]
         idx = _command_token_index(values)
+        payload = _eval_payload(words, idx)
+        if payload is not None:
+            yield 'text', payload, fed or bool(feeds), False
+            continue
         if idx is None or words[idx][1] or not _SHELL_NAME_RE.match(_basename(values[idx])):
             continue
         op = _shell_c_operand(words, idx + 1)
