@@ -167,11 +167,11 @@ class Use(namedtuple("Use", "id name input ok result_at")):
     __slots__ = ()
 
 
-class AgentEnd(namedtuple("AgentEnd", "line agent tool_use_id status")):
+class AgentEnd(namedtuple("AgentEnd", "line agent tool_use_id status result")):
     """One task-notification the CLI delivered to the main session: its line, the agent it names
     (<task-id>), the tool use it answers (<tool-use-id>: the Agent call that launched the agent in
-    the background, or the SendMessage that resumed it) and its <status> ("completed", "failed",
-    "stopped", ...)."""
+    the background, or the SendMessage that resumed it), its <status> ("completed", "failed",
+    "stopped", ...) and its <result>, the agent's own last text ('' when it carries none)."""
     __slots__ = ()
 
 
@@ -179,8 +179,9 @@ class AgentEnd(namedtuple("AgentEnd", "line agent tool_use_id status")):
 # tests/fixtures/cli): as the turn it opens for it, a user record of origin kind
 # "task-notification" whose content is the notification, or, while a turn runs, inside it as an
 # attachment of type queued_command whose commandMode is "task-notification". Neither can be
-# typed, and a subagent's own record (isSidechain) is not the session's. Only the header tags are
-# read, each the first of its name: the <result> after them is the agent's own text.
+# typed, and a subagent's own record (isSidechain) is not the session's. The header tags are read
+# each the first of its name; the <result> after them is the agent's own text, read whole: from its
+# opening tag to the notification's last closing one, whatever tags that text holds.
 _NOTIFICATION = b"<task-notification>"
 _NOTE_TAG = {name: re.compile(rf"<{name}>([^<]*)</{name}>") for name in ("task-id", "tool-use-id", "status")}
 
@@ -550,7 +551,7 @@ class Span:
     def agent_ends(self) -> list:
         """Each task-notification the CLI delivered to the main session in the span, in order
         (AgentEnd): how a dispatched agent's end comes back when its Agent call's own result does not
-        carry it (a background launch, a SendMessage resume)."""
+        carry it (a background launch, a SendMessage resume). agent_returns.Returns reads them."""
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
@@ -564,15 +565,22 @@ class Span:
             for body in (text or "").split("<task-notification>")[1:]:
                 head = body.split("</task-notification>")[0]
                 fields = {name: (_NOTE_TAG[name].search(head) or [None, ""])[1].strip() for name in _NOTE_TAG}
+                opened, closed = head.find("<result>"), body.rfind("</result>")
+                result = body[opened + len("<result>"):closed] if 0 <= opened < closed else ""
                 if fields["task-id"] or fields["tool-use-id"]:
-                    ends.append(AgentEnd(number, fields["task-id"], fields["tool-use-id"], fields["status"]))
+                    ends.append(AgentEnd(number, fields["task-id"], fields["tool-use-id"], fields["status"], result))
         return ends
+
+    def dispatches(self) -> list:
+        """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
+        however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
+        ob = _obligation()
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
-        ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
-        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+        return [(call, doc) for call, doc in self.dispatches() if call.ok]
 
     def session_families(self) -> set:
         """The task families (obligation.task_family) of the span's ok

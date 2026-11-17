@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 72
+*Last updated: 2026-11-17T10:42:31Z*
+**Total entries**: 73
 **Convention**: kebab
 
 ## Tree
@@ -22,6 +22,7 @@ lib/
 │   └── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
 ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
+├── `agent_returns.py` - the one reading of whether a dispatch has returned, for every hook that asks
 ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.

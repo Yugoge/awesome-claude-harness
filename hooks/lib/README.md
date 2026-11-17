@@ -2,13 +2,14 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 62
+- **Total files**: 63
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
 ## Files
 - `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 - `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
+- `agent_returns.py` - the one reading of whether a dispatch has returned, for every hook that asks
 - `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 - `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 - `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.

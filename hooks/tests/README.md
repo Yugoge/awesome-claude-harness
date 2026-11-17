@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 183
+- **Total files**: 184
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -11,6 +11,7 @@
 - `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 - `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 - `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
+- `test_agent_end_readers.py` - the /commit --bulk Stop, the close rating and ask-first read its end as G1 does
 - `test_agent_resolver.py` - Covers the bug: cp-state files that were never checked out (crashed/
 - `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 - `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a

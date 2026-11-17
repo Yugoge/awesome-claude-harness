@@ -211,6 +211,7 @@ VARIANTS = {
     "queue-operation": {
         "enqueue": lambda r: r.get("operation") == "enqueue",
         "dequeue": lambda r: r.get("operation") == "dequeue",
+        "remove": lambda r: r.get("operation") == "remove",  # a queued notification delivered mid-turn
     },
 }
 
@@ -261,14 +262,21 @@ def recording(source: str = "transcript", version: str | None = None, root=FIXTU
 
 
 _NOTIFICATION_TAG = re.compile(r"<(task-id|tool-use-id|status)>(.*?)</\1>")
+_NOTIFICATION_RESULT = re.compile(r"<result>.*?</result>", re.S)
 
 
-def notification(task_id: str, tool_use_id: str, status: str = "completed") -> str:
+def notification(task_id: str, tool_use_id: str, status: str = "completed", result: str | None = None) -> str:
     """The text of a task-notification as the CLI writes it (the first recorded one: its tags, in
-    their order, the redacted text left in place) with these values in its header tags."""
+    their order, the redacted text left in place) with these values in its header tags and, when
+    ``result`` is given, that text (the agent's own last reply) in its <result> tag."""
     text = template("user", "task_notification")["message"]["content"]
     values = {"task-id": task_id, "tool-use-id": tool_use_id, "status": status}
-    return _NOTIFICATION_TAG.sub(lambda m: f"<{m.group(1)}>{values[m.group(1)]}</{m.group(1)}>", text)
+    text = _NOTIFICATION_TAG.sub(lambda m: f"<{m.group(1)}>{values[m.group(1)]}</{m.group(1)}>", text)
+    if result is None:
+        return text
+    if len(_NOTIFICATION_RESULT.findall(text)) != 1:
+        raise KeyError("user: the recorded task-notification holds no one <result>")
+    return _NOTIFICATION_RESULT.sub(lambda _m: f"<result>{result}</result>", text)
 
 
 @functools.lru_cache(maxsize=None)

@@ -73,7 +73,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
+from lib import agent_returns, command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
 from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
@@ -150,139 +150,6 @@ def _declared(obligation) -> dict:
             if isinstance(a, dict) and isinstance(a.get("path"), str)}
 
 
-def _resumed_returns(span, session_id, before) -> dict:
-    """{id of an Agent call that never came back: the line its agent's resume
-    returned at} for the agents the /restart recovery resumed and saw come
-    back (subagent_restart.completed_resumes, the journal Gate 4 reads; P1c
-    R15): that call is its step's dispatch, with no replacement call
-    (commands/restart.md, Lesson 16), and it returned when its resume did."""
-    try:
-        from lib.subagent_restart import completed_resumes
-        journal = completed_resumes(session_id) if session_id else {}
-    except Exception:
-        return {}
-    returns = {}
-    for message in span.iter_calls("SendMessage", before=before) if journal else ():
-        original = journal.get(str((message.input or {}).get("to")))
-        if original and message.result_line and message.ok:
-            returns[original] = message.result_line
-    return returns
-
-
-def _meta_agent(transcript_path, tool_use_id: str) -> str:
-    """The agent id whose meta file (agent-<id>.meta.json, which the CLI writes beside the agent's
-    transcript when it starts) names ``tool_use_id``: a cut Agent call's result carries no agentId.
-    The session's own subagents directory first, then the project's other sessions' (a session
-    continued in another file keeps its agents under the first file's directory)."""
-    main = Path(transcript_path)
-    for pattern in (f"{main.stem}/subagents/agent-*.meta.json", "*/subagents/agent-*.meta.json"):
-        for meta in main.parent.glob(pattern):
-            try:
-                if json.loads(meta.read_text(encoding="utf-8")).get("toolUseId") == tool_use_id:
-                    return meta.name[len("agent-"):-len(".meta.json")]
-            except (OSError, ValueError, AttributeError):
-                continue
-    return ""
-
-
-def _agent_transcript(transcript_path, agent: str):
-    """The fullest copy of agent ``agent``'s own transcript (None when there is none): under this
-    session's directory, else another session's of the project (a session continued in another
-    file), and each other account root's copy of it (subagent_restart._child_transcript_copies, the
-    reader /restart uses). Account roots each keep a partial view; the longest holds the most."""
-    main = Path(transcript_path)
-    found = [p for p in [main.with_suffix("") / "subagents" / f"agent-{agent}.jsonl"] if p.is_file()] or \
-        sorted(main.parent.glob(f"*/subagents/agent-{agent}.jsonl"))
-    try:
-        from lib.subagent_restart import _child_transcript_copies
-        copies = [Path(c) for path in found for c in _child_transcript_copies(path)]
-    except Exception:
-        copies = found
-    sizes = {c: c.stat().st_size for c in dict.fromkeys(copies) if c.is_file()}
-    return max(sizes, key=sizes.get) if sizes else None
-
-
-def _stop_recorded(path) -> bool:
-    """The agent's own transcript ends in a stop its SubagentStop hooks let stand: its last user or
-    assistant record is an end_turn reply (no API error), followed by a SubagentStop hook record.
-    A stop a hook blocked is followed by the CLI's feedback record and more of the agent's turn, so
-    its tail is not this one; nor is the tail of an agent cut mid-turn."""
-    last, hooked = None, False
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(record, dict):
-                    continue
-                if record.get("type") in ("user", "assistant"):
-                    last, hooked = record, False
-                elif record.get("type") == "attachment" and isinstance(record.get("attachment"), dict):
-                    hooked = hooked or record["attachment"].get("hookEvent") == "SubagentStop"
-    except OSError:
-        return False
-    message = last.get("message") if isinstance(last, dict) else None
-    return (hooked and isinstance(message, dict) and last.get("type") == "assistant"
-            and not last.get("isApiErrorMessage") and message.get("stop_reason") == "end_turn")
-
-
-class _Returns:
-    """When the agent of each earlier dispatch in the span stopped (a line of the transcript), read
-    from what the CLI recorded (tests/fixtures/cli, CLI 2.1.326). The dispatch's own Agent call
-    result says so for a foreground agent that ran to its end. It does not for:
-      - a background launch: its result ("async_launched") comes back at once, while the agent
-        runs; the agent's end is its task-notification (Span.agent_ends);
-      - a SendMessage resume of the agent (Lesson 16's /restart, the /dev-overnight wake, or any
-        other): the agent runs again from that SendMessage's result on, and its end is the
-        task-notification that follows, naming the agent (<task-id>);
-      - a cut call (an is_error result: an interrupt, the CLI's result for a call the session's end
-        cut off) whose agent is not resumed: it stopped by itself only when its own transcript
-        records that stop (_stop_recorded); an agent cut mid-turn did not.
-    A /restart journal that saw its resumes' responses (_resumed_returns) counts as before. The
-    agent stopped when its latest stop follows its latest start (the dispatch, each resume); a
-    failed or stopped notification is no stop: no result came back."""
-
-    def __init__(self, span, data: dict):
-        self.span, self.transcript = span, data.get("transcript_path") or ""
-        before = data.get("tool_use_id") or None
-        self.journal = _resumed_returns(span, data.get("session_id") or data.get("sessionId"), before)
-        self.ends = span.agent_ends()
-        self.resumes = []
-        for message in span.iter_calls("SendMessage", before=before):
-            if message.ok and message.result_line:
-                use = span.use_result(message.id)
-                agent = use.get("resumedAgentId") or (message.input or {}).get("to")
-                self.resumes.append((message.result_line, str(agent or "")))
-        self.memo = {}
-
-    def line(self, call) -> int:
-        if call.id not in self.memo:
-            self.memo[call.id] = self._line(call)
-        return self.memo[call.id]
-
-    def _line(self, call) -> int:
-        use = self.span.use_result(call.id) if call.result_line else {}
-        launched = use.get("isAsync") is True or use.get("status") == "async_launched"
-        agent = str(use.get("agentId") or next(
-            (e.agent for e in self.ends if e.tool_use_id == call.id and e.agent), "") or "")
-        if not agent and call.result_line and not call.ok and self.transcript:
-            agent = _meta_agent(self.transcript, call.id)
-        starts = [call.line] + [line for line, who in self.resumes if agent and who == agent and line > call.line]
-        stops = [call.result_line] if call.result_line and call.ok and not launched else []
-        stops += [e.line for e in self.ends if e.status == "completed" and e.line > call.line
-                  and ((agent and e.agent == agent) or e.tool_use_id == call.id)]
-        stops += [self.journal[call.id]] if self.journal.get(call.id) else []
-        stop = max(stops, default=0)
-        if stop and stop >= max(starts):
-            return stop
-        if call.result_line and not call.ok and agent and max(starts) == call.line:
-            own = _agent_transcript(self.transcript, agent)
-            return call.result_line if own is not None and _stop_recorded(own) else 0
-        return 0
-
-
 def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset) -> list:
     """R17, read from the active span's dispatch order (the CLI's record of
     each Agent call and how its agent's end came back, never a file's mtime
@@ -293,7 +160,7 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
     too. A refused or errored dispatch (an is_error result) ran nothing, so it
     has not returned, unless its agent's own transcript records its stop; a
     background, resumed or cut dispatch returned when its agent's end came
-    back (_Returns)."""
+    back (lib/agent_returns.py, the one reading of it)."""
     span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
     if span is None:
         return []
@@ -301,7 +168,8 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
 
     def returned_at(call) -> int:
         if not returns:
-            returns.append(_Returns(span, data))
+            returns.append(agent_returns.Returns(span, data.get("session_id") or data.get("sessionId"),
+                                                 data.get("tool_use_id") or None, data["transcript_path"]))
         return returns[0].line(call)
 
     earlier = []

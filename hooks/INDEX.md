@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T09:09:14Z*
-**Total entries**: 396
+*Last updated: 2026-11-17T10:42:31Z*
+**Total entries**: 398
 **Convention**: kebab
 
 ## Tree
@@ -41,6 +41,7 @@ hooks/
 │   │   └── `overwrite.py` - The Python form of hooks/pretool-write-guard.sh, decision for decision and message for
 │   ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
+│   ├── `agent_returns.py` - the one reading of whether a dispatch has returned, for every hook that asks
 │   ├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
 │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
@@ -111,6 +112,7 @@ hooks/
 │   ├── `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
+│   ├── `test_agent_end_readers.py` - the /commit --bulk Stop, the close rating and ask-first read its end as G1 does
 │   ├── `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
 │   ├── `test_allow_grant_quoted_separators.py` - The owner's report: a commit made under a valid grant was refused when its quoted message held a
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants

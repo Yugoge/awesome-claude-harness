@@ -493,15 +493,19 @@ def _json(raw: bytes) -> dict:
 
 
 def _bulk_block(span):
-    """The status block of the span's last ok commit-bulk dispatch (its
-    obligation's response_block, changelog-status.v1, checked at the
-    analyst's own stop), or None."""
-    found = None
-    for call, doc in span.obligations():
-        if doc.get("profile") != "commit-bulk":
+    """The status block the analyst of the span's last commit-bulk dispatch
+    reported when it stopped (its obligation's response_block,
+    changelog-status.v1, checked at the analyst's own stop), or None: no such
+    dispatch ran, or its analyst has not stopped. Its stop and reply are read
+    as G1 reads them (lib/agent_returns.py): its Agent call's result, the
+    task-notification of a background or resumed analyst, or a cut analyst's
+    own recorded stop. A dispatch refused before it ran started no analyst."""
+    returns, found = importlib.import_module("lib.agent_returns").Returns(span), None
+    for call, doc in span.dispatches():
+        if doc.get("profile") != "commit-bulk" or not (call.ok or returns.agent(call)):
             continue
         block = next((a for a in doc.get("artifacts") or () if a.get("kind") == "response_block"), {})
-        begin, end, text = block.get("begin") or "", block.get("end") or "", span.result_text(call.id)
+        begin, end, text = block.get("begin") or "", block.get("end") or "", returns.reply(call)
         try:
             found = json.loads(text.split(begin, 1)[1].split(end, 1)[0]) if begin and end and begin in text else None
         except ValueError:
