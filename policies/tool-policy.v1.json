@@ -765,5 +765,25 @@
       ],
       "rationale": "graphify: /dev Step 9 enrichment subagent; runs graphify-enrich.py via Bash, which writes the task's run record and focused subgraph under .claude/dev-registry/<task_id>/graphify/ and never the context (the graph cache is graphify-maintain.py's). Its Write grant is scoped to that graphify sub-directory, not the whole dev-registry, so it cannot author peer artifacts. No Skill/Edit (graphify.md uses neither). No write access to protected infra."
     }
+  },
+  "built_in_agents": {
+    "_note": "Claude Code's own agent types that a dispatch may name and no role row covers. They are not roles: hooks/pretool-tool-policy.py reads only \"roles\" and leaves these agents unrestricted, as before. A row here declares which tools the agent type carries, so a rule that depends on whether a dispatched agent can write (hooks/pretool-gitignore-preflight.py) reads it from this file; an agent type named neither here nor under \"roles\" (general-purpose, a plugin agent) counts as able to write.",
+    "Explore": {
+      "allowed_tools": [
+        "Bash",
+        "Glob",
+        "Grep",
+        "Read",
+        "WebFetch",
+        "WebSearch"
+      ],
+      "denied_tools": [
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "Write"
+      ],
+      "rationale": "Claude Code's read-only codebase search agent: it has no Write, Edit, MultiEdit or NotebookEdit tool."
+    }
   }
 }

@@ -25,6 +25,9 @@
 #   9. The dispatch is a close or commit producer reading the report of its
 #      own task: its obligation (pipeline close or commit, a role other than
 #      dev) names that task as its task_id. See discriminator E5 below.
+#  10. The dispatched agent type cannot write: policies/tool-policy.v1.json
+#      declares it (under "roles" or "built_in_agents") with no Write, Edit,
+#      MultiEdit or NotebookEdit tool. See E7 below.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -379,6 +382,28 @@
 #   as does every name no declaration covers: a foreign extension, a foreign or
 #   ancestor task-id, a caller-chosen name. Only a gitignored path asks.
 #
+# 2026-11-17 — OB-L29 (GIT-10): E7, THE DISPATCHED AGENT'S WRITE CAPABILITY.
+#
+#   Defect: a dispatch that can write nothing was refused over a report it was
+#   only asked to read. An Explore agent asked to read and summarize a cited dev
+#   report whose dev.files_created lists `.pytest_cache/...` exited 2: the rule
+#   took the report's files as the deliverables of a dispatch that has no tool
+#   to produce any deliverable.
+#
+#   DISCRIMINATOR E7: the refusal stands only when the dispatched agent type
+#   can write. The capability is read from policies/tool-policy.v1.json (the
+#   harness's own copy, through claude_home, as lib/policy_registry reads it):
+#   the agent type's row under "roles", else under "built_in_agents"; it can
+#   write when one of policy_registry.WRITE_TOOLS is in its allowed_tools (an
+#   empty list allows every tool, as policy_registry._check_tool_lists reads
+#   it) and not in its denied_tools. Fails CLOSED: a dispatch naming no
+#   subagent_type (Claude Code then runs general-purpose), an agent type the
+#   policy names in neither place (general-purpose, a plugin agent), and an
+#   unreadable policy all count as able to write. Detection is unchanged and
+#   runs first; E7 only declines to refuse a dispatch that cannot ship a file.
+#   The dev, qa and every other role row carrying Write keep the refusal.
+#   Regression coverage: hooks/tests/test_gitignore_preflight_write_capability.py.
+#
 # ---------------------------------------------------------------------------
 
 import glob
@@ -390,7 +415,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import obligation, schema_registry  # noqa: E402
+from lib import claude_home, obligation, policy_registry, schema_registry  # noqa: E402
 
 DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 
@@ -833,6 +858,41 @@ def gitignored_deliverables(prompt):
     return findings
 
 
+# E7: Claude Code runs this agent type when a dispatch names none.
+DEFAULT_AGENT_TYPE = 'general-purpose'
+
+
+def agent_can_write(subagent_type):
+    """E7: False only when policies/tool-policy.v1.json declares this agent type
+    (under "roles", else "built_in_agents") with no write tool; True otherwise,
+    an undeclared type and an unreadable policy included (fail closed)."""
+    if not isinstance(subagent_type, str) or not subagent_type.strip():
+        subagent_type = DEFAULT_AGENT_TYPE
+    try:
+        policy_path = claude_home.resolve_optional(policy_registry.POLICY_RELPATH)
+        if policy_path is None:
+            return True
+        with open(policy_path) as fh:
+            policy = json.load(fh)
+        row = None
+        for section in ('roles', 'built_in_agents'):
+            rows = policy.get(section)
+            if isinstance(rows, dict) and isinstance(rows.get(subagent_type), dict):
+                row = rows[subagent_type]
+                break
+        if row is None:
+            return True
+        allowed = row.get('allowed_tools') or []
+        denied = row.get('denied_tools') or []
+        if not isinstance(allowed, list) or not isinstance(denied, list):
+            return True
+        return any((not allowed or policy_registry._tool_in_list(tool, allowed))
+                   and not policy_registry._tool_in_list(tool, denied)
+                   for tool in policy_registry.WRITE_TOOLS)
+    except Exception:
+        return True
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -841,6 +901,9 @@ def main():
 
     tool_input = data.get('tool_input') or data.get('toolInput') or {}
     findings = gitignored_deliverables(tool_input.get('prompt', ''))
+    # E7: a dispatch whose agent type has no write tool ships no deliverable.
+    if findings and not agent_can_write(tool_input.get('subagent_type')):
+        sys.exit(0)
     if findings:
         print('BLOCKED: gitignored deliverables detected: '
               + ', '.join(path for _, paths in findings for path in paths), file=sys.stderr)
