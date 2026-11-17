@@ -24,8 +24,12 @@ Evidence labels used below:
 - **static**: read in the CLI 2.1.326 bundle only, never observed.
 - **docs**: the official Claude Code documentation as fetched on 2026-11-17 (pages named in place).
 
-Five defects that the estimate found and that do not depend on the migration are tracked and
-fixed separately; they are not part of this plan.
+Five defects the estimate found do not depend on the migration and are not part of this plan;
+each is its own fix: `hooks/posttool-overnight-loop.py` does not check `agent_id`; its `:69` and
+`:73` contradict each other; `commands/dev-overnight.md:19` contradicts `:882`;
+`tests/replay/replay.py:934-936` returns the old list as `oldTodos` where 2.1.326 returns `[]`
+once every step is completed; `commands/dev.md:448`, `:452` ask for a todo-list record TodoWrite
+cannot hold.
 
 ---
 
@@ -52,9 +56,10 @@ recordings were made meanwhile (§1).
 
 **Why the "forward-looking" argument is weaker than it looks (docs).** On newer models *both*
 families need explicit enabling (tools-reference, "Task tool availability"; interactive-mode, "Task
-list"). Migrating does not remove the dependency on `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`. The
-precedents are real but cut both ways: `TaskOutput` was removed in v2.1.277 (tools-reference), and
-the `Task` tool was renamed `Agent` in v2.1.63 (sub-agents).
+list"). Migrating does not remove the dependency on `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`.
+Precedents for removing or renaming a tool exist, though none dates TodoWrite: `TaskOutput` was
+removed in v2.1.277 (tools-reference), and the `Task` tool was renamed `Agent` in v2.1.63
+(sub-agents).
 
 **The shipped switch value is recorded, not documented.** The docs spell the switch back to
 TodoWrite as `CLAUDE_CODE_ENABLE_TASKS=0` (env-vars, tools-reference). `settings.json:21` uses
@@ -75,10 +80,11 @@ with the shipped value for that reason.
 
 ## 1. Meanwhile (no hook change)
 
-Two things are worth doing before any trigger fires. Neither touches a hook.
+Two things are worth doing before any trigger fires. Neither touches a hook. Like every lane, each
+starts only when the owner schedules it.
 
-1. **Record Task-tool samples (lane L0's recording half).** Run the §5 probes once and commit the
-   recordings as fixtures under `tests/fixtures/cli/<ver>/`, so the open facts become recorded
+1. **Record Task-tool samples (lane L0).** Run the §5 probes once and commit the recordings as
+   fixtures under `tests/fixtures/cli/<ver>/`, so the open facts become recorded
    facts and later lanes build on fixtures instead of memory. About 60 lines of recorder change plus
    one local recording. It needs P15-L1's recorder, which is **not on master at `a21dcbf9`**
    (branch `claude/p15-l1-cli-fixtures`; L0 waits for it to merge).
@@ -89,12 +95,13 @@ Two things are worth doing before any trigger fires. Neither touches a hook.
    - a task-tracking tool family is available on the production model at all;
    - the CLI CHANGELOG has no TodoWrite or Task-tool deprecation (F12).
 
-   Red on any of these is trigger 1. The check fits P15-L1's CLI fixture canary once that is on
-   master.
+   A failing first bullet or a TodoWrite deprecation is trigger 1; no task-tracking family on the
+   production model, or a Task-tool deprecation, is not a reason to migrate and goes to the owner
+   as its own decision. The check fits P15-L1's CLI fixture canary once that is on master.
 
 L1 (the dual-read adapter, §4) is the one lane that would pay off even without a migration: it
-gathers the direct TodoWrite readers (§7) into one place. It is still not scheduled; pulling it
-forward is an owner decision.
+moves the one direct TodoWrite reader (`pretool-subagent-enforce.py:63`) onto lib and tests every
+checklist reader (§7). It is still not scheduled; pulling it forward is an owner decision.
 
 ---
 
@@ -130,9 +137,9 @@ Files that never name TodoWrite but depend on whole-list semantics are counted i
 | Area | Files | Est. changed lines | Rename-class | Redesign / medium |
 |---|---|---:|---|---|
 | Core state and validation hooks | 6 | ~590 | none | redesign: `todo_canonical.py`, `command_span.py`, `pretool-todo-validate.py`; medium: workflow gate, `prompt-workflow.py`, stop gate |
-| Other hooks and config | 12 + 1 new | ~110 | `settings.json:21`; launcher rules; orchestrator whitelist; prompt-purity `:74`; bash-safety; spec-block-foreground `:88` | new task-owner guard (~35); `posttool-todo-tracker.py`; `posttool-overnight-loop.py`; `pretool-subagent-enforce.py` |
+| Other hooks and config | 12 + 1 new | ~110 | `settings.json:21`; launcher rules; orchestrator whitelist (+ frozen in-flight wording, §3.6); prompt-purity `:74`; spec-block-foreground `:88` | new task-owner guard (~35); `.claude/tasks/` write refusal (new, L2b); `posttool-todo-tracker.py`; `posttool-overnight-loop.py`; `pretool-subagent-enforce.py` |
 | Command text and scripts | ~19 | ~50 (adapter route) / ~110 (reshaped canonical format) | `CLAUDE.md:48`; `dev.md:13`; `dev-command.md:8`; `close.md:103`; `restart.md:123`; `scripts/todo/*.py` docstrings | `dev-overnight.md:882` reset and `:627` 11g detour; ledger rows H-008, H-018, H-037, H-051, H-054 |
-| Unit tests | 27 + 3 new | ~1,060 + ~360 | in-flight wording pins, docstrings | 8 existing files redesigned, new risk tests, recorder extension, a shared recording-based task builder (~150) |
+| Unit tests | 27 + 3 new | ~1,060 + ~360 | `tests/test_restart_command.py` docstring, validator script name | 8 existing files redesigned, frozen in-flight wording (`test_orchestrator_gate_in_flight.py:32-35`, §3.6), new risk tests, recorder extension, a shared recording-based task builder (~150) |
 | Replay | ~20 | ~650 | driver step labels | simulator, pipeline, overnight driver, `_deadend`, `test_live_landing` |
 | **First estimate** | **~85** | **~2,800** | ~10% of lines | ~90% of lines |
 | Missed by the first estimate (review) | see §7 | **+400 to +700** | — | mixed-family spans, 11g transition rules, the dispatch gap, porting Rule 7 and `_counted_in_flight`, frozen in-flight wordings, one dead-end case per new refusal, the replay tests the review found |
@@ -157,7 +164,7 @@ TodoWrite branch later (L7) leaves Codex alone.
 **Today (code).** The checklist is the whole-list snapshot of the span's last ok TodoWrite
 (`hooks/lib/todo_canonical.py:272-282`, `hooks/lib/command_span.py:438-448`). The validator compares
 the old and new whole lists: length, text and order unchanged, at most one step completed per call
-(`hooks/pretool-todo-validate.py:17-20`, `:453-478`).
+(`hooks/pretool-todo-validate.py:13-20`, `:453-478`).
 
 **With Task tools.**
 
@@ -222,7 +229,8 @@ list; the hooks read only the main transcript (`hooks/lib/command_span.py:270-27
 - **The policy does not stop built-in or plugin agents (code).** `hooks/pretool-tool-policy.py:1582-1585`
   exits 0 for an unlisted role: Explore, general-purpose, Plan, plugin agents and calls whose
   `agent_type` does not resolve.
-- On a shared list, the F1 bypass (`pretool-todo-validate.py:449`) turns into an unvalidated write.
+- On a shared list, the subagent bypass (`pretool-todo-validate.py:447-450`, labelled "F1" in the
+  code; not fact F1 of §5) turns into an unvalidated write.
 - **Agent teams share the leader's list by design (docs, agent-teams page):** a shared task list,
   teammates self-claiming unassigned, unblocked pending tasks, file locking, and the list at
   `~/.claude/tasks/{team-name}/`. `TaskCreated` and `TaskCompleted` inputs carry `teammate_name`
@@ -246,8 +254,8 @@ no known switch for the reminder; F15 measures how often and how long, and L5 ju
 - `TaskCreated` is the second layer (its payload carries `agent_id` for a subagent, recorded).
 - State is still folded from the main transcript only; foreign or deleted tasks in the CLI list
   are tolerated and never taken for the span's steps.
-- The role refusal for Task* names the list as the orchestrator's, so a nudged subagent stops after
-  one refused call.
+- The role refusal for Task* names the list as the orchestrator's, so a nudged subagent has a
+  reason to stop after one refused call (measured with F15 in L5).
 
 ### 3.3 The atomic switch
 
@@ -302,7 +310,10 @@ from the CLI: the CLI accepts `pending → completed` directly (recorded). Rule 
 | Hook processes per call | 3 | 3 |
 
 The three processes are `pretool-launch.py` and `pretool-worktree-guard.sh` (PreToolUse) and
-`posttool-launch.py` (PostToolUse), each paying the fold read.
+`posttool-launch.py` (PostToolUse). The fold read is paid by `pretool-launch.py`'s workflow-gate
+rule on every tool call, by its dispatch-gate readers on Agent calls (§7), and by the todo rules on
+Task calls (the validator in `pretool-launch.py`; the tracker and the overnight loop in
+`posttool-launch.py`); `pretool-worktree-guard.sh` never reads it.
 
 The 11g detour today moves `in_progress` back to Step 11g before each graphify dispatch and
 restores 12, 13 or 17 before the dev dispatch. Under Task tools that is four updates (13 → pending,
@@ -351,11 +362,13 @@ or the next pending step counts as the current one.
   last step while the loop's conditions hold, until N steps are pending again). While it is open,
   the stop gate reports "reset k/N".
 
-**Span scope.** The CLI keeps a task list across compaction (docs, interactive-mode), so a new
-command sees an earlier command's tasks. The fold counts only creates inside the span; earlier
-tasks are deleted at the command's start or ignored, never held to the step rules. The warning at
-`hooks/prompt-workflow.py:1141-1145` ("The previous workflow state will be lost") stays true for the
-harness's span state; it gains one sentence saying the CLI list keeps the old tasks.
+**Span scope.** The CLI list belongs to the session, not the command (its id defaults to the
+session id: recorded at `tasks/<session-id>/`; static: `ownTaskListId`), and survives compaction
+(docs, interactive-mode), so a new command sees an earlier command's tasks. The fold counts only
+creates inside the span; earlier tasks are deleted at the command's start or ignored, never held to
+the step rules. The warning at `hooks/prompt-workflow.py:1141-1145` ("The previous workflow state
+will be lost") stays true for the harness's span state; in the Task family it gains one sentence
+saying the CLI list keeps the old tasks.
 
 ---
 
@@ -381,8 +394,8 @@ harness's span state; it gains one sentence saying the CLI list keeps the old ta
   harness hooks attached. The recordings so far used a smaller model, loaded the tools through
   ToolSearch and ran without harness hooks.
 
-**Acceptance:** every §5 fact has a recorded answer; the fixtures load through the `cli_record`
-loader; no hook is changed.
+**Acceptance:** every §5 fact but F12 (a CHANGELOG read) has a recorded answer; the fixtures load
+through the `cli_record` loader; no hook is changed.
 
 ### L1 — dual-family state adapter (dual read)
 
@@ -393,9 +406,11 @@ loader; no hook is changed.
   `toolUseResult.task.id`; update: `toolUseResult.success`), read from the `type: user` record.
 - `before` (the state before a given tool use) is supported; `first_list()` is added; the lock stays
   `not_started` until N creates exist.
-- The direct readers move onto the adapter: `pretool-subagent-enforce.py:60-67`,
-  `hooks/lib/requirement_round.py:156`, `hooks/pretool-block-background-tasks.py:74-88`,
-  `hooks/pretool-spec-block-foreground-agent.py:32-40`.
+- `pretool-subagent-enforce.py:60-67`, the one reader that takes TodoWrite uses itself (`:63`),
+  moves onto the adapter. The readers already on it (`hooks/lib/requirement_round.py:156`,
+  `span.last_todos()`; `hooks/pretool-block-background-tasks.py:74-88` and
+  `hooks/pretool-spec-block-foreground-agent.py:32-40`, `checklist().todos` with the canonical
+  fallback) get fold tests, including a partial list (k of N created: /spec's `total` stays N).
 - Production still runs TodoWrite.
 
 **Acceptance:** every existing test passes unchanged; new fold tests built on L0's recordings
@@ -432,8 +447,9 @@ unchanged with `CLAUDE_CODE_ENABLE_TASKS=false`.
 - `posttool-todo-tracker.py` and `posttool-overnight-loop.py` handle each family.
 - Writes to `~/.claude/tasks/` by Write, Edit or Bash are refused: only the CLI writes the store.
   This is new protection, not a rename: `pretool-bash-safety.sh:1788` blocks only `rm`/`mv`, and
-  its `.claude/todos/` rule and `pretool-overnight-hook-guard.py:96` guard a directory 2.1.326 no
-  longer writes (docs, claude-directory; recorded: no `todos/` after a TodoWrite run).
+  its `.claude/todos/` rule guards, and `pretool-overnight-hook-guard.py:96` exempts from the
+  overnight worktree boundary, a directory 2.1.326 no longer writes (docs, claude-directory;
+  recorded: no `todos/` after a TodoWrite run); `.claude/tasks/` is not added to that exemption.
 
 **Acceptance:** `scripts/check-enforcement-evidence.py --claims` passes; a test shows N TaskCreate
 and 2 TaskUpdate in one turn are not refused by the orchestrator gate; the stop gate reports
@@ -443,7 +459,8 @@ and 2 TaskUpdate in one turn are not refused by the orchestrator gate; the stop 
 
 - `hooks/prompt-workflow.py`'s `checklist_message` and progress hints (`:304-352`, `:1118-1131`)
   are worded per family. The header line "CHECKLIST PRE-INITIALIZED for /X:" stays, since
-  `_recorded_start` (`:1878`) splits on it. The warning at `:1141-1145` gains its sentence (§3.7).
+  `_recorded_start` (`:1878`) splits on it. In the Task family, the warning at `:1141-1145` gains
+  its sentence (§3.7).
 - Command text: `commands/dev-overnight.md:882` (reset) and `:627` (11g detour), `:21`, `:27`;
   `commands/dev.md:13`; `commands/dev-command.md:8`; `commands/restart.md:123`; `commands/close.md:103`.
 - Docs: `docs/how-it-works.md:87`; `ARCHITECTURE.md:113`, `:150`, `:324`; `README.md:162`.
@@ -563,13 +580,14 @@ Stated as of `a21dcbf9`; re-check each before a lane edits it.
 - `hooks/lib/command_span.py:9-12` (E7), `:270-275` (sidechain skip), `:290-296` (ok =
   `not is_error`, `:294`), `:438-448` (`last_todos`)
 
-**Direct checklist readers (onto the adapter in L1).**
-- `hooks/pretool-subagent-enforce.py:60-67` (`_current_step_label`), `:296-300` (fail-open)
-- `hooks/lib/requirement_round.py:156`
-- `hooks/pretool-block-background-tasks.py:74-88`
-- `hooks/pretool-spec-block-foreground-agent.py:32-40`, `:88` (wording)
+**Checklist readers L1 covers (only subagent-enforce bypasses lib).**
+- `hooks/pretool-subagent-enforce.py:60-67` (`_current_step_label`; `:63` reads TodoWrite uses),
+  `:296-300` (fail-open)
+- `hooks/lib/requirement_round.py:156` (`span.last_todos()`)
+- `hooks/pretool-block-background-tasks.py:74-88` (`checklist().todos`, `:81-85`)
+- `hooks/pretool-spec-block-foreground-agent.py:32-40` (`checklist().todos`, `:35-38`), `:88` (wording)
 
-**Validator.** `hooks/pretool-todo-validate.py:17-20` (rules), `:262-276` (`_started_at`), `:307`
+**Validator.** `hooks/pretool-todo-validate.py:13-20` (rules), `:262-276` (`_started_at`), `:307`
 (`_in_flight`), `:335-360` (`_counted_in_flight`), `:423-434` (`check_wake_step`, Rule 7), `:447-450`
 (agent bypass), `:453-478` (whole-list compare).
 
@@ -595,7 +613,8 @@ Stated as of `a21dcbf9`; re-check each before a lane edits it.
 `hooks/lib/write_gate/__init__.py:77`; `policies/tool-policy.v1.json` (23 roles);
 `hooks/lib/overnight.py:33-35`.
 
-**State-directory guards.** `hooks/pretool-bash-safety.sh:1786-1792`;
+**State-directory rules (bash-safety guard; overnight-hook-guard exemption).**
+`hooks/pretool-bash-safety.sh:1786-1792`;
 `hooks/pretool-overnight-hook-guard.py:93-97`.
 
 **Command text and docs.** `CLAUDE.md:48`, `:49`; `commands/dev.md:13`, `:448`, `:452`;
