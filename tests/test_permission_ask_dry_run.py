@@ -3,26 +3,32 @@
 `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and `Bash(npm publish:*)` were whole-verb deny entries,
 so `kubectl apply --dry-run=client -f k8s/deploy.yaml` was refused like a real apply, and a deny entry
 cannot carry an exception: "An allow rule can't carve an exception out of a deny rule"
-(code.claude.com/docs/en/permissions.md, "Manage permissions"). The owner moved exactly these three to
+(code.claude.com/docs/en/permissions.md, "Manage permissions"). The owner moved these three verbs to
 `permissions.ask`; every other entry (`Bash(kubectl delete:*)`, `Bash(yarn publish:*)` among them) stays.
 
-The cases model the CLI's documented decision (code.claude.com/docs/en/permissions.md):
+Documented (code.claude.com/docs/en/permissions.md): deny, then ask, then allow ("a matching ask rule
+prompts even when a more specific allow rule also matches the same call", so `Bash(npm:*)` in allow does
+not let `npm publish` run); deny and ask apply to any subcommand of a compound command; deny and ask match
+past a leading assignment, allow does not; the wrappers timeout, time, nice, nohup, stdbuf, command,
+builtin and noglob are stripped.
 
-* "Rules are evaluated in order: deny, then ask, then allow. The first match in that order determines the
-  outcome, and rule specificity doesn't change the order." and "a matching ask rule prompts even when a
-  more specific allow rule also matches the same call." So `Bash(npm publish:*)` in ask prompts for
-  `npm publish` although `Bash(npm:*)` in allow also matches it.
-* "Deny and ask rules apply when any subcommand matches them" (separators `&&`, `||`, `;`, `|`, `|&`, `&`,
-  newlines, and a command substitution's body); "Every subcommand must be allowed for a compound command
-  to run without a prompt".
-* "A deny or ask rule matches past any leading assignment." "An allow rule won't match past an assignment
-  of any other variable." Wrappers stripped before matching: timeout, time, nice, nohup, stdbuf, command,
-  builtin, noglob.
-* A call no rule matches prompts (the default mode asks for a Bash command no allow rule covers).
+Measured on Claude Code 2.1.326 and not documented, modelled below as TIERS: a rule that matches the
+command text exactly (a rule with no `*`, or `P:*` against the bare `P`) is decided before any wildcard
+match, deny before ask inside each tier, allow only when neither matched; ask and allow rules are also
+matched past `sudo` (with its options) and `env`. So the first spelling, `Bash(npm publish:*)` in ask,
+matched `sudo npm publish` (past `sudo`) in the exact tier and outranked the wildcard deny
+`Bash(sudo:*)`: `sudo npm publish`, `sudo kubectl apply` and their wrapped forms fell from deny to ask.
+Each verb is therefore spelled as two ask entries with a `*` inside the program name,
+`Bash(n*pm publish)` for the bare verb and `Bash(n*pm publish *)` for the verb with arguments: both sit
+in the wildcard tier, where `Bash(sudo:*)` is decided first. One entry `Bash(n*pm publish *)` is not
+enough: with a `*` before it, the trailing ` *` no longer matches the bare `npm publish` (measured: it ran
+unasked). The inner `*` widens the match only to commands that end in `npm publish`, `kubectl apply` or
+`kubectl create` (with or without arguments) after other text: `nXpm publish` or `npx npm publish` now
+ask, which only adds a prompt; `kubectl applyset`, `kubectl create-foo` and `npm publisher` do not match.
 
-The `:*` prefix rule (`P:*` matches `P` and `P <args>`) is `rule_covers` of tests/test_permission_coverage.py,
-whose model was measured on Claude Code 2.1.319. The precedence and subcommand points above are modelled from
-the quoted documentation, not measured.
+Method of the measurement: claude -p --permission-mode default, a throwaway HOME holding only a
+`permissions` block, a throwaway cwd, a local mock Messages API issuing one Bash tool_use, and stand-in
+`npm`/`kubectl` programs on PATH. MEASURED records the decisions; the model must reproduce them.
 """
 from __future__ import annotations
 
@@ -38,10 +44,14 @@ from tests.test_permission_coverage import rule_covers, simple_commands
 
 REPO = Path(__file__).resolve().parent.parent
 SETTINGS = REPO / "settings.json"
-MOVED = ["Bash(kubectl apply:*)", "Bash(kubectl create:*)", "Bash(npm publish:*)"]
-KEPT_DENY = ["Bash(kubectl delete:*)", "Bash(yarn publish:*)"]
-WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", "noglob"}
-ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
+LEFT_DENY = ["Bash(kubectl apply:*)", "Bash(kubectl create:*)", "Bash(npm publish:*)"]
+ASK_ENTRIES = ["Bash(k*ubectl apply *)", "Bash(k*ubectl apply)", "Bash(k*ubectl create *)",
+               "Bash(k*ubectl create)", "Bash(n*pm publish *)", "Bash(n*pm publish)"]
+KEPT_DENY = ["Bash(kubectl delete:*)", "Bash(yarn publish:*)", "Bash(sudo:*)"]
+DOC_WRAPPERS = re.compile(r"^(?:(?:timeout|nice|stdbuf)(?:\s+-\S+)*(?:\s+\d\S*)?|time|nohup|command|builtin|noglob)\s+")
+MEASURED_WRAPPERS = re.compile(r"^(?:sudo(?:\s+(?:-[uUgCh]\s+\S+|--\w[\w-]*=\S+|-\w+))*|env)\s+")
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
+READ_ONLY = {"ls", "cat", "echo", "pwd", "head", "tail", "grep", "find", "wc", "which", "diff", "stat", "du", "cd"}
 
 # Must become a prompt, not a refusal.
 DRY_RUNS = [
@@ -57,23 +67,77 @@ REAL_RUNS = [
     "kubectl apply --dry-run=none -f x",
     "npm publish --dry-run=false",
     "npm publish",
+    "kubectl apply",
+    "kubectl create",
     "kubectl create namespace prod",
     "kubectl create -f k8s/deploy.yaml",
     # compound, wrapped and assignment-led forms of the same verbs
     "npm run build && npm publish",
     "cd pkg && npm publish --access public",
     "NPM_TOKEN=t npm publish",
+    "nohup npm publish",
     "timeout 60 kubectl apply -f k8s/deploy.yaml",
     "echo $(kubectl create secret generic s --from-literal=a=b)",
     "ls; kubectl apply -k overlays/prod",
 ]
-# Unchanged refusals of this lane's neighbours.
+# Denied on the base and denied still: kubectl delete, yarn publish, and every sudo form of the three verbs,
+# bare ones included (the first spelling let the bare sudo forms fall to ask).
 STILL_DENIED = [
     "kubectl delete pod web",
     "kubectl delete -f k8s/deploy.yaml --dry-run=client",
     "yarn publish",
     "yarn publish --new-version 1.2.3",
+    "sudo npm publish",
+    "sudo -u root npm publish",
+    "echo a | sudo npm publish",
+    "timeout 5 sudo npm publish",
+    "sudo env npm publish",
+    "nohup sudo npm publish",
+    "FOO=1 sudo npm publish",
+    "sudo kubectl apply",
+    "sudo kubectl create",
+    "sudo -E kubectl create",
+    "echo a | sudo -u root kubectl apply",
+    "sudo npm publish --dry-run",
 ]
+
+# Measured on 2.1.326: deny, ask (an ask rule matched), prompt (the CLI's own approval request for a command
+# no rule allows), allow (ran). Columns: the base, the first spelling (P:* ask entries), this spelling.
+MEASURED = {
+    "sudo npm publish": ("deny", "ask", "deny"),
+    "sudo -u root npm publish": ("deny", "ask", "deny"),
+    "echo a | sudo npm publish": ("deny", "ask", "deny"),  # in a compound the CLI words the ask as
+    # "This Bash command contains multiple operations. The following part requires approval: ..."
+    "timeout 5 sudo npm publish": ("deny", "ask", "deny"),
+    "sudo env npm publish": ("deny", "ask", "deny"),
+    "nohup sudo npm publish": ("deny", "ask", "deny"),
+    "FOO=1 sudo npm publish": ("deny", "ask", "deny"),
+    "sudo kubectl apply": ("deny", "ask", "deny"),
+    "sudo kubectl create": ("deny", "ask", "deny"),
+    "sudo -E kubectl create": ("deny", "ask", "deny"),
+    "echo a | sudo -u root kubectl apply": ("deny", "ask", "deny"),
+    "sudo npm publish --dry-run": ("deny", "deny", "deny"),
+    "kubectl apply --dry-run=client -f k8s/deploy.yaml": ("deny", "ask", "ask"),
+    "kubectl create deployment web --image=nginx --dry-run=client -o yaml": ("deny", "ask", "ask"),
+    "npm publish --dry-run": ("deny", "ask", "ask"),
+    "npm publish": ("deny", "ask", "ask"),
+    "kubectl apply": ("deny", "ask", "ask"),
+    "kubectl create": ("deny", "ask", "ask"),
+    "kubectl apply -f k8s/deploy.yaml": ("deny", "ask", "ask"),
+    "kubectl apply --dry-run=none -f x": ("deny", "ask", "ask"),
+    "npm publish --dry-run=false": ("deny", "ask", "ask"),
+    "NPM_TOKEN=t npm publish": ("deny", "ask", "ask"),
+    "timeout 60 kubectl apply -f k8s/deploy.yaml": ("deny", "ask", "ask"),
+    "npm run build && npm publish": ("deny", "ask", "ask"),
+    "npm publisher": ("allow", "allow", "allow"),
+    "npm install": ("allow", "allow", "allow"),
+    "kubectl get pods": ("allow", "allow", "allow"),
+    "nXpm publish": ("prompt", "prompt", "ask"),
+    "kubectl applyset": ("prompt", "prompt", "prompt"),
+    "kubectl create-foo": ("prompt", "prompt", "prompt"),
+    "kubectl delete pod web": ("deny", "deny", "deny"),
+    "yarn publish": ("deny", "deny", "deny"),
+}
 
 
 def _perms(path: Path = SETTINGS) -> dict:
@@ -84,43 +148,75 @@ def _bash(entries: list[str]) -> list[str]:
     return [e[5:-1] for e in entries if e.startswith("Bash(") and e.endswith(")")]
 
 
-def _strip_wrappers(cmd: str) -> str:
-    words = cmd.split()
-    while words and words[0] in WRAPPERS:
-        words = words[1:]
-        while words and (words[0].startswith("-") or re.fullmatch(r"\d+[smhd]?", words[0])):
-            words = words[1:]
-    return " ".join(words)
+def _forms(sub: str, measured: bool, assignments: bool = True) -> list[str]:
+    """The subcommand, then past each wrapper (and leading assignment) in turn."""
+    cur = re.sub(r"\s+", " ", sub).strip()
+    forms = [cur]
+    while True:
+        nxt = DOC_WRAPPERS.sub("", cur, count=1)
+        if assignments:
+            nxt = ASSIGNMENT.sub("", nxt, count=1)
+        if measured:
+            nxt = MEASURED_WRAPPERS.sub("", nxt, count=1)
+        if nxt == cur:
+            return forms
+        forms.append(nxt)
+        cur = nxt
 
 
-def _for_deny_or_ask(sub: str) -> str:
-    sub = _strip_wrappers(sub)
-    while ASSIGNMENT.match(sub):
-        sub = _strip_wrappers(ASSIGNMENT.sub("", sub, count=1))
-    return sub
+def exact_tier(rule: str, cmd: str) -> bool:
+    """Measured: a match is exact-tier when the rule has no `*`, or it is `P:*` against the bare `P`."""
+    return ("*" not in rule and cmd == rule) or (rule.endswith(":*") and "*" not in rule[:-2] and cmd == rule[:-2])
+
+
+def _sub_decision(perms: dict, sub: str) -> str:
+    rules = {k: _bash(perms.get(k, [])) for k in ("deny", "ask", "allow")}
+    forms = {"deny": _forms(sub, False), "ask": _forms(sub, True), "allow": _forms(sub, True, assignments=False)}
+    for tier in (True, False):
+        for kind in ("deny", "ask"):
+            if any(rule_covers(r, f) and exact_tier(r, f) == tier for r in rules[kind] for f in forms[kind]):
+                return kind
+    if forms["allow"][-1].split()[0] in READ_ONLY:
+        return "allow"
+    if any(rule_covers(r, f) for r in rules["allow"] for f in forms["allow"]):
+        return "allow"
+    return "prompt"
 
 
 def decide(perms: dict, command: str) -> str:
-    """deny, ask or allow for one Bash command line, in the documented order deny > ask > allow; a line
-    with a subcommand no allow rule covers prompts (ask)."""
-    subs = simple_commands(command)
-    deny, ask, allow = (_bash(perms.get(k, [])) for k in ("deny", "ask", "allow"))
-    if any(rule_covers(r, _for_deny_or_ask(s)) for s in subs for r in deny):
-        return "deny"
-    if any(rule_covers(r, _for_deny_or_ask(s)) for s in subs for r in ask):
-        return "ask"
-    if all(any(rule_covers(r, _strip_wrappers(s)) for r in allow) for s in subs):
-        return "allow"
-    return "ask"
+    """deny, ask (an ask rule matched), prompt (no rule allows a subcommand) or allow for one Bash line."""
+    got = [_sub_decision(perms, s) for s in simple_commands(command)]
+    for kind in ("deny", "ask", "prompt"):
+        if kind in got:
+            return kind
+    return "allow"
+
+
+def _variant(column: int) -> dict:
+    """Column 0: the base (the three entries in deny); 1: the first spelling (in ask); 2: settings.json."""
+    perms = _perms()
+    if column == 2:
+        return perms
+    ask = [e for e in perms["ask"] if e not in ASK_ENTRIES]
+    if column == 0:
+        return dict(perms, deny=perms["deny"] + LEFT_DENY, ask=ask)
+    return dict(perms, ask=ask + LEFT_DENY)
 
 
 # ------------------------------------------------------------------ the entries
-def test_the_three_whole_verb_entries_moved_from_deny_to_ask():
+def test_the_three_whole_verb_entries_left_deny_for_wildcard_tier_ask_entries():
     perms = _perms()
-    for entry in MOVED:
+    for entry in LEFT_DENY:
+        assert entry not in perms["deny"] and entry not in perms["ask"], entry
+    for entry in ASK_ENTRIES:
         assert entry in perms["ask"], entry
-        assert entry not in perms["deny"], entry
-    assert sorted(perms["ask"]) == sorted(MOVED)  # exactly these three, nothing else asks
+
+
+def test_no_ask_entry_sits_in_the_exact_tier():
+    """An exact-tier ask outranks a wildcard deny past a wrapper (measured): every ask entry needs a `*`
+    that is not a trailing `:*`."""
+    for rule in _bash(_perms()["ask"]):
+        assert "*" in (rule[:-2] if rule.endswith(":*") else rule), rule
 
 
 def test_the_neighbouring_deny_entries_stay():
@@ -141,41 +237,61 @@ def test_a_real_apply_create_or_publish_never_runs_unasked(command):
 
 
 @pytest.mark.parametrize("command", STILL_DENIED)
-def test_kubectl_delete_and_yarn_publish_stay_refused(command):
+def test_kubectl_delete_yarn_publish_and_every_sudo_form_stay_refused(command):
     assert decide(_perms(), command) == "deny"
+    assert decide(_variant(0), command) == "deny"  # as on the base
+
+
+@pytest.mark.parametrize("command,want", sorted(MEASURED.items()))
+def test_the_model_reproduces_the_measured_decisions(command, want):
+    for column in range(3):
+        assert decide(_variant(column), command) == want[column], (column, command)
 
 
 def test_the_ask_entry_beats_the_npm_allow_entry():
-    """`Bash(npm:*)` is in allow and covers `npm publish`: only the ask rule, checked before allow
+    """`Bash(npm:*)` is in allow and covers `npm publish`: only the ask rules, checked before allow
     ("a matching ask rule prompts even when a more specific allow rule also matches the same call"),
-    keeps it from running unasked."""
+    keep it from running unasked."""
     perms = _perms()
     assert "Bash(npm:*)" in perms["allow"]
     assert rule_covers("npm:*", "npm publish")
-    without_ask = dict(perms, ask=[])
-    assert decide(without_ask, "npm publish") == "allow"  # the hazard the ask entry closes
+    without = dict(perms, ask=[e for e in perms["ask"] if e not in ASK_ENTRIES])
+    assert decide(without, "npm publish") == "allow"  # the hazard the ask entries close
     assert decide(perms, "npm publish") == "ask"
     assert decide(perms, "npm install") == "allow"  # the allow entry still serves the rest of npm
 
 
+def test_both_spellings_of_each_verb_are_needed():
+    """Measured: with a `*` before it, a trailing ` *` no longer matches the bare verb."""
+    perms = _perms()
+    only_args = dict(perms, ask=[e for e in perms["ask"] if e != "Bash(n*pm publish)"])
+    assert decide(only_args, "npm publish") == "allow"
+    assert decide(perms, "npm publish") == "ask"
+
+
 def test_no_allow_entry_covers_kubectl_apply_or_create():
     allow = _bash(_perms()["allow"])
-    kubectl = [c for c in DRY_RUNS + REAL_RUNS + ["kubectl apply", "kubectl create"]
-               if c.startswith("kubectl")]
-    for cmd in kubectl:
+    for cmd in [c for c in DRY_RUNS + REAL_RUNS if c.startswith("kubectl")]:
         assert [r for r in allow if rule_covers(r, cmd)] == [], cmd
-    assert decide(dict(_perms(), ask=[]), "kubectl apply -f k8s/deploy.yaml") == "ask"
+    perms = _perms()
+    assert decide(dict(perms, ask=[e for e in perms["ask"] if e not in ASK_ENTRIES]),
+                  "kubectl apply -f k8s/deploy.yaml") == "prompt"
 
 
 def test_the_decision_model():
-    perms = {"deny": ["Bash(rm -rf:*)"], "ask": ["Bash(npm publish:*)"], "allow": ["Bash(npm:*)", "Bash(ls:*)"]}
+    perms = {"deny": ["Bash(rm -rf:*)", "Bash(sudo:*)"], "ask": ["Bash(n*pm publish *)", "Bash(n*pm publish)"],
+             "allow": ["Bash(npm:*)", "Bash(ls:*)"]}
     assert decide(perms, "ls && rm -rf build") == "deny"
     assert decide(perms, "FOO=1 npm publish") == "ask"
-    assert decide(perms, "FOO=1 npm install") == "ask"  # allow does not match past an assignment
+    assert decide(perms, "FOO=1 npm install") == "prompt"  # allow does not match past an assignment
     assert decide(perms, "npm install && ls") == "allow"
-    assert decide(perms, "npm install && make") == "ask"
+    assert decide(perms, "npm install && make") == "prompt"
     assert decide(perms, "nohup npm publish") == "ask"
-    assert decide(perms, "npm publisher") == "allow"  # `P:*` needs a word boundary
+    assert decide(perms, "npm publisher") == "allow"
+    assert decide(perms, "sudo npm publish") == "deny"
+    assert decide(dict(perms, ask=["Bash(npm publish:*)"]), "sudo npm publish") == "ask"  # exact tier
+    assert decide(dict(perms, ask=["Bash(npm publish)"]), "sudo npm publish") == "ask"  # exact tier
+    assert decide(dict(perms, ask=["Bash(npm publish:*)"]), "sudo npm publish x") == "deny"
 
 
 # ------------------------------------------------------------------ readers of a non-empty ask
@@ -185,7 +301,7 @@ def test_the_settings_load_accepts_the_non_empty_ask_list():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     settings, problem = mod.load_settings(SETTINGS)
-    assert problem is None and settings["permissions"]["ask"] == MOVED
+    assert problem is None and settings["permissions"]["ask"] == _perms()["ask"]
 
 
 def test_apply_permissions_keeps_the_ask_entries_when_it_merges(tmp_path):
@@ -194,7 +310,7 @@ def test_apply_permissions_keeps_the_ask_entries_when_it_merges(tmp_path):
     target.write_text(SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
     perms = tmp_path / "perms.json"
     perms.write_text(json.dumps([
-        {"pattern": "Bash(npm publish:*)", "section": "ask"},  # already there: not doubled
+        {"pattern": "Bash(n*pm publish *)", "section": "ask"},  # already there: not doubled
         {"pattern": "Bash(scripts/purge-cache.sh:*)", "section": "ask"},
     ]), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
@@ -203,5 +319,5 @@ def test_apply_permissions_keeps_the_ask_entries_when_it_merges(tmp_path):
                           cwd=str(tmp_path), env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     after = _perms(target)
-    assert after["ask"] == MOVED + ["Bash(scripts/purge-cache.sh:*)"]
+    assert after["ask"] == _perms()["ask"] + ["Bash(scripts/purge-cache.sh:*)"]
     assert after["deny"] == _perms()["deny"] and after["allow"] == _perms()["allow"]

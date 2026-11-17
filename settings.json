@@ -267,9 +267,12 @@
       "Skill(test:*)"
     ],
     "ask": [
-      "Bash(kubectl apply:*)",
-      "Bash(kubectl create:*)",
-      "Bash(npm publish:*)"
+      "Bash(k*ubectl apply *)",
+      "Bash(k*ubectl apply)",
+      "Bash(k*ubectl create *)",
+      "Bash(k*ubectl create)",
+      "Bash(n*pm publish *)",
+      "Bash(n*pm publish)"
     ]
   },
   "deniedMcpServers": [
