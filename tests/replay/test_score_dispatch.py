@@ -56,6 +56,17 @@ def fixture_of(name: str) -> dict:
     return {role: RANK_OF[rank] for role, _, rank in (item.partition(":") for item in dict(SCENARIOS[name].args)["score"].split(","))}
 
 
+SCRATCH_LINE = "Your scratch, this dispatch's alone: "  # OB-L05: the line naming the dispatch's own scratch, after the record
+
+
+def _split_scratch(text: str) -> tuple[str, str]:
+    """(the record, the scratch line) of a start text: the record keeps its own budget; the scratch line follows it."""
+    head, _, last = text.rpartition("\n")
+    if last.startswith(SCRATCH_LINE):
+        return head, last
+    return (text, "") if not text.startswith(SCRATCH_LINE) else ("", text)
+
+
 def starts(r) -> list[dict]:
     """Each SubagentStart event: the agent's type, its step label and the text its hook handed it ("" for none)."""
     out = []
@@ -64,7 +75,8 @@ def starts(r) -> list[dict]:
             (run,) = [h for h in ev["hooks"] if h["hook"] == "hooks/subagentstart-record.py"]
             assert (run["rc"], run["verdict"], run["stderr"]) == (0, "ok", ""), run
             text = json.loads(run["stdout"])["hookSpecificOutput"]["additionalContext"] if run["stdout"].strip() else ""
-            out.append({"type": ev["agent_type"], "label": ev["label"], "text": text, "label_n": len(out)})
+            text, scratch = _split_scratch(text)
+            out.append({"type": ev["agent_type"], "label": ev["label"], "text": text, "scratch": scratch, "label_n": len(out)})
     return out
 
 
@@ -175,9 +187,11 @@ def test_a_close_span_gets_no_start_text_and_no_new_block(replays):
     in_close = [e for e in events[opener:] if e["event"] == "SubagentStart"]
     before = [e for e in events[:opener] if e["event"] == "SubagentStart"]
     assert in_close and before
-    for ev in in_close:  # the hook ran (it is registered on every start) and printed nothing
+    for ev in in_close:  # the hook ran (it is registered on every start) and printed no record: OB-L05's scratch line alone
         (run,) = [h for h in ev["hooks"] if h["hook"] == "hooks/subagentstart-record.py"]
-        assert (run["rc"], run["verdict"], run["stdout"], run["stderr"]) == (0, "ok", "", ""), run
+        assert (run["rc"], run["verdict"], run["stderr"]) == (0, "ok", ""), run
+        text = json.loads(run["stdout"])["hookSpecificOutput"]["additionalContext"] if run["stdout"].strip() else ""
+        assert _split_scratch(text)[0] == "", run
     assert all(any(h["stdout"].strip() for h in ev["hooks"]) for ev in before)  # while the /dev span's starts did
     assert [b for b in r.blocks if b["event"] in ("SubagentStart", "Stop", "SubagentStop")] == [], r.blocks
 
