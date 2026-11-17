@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T17:49:30Z*
-**Total entries**: 986
+*Last updated: 2026-11-17T18:20:41Z*
+**Total entries**: 987
 **Convention**: kebab
 
 ## Tree
@@ -212,6 +212,7 @@ dot-claude/
 │   │   ├── `test_bash_safety_rules.py` - their cases, the over-blocks fixed, the bulk-commit writer closed from Bash, and the release word...
 │   │   ├── `test_bash_safety_sensitive_names.py` - check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write targe...
 │   │   ├── `test_bash_safety_session_dirs.py` - The name may stand only as a search pattern (grep, rg, git grep, git log -S/-G/--grep) or in a gi...
+│   │   ├── `test_bash_safety_worktree_git_view.py` - judge the git invocations lib/shell_parse.py finds, not the raw text: a git subcommand named in d...
 │   │   ├── `test_bash_views_guard.py` - the quoted CLAUDE_HOME channel spelling P2 R6 gave every command line, as it
 │   │   ├── `test_bash_write_targets_policy.py` - Execution-semantic write-target resolution at the exact sink use site.
 │   │   ├── `test_blackbox_integration.py` - WHAT THIS PROVES, AND WHAT IT EXPLICITLY DOES NOT
