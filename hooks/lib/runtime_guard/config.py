@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Config-file loading and STEP0 self-protection for the protected-runtime guard.
 
-Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
-(`_normalize_path`) + stdlib; references nothing from _core. The DATA_FILE_PATH
+Depends on pathmatch (`_normalize_path`, `_strip_quotes`) + stdlib; references nothing from _core. The DATA_FILE_PATH
 import-time reload contract is stated at _core's `_importlib.reload(_config)`.
 
 Scope: the single generic `DATA_FILE_PATH` (env-overridable, read at MODULE-IMPORT
@@ -20,22 +19,19 @@ import json
 import os
 from typing import Optional
 
-# _targets_config_file needs the phase-1 quote stripper + redirect scanner and
-# the phase-3 path normalizer. Dual-context import (INV-3; the contract
-# is stated at _core's first re-import block).
+# _targets_config_file needs the quote stripper and the path normalizer.
+# Dual-context import (INV-3; the contract is stated at _core's first import block).
 try:
-    from .shell_lex import _has_redirect_to, _strip_quotes
-    from .pathmatch import _normalize_path
+    from .pathmatch import _normalize_path, _strip_quotes
 except ImportError:  # executed under the top-level-script shim (no package)
-    from shell_lex import _has_redirect_to, _strip_quotes  # type: ignore[no-redef]
-    from pathmatch import _normalize_path  # type: ignore[no-redef]
+    from pathmatch import _normalize_path, _strip_quotes  # type: ignore[no-redef]
 
 
 # ── The single generic data-file path ────────────────────────────────────────
 # Overridable for tests via env so the live machine file is never mutated by a
-# test run. The path is generic; it carries no project identity. WS1: the
-# default is now $HOME-relative (~/.config/claude/...) rather than the author
-# literal /root, so a fresh non-root home resolves its own config path.
+# test run. The path is generic; it carries no project identity. The
+# default is $HOME-relative (~/.config/claude/...), so any home resolves its own
+# config path.
 DATA_FILE_PATH = os.environ.get(
     "CLAUDE_PROTECTED_RUNTIME_FILE",
     os.path.join(
@@ -78,7 +74,7 @@ def _home_tilde_variant(path: str) -> Optional[str]:
     """Return the ``~/``-prefixed form of ``path`` iff it lives under the real
     user home (``$HOME`` / ``Path.home()``), else None.
 
-    Generic (WS1 codex #4 — no ``/root``-specific branch): on a non-root home
+    Generic (no ``/root``-specific branch): on a non-root home
     (``/home/alice/...``) the ``~/relative`` variant is generated exactly as it
     was for ``/root/...``, so the guard protects the same path written either
     way regardless of which user runs it.
@@ -132,7 +128,7 @@ def _config_ancestor_dirs() -> set:
     d = os.path.dirname(norm)
     while d and d not in _ANCESTOR_STOP_ROOTS:
         out.add(d)
-        # Generic (WS1 codex #4): add the ~/-prefixed variant for ANY ancestor
+        # Generic: add the ~/-prefixed variant for ANY ancestor
         # under the real user home, not only /root/.
         tilde = _home_tilde_variant(d + "/")
         if tilde:
@@ -153,11 +149,8 @@ def _config_or_ancestor_variants() -> set:
 def _targets_config_file(simple_cmd: str, tokens: list) -> bool:
     cfg_variants = {_normalize_path(v) for v in _config_path_variants()}
     cfg_dir = os.path.dirname(DATA_FILE_PATH)
-    # redirect to the config path
-    rt = _has_redirect_to(simple_cmd)
-    if rt and _normalize_path(rt) in cfg_variants:
-        return True
-    # any bareword token equal to the config path (cp/mv/rm/tee/sed -i/chmod/chown/truncate/ln)
+    # any token equal to the config path (a redirect target, cp/mv/rm/tee/sed -i/chmod/
+    # chown/truncate/ln operands)
     for tok in tokens:
         st = _strip_quotes(tok)
         if not st:

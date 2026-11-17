@@ -2,7 +2,7 @@
 """P0 anchor helper predicates for the guard.
 
 The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan.
-Depends on shell_lex (`_strip_quotes`) + constants (`RUNTIMES`,
+Depends on pathmatch (`_strip_quotes`) + constants (`RUNTIMES`,
 `EXEC_RUNNER_TOKENS`, `SERVICE_VERBS`) + stdlib; references nothing from _core.
 The P0 decision ENGINE `_p0_anchor` and every forward-referencing anchor helper
 stay in _core.
@@ -22,14 +22,14 @@ from __future__ import annotations
 import os
 import re
 
-# The anchor predicates key on the phase-1 quote stripper and the phase-2 runtime
+# The anchor predicates key on the quote stripper and the runtime
 # /runner/service-verb lookup tables. Dual-context import (INV-3; the contract
-# is stated at _core's first re-import block).
+# is stated at _core's first import block).
 try:
-    from .shell_lex import _strip_quotes
+    from .pathmatch import _strip_quotes
     from .constants import EXEC_RUNNER_TOKENS, RUNTIMES, SERVICE_VERBS
 except ImportError:  # executed under the top-level-script shim (no package)
-    from shell_lex import _strip_quotes  # type: ignore[no-redef]
+    from pathmatch import _strip_quotes  # type: ignore[no-redef]
     from constants import EXEC_RUNNER_TOKENS, RUNTIMES, SERVICE_VERBS  # type: ignore[no-redef]
 
 
@@ -158,11 +158,16 @@ def _anchor_service_hits_protected(tokens: list, exec_toks: list,
     if not any(v in own_bases for v in SERVICE_VERBS):
         return False
     joined = " " + " ".join(_strip_quotes(t) for t in own) + " "
-    for s in services:
-        rx = re.compile(r"(^|[\s=])" + re.escape(s) + r"(@[^\s.=/]*)?(\.service)?(\s|$|\.|=)")
-        if rx.search(joined):
-            return True
-    return False
+    return any(_service_unit_re(s).search(joined) for s in services)
+
+
+def _service_unit_re(unit: str):
+    """Regex for a protected unit in a space-joined service-manager argv: the bare
+    unit, `unit.service` and the template instance `unit@instance(.service)`, never
+    a longer hyphenated name. A `*` in the entry stands for any run of unit-name
+    characters, so `<prefix>-*` names every unit of that family."""
+    body = re.escape(unit).replace(r"\*", r"[^\s.=/@]*")
+    return re.compile(r"(^|[\s=])" + body + r"(@[^\s.=/]*)?(\.service)?(\s|$|\.|=)")
 
 
 # Recursive / all-workspace flags that fan a build into EVERY workspace (incl.
@@ -176,7 +181,7 @@ def _anchor_nonprotected_workspace_selector(tokens: list, cfg: dict) -> bool:
     present. Used by the build anchor to exempt an explicit non-protected
     workspace build from the cwd-based fallback. A RECURSIVE (`-r`/`--recursive`),
     GLOB (`--filter '*'` / `...`), or MULTI selector fans into EVERY workspace
-    (incl. the protected one) and therefore does NOT exempt (codex finding 5).
+    (incl. the protected one) and therefore does NOT exempt.
     """
     non_prot = set(cfg.get("non_protected_workspaces", []))
     prot = set(cfg.get("protected_build_workspaces", []))

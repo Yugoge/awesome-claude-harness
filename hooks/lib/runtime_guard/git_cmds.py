@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """git destructive-subcommand argument parsing for the guard.
 
-Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
+Depends on pathmatch (`_strip_quotes`, `_expand_leading_home`) +
 the git global-option table of hooks/lib/git_command_classifier.py + stdlib;
 references nothing from _core. `_git_inspection_head` and the
 forward-referencing orchestrator `_git_destructive_pathspec_hits` stay in _core.
@@ -22,14 +22,14 @@ import os
 import sys
 from typing import Optional
 
-# git argv parsers key on the phase-1 quote stripper and the phase-3 leading-home
+# git argv parsers key on the quote stripper and the leading-home
 # expander (for `git -C ~/dir`). Dual-context import (INV-3; the contract
-# is stated at _core's first re-import block).
+# is stated at _core's first import block).
 try:
-    from .shell_lex import _strip_quotes
+    from .pathmatch import _strip_quotes
     from .pathmatch import _expand_leading_home
 except ImportError:  # executed under the top-level-script shim (no package)
-    from shell_lex import _strip_quotes  # type: ignore[no-redef]
+    from pathmatch import _strip_quotes  # type: ignore[no-redef]
     from pathmatch import _expand_leading_home  # type: ignore[no-redef]
 
 

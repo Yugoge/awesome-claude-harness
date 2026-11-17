@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """find/fd destructive-command argument parsing for the guard.
 
-Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
+Depends on pathmatch (`_strip_quotes`, `_glob_to_segment_regex`,
 `_has_shell_glob`) + stdlib; references nothing from _core. The
 forward-referencing orchestrators `_find_destructive_target_hits` /
 `_find_filter_exonerates_reverse` / `_find_is_destructive` stay in _core.
@@ -19,14 +19,14 @@ from __future__ import annotations
 import os
 import re
 
-# find/fd argv parsers key on the phase-1 quote stripper and the phase-3
+# find/fd argv parsers key on the quote stripper and the
 # basename-glob matchers. Dual-context import (INV-3; the contract
-# is stated at _core's first re-import block).
+# is stated at _core's first import block).
 try:
-    from .shell_lex import _strip_quotes
+    from .pathmatch import _strip_quotes
     from .pathmatch import _glob_to_segment_regex, _has_shell_glob
 except ImportError:  # executed under the top-level-script shim (no package)
-    from shell_lex import _strip_quotes  # type: ignore[no-redef]
+    from pathmatch import _strip_quotes  # type: ignore[no-redef]
     from pathmatch import _glob_to_segment_regex, _has_shell_glob  # type: ignore[no-redef]
 
 
