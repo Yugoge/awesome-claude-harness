@@ -1004,6 +1004,122 @@ def kill_pid_rule(command, view):
 
 
 # ── Working-tree git rules (BS-36..BS-39, BS-43) ─────────────────────────────
+#
+# The rules judge the git invocations lib/shell_parse.py finds where they run: past wrappers (sudo, env, xargs,
+# nohup, timeout, a path-qualified git ...), inside shell payloads (bash -c, eval, a heredoc or pipe fed to a
+# shell, find -exec, a git alias body) and, where interpreter code hands a string to a process-spawning call,
+# inside that string. A git subcommand named in data (a grep pattern, an echo, a commit message, a heredoc a
+# non-shell reads) is no invocation. A command the parser cannot read falls back to the raw-text patterns.
+
+_INTERP_CODE_OPTS = (  # interpreter name pattern, the options whose value is the code, options taking a value
+    (re.compile(r"^(python|pypy)[\d.]*$"), ("-c",), ("-W", "-X")),
+    (re.compile(r"^(node|nodejs|bun|deno)[\d.]*$"), ("-e", "--eval", "-p", "--print"),
+     ("-r", "--require", "--import", "--loader", "--experimental-loader", "--input-type", "--env-file")),
+    (re.compile(r"^perl[\d.]*$"), ("-e", "-E"), ("-I", "-M", "-m")),
+    (re.compile(r"^ruby[\d.]*$"), ("-e",), ("-I", "-r")),
+    (re.compile(r"^php[\d.]*$"), ("-r",), ("-c", "-d")),
+)
+_SPAWN_RE = re.compile(r"\b(system|popen\w*|Popen|spawn\w*|exec\w*|run|call|check_call|check_output|getoutput|"
+                       r"getstatusoutput|subprocess|child_process|shell_exec|passthru|proc_open|pcntl_exec|qx)\b|`")
+_STR_LIT_RE = re.compile(r"'''(.*?)'''|\"\"\"(.*?)\"\"\"|'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"|`([^`]*)`",
+                         re.S)
+_VISIBLE = {"top", "cmdsub", "backtick", "procsub"}
+
+
+def _interpreter_code(res, cmd):
+    """The code an interpreter command runs from its own arguments (`-c CODE`, `-cCODE`, a cluster ending in the
+    code option, `--eval=CODE`) or, with no script operand, from a heredoc or here-string; None if none."""
+    name = res.name or ""
+    spec = next(((c, v) for rx, c, v in _INTERP_CODE_OPTS if rx.match(name)), None)
+    if spec is None:
+        return None
+    code_opts, value_opts = spec
+    args = res.argv()
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a is None:
+            k += 1
+            continue
+        if a in code_opts:
+            return args[k + 1] if k + 1 < len(args) else None
+        for o in code_opts:
+            if o.startswith("--") and a.startswith(o + "="):
+                return a[len(o) + 1:]
+            if not o.startswith("--") and a.startswith(o) and len(a) > 2:
+                return a[2:]
+            if not o.startswith("--") and a.startswith("-") and not a.startswith("--") and len(a) > 2 \
+                    and a[-1] == o[1] and a[1:-1].isalpha():
+                return args[k + 1] if k + 1 < len(args) else None
+        if a in value_opts:
+            k += 2
+            continue
+        if a == "--" or a == "-" or not a.startswith("-"):
+            break
+        k += 1
+    if all(a is None or a == "-" or a.startswith("-") for a in args):
+        for red in cmd.redirects:
+            if red.hd is not None and red.fd == 0:
+                return red.hd.body
+            if red.op == "<<<" and red.target is not None:
+                return red.target.value()
+    return None
+
+
+def _interpreter_shell_texts(code):
+    """Shell texts interpreter code hands to a process-spawning call: each string literal, and each comma-joined
+    run of literals (an argv list) read as words. Code with no spawning call yields none."""
+    if not code or "git" not in code or not _SPAWN_RE.search(code):
+        return []
+    lits = [(m.start(), m.end(), next(g for g in m.groups() if g is not None)) for m in _STR_LIT_RE.finditer(code)]
+    texts, run, prev_end = [], [], None
+    for a, b, body in lits:
+        if run and not re.fullmatch(r"\s*,\s*", code[prev_end:a]):
+            texts.append(" ".join(run))
+            run = []
+        run.append(body)
+        prev_end = b
+        texts.append(body)
+    if run:
+        texts.append(" ".join(run))
+    return [t for t in dict.fromkeys(texts) if "git" in t]
+
+
+def git_view(command):
+    """[(GitInvocation, context)] for every git invocation the command runs, or None when it does not parse.
+
+    context is the walk's context tuple; a git alias body adds "alias", interpreter code adds "interp".
+    """
+    if "git" not in command:
+        return []
+    try:
+        from lib.shell_parse import parse, git_invocations, walk, resolve
+        into = ("cmdsub", "backtick", "procsub", "heredoc_shell", "pipe_shell", "shell_c", "eval", "exec_argv")
+        script = parse(command)
+        if script.error is not None:
+            return None
+        out = []
+
+        def collect(scr, prefix, depth):
+            for inv in git_invocations(scr, into=into):
+                ctx = prefix + tuple(inv.context[1:])
+                out.append((inv, ctx))
+                if inv.alias_body is not None and depth < 8:
+                    collect(inv.alias_body, ctx + ("alias",), depth + 1)
+            if depth >= 4:
+                return
+            for site in walk(scr, into=into):
+                res = resolve(site.cmd)
+                for text in _interpreter_shell_texts(_interpreter_code(res, site.cmd)):
+                    sub = parse(text)
+                    if sub.error is None:
+                        collect(sub, prefix + tuple(site.context[1:]) + ("interp",), depth + 1)
+
+        collect(script, ("top",), 0)
+        return out
+    except Exception:  # noqa: BLE001 - an unreadable command takes the raw-text fallback
+        return None
+
 
 def _wide_path_after_dashdash(args):
     try:
@@ -1011,36 +1127,86 @@ def _wide_path_after_dashdash(args):
     except ValueError:
         return False
     path = args[dd + 1] if dd + 1 < len(args) else ""
-    return path in (".", "*") or path.endswith("/")
+    return path in (".", "*") or (path or "").endswith("/")
 
 
-def worktree_git_rules(command, view):
-    """git stash (push forms and bare), wide-path checkout and restore from a ref."""
+def _stash_pushes(args):
     bad = {"push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all"}
-    first = (view.outer("stash") or [None])[0]
-    pq_destructive = first is not None and (not first["args"] or first["args"][0] in bad or (
-        first["args"][0].startswith("-") and not first["args"][0].startswith("--") and any(c in first["args"][0][1:] for c in "ua")))
-    if grep(r"git\s+stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command) \
-            or grep(r"git\s+stash\s+-[ua]+\b", command) or pq_destructive:
+    first = args[0] if args else None
+    return first is not None and (first in bad or (
+        first.startswith("-") and not first.startswith("--") and any(c in first[1:] for c in "ua")))
+
+
+def _checkout_wide(args):
+    if not _wide_path_after_dashdash(args):
+        return False
+    return any(a is None or not a.startswith("-") for a in args[:args.index("--")])
+
+
+def _restore_wide_from_ref(args):
+    """--source/-s given, the working tree among the targets (--worktree/-W, or no --staged/-S), a wide path."""
+    if not _wide_path_after_dashdash(args):
+        return False
+    source = worktree = staged = False
+    skip = False
+    for a in args[:args.index("--")]:
+        if skip or a is None:
+            skip = False
+            continue
+        if a == "--source" or a.startswith("--source="):
+            source, skip = True, a == "--source"
+        elif a == "--worktree":
+            worktree = True
+        elif a == "--staged":
+            staged = True
+        elif a.startswith("-") and not a.startswith("--"):
+            for k, c in enumerate(a[1:]):
+                if c == "s":
+                    source, skip = True, k == len(a) - 2
+                    break
+                worktree, staged = worktree or c == "W", staged or c == "S"
+    return source and (worktree or not staged)
+
+
+def _worktree_raw_fallback(command):
+    """The pre-parser patterns, for a command lib/shell_parse.py cannot read (fail closed)."""
+    return {
+        "push": grep(r"git\s+stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
+        or grep(r"git\s+stash\s+-[ua]+\b", command),
+        "bare": grep(r"git\s+stash\s*($|[;&|])", command),
+        "checkout": grep(r"git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
+        "restore": grep(r"git\s+restore\b", command) and grep(r"(--source\b|-s\b)", command)
+        and grep(r"--\s+(\.|\*|[^ /]+/)\s*($|[;&|])", command),
+    }
+
+
+def worktree_git_rules(command, invs):
+    """git stash (push forms and bare), wide-path checkout and restore from a ref, judged per invocation."""
+    if invs is None:
+        hit = _worktree_raw_fallback(command)
+    else:
+        def args_of(sub):
+            return [list(i.args) for i, _ctx in invs if i.subcommand == sub]
+        hit = {"push": any(_stash_pushes(a) for a in args_of("stash")),
+               "bare": any(not a for a in args_of("stash")),
+               "checkout": any(_checkout_wide(a) for a in args_of("checkout")),
+               "restore": any(_restore_wide_from_ref(a) for a in args_of("restore"))}
+    if hit["push"]:
         refuse("BLOCKED: 'git stash push/save/create/store/-u/--all' requires explicit user approval",
                    f"Command: {command}",
                    "REASON: a stash used as a throwaway buffer before a wide checkout can silently lose work; "
                    "-u/--include-untracked/-a/--all also take untracked and ignored files.",
                    "Tell the user what you want to do and ask them to run it, or use commit/branch.", released_line())
-    if grep(r"git\s+stash\s*($|[;&|])", command) or any(not i["args"] for i in view.outer("stash")):
+    if hit["bare"]:
         refuse("BLOCKED: bare 'git stash' (implicit push) requires explicit user approval", f"Command: {command}",
                    "Safe stash subcommands are exempt: list, show, pop, apply, drop, clear, branch.", released_line())
-    if grep(r"git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command) \
-            or any(_wide_path_after_dashdash(i["args"]) for i in view.outer("checkout")):
+    if hit["checkout"]:
         refuse("BLOCKED: 'git checkout <ref> -- .' / '-- *' / '-- dir/' requires explicit user approval",
                    f"Command: {command}",
                    "REASON: a wide-path checkout from a commit overwrites a whole subtree with old content.",
                    "Allowed: 'git checkout <ref> -- path/to/specific-file.ts' (single file).",
                    "If you need a subtree restore, tell the user what you need and why.", released_line())
-    pq_restore = any(any(a in ("--source", "-s") or a.startswith(("--source=", "-s=")) for a in i["args"])
-                     and _wide_path_after_dashdash(i["args"]) for i in view.outer("restore"))
-    if (grep(r"git\s+restore\b", command) and grep(r"(--source\b|-s\b)", command)
-            and grep(r"--\s+(\.|\*|[^ /]+/)\s*($|[;&|])", command)) or pq_restore:
+    if hit["restore"]:
         refuse("BLOCKED: 'git restore --source=<ref> -- .' / '-- *' / '-- dir/' requires explicit user approval",
                    f"Command: {command}",
                    "REASON: it is 'git checkout <ref> -- .' under another name: it overwrites the working tree with old "
@@ -1073,20 +1239,45 @@ GC_EXECCTX_RE = (rf"(^|{GC_SEP}){GC_GIT}{GC_GOPT}\s+(rebase{GC_ANYTOK}\s+(-x|--e
                  rf"|difftool{GC_ANYTOK}\s+(--extcmd|-x)|grep{GC_ANYTOK}\s+--open-files-in-pager)\b")
 
 
+_DATA_COMMANDS = frozenset({"echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack"})
+
+
+def code_text(command):
+    """The command with text no shell runs blanked, offsets kept: comments, the heredoc body of a command that is
+    not a shell (unless the body expands something), and the all-literal arguments of a command that only prints
+    or searches its arguments (echo, printf, grep ...). The raw command when it does not parse."""
+    try:
+        from lib.shell_parse import SHELLS, _blank, _blank_comments, parse, resolve, walk
+        script = parse(command)
+        if script.error is not None:
+            return command
+        out = list(command)
+        _blank_comments(command, out)
+        for site in walk(script, into=("cmdsub", "backtick", "procsub")):
+            res = resolve(site.cmd)
+            if res.name is None:
+                continue
+            for red in site.cmd.redirects:
+                if red.hd is not None and res.name not in SHELLS and not red.hd.expansions:
+                    _blank(out, *red.hd.body_span, keep_newlines=True)
+            if res.name in _DATA_COMMANDS and not res.wrappers:
+                for w in res.args:
+                    if all(p.kind == "lit" for p in w.parts):
+                        _blank(out, *w.span)
+        return "".join(out)
+    except Exception:  # noqa: BLE001
+        return command
+
+
 def git_clean_verdict(command, view):
     """ALLOW only for a provable dry run; BLOCK:nested / BLOCK:trust / BLOCK:exclude / BLOCK:dryrun otherwise.
 
-    Trust first: every raw argument is a plain literal (T1), the raw and stripped passes see the same cleans (T2),
-    and no xargs injects arguments (T3). Then a separate-value exclude eats the next token, and the effective
-    dry-run state is read up to the first `--`, last one wins, default off.
+    Reads the raw text: the fallback for a command lib/shell_parse.py cannot read. Trust first: every raw argument
+    is a plain literal (T1), the raw and stripped passes see the same cleans (T2), and no xargs injects arguments
+    (T3). Then a separate-value exclude eats the next token, and the effective dry-run state is read up to the first
+    `--`, last one wins, default off.
     """
     from lib.git_command_classifier import _basename, _command_token_index, _git_subcommand, _segments, _unquote_token
-    literal = re.compile(r'^[A-Za-z0-9_./=+:@,-]*$')
-    pos_dry = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
-    neg_dry = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
-    exclude = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
-    cluster = re.compile(r'^-[A-Za-z]+$')
-    coarse, shell_cmd, exec_ctx = (re.compile(p) for p in (GIT_CLEAN_OCCURRENCE_RE, GC_SHELL_RE, GC_EXECCTX_RE))
     raw = []
     for seg in _segments(command):
         toks = seg.split()
@@ -1096,55 +1287,110 @@ def git_clean_verdict(command, view):
         sub, args = _git_subcommand(toks[idx + 1:])
         if sub == 'clean':
             raw.append((args, any(_basename(_unquote_token(t)) == 'xargs' for t in toks[:idx])))
-    # More `git … clean` occurrences than resolved invocations means one sits where the walk cannot see it.
-    if shell_cmd.search(command) or exec_ctx.search(command):
-        found = max(len(coarse.findall(command.replace('"', q).replace("'", q))) for q in (' ', ''))
-    else:
-        found = len(coarse.findall(command))
-    if found > len(raw):
+    if _clean_occurrences(command) > len(raw):
         return 'BLOCK:nested'
     stripped = [i for i in view.invs if i.get('subcommand') == 'clean']
     if len(raw) != len(stripped):
         return 'BLOCK:trust'
     for (raw_args, injected), inv in zip(raw, stripped):
-        if injected or not all(literal.match(t) for t in raw_args):
+        if injected or not all(_CLEAN_LITERAL.match(t) for t in raw_args):
             return 'BLOCK:trust'
-        args = inv.get('args', [])
-        if any(a == '-e' or (cluster.match(a) and a.endswith('e')) or (exclude.match(a) and '=' not in a) for a in args):
-            return 'BLOCK:exclude'
-        state = False
-        for a in args:
-            if a == '--':
-                break
-            if a == '-n' or pos_dry.match(a):
-                state = True
-            elif neg_dry.match(a):
-                state = False
-            elif cluster.match(a) and 'n' in a[1:]:
-                first_e = a[1:].find('e')
-                if first_e < 0 or a[1:].index('n') < first_e:
-                    state = True
-        if not state:
-            return 'BLOCK:dryrun'
+        verdict = _clean_args_verdict(inv.get('args', []))
+        if verdict != 'ALLOW':
+            return verdict
     return 'ALLOW'
 
 
-def git_clean_rule(command, stripped, view):
-    """BS-43: `git clean` passes only as a provable dry run. A clean the classifier cannot resolve (a wrapper prefix,
-    a nested shell payload) is found by the occurrence grammar over the raw and stripped text, with quotes
-    neutralised when a shell or an exec-taking git subcommand holds command position, and fails closed."""
-    has_inv = view.ok and view.any_sub("clean")
-    verdict = ""
-    if has_inv:
+_CLEAN_LITERAL = re.compile(r'^[A-Za-z0-9_./=+:@,-]*$')
+
+
+def _clean_occurrences(text):
+    """How many `git … clean` occurrences the occurrence grammar finds, with quotes neutralised when a shell or an
+    exec-taking git subcommand holds command position."""
+    coarse, shell_cmd, exec_ctx = (re.compile(p) for p in (GIT_CLEAN_OCCURRENCE_RE, GC_SHELL_RE, GC_EXECCTX_RE))
+    if shell_cmd.search(text) or exec_ctx.search(text):
+        return max(len(coarse.findall(text.replace('"', q).replace("'", q))) for q in (' ', ''))
+    return len(coarse.findall(text))
+
+
+def _clean_args_verdict(args):
+    """The exclude gate, then the effective dry-run state, over one clean invocation's arguments."""
+    pos_dry = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
+    neg_dry = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
+    exclude = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
+    cluster = re.compile(r'^-[A-Za-z]+$')
+    if any(a == '-e' or (cluster.match(a) and a.endswith('e')) or (exclude.match(a) and '=' not in a) for a in args):
+        return 'BLOCK:exclude'
+    state = False
+    for a in args:
+        if a == '--':
+            break
+        if a == '-n' or pos_dry.match(a):
+            state = True
+        elif neg_dry.match(a):
+            state = False
+        elif cluster.match(a) and 'n' in a[1:]:
+            first_e = a[1:].find('e')
+            if first_e < 0 or a[1:].index('n') < first_e:
+                state = True
+    return 'ALLOW' if state else 'BLOCK:dryrun'
+
+
+def git_clean_view_verdict(command, invs):
+    """The verdict over lib/shell_parse.py's invocations; '' when the command runs no `git clean`.
+
+    A clean inside a shell payload (bash -c, eval, a fed shell, find -exec, a git alias) is BLOCK:nested, as is a
+    `git … clean` occurrence in the command's code text that no invocation accounts for (rebase -x, submodule
+    foreach ...). A clean that interpreter code spawns, or one the command runs itself, passes only as a provable
+    dry run: literal arguments, no argument-injecting xargs, no separate-value exclude, dry-run on.
+    """
+    if "clean" not in command:
+        return ""
+    from lib.shell_parse import resolve
+    cleans = [(i, ctx) for i, ctx in invs if i.subcommand == "clean"]
+    visible = [(i, ctx) for i, ctx in cleans if set(ctx) <= _VISIBLE]
+    found = _clean_occurrences(code_text(command))
+    if not cleans and not found:
+        return ""
+    if found > len(visible) or any(not set(ctx) <= _VISIBLE | {"interp"} for _i, ctx in cleans):
+        return "BLOCK:nested"
+    for inv, _ctx in cleans:
+        res = resolve(inv.cmd) if inv.cmd is not None else None
+        if inv.unresolved or any(a is None for a in inv.args) \
+                or (res is not None and any(w[0] == "xargs" for w in res.wrappers)) \
+                or not all(_CLEAN_LITERAL.match(w.text) for w in inv.arg_words):
+            return "BLOCK:trust"
+        verdict = _clean_args_verdict(list(inv.args))
+        if verdict != "ALLOW":
+            return verdict
+    return "ALLOW"
+
+
+def git_clean_rule(command, stripped, view, invs):
+    """BS-43: `git clean` passes only as a provable dry run. The invocations come from lib/shell_parse.py; a clean
+    they do not account for (an exec-taking git subcommand, a launcher the parser does not read) is found by the
+    occurrence grammar over the command's code text and fails closed. A command the parser cannot read takes the
+    raw-text classifier pass."""
+    fail_closed = False
+    if invs is not None:
         try:
-            verdict = git_clean_verdict(command, view)
+            verdict = git_clean_view_verdict(command, invs)
         except Exception:  # noqa: BLE001
-            verdict = ""
-    probe = ""
-    if "clean" in command + stripped and grep(GC_SHELL_RE + "|" + GC_EXECCTX_RE, command + "\n" + stripped):
-        probe = (command.replace('"', ' ') + "\n" + stripped.replace('"', ' ')).replace("'", " ")
-        probe = (probe + "\n" + command.replace('"', '') + "\n" + stripped.replace('"', '')).replace("'", "")
-    fail_closed = not has_inv and grep(GIT_CLEAN_OCCURRENCE_RE, command + "\n" + stripped + "\n" + probe)
+            verdict = "BLOCK:trust"
+        has_inv = bool(verdict)
+    else:
+        has_inv = view.ok and view.any_sub("clean")
+        verdict = ""
+        if has_inv:
+            try:
+                verdict = git_clean_verdict(command, view)
+            except Exception:  # noqa: BLE001
+                verdict = ""
+        probe = ""
+        if "clean" in command + stripped and grep(GC_SHELL_RE + "|" + GC_EXECCTX_RE, command + "\n" + stripped):
+            probe = (command.replace('"', ' ') + "\n" + stripped.replace('"', ' ')).replace("'", " ")
+            probe = (probe + "\n" + command.replace('"', '') + "\n" + stripped.replace('"', '')).replace("'", "")
+        fail_closed = not has_inv and grep(GIT_CLEAN_OCCURRENCE_RE, command + "\n" + stripped + "\n" + probe)
     detail = {
         "BLOCK:trust": ["DETAIL: the argument region is not a provable literal (quoting, backslash, $-expansion, brace, "
                         "~, ^, or an argument-injecting xargs wrapper), so what git receives cannot be proven to match "
@@ -1227,8 +1473,9 @@ def decide(payload_text):
     service_rules(command, executable, env)
     removal_policy(payload_text, command)
     kill_pid_rule(command, executable)
-    worktree_git_rules(command, view)
-    git_clean_rule(command, stripped, view)
+    invs = git_view(command)
+    worktree_git_rules(command, invs)
+    git_clean_rule(command, stripped, view, invs)
     return "ALLOW"
 
 
