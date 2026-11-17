@@ -1271,9 +1271,11 @@ def _dg_options_only(*allowed):
 def _dg_operands(words, valued):
     """The operands of a command whose options in `valued` take a separate value."""
     out, skip = [], False
-    for w in words[1:]:
+    for i, w in enumerate(words[1:], 1):
         if skip:
             skip = False
+        elif w == "--":
+            return out + words[i + 1:]  # every word after `--` is an operand
         elif w.startswith("-") and len(w) > 1:
             skip = w in valued
         else:
@@ -1291,37 +1293,29 @@ def _dg_operands(words, valued):
 _DG_REFUSED_OPTS = {
     "sort": (("-o", "--output", "--compress-program"), "kStT"),     # writes a file it names; runs a compressor
     "tree": (("-o", "-H", "-R"), ""),                               # writes a file; HTML output (-R rewrites dirs)
-    "file": (("-C", "--compile"), "mfFeP"),                         # compiles a magic file beside the operand
     "rg": (("--pre", "--pre-glob", "--hostname-bin", "-z", "--search-zip"), "efgtTABCmMjrE"),  # run programs
     "fd": (("-x", "-X", "--exec", "--exec-batch"), "etE"),          # run a command per match
     "date": (("-s", "--set", "-f", "--file"), "Idr"),               # set the clock; read dates from a file
     "hostname": (("-F", "--file", "-b", "--boot"), ""),             # set the host name
     "man": (("-P", "--pager", "-H", "--html", "-B", "--browser", "-C", "--config-file", "-X", "--gxditview",
              "-l", "--local-file"), "MLmSsepErRT"),                 # name a program or format a file it is given
-    "info": (("-o", "--output", "--dribble", "--restore", "--init-file"), "dfn"),  # write or replay keystrokes
     # Key-binding files (a lesskey `#env LESSOPEN=|cmd` runs a command), log files it writes, tags files it follows.
     "less": (("-k", "--lesskey-file", "--lesskey", "--lesskey-src", "--lesskey-content", "-o", "-O", "--log-file",
               "--LOG-FILE", "-t", "--tag", "-T", "--tag-file"), "", True),
-    "ruff": (("-o", "--output-file", "--cache-dir"), ""),           # writes a file or directory it names
-    "kubectl": (("--kubeconfig",), ""),                             # a kubeconfig's exec plugin is code
-    "helm": (("--kubeconfig", "--post-renderer"), ""),              # same, and a renderer program
-    "pip": (("--python", "--log", "--log-file"), ""),               # re-runs under a named interpreter; writes
-    "npm": (("--userconfig", "--globalconfig", "--node-options", "--script-shell"), "", True),  # config naming programs
-    "pnpm": (("--pnpmfile", "--global-pnpmfile"), "", True),         # a pnpmfile is JavaScript it runs
-    "apt": (("-o", "--option", "-c", "--config-file"), ""),          # APT config can name hooks (Pre-Invoke …)
-    "printf": (("-v",), ""),                                         # assigns a shell variable (PATH …)
-    "ss": (("-K", "--kill"), ""),                                    # closes the sockets it lists
-    "whatis": (("-P", "--pager", "-C", "--config-file"), "smML"),    # a pager program; a man-db config file
-    "go": (("-w", "-u"), ""),                                        # `go env -w/-u` write the go env file
+    # writes a file or directory it names; a --config (file or inline `cache-dir=`) can name one too
+    "ruff": (("-o", "--output-file", "--cache-dir", "--config"), ""),
+    # a kubeconfig's exec plugin is code; klog and profile files are written; dump writes a directory
+    "kubectl": (("--kubeconfig", "--log-file", "--log-dir", "--cache-dir", "--profile-output",
+                 "--output-directory"), ""),
+    "pip": (("--python", "--log", "--log-file", "--cache-dir", "--report"), ""),  # a named interpreter; writes
+    # APT reads long names in any case: config can name hooks (Pre-Invoke …); -p/-s overwrite the cache files named
+    "apt": (("-o", "--option", "-c", "--config-file", "-p", "--pkg-cache", "-s", "--src-cache"), "", True),
+    "ss": (("-K", "--kill", "-D", "--diag"), ""),                    # closes the sockets it lists; -D writes a file
     # tsc reads option names in any case; these write files (build output, profiles, build info, a new config).
     "tsc": (("-b", "--build", "-w", "--watch", "-i", "--incremental", "--init", "--generateTrace",
              "--generateCpuProfile", "--tsBuildInfoFile", "--outDir", "--outFile", "--out", "--declarationDir"),
             "", True),
 }
-_DG_REFUSED_OPTS["more"] = _DG_REFUSED_OPTS["less"]
-_DG_REFUSED_OPTS["pip3"] = _DG_REFUSED_OPTS["pip"]
-_DG_REFUSED_OPTS["apt-cache"] = _DG_REFUSED_OPTS["apt"]
-_DG_REFUSED_OPTS["apropos"] = _DG_REFUSED_OPTS["whatis"]
 
 
 def _dg_refusing(head, then=_dg_any):
@@ -1389,8 +1383,10 @@ def _dg_git(t, words):
     sub, rest = words[i], words[i + 1:]
     if sub not in _DG_GIT_SUB or _dg_git_runs(words):
         return False
-    if sub == "remote":  # listing only: `git remote`, `git remote -v`, `git remote show|get-url x`
-        return not rest or rest[0] in ("-v", "--verbose", "show", "get-url")
+    if sub == "remote":  # listing only: `git remote [-v]`, `git remote [-v] show|get-url [options] name`
+        words_ = [w for w in rest if not w.startswith("-")]
+        return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
+            not words_ or words_[0] in ("show", "get-url"))
     if sub == "config":  # reading only: --list/--get*, or one key; never edit
         reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
                  "--local", "--system", "--name-only", "-z", "--null")
@@ -1444,37 +1440,33 @@ def _dg_tsc(t, words):
         any(w.lower() == "--noemit" for w in words) and _dg_refusing("tsc")(t, words))
 
 
+def _dg_version_only(*forms):
+    """Exactly the head and one version or help word: anything after it (`javac -version -J-javaagent:…`,
+    `java -version -agentpath:…`, `mvn -v -f …`) is read by the program and refuses."""
+    return lambda t, words: len(words) == 2 and words[1] in forms
+
+
+# Pruned to the heads the owner's everyday lists need on a line where a command ends on an option (the 143-command
+# list, the 486-command corpus, the R5 mentions and the multi-line and pipe lists); every other head refuses on such
+# a line as the base fallback does. hooks/tests/test_bash_safety_degraded_fallback.py checks each head below is used
+# by one of those lists.
 _DG_ALLOW = {
-    # Text and file readers: options select, format or count; operands are files read.
-    **dict.fromkeys(("cat", "head", "tail", "wc", "nl", "od", "hexdump", "base64", "md5sum", "sha1sum",
-                     "sha256sum", "sha512sum", "cksum", "b2sum", "cmp", "comm", "paste", "column", "cut", "tr",
-                     "diff", "stat", "fold", "fmt", "expand", "unexpand", "tac", "rev", "strings", "basename",
-                     "dirname", "realpath", "readlink", "seq", "true", "false", "sleep", "yes", "echo", "jq", "yq",
-                     "pwd", "cd", "pushd", "popd", "type"), _dg_any),
-    "printf": _dg_refusing("printf"),
-    # One input operand: a second operand is the file they write.
+    # Text readers and listings: options select, format or count; operands are files read.
+    **dict.fromkeys(("head", "tail", "wc", "base64", "jq", "ls", "du", "df", "pwd", "cd", "echo"), _dg_any),
+    "sort": _dg_refusing("sort"), "tree": _dg_refusing("tree"),
+    # One input operand: a second operand is the file uniq writes.
     "uniq": lambda t, w: len(_dg_operands(w, ("-f", "-s", "-w", "--skip-fields", "--skip-chars",
                                               "--check-chars"))) <= 1,
-    # xxd.c: -c/-cols, -g/-groupsize, -l/-len, -s/-seek, -o, -n/-name and -R take the NEXT word unless the value is
-    # attached; -b -C -E -i -p -r -u -a -d -e are flags.
-    "xxd": lambda t, w: len(_dg_operands(w, ("-c", "-cols", "-g", "-groupsize", "-l", "-len", "-s", "-seek", "-o",
-                                             "-n", "-name", "-R"))) <= 1,
-    "sort": _dg_refusing("sort"), "tree": _dg_refusing("tree"), "file": _dg_refusing("file"), "ls": _dg_any,
-    # Pagers: no `+command` start-up word, no key-binding file (bindings run commands), no log file. Reading keys
-    # needs a terminal, which a tool call does not have.
+    # Pager: no `+command` start-up word, no key-binding file (bindings run commands), no log or tags file. Reading
+    # keys needs a terminal, which a tool call does not have.
     "less": _dg_refusing("less", lambda t, w: not any(x.startswith("+") for x in w[1:])),
-    "more": _dg_refusing("more", lambda t, w: not any(x.startswith("+") for x in w[1:])),
-    # Relocators: copy, move or create their operands; the analyzer's relocator class (no option runs a program).
-    **dict.fromkeys(("cp", "mv", "mkdir", "touch", "ln"), _dg_any),
-    "du": _dg_any, "df": _dg_any, "find": lambda t, w: not set(w[1:]) & t["find_ops"],  # actions refuse
+    "cp": _dg_any,  # copies its operands; the analyzer's relocator class (no option runs a program)
+    "find": lambda t, w: not set(w[1:]) & t["find_ops"],  # exec, delete and fprint actions refuse
     "fd": _dg_refusing("fd"),
     # Search tools: patterns and paths are data; rg's preprocessor and decompressor options run programs.
-    **dict.fromkeys(("grep", "egrep", "fgrep", "rgrep"), _dg_any),
-    "rg": _dg_refusing("rg"),
+    "grep": _dg_any, "rg": _dg_refusing("rg"),
     # System inspection: read-only reports. hostname, date, stty and ulimit can also set; only reading forms.
-    **dict.fromkeys(("uname", "whoami", "id", "groups", "nproc", "uptime", "free", "ps", "top", "lscpu", "lsblk",
-                     "netstat", "lsof", "locale", "tty", "printenv", "which", "whereis", "cal"),
-                    _dg_any),
+    **dict.fromkeys(("uname", "id", "nproc", "uptime", "free", "ps", "top", "netstat"), _dg_any),
     "ss": _dg_refusing("ss"),
     "date": _dg_refusing("date"),
     "hostname": _dg_refusing("hostname", lambda t, w: all(x.startswith("-") for x in w[1:])),
@@ -1485,46 +1477,29 @@ _DG_ALLOW = {
     "history": lambda t, w: all(x.isdigit() for x in w[1:]),
     # Arithmetic: bc's language has no command or file-writing statement (unlike dc's `!`).
     "bc": _dg_any,
-    # Documentation: refused options name a pager, browser or config, or format a file given on the command line.
     # man formats an operand holding a `/` as a local file, as -l does.
     "man": _dg_refusing("man", lambda t, w: not any("/" in x for x in w[1:] if not x.startswith("-"))),
-    "info": _dg_refusing("info"), "apropos": _dg_refusing("apropos"),
-    "whatis": _dg_refusing("whatis"),
     "apt": _dg_refusing("apt", _dg_subcommands("show", "list", "search", "policy", "depends", "rdepends",
                                                 "showsrc")),
-    "apt-cache": _dg_refusing("apt-cache", _dg_subcommands("show", "search", "policy", "depends", "rdepends",
-                                                            "showpkg")),
     # Version control and orchestration CLIs, read forms (see above).
     "git": _dg_git, "docker": _dg_docker, "kubectl": _dg_refusing("kubectl", _dg_kubectl),
-    "helm": _dg_refusing("helm", _dg_subcommands("list", "ls", "version", "status", "history")),
     "terraform": _dg_subcommands("version", "fmt"),  # fmt rewrites its operand files, loads no provider
-    "gh": _dg_subcommands("--version"), "aws": _dg_subcommands("--version"),
-    "gcloud": _dg_subcommands("--version"),
-    # Interpreters and package tools: version reports and read forms only. Not `cargo fmt`: fmt is an external
-    # subcommand, so a `[alias] fmt = "run …"` in the repository's .cargo/config.toml runs repository code.
-    **dict.fromkeys(("python", "python3", "python2"), _dg_python),
-    "pip": _DG_PIP, "pip3": _DG_PIP,
-    "npm": _dg_refusing("npm", _dg_subcommands("ls", "list", "--version", "-v", "view", "outdated")),
-    "pnpm": _dg_refusing("pnpm", _dg_subcommands("--version", "-v", "ls", "list")),
-    "yarn": _dg_subcommands("--version", "-v"),
-    "node": _dg_subcommands("--version", "-v"), "deno": _dg_subcommands("--version"),
-    "bun": _dg_subcommands("--version"), "cargo": _dg_subcommands("--version", "-V"),
-    "rustc": _dg_subcommands("--version", "-V"), "go": _dg_refusing("go", _dg_subcommands("version", "env")),
-    "java": _dg_subcommands("-version", "--version"), "javac": _dg_subcommands("-version", "--version"),
-    "mvn": _dg_subcommands("-v", "--version"), "tsc": _dg_tsc,
-    # Linters and formatters that parse files and load no code from their configuration (eslint, prettier, mypy,
-    # pylint and flake8 can: JS configs and plugins), so not those.
-    "ruff": _dg_refusing("ruff", _dg_subcommands("check", "format", "--version")), "black": _dg_any,
-    "isort": _dg_any, "shellcheck": _dg_any,
+    # Version reports: exactly the head and the word. Not `cargo fmt`: fmt is an external subcommand, so a
+    # `[alias] fmt = "run …"` in the repository's .cargo/config.toml runs repository code.
+    "gh": _dg_version_only("--version"), "aws": _dg_version_only("--version"),
+    "gcloud": _dg_version_only("--version"), "cargo": _dg_version_only("--version", "-V"),
+    "rustc": _dg_version_only("--version", "-V"), "java": _dg_version_only("-version", "--version"),
+    "javac": _dg_version_only("-version", "--version"), "mvn": _dg_version_only("-v", "--version"),
+    "ssh": _dg_version_only("-V"), "mysql": _dg_version_only("--version", "-V"),
+    # Interpreters: version reports and `-m pip` read forms only.
+    **dict.fromkeys(("python", "python3"), _dg_python),
+    "pip": _DG_PIP, "tsc": _dg_tsc,
+    "ruff": _dg_refusing("ruff", _dg_subcommands("check", "format", "--version")),
     # Keys and agents: listing only.
     "ssh-add": _dg_options_only("-l", "-L"),
     "gpg": _dg_options_only("--list-keys", "-k", "--list-secret-keys", "-K", "--fingerprint", "--version"),
-    "ssh": _dg_options_only("-V"),
-    # Database clients: listing databases or the version only, alone (bare, they read SQL and its shell escapes
-    # from stdin; -c/-f/-e run statements).
-    "psql": lambda t, w: len(w) == 2 and w[1] in ("-l", "--list", "--version", "-V"),
-    "mysql": lambda t, w: len(w) == 2 and w[1] in ("--version", "-V"),
-    "openssl": _dg_subcommands("version"),
+    # psql: listing databases or the version only, alone (bare, it reads SQL and its shell escapes from stdin).
+    "psql": _dg_version_only("-l", "--list", "--version", "-V"),
 }
 # Any other head ending a command on an option-like word may still report its version or usage, alone, unless it
 # is a wrapper, a handler-owned program, a removal program or one of the degraded extras.

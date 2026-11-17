@@ -338,19 +338,25 @@ def test_predicate_refuses_sensitive_lines(line):
     assert not R.degraded_trailing_option_is_plain(line)
 
 
-@pytest.mark.parametrize("line", [
+PLAIN_LINES = [
     "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version", "grep -rn find src -i",
     "ls src/ -la", "cp a out/ -v", "git log --grep=ssh --oneline -5", "python3 -m pip list -v", "python3 -V",
     "git status --short", "ls -la | grep x -i", "date -u 2>&1 -R",
-])
+]
+
+
+@pytest.mark.parametrize("line", PLAIN_LINES)
 def test_predicate_admits_plain_lines(line):
     assert R.degraded_trailing_option_is_plain(line)
 
 
-@pytest.mark.parametrize("command", [
+MULTILINE_EVERYDAY = [
     "kubectl get pods -A\nkubectl get svc -n x", "git status --short\ngit log --oneline -5", "ls -la\n\ndate -u",
     "cd src && ls -la\ngit diff --stat", "git status --short\nfind . -name x -ls",
-])
+]
+
+
+@pytest.mark.parametrize("command", MULTILINE_EVERYDAY)
 def test_multiline_everyday_scripts_stay_allowed(command):
     assert not R.degraded_refuses(command, _rmref()), command
 
@@ -604,3 +610,67 @@ def test_round7_option_spellings_refuse_end_to_end(mode, tmp_path):
         results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))),
                               R7_OPTION_SPELLINGS + R8_SPELLINGS))
     assert not [c for c, code, _err in results if code != 2], (mode, results)
+
+
+# ── Round 9: the allowlist pruned to the heads the everyday lists need ──
+
+R9_REFUSED = [
+    "apt-cache policy -p /dev/shm/x/victim -q", "apt-cache policy --pkg-cache /dev/shm/x/victim -q",
+    "apt-cache show -s /dev/shm/x/victim coreutils -q", "apt policy --pkg-cache /dev/shm/x/victim -q",
+    "apt-cache depends -p /dev/shm/x/victim coreutils -i", "apt policy -p /dev/shm/x/victim -q",
+    "apt show -s /dev/shm/x/victim coreutils -q", "apt-cache policy --CONFIG-FILE /dev/shm/x/cfg -q",
+    "apt-cache policy --OPTION Dir::Cache::pkgcache=/dev/shm/x/victim -q", "apt policy --Config-File /dev/shm/x/cfg -q",
+    "apt policy --OPTION Dir::Cache::pkgcache=/dev/shm/x/victim -q", "apt show --PKG-CACHE /dev/shm/x/victim x -a",
+    "javac -version -J-javaagent:/dev/shm/x/a.jar -g", "javac --version -J-javaagent:/dev/shm/x/a.jar -g",
+    "java -version -agentpath:/dev/shm/x/evil.so -Xmx1m", "rustc -V -Zcodegen-backend=/dev/shm/x/evil.so -v",
+    "mvn -v -Dmaven.ext.class.path=/dev/shm/x/a.jar -q", "mvn -v -f /dev/shm/x/proj -q",
+    "cargo --version --config build.rustc=/dev/shm/x/w -v", "node -v --require /dev/shm/x/e.js --trace-warnings",
+    "ss -D /dev/shm/x/out -t -a", "ss --diag=/dev/shm/x/out -a", "ss -tD /dev/shm/x/out -a",
+    "yq -s '\"/dev/shm/x/o\"' in.yaml -P", "kubectl cluster-info dump --output-directory /dev/shm/x/d -A",
+    "kubectl get pods --log-file=/dev/shm/x/l -A", "npm view --git=/dev/shm/x/prog git+file:///dev/shm/x/r --json",
+    "npm view --GIT=/dev/shm/x/prog git+file:///dev/shm/x/r --json", "npm outdated --git /dev/shm/x/prog --long",
+    "uniq -- -f out; ls -l", "xxd -- -c out; ls -l", "ruff check --config cache-dir=/dev/shm/x/c . -q",
+    "git remote -v add x /dev/shm/x/r -q", "git remote -v remove origin -q", "git remote --verbose set-url o x -q",
+    "pip list --cache-dir /dev/shm/x/c -v",
+]
+
+
+@pytest.mark.parametrize("command", R9_REFUSED)
+def test_round9_forms_refuse(command):
+    assert R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
+def test_round9_forms_refuse_end_to_end(mode, tmp_path):
+    hook = None
+    if mode == "crash":
+        dst = tmp_path / "hooks"
+        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        analyzer = dst / "lib" / "bash_execution_boundary.py"
+        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
+            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
+        hook = str(dst / "pretool-bash-safety.sh")
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), R9_REFUSED))
+    assert not [c for c, code, _err in results if code != 2], (mode, results)
+
+
+def test_every_allowlisted_head_is_used_by_an_everyday_list():
+    """The allowlist holds only heads an everyday fixture needs on a line where a command ends on an option."""
+    t = R._degraded_tables()
+    used = set()
+    for command in (EVERYDAY_TRAILING_OPTION + MENTIONS + R7_ALLOWED + MULTILINE_EVERYDAY + PLAIN_LINES):
+        for line in R.lines_of(command):
+            parsed = R._dg_commands(line)
+            for words in (parsed[0] if parsed else []):
+                words = [w for w in words if w not in t["drop"]]
+                if words:
+                    used.add(words[0])
+    assert not sorted(set(R._DG_ALLOW) - used), sorted(set(R._DG_ALLOW) - used)
+    assert set(R._DG_REFUSED_OPTS) <= set(R._DG_ALLOW), sorted(set(R._DG_REFUSED_OPTS) - set(R._DG_ALLOW))
+
+
+@pytest.mark.parametrize("head", ["apt-cache", "yq", "helm", "info", "whatis", "apropos", "npm", "node", "pnpm",
+                                  "yarn", "go", "openssl", "file", "more", "xxd", "printf", "cat", "mv", "ln"])
+def test_pruned_heads_refuse_on_a_trailing_option(head):
+    assert R.degraded_refuses(head + " x -q", _rmref()), head
