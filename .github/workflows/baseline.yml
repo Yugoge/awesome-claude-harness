@@ -620,8 +620,9 @@ jobs:
     # everything it adds over its base, whatever was merged into it. Pull requests only: a push to
     # master has no base to be red on. Parallel to every other job, off the replays' critical path.
     name: red then green
-    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing.
-    if: ${{ github.event_name == 'pull_request' && toJSON(github.event.repository.private) == 'false' && !github.event.pull_request.draft }}
+    # Pull requests only; the D30 visibility gate in the form every job carries (see the baseline job;
+    # its dispatch alternative never holds on a pull_request event); a draft pull request runs nothing.
+    if: ${{ github.event_name == 'pull_request' && (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # Train A (4d1b5458..87731833, 13 merges, 447 ids red then green) took 25 min on 4 CPUs; still
     # inside the replay shards' critical path (about 58 min), so it adds nothing to the run.
@@ -668,8 +669,9 @@ jobs:
     # adds over its base. After 10 pull requests, if under 1 survivor in 10 is equivalent, survivors
     # on changed lines become blocking (plan P15 (b)); until then nothing here blocks on them.
     name: diff mutation (report-only)
-    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing.
-    if: ${{ github.event_name == 'pull_request' && toJSON(github.event.repository.private) == 'false' && !github.event.pull_request.draft }}
+    # Pull requests only; the D30 visibility gate in the form every job carries (see the baseline job;
+    # its dispatch alternative never holds on a pull_request event); a draft pull request runs nothing.
+    if: ${{ github.event_name == 'pull_request' && (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # The mutation run is bounded below (MUTATE_BUDGET) so the job ends inside the replay shards'
     # critical path and still posts what it found; this is the backstop.
