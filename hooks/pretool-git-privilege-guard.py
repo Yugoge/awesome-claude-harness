@@ -1356,6 +1356,116 @@ def _evaluate_direct_ref_mutation(command, data):
     )
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint refs (GIT-M3)
+#
+# The auto-commit mechanism snapshots work to refs/checkpoints/<branch>
+# (docs/reference/checkpoint-mechanism.md). A fetch or pull whose refspec maps
+# into that namespace overwrites, force-updates or (with --prune) deletes those
+# snapshots: `git fetch origin refs/checkpoints/master:refs/checkpoints/master`.
+# git takes refspecs from operands, --refmap, remote.<name>.fetch configuration
+# (-c, --config-env, GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS) and,
+# under --stdin, from stdin. All but configuration files and stdin from a file or
+# a program are text in the command, so a command that runs fetch or pull is
+# refused when any word of it, as the shell reads it (the parser's static
+# values: quotes, backslashes and $'...' resolved) or as written with quotes and
+# backslashes dropped (which keeps a computed tail: "x:refs/checkpoints/$b"),
+# holds a refspec whose destination is in the namespace. A remote.<name>.fetch
+# value the command does not show (--config-env) is refused too. A fetch with no
+# destination (`git fetch origin refs/checkpoints/master`, FETCH_HEAD only) or
+# with one elsewhere (refs/remotes/...) passes.
+# ---------------------------------------------------------------------------
+
+_CHECKPOINT_NS = ('refs', 'checkpoints')
+_FETCHING = frozenset({'fetch', 'pull'})
+# What separates refspecs in a word: whitespace, quotes, `=` (`--refmap=`, a `-c`
+# key=value, GIT_CONFIG_PARAMETERS' 'key'='value') and printf's `\n`.
+_REFSPEC_SPLIT_RE = re.compile(r"\\n|[\s'\"=;|&()<>`]+")
+_FETCH_CONFIG_KEY_RE = re.compile(r'remote\..+\.fetch$', re.IGNORECASE)
+
+
+def _in_checkpoint_ns(dst):
+    """True when the ref (or refspec glob) `dst` names, or can match, a ref in
+    refs/checkpoints/ or refs/checkpoints itself. Read the way the namespace is
+    stored on any disk: letter case ignored (a case-blind filesystem keeps
+    refs/Checkpoints/x in the same directory), empty and `.` components dropped
+    and `..` applied; the spellings git rejects outright are refused alike."""
+    parts = []
+    for comp in dst.lstrip('+').lower().split('/'):
+        if comp in ('', '.'):
+            continue
+        if comp == '..':
+            if parts:
+                parts.pop()
+            continue
+        parts.append(comp)
+    norm = '/'.join(parts)
+    ns = '/'.join(_CHECKPOINT_NS)
+    if '*' in norm:  # a glob: `*` matches across `/`
+        head = norm.split('*', 1)[0]
+        return (ns + '/').startswith(head) or head.startswith(ns + '/')
+    return norm == ns or norm.startswith(ns + '/')
+
+
+def _maps_into_checkpoints(text):
+    """True when `text` holds a refspec `[+]<src>:<dst>` whose <dst> is in the
+    checkpoint namespace (_in_checkpoint_ns)."""
+    for token in _REFSPEC_SPLIT_RE.split(text):
+        token = token.replace('\\', '')
+        if ':' in token and _in_checkpoint_ns(token.rpartition(':')[2]):
+            return True
+    return False
+
+
+def _flat_text(command):
+    """`command` as written, line continuations, quotes and backslashes dropped
+    (`\\n` kept as a separator)."""
+    flat = command.replace('\\\n', '').replace('\\n', ' ')
+    for ch in '\'"\\':
+        flat = flat.replace(ch, '')
+    return flat
+
+
+def _writes_checkpoint_ref(command, invocations):
+    """True when `command` runs git fetch or pull (as the parser or the
+    classifier reads it) and carries a refspec into refs/checkpoints/, or gives
+    it a remote.<name>.fetch value the guard cannot read."""
+    script = shell_parse.parse(command)
+    parsed = [] if script.error is not None else shell_parse.git_invocations(script)
+    fetches = [inv for inv in parsed if inv.subcommand in _FETCHING]
+    if not fetches and not any(inv.subcommand in _FETCHING for inv in invocations):
+        return False
+    for inv in fetches:
+        for key, value in inv.config_pairs:
+            if key is not None and _FETCH_CONFIG_KEY_RE.match(key) and (
+                    value is None or value.startswith('$')):
+                return True
+    texts = [_flat_text(command)]
+    texts += [_unquote_token(t) for inv in invocations for t in inv.args]
+    for inv in fetches:
+        texts += [v for _k, v in inv.config_pairs if v]
+    if script.error is None:
+        for site in shell_parse.walk(script):
+            texts += [w.value() for w in site.cmd.words if w.value()]
+            texts += [a.static_value() for a in site.cmd.assignments if a.static_value()]
+            texts += [r.hd.body for r in site.cmd.redirects if r.hd is not None]
+    return any(_maps_into_checkpoints(t) for t in texts if t)
+
+
+def _evaluate_checkpoint_write(command, data):
+    if _check_git_allowlist(command, data):
+        return
+    _block(
+        '\nBLOCKED: agent git checkpoint ref write - a git fetch or pull whose '
+        'refspec writes under refs/checkpoints/ (an operand, --refmap, a '
+        'remote.<name>.fetch value from -c, --config-env or GIT_CONFIG_*, or '
+        '--stdin text) would overwrite or prune the auto-commit snapshots.\n'
+        'Command excerpt: %s\n' % command[:200]
+        + 'To read a remote checkpoint, fetch it without a destination '
+        '(FETCH_HEAD) or into refs/remotes/<remote>/checkpoints/<name>.\n'
+    )
+
+
 def _looks_like_git_forbidden_plumbing(invocations):
     """git commands that write commits or move refs outside /commit and /merge.
 
@@ -1629,6 +1739,11 @@ def _evaluate_command(command, data, do_consent=False):
                 + 'Segment(s): %s\n' % '; '.join(seg.strip()[:80] for seg in segments[:3])
                 + _residual_recovery(kinds, digest)
             )
+    # A fetch or pull into refs/checkpoints/ is direct ref mutation: /allow
+    # lifts it and /do releases it. Judged before the classifier's list, which
+    # may miss a fetch the parser reads.
+    if not do_consent and _writes_checkpoint_ref(command, invocations):
+        _evaluate_checkpoint_write(command, data)
     if not invocations:
         return
     # A read-only form of a guarded subcommand (help, a dry run,

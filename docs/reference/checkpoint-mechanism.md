@@ -71,6 +71,13 @@ document-only:
 After adding the refspec, `git fetch` mirrors checkpoints into
 `refs/remotes/origin/checkpoints/<branch>` on the cloning machine.
 
+Fetch a remote checkpoint into `refs/remotes/<remote>/checkpoints/` or with no
+destination (FETCH_HEAD), never into `refs/checkpoints/`: that overwrites, or with
+`--prune` deletes, this machine's own snapshots. `hooks/pretool-git-privilege-guard.py`
+refuses an agent's fetch or pull whose refspec maps into `refs/checkpoints/` (GIT-M3); it
+does not see a `remote.<name>.fetch` line already in `.git/config`, so do not add one
+that maps there.
+
 ---
 
 ## Log file locations
