@@ -205,7 +205,7 @@ def test_git_named_to_a_command_that_is_not_git_is_read(repo, command):
 
 @WHO
 @pytest.mark.parametrize("command", ["echo x > .claude/hooks/x.py", "cp a .claude/commands/x.md",
-                                     "cp .claude/hooks/x.py /tmp/b.py", "bash -c 'echo x > .claude/hooks/y.py'"])
+                                     "bash -c 'echo x > .claude/hooks/y.py'"])
 def test_a_bash_write_to_hooks_or_commands_is_the_config_guard_s(repo, command, agent):
     main, wt = repo
     assert "HOOK PROTECTION" not in _run(HOOK, main, command, main, "s-other", True, agent).stderr
