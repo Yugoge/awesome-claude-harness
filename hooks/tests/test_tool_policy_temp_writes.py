@@ -151,6 +151,7 @@ def _state_targets(tmp_path: Path) -> dict:
     return {
         "sentinel grant (state dir)": (str(state / "claude-grants" / f"{SID}.json"), REFUSED),
         "sentinel grant (/tmp)": ("/tmp/claude-grants/x.json", REFUSED),
+        "sentinel grant, other case": ("/tmp/Claude-Grants/x.json", REFUSED),
         "/do consent flag": (f"/tmp/claude-orchestrator-consent-{SID}.flag", REFUSED),
         "userintent flag": (f"/tmp/claude-push-userintent-{SID}.flag", REFUSED),
         "commit grant": (f"/tmp/claude-commit-grant-{SID}-n1.json", REFUSED),
