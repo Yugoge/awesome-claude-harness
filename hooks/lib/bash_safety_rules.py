@@ -501,42 +501,166 @@ def daemon_restart(command, payload, prefix):
         return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
 
 
-HTTP_STOP_URL = (r"(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|(?<![-A-Za-z0-9.\]_])):[0-9]+/stop"
-                 r"(?![-A-Za-z0-9_])")
-"""A localhost port's `/stop` path segment: `/stop`, `/stop?x`, `/stop/now`, never `/stops` or `/stopwords`.
-The host may be left out (`:8080/stop`, httpie's shorthand for localhost)."""
+HTTP_STOP_URL = r"(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]+/stop(?![A-Za-z0-9])"
+"""A localhost port's stop endpoint: `/stop`, `/stop?x`, `/stop/now`, `/stop-now`, `/stop_server`; never `/stops`
+or `/stopwords`."""
+HTTP_STOP_BARE_URL = r"(?:^|(?<=[\s'\"=])):[0-9]+/stop(?![A-Za-z0-9])"
+"""httpie's shorthand for localhost (`:8080/stop`); it counts only in an HTTP client's own arguments."""
+HTTP_STOP_ANY = r":[0-9]+/stop"
+"""Any port's /stop prefix, whatever the host and whatever follows."""
+HTTP_STOP_RAW_CLIENT = r"(curl|wget|nc\s|ncat|http\.client|aiohttp|requests)"
+HTTP_STOP_RAW_URL = r"(localhost|127\.0\.0\.1):[0-9]+/stop"
+"""The rule's raw reading: a client word anywhere in the text and a localhost /stop prefix anywhere."""
 HTTP_CLIENTS = frozenset({"curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "http", "https", "httpie",
                           "xh", "xhs"})
-HTTP_INTERPRETERS = re.compile(r"^(python[0-9.]*|node(js)?|deno|bun|perl|ruby|php)$")
+HTTP_INTERPRETERS = re.compile(r"^(i?python|pypy|node|nodejs|deno|bun|perl|ruby|php)[0-9.]*(-dbg)?$")
 HTTP_LIBRARIES = r"(http\.client|aiohttp|requests|urllib|httpx|fetch\(|axios|LWP|HTTP::Tiny|Net::HTTP)"
+HTTP_STOP_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack", "echo", "printf", "cat", "sed", "git"})
+"""Commands that only print the text they are given or read (sed and git under the checks of _http_reader_ok)."""
+HTTP_STOP_FILTERS = frozenset({"head", "tail", "wc", "cut", "tr", "uniq", "nl", "column", "jq"})
+HTTP_STOP_CONTEXTS = frozenset({"top", "cmdsub", "backtick"})
+
+
+def _http_sites(command):
+    """[(site, resolved)] for every simple command the parser reaches, or None when the text does not parse."""
+    try:
+        from lib.shell_parse import SimpleCommand, parse, resolve, walk
+        script = parse(command)
+        if script.error is not None:
+            return None
+        out = []
+        for site in walk(script):
+            if not isinstance(site.cmd, SimpleCommand):
+                return None
+            out.append((site, resolve(site.cmd)))
+        return out
+    except Exception:  # noqa: BLE001 - the parser unavailable: the caller's raw reading
+        return None
+
+
+def _http_plain(site, r):
+    """The literal command word of a simple command run as written: no wrapper, payload, prefix assignment or
+    computed command word, at the top or inside a plain command substitution. Else None."""
+    cmd = site.cmd
+    if site.dynamic or cmd.assignments or not cmd.words or r.wrappers or r.payload is not None or r.unresolved:
+        return None
+    if not set(site.context) <= HTTP_STOP_CONTEXTS:
+        return None
+    head = cmd.words[0].value()
+    if head is None:
+        return None
+    name = os.path.basename(head)
+    return name if name == r.name else None
+
+
+def _http_reader_ok(site, r):
+    """True if the simple command only prints or filters text: a reader or a pure filter, as written, whose
+    redirections write nowhere but /dev/null."""
+    name = _http_plain(site, r)
+    if name not in HTTP_STOP_READERS | HTTP_STOP_FILTERS:
+        return False
+    for rd in site.cmd.redirects:
+        if rd.writes() and not (rd.target is not None and rd.target.value() == "/dev/null"):
+            return False
+    args = [w.value() if w.value() is not None else w.text for w in site.cmd.words[1:]]
+    if name in ("sed", "rg", "git") and any(w.value() is None for w in site.cmd.words[1:]):
+        return False  # a computed operand could be a script, a preprocessor or an option
+    if name == "rg" and any(a.startswith("--pre") for a in args):
+        return False
+    if name == "git":
+        return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
+            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args)
+    if name == "sed":
+        quiet, scripts, operands, take = False, [], [], False
+        for a in args:
+            if take:
+                scripts.append(a)
+                take = False
+            elif a in ("--quiet", "--silent"):
+                quiet = True
+            elif a.startswith("--expression="):
+                scripts.append(a.split("=", 1)[1])
+            elif a == "--expression":
+                take = True
+            elif a.startswith("--"):
+                return False  # --in-place, --file and the rest
+            elif a.startswith("-") and len(a) > 1:
+                flags = a[1:]
+                if "e" in flags:
+                    flags, rest = flags.split("e", 1)
+                    if rest:
+                        scripts.append(rest)
+                    else:
+                        take = True
+                if set(flags) - set("nErsuz"):
+                    return False  # -i, -f and anything unknown
+                quiet = quiet or "n" in flags
+            else:
+                operands.append(a)
+        if not scripts and operands:
+            scripts.append(operands[0])
+        stripped = re.sub(r"(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)?" + HTTP_STOP_ANY, "", " ".join(scripts))
+        return quiet and not take and not re.search(r"[ewW]", stripped)
+    return True
+
+
+def _http_runs_client(command, sites):
+    """The rule's structured reading: a localhost stop endpoint (explicit host) in a text in which some parsed
+    command names an HTTP client, a computed command, or an interpreter while the text calls an HTTP library; or
+    httpie's `:PORT/stop` in an HTTP client's own arguments."""
+    names, dynamic = set(), False
+    for site, r in sites:
+        dynamic = dynamic or r.unresolved == "dynamic_head"
+        names.update(os.path.basename(w.value() or w.text).strip("'\"") for w in site.cmd.words)
+        names.add(r.name or "")
+    if grep(HTTP_STOP_URL, command):
+        if dynamic or names & HTTP_CLIENTS:
+            return True
+        if any(HTTP_INTERPRETERS.match(n) for n in names) and grep(HTTP_LIBRARIES, command):
+            return True
+    for site, r in sites:
+        if r.name in HTTP_CLIENTS or r.unresolved == "dynamic_head":
+            if any(re.search(HTTP_STOP_BARE_URL, w.value() if w.value() is not None else w.text) for w in r.args):
+                return True
+    return False
+
+
+def _http_stop_allowed(command, sites):
+    """The whole command has one of the two shapes that send no request to a stop endpoint:
+    (a) every parsed command only prints or filters text (grep, rg, echo, cat, sed -n, git log, ... | head), so
+        the URL is a mention; or
+    (b) no port's /stop in the text is a stop endpoint (`/stops/42`, `/stopwords`), and every such URL sits in a
+        literal argument of an HTTP client run as written."""
+    if all(_http_reader_ok(site, r) for site, r in sites):
+        return True
+    if re.search(HTTP_STOP_ANY + r"(?![A-Za-z0-9])", command):
+        return False
+    found = 0
+    for site, r in sites:
+        words = list(site.cmd.words) + [a.word for a in site.cmd.assignments] + \
+            [rd.target for rd in site.cmd.redirects if rd.target is not None]
+        hits = sum(len(re.findall(HTTP_STOP_ANY, w.text)) for w in words)
+        if hits:
+            if _http_plain(site, r) not in HTTP_CLIENTS:
+                return False
+            found += hits
+    return found == len(re.findall(HTTP_STOP_ANY, command))
 
 
 def http_stop(command):
-    """BS-02: the command sends a request to a localhost port's /stop. The URL may sit anywhere in the text (a
-    variable, a pipe into xargs), but a client must run: a word of some simple command the parser reaches (its
-    command, an argument, a nested payload) names an HTTP client, or names an interpreter and the text calls an
-    HTTP library. A mention alone (`grep -n 'localhost:8080/stop' tests/test_requests_client.py`) runs no client.
-    A parser failure falls back to the raw reading, which over-blocks."""
-    if not grep(HTTP_STOP_URL, command):
+    """BS-02: the command may send a request to a localhost port's stop endpoint. It refuses when the raw reading
+    does (a client word anywhere and a localhost /stop prefix anywhere) or when a parsed command runs a client
+    against a stop endpoint (httpie, xh, [::1], 0.0.0.0, an interpreter's HTTP library), unless the whole command
+    has an allow-listed shape (_http_stop_allowed). A parser failure keeps the refusing readings."""
+    raw = grep(HTTP_STOP_RAW_CLIENT, command) and grep(HTTP_STOP_RAW_URL, command)
+    if not raw and not grep(HTTP_STOP_ANY, command):
         return False
-    try:
-        from lib.shell_parse import parse, resolve, walk
-        script = parse(command)
-        if script.error is not None:
-            raise ValueError(script.error)
-        names = set()
-        for site in walk(script):
-            r = resolve(site.cmd)
-            if r.unresolved == "dynamic_head":
-                return True
-            names.update(os.path.basename(w.value() or w.text) for w in getattr(site.cmd, "words", ()))
-            names.add(r.name or "")
-    except Exception:  # noqa: BLE001 - the parser unavailable: the raw reading
-        return grep(r"(curl|wget|nc\s|ncat|http\.client|aiohttp|requests)", command)
-    names = {n.strip("'\"") for n in names}
-    if names & HTTP_CLIENTS:
-        return True
-    return any(HTTP_INTERPRETERS.match(n) for n in names) and grep(HTTP_LIBRARIES, command)
+    sites = _http_sites(command)
+    if sites is None:
+        return raw or (grep(HTTP_STOP_URL, command) and grep(r"(^|[\s;&|(])(https?|xhs?|httpie)\s", command))
+    if not (raw or _http_runs_client(command, sites)):
+        return False
+    return not _http_stop_allowed(command, sites)
 
 
 def daemon_rules(command, payload, env):

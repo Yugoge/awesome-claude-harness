@@ -119,3 +119,99 @@ def test_http_stop_refused(sandbox, command):
 def test_global_package_op_refused(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)
+
+
+# Verifier round 2. The raw reading (a client word anywhere and a localhost /stop prefix anywhere) refuses unless
+# the whole command is an allow-listed shape, so a client run through an interpreter, a wrapper taking a string,
+# a renamed client or a stop-like endpoint stays refused.
+HTTP_STOP_REFUSED_R2 = [
+    "python3 -c 'import os; os.system(\"curl -X POST http://localhost:8080/stop\")'",
+    "python3 -c 'import subprocess; subprocess.run([\"curl\",\"-X\",\"POST\",\"http://localhost:8080/stop\"])'",
+    "node -e 'require(\"child_process\").execSync(\"curl -X POST http://localhost:8080/stop\")'",
+    "perl -e 'system(\"curl -X POST http://localhost:8080/stop\")'",
+    "ruby -e 'system(\"curl -X POST http://localhost:8080/stop\")'",
+    "awk 'BEGIN{system(\"curl -X POST http://localhost:8080/stop\")}'",
+    "git -c alias.x='!curl -X POST http://localhost:8080/stop' x",
+    "runuser -u u -- sh -c 'curl -X POST http://localhost:8080/stop'",
+    "script -qc 'curl -X POST http://localhost:8080/stop' /dev/null",
+    "watch 'curl -X POST http://localhost:8080/stop'",
+    "tmux new -d 'curl -X POST http://localhost:8080/stop'",
+    "parallel ::: 'curl -X POST http://localhost:8080/stop'",
+    "docker exec app sh -c 'curl -X POST http://localhost:8080/stop'",
+    "fish -c 'curl -X POST http://localhost:8080/stop'",
+    "make stop CMD='curl -X POST http://localhost:8080/stop'",
+    "vim -es -c '!curl -X POST http://localhost:8080/stop' -c q",
+    "wget2 http://localhost:8080/stop",
+    "curlie POST localhost:8080/stop",
+    "curl_chrome116 http://localhost:8080/stop",
+    "pypy3 -c 'import requests; requests.post(\"http://localhost:8080/stop\")'",
+    "ipython -c 'import requests; requests.post(\"http://localhost:8080/stop\")'",
+    "python3-dbg -c 'import requests; requests.post(\"http://localhost:8080/stop\")'",
+    "curl -X POST http://localhost:8080/stop-now",
+    "curl -X POST http://localhost:8080/stop_now",
+    "curl -X POST http://localhost:8080/stop_server",
+    "curl -X POST http://localhost:8080/stop-all",
+    # the allow-listed shapes do not stretch
+    "grep localhost:8080/stop requests.py | sh",
+    "grep -n curl localhost:8080/stop > x.sh",
+    "sed -n '1e curl localhost:8080/stop' f",
+    "rg --pre curl localhost:8080/stop",
+    "curl http://localhost:8000/stops/42; curl http://localhost:8080/stop",
+    "u=http://localhost:8080/stopX; curl ${u%X}",
+    "grep(){ curl \"$@\"; }; grep localhost:8080/stop",
+    "sudo grep -n curl localhost:8080/stop",
+    "curl \"http://localhost:8080/stop\"s",
+    "grep -n x \"$(curl localhost:8080/stop)\"",
+    # kept from round 1: clients and hosts the raw reading missed
+    "http :8080/stop",
+    "xh POST localhost:8080/stop",
+    "curl http://[::1]:8080/stop",
+    "curl http://0.0.0.0:8080/stop",
+    "node -e 'fetch(\"http://localhost:8080/stop\",{method:\"POST\"})'",
+]
+HTTP_STOP_ALLOWED_R2 = [
+    "curl -s http://localhost:8000/stops/42 | jq .",
+    "git log --oneline -S 'curl localhost:8080/stop'",
+    "grep -n 'localhost:8080/stop' tests/test_requests_client.py 2>/dev/null",
+    "curl \"http://${HOST}:8080/stop\"",
+    "echo ':8080/stop'; curl -s https://example.com/",
+]
+NPM_ALLOWED_R2 = [
+    "npm config set init-author-name global",
+    "npm config set tag global",
+    "npm set preid global",
+    "npm config set global false",
+    "npm config set location project",
+    "npm run deploy -- --location=global",
+    "npm run deploy -- -g",
+    "export NPM_CONFIG_GLOBAL=true; unset NPM_CONFIG_GLOBAL; npm i x",
+]
+NPM_REFUSED_R2 = [
+    "npm i -gD foo",
+    "npm i -Dg foo",
+    "npm i --locat=global foo",
+    "npm i --locatio global foo",
+    "NPM_CONFIG_GLOBAL=true bash -c 'npm i x'",
+    "npm_config_location=global sh -c 'npm i x'",
+    "npm config set location=global",
+    "npm config set tag latest global true",
+    "npm i -g foo -- --location=project",
+]
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_ALLOWED_R2 + NPM_ALLOWED_R2)
+def test_allowed_round2(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_REFUSED_R2)
+def test_http_stop_refused_round2(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "daemon-restart-http-stop" in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", NPM_REFUSED_R2)
+def test_global_package_op_refused_round2(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)

@@ -2626,26 +2626,39 @@ def _pm_global_setting(name: str, value: Optional[str]) -> bool:
 
 def _pm_global_args(args: list) -> bool:
     """True if a package manager's own arguments make it a global op: `-g`,
-    `--global`, `--global=<true>`, `--location=global`, `--location global`, a
-    `global` subcommand (yarn), or a persistent `config set global true` /
-    `set location=global`."""
+    `--global`, `--global=<true>`, a short cluster holding `g` (`-gD`),
+    `--location=global` / `--location global` (or npm's unique abbreviations
+    `--locat` .. `--locatio`), a `global` subcommand (yarn), or a persistent
+    `config set global <true>` / `set location=global`. Arguments after `--`
+    belong to the script the package manager runs, not to it."""
+    if "--" in args:
+        args = args[:args.index("--")]
     for i, t in enumerate(args):
         if t in ("-g", "--global"):
             return True
+        if re.fullmatch(r"-[A-Za-z]{2,}", t) and "g" in t[1:]:
+            return True
         if t.startswith(("--global=", "-g=")) and _pm_config_true(t.split("=", 1)[1]):
             return True
-        if t == "--location=global" or (t == "--location" and i + 1 < len(args) and args[i + 1] == "global"):
+        m = re.fullmatch(r"--locat(?:i(?:on?)?)?(=(.*))?", t)
+        if m and (m.group(2) == "global" if m.group(1) is not None
+                  else i + 1 < len(args) and args[i + 1] == "global"):
             return True
     if args[:1] == ["global"]:  # `yarn global add <pkg>`
         return True
     words = [t for t in args if not t.startswith("-")]
     if "set" in words[:2] and (words[0] in ("config", "c", "set")):
         rest = words[words.index("set") + 1:]
-        for i, t in enumerate(rest):
-            if "=" in t and _pm_global_setting(*t.split("=", 1)):
+        i = 0
+        while i < len(rest):  # `key=value` or `key value` pairs
+            if "=" in rest[i]:
+                if _pm_global_setting(*rest[i].split("=", 1)):
+                    return True
+                i += 1
+                continue
+            if _pm_global_setting(rest[i], rest[i + 1] if i + 1 < len(rest) else "true"):
                 return True
-            if "=" not in t and t.lower() in ("global", "location"):
-                return _pm_global_setting(t, rest[i + 1] if i + 1 < len(rest) else "true")
+            i += 2
     return False
 
 
@@ -2671,6 +2684,11 @@ def _p7_global_env(command: str) -> Optional[Verdict]:
             continue
         name = r.name or ""
         args = r.argv()
+        if name == "unset":
+            for w in args:
+                if w is not None and not w.startswith("-"):
+                    shell_env.pop(w, None)
+            continue
         if name in _PM_ENV_SETTERS:
             for w in args:
                 if w is not None and "=" in w and not w.startswith("-"):
@@ -2684,10 +2702,16 @@ def _p7_global_env(command: str) -> Optional[Verdict]:
             env[k] = v
             name = os.path.basename(args[0] or "") if args else ""
             args = args[1:]
+        env_global = any(_pm_global_setting(k, v) for k, v in env.items()
+                         if k.lower().startswith("npm_config_"))
         if name not in PKG_MANAGERS:
+            # `NPM_CONFIG_GLOBAL=true bash -c 'npm i x'`: the prefix reaches the nested shell's package manager
+            if env_global and r.payload is not None and any(
+                    isinstance(s.cmd, _sp.SimpleCommand) and _sp.resolve(s.cmd).name in PKG_MANAGERS
+                    for s in _sp.walk(r.payload)):
+                return _block("P7", "global package install/link (npm_config_global/location in its environment)")
             continue
-        if any(_pm_global_setting(k, v) for k, v in env.items()
-               if k.lower().startswith("npm_config_")):
+        if env_global:
             return _block("P7", "global package install/link (npm_config_global/location in its environment)")
         if _pm_global_args([a or "" for a in args]):
             return _block("P7", "global package install/link")
