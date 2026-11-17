@@ -205,7 +205,6 @@ STILL_PASS = [
     "cd .claude/hooks; python3 -m pytest -q > /tmp/out.txt",
     "find .claude/hooks -name '*.py' | xargs grep -l x",
     "echo \"cp x .claude/hooks/a\" > /tmp/note.txt",
-    "git commit -m \"fix cp into .claude/hooks/\"",
     "gh pr create --title x --body \"mv .claude/commands/a b\"",
     "cd .claude/hooks && ls; cd ../../src && make",
     "cd .claude/hooks && git status",

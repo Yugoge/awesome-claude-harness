@@ -10,7 +10,8 @@ zip, sed --i/--in-pl, perl -I dir -i, perl -e with the folder as an argument, su
 (a function body, `OLDPWD=... cd -`, `HOME=... cd`, `. <(echo cd ...)`, `"$PWD"`, `$(pwd)`) and
 indirection (`d=...; touch $d`, arrays, `"$_"`, `!$`, `xargs -a`).
 
-Now such a command goes through only when the guard proves the WHOLE command harmless: every simple
+Now such a command goes through only on a proof that no write it can read reaches a protected folder
+(bounded: see test_claude_config_guard_chain.py and the R-006 residuals): every simple
 command is a reader with no write or exec option or a write verb whose every target is read, no
 assignment but locale-like ones, no function, substitution, `source` or unknown wrapper, every `cd`
 followed from the session's directory, and every written path literal and outside the protected
@@ -171,7 +172,7 @@ HARMLESS = [
     "cp a b && ls .claude/hooks/ | sort -n > /tmp/l",
     "cp a b && sed -n 1,20p .claude/hooks/x.py",
     "cp a b && find .claude/hooks/ -name '*.py' > /tmp/f.txt",
-    "cp a b && git log --oneline -- .claude/hooks/",
+    "cp a /tmp/b && git log --oneline -- .claude/hooks/",
     "cp a b && git -C .claude/hooks log --oneline -5",
     "cp a b && rg -n x .claude/hooks/ > /tmp/r.txt",
     "cp .claude/hooks/x.py /tmp/y.py && sed -i s/a/b/ /tmp/y.py",
@@ -184,7 +185,6 @@ HARMLESS = [
     "timeout 5 cp ~/.claude/hooks/a.py /tmp/a.py",
     "echo \"cp x .claude/hooks/a\" > /tmp/note.txt",
     "gh pr create --title x --body \"mv .claude/commands/a b\"",
-    "git commit -m \"fix cp into .claude/hooks/\"",
     # read-only commands the base passes and the guard must not start refusing
     "find .claude/hooks -name '*.py' -exec grep -l foo {} +",
     "tar -cf /tmp/h.tar .claude/hooks/",

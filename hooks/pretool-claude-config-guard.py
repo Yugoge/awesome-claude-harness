@@ -920,6 +920,178 @@ def _sort_reads(vals) -> bool:
     return True
 
 
+# git subcommands the proof takes: not commit (hooks), add (clean filters) or status (the fsmonitor
+# and post-index-change hooks). The others may still run textconv, diff drivers or a pager the
+# existing configuration names; the proof only makes sure the same command planted none of them.
+_PROOF_GIT_READS = _GIT_READS - {'commit', 'add', 'status'}
+
+# rg options the proof takes: the ones that search, filter and format. Nothing that runs a program
+# (--pre, --pre-glob, --hostname-bin, --search-zip/-z, --hyperlink-format) and nothing unknown.
+_RG_SHORT_FLAGS = frozenset('abcFHhiILlNnoPpqSsUuVvwx0.')
+_RG_SHORT_VALUES = frozenset('ABCdEefgjMmrTt')
+_RG_LONG_FLAGS = frozenset({
+    '--line-number', '--no-line-number', '--ignore-case', '--smart-case', '--case-sensitive',
+    '--files-with-matches', '--files-without-match', '--count', '--count-matches', '--word-regexp',
+    '--invert-match', '--fixed-strings', '--hidden', '--no-hidden', '--no-ignore', '--no-ignore-vcs',
+    '--no-ignore-dot', '--no-ignore-parent', '--no-ignore-global', '--no-ignore-exclude',
+    '--no-ignore-files', '--follow', '--no-follow', '--only-matching', '--quiet', '--line-regexp',
+    '--null', '--null-data', '--multiline', '--multiline-dotall', '--pcre2', '--no-pcre2', '--files',
+    '--json', '--vimgrep', '--heading', '--no-heading', '--with-filename', '--no-filename', '--stats',
+    '--text', '--no-text', '--trim', '--column', '--no-column', '--no-messages', '--type-list',
+    '--unrestricted', '--binary', '--no-binary', '--no-config', '--passthru', '--byte-offset',
+    '--crlf', '--no-crlf', '--mmap', '--no-mmap', '--one-file-system', '--pretty', '--line-buffered',
+    '--block-buffered', '--no-unicode', '--glob-case-insensitive', '--include-zero',
+    '--max-columns-preview', '--no-require-git', '--sort-files', '--version', '--help',
+    '--no-search-zip', '--no-pre',
+})
+_RG_LONG_VALUES = frozenset({
+    '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--type-add', '--type-clear',
+    '--after-context', '--before-context', '--context', '--max-count', '--max-depth', '--max-columns',
+    '--max-filesize', '--color', '--colors', '--sort', '--sortr', '--encoding', '--threads',
+    '--replace', '--context-separator', '--field-match-separator', '--field-context-separator',
+    '--path-separator', '--engine', '--ignore-file', '--dfa-size-limit', '--regex-size-limit',
+})
+
+
+def _rg_proof(vals) -> bool:
+    """Whether an rg call uses only options that search and print (no program it runs, no
+    config file RIPGREP_CONFIG_PATH names unless --no-config)."""
+    if os.environ.get('RIPGREP_CONFIG_PATH') and '--no-config' not in vals:
+        return False
+    k = 0
+    while k < len(vals):
+        v = vals[k]
+        k += 1
+        if v == '--':
+            break
+        if v.startswith('--'):
+            name, eq, _val = v.partition('=')
+            if name in _RG_LONG_FLAGS and not eq:
+                continue
+            if name in _RG_LONG_VALUES:
+                k += 0 if eq else 1
+                continue
+            return False
+        if v.startswith('-') and v != '-':
+            for j, c in enumerate(v[1:], 1):
+                if c in _RG_SHORT_FLAGS:
+                    continue
+                if c in _RG_SHORT_VALUES:
+                    k += 0 if v[j + 1:] else 1
+                    break
+                return False
+    return True
+
+
+def _git_subcommand(vals):
+    """The subcommand word of a git call (after its global options), or None."""
+    k = 0
+    while k < len(vals) and (vals[k] or '').startswith('-'):
+        k += 2 if vals[k] in _GIT_VALUE_GLOBALS else 1
+    return vals[k] if k < len(vals) else None
+
+
+def _copy_links(name: str, vals) -> tuple:
+    """(refused, aliasing) for a cp, mv or install call. refused: an option that makes a link
+    (cp -l/-s/--link/--symbolic-link, a BSD install -l) or runs a program (install -s/--strip,
+    --strip-program). aliasing: the destination may come out a symlink or hold one (mv; cp
+    recursive, archive, -d/-P/--no-dereference, --preserve), so a write under it may land wherever
+    that symlink points."""
+    aliasing = name == 'mv'
+    value_letters = {'cp': 'St', 'mv': 'St', 'install': 'gmoSt'}[name]
+    for v in vals:
+        if v is None:
+            continue  # a home-variable source word (`"$HOME/..."`): never an option
+        if v == '--':
+            break
+        if v.startswith('--'):
+            opt = v.split('=', 1)[0]
+            if name == 'cp' and ((len(opt) >= 3 and '--link'.startswith(opt))
+                                 or (len(opt) >= 4 and '--symbolic-link'.startswith(opt))):
+                return True, aliasing
+            if name == 'install' and opt.startswith('--st'):
+                return True, aliasing
+            if name == 'cp' and any(len(opt) >= least and full.startswith(opt) for full, least in (
+                    ('--no-dereference', 6), ('--archive', 4), ('--recursive', 5), ('--preserve', 4))):
+                aliasing = True
+        elif v.startswith('-') and v != '-':
+            for c in v[1:]:
+                if c in value_letters:
+                    break
+                if (name == 'cp' and c in 'ls') or (name == 'install' and c in 'ls'):
+                    return True, aliasing
+                if name == 'cp' and c in 'dPaRr':
+                    aliasing = True
+    return False, aliasing
+
+
+def _under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip('/') + '/')
+
+
+def _forms_of(path: str) -> set:
+    forms = {os.path.normpath(path)}
+    try:
+        forms.add(os.path.realpath(path))
+    except (OSError, ValueError):
+        pass
+    return forms
+
+
+def _temp_path(path: str) -> bool:
+    """Whether ``path`` is a scratch location no tool reads config or code from: a device sink, or
+    a path under /tmp, /var/tmp or $TMPDIR that is not in the project, the home or the harness
+    home, and has no git work tree or repository (`.git`) on the way up to the temp root."""
+    if path in ('/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty') or path.startswith('/dev/fd/'):
+        return True
+    roots = set()
+    for root in ('/tmp', '/var/tmp', os.environ.get('TMPDIR') or '/tmp'):
+        if os.path.isabs(root) and os.path.normpath(root) != '/':
+            roots |= _forms_of(root)
+    excluded = set()
+    for base in [str(_project_dir()), os.path.expanduser('~'), os.path.expanduser('~/.claude')] + [
+            os.environ[v] for v in _HOME_VARS if os.environ.get(v)]:
+        if os.path.isabs(base):
+            excluded |= _forms_of(base)
+    for form in _forms_of(path):
+        root = next((r for r in roots if form != r and _under(form, r)), None)
+        if root is None or any(_under(form, e) for e in excluded):
+            return False
+        d = os.path.dirname(form)
+        while d != root and _under(d, root):
+            if os.path.lexists(os.path.join(d, '.git')):
+                return False
+            d = os.path.dirname(d)
+    return True
+
+
+def _git_config_path(path: str) -> bool:
+    """Whether ``path`` is (or is in) a file git reads config, attributes, modules or hooks from:
+    a `.git*` path component, ~/.config/git or $XDG_CONFIG_HOME/git."""
+    xdg = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
+    for form in _forms_of(path):
+        if any(part.startswith('.git') for part in form.split('/')):
+            return True
+        if _under(form, os.path.join(xdg, 'git')) or _under(form, os.path.expanduser('~/.config/git')):
+            return True
+    return False
+
+
+def _on_search_path(path: str) -> bool:
+    """Whether writing ``path`` may plant a program a later command name runs: it lies in, is, or
+    holds a directory on PATH, or PATH has a relative entry."""
+    entries = os.environ.get('PATH', '').split(':')
+    if any(not e or not os.path.isabs(e) for e in entries):
+        return not (path.startswith('/dev/'))
+    dirs = set()
+    for e in entries:
+        dirs |= _forms_of(e)
+    for form in _forms_of(path):
+        if os.path.dirname(form) in dirs or any(_under(d, form) for d in dirs):
+            return True
+    return False
+
+
 def _proven_harmless(command: str, start: str) -> bool:
     """Whether ``command`` (run from directory ``start``) provably writes nothing into a protected
     folder: it parses cleanly; every simple command, also in a `bash -c` or `eval` payload, is a
@@ -941,6 +1113,8 @@ def _proven_harmless(command: str, start: str) -> bool:
     if scopes.functions:
         return False
     sites = []
+    aliasing = set()  # the spans of the copies and moves whose destination may be or hold a symlink
+    config_readers = set()  # git, gh and a `bash -c` under BASH_ENV/ENV: they read files as config or code
     for site in sp.walk(script):
         cmd = site.cmd
         if cmd.span not in scopes.visited or site.dynamic or site.templated:
@@ -961,6 +1135,8 @@ def _proven_harmless(command: str, start: str) -> bool:
         if res.payload is not None:
             if res.payload_kind not in ('shell_c', 'eval'):
                 return False
+            if res.payload_kind == 'shell_c' and (os.environ.get('BASH_ENV') or os.environ.get('ENV')):
+                config_readers.add('shell')
             continue  # its commands are walked and judged on their own
         if res.head is None:
             continue  # redirects only: their targets are judged below
@@ -986,7 +1162,7 @@ def _proven_harmless(command: str, start: str) -> bool:
             if _FIND_ACTIONS & set(vals):
                 return False
         elif name == 'rg':
-            if any(v.startswith('--pre') for v in vals):
+            if not _rg_proof(vals):
                 return False
         elif name == 'sort':
             if not _sort_reads(vals):
@@ -995,9 +1171,13 @@ def _proven_harmless(command: str, start: str) -> bool:
             if not _git_settled(res, command) or 'add' in vals or any(
                     v.startswith(('--git-dir', '--work-tree', '--namespace')) for v in vals):
                 return False  # another git directory or work tree (git writes its index there), an add
+            if _git_subcommand(vals) not in _PROOF_GIT_READS:
+                return False  # commit, add, status: they run hooks or filters
+            config_readers.add('git')
         elif name == 'gh':
             if vals[:1] not in (['pr'], ['issue']) or len(vals) < 2 or vals[1] not in _GH_READS:
                 return False
+            config_readers.add('git')  # gh reads its own config and runs git
         elif name == 'sed':
             known, inplace = _sed_proof(list(res.args))
             if not known:
@@ -1008,6 +1188,12 @@ def _proven_harmless(command: str, start: str) -> bool:
             if name in ('cp', 'mv', 'install') and any(
                     (v or '').startswith(('-S', '--suffix', '--parents', '--su', '--pa')) for v in vals):
                 return False  # a backup suffix or --parents: a written path not read here
+            if name in ('cp', 'mv', 'install'):
+                refused, alias = _copy_links(name, vals)
+                if refused:
+                    return False  # a link into whatever the source is, or a strip program run
+                if alias:
+                    aliasing.add(cmd.span)
             extra = []
             if name == 'touch':
                 extra = [w for _t, w in _site_writes(sp, command, res)]
@@ -1062,6 +1248,7 @@ def _proven_harmless(command: str, start: str) -> bool:
         _opts, ops, err = sp.split_options(list(res.args), spec, 0, permute=True)
         return None if err else ops
 
+    writes = []  # (written paths, the span of the copy or move that wrote them or None)
     for t in sp.write_targets(script):
         if not t.decidable or t.word is None or t.path is None:
             return False
@@ -1070,6 +1257,7 @@ def _proven_harmless(command: str, start: str) -> bool:
             paths = resolved(word, t.path)
             if paths is None or not outside(paths, False):
                 return False
+            writes.append((paths, None))
             continue
         owner = site_of(word)
         if owner is None:
@@ -1099,6 +1287,7 @@ def _proven_harmless(command: str, start: str) -> bool:
                     written |= {os.path.join(p, base) for p in paths}
         if not outside(written, subtree):
             return False
+        writes.append((written, cmd.span))
     for cmd, name, res, extra in sites:
         words = list(extra)
         if name == 'mv':
@@ -1110,6 +1299,28 @@ def _proven_harmless(command: str, start: str) -> bool:
             paths = resolved(word)
             if paths is None or not outside(paths, name == 'mv'):
                 return False
+            writes.append((paths, cmd.span))  # its own operands: not a write through its own copy
+    return _unchained(writes, aliasing, config_readers)
+
+
+def _unchained(writes, aliasing, config_readers) -> bool:
+    """Whether the proven writes of one command cannot be chained into a protected write: no write
+    lands under the destination of another copy or move that may have left a symlink there (it may
+    point into a protected folder); none plants a program on PATH; and when the command runs git, gh
+    or a `bash -c` under BASH_ENV (all read files as config or code), every write is to a temp
+    location, none is a git config, attributes, modules or hooks file, and no copy or move carried a
+    directory (it may hold a `.git`)."""
+    alias_dests = [(paths, span) for paths, span in writes if span in aliasing]
+    for paths, span in writes:
+        for dests, dspan in alias_dests:
+            if span != dspan and any(_under(p, d) for p in paths for d in dests):
+                return False  # a write through a copied symlink or hard link
+        if any(_on_search_path(p) for p in paths):
+            return False
+        if config_readers and any(not _temp_path(p) or _git_config_path(p) for p in paths):
+            return False
+    if config_readers and aliasing:
+        return False
     return True
 
 
@@ -1117,7 +1328,8 @@ def _classify_bash_target(command: str, start: str = None) -> str:
     """Return 'hooks', 'commands', or '' for a Bash command. A protected folder a path it writes,
     removes or moves away lies in, as the shared parser (or _site_writes) reads it, refuses it.
     Otherwise the base reading of the raw text decides, unless _proven_harmless proves from the
-    directory ``start`` that the whole command writes nothing into a protected folder."""
+    directory ``start`` that no write of the command it can read reaches a protected folder (a bounded
+    proof: configuration that existed before the command, hard links and symlinks made earlier stay residual)."""
     if not command:
         return ''
     try:
