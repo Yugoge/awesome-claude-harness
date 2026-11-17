@@ -26,8 +26,11 @@ subagent, each other path by which an agent call could switch the harness or fak
                         settings*.json that would set disableAllHooks; a script outside a harness
                         checkout that names the switch's state
   CronCreate / ScheduleWakeup / SendMessage
-                        a prompt or message that types /harness (a scheduled prompt reaches
-                        UserPromptSubmit as if typed)
+                        a prompt or message the switch's own parser (scripts/harness-switch
+                        parse_prompt) takes for the /harness command, typed or in the command-name
+                        tag form (a scheduled prompt reaches UserPromptSubmit as if typed); a prompt
+                        that only mentions /harness passes; fails closed on any /harness when the
+                        parser cannot be loaded
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
@@ -1960,10 +1963,57 @@ def check_skill(tool: str, ti: dict) -> int:
     return 0
 
 
+_PARSE_PROMPT = []  # [parse_prompt or None], loaded once
+
+
+def switch_parser():
+    """scripts/harness-switch's own parse_prompt (what UserPromptSubmit treats as the owner's /harness),
+    loaded from the file without running its main; None when it cannot be loaded."""
+    if not _PARSE_PROMPT:
+        fn = None
+        try:
+            import importlib.machinery
+            import importlib.util
+            loader = importlib.machinery.SourceFileLoader("_harness_switch_script", SWITCH_FILES[0])
+            spec = importlib.util.spec_from_loader("_harness_switch_script", loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)  # top level defines only; main runs under __name__ == "__main__"
+            fn = getattr(module, "parse_prompt", None)
+            fn = fn if callable(fn) else None
+        except Exception:
+            fn = None
+        _PARSE_PROMPT.append(fn)
+    return _PARSE_PROMPT[0]
+
+
+def types_switch(text: str) -> bool:
+    """Whether the switch would take `text`, arriving as a prompt, for the /harness command; fails closed
+    (any `/harness` in it) when the switch's parser cannot be loaded or raises."""
+    parse = switch_parser()
+    if parse is not None:
+        try:
+            return parse(text) is not None
+        except Exception:
+            pass
+    return "/harness" in text
+
+
+def _strings(value, depth=0):
+    if isinstance(value, str):
+        yield value
+    elif depth < 8 and isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v, depth + 1)
+    elif depth < 8 and isinstance(value, list):
+        for v in value:
+            yield from _strings(v, depth + 1)
+
+
 def check_prompt(tool: str, ti: dict) -> int:
-    for key in ("prompt", "message", "content"):
-        value = ti.get(key)
-        if isinstance(value, str) and TYPED.search(value):
+    """A prompt or message (any string in the tool's input) the switch would take for a typed /harness
+    command; one that only mentions /harness passes."""
+    for text in _strings(ti):
+        if types_switch(text):
             return refuse("this %s carries a prompt that types /harness" % tool)
     return 0
 
