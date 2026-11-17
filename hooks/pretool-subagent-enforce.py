@@ -20,10 +20,16 @@ For a /dev-overnight session (the session owns an overnight state record):
      exploration steps and names itself in the block (Case M).
 
 A session with no overnight state is not an overnight workflow and is not
-contracted: exit 0 silently.
+contracted: exit 0 silently. Nor is a span other than the human-typed
+/dev-overnight's (lib.command_span.active_span): a /dev the owner types after
+end_time or mid-window, or the span /stop opens, keeps its own checklist,
+whose step labels are not /dev-overnight's. The /dev-overnight span stays
+contracted after end_time (its closeout steps 20-21 run in it); /stop, which
+releases the time-lock, opens its own span, so no separate release check.
 
 Exit codes:
-  0 — Allow (not an overnight session, or call matches an allowed entry).
+  0 — Allow (not an overnight session, the active span is not
+      /dev-overnight's, or call matches an allowed entry).
   2 — Reject (role/pipeline_id/mode mismatch against the allowed calls).
 """
 
@@ -289,6 +295,13 @@ def _main() -> None:
         # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
     span = command_span.active_span(stdin_data.get('transcript_path') or '')
+    if span is None or span.command != 'dev-overnight':
+        # The contract is /dev-overnight's checklist: a span the human opened
+        # with another command (a /dev typed after end_time or mid-window, the
+        # /stop that releases the time-lock) has its own checklist, whose step
+        # labels are not /dev-overnight's. Only a human-typed command opens a
+        # span (command_span), so no agent record lifts this.
+        sys.exit(0)
     allowed, loaded = _allowed_calls(
         overnight_state, _declared_paths(stdin_data, overnight_state), _loaded_text(span))
     if allowed is None:
