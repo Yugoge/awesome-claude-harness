@@ -61,7 +61,7 @@ Pass `run_in_background: false` on every `Agent`/`Task` dispatch, since they run
 
 ## Branches, PRs and worktrees
 
-A cloud session working on a plain clone of this repository runs no harness hook: it creates its own branch and opens its PR (owner decision 2026-11-16). Where the harness runs, `hooks/pretool-block-branch-pr-worktree.py` refuses the Bash forms of creating a branch, PR or worktree except in a live `/dev-overnight` session, under `/do` consent (main agent) or with an `/allow` grant for the command, and `hooks/pretool-block-enterworktree.sh` refuses the `EnterWorktree` tool (no switch; an `/allow EnterWorktree` grant passes the main agent only). Deleting or renaming a branch is refused as direct ref mutation by `hooks/pretool-bash-safety.sh` and `hooks/pretool-git-privilege-guard.py` unless an `/allow` grant names the command.
+Creating a branch or a PR is allowed. Creating a worktree is refused outside a live `/dev-overnight` session, `/do` consent (main agent) or an `/allow` grant for the command: `hooks/pretool-block-branch-pr-worktree.py` refuses the Bash forms and `hooks/pretool-block-enterworktree.sh` the `EnterWorktree` tool (no switch; an `/allow EnterWorktree` grant passes the main agent only). Deleting or renaming a branch is refused as direct ref mutation by `hooks/pretool-bash-safety.sh` and `hooks/pretool-git-privilege-guard.py` unless an `/allow` grant names the command.
 
 ## Subagent Hook Discipline
 
