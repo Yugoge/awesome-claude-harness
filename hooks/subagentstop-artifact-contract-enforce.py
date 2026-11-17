@@ -394,17 +394,81 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     return lines
 
 
+def _in_fixtures(path: Path, roots: list) -> bool:
+    """path, compared as given (exact case, no resolution), lies in a `fixtures` directory directly
+    under a `tests` directory below every one of roots that holds it (at least one)."""
+    held = [path.relative_to(r).parts[:-1] for r in roots if path.is_relative_to(r)]  # directories only
+    return bool(held) and all(any(a == "tests" and b == "fixtures" for a, b in zip(d, d[1:])) for d in held)
+
+
+def _live_link_targets(roots: list) -> list:
+    """The realpath of every symlink (file or directory) under roots whose own location is not in a
+    tests/fixtures tree: a live name for whatever it points at. The walk follows no link; any error
+    propagates, so the caller fails closed."""
+    def fail(exc):
+        raise exc
+    targets = []
+    for root in roots:
+        for top, dirs, files in os.walk(root, onerror=fail):
+            for name in dirs + files:
+                link = Path(top, name)
+                if link.is_symlink() and not _in_fixtures(link, roots):
+                    targets.append(link.resolve(strict=False))
+    return targets
+
+
+def _parser_fixture(spellings: set, real: Path, roots: list) -> bool:
+    """A6-RC3: a written file nothing executes, so it may be invalid on purpose: every path the agent
+    wrote it by (absolute, normalised, not resolved) and its realpath both lie in a `fixtures`
+    directory directly under a `tests` directory below hooks/ or scripts/ (hooks/tests/fixtures/**).
+    Not one: a file pytest collects there (test_*.py, *_test.py, conftest.py) or one with another
+    hard link, whose bytes a live file may share. Requiring both paths means neither a live path that
+    is a symlink into fixtures nor a fixtures path that resolves to a live file (`..`, a file or
+    directory symlink) is skipped; names match in exact case, so a case variant is checked too. The
+    caller also refuses the skip when a live symlink names the file or a directory holding it."""
+    try:
+        if real != real.resolve(strict=True) or real.name == "conftest.py" or real.suffix == ".py" and (
+                real.name.startswith("test_") or real.stem.endswith("_test")) or real.stat().st_nlink != 1:
+            return False
+    except (OSError, RuntimeError):
+        return False
+    return bool(spellings) and _in_fixtures(real, roots) and all(_in_fixtures(w, roots) for w in spellings)
+
+
+def _written_spellings(transcript) -> dict:
+    """realpath -> the absolute, normalised but unresolved paths the transcript's own calls wrote it
+    by, over every account root's copy (as _recorded reads them)."""
+    spellings = {}
+    for c in subagent_restart._child_transcript_copies(transcript) if transcript else []:
+        if (found := command_span.write_set(c, "/")) is not None:
+            for r in found[0]:
+                spellings.setdefault(Path("/", r).resolve(), set()).add(Path(os.path.normpath(os.path.join("/", r))))
+    return spellings
+
+
 def _harness_syntax(resolution) -> list:
     """F3.a: each file of the agent's own written set (no inheritance) under the live harness home's
     hooks/ or scripts/ (realpath) that Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
-    shebang) rejects as it stands now. Nothing is written: no py_compile, no __pycache__."""
+    shebang) rejects as it stands now, a parser fixture (_parser_fixture) aside. Nothing is written:
+    no py_compile, no __pycache__."""
     home, findings = claude_home.resolve(), []
     roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
+    spelled_roots = roots + [home / d for d in ("hooks", "scripts")] if home else []
     try:
-        written = sorted(_recorded(getattr(resolution, "transcript_path", None))[0])
+        transcript = getattr(resolution, "transcript_path", None)
+        written = sorted(_recorded(transcript)[0])
+        spellings = _written_spellings(transcript)
     except Exception:  # an unreadable transcript judges nothing
         return []
-    for p in (p for p in written if any(p.is_relative_to(r) for r in roots)):
+    candidates = [p for p in written if any(p.is_relative_to(r) for r in roots)]
+    fixtures = {p for p in candidates if _parser_fixture(spellings.get(p, set()), p, spelled_roots)}
+    if fixtures:  # a fixture another live name reaches through a symlink is live: parsed
+        try:
+            links = _live_link_targets(roots)
+            fixtures = {p for p in fixtures if not any(p == t or p.is_relative_to(t) for t in links)}
+        except Exception:  # an incomplete scan cannot clear a fixture
+            fixtures = set()
+    for p in (p for p in candidates if p not in fixtures):
         try:
             text = p.read_bytes()
             shebang = text.split(b"\n", 1)[0] if text[:2] == b"#!" and not p.suffix else b""
