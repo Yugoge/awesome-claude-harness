@@ -10,7 +10,7 @@ You give it a requirement. It finds the root cause. It asks you only the decisio
 
 Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. Structure, not vibes. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. QA reviews every `/commit` first. `/push` needs a commit from `/commit`.
 
-Built from real failures. Two git incidents shaped the kernel. The code names both. Every hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
+Built from real failures. Two git incidents shaped the kernel. The code names both. Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
 
 <p>
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
@@ -37,7 +37,7 @@ Hooks refuse what a prompt can only ask for.
 | **Crash-proof checkpoints** | Snapshots go to `refs/checkpoints/<branch>` through git plumbing. HEAD never moves. `git blame` points at real commits. |
 | **Self-updating docs** | A session edits a command, agent or hook. A hook regenerates the marked sections of the folder's `INDEX.md` and `README.md` and of `CLAUDE.md`. Your prose outside the markers stays. CI fails when a folder's generated sections drift. |
 | **Generated acceptance tests** | For standard or risky tasks, `test-writer` writes failing skeletons from the acceptance criteria. A `TEST_INCOMPLETE` stop left in a test is a critical QA finding. |
-| **Shell and secrets deny list** | `settings.json` denies `sudo`, `rm -rf`, `dd`, `mkfs`, force-push, `systemctl restart`, `kubectl delete` and package publish. It denies `Read` on `.env` files, keys, credentials and secret files. `Edit` and a shell redirect are refused on all of them but keys. A shell read is not refused. |
+| **Shell and secrets deny list** | `settings.json` denies `sudo`, `rm -rf`, `dd`, `mkfs`, force-push, `git reset --hard`, `systemctl restart`, `kubectl delete` and package publish. It denies `Read` on `.env` files, keys, credentials and secret files. `Edit` and a shell redirect are refused on all of them but keys. A shell read is not refused. |
 | **UI-audit skills** | Playwright review: axe-core injection, APCA contrast, an anti-pattern catalog, a state matrix, token conformance, a weighted beauty score. |
 | **Ask-first round** | `/spec`, `/dev`, `/redev` and `/dev-command` ask you first. Intent, scope, edge cases, acceptance. In Claude Code's question dialog. A skipped question settles to its stated default. |
 | **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. `/stop` is your exit. `CLAUDE_COMMAND_GATE=off` switches it off. The shipped settings never set it. |
@@ -65,20 +65,22 @@ flowchart TD
     L -->|"no: an expansion or a quoted binary,<br/>unless you issued a residual override"| NO
     L -->|yes| V{which verb?}
     V -->|commit| C{"a matching /allow, or a /commit grant bound to this<br/>repository, branch and HEAD, spent by the changelog<br/>analyst that /commit dispatched?"}
+    V -->|"commit with the<br/>auto-bulk: prefix"| K{"a live sentinel from a /commit --bulk<br/>you typed, and no unspent /commit grant<br/>for this HEAD?"}
     V -->|push| P{"a matching /allow?<br/>never with the wrapper's variable inline,<br/>never force, delete or mirror"}
     V -->|"merge, reset --hard,<br/>ref change"| R{"a matching /allow, or /do<br/>that cannot move the protected branch?"}
     C -->|yes| OK[("allowed. The guard unlinks the grant<br/>as it authorizes, so it is spent once.")]
     P -->|yes| OK2[("allowed once")]
     R -->|yes| OK2
-    C & P & R -->|no| NO[/"refused, exit 2: the rule, the reason,<br/>and the command that lands it"/]
+    K -->|yes| OK3[("allowed. The sentinel is not spent.<br/>It covers each bulk commit until it expires.")]
+    C & P & R & K -->|no| NO[/"refused, exit 2: the rule, the reason,<br/>and the command that lands it"/]
 
     classDef block fill:#ffebee,stroke:#c62828
     classDef ok fill:#e3f2fd,stroke:#1565c0
     class NO block
-    class OK,OK2 ok
+    class OK,OK2,OK3 ok
 ```
 
-Something you typed must allow each agent commit, push, merge or hard reset. `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. `/do` never covers a commit or a push. It covers the main agent for one turn, and only when the change cannot move the protected branch.
+Something you typed must allow each agent commit, push, merge or hard reset. `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. A command that starts with `git reset --hard` also hits the `settings.json` deny. No grant and no `/do` lifts it. `/do` never covers a commit or a push. It covers the main agent for one turn, and only when the change cannot move the protected branch.
 
 `/push` and `/merge` run git inside their own wrappers. No hook sees inside. `/push` spends the push analyst's grant first. `/merge` runs only after the merge analyst's grant passes its check. These stay free:
 
@@ -185,7 +187,7 @@ graph TD
 
     SUB -.->|on stop| SS["SubagentStop producer gate<br/>artifact contract · end-to-end status · Codex record"]
     ORC -.->|on stop| SG["Stop gate<br/>todos done · artifacts checked · overnight time-lock"]
-    G["Grants you mint by typing<br/>/commit · /push · /allow"] -->|checked by| PRE
+    G["Grants you mint by typing<br/>/commit · /allow"] -->|checked by| PRE
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
@@ -230,8 +232,8 @@ You are the trust root. The threat model treats the agent itself as the adversar
 | Actor | Edit, Write | git commit | git push | git reset --hard | Break-glass |
 |---|---|---|---|---|---|
 | You, in your own shell | yes | yes | yes | yes | not needed |
-| Main agent | Once per tool per turn. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch. Or a matching `/allow`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
-| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant | A matching `/allow` only | A matching `/allow` only | `/allow` only. Subagents never get `/do`. |
+| Main agent | Once per tool per turn. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch. Or a matching `/allow`. Never a command that starts with `git reset --hard`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
+| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
 
 The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command. Never a substring of the raw text. It expires. It is consumed once the matched call ends, whatever the result.
 
