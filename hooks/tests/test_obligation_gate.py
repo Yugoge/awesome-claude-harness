@@ -24,7 +24,9 @@ P1 behaviour pinned here:
     obligation for its subagent_type (/redev's are /dev's) -- never keyed by
     .claude/dev-registry/<session_id>/ and never by a list of commands;
   - a malformed block, an unregistered schema id or a bad prompt is rejected
-    whatever the span.
+    only on a dispatch that span requires a block of; elsewhere the prompt
+    only mentions the tag and carries no obligation (OB-L41), while a block
+    that parses is held to role and clock on every dispatch.
 
 Every assertion anchors on the subprocess exit code and/or stable tokens in
 stderr -- never solely on a full free-text sentence
@@ -478,17 +480,17 @@ def test_AC_L1_12_block_then_fixed_dispatch_passes(tmp_path):
     assert second.returncode == 0, second.stderr
 
 
-def test_AC_L1_13_malformed_block_unconditional_no_active_session(tmp_path):
-    """AC-L1-13: malformed block, NO gated span -> block mode still rejects it
-    with the validator's reason (Rejection is unconditional, unlike NoBlock's
-    AC-L1-03 gating)."""
+def test_AC_L1_13_malformed_block_no_active_session_passes(tmp_path):
+    """AC-L1-13 (OB-L41): malformed block, NO gated span -> a Rejection where
+    no block is required carries no obligation, as NoBlock's AC-L1-03 gating:
+    block mode passes it silently (AC-L1-06 refuses it inside a /dev span)."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac13")
     payload = _dispatch_payload(project, sid, _no_span_records(),
                                 prompt="do work\n" + _malformed_block())
     result = _run_hook(home, project, payload, switch="block")
-    assert result.returncode == 2
-    assert "reason=missing_field at profile)" in result.stderr, result.stderr
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == "", result.stderr
 
 
 def test_G1_names_the_field_a_pre_p1_template_fails(tmp_path):
@@ -571,10 +573,9 @@ VIOLATION_CASES = {
     "e_role_graphify_subagent_dev": (
         lambda: _span_records("dev"), "dev",
         lambda: "do work\n" + _valid_block("graphify"), "role_mismatch"),
-    # f: a non-producer dispatch carrying "<obligation" is validated too.
-    "f_general_purpose_malformed_obligation": (
-        _no_span_records, "general-purpose",
-        lambda: 'research this\n<obligation v="1">{"task_id": </obligation>', "malformed_json"),
+    # f (OB-L41): a non-producer dispatch outside a span whose prompt only
+    # carries a malformed "<obligation" now passes; see TAG_MENTIONS
+    # ["malformed_example"] and test_OB_L41_a_tag_mention_where_no_block_is_required_passes.
     # i: profile "repair" is outside the grammar and bypasses nothing.
     "i_repair_profile": (
         lambda: _span_records("dev"), "dev",
@@ -1138,3 +1139,91 @@ def test_r5_a_session_whose_text_asks_no_round_is_not_held_to_it(tmp_path):
             r["parentUuid"] = "opener-r5old"
     payload = _dispatch_payload(project, _unique_sid("r5old"), records, subagent_type="ba", prompt=prompt)
     assert _run_hook(home, project, payload, switch="block").returncode == 0
+
+
+# --------------------------------------------------------------------------
+# OB-L41: a prompt that only mentions the tag is no obligation block
+# --------------------------------------------------------------------------
+
+# Prose that names the obligation tag without carrying a block: each parses to
+# a Rejection (unterminated_block, unsupported_version, malformed_json).
+TAG_MENTIONS = {
+    "versioned_tag_in_prose": 'Find where G1 parses the <obligation v="1"> block and summarize it.',
+    "bare_tag_in_prose": "List the commands whose templates write <obligation> blocks.",
+    "malformed_example": 'research this\n<obligation v="1">{"task_id": </obligation>',
+}
+
+
+@pytest.mark.parametrize("records", [_no_span_records, lambda: _span_records("dev")],
+                         ids=["no_span", "dev_span_undeclared_role"])
+@pytest.mark.parametrize("mention", sorted(TAG_MENTIONS))
+@pytest.mark.parametrize("subagent_type", ["Explore", "general-purpose"])
+def test_OB_L41_a_tag_mention_where_no_block_is_required_passes(tmp_path, records, mention,
+                                                                  subagent_type):
+    """OB-L41 (OB-TOKEN-MENTION): outside a span that requires this dispatch's
+    block, a prompt that mentions the obligation tag in prose parses to a
+    Rejection and carries no obligation: the dispatch passes in block mode and
+    advisory mode alike, with nothing on stderr."""
+    home, project = _dirs(tmp_path)
+    for switch in ("block", None):
+        sid = _unique_sid("obl41")
+        payload = _dispatch_payload(project, sid, records(), subagent_type=subagent_type,
+                                    prompt=TAG_MENTIONS[mention])
+        result = _run_hook(home, project, payload, switch=switch)
+        assert result.returncode == 0, f"switch={switch!r}: {result.stderr}"
+        assert result.stderr == "", result.stderr
+        assert _written_logs(home) == []
+
+
+@pytest.mark.parametrize("command,role", DECLARING_SPANS)
+@pytest.mark.parametrize("mention", ["versioned_tag_in_prose", "bare_tag_in_prose"])
+def test_OB_L41_declared_role_whose_prompt_only_mentions_the_tag_is_refused(tmp_path, command,
+                                                                             role, mention):
+    """OB-L41 must-still-refuse: inside a span whose templates declare an
+    obligation for the dispatch's role, a prompt that only mentions the tag
+    carries no block, and is refused as the malformed block it is."""
+    home, project = _dirs(tmp_path)
+    sid = _unique_sid("obl41req")
+    payload = _dispatch_payload(project, sid, _span_records(command), subagent_type=role,
+                                prompt=TAG_MENTIONS[mention])
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2, result.stderr
+    assert BLOCK_BANNER in result.stderr
+    assert f"subagent_type={role}" in result.stderr
+
+
+def test_OB_L41_malformed_block_where_one_is_required_is_refused(tmp_path):
+    """OB-L41 must-still-refuse: a malformed block on a dispatch its span
+    requires one of is refused with the validator's reason."""
+    home, project = _dirs(tmp_path)
+    sid = _unique_sid("obl41mal")
+    payload = _dispatch_payload(project, sid, _span_records("dev"), subagent_type="ba",
+                                prompt="do work\n" + _block(dict(_obligation_doc(role="ba"),
+                                                                  profile=None)))
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2, result.stderr
+    assert BLOCK_BANNER in result.stderr and "subagent_type=ba" in result.stderr
+
+
+@pytest.mark.parametrize("records", [_no_span_records, lambda: _span_records("dev")],
+                         ids=["no_span", "dev_span"])
+@pytest.mark.parametrize("subagent_type,prompt,reason", [
+    ("Explore", lambda: "summarize this example\n" + _valid_block("dev"), "role_mismatch"),
+    ("general-purpose", lambda: "do work\n" + _valid_block("dev"), "role_mismatch"),
+    ("dev", lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_two_hours_ago())),
+     "dispatch_clock_out_of_bound"),
+    ("dev", lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_naive_now())),
+     "dispatch_clock_unverifiable"),
+], ids=["explore_role_mismatch", "general_purpose_role_mismatch", "stale_clock", "naive_clock"])
+def test_OB_L41_a_block_that_parses_is_held_to_role_and_clock_on_any_dispatch(
+        tmp_path, records, subagent_type, prompt, reason):
+    """OB-L41 must-still-refuse: a block that parses is a real obligation
+    whatever the span: a role that differs from the dispatch's subagent_type
+    or a stale or unverifiable dispatched_at is refused, in or out of a span."""
+    home, project = _dirs(tmp_path)
+    sid = _unique_sid("obl41parsed")
+    payload = _dispatch_payload(project, sid, records(), subagent_type=subagent_type,
+                                prompt=prompt())
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2, result.stderr
+    assert BLOCK_BANNER in result.stderr and f"reason={reason}" in result.stderr, result.stderr

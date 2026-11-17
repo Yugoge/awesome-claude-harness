@@ -3315,3 +3315,34 @@ def test_c5_advisory_stopgate_does_not_block(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)
+
+
+# ---------------------------------------------------------------------------
+# OB-L41: at the producer stop a prompt that only mentions the obligation tag
+# resolves as a Rejection (Unresolvable invalid_obligation) and owes nothing;
+# a real producer's block that fails the grammar is still read as declared
+# (test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report,
+# test_ba_validation_qa_exempt).
+# ---------------------------------------------------------------------------
+
+_TAG_MENTION_SESSION = "harness-tag-mention"
+
+
+@pytest.mark.parametrize("stopgate", ["block", "advisory"])
+@pytest.mark.parametrize("prompt", [
+    'Find where G1 parses the <obligation v="1"> block and summarize it.',
+    "List the commands whose templates write <obligation> blocks.",
+], ids=["versioned_tag", "bare_tag"])
+def test_OB_L41_a_tag_mention_owes_nothing_at_the_stop(tmp_path, stopgate, prompt):
+    project, home = _standard_setup(tmp_path, "Explore", "agent-explore-1")
+    _write_obligation_transcript(home, project, _TAG_MENTION_SESSION, "agent-explore-1", prompt)
+    # A schema-invalid report in the project: no declaration makes it this agent's.
+    _write(project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json", _invalid_qa_report(SESSION_TS))
+    resolution = _resolution(home, project, _TAG_MENTION_SESSION, "agent-explore-1", "Explore")
+    assert isinstance(resolution, HOOK.obligation.Unresolvable), resolution
+    assert resolution.reason == "invalid_obligation"
+    assert HOOK._dispatch_obligation(resolution.prompt) == {}
+    proc = _run_hook(project, home, "agent-explore-1", session_id=_TAG_MENTION_SESSION,
+                     stopgate_mode=stopgate)
+    assert proc.returncode == 0, proc.stderr
+    assert "BLOCKED" not in proc.stderr, proc.stderr
