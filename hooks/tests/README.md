@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 194
+- **Total files**: 203
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -14,6 +14,7 @@
 - `test_agent_end_readers.py` - the /commit --bulk Stop, the close rating and ask-first read its end as G1 does
 - `test_agent_resolver.py` - Covers the bug: cp-state files that were never checked out (crashed/
 - `test_aggregate_check_obligation_scope.py` - from the QA dispatch's own obligation (P3 row 12)
+- `test_aggregate_check_unscoped_span.py` - (hooks/pretool-aggregate-check.py) on a QA dispatch with no obligation
 - `test_allow_grant_quoted_separators.py` - A grant authorizes exactly one command. pretool-git-privilege-guard, pretool-bash-safety.sh and
 - `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 - `test_allowlist_git_global_opts.py` - args_contain is a positional prefix anchored right after the head token, so
@@ -38,6 +39,7 @@
 - `test_bulk_commit_sentinel.py` - Covers:
 - `test_c_layer_protected_targets.py` - d1b244f0 made a shell `-c` layer fail closed: run-time text given to a program outside
 - `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
+- `test_checklist_lock_read_only.py` - pretool-workflow-gate.py holds every tool but TodoWrite/TodoRead while the
 - `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 - `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 - `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
@@ -83,14 +85,17 @@
 - `test_g2_file_lists.py` - files Claude Code recorded the dev writing (hooks/subagentstop-artifact-
 - `test_g2_harness_syntax.py` - artifact-contract-enforce.py, _harness_syntax) parses every file of the
 - `test_g2_spec_views.py` - subagent's stop by `spec-verify.py --strict` on the views its dispatch declares
+- `test_git_clean_guard_argument_data.py` - read grep / rg / echo pattern text and heredoc text as a `git clean`
 - `test_git_cmd_cross_consistency.py` - Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 - `test_git_prefix_enumeration.py` - THE DEFECT
 - `test_git_residual_override.py` - Background
 - `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
 - `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 - `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+- `test_gitignore_preflight_write_capability.py` - pretool-gitignore-preflight.py scopes its refusal by the dispatched agent's
 - `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 - `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+- `test_grep_backtrack_probe_start.py` - The probe runs inside a transient systemd scope. A launch delay of systemd-run
 - `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
 - `test_hook_output_reaches_model.py` - The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 - `test_inflight_push_route.py` - COMPATIBILITY TESTS, kept only as long as hooks/pretool-tool-policy.py's _note_inflight_token_rou...
@@ -109,6 +114,7 @@
 - `test_orchestrator_gate_in_flight.py` - P9 reworded the gate's refusals (the Bash limit's and the non-whitelisted limit's first line, the
 - `test_orchestrator_gate_overnight_budget.py` - hooks/pretool-orchestrator-gate.py allows the main agent one call per non-whitelisted tool name per
 - `test_overnight_a12_timelock_cases.py` - A12 (prompts/P5.md acceptance 12; prompts/short/P5.md A12) says, of the overnight time-lock:
+- `test_overnight_contract_span_scope.py` - pretool-subagent-enforce.py reads the in-progress step label of the active
 - `test_overnight_cycle_contract.py` - - No seed file: the exploration (steps 2-4) passes the dispatch hook in cycles
 - `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
 - `test_overnight_gitenv_failclosed.py` - Two halves of one fail-open, scoped together because closing either alone leaves
@@ -146,6 +152,7 @@
 - `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 - `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 - `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
+- `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 - `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 - `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 - `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
@@ -160,6 +167,7 @@
 - `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
 - `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
+- `test_spec_flag_prose.py` - in a /dev, /redev, /dev-command or /dev-overnight prompt as the --spec flag, and
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 - `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
 - `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
@@ -175,6 +183,7 @@
 - `test_subagentstop_codex_enforce.py` - The codex ledger's one deciding read blocks a stopping subagent whose session
 - `test_subagentstop_cp_enforce.py` - Armed as shipped (settings.json's env sets CP_ENFORCE_MODE=block), the hook blocks
 - `test_test_writer_manifest_skeleton.py` - (agents/test-writer.md, agents/dev.md "Generated tests"). schemas/test-writer-manifest.v1.json
+- `test_todo_after_completion.py` - pretool-todo-validate.py held every TodoWrite of a span to the canonical list, so once a command's
 - `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 - `test_todo_validate_after_restart.py` - A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result aft...
 - `test_todo_validate_in_flight.py` - The owner cannot stop his sessions: one that took up origin/master's /close before train 2 landed
