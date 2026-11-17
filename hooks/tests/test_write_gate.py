@@ -80,6 +80,9 @@ class Lab:
         (self.proj / "existing.txt").write_text("old\n")
         (self.proj / ".claude" / "hooks" / "h.sh").write_text("#!/bin/sh\n")
         subprocess.run(["git", "init", "-q", str(self.proj)], check=True)
+        # Tracked, so the overwrite rule's OB-L46 exemption (untracked or temp output) does not
+        # apply and the old guards' refusal of an overwrite is still compared.
+        subprocess.run(["git", "-C", str(self.proj), "add", "existing.txt"], check=True)
 
     def env(self) -> dict:
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_")}

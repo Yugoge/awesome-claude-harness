@@ -168,6 +168,8 @@ Write a JSON report to the output path (under /dev-overnight your obligation blo
 
 `gate_details` has one entry per gate; `frustration_signals_detected` one count per signal.
 
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace `docs/codex/` and `/var/tmp/codex-outputs/` and `/tmp/claude-scratch/user/` drafts and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): your report under `docs/dev/overnight/` (the obligation path G2 reads); any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
+
 ## Severity calibration
 
 **Critical**: the core flow cannot be completed, the user loses data, or an error prevents progress. **Major**: a significant feature does not work as intended, or a non-obvious UX failure a real user would hit and be confused by. **Minor**: a nuisance that does not stop the user reaching their goal. **Cosmetic**: purely visual. When in doubt, escalate: a "minor" you think most users will not notice is a major.
