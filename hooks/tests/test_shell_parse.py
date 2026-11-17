@@ -145,7 +145,7 @@ class TestRedirects:
     def test_heredoc(self):
         r = self.red("cat <<-'E'\n\tbody $x\n\tE\nls")[0]
         assert (r.hd.delim, r.hd.quoted, r.hd.strip_tabs, r.hd.terminated) == ("E", True, True, True)
-        assert r.hd.body == "\tbody $x\n"
+        assert r.hd.body == "body $x\n"  # <<- strips the leading tabs as the command reads it
         assert r.hd.expansions == ()
 
     def test_heredoc_end_matches_exactly(self):
@@ -430,6 +430,11 @@ class TestConsumerDefects:
         t = [t for t in sp.write_targets(text) if t.path == "/srv/data/out"]
         assert [x.decidable for x in t] == [False]
 
+    def test_computed_command_word_names_every_operand(self):
+        t = sp.write_targets('"$V" a /p/b')
+        assert [(x.path, x.mechanism, x.decidable) for x in t] == [
+            ("a", "computed-command", False), ("/p/b", "computed-command", False)]
+
     @pytest.mark.parametrize("text", ["taskset -c 0 git push", "taskset 0x1 git push",
                                       "taskset -a 0x3 git push", "numactl -N 0 git push",
                                       "chrt -f 10 git push"])
@@ -476,3 +481,54 @@ class TestConsumerDefects:
         sites = list(sp.walk(sp.parse("{ echo x; } > a")))
         assert [s.cmd.argv() for s in sites] == [[], ["echo", "x"]]
         assert [r.target.value() for r in sites[0].cmd.redirects] == ["a"]
+
+    @pytest.mark.parametrize("text,expected", [
+        ('T=/x; bash -c "echo x | tee $T"', [("/x", True)]),
+        ("T=/x; bash -c 'echo x | tee $T'", [(None, False)]),
+    ])
+    def test_c_string_is_expanded_by_its_outer_quoting(self, text, expected):
+        assert [(t.path, t.decidable) for t in sp.write_targets(text)] == expected
+
+    def test_every_operand_of_an_xargs_run_move_is_undecidable(self):
+        t = sp.write_targets("echo y | xargs mv /elsewhere/a d/sid")
+        assert {(x.path, x.mode) for x in t} == {("d/sid", "move-dest"), ("/elsewhere/a", "delete"),
+                                                 ("d/sid", "delete"), (None, "move-dest")}
+        assert not any(x.decidable for x in t)
+
+    @pytest.mark.parametrize("text", ["T=$HOME/settings.json; echo x | tee $T",
+                                      "T=$HOME/settings.json; echo x > ${T}"])
+    def test_a_computed_assignment_keeps_its_word(self, text):
+        t = sp.write_targets(text)
+        assert [(x.path, x.decidable, x.word.text) for x in t] == [(None, False, "$HOME/settings.json")]
+
+
+class TestAuditViews:
+    def test_fd_move_writes_no_file(self):
+        assert [t.path for t in sp.write_targets("echo a 3>o13 >&3-")] == ["o13"]
+
+    def test_git_rm_abbreviated_cached_removes_nothing(self):
+        assert sp.write_targets("git rm --cach f") == []
+
+    def test_exec_path_is_unresolved(self):
+        g = sp.git_invocations("git --exec-path=/x push")[0]
+        assert (g.subcommand, g.unresolved) == ("push", "exec_path")
+
+    def test_alias_chain_keeps_the_config(self):
+        subs = [g.subcommand for g in sp.git_invocations("git -c alias.a=b -c alias.b=push a o m")]
+        assert subs[-1] == "push"
+
+    def test_alias_loop_stops(self):
+        g = sp.git_invocations("git -c alias.a=b -c alias.b=a a")
+        assert g[-1].unresolved == "alias_loop" and len(g) == 3
+
+    def test_xargs_appends_its_static_input(self):
+        g = sp.git_invocations("xargs git <<< 'push --force origin main'")
+        assert [(x.subcommand, x.args) for x in g] == [("push", ("--force", "origin", "main"))]
+
+    def test_xargs_with_unknown_input_writes_undecidably(self):
+        t = sp.write_targets("ls | xargs rm")
+        assert [(x.path, x.mode, x.decidable) for x in t] == [(None, "delete", False)]
+
+    @pytest.mark.parametrize("text", ["echo x &>(rm q)", "true | ! rm a", "echo x >#o7", "f() rm x"])
+    def test_what_bash_rejects_is_an_error(self, text):
+        assert sp.parse(text).error is not None
