@@ -760,14 +760,30 @@ def executable_view_or_raw(command):
 
 _HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
+# Wrappers a top-level noexec shell may sit behind and still be read as inert (none sends its output on).
+_HB_INERT_WRAPPERS = frozenset({"sudo", "command", "env", "nice", "timeout"})
+# Test operators whose operand bash reads as a file name or a string, never as a subscript or arithmetic.
+_HB_TEST_UNARY = frozenset({"-e", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-b", "-c", "-p", "-S", "-g",
+                            "-u", "-k", "-O", "-G", "-N", "-a", "-z", "-n"})
+_HB_TEST_STRING = frozenset({"=", "==", "!=", "<", ">", "=~"})
+# Operators whose operand bash evaluates (`-v` and `-R` a subscript, the comparisons arithmetic in `[[ ]]`).
+_HB_TEST_EVAL = frozenset({"-v", "-R", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-t"})
+# Anything that can redefine bash/sh/dash/test/[ or re-run a word of an earlier command (a function or alias,
+# exec redirecting the rest, a sourced file, eval, a trap, `$_`, BASH_COMMAND, indirection, a nameref): when
+# the text holds one, no word is blanked.
+_HB_BLANK_UNSAFE = re.compile(
+    r"\(\s*\)|\b(function|alias|unalias|enable|builtin|exec|hash|eval|source|trap|fc|history|declare|typeset|local|"
+    r"BASH_COMMAND|BASH_ARGV|BASH_ARGC|BASH_ENV|ENV|PATH|SHELLOPTS|BASHOPTS)\b|\$\{?_(?![A-Za-z0-9_])|\$\{!"
+    r"|(^|[;&|(){}`!\n])\s*\.\s|\bcommand\s+\.\s")
 
 
 def _hb_shell_options(args):
-    """A bash/sh/dash argument list read as the shell reads it: (runs, has_c, has_s, operands). runs is False when
-    the options leave noexec on (`-n`, `-nx`, `-o noexec`; the last one wins, `+n` / `+o noexec` turn it off), so
-    the shell reads its script or `-c` string without running it; an interactive (`-i`) shell, which ignores
-    noexec, runs. None for an option it cannot read."""
-    noexec = interactive = has_c = has_s = False
+    """A bash/sh/dash argument list read as the shell reads it: (runs, has_c, has_s, operands, verbose). runs is
+    False when the options leave noexec on (`-n`, `-nx`, `-o noexec`; the last one wins, `+n` / `+o noexec` turn it
+    off), so the shell reads its script or `-c` string without running it; an interactive (`-i`) shell, which
+    ignores noexec, runs. verbose is True when any `-v`, `-o verbose` or `--verbose` appears (the shell then echoes
+    the script it reads). None for an option it cannot read."""
+    noexec = interactive = has_c = has_s = verbose = False
     k = 0
     while k < len(args):
         v = args[k].value()
@@ -780,6 +796,7 @@ def _hb_shell_options(args):
             if v in ("--rcfile", "--init-file"):
                 k += 2
             elif v in _HB_SHELL_LONG:
+                verbose = verbose or v == "--verbose"
                 k += 1
             else:
                 return None
@@ -793,24 +810,57 @@ def _hb_shell_options(args):
                     return None
                 if ch == "o" and args[k].value() == "noexec":
                     noexec = v[0] == "-"
+                verbose = verbose or (ch == "o" and args[k].value() == "verbose")
                 k += 1
             elif ch == "n":
                 noexec = v[0] == "-"
+            elif ch == "v":
+                verbose = True
             elif v[0] == "-" and ch in "ics":
                 interactive = interactive or ch == "i"
                 has_c = has_c or ch == "c"
                 has_s = has_s or ch == "s"
-    return (interactive or not noexec), has_c, has_s, args[k:]
+    return (interactive or not noexec), has_c, has_s, args[k:], verbose
+
+
+def _hb_test_inert(words):
+    """The words of a `test` / `[` / `[[ ]]` expression bash reads only as a file name or a string: the operand
+    of a unary file or string test (-e -f ... -z -n) and each side of a string comparison; never one beside `-v`,
+    `-R`, `-t` or an arithmetic comparison, which bash evaluates."""
+    vals = [w.value() for w in words]
+    out = []
+    for i, w in enumerate(words):
+        prev = vals[i - 1] if i > 0 else None
+        nxt = vals[i + 1] if i + 1 < len(vals) else None
+        if prev in _HB_TEST_EVAL or nxt in _HB_TEST_EVAL:
+            continue
+        if prev in _HB_TEST_UNARY or prev in _HB_TEST_STRING or nxt in _HB_TEST_STRING:
+            out.append(w)
+    return out
+
+
+def _hb_redirect_inert(r):
+    """True for a redirection that sends nothing on: a dup or close, /dev/null, or an input redirection."""
+    if r.dup is not None or r.close:
+        return True
+    if r.op in ("<", "<<", "<<-", "<<<"):
+        return True
+    return r.target is not None and r.target.value() == "/dev/null"
 
 
 def hard_ban_noexec_blank(command):
-    """command with the words no shell runs blanked (offsets kept): the literal operands of `test`, `[` and
-    `[[ ... ]]`, and those of a noexec bash/sh/dash (`bash -n x.sh`) whose output is not piped on. Found through
-    lib/shell_parse.py at command position (wrappers peeled, substitutions descended); a word holding a
-    substitution or expansion stays. A bash/sh/dash that does run gets a line appended naming what it runs
-    (`bash <script>`, or its `-c` string), so an option the command-word pattern does not read
-    (`bash +x x.sh`, `bash -o errexit x.sh`, `bash -n +n x.sh`) still shows the run. command unchanged when it
-    does not parse."""
+    """command with the words no shell runs blanked (offsets kept), found through lib/shell_parse.py at command
+    position (wrappers peeled, substitutions descended); a word holding a substitution or expansion stays.
+    Blanked: the operand of a unary file or string test and each side of a string comparison in `test`, `[` and
+    `[[ ... ]]` (never an operand of `-v` or an arithmetic comparison, which bash evaluates), and the operands of a
+    noexec bash/sh/dash (`bash -n x.sh`) only when it is a top-level simple command (not in a group, subshell,
+    substitution or function), last in its pipeline, not verbose, behind no wrapper but sudo/command/env/nice/
+    timeout, and with no redirection but a dup, /dev/null or input. Nothing is blanked when the text could
+    redefine the shell or a test builtin or re-run an earlier word (_HB_BLANK_UNSAFE). A bash/sh/dash that does
+    run, and a verbose noexec one not read as inert (its echo of the script is carried on), gets a line appended
+    naming what it runs (`bash <script>`, or its `-c` string), so an option the
+    command-word pattern does not read (`bash +x x.sh`, `bash -o errexit x.sh`, `bash -n +n x.sh`) still shows the
+    run. command unchanged when it does not parse."""
     try:
         from lib.shell_parse import Compound, SimpleCommand, active_parts, parse, resolve
     except Exception:  # noqa: BLE001
@@ -828,16 +878,16 @@ def hard_ban_noexec_blank(command):
         for w in words:
             for p in active_parts(w.parts):
                 if p.body is not None:
-                    visit(p.body)
+                    visit(p.body, False)
 
-    def visit_cmd(cmd, piped_on):
+    def visit_cmd(cmd, top, last):
         if isinstance(cmd, Compound):
             if cmd.kind == "cond":
-                spans.extend(w.span for w in cmd.header if literal(w))
+                spans.extend(w.span for w in _hb_test_inert(cmd.header) if literal(w))
             nested(cmd.header)
             nested([r.target for r in cmd.redirects if r.target is not None])
             for body in cmd.body:
-                visit(body)
+                visit(body, False)
             return
         if not isinstance(cmd, SimpleCommand):
             return
@@ -845,30 +895,38 @@ def hard_ban_noexec_blank(command):
         if res.unresolved is None and res.head is not None:
             inert = None
             if res.name in ("test", "["):
-                inert = res.args
+                inert = _hb_test_inert(res.args)
             elif res.name in _HB_NOEXEC_SHELLS:
                 opts = _hb_shell_options(list(res.args))
                 if opts is not None:
-                    runs, has_c, has_s, operands = opts
-                    if not runs and not piped_on:
+                    runs, has_c, has_s, operands, verbose = opts
+                    if (not runs and top and last and not verbose
+                            and all(name in _HB_INERT_WRAPPERS for name, _o in res.wrappers)
+                            and all(_hb_redirect_inert(r) for r in cmd.redirects)):
                         inert = operands
+                    elif not runs and verbose and operands and not has_c and operands[0].value() is not None:
+                        # a verbose noexec shell whose echo of the script is carried on reads as a run of it
+                        runs_text.append("bash " + operands[0].value())
                     elif runs and operands and (has_c or not has_s) and operands[0].value() is not None:
                         runs_text.append(operands[0].value() if has_c else "bash " + operands[0].value())
             spans.extend(w.span for w in inert or () if literal(w))
         nested([a.word for a in cmd.assignments] + list(cmd.words) +
                [r.target for r in cmd.redirects if r.target is not None])
 
-    def visit(s):
+    def visit(s, top):
         for pl, _sep in s.items:
             for k, stage in enumerate(pl.stages):
-                visit_cmd(stage, k < len(pl.stages) - 1)
+                visit_cmd(stage, top, k == len(pl.stages) - 1)
 
-    visit(script)
+    visit(script, True)
+    if _HB_BLANK_UNSAFE.search(command):
+        spans = []
     out = list(command)
     for a, b in spans:
         for i in range(max(a, 0), min(b, len(out))):
             out[i] = " "
     return "".join(out) + "".join("\n" + line for line in runs_text)
+
 
 
 def hard_ban_mask(t):

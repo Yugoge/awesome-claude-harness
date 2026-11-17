@@ -2,7 +2,10 @@
 `bash -n`, `sh -n`, `bash -o noexec`, `-n` inside a short-option cluster) and a test operand (`test`, `[`,
 `[[ ... ]]`) do not run the script, so they pass; every form that runs it is still refused. The shell options
 are read as bash/dash read them: the last of `-n` / `+n` / `-o noexec` / `+o noexec` wins, an interactive
-shell ignores noexec, and a noexec shell whose output is piped on is not treated as inert.
+shell ignores noexec. A noexec shell is inert only as a top-level simple command that is not verbose and whose
+output is not piped, redirected (other than to /dev/null or a dup) or substituted; a test operand is inert only
+beside a file-test or string operator, never beside `-v` or an arithmetic comparison; and nothing is inert when
+the command defines a function or alias (or runs exec, enable or hash).
 
 Every case goes through the real hook entry, hooks/pretool-bash-safety.sh, with a scratch HOME, config dir,
 state dir and protected-runtime data file.
@@ -77,12 +80,16 @@ def hook(env, command, **extra):
     "bash -n -c 'session-recovery --all'",
     # in a list and in a substitution
     "bash -n scripts/session-recovery.sh && echo syntax-ok",
-    "x=$(bash -n scripts/restart-all-sessions.sh) && echo ok",
+    "bash -n scripts/session-recovery.sh 2>&1",
+    "bash -n scripts/session-recovery.sh >/dev/null 2>&1",
     # test operands
     "[[ -f scripts/session-recovery.sh ]] && echo present",
     "[ ! -f scripts/session-recovery.sh ] || echo present",
     "test -x scripts/restart-all-sessions.sh",
     "if [[ -x ./scripts/session-recovery.sh ]]; then echo ok; fi",
+    "[[ scripts/session-recovery.sh == *.sh ]]",
+    "[ -n scripts/session-recovery.sh ]",
+    "x=$([[ -f scripts/session-recovery.sh ]] && echo y)",
 ))
 def test_noexec_shell_and_test_operand_pass(env, command):
     r = hook(env, command)
@@ -121,6 +128,34 @@ def test_noexec_shell_and_test_operand_pass(env, command):
     ("test -f x && restart-all-sessions", "restart-all-sessions"),
     # a noexec shell nested in a payload is still read as before (fail closed)
     ("bash -c 'bash -n scripts/session-recovery.sh; session-recovery'", "session-recovery"),
+    # the -v echo of the script carried on by a group, subshell, substitution or redirection runs it;
+    # a noexec shell is read as inert only as a top-level simple command, not verbose, output not redirected
+    ("{ bash -nv scripts/session-recovery.sh; } 2>&1 | bash", "session-recovery"),
+    ("( bash -nv scripts/session-recovery.sh ) 2>&1 | bash", "session-recovery"),
+    ('eval "$(bash -nv scripts/session-recovery.sh 2>&1)"', "session-recovery"),
+    ("bash -nv scripts/session-recovery.sh 2> >(bash)", "session-recovery"),
+    ("bash <(bash -nv scripts/session-recovery.sh 2>&1)", "session-recovery"),
+    ("bash -nv scripts/session-recovery.sh 2>/tmp/x.sh; bash /tmp/x.sh", "session-recovery"),
+    ("x=$(bash -n scripts/restart-all-sessions.sh) && echo ok", "restart-all-sessions"),
+    ("{ bash -n -o verbose scripts/session-recovery.sh; } 2>&1 | bash", "session-recovery"),
+    ("bash -n --verbose scripts/session-recovery.sh 2>&1 | bash", "session-recovery"),
+    ("exec 2>/tmp/x.sh; bash -nv scripts/session-recovery.sh; bash /tmp/x.sh", "session-recovery"),
+    # a function or alias named like the shell or a test builtin replaces it
+    ('bash() { shift; command bash "$@"; }; bash -n scripts/session-recovery.sh', "session-recovery"),
+    ('function sh { shift; command bash "$@"; }; sh -n scripts/session-recovery.sh', "session-recovery"),
+    ('[() { bash "$3"; }; [ ! -f scripts/session-recovery.sh ]', "session-recovery"),
+    ('test () { bash "$3"; }; test ! -f scripts/session-recovery.sh', "session-recovery"),
+    ("eval 'bash() { shift; command bash \"$@\"; }'; bash -n scripts/session-recovery.sh", "session-recovery"),
+    ("alias bash='bash -c \"$2\"'; bash -n scripts/session-recovery.sh", "session-recovery"),
+    # a later word that re-runs an earlier operand ($_, a DEBUG trap reading BASH_COMMAND)
+    ('bash -n scripts/session-recovery.sh; "$_"', "session-recovery"),
+    ('[[ ! -f scripts/session-recovery.sh ]] && "$_"', "session-recovery"),
+    ("trap 'c=${BASH_COMMAND#* -n }; $c' DEBUG; bash -n scripts/session-recovery.sh", "session-recovery"),
+    # operands bash evaluates as a subscript or as arithmetic run their substitutions
+    ("[[ 'a[$(scripts/session-recovery.sh)]' -eq 0 ]]", "session-recovery"),
+    ("[[ -v 'a[$(scripts/session-recovery.sh)]' ]]", "session-recovery"),
+    ("[[ 0 -lt 'a[$(scripts/session-recovery.sh)]' ]]", "session-recovery"),
+    ("[[ -f x && 'a[$(scripts/session-recovery.sh)]' -ge 1 ]]", "session-recovery"),
 ))
 def test_running_the_script_is_still_refused(env, command, name):
     r = hook(env, command)
