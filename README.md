@@ -103,19 +103,77 @@ Each stage hands a checked artifact to the next. You start each stage with one c
 /stop
 ```
 
-## Why a harness
+## System architecture
 
 > **The main session routes. It hires specialists. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.**
 
 Not a prompt pack. An operating system for agents. The orchestrator schedules one-issue agents. Grants and role write paths are the permission model. `docs/dev/` is the filesystem layout. A git protection kernel guards history.
 
-Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. Structure, not vibes. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. QA reviews every `/commit` first. `/push` needs a commit from `/commit`.
+The whole system in one picture. Each part has its own section below.
 
-Built from real failures. Two git incidents shaped the kernel. The code names both. Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
+```mermaid
+graph TD
+    U([You]) -->|type a command| CMD[Slash commands]
+    U -->|"/commit · /push · /merge · /allow"| G["Grants<br/>started only by a command you type"]
+    CMD --> ORC{{"Orchestrator: your main session<br/>routes work, writes little itself"}}
+    ORC ==>|"dispatch WHAT, not HOW<br/>one issue per agent"| SUB["Agents<br/>BA → QA → dev → QA<br/>in parallel lanes"]
+    ORC -->|"/dev-overnight"| OVN["Overnight loop, until the end time<br/>PM plan · specialists · triage · retro"]
+    OVN -->|"one pipeline per real issue"| SUB
+    SUB -->|"each stage writes its own"| ART[("Artifacts in docs/dev/<br/>your words · ticket · context · reports")]
+    ART -->|"the next stage reads it"| SUB
+    CMD -.->|"prompt hook: your words to disk"| ART
 
-Grants start from a command you type. The [trust model](#trust-model-in-practice) below says who may use which.
+    subgraph PRE["PreToolUse hooks"]
+        GATES["orchestrator gate · write gate · dispatch gate<br/>branch and PR firewall"]
+        KER["git protection kernel<br/>bash safety · git privilege guard"]
+    end
+    ORC -.->|every tool call| PRE
+    SUB -.->|every tool call| PRE
+    G -->|checked by| KER
+    PRE -->|allow| TOOL[("Tool runs<br/>files · shell · git")]
+    PRE -->|"refuse: the rule, the reason, a remedy"| BLK[/Refused/]
+    TOOL --> POST["PostToolUse hooks<br/>grant consumption · checkpoints · doc sync · lane aggregate"]
+    POST -->|"snapshots, HEAD never moves"| CK[("refs/checkpoints")]
 
-Hooks refuse what a prompt can only ask for.
+    SUB -.->|on stop| SS["SubagentStop producer gate<br/>artifact contract · end-to-end status · Codex record"]
+    ORC -.->|on stop| SG["Stop gate<br/>todos done · artifacts checked · overnight time-lock"]
+
+    classDef restricted fill:#ffebee,stroke:#c62828
+    classDef gate fill:#fff3e0,stroke:#e67e22
+    class BLK restricted
+    class GATES,KER,SS,SG gate
+```
+
+| Part | What it does | Section |
+|---|---|---|
+| You | The trust root. You type each command. Only a command you type starts a grant. | [Trust model](#trust-model-in-practice) |
+| Slash commands | Start each stage. An agent cannot start an owner-only one. | [The command surface](#the-command-surface) |
+| Orchestrator | Your main session. It splits the work into lanes, dispatches agents and keeps the todo list. A hook caps what it does itself. | [Context-engineering guardrails](#context-engineering-guardrails) |
+| Agents | One issue each, in a clean context. Each writes only to its role's paths and returns a structured report. | [The cast of agents](#the-cast-of-agents) |
+| Artifacts | Files under `docs/dev/`. Your words, the ticket, the context, the acceptance criteria, each report. Each stage reads the last one's checked output. | [The full pipeline](#the-full-pipeline) |
+| Hooks | Code at every prompt, every tool call and every stop. A prompt hook writes your words to disk before any agent runs. PreToolUse refuses before a call runs. PostToolUse spends grants, takes checkpoints and syncs docs. SubagentStop checks what an agent owes. The Stop gate holds the session while a todo is open or an artifact fails its check. | [Failure modes](#failure-modes) and the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) |
+| Git protection kernel | Refuses an agent's commit, push, merge and hard reset. Only something you typed lets one through. Checkpoints snapshot the tree to `refs/checkpoints/<branch>`. | [The git protection kernel](#the-git-protection-kernel) |
+| Grants | Each expires. A commit, push or `/allow` grant works once. Who may use which is in the trust model. | [Trust model](#trust-model-in-practice) |
+| Overnight loop | The same pipeline, unattended until a clock time. Nobody is asked. It commits nothing. | [The overnight pipeline](#the-overnight-pipeline) |
+| Deny list | `settings.json` denies destructive shell forms and reads of secret files. No grant and no `/do` lifts it. | [Feature highlights](#feature-highlights) |
+
+## Why a harness
+
+Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. QA reviews every `/commit` first. `/push` needs a commit from `/commit`.
+
+Built from real failures. Two git incidents shaped [the kernel](#the-git-protection-kernel). The code names both. Every registered hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
+
+The taste behind the project:
+
+- **Enforce in code, not in prose.** "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. A hook carries each rule that must hold. Prompts carry judgment and point at the hook.
+- **Rules, not stories.** Every prompt that touches infrastructure says what is forbidden, not only what is allowed.
+- **WHAT, not HOW.** The orchestrator describes the problem. The agent picks its tools. A hook warns on a leak. It never blocks.
+- **One agent, one issue.** Never bundle. N outcomes become N parallel lanes in one cycle. Nothing is split into phases.
+- **Your words are the contract.** The literal requirement is on disk before any agent runs. BA, QA, dev and the specialists get it. Paraphrase is drift. Drift ships the wrong thing with confidence.
+- **No flow may strand you.** CI fails a replay that reaches a block no action clears. No hook gates `/stop` or Esc.
+- **One producer per fact.** Every artifact has one producer and a reader that decides on it. The repository generates every figure about itself.
+- **Fail closed, leave forensics.** Ambiguous grant? Refuse. Unparseable verdict? Fail. The evidence stays on disk.
+- **Degrade, never fall back unsafely.** A missing extra loses its own feature. Codex never falls back to a bare `codex`. No bubblewrap, no in-place overnight run.
 
 ## Feature highlights
 
@@ -145,160 +203,6 @@ What sits under [the full pipeline](#the-full-pipeline).
 | **Usage-limit resume** | `/restart` resumes each interrupted agent by its original id. Never a replacement. |
 | **Fact-based scores** | A hook scores each agent from what its dispatch did. No agent reports its own score. Your `/close` rating counts too. The two lowest ranks add a QA round or a Codex debate. |
 | **Generated claims** | The repository computes every figure about itself. CI fails when one drifts or is typed by hand. |
-
-## The git protection kernel
-
-Scars, not hypotheticals. Two incidents shaped it. The code names both, with dates.
-
-- A dev agent used `git stash` as a scratch buffer. Then it ran a wide-path checkout. It erased seventeen days of UI work. It reported that as an accident.
-- An orchestrator answered "commit and push everything" with a ninety-three-file commit and push. Nobody signed off. It happened in an interactive session. So the guard is not limited to overnight runs.
-
-The guard covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Every agent `git` command passes through the Bash hooks below. They run in parallel. The diagram shows what each one does, not an order.
-
-```mermaid
-flowchart TD
-    B["an agent's Bash call runs git"] --> S["bash safety<br/>refuses stash-as-buffer, a wide-path checkout or restore from a ref, reset --hard<br/>unless /do (main agent) or a matching /allow"]
-    B --> W["bulk-commit detector<br/>warns on the sync-everything commit shape. Never refuses."]
-    B --> G["git privilege guard"]
-    G --> L{"can it read which git<br/>subcommand runs?"}
-    L -->|"no: an expansion or a quoted binary,<br/>unless you issued a residual override"| NO
-    L -->|yes| V{which verb?}
-    V -->|commit| C{"a matching /allow, or a /commit grant bound to this<br/>repository, branch and HEAD, spent by the changelog<br/>analyst that /commit dispatched?"}
-    V -->|"commit with the<br/>auto-bulk: prefix"| K{"a live sentinel from a /commit --bulk<br/>you typed, and no unspent /commit grant<br/>for this HEAD?"}
-    V -->|push| P{"a matching /allow?<br/>never with the wrapper's variable inline,<br/>never force, delete or mirror"}
-    V -->|"merge, reset --hard,<br/>ref change"| R{"a matching /allow, or /do<br/>that cannot move the protected branch?"}
-    C -->|yes| OK[("allowed. The guard unlinks the grant<br/>as it authorizes, so it is spent once.")]
-    P -->|yes| OK2[("allowed once")]
-    R -->|yes| OK2
-    K -->|yes| OK3[("allowed. The sentinel is not spent.<br/>It covers each bulk commit until it expires.")]
-    C & P & R & K -->|no| NO[/"refused, exit 2: the rule, the reason,<br/>and the command that lands it"/]
-
-    classDef block fill:#ffebee,stroke:#c62828
-    classDef ok fill:#e3f2fd,stroke:#1565c0
-    class NO block
-    class OK,OK2,OK3 ok
-```
-
-Something you typed must allow each agent commit, push, merge or hard reset. `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. A command that starts with `git reset --hard` also hits the `settings.json` deny. No grant and no `/do` lifts it. `/do` never covers a commit or a push. It covers the main agent for one turn, and only when the change cannot move the protected branch.
-
-`/push` and `/merge` run git inside their own wrappers. No hook sees inside. `/push` spends the push analyst's grant first. `/merge` runs only after the merge analyst's grant passes its check. These stay free:
-
-- read-only git: `status`, `log`, `diff`, `show`, `blame`
-- `add`
-- a checkout or `restore` of a single file
-- `stash list`, `show` and `pop`
-
-[The git protection kernel](docs/git-protection-kernel.md) lists what each guard does not see.
-
-### Walkthrough: a hook firing
-
-An agent tries the obvious shortcut. It sets the push wrapper's own variable on the command line:
-
-```bash
-CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
-```
-
-The git privilege guard runs before the tool executes. It finds the wrapper's variable in the raw command text. It refuses with exit code `2` and prints `BLOCKED: agent git push - inline-env injection blocked`. This check runs before the guard reads any grant. `/do` does not cover pushes. Nothing the agent can arrange lets this form through.
-
-| What the agent runs | Result |
-|---|---|
-| `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | Refused, exit `2`. Inline environment injection. Decided before any grant is read. |
-| `git push` | Refused, exit `2`. Agents may not push. The message points to `/push`. |
-| `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
-
-The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
-
-## The overnight pipeline
-
-The unattended stage of [the full pipeline](#the-full-pipeline). Hand it a vague bug report at midnight. It works while you sleep. The git kernel stays on all night. You land the work in the morning.
-
-```mermaid
-flowchart LR
-    S(["/dev-overnight 6:00 fix bugs"]) --> WT["working root: your checkout,<br/>a linked worktree only with --worktree"]
-    WT --> PM["PM: explore the running app,<br/>build a test plan"]
-    PM --> SP["specialists scan<br/>architect · product owner · user · UI"]
-    SP --> TR["PM triage<br/>one pipeline per real issue"]
-    TR --> PARA["parallel BA → QA → dev → QA<br/>one issue per pipeline"]
-    PARA --> CP["checkpoint snapshots<br/>refs/checkpoints, no commit"]
-    CP --> RT["PM retrospective"]
-    RT -->|time remaining| PM
-    RT -->|end time reached| SUM(["summary, then stop"])
-    SUM --> LAND["you, in the morning:<br/>/close --auto · /commit --auto<br/>/merge after --worktree · /push"]
-    TL[["Stop gate time-lock:<br/>refuses to end before the end time"]] -.guards.-> RT
-```
-
-`/dev-overnight` runs until a clock time. With no time given, it uses the default in `commands/dev-overnight.md`. The Stop gate refuses to end the session before that time. After it, the session ends once the PM retrospective and the overnight summary are on disk.
-
-Nobody is asked anything. A pipeline may need a decision. An experiment makes it, else the question's default does. The summary lists each one under "Decisions made without the owner". Nothing is committed. The work waits in `refs/checkpoints/<branch>` until you land it. A typed `/stop` ends the run at once.
-
-It runs in your checkout by default, with no worktree boundary. A `--worktree` run shares the repository's git directory. [The overnight pipeline](docs/overnight-pipeline.md) says what each mode does and does not protect.
-
-## System architecture
-
-```mermaid
-graph TD
-    U([You]) -->|type a command| CMD[Slash commands]
-    CMD --> ORC{{"Orchestrator: your main session<br/>routes work, writes little itself"}}
-    ORC ==>|"dispatch WHAT, not HOW<br/>one issue per agent"| SUB["Agents<br/>BA → QA → dev → QA<br/>in parallel lanes"]
-
-    ORC -.->|every tool call| PRE
-    SUB -.->|every tool call| PRE
-    PRE["PreToolUse gates<br/>orchestrator gate · write gate · dispatch gate<br/>bash safety · git privilege guard · branch and PR firewall"]
-    PRE -->|allow| TOOL[("Tool runs<br/>files · shell · git")]
-    PRE -->|"refuse: the rule, the reason, a remedy"| BLK[/Refused/]
-    TOOL --> POST["PostToolUse hooks<br/>grant consumption · checkpoints · doc sync · lane aggregate"]
-
-    SUB -.->|on stop| SS["SubagentStop producer gate<br/>artifact contract · end-to-end status · Codex record"]
-    ORC -.->|on stop| SG["Stop gate<br/>todos done · artifacts checked · overnight time-lock"]
-    G["Grants you mint by typing<br/>/commit · /allow"] -->|checked by| PRE
-
-    classDef restricted fill:#ffebee,stroke:#c62828
-    classDef gate fill:#fff3e0,stroke:#e67e22
-    class BLK restricted
-    class PRE,SS,SG gate
-```
-
-## Failure modes
-
-| Failure mode | Rule |
-|---|---|
-| One context does too much. Quality silently degrades. | The main session routes. A one-issue agent with a clean context does each piece of work. |
-| The build drifts from the requirement | Your words are on disk before any agent runs. BA cites evidence. QA checks the analysis before any code. |
-| Agents build what they guessed you meant | The requirement round asks you first, in the question dialog. A hook writes your answers to disk. The Stop gate refuses to end a turn on a question in plain text. |
-| A requested outcome quietly becomes "phase two" | One cycle, parallel lanes. QA fails a plan that phases or defers an outcome. |
-| A missing artifact shows up only at `/close` | Each dispatch declares what its agent owes. A hook checks it when that agent stops. |
-| QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA until the aggregate report names every declared lane and each lane has a report. |
-| A false pass ships a broken feature | QA starts from doubt and fails when in doubt. Its report must record the end-to-end status. |
-| QA inherits a draft's mistakes | `--codex` puts each draft through an adversarial Codex review first. Claude keeps the verdict. |
-| Unfinished work is handed off as done | The Stop gate refuses the stop until every todo is done and the artifact chain passes. |
-| An agent writes outside its job | Each subagent writes only to its role's paths. |
-| An irreversible git operation | Agent commit, push, merge and `reset --hard` are refused by default. Stash-as-buffer and wide-path checkout are refused by shape. |
-
-## Context-engineering guardrails
-
-The main session's context stays small. The real work happens in the agents' clean contexts.
-
-| Guardrail | What it refuses | Why |
-|---|---|---|
-| Bash streak cap | The main agent's next `Bash` call after a short run. It lifts on an agent dispatch or your next prompt. | Delegate before shell output floods the context. |
-| Once per turn | A second call in one turn of a capped tool such as `Edit`, `Write` or `WebFetch` | Real edits belong in an agent's clean context. |
-| Read-size cap | The main agent reading a large file whole | Delegate and ask for a summary. |
-| Write over existing | `Write` onto an existing file. Use `Edit`. | A rewrite from memory loses content. No diff catches it. |
-| No background dispatch | An agent dispatch without `run_in_background: false`, and every ordinary `SendMessage` | A background agent escapes the pipeline's checks. |
-| Gitignored deliverable | A dispatch whose dev report names a deliverable that `.gitignore` matches | It would pass QA and never ship through git. |
-| Todo sequence | A `TodoWrite` that skips, reorders, edits or bulk-completes steps | The plan stays auditable, one step at a time. |
-
-## Trust model in practice
-
-You are the trust root. The threat model treats the agent itself as the adversary. The table shows who may do what, and which grant lets an operation through. [The git protection kernel](docs/git-protection-kernel.md) has the full grant lifecycle.
-
-| Actor | Edit, Write | git commit | git push | git reset --hard | Break-glass |
-|---|---|---|---|---|---|
-| You, in your own shell | yes | yes | yes | yes | not needed |
-| Main agent | Once per tool per turn. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch. Or a matching `/allow`. Never a command that starts with `git reset --hard`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
-| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
-
-The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command. Never a substring of the raw text. It expires. It is consumed once the matched call ends, whatever the result.
 
 ## The cast of agents
 
@@ -369,19 +273,134 @@ These are the commands you type. An owner-only command carries `disable-model-in
 
 Did you hit a usage limit? `/restart` resumes every recoverable interrupted child in the current parent transcript by its original agent id. It never creates a replacement agent. It claims recovery only on response evidence from every candidate.
 
-## Design philosophy
+## The overnight pipeline
 
-The taste behind the project.
+The unattended stage of [the full pipeline](#the-full-pipeline). Hand it a vague bug report at midnight. It works while you sleep. [The git kernel](#the-git-protection-kernel) stays on all night. You land the work in the morning.
 
-- **Enforce in code, not in prose.** A hook carries each rule that must hold. Prompts carry judgment and point at the hook.
-- **Rules, not stories.** Every prompt that touches infrastructure says what is forbidden, not only what is allowed.
-- **WHAT, not HOW.** The orchestrator describes the problem. The agent picks its tools. A hook warns on a leak. It never blocks.
-- **One agent, one issue.** Never bundle. N outcomes become N parallel lanes in one cycle. Nothing is split into phases.
-- **Your words are the contract.** The literal requirement is on disk before any agent runs. BA, QA, dev and the specialists get it. Paraphrase is drift. Drift ships the wrong thing with confidence.
-- **No flow may strand you.** CI fails a replay that reaches a block no action clears. No hook gates `/stop` or Esc.
-- **One producer per fact.** Every artifact has one producer and a reader that decides on it. The repository generates every figure about itself.
-- **Fail closed, leave forensics.** Ambiguous grant? Refuse. Unparseable verdict? Fail. The evidence stays on disk.
-- **Degrade, never fall back unsafely.** A missing extra loses its own feature. Codex never falls back to a bare `codex`. No bubblewrap, no in-place overnight run.
+```mermaid
+flowchart LR
+    S(["/dev-overnight 6:00 fix bugs"]) --> WT["working root: your checkout,<br/>a linked worktree only with --worktree"]
+    WT --> PM["PM: explore the running app,<br/>build a test plan"]
+    PM --> SP["specialists scan<br/>architect · product owner · user · UI"]
+    SP --> TR["PM triage<br/>one pipeline per real issue"]
+    TR --> PARA["parallel BA → QA → dev → QA<br/>one issue per pipeline"]
+    PARA --> CP["checkpoint snapshots<br/>refs/checkpoints, no commit"]
+    CP --> RT["PM retrospective"]
+    RT -->|time remaining| PM
+    RT -->|end time reached| SUM(["summary, then stop"])
+    SUM --> LAND["you, in the morning:<br/>/close --auto · /commit --auto<br/>/merge after --worktree · /push"]
+    TL[["Stop gate time-lock:<br/>refuses to end before the end time"]] -.guards.-> RT
+```
+
+`/dev-overnight` runs until a clock time. With no time given, it uses the default in `commands/dev-overnight.md`. The Stop gate refuses to end the session before that time. After it, the session ends once the PM retrospective and the overnight summary are on disk.
+
+Nobody is asked anything. A pipeline may need a decision. An experiment makes it, else the question's default does. The summary lists each one under "Decisions made without the owner". Nothing is committed. The work waits in `refs/checkpoints/<branch>` until you land it. A typed `/stop` ends the run at once.
+
+It runs in your checkout by default, with no worktree boundary. A `--worktree` run shares the repository's git directory. [The overnight pipeline](docs/overnight-pipeline.md) says what each mode does and does not protect.
+
+## The git protection kernel
+
+Scars, not hypotheticals. Two incidents shaped it. The code names both, with dates.
+
+- A dev agent used `git stash` as a scratch buffer. Then it ran a wide-path checkout. It erased seventeen days of UI work. It reported that as an accident.
+- An orchestrator answered "commit and push everything" with a ninety-three-file commit and push. Nobody signed off. It happened in an interactive session. So the guard is not limited to overnight runs.
+
+The guard covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Every agent `git` command passes through the Bash hooks below. They run in parallel. The diagram shows what each one does, not an order.
+
+```mermaid
+flowchart TD
+    B["an agent's Bash call runs git"] --> S["bash safety<br/>refuses stash-as-buffer, a wide-path checkout or restore from a ref, reset --hard<br/>unless /do (main agent) or a matching /allow"]
+    B --> W["bulk-commit detector<br/>warns on the sync-everything commit shape. Never refuses."]
+    B --> G["git privilege guard"]
+    G --> L{"can it read which git<br/>subcommand runs?"}
+    L -->|"no: an expansion or a quoted binary,<br/>unless you issued a residual override"| NO
+    L -->|yes| V{which verb?}
+    V -->|commit| C{"a matching /allow, or a /commit grant bound to this<br/>repository, branch and HEAD, spent by the changelog<br/>analyst that /commit dispatched?"}
+    V -->|"commit with the<br/>auto-bulk: prefix"| K{"a live sentinel from a /commit --bulk<br/>you typed, and no unspent /commit grant<br/>for this HEAD?"}
+    V -->|push| P{"a matching /allow?<br/>never with the wrapper's variable inline,<br/>never force, delete or mirror"}
+    V -->|"merge, reset --hard,<br/>ref change"| R{"a matching /allow, or /do<br/>that cannot move the protected branch?"}
+    C -->|yes| OK[("allowed. The guard unlinks the grant<br/>as it authorizes, so it is spent once.")]
+    P -->|yes| OK2[("allowed once")]
+    R -->|yes| OK2
+    K -->|yes| OK3[("allowed. The sentinel is not spent.<br/>It covers each bulk commit until it expires.")]
+    C & P & R & K -->|no| NO[/"refused, exit 2: the rule, the reason,<br/>and the command that lands it"/]
+
+    classDef block fill:#ffebee,stroke:#c62828
+    classDef ok fill:#e3f2fd,stroke:#1565c0
+    class NO block
+    class OK,OK2,OK3 ok
+```
+
+Something you typed must allow each agent commit, push, merge or hard reset. `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. A command that starts with `git reset --hard` also hits the `settings.json` deny. No grant and no `/do` lifts it. `/do` never covers a commit or a push. It covers the main agent for one turn, and only when the change cannot move the protected branch.
+
+`/push` and `/merge` run git inside their own wrappers. No hook sees inside. `/push` spends the push analyst's grant first. `/merge` runs only after the merge analyst's grant passes its check. These stay free:
+
+- read-only git: `status`, `log`, `diff`, `show`, `blame`
+- `add`
+- a checkout or `restore` of a single file
+- `stash list`, `show` and `pop`
+
+[The git protection kernel](docs/git-protection-kernel.md) lists what each guard does not see.
+
+### Walkthrough: a hook firing
+
+An agent tries the obvious shortcut. It sets the push wrapper's own variable on the command line:
+
+```bash
+CLAUDE_PUSH_COMMAND_ACTIVE=1 git push
+```
+
+The git privilege guard runs before the tool executes. It finds the wrapper's variable in the raw command text. It refuses with exit code `2` and prints `BLOCKED: agent git push - inline-env injection blocked`. This check runs before the guard reads any grant. `/do` does not cover pushes. Nothing the agent can arrange lets this form through.
+
+| What the agent runs | Result |
+|---|---|
+| `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | Refused, exit `2`. Inline environment injection. Decided before any grant is read. |
+| `git push` | Refused, exit `2`. Agents may not push. The message points to `/push`. |
+| `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
+
+The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
+
+## Trust model in practice
+
+You are the trust root. The threat model treats the agent itself as the adversary. The table shows who may do what, and which grant lets an operation through. [The git protection kernel](docs/git-protection-kernel.md) has the full grant lifecycle.
+
+| Actor | Edit, Write | git commit | git push | git reset --hard | Break-glass |
+|---|---|---|---|---|---|
+| You, in your own shell | yes | yes | yes | yes | not needed |
+| Main agent | Once per tool per turn. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch. Or a matching `/allow`. Never a command that starts with `git reset --hard`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
+| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
+
+The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command. Never a substring of the raw text. It expires. It is consumed once the matched call ends, whatever the result.
+
+## Failure modes
+
+| Failure mode | Rule |
+|---|---|
+| One context does too much. Quality silently degrades. | The main session routes. A one-issue agent with a clean context does each piece of work. |
+| The build drifts from the requirement | Your words are on disk before any agent runs. BA cites evidence. QA checks the analysis before any code. |
+| Agents build what they guessed you meant | The requirement round asks you first, in the question dialog. A hook writes your answers to disk. The Stop gate refuses to end a turn on a question in plain text. |
+| A requested outcome quietly becomes "phase two" | One cycle, parallel lanes. QA fails a plan that phases or defers an outcome. |
+| A missing artifact shows up only at `/close` | Each dispatch declares what its agent owes. A hook checks it when that agent stops. |
+| QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA until the aggregate report names every declared lane and each lane has a report. |
+| A false pass ships a broken feature | QA starts from doubt and fails when in doubt. Its report must record the end-to-end status. |
+| QA inherits a draft's mistakes | `--codex` puts each draft through an adversarial Codex review first. Claude keeps the verdict. |
+| Unfinished work is handed off as done | The Stop gate refuses the stop until every todo is done and the artifact chain passes. |
+| An agent writes outside its job | Each subagent writes only to its role's paths. |
+| An irreversible git operation | Agent commit, push, merge and `reset --hard` are refused by default. Stash-as-buffer and wide-path checkout are refused by shape. |
+
+## Context-engineering guardrails
+
+The main session's context stays small. The real work happens in the agents' clean contexts.
+
+| Guardrail | What it refuses | Why |
+|---|---|---|
+| Bash streak cap | The main agent's next `Bash` call after a short run. It lifts on an agent dispatch or your next prompt. | Delegate before shell output floods the context. |
+| Once per turn | A second call in one turn of a capped tool such as `Edit`, `Write` or `WebFetch` | Real edits belong in an agent's clean context. |
+| Read-size cap | The main agent reading a large file whole | Delegate and ask for a summary. |
+| Write over existing | `Write` onto an existing file. Use `Edit`. | A rewrite from memory loses content. No diff catches it. |
+| No background dispatch | An agent dispatch without `run_in_background: false`, and every ordinary `SendMessage` | A background agent escapes the pipeline's checks. |
+| Gitignored deliverable | A dispatch whose dev report names a deliverable that `.gitignore` matches | It would pass QA and never ship through git. |
+| Todo sequence | A `TodoWrite` that skips, reorders, edits or bulk-completes steps | The plan stays auditable, one step at a time. |
 
 ## Proof and limits
 
