@@ -1524,6 +1524,53 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
     )
 
 
+def _residual_recovery(kinds, digest):
+    """Why a residual refusal fired and the routes out of it, for the kinds it names.
+
+    An unresolved_shell_string already names its binary literally; what the guard
+    cannot read is a value the outer shell splices into a `-c` string at run time
+    (a directory named `x;git push` runs a push). Its route is to pass the value as
+    data: a positional argument the `-c` string quotes, or no `-c` wrapper at all.
+    """
+    binary = [k for k in kinds if k != 'unresolved_shell_string']
+    text, routes = '', []
+    if binary:
+        text += ('A command word names its binary through a shell expansion, a '
+                 'substitution, or an escaped/quoted spelling (%s), so the guard cannot '
+                 'prove which program runs or which git subcommand it receives.\n'
+                 % ', '.join(binary))
+        routes.append('Re-issue it with the binary written literally (e.g. '
+                      '`git push` or `/usr/bin/git push`) so the policy checks can '
+                      'judge it on its merits. This needs no authorization.')
+    if 'unresolved_shell_string' in kinds:
+        text += ('A shell `-c` string runs text the guard cannot read before it runs, '
+                 'most often a value the outer shell expands into it at run time (e.g. '
+                 '`bash -c "cd $d && git status"`): that value becomes shell code, and a '
+                 'directory named `x;git push` would run a push. (Quoting the guard '
+                 'cannot follow, or shells nested too deep, are refused the same way.) Writing '
+                 'git literally inside the string does not help.\n')
+        routes.append('Pass the value as data, not as shell text, so the policy checks '
+                      'can judge the git it runs on its merits; this needs no '
+                      'authorization. Either single-quote the `-c` string and hand the '
+                      'value over as a positional argument: '
+                      'for d in */; do bash -c \'cd "$1" && git status\' _ "$d"; done '
+                      '-- or drop the `bash -c` wrapper: '
+                      'for d in */; do (cd "$d" && git status); done . For deep nesting or '
+                      'tangled quoting, run the git command outside the shell string.')
+    routes.append('If it genuinely cannot be re-written, ask your user for a residual '
+                  'override. Only the human can issue one -- you cannot authorize '
+                  'yourself and neither can another agent. It is bound to this exact '
+                  'command text, is single-use, expires, and its use is recorded in the '
+                  'transcript. The human runs:\n'
+                  '       scripts/write-git-residual-override.py \\\n'
+                  '         --command-sha256 %s \\\n' % digest
+                  + '         --residual-kinds %s \\\n' % ','.join(kinds)
+                  + '         --reason "<why this command must run as written>"\n'
+                  + '     Command sha256: %s' % digest)
+    text += '\n%s RECOVERY ROUTES, cheapest first:\n' % ('TWO' if len(routes) == 2 else 'THREE')
+    return text + ''.join('  %d. %s\n' % (n, r) for n, r in enumerate(routes, 1))
+
+
 def _evaluate_command(command, data, do_consent=False):
     # do_consent: the main agent holds /do consent, which releases the rules in
     # _DO_RELEASED and adds none: what one of them refuses stays refused when it
@@ -1532,7 +1579,8 @@ def _evaluate_command(command, data, do_consent=False):
     # guard cannot classify are judged as without it.
     invocations, residuals = classify_git_command(command)
     # A git-shaped command whose binary the classifier cannot resolve (`g\it push`,
-    # `$GIT push`, `$(which git) push`) is refused before the invocation list and
+    # `$GIT push`, `$(which git) push`), or a shell `-c` string it cannot read
+    # (`bash -c "cd $d && git status"`), is refused before the invocation list and
     # before /allow: no grant can be shown to cover an unknown binary, and the
     # grant matcher may read `git status & $GIT push --force` as one `git status`.
     if residuals:
@@ -1558,25 +1606,7 @@ def _evaluate_command(command, data, do_consent=False):
                 'Command excerpt: %s\n' % command[:200]
                 + 'Unresolvable command token(s): %s\n' % ', '.join(kinds)
                 + 'Segment(s): %s\n' % '; '.join(seg.strip()[:80] for seg in segments[:3])
-                + 'This command names its binary through a shell expansion, a '
-                'substitution, or an escaped/quoted spelling, so the guard cannot '
-                'prove which program runs or which git subcommand it receives.\n'
-                + '\nTWO RECOVERY ROUTES, cheapest first:\n'
-                + '  1. Re-issue it with the binary written literally (e.g. '
-                '`git push` or `/usr/bin/git push`) so the policy checks can '
-                'judge it on its merits. This is almost always the right fix '
-                'and needs no authorization.\n'
-                + '  2. If the binary genuinely cannot be written literally, ask '
-                'your user for a residual override. Only the human can issue '
-                'one -- you cannot authorize yourself and neither can another '
-                'agent. It is bound to this exact command text, is single-use, '
-                'expires, and its use is recorded in the transcript. The human '
-                'runs:\n'
-                + '       scripts/write-git-residual-override.py \\\n'
-                + '         --command-sha256 %s \\\n' % digest
-                + '         --residual-kinds %s \\\n' % ','.join(kinds)
-                + '         --reason "<why this command must run as written>"\n'
-                + '     Command sha256: %s\n' % digest
+                + _residual_recovery(kinds, digest)
             )
     if not invocations:
         return

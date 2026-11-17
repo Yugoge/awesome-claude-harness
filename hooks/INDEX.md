@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 401
+*Last updated: 2026-11-17T14:13:04Z*
+**Total entries**: 404
 **Convention**: kebab
 
 ## Tree
@@ -65,7 +65,7 @@ hooks/
 │   ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
 │   ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 │   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
-│   ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
+│   ├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
 │   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
@@ -181,7 +181,9 @@ hooks/
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   ├── `test_git_residual_override.py` - Background
+│   ├── `test_git_residual_shell_string_message.py` - `for d in */; do bash -c "cd $d && git status"; done` stays refused: the outer
 │   ├── `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
+│   ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
@@ -226,9 +228,10 @@ hooks/
 │   ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 │   ├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
 │   ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
-│   ├── `test_privilege_guard_fails_closed.py` - P9 renamed the classifier's git value-option set to GIT_GLOBAL_VALUE_OPTS; another
+│   ├── `test_privilege_guard_fails_closed.py` - When a name the guard imports from the classifier is missing, the guard raises at
 │   ├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
 │   ├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
+│   ├── `test_privilege_guard_read_only_forms.py` - Its rules judge an invocation by its subcommand name, so help (`git push --help`,
 │   ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 │   ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
 │   ├── `test_prompt_workflow_replay_window.py` - envelope only while its replay record is younger than 60 s, judged by the
