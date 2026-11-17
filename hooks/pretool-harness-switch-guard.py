@@ -26,7 +26,10 @@ subagent, each other path by which an agent call could switch the harness or fak
                         settings*.json whose resulting document sets disableAllHooks truthy
                         (a falsy value passes; an unreadable document naming it does not); a
                         file outside a harness checkout that names the switch's state: any kind
-                        but prose (.md, .txt, .rst), where only a line that writes it counts
+                        but prose (.md, .txt, .rst), where a line naming it passes only as a
+                        proven mention (_proven_mention: no shell syntax, dash word, other path,
+                        file name after the directory, code block or continuation; its first
+                        word runs nothing)
   CronCreate / ScheduleWakeup / SendMessage
                         a prompt or message that types /harness (a scheduled prompt reaches
                         UserPromptSubmit as if typed)
@@ -68,6 +71,7 @@ harness_switch.exit_if_off()
 import collections  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
+import shutil  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
@@ -1931,27 +1935,108 @@ def _new_text(tool: str, ti: dict) -> str:
 
 
 PROSE = (".md", ".txt", ".rst")  # a file kind no shell or interpreter runs: naming the state there is prose
-STATE_WRITE = re.compile(  # a line of prose that writes, moves or removes what it names, or keeps it for a write
-    r"\b(?:rm|rmdir|touch|mkdir|mv|cp|ln|tee|dd|install|truncate|chmod|chown|unlink|shred|rsync|cd|pushd"
-    r"|mknod|mkfifo|exec|eval|subprocess|shutil|pathlib|os\.\w+|fs\.\w+)\b|\bsed\b.*\s-[A-Za-z]*i"
-    r"|\bperl\b.*\s-[A-Za-z]*i|[A-Za-z_][A-Za-z0-9_]*=|(?<![-=])>(?!=)|\b(?:open|write\w*|unlink|remove\w*"
-    r"|rename|replace|mkdirs?|makedirs|rmtree|copy\w*|move|symlink\w*|link|touch|appendFile\w*|writeFile\w*"
-    r"|system|Path)\s*\(")
-QUOTE_MARK = re.compile(r"\A\s*(?:>\s*)+")  # a Markdown blockquote's markers, no redirect
+PROSE_META = re.compile(r"[$<>|;&\\(){}*?\[\]=`]")  # shell syntax: a line holding any is no proven mention
+PROSE_DIR_WORD = re.compile(r"(`*)([^\s`]*%s)/?\1[.,:!]?" % re.escape(harness_switch.DIR_NAME))
+PROSE_FENCE = re.compile(r"\A {0,3}(?:```|~~~)")
+PROSE_PATH = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+SHELL_WORDS = frozenset((  # bash's reserved words and builtins: a line led by one runs it under `bash x.md`
+    "!", "[[", "]]", "{", "}", "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function",
+    "if", "in", "select", "then", "time", "until", "while", ".", ":", "[", "alias", "bg", "bind", "break",
+    "builtin", "caller", "cd", "command", "compgen", "complete", "compopt", "continue", "declare", "dirs",
+    "disown", "echo", "enable", "eval", "exec", "exit", "export", "false", "fc", "fg", "getopts", "hash", "help",
+    "history", "jobs", "kill", "let", "local", "logout", "mapfile", "popd", "printf", "pushd", "pwd", "read",
+    "readarray", "readonly", "return", "set", "shift", "shopt", "source", "suspend", "test", "times", "trap",
+    "true", "type", "typeset", "ulimit", "umask", "unalias", "unset", "wait"))
+PROSE_DEFINES = re.compile(r"[\w.:+-]\s*\(\s*\)|^\s*(?:function|alias|enable|hash|shopt)\b", re.M)
 
 
-def _names_state(names: tuple, text: str) -> bool:
+def _is_command(word: str) -> bool:
+    """Whether `bash x.md` would run something for a line led by `word`: a reserved word, a builtin,
+    or a program on PATH or a standard bin directory (in either case, for a case-blind file system)."""
+    if word in SHELL_WORDS or word.lower() in SHELL_WORDS:
+        return True
+    path = os.pathsep.join([os.environ.get("PATH", "")] + list(PROSE_PATH))
+    return any(shutil.which(w, path=path) for w in {word, word.lower()})
+
+
+def _clean_starts(lines: list) -> list:
+    """For each line, whether a shell reading the text from its top starts that line afresh: not
+    inside a quote or a backtick, not continued by a trailing backslash, and after no heredoc (`<<`)."""
+    out, state, heredoc, cont = [], None, False, False
+    for line in lines:
+        out.append(state is None and not heredoc and not cont)
+        cont, i, word_start = False, 0, True
+        while i < len(line):
+            c = line[i]
+            if state == "'":
+                state = None if c == "'" else state
+            elif state in ('"', "`"):
+                if c == "\\":
+                    i += 1
+                elif c == state:
+                    state = None
+            elif c == "\\":
+                if i == len(line) - 1:
+                    cont = True
+                i += 1
+            elif c in "'\"`":
+                state = c
+            elif c == "#" and word_start:
+                break
+            elif line.startswith("<<", i):
+                heredoc = True
+            word_start = c.isspace() or c in ";&|()<>"
+            i += 1
+        if state in ('"', "`") and line.endswith("\\"):
+            cont = True
+    return out
+
+
+def _proven_mention(line: str, clean: bool) -> bool:
+    """Whether a prose line naming the switch's state provably only mentions its directory: it starts
+    afresh (no open quote, continuation or heredoc above it), holds no shell syntax (the backticks of
+    Markdown or reST inline code around the directory's path alone excepted), no word starting with
+    `-`, no path but the directory's own, which no file name follows, and its first word runs nothing."""
+    if not clean or not line.strip() or line[:1] == "\t" or line.startswith("    "):
+        return False
+    words = line.split()
+    dirs = [w for w in words if harness_switch.DIR_NAME in w]
+    if len(dirs) != 1 or not PROSE_DIR_WORD.fullmatch(dirs[0]):
+        return False
+    if any(w.startswith("-") or ("/" in w and w not in dirs) for w in words):
+        return False
+    if PROSE_META.search(" ".join(w for w in words if w not in dirs)):
+        return False
+    if PROSE_META.search(PROSE_DIR_WORD.fullmatch(dirs[0]).group(2)):
+        return False
+    if words[0] in dirs and words[0].startswith("`"):
+        words = words[1:]  # a substitution printing nothing: the next word leads the command
+    return not (words and (_is_command(words[0]) or _is_command(words[0].rstrip(".,:!"))))
+
+
+def _names_state(names: tuple, text: str, doc=None) -> bool:
     """Whether a written file's text names the switch's state in a way that may change it: any
     mention in a file of any kind but prose (.md, .txt, .rst; by every one of `names`, the path as
-    written and as resolved, so a link named x.sh is no prose); in prose, a line that names it and
-    writes (a writing command, a `>` redirect, sed -i, a `cd` into it, an assignment of it, a
-    write call)."""
+    written and as resolved, so a link named x.sh is no prose); in prose, any line naming it that is
+    no proven mention (_proven_mention), judged in `doc`, the document the call leaves, when known,
+    and the whole document refused when it defines a shell function or alias anywhere."""
     if harness_switch.DIR_NAME not in text:
         return False
     if not all(n.lower().endswith(PROSE) for n in names):
         return True
-    return any(harness_switch.DIR_NAME in line and STATE_WRITE.search(QUOTE_MARK.sub("", line))
-               for line in text.splitlines())
+    lines = (doc if isinstance(doc, str) and harness_switch.DIR_NAME in doc else text).splitlines()
+    if PROSE_DEFINES.search("\n".join(lines)):
+        return True
+    clean, fenced, prev_cont = _clean_starts(lines), False, False
+    for line, start in zip(lines, clean):
+        if PROSE_FENCE.match(line):
+            fenced = not fenced
+        if harness_switch.DIR_NAME in line and (fenced or prev_cont or PROSE_FENCE.match(line)
+                                                or not _proven_mention(line, start)):
+            return True
+        if line.strip():
+            prev_cont = line.rstrip().endswith("\\")
+    return False
 
 
 class _Pairs(dict):
@@ -2024,7 +2109,16 @@ def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
         change = _settings_change(_held(named[0]), _edit_result(tool, ti, before))
         if change and not _granted(tool, ti, data or {}):
             return _refuse_settings(tool, change, raw)
-    if _names_state((name, os.path.basename(raw)), text) and not _in_harness_checkout(path):
+    doc = None
+    if harness_switch.DIR_NAME in text and tool in ("Write", "Edit", "MultiEdit"):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doc = _edit_result(tool, ti, fh.read())
+        except (FileNotFoundError, NotADirectoryError):
+            doc = _edit_result(tool, ti, None)
+        except (OSError, UnicodeDecodeError):
+            doc = None
+    if _names_state((name, os.path.basename(raw)), text, doc) and not _in_harness_checkout(path):
         return refuse("this %s writes a file naming the switch's state (%s), outside the harness" % (tool, raw))
     return 0
 

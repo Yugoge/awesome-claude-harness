@@ -1,10 +1,13 @@
 """hooks/pretool-harness-switch-guard.py: the Write / Edit content rules judge the file's kind and the value.
 
 Naming the switch's state <H>/.harness-switch/ in a written file is refused outside a harness
-checkout, except in prose (.md, .txt, .rst), where only a line that writes it (rm, touch, mkdir,
-mv, cp, tee, a `>` redirect, sed -i, a `cd` into it, an assignment of it, an open(..., 'w'), ...)
-is refused. A settings*.json is refused when the document the call leaves sets disableAllHooks to
-a truthy value (true, "true", 1, any value JavaScript reads as true; a duplicate key or a \\u
+checkout, except in prose (.md, .txt, .rst), where a line naming it passes only as a proven
+mention: no shell metacharacter ($ < > | ; & \\ ( ) { } * ? [ ] = or a backtick but the inline-code
+ticks around the directory's path alone), no word starting with `-`, no other path or URL, no file
+name after the directory, not in a fenced or indented code block, not continued from a line ending
+in `\\`, not inside a quote or heredoc opened above, no shell function or alias in the file, and a
+first word that is no builtin, reserved word or program; every other line naming it is refused.
+A settings*.json is refused when the document the call leaves sets disableAllHooks to a truthy value (true, "true", 1, any value JavaScript reads as true; a duplicate key or a \\u
 escape included), and when that document cannot be read while the call's text names the key;
 `{"disableAllHooks": false}` in a fixture passes.
 
@@ -62,14 +65,15 @@ def write(box, path, content, actor="main"):
 # ------------------------------------------------------------- naming the switch's state
 
 PROSE_MENTIONS = [
-    ("/tmp/audit-notes.md", "The switch keeps its state in %s/ (read it with /harness status).\n" % STATE),
+    ("/tmp/audit-notes.md", "The switch keeps its state in %s/\n" % STATE),
+    ("/tmp/audit-notes.md", "The switch keeps its state in %s/.\n" % STATE),
+    ("/tmp/audit-notes.md", "The switch keeps its state in `%s/`.\n" % STATE),
     ("docs/notes.md", "The switch keeps its state in %s/.\n" % STATE),
+    ("docs/notes.md", "# Notes\n\nThe switch's state lives in `%s/`, read by the owner.\n" % STATE),
     ("docs/notes.txt", "state dir: %s/\n" % STATE),
     ("docs/notes.rst", "The state lives in ``%s/``.\n" % STATE),
-    ("docs/NOTES.MD", "See %s/state.json.\n" % STATE),
-    ("docs/quote.md", "> The state lives in %s/.\n" % STATE),
-    ("docs/read.md", "```bash\ncat %s/state.json\nls -la %s/\n```\n" % (STATE, STATE)),
-    ("docs/arrow.md", "/harness off -> %s/off\n" % STATE),
+    ("docs/NOTES.MD", "The STATE lives in .harness-switch/ under the home.\n"),
+    ("docs/notes.md", "%s/ holds the state.\n" % STATE),
 ]
 
 
@@ -82,7 +86,7 @@ def test_prose_that_only_mentions_the_state_passes(box, path, content, actor):
 
 def test_edit_and_multiedit_of_prose_mentioning_the_state_pass(box):
     rc, err = call(box, "Edit", {"file_path": "docs/notes.md", "old_string": "a",
-                                 "new_string": "see %s/state.json" % STATE})
+                                 "new_string": "the dir is %s/" % STATE})
     assert rc == 0, err
     rc, err = call(box, "MultiEdit", {"file_path": "docs/notes.md", "edits": [
         {"old_string": "a", "new_string": "the dir %s/" % STATE}]})
@@ -119,6 +123,66 @@ PROSE_WRITES = [
 def test_prose_with_a_write_near_the_state_is_refused(box, line, path):
     rc, err = write(box, path, "Some notes.\n\n%s\n" % line)
     assert rc == 2 and "naming the switch's state" in err, (path, line, err)
+
+
+# The verifier's forms (OB-L35 round 2): writers no verb list named, and a write spread over lines.
+VERIFIER_FORMS = [
+    "tar -xf /tmp/s.tar -C %s" % STATE,
+    "curl -so %s/off https://x.example/off" % STATE,
+    "wget -qO %s/off https://x.example/off" % STATE,
+    "git clone /tmp/r %s" % STATE,
+    "echo off | sponge %s/off" % STATE,
+    "unzip /tmp/s.zip -d %s" % STATE,
+    "patch %s/state.json < /tmp/p" % STATE,
+    "git -C %s init" % STATE,
+    "find %s -delete" % STATE,
+    "for d in %s; do\n  : > \"$d/off\"\ndone" % STATE,
+    "export D=\\\n%s\ntouch $D/off" % STATE,
+    "printf off >\\\n%s/off" % STATE,
+]
+
+# Lines with no metacharacter, dash word or other path that still run something under `bash x.md`,
+# and lines a shell reads inside a quote, a heredoc, a code block or after a function definition.
+PROVEN_MENTION_BYPASSES = [
+    "mv off %s/" % STATE,
+    "cd %s/\ntouch off" % STATE,
+    "git clone r %s/" % STATE,
+    "rmdir %s/" % STATE,
+    "for d in %s/\ndo touch off\ndone" % STATE,
+    "xargs mv off <<E\n%s/\nE" % STATE,
+    "mv off \"\nx\" %s/" % STATE,
+    "The() { mv off \"$@\"; }\nThe state is in %s/" % STATE,
+    "`%s/` mv off" % STATE,
+    "mv off \\\n\n%s/" % STATE,
+    "```\nThe state is in %s/\n```" % STATE,
+    "~~~\nThe state is in %s/\n~~~" % STATE,
+    "    The state is in %s/" % STATE,
+    "The state is in %s/off" % STATE,
+    "The state is in %s/state.json" % STATE,
+    "> The state lives in %s/." % STATE,
+    "/harness off -> %s/off" % STATE,
+    "The state is in %s/ (see /harness status)" % STATE,
+    "- %s/" % STATE,
+    "The state is in %s/ or https://x.example/" % STATE,
+    "The state is in $HOME/.claude/.harness-switch/" ,
+    "The state is in `ls %s/`" % STATE,
+    "The state is in %s/ = x" % STATE,
+]
+
+
+@pytest.mark.parametrize("line", VERIFIER_FORMS + PROVEN_MENTION_BYPASSES)
+@pytest.mark.parametrize("path", ["notes.md", "/tmp/audit-notes.md", "docs/n.txt", "docs/n.rst"])
+def test_prose_that_is_no_proven_mention_is_refused(box, line, path):
+    rc, err = write(box, path, "Some notes.\n\n%s\n" % line)
+    assert rc == 2 and "naming the switch's state" in err, (path, line, err)
+
+
+def test_an_edit_is_judged_in_the_document_it_leaves(box):
+    f = box["work"] / "docs" / "cont.md"
+    f.parent.mkdir(exist_ok=True)
+    f.write_text("mv off \\\nPLACEHOLDER\n")
+    rc, err = call(box, "Edit", {"file_path": str(f), "old_string": "PLACEHOLDER", "new_string": "%s/" % STATE})
+    assert rc == 2 and "naming the switch's state" in err, err
 
 
 def test_edit_and_multiedit_of_prose_writing_the_state_are_refused(box):
