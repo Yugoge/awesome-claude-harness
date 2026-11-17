@@ -574,21 +574,25 @@ def test_the_hook_registration_cell_names_the_gate_that_fails(status_text):
 
 def test_the_commands_table_is_built_from_the_command_rows_by_group(readme_text):
     lines = body(readme_text, "commands").splitlines()
-    assert lines[0] == "| Command | What it does | Group | Typed by |" and lines[1] == "|---|---|---|---|"
+    assert lines[0] == "| Command | What it does |" and lines[1] == "|---|---|"
     rows = rows_of(body(readme_text, "commands"))
     facts = gen.fact("command_rows")
     order = {g: i for i, g in enumerate(gen.facts_module().COMMAND_GROUPS)}
     shown = sorted((f for f in facts if not f["module"]), key=lambda f: (order[f["group"]], f["name"]))
-    assert len(rows) == len(shown) and all(len(r) == 4 for r in rows)
+    assert len(rows) == len(shown) and all(len(r) == 2 for r in rows)
+    typed, groups = [], []
     for cells, fact in zip(rows, shown):
         usage = f"/{fact['name']}" + (f" {fact['argument_hint']}" if fact["argument_hint"] else "")
-        assert cells[0] == "`" + usage.replace("|", "\\|") + "`", cells
+        command, _, under = cells[0].partition("<br>")  # the command, then who may type it and its group
+        assert command == "`" + usage.replace("|", "\\|") + "`", cells
+        who, _, group = under.partition(", ")
+        assert who == ("owner only" if fact["human_only"] else "owner or agent") and group == fact["group"], cells
         assert cells[1] == gen.md_cell(fact["summary"])  # the summary as written, never cut
         assert not cells[1].endswith("…")
-        assert cells[2] == fact["group"]
-        assert cells[3] == ("owner only" if fact["human_only"] else "owner or agent")
-    assert {c[3] for c in rows} == {"owner only", "owner or agent"}
-    assert [c[2] for c in rows] == sorted((c[2] for c in rows), key=order.__getitem__)  # grouped, in the groups' order
+        typed.append(who)
+        groups.append(group)
+    assert set(typed) == {"owner only", "owner or agent"}
+    assert groups == sorted(groups, key=order.__getitem__)  # grouped, in the groups' order
 
 
 def test_an_optional_modules_command_is_left_off_the_front_page_and_pointed_to(readme_text, monkeypatch):
@@ -624,7 +628,7 @@ def test_the_tables_move_with_their_facts(monkeypatch):
     assert "| `zz-new` | A new agent. |" in gen.render_agents()
     with_fact(monkeypatch, "command_rows", lambda rows: rows[0].update(summary="Changed.", group="Quality"))
     first = gen.fact("command_rows")[0]
-    assert f"| Changed. | Quality | {'owner only' if first['human_only'] else 'owner or agent'} |" in gen.render_commands()
+    assert f"<br>{'owner only' if first['human_only'] else 'owner or agent'}, Quality | Changed. |" in gen.render_commands()
 
 
 HOSTILE = {"name": "evil", "argument_hint": "[a|b] <what> `x`", "human_only": False, "group": "Control", "module": None,
@@ -637,7 +641,7 @@ def test_a_summary_can_neither_break_the_table_nor_be_read_as_html(monkeypatch):
     table = gen.render_commands()
     lines = [l for l in table.splitlines() if "/evil" in l]
     assert len(lines) == 1
-    assert len(re.split(r"(?<!\\)\|", lines[0].strip())) == 6  # '', four cells, '' : the pipes did not add cells
+    assert len(re.split(r"(?<!\\)\|", lines[0].strip())) == 4  # '', two cells, '' : the pipes did not add cells
     cells = next(r for r in rows_of(table) if "/evil" in r[0])
     # outside code spans no angle bracket survives; inside one it is literal already
     prose = gen._CODE_SPAN.sub("", cells[1])
@@ -896,7 +900,7 @@ def test_an_edited_proof_cell_fails_the_byte_compare_and_names_the_region(scratc
 
 def test_an_edited_commands_row_fails_the_byte_compare(scratch, capsys):
     commit = gen.md_cell(next(c for c in gen.fact("command_rows") if c["name"] == "commit")["summary"])
-    edited(scratch.readme, f"| `/commit` | {commit} | Ship | owner only |", f"| `/commit` | {commit} | Ship | owner or agent |")
+    edited(scratch.readme, f"| `/commit`<br>owner only, Ship | {commit} |", f"| `/commit`<br>owner or agent, Ship | {commit} |")
     rc, err, _ = run_check(scratch, capsys)
     assert rc == 2 and "README.md: [region-byte-compare] region 'commands'" in err
 

@@ -97,13 +97,14 @@ BA, the business analyst, finds the root cause. QA, the checker, passes or fails
 ```mermaid
 flowchart TD
     subgraph LANE["/dev · one lane per outcome, lanes in parallel"]
-        BA["BA<br/>root cause, with evidence"] --> QA1{"QA<br/>checks the analysis"}
+        BA["BA<br/>root cause, with evidence"] --> QA1["QA<br/>checks the analysis"]
         QA1 -->|fail| BA
         QA1 -->|pass| DEV["dev<br/>smallest change"]
-        DEV --> QA2{"QA<br/>verifies the build"}
+        DEV --> QA2["QA<br/>verifies the build"]
         QA2 -->|fail| DEV
     end
     subgraph LAND["you land it, one command each"]
+        direction LR
         CLOSE["/close<br/>release readiness"] --> COMMIT["/commit<br/>QA first, then commits the task's files"] --> PUSH["/push<br/>checked, then published"]
     end
     REQ(["your requirement"]) --> SPEC["/spec · optional<br/>a durable spec"]
@@ -225,18 +226,18 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 <details>
 <summary><strong>Each part, one line.</strong> What it does and where to read on.</summary>
 
-| Part | What it does | Read on |
-|---|---|---|
-| You | The trust root. You type each owner-only command. Only a command you type starts a grant. | [Who may do what](#trust-model-in-practice) |
-| Slash commands | Start each stage. An agent cannot start an owner-only one. | [The command surface](#the-command-surface) |
-| Orchestrator | Your main session. It splits the work into lanes, dispatches agents and keeps the todo list. A hook caps what it does itself. | [Context guardrails](docs/how-it-works.md#context-engineering-guardrails) |
-| Agents | One issue each, in a clean context. Each writes only to its role's paths and returns a structured report. | [The cast of agents](#the-cast-of-agents) |
-| Artifacts | Files under `docs/dev/`. Your words, the ticket, the context, the acceptance criteria, each report. Each stage reads the last one's checked output. | [The full pipeline](#the-full-pipeline) |
-| Hooks | Code at every prompt, every tool call and every stop. A prompt hook writes your words to disk before any agent runs. PreToolUse refuses before a call runs. PostToolUse spends `/allow` grants, takes checkpoints and syncs docs. SubagentStop checks what an agent owes. The Stop gate holds a gated command while a todo is open or an artifact fails its check. It holds the overnight run until its end time and its closeout are on disk. | [Failure modes](docs/how-it-works.md#failure-modes-this-exists-to-prevent) and the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) |
-| Git protection kernel | Refuses an agent's commit, push, merge and hard reset. Only something you typed lets one through. Checkpoints snapshot the tree to `refs/checkpoints/`, one ref per branch. | [The git protection kernel](#the-git-protection-kernel) |
-| Grants | Each expires. A commit, push or `/allow` grant works once. `/commit` and `/allow` grants are checked before the tool runs. `/push` and `/merge` grants are checked before their wrapper runs git. Who may use which is in the trust model. | [Who may do what](#trust-model-in-practice) |
-| Overnight loop | The same pipeline, unattended until a clock time. Nobody is asked. It commits nothing. | [The overnight pipeline](#the-overnight-pipeline) |
-| Deny list | `settings.json` denies destructive shell forms and reads of secret files. No grant and no `/do` lifts it. | [Every capability](#feature-highlights) |
+| Part | What it does |
+|---|---|
+| You | The trust root. You type each owner-only command. Only a command you type starts a grant. Read on: [Who may do what](#trust-model-in-practice). |
+| Slash commands | Start each stage. An agent cannot start an owner-only one. Read on: [The command surface](#the-command-surface). |
+| Orchestrator | Your main session. It splits the work into lanes, dispatches agents and keeps the todo list. A hook caps what it does itself. Read on: [Context guardrails](docs/how-it-works.md#context-engineering-guardrails). |
+| Agents | One issue each, in a clean context. Each writes only to its role's paths and returns a structured report. Read on: [The cast of agents](#the-cast-of-agents). |
+| Artifacts | Files under `docs/dev/`. Your words, the ticket, the context, the acceptance criteria, each report. Each stage reads the last one's checked output. Read on: [The full pipeline](#the-full-pipeline). |
+| Hooks | Code at every prompt, every tool call and every stop. A prompt hook writes your words to disk before any agent runs. PreToolUse refuses before a call runs. PostToolUse spends `/allow` grants, takes checkpoints and syncs docs. SubagentStop checks what an agent owes. The Stop gate holds a gated command while a todo is open or an artifact fails its check. It holds the overnight run until its end time and its closeout are on disk. Read on: [Failure modes](docs/how-it-works.md#failure-modes-this-exists-to-prevent) and the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md). |
+| Git protection kernel | Refuses an agent's commit, push, merge and hard reset. Only something you typed lets one through. Checkpoints snapshot the tree to `refs/checkpoints/`, one ref per branch. Read on: [The git protection kernel](#the-git-protection-kernel). |
+| Grants | Each expires. A commit, push or `/allow` grant works once. `/commit` and `/allow` grants are checked before the tool runs. `/push` and `/merge` grants are checked before their wrapper runs git. Who may use which is in the trust model. Read on: [Who may do what](#trust-model-in-practice). |
+| Overnight loop | The same pipeline, unattended until a clock time. Nobody is asked. It commits nothing. Read on: [The overnight pipeline](#the-overnight-pipeline). |
+| Deny list | `settings.json` denies destructive shell forms and reads of secret files. No grant and no `/do` lifts it. Read on: [Every capability](#feature-highlights). |
 
 </details>
 
@@ -275,7 +276,7 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 | **Shell and secrets deny list** | `settings.json` denies `sudo`, `rm -rf`, `dd`, `mkfs`, force-push, `git reset --hard`, `systemctl restart`, `kubectl delete` and package publish. It denies `Read` on `.env` files, keys, credentials and secret files. `Edit` and a shell redirect are refused on all of them but keys. A shell read is not refused. |
 | **UI-audit skills** | Playwright review: axe-core injection, APCA contrast, an anti-pattern catalog, a state matrix, token conformance, a weighted beauty score. |
 | **Ask-first round** | `/spec`, `/dev`, `/redev` and `/dev-command` ask you first. Intent, scope, edge cases, acceptance. In Claude Code's question dialog. A skipped question settles to its stated default. |
-| **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. `/stop` is your exit. `CLAUDE_COMMAND_GATE` set to `off` switches it off. The shipped settings never set it. |
+| **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. `/stop` is your exit. An environment switch turns it off. The shipped settings never set it. |
 | **Parallel lanes, no phases** | Several outcomes run as parallel lanes in one cycle. QA fails a plan that phases or defers one. |
 | **Declared obligations** | Each dispatch declares the artifacts its agent owes. A hook checks them when the agent stops, while its context still exists. |
 | **Usage-limit resume** | `/restart` resumes each interrupted agent by its original id. Never a replacement. |
@@ -389,30 +390,30 @@ These are the commands you type. An owner-only command carries `disable-model-in
 <summary><strong>All commands.</strong> Who may type each, generated from each command's own file.</summary>
 
 <!-- BEGIN canonical-region id=commands — generated by scripts/generate-hero-status.py; do not hand-edit -->
-| Command | What it does | Group | Typed by |
-|---|---|---|---|
-| `/spec [--codex] [<requirement>]` | Ask you about the requirement first, then write a durable spec and split it into per-agent briefs with checkpoints, for /dev or /dev-overnight to build from. | Spec | owner only |
-| `/spec-update [--update --spec <path> \| --continue \| --temp] [--spec <path>] [what the next session should focus on]` | Turn unfinished work into a continuation spec for a fresh session, enrich an existing spec, or write a short session note. | Spec | owner only |
-| `/dev [--codex] [--spec <path>] <requirement>` | Build a requirement end to end: ask you first, then BA finds the root cause, QA checks it, dev builds in parallel one-issue lanes, QA verifies until it passes. | Develop | owner only |
-| `/dev-command` | The /dev workflow for building a slash command, a subagent or another harness file, with the differences such a file needs. | Develop | owner only |
-| `/dev-overnight` | Run unattended until an end time: explore, fix each real issue in its own pipeline, decide without the owner, and commit nothing. | Develop | owner only |
-| `/redev [--codex] [--spec <path>] [<requirement>]` | Start a fresh /dev cycle in the same conversation without repeating the text of /dev, to save context. | Develop | owner only |
-| `/checkpoint` | Snapshot the working tree to the safety ref `refs/checkpoints/`, one per branch, without moving HEAD, touching the index or pushing. | Ship | owner only |
-| `/close [--codex \| --auto \| --late-repair] [<task-id>\|<path>]` | Close the cycle: finish what is unfinished, have inspectors and QA judge it, end on `CLOSE: YES` or the findings, then ask you to rate it. | Ship | owner only |
-| `/commit` | Commit a task's changes through the changelog analyst, closing an unfinished cycle first and staging only the task's own files. | Ship | owner only |
-| `/merge` | Merge a branch or commit into the default branch with a real merge that keeps the full history, after a pre-merge analysis. | Ship | owner only |
-| `/pull` | Pull with rebase, stashing and restoring local changes and stopping on conflicts, then summarize the risk of what arrived. | Ship | owner only |
-| `/push` | Publish the current branch through the push wrapper after the push analyst reviews what would go out; it needs a commit made by /commit. | Ship | owner only |
-| `/clean [--codex]` | Clean up the project: inspectors find misplaced docs, byproducts and style violations, and the cleaner applies the approved fixes. | Quality | owner only |
-| `/test` | Check the project's tests against edge cases found in its git history, then run them and report. | Quality | owner only |
-| `/allow` | Grant one single-use permission for an operation a grant-aware safety hook refused; it never overrides a settings deny rule. | Control | owner only |
-| `/codex [prompt or --review or --model <model> <prompt>]` | Ask OpenAI Codex for a second opinion, a code review or a delegated coding task, through an isolated wrapper. | Control | owner or agent |
-| `/do` | Let the main agent do one task itself for this turn, past the orchestrator gate; it does not cover commits or pushes. | Control | owner only |
-| `/harness off \| on \| status` | Switch the whole harness off or back on for this harness home, or show its state; on restores exactly what off removed. | Control | owner only |
-| `/rating` | Show every agent's score, rank, trend and latest scored events for this project, then your latest ratings; it writes nothing. | Control | owner only |
-| `/restart` | Resume every subagent a usage limit interrupted, by its original agent id; with none to resume, continue the main agent. | Control | owner only |
-| `/stop` | End the overnight run before its end time, or any command the Stop gate holds; only the owner can type it. | Control | owner only |
-| `/tickets [--format table\|json]` | Print a read-only table of every ticket, spec and lane, with its state and next action. | Control | owner or agent |
+| Command | What it does |
+|---|---|
+| `/spec [--codex] [<requirement>]`<br>owner only, Spec | Ask you about the requirement first, then write a durable spec and split it into per-agent briefs with checkpoints, for /dev or /dev-overnight to build from. |
+| `/spec-update [--update --spec <path> \| --continue \| --temp] [--spec <path>] [what the next session should focus on]`<br>owner only, Spec | Turn unfinished work into a continuation spec for a fresh session, enrich an existing spec, or write a short session note. |
+| `/dev [--codex] [--spec <path>] <requirement>`<br>owner only, Develop | Build a requirement end to end: ask you first, then BA finds the root cause, QA checks it, dev builds in parallel one-issue lanes, QA verifies until it passes. |
+| `/dev-command`<br>owner only, Develop | The /dev workflow for building a slash command, a subagent or another harness file, with the differences such a file needs. |
+| `/dev-overnight`<br>owner only, Develop | Run unattended until an end time: explore, fix each real issue in its own pipeline, decide without the owner, and commit nothing. |
+| `/redev [--codex] [--spec <path>] [<requirement>]`<br>owner only, Develop | Start a fresh /dev cycle in the same conversation without repeating the text of /dev, to save context. |
+| `/checkpoint`<br>owner only, Ship | Snapshot the working tree to the safety ref `refs/checkpoints/`, one per branch, without moving HEAD, touching the index or pushing. |
+| `/close [--codex \| --auto \| --late-repair] [<task-id>\|<path>]`<br>owner only, Ship | Close the cycle: finish what is unfinished, have inspectors and QA judge it, end on `CLOSE: YES` or the findings, then ask you to rate it. |
+| `/commit`<br>owner only, Ship | Commit a task's changes through the changelog analyst, closing an unfinished cycle first and staging only the task's own files. |
+| `/merge`<br>owner only, Ship | Merge a branch or commit into the default branch with a real merge that keeps the full history, after a pre-merge analysis. |
+| `/pull`<br>owner only, Ship | Pull with rebase, stashing and restoring local changes and stopping on conflicts, then summarize the risk of what arrived. |
+| `/push`<br>owner only, Ship | Publish the current branch through the push wrapper after the push analyst reviews what would go out; it needs a commit made by /commit. |
+| `/clean [--codex]`<br>owner only, Quality | Clean up the project: inspectors find misplaced docs, byproducts and style violations, and the cleaner applies the approved fixes. |
+| `/test`<br>owner only, Quality | Check the project's tests against edge cases found in its git history, then run them and report. |
+| `/allow`<br>owner only, Control | Grant one single-use permission for an operation a grant-aware safety hook refused; it never overrides a settings deny rule. |
+| `/codex [prompt or --review or --model <model> <prompt>]`<br>owner or agent, Control | Ask OpenAI Codex for a second opinion, a code review or a delegated coding task, through an isolated wrapper. |
+| `/do`<br>owner only, Control | Let the main agent do one task itself for this turn, past the orchestrator gate; it does not cover commits or pushes. |
+| `/harness off \| on \| status`<br>owner only, Control | Switch the whole harness off or back on for this harness home, or show its state; on restores exactly what off removed. |
+| `/rating`<br>owner only, Control | Show every agent's score, rank, trend and latest scored events for this project, then your latest ratings; it writes nothing. |
+| `/restart`<br>owner only, Control | Resume every subagent a usage limit interrupted, by its original agent id; with none to resume, continue the main agent. |
+| `/stop`<br>owner only, Control | End the overnight run before its end time, or any command the Stop gate holds; only the owner can type it. |
+| `/tickets [--format table\|json]`<br>owner or agent, Control | Print a read-only table of every ticket, spec and lane, with its state and next action. |
 
 22 commands, generated from the frontmatter of `commands/*.md`. An optional module's own commands are described with the module in the [installation guide](docs/installation.md).
 <!-- END canonical-region id=commands -->

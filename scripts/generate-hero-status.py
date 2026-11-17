@@ -778,7 +778,7 @@ def render_rows() -> dict[str, list[tuple[str, str]]]:
 # --------------------------------------------------------------------------------------
 
 PROOF_HEADER = ("Counted from the repository", "Now", "CI fails when")
-COMMANDS_HEADER = ("Command", "What it does", "Group", "Typed by")
+COMMANDS_HEADER = ("Command", "What it does")
 AGENTS_HEADER = ("Agent", "What it does")
 
 _CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
@@ -904,15 +904,16 @@ def render_proof() -> str:
 
 def render_commands() -> str:
     """The command surface: every command but an optional module's own, by group (in the order of
-    readme_facts' COMMAND_GROUPS) and then by name, each with its frontmatter summary as written."""
+    readme_facts' COMMAND_GROUPS) and then by name, each with its frontmatter summary as written.
+    Two columns, so a phone shows every word: who may type it and its group sit under the command."""
     rows = fact("command_rows")
     order = {g: i for i, g in enumerate(facts_module().COMMAND_GROUPS)}
     shown = sorted((c for c in rows if not c["module"]), key=lambda c: (order[c["group"]], c["name"]))
     lines = []
     for c in shown:
         usage = f"/{c['name']}" + (f" {c['argument_hint']}" if c["argument_hint"] else "")
-        lines.append((md_cell(code_span(usage)), md_cell(c["summary"]), c["group"],
-                      "owner only" if c["human_only"] else "owner or agent"))
+        typed_by = "owner only" if c["human_only"] else "owner or agent"
+        lines.append((f"{md_cell(code_span(usage))}<br>{typed_by}, {c['group']}", md_cell(c["summary"])))
     note = f"{len(shown)} commands, generated from the frontmatter of `commands/*.md`."
     if len(shown) < len(rows):
         note += (" An optional module's own commands are described with the module in the "
