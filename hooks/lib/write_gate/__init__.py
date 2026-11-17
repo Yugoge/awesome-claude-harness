@@ -13,7 +13,8 @@ Each rule declares:
   refusing input.
 - ``fail``: what an error the rule's own handlers did not catch, or an overrun of its
   budget, means: "open" (the call goes on, as a crashed or timed-out hook let it) or
-  "closed" (refused: WS1, tool-policy's import failure blocks).
+  "closed" (refused: WS1, tool-policy's import failure blocks; harness-switch, whose
+  overrun would let through the settings write it exists to refuse).
 - ``exemptions``: what lets the rule allow a call it would otherwise refuse. Each rule
   checks its own; the gate grants none (no consent check at the gate's entry).
 - ``budget``: seconds, measured (test_write_gate.py::test_budgets_cover_the_measured_times).
@@ -92,7 +93,7 @@ RULES: tuple[Rule, ...] = (
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
     Rule("harness-switch", "pretool-harness-switch-guard.py",
          WRITE_TOOLS | {"Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"},
-         "both", "open",
+         "both", "closed",  # an overrun refuses: an agent pads a command past the budget at will
          ("reading the switch's state or settings files",
           "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files",
           "an /allow grant for the one call, for a Claude Code settings file's env, hooks or permissions "
