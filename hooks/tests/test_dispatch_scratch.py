@@ -313,3 +313,35 @@ def test_a_link_or_a_moved_directory_directly_in_scratch_is_no_flat_file(env_bas
     refused(run_policy(env_base, "dev", "adev1", "mv adir .claude/scratch/moved"))
     (project / "afile").write_text("x")
     allowed(run_policy(env_base, "dev", "adev1", "mv afile .claude/scratch/moved"))
+
+
+# --- verifier round 3: fail closed when TMPDIR is not statically certain ----------------------------------------
+
+@pytest.mark.parametrize("env_tmp", [None, "/tmp"])
+@pytest.mark.parametrize("prefix", ["false && export TMPDIR={own};", "false && TMPDIR={own};",
+                                    "export() {{ :; }}; export TMPDIR={own};",
+                                    "enable -n export; export TMPDIR={own};",
+                                    "true || export TMPDIR={own};", "export TMPDIR={own} &",
+                                    "true && export TMPDIR={own} &&",
+                                    "builtin export TMPDIR=/tmp; export TMPDIR={own};",
+                                    "command export TMPDIR={own};", "alias export=:; export TMPDIR={own};",
+                                    "set -a; TMPDIR={own};", "mktemp() {{ :; }}; export TMPDIR={own};"])
+@pytest.mark.parametrize("mktemp", [GRANT_MKTEMP, 'f=$(mktemp) && echo x > "$f"'])
+def test_an_uncertain_tmpdir_gives_mktemp_no_allowance(env_base, env_tmp, prefix, mktemp):
+    _, project = env_base
+    own = own_scratch(project, "qa", "aqa1") / "tmp"
+    extra = {"TMPDIR": env_tmp} if env_tmp else {}
+    refused(run_policy(env_base, "qa", "aqa1", prefix.format(own=own) + " " + mktemp, extra_env=extra))
+
+
+def test_the_everyday_cases_stay_allowed(env_base):
+    _, project = env_base
+    dev_tmp = own_scratch(project, "dev", "adev1") / "tmp"
+    qa_tmp = own_scratch(project, "qa", "aqa1") / "tmp"
+    allowed(run_policy(env_base, "dev", "adev1", 'python3 -m pytest -q > "$TMPDIR/out.txt" 2>&1',
+                       extra_env={"TMPDIR": str(dev_tmp)}))
+    allowed(run_policy(env_base, "qa", "aqa1", "echo x > $TMPDIR/qa/out.txt",
+                       extra_env={"TMPDIR": str(qa_tmp.parent)}))
+    allowed(run_policy(env_base, "dev", "adev1", 'f=$(mktemp) && python3 -m pytest -q > "$f"'))
+    allowed(run_policy(env_base, "dev", "adev1", "echo x > .claude/scratch/out.txt"))
+    allowed(run_policy(env_base, "qa", "aqa1", f'export TMPDIR={qa_tmp} && f=$(mktemp) && echo x > "$f"'))

@@ -91,6 +91,13 @@ class Value(NamedTuple):
 
 
 _UNKNOWN = object()
+# Variables a child process reads without a $ in the command text: their value is certain only when
+# set outside any chain element after the first.
+IMPLICIT_READS = frozenset({"TMPDIR"})
+# Command heads that change what a builtin is or does, or how assignments are exported.
+_UNCERTAIN_HEADS = frozenset({"enable", "builtin", "command", "alias", "unalias", "set", "shopt", "declare",
+                              "typeset", "readonly", "local", "trap", "exec", "hash"})
+_FUNCTION_DEF = re.compile(r"(?:^|[\s;&|(){`])(?:function\s+[^\s(){};&|]+|[^\s(){};&|=$`'\"]+\s*\(\s*\))")
 
 
 def _expand(text: str, scope: Mapping) -> Optional[str]:
@@ -291,6 +298,11 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
                     exports.append((w.span[0], m.group(1)))
                 else:
                     exports.append((w.span[0], m.group(1)))
+                    if k > 0 or maybe:
+                        conditional.add(m.group(1))  # a chained export may not run
+        if k > 0:
+            # a name a child reads implicitly (mktemp reads TMPDIR) is certain only when set unchained
+            conditional.update(a.name for a in found if a.name in IMPLICIT_READS)
         if not maybe and k > 0:
             # a later element of a pure && chain: every use of the name must lie in this chain, after it
             span = chain["span"]
@@ -301,7 +313,7 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
         if maybe:
             conditional.update(a.name for a in found)
         top.extend(found)
-    counted, nested = {}, False
+    counted, nested, uncertain = {}, False, False
     for site in _sp.walk(script):
         # A target read from a shell the command starts (-c, a fed script, eval, an alias) does not
         # see the outer shell's unexported assignments: none is trusted then.
@@ -311,13 +323,18 @@ def bindings(command: str, env: Mapping[str, str], cwd: str) -> dict:
         for a in getattr(cmd, "assignments", ()):
             counted[a.name] = counted.get(a.name, 0) + 1
         words = getattr(cmd, "words", ())
+        head = words[0].value() if words else None
+        if words and (head is None or head in _UNCERTAIN_HEADS):
+            uncertain = True
         if words and words[0].value() == "export":
             for w in words[1:]:
                 m = re.match(r"([A-Za-z_]\w*)=", w.raw.text)
                 if m:
                     counted[m.group(1)] = counted.get(m.group(1), 0) + 1
-    if re.search(r"(?:^|[\s;&|(`])(?:source|\.|eval)\s", command):
-        # a sourced or eval'd text can bind and export anything
+    if uncertain or re.search(r"(?:^|[\s;&|(`])(?:source|\.|eval)\s", command) or _FUNCTION_DEF.search(command):
+        # a sourced or eval'd text, a function definition (it may shadow export, mktemp, ...), or a
+        # command that changes what a builtin is or does (enable, builtin, command, alias, set):
+        # fail closed, nothing the command binds or exports is known
         out = {name: _UNKNOWN for name in scope}
         out["TMPDIR"] = _UNKNOWN
         return out
