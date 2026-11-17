@@ -145,10 +145,11 @@ def test_replay_suite_size_equals_the_imported_suite_and_the_text(real):
     assert got["compliant_replays"] == len(suite.COMPLIANT) * len(suite.SETTINGS)
     # the fault classes by a plain pattern over the two test files that name them
     text = tracked_text("tests/replay/test_faults.py") + tracked_text("tests/replay/test_regressions.py")
-    ids = sorted(set(re.findall(r"\bF[1-9][a-z]?\b", text)))
+    ids = sorted(set(re.findall(r"\bF[1-9]\d?[a-z]*\b", text)))
+    classes = {re.match(r"F\d+", i).group(0) for i in ids}
     assert got["fault_ids"] == len(ids)
-    assert got["fault_classes"] == len({i[:2] for i in ids})
-    assert {"F1", "F2", "F3", "F4", "F5", "F6", "F7"} <= {i[:2] for i in ids}  # the owner's list, and more
+    assert got["fault_classes"] == len(classes)
+    assert {"F1", "F2", "F3", "F4", "F5", "F6", "F7"} <= classes  # the owner's list, and more
     # the regressions by the ids the whole file mentions
     assert got["regression_ids"] == sorted(set(re.findall(r"\bR-[A-Z]\d\b", tracked_text("tests/replay/test_regressions.py"))))
     assert got["regression_replays"] == len(got["regression_ids"])
@@ -172,7 +173,7 @@ def test_replay_suite_size_follows_its_inputs(tmp_path):
     edit(root, "tests/replay/suite.py", 'SETTINGS = ("shipped", "armed")', 'SETTINGS = ("shipped", "armed", "extra")')
     assert rf.replay_suite_size(root)["settings_modes"] == ["shipped", "armed", "extra"]
     # a new fault class
-    edit(root, "tests/replay/test_faults.py", '    "F9": "bash@', '    "F10": "missing@x",\n    "F9": "bash@')
+    edit(root, "tests/replay/test_faults.py", '    "F9": "bash@', '    "F99": "missing@x",\n    "F9": "bash@')
     assert rf.replay_suite_size(root)["fault_classes"] == base["fault_classes"] + 1
     # a new variant of an existing class is no new class
     edit(root, "tests/replay/test_faults.py", '    "F9": "bash@', '    "F9z": "missing@x",\n    "F9": "bash@')

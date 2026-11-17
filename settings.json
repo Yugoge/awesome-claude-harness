@@ -301,7 +301,8 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/check-todo-md-sync.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/sessionstart-launch.py\"",
+            "timeout": 120
           },
           {
             "type": "command",
@@ -478,7 +479,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstart-record.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstart-launch.py\"",
+            "timeout": 120
           }
         ]
       }

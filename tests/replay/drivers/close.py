@@ -85,7 +85,7 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|decline|afk|free|dismissed[,...]   Step 4's answer, per landed task in order (default label:
+  rating=label|4|skip|decline|afk|free|dismissed|none[,...]   Step 4's answer, per landed task in order (default label:
                           the dialog's first option). label (the first option) and 4 ("4 - Minor gaps") are answers;
                           free is a typed reply (the response field); afk is the dialog's timeout (afkTimeoutMs in
                           the response). skip (terminal Skip, "Chat about this") and decline (Esc, decline) are the
@@ -95,7 +95,10 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
                           app-side dismissal, UNCONFIRMED: the bundle has a client capability that marks a question
                           unanswered (annotations[question].unanswered "skipped"), but which path the app takes
                           when its user presses Skip is not settled by reading; played as the tool running with
-                          that annotation, so the hook runs and writes no rating row
+                          that annotation, so the hook runs and writes no rating row; none: the session
+                          offers no AskUserQuestion (P5 A20's rerun without it): the main agent makes the call all
+                          the same and the CLI answers it with `No such tool available` before any hook runs
+                          (close.md Step 4)
   again=A[,B,...]         (not --auto) after Step 4's question the same question for the same task is asked once
                           more for each answer listed, in order (a /close typed twice on one task): what the
                           score log's rating dedup and each answer's hook run are seen on, in one replay
@@ -118,7 +121,7 @@ import shlex
 
 from .. import agents, cmdtext, roles, schemagen
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
-from ..replay import Deviation, Rejected
+from ..replay import MODEL, Deviation, Rejected
 from . import _codex
 
 PIPELINE = "close"
@@ -499,7 +502,7 @@ class DevProducer:
             found.append(t)
             k += 1
         for t in found:
-            if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == role:
+            if o.template_role(t, self.cyc.tid) == role:
                 return t
         if len(found) == 1:
             return found[0]
@@ -578,11 +581,11 @@ class DoProducer:
         raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
 
     def pending_edits(self) -> list:
-        """The /do turn's changes not yet on disk (the user abandoned the task before them): the work dev,
-        dispatched along the do-report's route, completes."""
+        """The /do turn's changes not yet on disk (an in-flight /do left them undone, drivers/do.py
+        variant=blocked): the work dev, dispatched along the do-report's route, completes."""
         turn, out = self.turn, []
         with turn.rp.acting("driver"):
-            for rel, old, new in turn.edits:
+            for rel, old, new in turn.rest:
                 with open(os.path.join(turn.o.project, rel), encoding="utf-8") as fh:
                     if old in fh.read():
                         out.append((rel, old, new))
@@ -596,7 +599,7 @@ PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "f
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
 # The rating answers the owner may give (Step 4's question), as the dialog returns them.
-RATINGS = ("label", "4", "skip", "decline", "afk", "free", "dismissed")
+RATINGS = ("label", "4", "skip", "decline", "afk", "free", "dismissed", "none")
 
 
 class CloseRun:
@@ -954,7 +957,9 @@ class CloseRun:
         done: dict = {}
         if edits is None and hasattr(self.producer, "pending_edits"):
             edits = self.producer.pending_edits()
-        dev_work = roles.dev(list(edits or []), baseline_fallback=True)
+        # The files dev declares are the ones it wrote (agents/dev.md's file-list rule, since P6): no
+        # baseline is needed to derive them, so a /do task's absent baseline takes no fallback.
+        dev_work = roles.dev(list(edits or []))
 
         def work(sub, brief, player):
             done.update(dev_work(sub, brief, player) or {})
@@ -965,7 +970,7 @@ class CloseRun:
                 agents.put(sub, os.path.join(o.project, art["path"]), json.dumps(doc, indent=2) + "\n",
                            f"{sub.role} Write {art['path']}")
             return done
-        # no baseline was captured for a /do task: the agent text's fallback (empty values, git status)
+        # no baseline was captured for a /do task: the two baseline fields are the agent text's empty strings
         act = agents.Act(work=work, content={"do-report.v1": {"do": {"status": "completed"}},
                                              "dev-report.v2": {"baseline_head_sha": "", "baseline_dirty_snapshot": ""}},
                          faults={a["path"]: "missing" for a in arts} if short else {},
@@ -1309,6 +1314,24 @@ class CloseRun:
         tin = self.rating_input()
         q = tin["questions"][0]
         labels = [opt["label"] for opt in q["options"]]
+        if answer == "none":
+            # Step 4 in a session that offers no AskUserQuestion: the call is made all the same, and the CLI
+            # answers it with its own error tool_result before any hook runs (cli.js bp1 and the streaming
+            # executor's addTool: an unknown tool's tool_use gets `No such tool available: <name>`), so no
+            # PreToolUse/PostToolUse fires. That error is a complete Step 4 (close.md Step 4).
+            tid = self.rp.new_tool_id()
+            self.o.s.append({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
+                {"type": "tool_use", "id": tid, "name": "AskUserQuestion", "input": tin}]}})
+            err = "No such tool available: AskUserQuestion"
+            self.o.s.main._result(tid, f"<tool_use_error>Error: {err}</tool_use_error>", error=True,
+                                  resp=f"Error: {err}")
+            self.asked.append((self.tid, answer))
+            fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
+                                            "multiSelect": q.get("multiSelect"),
+                                            "source": (tin.get("metadata") or {}).get("source"),
+                                            "answer": answer, "nth": nth, "ok": False, "blocked": False,
+                                            "asked": True, "error": err})
+            return
 
         def perform():
             if answer == "decline":

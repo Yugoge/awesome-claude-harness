@@ -23,10 +23,19 @@ Driver arguments (cli.py --arg K=V):
   mistype=1           P5 review M: the owner types /close with a ticket path of another id, which does not
                       exist; Task-id resolution asks in the turn and the owner picks the /do task's id
                       (drivers/close.py resolve_typed)
-  variant=blocked     the /do turn ends with the do-report's other terminal, do.status "blocked"
-                      (default then=close): /close's Step 0 names the do-report, Routes' /do bullet
-                      dispatches dev under the same task id with the obligation the bullet spells,
-                      and /close lands (acceptance 4 (g), Q7)
+  variant=blocked     an in-flight /do of a text with a second terminal (before P5: a7d3a9f's Step 5
+                      names `"blocked"`): the task is left unfinished and Step 5 writes the honest
+                      terminal the text names, do.status "blocked" (default then=close). Since P5 a
+                      /do has one terminal (commands/do.md Step 5): on such a text the driver refuses
+                      the variant (TextNotFound), and only a session that wrote the report before
+                      the landing holds one (tests/replay/test_do_inflight_blocked.py lands the home
+                      after the /do Stop). /close's Step 0 names the do-report, Routes' /do bullet
+                      dispatches dev under the same task id with the obligation the bullet spells, dev
+                      finishes the work and its dev-report concludes the task (acceptance 4 (g), Q7)
+  left=half|none|all  with variant=blocked, how much of the change the /do made: half (default:
+                      toy.add checks argument a only; dev adds b in the same file), none (the user
+                      abandoned the task before the change; P1b's acceptance 7 /do case), all (the
+                      change is made, the toy tests stayed unauthorized and were not run)
   variant=main-file   close QA's first round names the file the /do main agent wrote (default
                       then=close): dev along the do-report's route, Step 0 again, a fresh round
                       (acceptance 4 (h), its /do half)
@@ -34,11 +43,6 @@ Driver arguments (cli.py --arg K=V):
                       declares as it is, or written with its terminal field short of completed; on
                       G2's block it writes it completed and stops again (whether G2 stops a missing
                       completion at dev's stop)
-  variant=abandoned   P1b's acceptance 7 /do case (P1b ran it as variant=blocked): the user abandons
-                      the task before the change is made, and Step 5 writes the do-report with the
-                      honest terminal status `blocked` the text names (default then=close): /close's
-                      Step 0 names the do-report and Routes' /do bullet dispatches dev under the same
-                      task id, which makes the change
 The artifact check replays the plain /do (VARIANTS); the variants run on demand.
 
 Respellings: no harness-script call of the /do text needs one (row 7). One path is recorded in
@@ -67,23 +71,38 @@ COST = 289
 
 TASK = ("make toy.add raise TypeError naming the offending argument when an argument is not a number")
 TOY_OLD = "def add(a, b):\n    return a + b\n"
+# variant=blocked left=half: the /do checked argument a only; dev, along the do-report's route, adds b
+TOY_HALF = ("def add(a, b):\n    if not isinstance(a, (int, float)):\n"
+            "        raise TypeError(\"add(): argument a must be a number\")\n    return a + b\n")
 TOY_NEW = ("def add(a, b):\n    for name, x in ((\"a\", a), (\"b\", b)):\n"
            "        if not isinstance(x, (int, float)):\n"
            "            raise TypeError(f\"add(): argument {name} must be a number\")\n    return a + b\n")
 
 DEVIATIONS = Deviations([])
-# The do-report's summary per terminal status (Step 5: "blocked" says what blocked it).
+# The do-report's summary: the completed one, and per left= the blocked one (a text with that terminal:
+# "Fill `do.summary` with what blocked it").
 SUMMARY = {"completed": "toy.add now raises TypeError naming the argument that is not a number.",
-           "blocked": "toy.add is changed, but the toy tests were not run: the operation stayed unauthorized.",
-           "abandoned": "Not finished: the user abandoned the task before toy.add was changed."}
+           "half": "Not finished: toy.add checks argument a only; the user stopped the task before b was checked.",
+           "none": "Not finished: the user abandoned the task before toy.add was changed.",
+           "all": "toy.add is changed, but the toy tests were not run: the operation stayed unauthorized."}
+LEFT = ("half", "none", "all")
 
 
 class DoTurn:
     """One /do turn: the main agent works directly and writes the do-report."""
 
     def __init__(self, rp, session=None, deviations: Deviations | None = None, task: str = TASK,
-                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), status: str = "completed", variant: str = "plain"):
+                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), status: str = "completed", variant: str = "plain",
+                 left: str = ""):
         self.rp, self.task, self.edits, self.status, self.variant = rp, task, list(edits), status, variant
+        self.left = left  # variant=blocked: how much of the change the /do made (LEFT)
+        # the edits the /do makes, and those it leaves to dev (drivers/close.py DoProducer.pending_edits)
+        self.made, self.rest = list(self.edits), []
+        if left == "half":
+            self.made = [(rel, old, TOY_HALF) for rel, old, _new in self.edits]
+            self.rest = [(rel, TOY_HALF, new) for rel, _old, new in self.edits]
+        elif left == "none":
+            self.made, self.rest = [], list(self.edits)
         from .close import kept_only
         self.o = Orchestrator(rp, "do", session=session, deviations=kept_only(rp, deviations or DEVIATIONS))
         self.tid = ""
@@ -100,6 +119,9 @@ class DoTurn:
     # ------------------------------------------------------------ steps
     def start(self) -> None:
         o = self.o
+        if self.status == "blocked" and '"blocked"' not in o.section("Step 5"):
+            raise cmdtext.TextNotFound("this /do text's Step 5 names one terminal, do.status completed: "
+                                       "a compliant /do cannot end blocked (variant=blocked plays a text from before P5)")
         o.slash(self.task, label="/do")
         m = re.search(r"task-id minted:\s*(\S+)", o.hook_out)
         if not m:
@@ -116,16 +138,21 @@ class DoTurn:
 
     def step2(self) -> None:
         o, s = self.o, self.o.s
-        for rel, old, new in self.edits:
-            path = os.path.join(o.project, rel)
-            self.call(s.read, path, label=self.label(f"Step 2 Read {rel}"))
-            if self.variant == "abandoned":
-                # The user abandons the task before the change is made.
-                s.say("Stopping here at your request: toy.add is unchanged.")
-                return
-            c = self.call(s.edit, path, old, new, label=self.label(f"Step 2 Edit {rel}"))
+        for rel, _old, _new in self.edits:
+            self.call(s.read, os.path.join(o.project, rel), label=self.label(f"Step 2 Read {rel}"))
+        if self.left == "none":
+            s.say("Stopping here at your request: toy.add is unchanged.")
+            return
+        for rel, old, new in self.made:
+            c = self.call(s.edit, os.path.join(o.project, rel), old, new, label=self.label(f"Step 2 Edit {rel}"))
             if c.ok:
                 self.files_modified.append(rel)
+        if self.left == "half":
+            s.say("Stopping here at your request: toy.add checks argument a; argument b is not checked yet.")
+            return
+        if self.left == "all":
+            s.say("The toy tests stay unrun: running them was not authorized.")
+            return
         self.call(s.bash, "python3 -m pytest -q -p no:cacheprovider", "Run the toy tests",
                   label=self.label("Step 2 Bash pytest"))
 
@@ -133,8 +160,9 @@ class DoTurn:
         self.o.s.say("Step 3 skipped: --codex was not passed.")
 
     def step4(self) -> None:
-        if self.variant == "abandoned":
-            self.o.s.say("Nothing changed: the task was abandoned before the change was made. Codex audit not run.")
+        if self.status == "blocked":
+            self.o.s.say(f"{self.summary()} Files modified: {', '.join(self.files_modified) or 'none'}. "
+                         "Codex audit not run.")
             return
         self.o.s.say(f"Changed toy.add: a non-number argument now raises TypeError naming it. "
                      f"Files modified: {', '.join(self.files_modified)}. Codex audit not run.")
@@ -193,7 +221,7 @@ class DoTurn:
 
     def summary(self) -> str:
         """do.summary: what blocked a `blocked` report (Step 5)."""
-        return SUMMARY["abandoned" if self.variant == "abandoned" else self.status]
+        return SUMMARY[self.left if self.status == "blocked" else self.status]
 
     def run(self) -> str:
         o = self.o
@@ -217,7 +245,7 @@ class DoTurn:
 # The variant the artifact check replays ("": the plain /do, then /close and /commit); the acceptance
 # variants run on demand only (`--arg variant=...`).
 VARIANTS = ("",)
-ACCEPTANCE_VARIANTS = ("blocked", "main-file", "abandoned")
+ACCEPTANCE_VARIANTS = ("blocked", "main-file")
 
 
 def run(rp) -> None:
@@ -227,8 +255,11 @@ def run(rp) -> None:
     then = rp.args.get("then", "close" if variant else "close-commit")
     rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant else "") + (
         "/later" if rp.args.get("session") == "later" else "") + ("/mistyped" if rp.args.get("mistype") else "")
-    turn = DoTurn(rp, status="blocked" if variant in ("blocked", "abandoned") else "completed",
-                  variant=variant or "plain")
+    left = rp.args.get("left", "half" if variant == "blocked" else "")
+    if (variant == "blocked") != bool(left) or (left and left not in LEFT):
+        raise ValueError(f"left={left!r} wants variant=blocked and one of {', '.join(LEFT)}")
+    turn = DoTurn(rp, status="blocked" if variant == "blocked" else "completed", variant=variant or "plain",
+                  left=left)
     tid = turn.run()
     if then == "none":
         return

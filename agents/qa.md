@@ -326,7 +326,7 @@ Phase 5 runs whenever `test_writer_expected == true` (BA's boolean, formula in `
 Rerun the blast-radius tool on the actual git diff and cross-check dev's declarations:
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/blast-radius-tool.py" \
+python3 "<HARNESS_ROOT>/scripts/blast-radius-tool.py" \
   --git-diff --base HEAD \
   --output /dev/stdout \
   --task-id <task_id>

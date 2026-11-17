@@ -366,6 +366,9 @@ class DevCommandCycle:
             self.read_patterns()
         typed = f"/{o.typed} {REQUIREMENT}"
         cmd = re.sub(r"(?m)^<the command exactly as typed[^\n]*>$", lambda m: typed, blk.text)
+        # The main agent writes the printed HARNESS_ROOT (SessionStart's, which a compaction keeps) as the
+        # literal path, as Pipeline.run does for its own calls; o.s.bash does not substitute it.
+        cmd = cmd.replace("<HARNESS_ROOT>", o.harness)
         c = self.gated(lambda label: o.s.bash(cmd, "Re-read this command's start", label=label,
                                               deviation=o.devs.at(label)),
                        f"Step 1 Bash start function ({ctx})")
@@ -430,7 +433,9 @@ class DevCommandCycle:
         content["context.v1"]["requirement"].update(mapping["requirement"])
         content["context.v1"]["assumptions"] = mapping["assumptions"]
         self.chosen = _round.chosen(self.rp, o.project, self.tid) or "A"
-        calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": CMD_REL})]
+        # <DEV_SESSION_ID> is the registry the start function printed (dev-command-<ts>), BA's FIRST ACTION one.
+        calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": CMD_REL,
+                                                    "<DEV_SESSION_ID>": self.reg})]
         act = agents.Act(content=content, status="ready", text_calls=calls, respell=o.respell,
                          summary="a project slash command named test runs the toy package tests")
         o.dispatch(self.tpl("4c"), act, "Step 4c Agent(ba)", self.tid, subagent_type=self.step_role("4c"))

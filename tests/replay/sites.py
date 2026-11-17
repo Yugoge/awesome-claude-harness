@@ -27,10 +27,14 @@ site. Consult, observe, witness and advise rules refuse nothing through the gate
 unaccounted() cross-checks the walk against a plain token scan of each registered hook's own file
 (and of each refusing rule file).
 Each Site keeps its file, line, function, the source of the conditions guarding it (enclosing tests,
-early returns), the string constants of its message, and the registrations (event, matcher) of the
-hooks that reach it. classify() derives one class per site from that code and those registrations
-(X6 (ii)), with the rule that fired; unreachable() proves a site no path runs. match() maps a block a
-replay recorded to the sites whose message pieces its text holds (X6 (iv)).
+early returns), the string constants of its message (with those of a module-level name bound once to a
+string, or to a dict, tuple or list of strings, that the message reads: PyModule.named_text), and the
+registrations (event, matcher) of the hooks that reach it: a registration whose event the hook's own
+file answers first (a function testing the payload's hook_event_name and leaving, answered_first)
+reaches only what runs before that answer and what that code calls (Enumerator.at_event). classify()
+derives one class per site from that code and those registrations (X6 (ii)), with the rule that
+fired; unreachable() proves a site no path runs. match() maps a block a replay recorded to the sites
+whose message pieces its text holds (X6 (iv)).
 """
 from __future__ import annotations
 
@@ -141,6 +145,64 @@ def _const_str(node) -> list[str]:
     return out
 
 
+def _flow_text(mod, func, call) -> list[str]:
+    """The string constants a Name argument of `call` is built from inside `func`: the strings of
+    the module constant it names (PyModule.str_consts, unless `func` binds the name itself), the
+    values assigned to it (transitively through the names they read, with the module constants they
+    read: PyModule.text_of) and the `return` values of the module's own functions those values call."""
+    todo, seen, out = [a.id for a in call.args if isinstance(a, ast.Name)], set(), []
+    local = _bound_names(func)
+    out += [t for name in todo if name not in local for t in mod.str_consts.get(name, [])]
+    assigns = [n for n in ast.walk(func) if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)) and n.value]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for a in assigns:
+            if not any(isinstance(t, ast.Name) and t.id == name for t in getattr(a, "targets", None) or [a.target]):
+                continue
+            out += mod.text_of(a.value)
+            for n in ast.walk(a.value):
+                if isinstance(n, ast.Name):
+                    todo.append(n.id)
+                elif isinstance(n, ast.Call) and _call_name(n.func)[0] is None and _call_name(n.func)[1] in mod.funcs:
+                    out += [t for r in ast.walk(mod.funcs[_call_name(n.func)[1]])
+                            if isinstance(r, ast.Return) and r.value is not None for t in _const_str(r.value)]
+    return out
+
+
+def _bound_names(func) -> set[str]:
+    """The names `func` binds itself (its parameters, the names it assigns or imports, its nested
+    definitions): a module constant of that name is not what it reads there."""
+    if func is None:
+        return set()
+    a = func.args
+    out = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs} | {x.arg for x in (a.vararg, a.kwarg) if x}
+    for n in ast.walk(func):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, ast.Nonlocal):
+            out.update(n.names)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            out.update((x.asname or x.name).split(".")[0] for x in n.names)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n is not func:
+            out.add(n.name)
+    return out
+
+
+def _str_value(node) -> list[str] | None:
+    """The strings a module constant's value holds: a string, or a dict (its values), tuple or list
+    of strings; None for any other value."""
+    if isinstance(node, ast.Constant):
+        return [node.value] if isinstance(node.value, str) else None
+    elems = node.values if isinstance(node, ast.Dict) else node.elts if isinstance(node, (ast.Tuple, ast.List)) \
+        else None
+    if not elems or not all(isinstance(x, ast.Constant) and isinstance(x.value, str) for x in elems):
+        return None
+    return [x.value for x in elems]
+
+
 def _call_name(func) -> tuple:
     if isinstance(func, ast.Name):
         return (None, func.id)
@@ -165,6 +227,23 @@ class PyModule:
                 for t in st.targets:
                     if isinstance(t, ast.Name):
                         self.consts[t.id] = st.value.value
+        # A module-level name bound once, to a string or a dict / tuple / list of strings, and never
+        # rebound (no function declares it global): a message that reads it reads those strings.
+        binds: dict[str, list] = {}
+        for st in self.ast.body:
+            targets = st.targets if isinstance(st, ast.Assign) else [st.target] \
+                if isinstance(st, (ast.AnnAssign, ast.AugAssign)) else []
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    binds.setdefault(t.id, []).append(st if isinstance(st, ast.Assign) and len(st.targets) == 1
+                                                      or isinstance(st, ast.AnnAssign) else None)
+        rebound = {x for n in ast.walk(self.ast) if isinstance(n, ast.Global) for x in n.names}
+        self.str_consts: dict[str, list[str]] = {}
+        for name, sts in binds.items():
+            if len(sts) == 1 and sts[0] is not None and sts[0].value is not None and name not in rebound:
+                vals = _str_value(sts[0].value)
+                if vals is not None:
+                    self.str_consts[name] = vals
         self.funcs: dict[str, ast.AST] = {}
         self.parent: dict[ast.AST, ast.AST] = {}
         for node in ast.walk(self.ast):
@@ -385,6 +464,39 @@ class PyModule:
             p = self.parent.get(p)
         return func is not None and p is func and st in func.body
 
+    def named_text(self, node) -> list[str]:
+        """The strings of the module constants (str_consts) node reads as a value: the name itself, a
+        subscript of it or a method call on it (`.get(...)`, `.format(...)`); not an operand of a
+        comparison or membership test, not what a loop iterates, and not a name the enclosing function
+        binds itself. Each constant once, however often node reads it."""
+        out, local, seen = [], None, set()
+        for n in ast.walk(node):
+            if not (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in self.str_consts) \
+                    or n.id in seen:
+                continue
+            par = self.parent.get(n)
+            if isinstance(par, ast.Attribute) and not isinstance(self.parent.get(par), ast.Call):
+                continue  # an attribute read, not a call on the value
+            ch, up, tested = n, par, False
+            while up is not None and not isinstance(up, (ast.stmt, ast.Module)):
+                if isinstance(up, ast.Compare) or isinstance(up, ast.comprehension) and ch is up.iter:
+                    tested = True
+                    break
+                ch, up = up, self.parent.get(up)
+            if tested or isinstance(up, (ast.For, ast.AsyncFor)) and ch is up.iter:
+                continue
+            if local is None:
+                local = _bound_names(node if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                     else self.enclosing_func(node))
+            if n.id not in local:
+                seen.add(n.id)
+                out += self.str_consts[n.id]
+        return out
+
+    def text_of(self, node) -> list[str]:
+        """The string constants of node (_const_str) and of the module constants it reads (named_text)."""
+        return _const_str(node) + self.named_text(node)
+
     def message(self, node) -> list[str]:
         """The string constants of the statement holding node and of up to six statements before it in
         the same block (the print / write / helper call composing the message)."""
@@ -396,15 +508,15 @@ class PyModule:
             if isinstance(b, list) and st in b:
                 body = b
                 break
-        out = _const_str(st)
+        out = self.text_of(st)
         stmts = [st]
         if body is not None:
             i = body.index(st)
             stmts = body[max(0, i - 6):i + 1]
             for prev in body[max(0, i - 6):i]:
-                out = _const_str(prev) + out
+                out = self.text_of(prev) + out
         for f in self._called_locals(stmts):
-            out += _const_str(f)
+            out += self.text_of(f)
         return [s for s in out if len(s.strip()) >= 4]
 
     def _called_locals(self, stmts) -> list:
@@ -604,6 +716,63 @@ def unreachable_after_exit(mod: PyModule) -> dict[int, int]:
     return out
 
 
+def _leaves(st) -> bool:
+    """The statement never completes normally: an exit, a raise or a return."""
+    return isinstance(st, (ast.Return, ast.Raise)) or isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) \
+        and (_call_name(st.value.func) in EXIT_FUNCS or _call_name(st.value.func) in {(None, n) for n in EXIT_NAMES})
+
+
+def _event_test(test, payload: set[str]) -> set[str]:
+    """The events an `if` test names when it compares the payload's hook_event_name with literals:
+    `<p>.get("hook_event_name") in (...)` / `== "..."`, or `<p>["hook_event_name"]`; set() otherwise."""
+    if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], (ast.In, ast.Eq))):
+        return set()
+    left = test.left
+    if isinstance(left, ast.Call) and isinstance(left.func, ast.Attribute) and left.func.attr == "get" \
+            and left.args and isinstance(left.args[0], ast.Constant):
+        base, key = left.func.value, left.args[0].value
+    elif isinstance(left, ast.Subscript) and isinstance(left.slice, ast.Constant):
+        base, key = left.value, left.slice.value
+    else:
+        return set()
+    if key != "hook_event_name" or not (isinstance(base, ast.Name) and base.id in payload):
+        return set()
+    comp = test.comparators[0]
+    vals = [comp] if isinstance(test.ops[0], ast.Eq) else \
+        comp.elts if isinstance(comp, (ast.Tuple, ast.List, ast.Set)) else []
+    if not vals or not all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in vals):
+        return set()
+    return {v.value for v in vals}
+
+
+def answered_first(mod: PyModule) -> dict[str, dict[str, set[int]]]:
+    """{event: {function: the lines of it no path runs at that event}} for each hook event a function
+    answers and leaves on: an `if` testing the payload's hook_event_name (_event_test; the payload is a
+    name the function assigns from json.load / json.loads) with no else, whose block ends in an exit,
+    raise or return. At those events that `if` never completes, so no statement after it in its block
+    runs; what the function calls only from there is left to Enumerator.at_event."""
+    out: dict[str, dict[str, set[int]]] = {}
+    for name, func in mod.funcs.items():
+        payload = {t.id for n in ast.walk(func) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                   and _call_name(n.value.func) in {("json", "load"), ("json", "loads")}
+                   for t in n.targets if isinstance(t, ast.Name)}
+        if not payload:
+            continue
+        for node in ast.walk(func):
+            for attr in ("body", "orelse", "finalbody"):
+                block = getattr(node, attr, None)
+                if not isinstance(block, list):
+                    continue
+                for i, st in enumerate(block):
+                    if not (isinstance(st, ast.If) and not st.orelse and st.body and _leaves(st.body[-1])
+                            and mod.enclosing_func(st) is func):
+                        continue
+                    lines = {n.lineno for later in block[i + 1:] for n in ast.walk(later) if hasattr(n, "lineno")}
+                    for ev in _event_test(st.test, payload):
+                        out.setdefault(ev, {}).setdefault(name, set()).update(lines)
+    return out
+
+
 # ------------------------------------------------------------------ shell
 
 _SH_FUNC = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{?\s*(.*)$")
@@ -799,6 +968,7 @@ class Enumerator:
         #                                            refusing rules: the union of their declared tools}
         self.rules: dict[str, list[GateRule]] = {}   # hook -> the refusing rules of its gate table
         self.via: dict[str, dict[str, list[str]]] = {}  # hook -> {file reached only through rules: their files}
+        self._at: dict[str, dict] = {}  # hook -> at_event(hook)
         for hook in self.regs:
             self.roles[hook] = self._closure(hook)
 
@@ -912,9 +1082,39 @@ class Enumerator:
         then what they call or name, across imports; a method call on an object the walk cannot type
         reaches every function of that name in the imported modules (conservative)."""
         roles = self.roles[hook]
-        out: set[tuple[str, str]] = set()
         todo = [(f, n) for f, r in roles.items() if r != "import" and f in self.py for n in self.py[f].funcs]
-        todo += [(f, "<module>") for f, r in roles.items() if f in self.py]
+        return self._calls(hook, todo + [(f, "<module>") for f, r in roles.items() if f in self.py])
+
+    def at_event(self, hook: str) -> dict[str, tuple[set[tuple[str, str]], dict[tuple[str, str], set[int]]]]:
+        """{event: ((file, function)s the hook's process can call at it, {(file, function): the lines it
+        skips there})} for each event the hook's own file answers first (answered_first): from its
+        top-level code, its functions only as that code calls them, the lines after the answer aside;
+        a child or rule process's functions all, as reachable() has them. {} for a hook answering none."""
+        if hook not in self._at:
+            mod, roles = self.module(hook), self.roles[hook]
+            first = answered_first(mod) if isinstance(mod, PyModule) else {}
+            todo = [(f, n) for f, r in roles.items() if r in ("child", "rule") and f in self.py
+                    for n in self.py[f].funcs]
+            todo += [(f, "<module>") for f in roles if f in self.py]
+            self._at[hook] = {}
+            for ev, skipped in first.items():
+                skip = {(hook, name): lines for name, lines in skipped.items()}
+                self._at[hook][ev] = (self._calls(hook, list(todo), skip), skip)
+        return self._at[hook]
+
+    def _runs_at(self, hook: str, s: Site, event: str) -> bool:
+        """Whether the site can run when the hook is called for `event` (at_event)."""
+        if event not in self.at_event(hook) or not s.file.endswith(".py"):
+            return True
+        reach, skip = self.at_event(hook)[event]
+        return (s.file, s.func) in reach and s.line not in skip.get((s.file, s.func), ())
+
+    def _calls(self, hook: str, todo: list, skip: dict | None = None) -> set[tuple[str, str]]:
+        """(file, function) the scopes in `todo` call or name, transitively, across the hook's files; the
+        lines `skip` names in a scope are not walked."""
+        roles = self.roles[hook]
+        skip = skip or {}
+        out: set[tuple[str, str]] = set()
         by_name: dict[str, list[tuple[str, str]]] = {}
         for f in roles:
             if f in self.py:
@@ -932,8 +1132,9 @@ class Enumerator:
             if scope is None:
                 continue
             as_main = roles.get(key[0]) != "import"
+            gone = skip.get(key, ())
             for n in _walk_scope(scope):
-                if key[1] == "<module>" and not _guard(mod, n, as_main, [hook]):
+                if key[1] == "<module>" and not _guard(mod, n, as_main, [hook]) or getattr(n, "lineno", 0) in gone:
                     continue
                 if isinstance(n, (ast.Name, ast.Attribute)) and not isinstance(getattr(n, "ctx", None), ast.Store):
                     tgt = self._resolve(mod, n)
@@ -954,7 +1155,7 @@ class Enumerator:
             conds, handler = mod.conds(node)
             own = kind == "call"  # a helper call carries its message in its own arguments
             return Site(mod.rel, node.lineno, func.name if func else "<module>", kind, conds=conds,
-                        text=_const_str(mod.statement(node)) if own else mod.message(node), handler=handler,
+                        text=mod.text_of(mod.statement(node)) if own else mod.message(node), handler=handler,
                         dynamic=mod.dynamic(node, own),
                         unconditional=func is not None and mod.top_level(node, func))
 
@@ -980,6 +1181,17 @@ class Enumerator:
                             mod.top_level(node, func) and (rel, func.name) not in helpers and (rel, func.name) != tgt:
                         helpers[(rel, func.name)] = [as_site(mod, node, "call")]
                         changed = True
+        # A helper's refusals off its top level (a helper call under a test, the helper still blocking
+        # at its end) leave through the same call site as its own: their message pieces join the
+        # helper's, the pieces of the values a variable message is assigned from included, so match()
+        # maps a refusal one of them printed to the site calling the helper.
+        for (rel, name), hs in helpers.items():
+            mod, f = mods[rel], mods[rel].funcs.get(name)
+            for node in ast.walk(f) if f is not None and hs and hs[0].kind == "call" else ():
+                if isinstance(node, ast.Call) and self._resolve(mod, node.func) in helpers \
+                        and mod.enclosing_func(node) is f and not mod.top_level(node, f):
+                    hs[0].text += [t for t in mod.text_of(mod.statement(node)) + _flow_text(mod, f, node)
+                                   if t not in hs[0].text]
         called = set()
         for rel, mod in mods.items():
             for node in ast.walk(mod.ast):
@@ -1097,7 +1309,7 @@ class Enumerator:
             out.append(s)
         out += self._sh_sites([f for f in roles if f.endswith(".sh")])
         for s in out:
-            s.regs = self._regs(hook, s.file)
+            s.regs = [r for r in self._regs(hook, s.file) if self._runs_at(hook, s, r[1])]
             s.role = roles.get(s.file)
             s.rules = sorted(self.via[hook].get(s.file, []))
         return [s for s in out if s.regs]
@@ -1236,7 +1448,9 @@ def classify(e: "Enumerator", s: Site) -> tuple[str, str]:
         tools = _site_tools(s)
         if tools and tools <= OBLIGATION_TOOLS:
             return "G", f"refuses the actor's own {'/'.join(sorted(tools))} (its todo record or its dispatch); its next compliant call clears it"
-        named = sorted(t for t in OBLIGATION_TOOLS if re.search(r"\b" + t + r"\b", text))
+        # a tool named as an event's matcher (`PreToolUse:Agent`, the event a hook runs on) is no call the
+        # message names as the actor's release
+        named = sorted(t for t in OBLIGATION_TOOLS if re.search(r"(?<!:)\b" + t + r"\b", text))
         if named and re.search(r"\b(?:Call|call|initiali[sz]e|fix|re-?run)\b", text):
             return "G", f"a lock on every call whose message names the actor's next {'/'.join(named)} call as its release"
         if not s.dynamic and re.search(r"(?m)^\s+(?:git|python3?|bash)\s+\S", text):

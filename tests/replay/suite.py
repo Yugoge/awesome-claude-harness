@@ -69,6 +69,7 @@ COMPLIANT = (
     Scenario("/dev 2-lane fan-out", "dev", (("variant", "fanout"),), ("dev",), 140),
     Scenario("/dev qafail", "dev", (("variant", "qa-fail"),), ("dev",), 110),
     Scenario("/dev clarify", "dev", (("variant", "question"),), ("dev",), 100),
+    Scenario("/dev devquestion", "dev", (("variant", "dev-question"),), ("dev",), 100),
     Scenario("/redev", "redev", (), ("dev", "redev"), 170),
     Scenario("/dev-command", "dev_command", (("variant", "plain"),), ("dev-command",), 80),
     Scenario("/dev-overnight", "overnight", (("variant", "plain"),), ("dev-overnight",), 600),
@@ -76,6 +77,9 @@ COMPLIANT = (
     Scenario("/close after /dev", "close", (("variant", "plain"),), ("dev", "close"), 150),
     Scenario("/close after /do", "do", (("then", "close"),), ("do", "close"), 110),
     Scenario("/close append round", "close", (("variant", "append"),), ("dev", "close"), 180),
+    # The /do task's close routing round: close QA names the file the /do main agent wrote, and Routes'
+    # /do bullet dispatches dev under the same task id (drivers/close.py do_dev).
+    Scenario("/close /do route round", "do", (("then", "close"), ("variant", "main-file")), ("do", "close"), 150),
     Scenario("/commit", "commit", (("variant", "auto"),), ("dev", "close", "commit"), 170),
     Scenario("/merge", "merge", (("variant", "plain"),), ("merge",), 40),
     Scenario("/push", "push", (), ("do", "close", "commit", "push"), 130),
@@ -224,6 +228,9 @@ def preconditions() -> list[str]:
 
 
 REGISTRY: dict[str, tuple] = {}
+# A settings name a test module defines -> fn(runner) returning the settings file the replay runs
+# with, built from the tree under test when a replay first names it (Runner._replay).
+BUILT_SETTINGS: dict = {}
 
 
 def replay_key(scn: Scenario, settings: str, faults: tuple = (), tag: str = "") -> str:
@@ -309,8 +316,10 @@ class Runner:
             shutil.rmtree(out)
         os.makedirs(out)
         sandbox.clone(self.template(), sb)
+        choice = self.settings_files.get(settings) or \
+            (BUILT_SETTINGS[settings](self) if settings in BUILT_SETTINGS else settings)
         argv = [sys.executable, "-m", "tests.replay", "run", "--tree", self.tree, "--out", out, "--sandbox", sb,
-                "--driver", scn.driver, "--settings", self.settings_files.get(settings, settings), "--runs", "plain"]
+                "--driver", scn.driver, "--settings", choice, "--runs", "plain"]
         for k, v in tuple(scn.args) + tuple(faults):
             argv += ["--arg", f"{k}={v}"]
         for k, v in {**self.guard.env(), **self.env}.items():

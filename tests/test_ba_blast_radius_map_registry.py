@@ -32,10 +32,6 @@ from hooks.lib import obligation  # noqa: E402
 TS = "20260101-000000"
 CYCLES = {"/dev": f"dev-{TS}", "/dev-command": f"dev-command-{TS}"}
 WANT = ".claude/dev-registry/<DEV_SESSION_ID>/blast-radius-map-<task_id>.json"
-PENDING = pytest.mark.xfail(strict=True, reason=(
-    "agents/ba.md Step 9 still writes the map at dev-<task_id>/; its fix spells <DEV_SESSION_ID>, which the "
-    "replay drivers' BA text calls (tests/replay/drivers/dev.py, dev_command.py, overnight.py) must bind "
-    "first; drop this marker with that fix"))
 
 
 def _ba() -> str:
@@ -55,7 +51,6 @@ def test_the_context_example_names_the_path_the_tool_call_writes() -> None:
     assert _tool_output() == _context_path()
 
 
-@PENDING
 def test_the_map_path_is_the_dispatch_registry_with_a_task_keyed_name() -> None:
     assert _tool_output() == WANT
 
@@ -119,7 +114,7 @@ def _run_map(project: Path, cycle: str) -> Path:
 
 
 @pytest.mark.parametrize("cycle", [pytest.param("/dev", id="dev"),
-                                   pytest.param("/dev-command", id="dev-command", marks=PENDING)])
+                                   pytest.param("/dev-command", id="dev-command")])
 def test_the_map_lands_in_the_cycle_registry_and_leaves_the_rule_on_it(tmp_path, cycle) -> None:
     written = _run_map(tmp_path, cycle)
     registry = tmp_path / ".claude" / "dev-registry" / CYCLES[cycle]
