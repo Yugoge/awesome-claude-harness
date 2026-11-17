@@ -12,7 +12,9 @@ Activation logic:
      fails the grammar: when the dispatch carries one, it decides alone,
      whatever the registry holds and whatever form the session id takes:
      the qa-report.v2 artifact it declares is the report judged, at exactly
-     the path declared (missing: exit 2 naming that path); one that declares
+     the path declared (missing: exit 2 naming that path; holding exactly the
+     content the main agent wrote, as lib/report_provenance.py recorded it,
+     with no write of it in this QA's own transcript: exit 2, CD-6); one that declares
      none (BA validation, close QA) owes no E2E evidence here: exit 0. The
      cycle it names (lib/agent_cycle.py: the registry of its task, else of
      the session that dispatched it) only labels the message.
@@ -42,7 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type
-from lib import agent_cycle, command_span, obligation
+from lib import agent_cycle, command_span, obligation, report_provenance
 
 # Only enforce for QA agents
 ENFORCED_AGENT_TYPE = "qa"
@@ -183,8 +185,31 @@ def _own_dispatch(data: dict, project_dir: str) -> tuple[dict, str | None]:
     return (doc if isinstance(doc, dict) else {}), transcript
 
 
+def _enforce_own_writer(
+    rel: str, agent_id: str, project_dir: str, session_id, transcript, session_context: str
+) -> None:
+    """Exit 2 when the declared report holds exactly what the main agent wrote
+    (lib/report_provenance.py: its content as an observation of the main agent's own
+    call recorded it, unchanged since) and this QA's own transcript shows no write of
+    it: the orchestrator's report is not this QA's evidence, whatever route wrote it
+    (CD-6)."""
+    if not report_provenance.held_by_main(session_id, project_dir, rel):
+        return
+    if transcript and report_provenance.own_write(transcript, project_dir, rel):
+        return
+    sys.stderr.write(
+        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "
+        f"the QA report at {rel} was written by the main agent, not by this QA "
+        f"(report provenance, CD-6).\n"
+        f"artifact: {rel} (failing check: the report's writer is the orchestrator)\n"
+        f"Perform the E2E verification and write the QA report yourself before stopping.\n"
+    )
+    sys.exit(2)
+
+
 def _enforce_declared_report(
-    declared: dict, agent_id: str, project_dir: str, session_context: str
+    declared: dict, agent_id: str, project_dir: str, session_context: str,
+    session_id=None, transcript=None,
 ) -> None:
     """Judge exactly the qa-report.v2 this QA's own dispatch obligation
     declares, at the path it declares, never another report of the session or
@@ -217,6 +242,7 @@ def _enforce_declared_report(
         )
         sys.exit(2)
 
+    _enforce_own_writer(qa_artifact["path"], agent_id, project_dir, session_id, transcript, session_context)
     _enforce_e2e_status(qa_report_path, agent_id, ENFORCED_AGENT_TYPE, session_context)
 
 
@@ -258,7 +284,8 @@ def main() -> None:
         context = f"(task_id={declared.get('task_id')})"
         if cycle is not None:
             context = f"in session {cycle.name} {context}"
-        _enforce_declared_report(declared, agent_id, project_dir, session_context=context)
+        _enforce_declared_report(declared, agent_id, project_dir, session_context=context,
+                                 session_id=data.get("session_id"), transcript=transcript)
         sys.exit(0)
 
     # A dispatch without an obligation, of a QA a cycle's registry holds: the

@@ -76,9 +76,13 @@ project's root README.md and ARCHITECTURE.md by its rule-inspector only
 Behavior:
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
-  - Main agent (no agent_id) writing a gate-read QA or dev report
-    (docs/dev/qa-report-*.json, ba-qa-report-*.json, dev-report-*.json) with
-    Bash, declared by a dispatch yet or not -> exit 2
+  - Every caller, before any check: who changed each docs/dev/qa-report-*.json
+    since the session last looked is recorded (lib/report_provenance.py), the
+    provenance subagentstop-e2e-enforce.py checks (CD-6). Never refuses.
+  - Main agent (no agent_id) writing a gate-read report this reading sees for
+    certain: a Bash write of a QA or dev report (docs/dev/qa-report-*.json,
+    ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
+    of a QA or BA-QA report, declared by a dispatch yet or not -> exit 2
     (_check_report_writes, CD-6; residuals in docs/ENFORCEMENT-LEDGER.md R-003).
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
@@ -658,50 +662,104 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
 # lib/obligation.py read docs/dev/ba-qa-report-*.json's verdict and the status of
 # docs/dev/dev-report-*.json (lane shards and the canonical one, lib/dev_loop_checks.py,
 # lib/dev_report_shard_patterns.py). Only the producer subagent writes one (the canonical
-# aggregate by posttool-lane-completeness-watch.py's script); the derived permission
-# above refuses the main agent once a dispatch declares the path, and this refuses it
-# before then too, so the orchestrator cannot forge a report a gate then reads.
+# aggregate by posttool-lane-completeness-watch.py's script).
+#
+# The decision for a QA report is the e2e gate's, by provenance: every call's PreToolUse
+# records who changed each qa-report (lib/report_provenance.py, observed in main() below)
+# and the gate refuses a QA whose declared report holds what the main agent wrote, by any
+# route. What follows is the early, friendly refusal of the forms a reading of the call
+# sees for certain: a Bash write target the shared parser reads (globs and braces
+# expanded), a literal report path an interpreter's code opens for writing, a Write,
+# Edit, MultiEdit or NotebookEdit of a qa-report or ba-qa-report. A read is never refused,
+# and a target this reading cannot resolve (a computed directory, an unknown `cd`) is
+# left to the gate.
 _REPORT_NAME = re.compile(r"(?:ba-)?qa-report-[^/]+\.json|dev-report-[^/]+\.json")
+_TOOL_REPORT_NAME = re.compile(r"(?:ba-)?qa-report-[^/]+\.json")
 _REPORT_TOKEN = re.compile(r"(?<![\w.-])(?:(?:ba-)?qa|dev)-report-[^\s/'\"`;|&<>(){}\\]*\.json")
-# An interpreter whose code a one-liner, heredoc, here-string or pipe hands it (the
-# shells are not here: their code is read as commands by the parser).
+_DOCS_DEV_REPORT_TEXT = re.compile(r"(?:\A|/)docs/+dev/+(?:(?:ba-)?qa|dev)-report-[^/]+\.json\Z")
 _CODE_INTERPRETER = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php)\Z")
 _IN_PLACE_INTERPRETER = re.compile(r"(?:perl|ruby)[\d.]*\Z")
-# What in an interpreter's code writes a file it names: an open mode that writes,
-# a write/dump call, a rename, copy, link or touch, a low-level create flag, a
-# perl/shell-style '>' open, a print to a file.
-_CODE_WRITES = re.compile(
-    r",\s*(?:mode\s*=\s*)?['\"][rwaxbt+]*[wax+][rwaxbt+]*['\"]"
-    r"|\bwrite\w*\s*\(|\bdump\s*\(|\bput_contents\b|\bcreateWriteStream\b|\bappendFile\w*\b"
-    r"|\b(?:rename|replace|copy\w*|move|symlink|link|truncate|touch|syswrite|spew)\s*\("
-    r"|\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b|['\"]\s*\+?>{1,2}|\bfile\s*=")
-_SHELL_WRITES = re.compile(r">|\b(?:tee|cp|mv|sed|dd|install|ln|rsync|truncate|curl|wget|python[\d.]*|node|"
-                           r"perl|ruby|php|deno|bun)\b")
+# A string literal (the path), then what makes the code write it: an open in a writing
+# mode, a write/copy/move/link call whose destination it is, a perl '>' open.
+_LIT = r"""(['"`])([^'"`\n]*?(?:qa|dev)-report-[^'"`\n/]*\.json)\1"""
+_WMODE = r"""\s*,\s*(?:mode\s*=\s*)?['"][rbt]*[wax+][rwaxbt+]*['"]"""
+_CODE_WRITE_FORMS = [re.compile(p) for p in (
+    r"\bopen\(\s*" + _LIT + _WMODE,                                   # python/ruby open(P, 'w')
+    r"\bfopen\(\s*" + _LIT + _WMODE,                                  # php
+    r"\bopenSync\(\s*" + _LIT + _WMODE,                               # node
+    r"\bPath\(\s*" + _LIT + r"\s*\)\s*\.\s*(?:write_text|write_bytes|touch|open\(\s*['\"][rbt]*[wax+])",
+    r"\b(?:File|IO)\s*\.\s*(?:write|binwrite)\(\s*" + _LIT,          # ruby
+    r"\bFile\s*\.\s*open\(\s*" + _LIT + _WMODE,
+    r"\b(?:file_put_contents|writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|"
+    r"truncateSync|truncate)\(\s*" + _LIT,
+    r"\b(?:copy\w*|move|rename\w*|replace|link\w*|symlink\w*|cp|cpSync|cp_r|mv|ln_s|ln|"
+    r"install)\(\s*[^;\n]*?,\s*" + _LIT + r"\s*[,)]",              # a copy/move/link's destination
+    r"""['"]\+?>{1,2}['"]\s*,\s*""" + _LIT,                            # perl open(F, '>', P)
+    r"""(['"])\+?>{1,2}\s*([^'"\n]*?(?:qa|dev)-report-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
+)]
 _DEST_MODES = ("copy-dest", "move-dest", "link")
+_WRITER_NAMES = frozenset({"tee", "cp", "mv", "install", "ln", "rsync", "dd", "truncate", "sed", "sh", "bash",
+                           "dash", "zsh", "ksh", "sponge", "sort", "uniq", "awk", "gawk", "curl", "wget", "touch"})
 _CD_LIMIT = 64
+_EXPAND_LIMIT = 64
 
 
-def _is_report(path: str) -> bool:
+def _is_report(path: str, names=_REPORT_NAME) -> bool:
     """``path`` (absolute, normalized) is a gate-read report: docs/dev/<report name>."""
     head, name = os.path.split(path)
     parent, folder = os.path.split(head)
-    return bool(_REPORT_NAME.fullmatch(name)) and folder == "dev" and os.path.basename(parent) == "docs"
+    return bool(names.fullmatch(name)) and folder == "dev" and os.path.basename(parent) == "docs"
 
 
-def _report_path(path: str) -> bool:
+def _report_path(path: str, names=_REPORT_NAME) -> bool:
     """As written (normalized) or with the links that exist now resolved."""
     path = os.path.normpath(path)
-    if _is_report(path):
+    if _is_report(path, names):
         return True
     try:
-        return _is_report(os.path.realpath(path))
+        return _is_report(os.path.realpath(path), names)
     except (OSError, ValueError):
         return False
 
 
-def _known_text(text: str):
-    """``text`` with ~, $HOME and $CLAUDE_PROJECT_DIR expanded; None when an expansion stays."""
+def _braces(text: str) -> list:
+    """``text`` with its brace alternatives expanded (`a{b,c}d`), at most _EXPAND_LIMIT."""
+    out, todo = [], [text]
+    while todo and len(out) + len(todo) <= _EXPAND_LIMIT:
+        cur = todo.pop()
+        m = re.search(r"\{([^{}]*,[^{}]*)\}", cur)
+        if not m:
+            out.append(cur)
+            continue
+        todo += [cur[:m.start()] + alt + cur[m.end():] for alt in m.group(1).split(",")]
+    return out + todo
+
+
+def _hits(cand: str, dirs: list) -> bool:
+    """``cand`` (a write target as written) names a gate-read report from one of ``dirs``: as
+    written, its brace alternatives, and the existing files its glob matches."""
+    import glob as _glob
+
+    for alt in _braces(cand):
+        bases = [alt] if os.path.isabs(alt) else [os.path.join(d, alt) for d in dirs]
+        for path in bases:
+            if _report_path(path):
+                return True
+            if any(c in alt for c in "*?["):
+                try:
+                    if any(_report_path(m) for m in _glob.glob(path)[:_EXPAND_LIMIT]):
+                        return True
+                except (OSError, ValueError, re.error):
+                    pass
+    return False
+
+
+def _known_text(text: str, cwd: str | None = None):
+    """``text`` with ~, $HOME, $CLAUDE_PROJECT_DIR and (at the call's start) $PWD expanded; None
+    when an expansion stays."""
     known = {"HOME": os.environ.get("HOME") or os.path.expanduser("~")}
+    if cwd:
+        known["PWD"] = cwd
     if os.environ.get("CLAUDE_PROJECT_DIR"):
         known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
     for name, value in known.items():
@@ -716,17 +774,18 @@ def _call_dirs(script, sp, cwd: str):
     """The call's directory and every directory a `cd`/`pushd` in the command may move to, each
     read from every directory known before it; ``unknown`` when one cannot be read (computed,
     `cd -`, too many)."""
-    dirs, unknown = [cwd], False
+    dirs, unknown, first = [cwd], False, True
     for site in sp.walk(script):
         r = sp.resolve(site.cmd)
         if r.name not in ("cd", "pushd"):
             continue
+        first, was_first = False, first
         operands = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
         if not operands:
             dest = os.environ.get("HOME") or os.path.expanduser("~")
         else:
             value = operands[0].value()
-            dest = value if value is not None else _known_text(operands[0].text)
+            dest = value if value is not None else _known_text(operands[0].text, cwd if was_first else None)
             if dest is not None and dest.startswith("~"):
                 dest = os.path.expanduser(dest)
         if dest is None or dest == "-" or dest.startswith("+") or dest.startswith("-"):
@@ -738,11 +797,91 @@ def _call_dirs(script, sp, cwd: str):
     return dirs, unknown
 
 
+def _code_writes_report(code: str, dirs: list) -> str | None:
+    """The literal report path an interpreter's ``code`` opens for writing, copies, moves or
+    links to, resolved from ``dirs``; None when it writes none it names literally."""
+    for form in _CODE_WRITE_FORMS:
+        for m in form.finditer(code):
+            lit = m.group(2)
+            if lit and _hits(os.path.expanduser(lit), dirs):
+                return lit
+    return None
+
+
+_SED_W = re.compile(r"(?:\A|[;\n{}])\s*w\s+(\S+)|\bs(.)(?:(?!\2).)*\2(?:(?!\2).)*\2[gpiImMe0-9]*w\s+(\S+)")
+_AWK_OUT = re.compile(r"""(?<![<>|])>{1,2}\s*"([^"\n]+)\"""")
+_PY_ARGV_WRITE = re.compile(r"\bopen\(\s*sys\.argv\[\d\]" + _WMODE)
+_PY_OS_OPEN = re.compile(r"\bos\.open\(\s*" + _LIT + r"\s*,\s*(?![^)]*\bO_RDONLY\b\s*\))(?:[^)]*\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b|\s*[1-9])")
+
+
+def _url_name(url: str) -> str:
+    return os.path.basename(url.split("?", 1)[0].split("#", 1)[0].rstrip("/"))
+
+
+def _operand_writes(name: str, values: list) -> list:
+    """The paths a writer names among its operands (as written): ``sort -o``, ``uniq IN OUT``, a
+    sed ``w`` command, an awk ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with
+    ``--output-dir``, wget's ``-O``/``-P``. Only literal operands; a read never names one."""
+    out = []
+    plain = [v for v in values if v is not None]
+    if name == "sort":
+        for i, v in enumerate(plain):
+            if v in ("-o", "--output") and i + 1 < len(plain):
+                out.append(plain[i + 1])
+            elif v.startswith("--output="):
+                out.append(v.split("=", 1)[1])
+            elif v.startswith("-o") and len(v) > 2 and not v.startswith("--"):
+                out.append(v[2:])
+    elif name == "uniq":
+        operands = [v for v in plain if not v.startswith("-") or v == "-"]
+        if len(operands) >= 2:
+            out.append(operands[1])
+    elif name in ("sed", "gsed"):
+        for v in plain:
+            for m in _SED_W.finditer(v):
+                out.append(m.group(1) or m.group(3))
+    elif name in ("awk", "gawk", "mawk", "nawk"):
+        for v in plain:
+            out += _AWK_OUT.findall(v)
+    elif name == "openssl":
+        for i, v in enumerate(plain):
+            if v == "-out" and i + 1 < len(plain):
+                out.append(plain[i + 1])
+    elif name == "curl":
+        out_dir, remote, urls = "", False, []
+        for i, v in enumerate(plain):
+            if v == "--output-dir" and i + 1 < len(plain):
+                out_dir = plain[i + 1]
+            elif v.startswith("--output-dir="):
+                out_dir = v.split("=", 1)[1]
+            elif v in ("-O", "--remote-name", "--remote-name-all") or re.fullmatch(r"-[a-zA-Z]*O[a-zA-Z]*", v):
+                remote = True
+            elif "://" in v:
+                urls.append(v)
+        if remote:
+            out += [os.path.join(out_dir, _url_name(u)) for u in urls if _url_name(u)]
+    elif name == "wget":
+        prefix, urls = "", []
+        for i, v in enumerate(plain):
+            if v in ("-P", "--directory-prefix") and i + 1 < len(plain):
+                prefix = plain[i + 1]
+            elif v.startswith("--directory-prefix="):
+                prefix = v.split("=", 1)[1]
+            elif v.startswith("-P") and len(v) > 2:
+                prefix = v[2:]
+            elif v in ("-O", "--output-document") and i + 1 < len(plain):
+                out.append(plain[i + 1])
+            elif "://" in v:
+                urls.append(v)
+        out += [os.path.join(prefix, _url_name(u)) for u in urls if _url_name(u)]
+    return [o for o in out if o and o != "-"]
+
+
 def _bash_report_writes(command: str, cwd: str) -> list:
-    """The gate-read reports ``command`` writes (as written), read by the shared parser's
-    write-target view from the call's directory and every `cd`; an interpreter whose code
-    names a report file and writes; a target whose directory cannot be read and whose name
-    is a report's."""
+    """The gate-read reports ``command`` writes for certain (as written): a write target of
+    the shared parser's view, resolved from the call's directory and every `cd` it reads; a
+    literal report path an interpreter's code writes; a writer xargs/parallel runs in a
+    command that names a report."""
     from lib import bash_write_targets as bwt
     from lib import shell_parse as sp
 
@@ -759,11 +898,14 @@ def _bash_report_writes(command: str, cwd: str) -> list:
                 if os.path.basename(src) == "dev" and os.path.basename(os.path.dirname(src)) == "docs":
                     aliases.update(os.path.normpath(os.path.join(e, os.path.expanduser(t.path))) for e in dirs)
     found = []
-    # xargs and parallel append operands the parser cannot see: a write they run in a command
-    # that names a report may write it.
-    if tokens and writes and any(sp.basename(w.value() or "") in ("xargs", "parallel")
-                                   for site in sp.walk(script) for w in site.cmd.words):
-        found.append(tokens[0])
+    sites = list(sp.walk(script))
+    # xargs and parallel append operands the parser cannot see: a writer they run, in a
+    # command that names a report, may write it.
+    for site in sites:
+        words = [sp.basename(w.value() or "") for w in site.cmd.words]
+        if tokens and words and words[0] in ("xargs", "parallel") and (
+                _WRITER_NAMES & set(words[1:]) or any(">" in (w.text or "") for w in site.cmd.words[1:])):
+            found.append(tokens[0])
     for t in writes:
         text = bwt._render(t, command)
         if not text:
@@ -775,59 +917,88 @@ def _bash_report_writes(command: str, cwd: str) -> list:
             else:
                 candidates += [os.path.join(text, tok) for tok in tokens]
         for cand in candidates:
-            name = os.path.basename(cand.rstrip("/").replace('"', "").replace("'", ""))
+            plain = cand.replace('"', "").replace("'", "")
+            name = os.path.basename(plain.rstrip("/"))
             if aliases and _REPORT_NAME.fullmatch(name) and any(
-                    os.path.normpath(os.path.join(d, os.path.dirname(cand))) in aliases for d in dirs):
+                    os.path.normpath(os.path.join(d, os.path.dirname(plain))) in aliases for d in dirs):
                 hit = True
-            elif any(c in cand for c in "$`\x00"):
-                hit = bool(_REPORT_NAME.fullmatch(name))
-            elif os.path.isabs(cand):
-                hit = _report_path(cand)
+            elif any(c in plain for c in "$`\x00") or (unknown and not os.path.isabs(plain)):
+                # A computed part, or a directory a `cd` computes: refused here only when the
+                # text itself ends in docs/dev/<report> (else the gate decides).
+                hit = bool(_DOCS_DEV_REPORT_TEXT.search(os.path.normpath(plain)))
             else:
-                hit = any(_report_path(os.path.join(d, cand)) for d in dirs) or (
-                    unknown and bool(_REPORT_NAME.fullmatch(name)))
+                hit = _hits(plain, dirs)
             if hit:
                 found.append(text)
                 break
-    for site in sp.walk(script):
+    for site in sites:
+        r = sp.resolve(site.cmd)
+        for path in _operand_writes(r.name or "", [w.value() for w in r.args]):
+            if _hits(os.path.expanduser(path), dirs if not (unknown and not os.path.isabs(path)) else []) or (
+                    _DOCS_DEV_REPORT_TEXT.search(os.path.normpath(path))):
+                found.append(path)
+                break
+    for site in sites:
         r = sp.resolve(site.cmd)
         name = r.name or ""
         if not _CODE_INTERPRETER.match(name):
             continue
         args = [w.text for w in r.args]
+        code_args = [a for a in args if not a.startswith("-")]
         code = " ".join(args)
         for red in site.cmd.redirects:
             if red.hd is not None:
                 code += "\n" + red.hd.body
             elif red.op == "<<<" and red.target is not None:
                 code += "\n" + red.target.text
-        if "pipe" in site.fed:
-            code += "\n" + command
-        names = _REPORT_TOKEN.findall(code)
-        if not names:
+        reads_stdin = "pipe" in site.fed and (not code_args or code_args[0] == "-") and not any(
+            re.fullmatch(r"-[A-Za-z]*[ceE]", a) or a in ("-r",) for a in args)
+        if reads_stdin:
+            code += "\n" + command  # the code it runs is what the pipe feeds it
+        lit = _code_writes_report(code, dirs)
+        if not lit:
+            m = _PY_OS_OPEN.search(code)
+            lit = m.group(2) if m and _hits(m.group(2), dirs) else None
+        if not lit and _PY_ARGV_WRITE.search(code):
+            lit = next((w.value() for w in r.args if w.value() and _hits(w.value(), dirs)), None)
+        if lit:
+            found.append(lit)
             continue
-        in_place = _IN_PLACE_INTERPRETER.match(name) and any(re.fullmatch(r"-[A-Za-z]*i\S*", a) for a in args)
-        if in_place or _CODE_WRITES.search(code):
-            found.append(names[0])
+        if _IN_PLACE_INTERPRETER.match(name) and any(re.fullmatch(r"-[A-Za-z]*i\S*", a) for a in args):
+            for w in r.args:
+                value = w.value()
+                if value and not value.startswith("-") and _hits(value, dirs):
+                    found.append(value)
+                    break
     return list(dict.fromkeys(found))
 
 
 def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
-    """Exit 2 on the main agent's Bash write of a gate-read QA or dev report (CD-6); a subagent's
-    write is left to the rules above and the role rows, as before. The main agent's Write tool
-    of an undeclared report is not refused here (test_tool_policy_derived_permission.py's
-    test_a_dispatch_refused_at_pretooluse_declares_nothing pins it as allowed; an owner decision)."""
+    """Exit 2 on the main agent's write of a gate-read report this call's reading sees for
+    certain (CD-6): a Bash write of a QA or dev report, a Write/Edit/MultiEdit/NotebookEdit of a
+    QA or BA-QA report. A subagent's write is left to the rules above and the role rows, as
+    before. The main agent's Write tool of an undeclared dev report is not refused here
+    (test_tool_policy_derived_permission.py's test_a_dispatch_refused_at_pretooluse_declares_nothing
+    pins it as allowed; an owner decision). Whatever this misses, the e2e gate refuses by
+    provenance (lib/report_provenance.py)."""
     if data.get("agent_id") or not isinstance(tool_input, dict):
         return
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if tool_name == "Bash":
         command = tool_input.get("command")
-        if not isinstance(command, str) or not _REPORT_TOKEN.search(command) and "report" not in command:
+        if not isinstance(command, str) or "report" not in command:
             return
         try:
             hits = _bash_report_writes(command, cwd)
-        except Exception:  # a command the reader cannot read: refused when it names a report and may write
-            hits = _REPORT_TOKEN.findall(command)[:1] if _SHELL_WRITES.search(command) else []
+        except Exception:  # a command the reader cannot read: the gate decides (provenance)
+            hits = []
+    elif tool_name in WRITE_TOOLS:
+        hits = []
+        for target in targets:
+            if isinstance(target, str) and target:
+                path = os.path.join(cwd, os.path.expanduser(target))
+                if _report_path(path, _TOOL_REPORT_NAME):
+                    hits.append(target)
     else:
         return
     if hits:
@@ -836,6 +1007,19 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
                     "ba-qa-report-*.json, dev-report-*.json): only the producer subagent its dispatch "
                     "declares writes it; the main agent never writes one (CD-6)")
         sys.exit(2)
+
+
+def _observe_reports(data: dict) -> None:
+    """Record this call's caller as the writer of every qa-report changed since the session
+    last looked (lib/report_provenance.py; the e2e gate reads it). Never refuses."""
+    try:
+        from lib import report_provenance
+
+        project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
+        report_provenance.observe(data.get("session_id"), project,
+                                  data.get("agent_id") or report_provenance.MAIN)
+    except Exception:
+        pass
 
 
 def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
@@ -1508,6 +1692,7 @@ def main() -> None:
     if not isinstance(tool_name, str):
         sys.exit(0)
     tool_input = data.get("tool_input") or {}
+    _observe_reports(data)
     role = resolve_agent_type(data)
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
