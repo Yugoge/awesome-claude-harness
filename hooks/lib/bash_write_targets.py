@@ -49,6 +49,8 @@ def _targets(command: str) -> list:
 def _render(t, command: str) -> str:
     if t.path is not None:
         text = t.path
+    elif t.word is None or t.word.value() is not None:
+        return ""  # a target with no word of its own (an operand xargs appends)
     else:
         text = "".join(p.text if p.kind == "lit" else command[p.span[0]:p.span[1]] for p in t.word.parts)
     for name, value in _known().items():
