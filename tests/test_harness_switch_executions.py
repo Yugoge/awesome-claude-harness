@@ -6,7 +6,7 @@ the same real path, inode or content: a copy or a link) is run by a command whos
 it (after env, command, exec, nice, timeout, setsid, xargs, ...), by an interpreter or shell given
 it as its script operand, a process substitution or a command substitution that prints it, or on
 its stdin (`<`, a pipe, a here-string), and by `source` / `.`. A command that only names it
-(sed -n, shellcheck, bash -n, grep, python3 -m py_compile, git log) runs nothing. A command that
+(sed -n, shellcheck, bash -n, grep, git log) runs nothing. A command that
 writes it is still refused.
 
 A nested `claude` starts a session wherever it is the command word, unless its first argument is
@@ -84,7 +84,6 @@ MUST_PASS = [
     "cd ~/.claude/scripts && shellcheck -x harness-switch",
     "env bash -n ~/.claude/hooks/userprompt-harness-switch.sh",
     "sh -n ~/.claude/hooks/userprompt-harness-switch.sh",
-    "python3 -m py_compile ~/.claude/scripts/harness-switch",
     "wc -l ~/.claude/scripts/harness-switch ~/.claude/hooks/userprompt-harness-switch.sh",
     "diff ~/.claude/scripts/harness-switch {O}/sw-copy",
     "cat {O}/sw-copy | head -5",
@@ -255,17 +254,102 @@ PARENT_KEEPS = [
 
 # Proven reads the parent refused: they pass.
 PROVEN_READS = [
+    "vim -R ~/.claude/scripts/harness-switch",
+    "view ~/.claude/scripts/harness-switch",
+    "sed -n 1,5p ~/.claude/scripts/harness-switch ~/.claude/hooks/userprompt-harness-switch.sh | grep -n x | wc -l",
+    "timeout 9 shellcheck ~/.claude/scripts/harness-switch",
+]
+
+
+# Round 3: the proof allow-list holds no interpreter and nothing that writes. A python -m module runs
+# a planted or copied <module>.py (the directory is first on sys.path); pylint and flake8 read rc files
+# and plugin options from the directory; ruff check -o writes; cp plants a copy into ~/.bashrc, a PATH
+# directory or as <module>.py; rg reads abbreviated long options. Each passed on the round-2 head.
+NARROWED = [
+    # formerly proven reads, now the parent's refusal
+    "python3 -m py_compile ~/.claude/scripts/harness-switch",
     "python3 -m py_compile x.py ~/.claude/scripts/harness-switch",
     "python3 -mpy_compile ~/.claude/scripts/harness-switch",
     "pylint ~/.claude/scripts/harness-switch",
     "ruff check ~/.claude/scripts/harness-switch",
-    "vim -R ~/.claude/scripts/harness-switch",
-    "view ~/.claude/scripts/harness-switch",
     "cp ~/.claude/scripts/harness-switch /tmp/backup-switch",
     "cp ~/.claude/scripts/harness-switch /tmp/l34-bak && diff /tmp/l34-bak ~/.claude/scripts/harness-switch",
-    "sed -n 1,5p ~/.claude/scripts/harness-switch ~/.claude/hooks/userprompt-harness-switch.sh | grep -n x | wc -l",
-    "timeout 9 shellcheck ~/.claude/scripts/harness-switch",
+    # 1: a python -m module planted or copied into the directory
+    "printf 'import sys,runpy\\nrunpy.run_path(sys.argv[1])\\n' > py_compile.py; "
+    "python3 -m py_compile ~/.claude/scripts/harness-switch",
+    "cp ~/.claude/scripts/harness-switch {O}/py_compile.py; python3 -m py_compile hook <<< '{\"prompt\": \"/harness off\"}'",
+    "cp ~/.claude/scripts/harness-switch tokenize.py; python3 -m tokenize hook <<< '{\"prompt\": \"/harness off\"}'",
+    "cp ~/.claude/scripts/harness-switch pyclbr.py; python3 -mpyclbr hook < /tmp/p",
+    "python3 -m tokenize ~/.claude/scripts/harness-switch",
+    "python3 -m dis ~/.claude/scripts/harness-switch",
+    "python3 -m pyflakes ~/.claude/scripts/harness-switch",
+    # 2: pylint / flake8 / pyflakes and their rc files, abbreviated or config options
+    "printf '[MAIN]\\ninit-hook=import runpy\\n' > .pylintrc; pylint ~/.claude/scripts/harness-switch",
+    "pylint --rc /tmp/x ~/.claude/scripts/harness-switch",
+    "pylint --init-hoo='import os' ~/.claude/scripts/harness-switch",
+    "pylint --load-plugin=x ~/.claude/scripts/harness-switch",
+    "flake8 --config /tmp/cfg ~/.claude/scripts/harness-switch",
+    "flake8 --append-config=/tmp/cfg ~/.claude/scripts/harness-switch",
+    "pyflakes ~/.claude/scripts/harness-switch",
+    # 3: rg's program options, abbreviated, in a command the proof must cover (a lone rg is the
+    # parent's reader: its --pre check reads the exact spelling alone, a gap this lane leaves)
+    "shellcheck ~/.claude/scripts/harness-switch; rg --hostname-bin ~/.claude/scripts/harness-switch x /tmp",
+    "shellcheck ~/.claude/scripts/harness-switch; rg --hostname-b=~/.claude/scripts/harness-switch x /tmp",
+    "shellcheck ~/.claude/scripts/harness-switch; rg --pr ~/.claude/scripts/harness-switch x /tmp",
+    "shellcheck ~/.claude/scripts/harness-switch; rg --pr=~/.claude/scripts/harness-switch x /tmp",
+    "shellcheck ~/.claude/scripts/harness-switch; rg --pre-g '*' x ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch; rg --hyperlink-f=x y ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch; rg --no-such-option y ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch; rg -z x ~/.claude/scripts/harness-switch",
+    # 4: cp planting a copy where a shell, PATH or python finds it
+    "cp ~/.claude/scripts/harness-switch ~/.bashrc",
+    "cp ~/.claude/scripts/harness-switch ~/.local/bin/python3",
+    "cp ~/.claude/scripts/harness-switch {O}/sitecustomize.py; python3 -c 1",
+    "cp ~/.claude/scripts/harness-switch ~/.local/bin/sw; sw off",
+    "cp -l ~/.claude/scripts/harness-switch /tmp/q",
+    "cp -s ~/.claude/scripts/harness-switch /tmp/q",
+    "cp ~/.claude/scripts/harness-switch ~/.claude/scripts/harness-switch.bak",
+    # 5: a reader writing a file, the ruff and git writes
+    "ruff check -o /tmp/q ~/.claude/scripts/harness-switch",
+    "ruff check --output-file=/tmp/q ~/.claude/scripts/harness-switch",
+    "sed -n 1p ~/.claude/scripts/harness-switch > /tmp/q; grep -n x ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch | tee /tmp/q",
+    "git diff --no-index --output=/tmp/q ~/.claude/scripts/harness-switch /dev/null",
+    "shellcheck ~/.claude/scripts/harness-switch; git diff --no-index --out=/tmp/q ~/.claude/scripts/harness-switch /dev/null",
+    "shellcheck ~/.claude/scripts/harness-switch; git log -p --ext -- ~/.claude/scripts/harness-switch",
+    "vi -R ~/.claude/scripts/harness-switch",
+    "nvim -R ~/.claude/scripts/harness-switch",
+    "zsh -n ~/.claude/hooks/userprompt-harness-switch.sh",
 ]
+
+# Still proven reads after the narrowing.
+STILL_PROVEN = [
+    "rg -n --hidden --glob '*.sh' harness ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch 2>&1 | head -5",
+    "sed -n 1p ~/.claude/scripts/harness-switch 2>/dev/null",
+    "bash -n ~/.claude/hooks/userprompt-harness-switch.sh < /dev/null",
+    "less -R ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch; rg -n --hidden x ~/.claude/scripts/harness-switch",
+    "shellcheck ~/.claude/scripts/harness-switch; git log --oneline -- ~/.claude/scripts/harness-switch",
+]
+
+
+@pytest.mark.parametrize("command", NARROWED)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_narrowed_allow_list_refuses(box, command, actor):
+    command = fill(box, command)
+    for cwd in (box["other"], box["h"]):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", STILL_PROVEN)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_kept_reader_still_passes(box, command, actor):
+    command = fill(box, command)
+    for cwd in (box["other"], box["h"], box["home"]):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 0 and "harness-switch:" not in err, (command, cwd, err)
 
 
 @pytest.mark.parametrize("command", RUNS_THE_SWITCH + PARENT_KEEPS)

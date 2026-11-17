@@ -470,9 +470,21 @@ def _writes_switch(words: list, written: list) -> bool:
 
 
 PROOF_READERS = frozenset({"cat", "head", "tail", "wc", "ls", "stat", "file", "md5sum", "sha1sum", "sha256sum",
-                           "sha512sum", "cksum", "shellcheck", "diff", "cmp", "nl", "od", "grep", "egrep", "fgrep",
-                           "rg", "realpath", "readlink", "basename", "dirname", "pyflakes", "flake8"})
-PROOF_PY_MODULES = PY_READERS + ("pyflakes",)
+                           "sha512sum", "cksum", "diff", "cmp", "nl", "od", "grep", "egrep", "fgrep",
+                           "shellcheck"})  # no interpreter: a python -m module, pylint, flake8, ruff or cp runs or
+# plants code (cwd first on sys.path, cwd rc files, a copy into a PATH dir or as <module>.py)
+RG_LONG = frozenset(("after-context", "before-context", "binary", "byte-offset", "case-sensitive", "color", "colors",
+                     "column", "context", "count", "count-matches", "crlf", "files", "files-with-matches",
+                     "files-without-match", "fixed-strings", "follow", "glob", "heading", "hidden", "iglob",
+                     "ignore-case", "invert-match", "line-number", "line-regexp", "max-columns", "max-count",
+                     "max-depth", "multiline", "multiline-dotall", "no-filename", "no-heading", "no-ignore",
+                     "no-line-number", "no-messages", "null", "only-matching", "passthru", "quiet", "regexp",
+                     "smart-case", "sort", "sortr", "stats", "text", "trim", "type", "type-not", "unrestricted",
+                     "with-filename", "word-regexp", "vimgrep", "json", "fixed-strings"))  # rg's long options
+# that run nothing: any other, an abbreviation of --pre / --pre-glob / --hostname-bin / --hyperlink-format
+# included, is no proof
+GIT_PROOF_BANNED = ("--ext-diff", "--textconv", "--open-files-in-pager", "--output", "--output-directory", "--exec",
+                    "--upload-pack", "--receive-pack", "--config-env", "--paginate")  # or an abbreviation of one
 PROOF_BANNED = frozenset({"export", "declare", "typeset", "local", "readonly", "set", "alias", "read", "mapfile",
                           "readarray", "enable"}) | TEXT_RUNNERS  # set or export a variable, or run text
 PROOF_SINKS = ("/dev/null", "/dev/stdout", "/dev/stderr")
@@ -494,40 +506,35 @@ def _proof_reader(res, env: dict) -> bool:
     args = [_text(w, env) for w in res.args]
     plain = [name] + args
     if name in PROOF_READERS:
-        return not (name == "rg" and any(a.startswith("--pre") for a in args))
-    if name == "find":
-        return not any(READER_OUTPUT["find"].match(a) for a in args)
+        return True
+    if name == "rg":
+        for a in args:
+            if a == "--":
+                break
+            if a.startswith("--"):
+                if a[2:].split("=", 1)[0] not in RG_LONG:
+                    return False
+            elif a.startswith("-") and not re.fullmatch(r"-[A-Za-y0-9]+", a):
+                return False  # -z runs decompressors
+        return True
     if name in ("less", "more"):
         return all(re.fullmatch(r"-[A-Za-z]+", a) and not re.search("[oOk]", a) or not a.startswith(("-", "+"))
                    for a in args)
-    if name in ("vim", "view", "vi", "nvim"):
-        return (name == "view" or "-R" in args) and all(a == "-R" or not a.startswith(("-", "+")) for a in args)
+    if name in ("vim", "view"):
+        return (name == "view" or args.count("-R") == 1) and all(
+            a == "-R" or not a.startswith(("-", "+")) for a in args)
     if name == "sed":
         return _sed(plain) == []
     if name in AWKS:
         program = _awk(plain)
         return program is not None and not AWK_OUTPUT.search(program) and "getline" not in program
     if name == "git":
-        return _read_only(plain) and not any(a.startswith(("--ext-diff", "--textconv", "-O", "--open")) for a in args)
-    if name == "cp":
-        return len([a for a in args if not a.startswith("-")]) >= 2 and all(
-            re.fullmatch(r"-[afpvLnHPRrdi]+|--", a) or not a.startswith("-") for a in args)
-    if name == "pylint":
-        return not any(a.startswith(("--init-hook", "--load-plugins", "--rcfile")) for a in args)
-    if name == "ruff":
-        return args[:1] == ["check"] and not any(a.startswith(("--fix", "--unsafe", "--add-noqa", "--watch"))
-                                                 for a in args)
+        return _read_only(plain) and not any(
+            a.startswith(("-O", "-c")) or a.startswith("--") and len(a.split("=", 1)[0]) > 3 and any(
+                b.startswith(a.split("=", 1)[0]) for b in GIT_PROOF_BANNED) for a in args)
     kind = _kind(name)
     if kind == "shell":
-        return len(args) == 2 and args[0] == "-n" and not args[1].startswith(("-", "+"))
-    if kind == "python":
-        if args[:1] == ["-m"] and len(args) > 1:
-            module, rest = args[1], args[2:]
-        elif args[:1] and args[0].startswith("-m") and len(args[0]) > 2:
-            module, rest = args[0][2:], args[1:]
-        else:
-            return False
-        return module in PROOF_PY_MODULES and not any(a.startswith("-") for a in rest)
+        return name in ("bash", "sh") and len(args) == 2 and args[0] == "-n" and not args[1].startswith(("-", "+"))
     return False
 
 
@@ -536,15 +543,13 @@ def _harmless_read(script, dirs: list, ident: list) -> bool:
     which names it (by text, real path, inode or content), names a file the command writes, or is
     computed, is a reader on an allow-list (_proof_reader), as is every pipeline stage fed by such a
     command; no command sets or exports a variable, runs text (xargs, eval, source, exec, find -exec,
-    ...), or runs an interpreter or shell other than a reader's form (`bash -n F`, `python3 -m
-    py_compile F`); a copy or link the command makes is used by readers alone."""
+    ...), runs an interpreter or shell other than `bash -n F` / `sh -n F`, or writes a file (a
+    redirect or tee to anything but /dev/null, /dev/stdout, /dev/stderr), so no copy is made."""
     env = dict(os.environ)
     written = []
     for t in shell_parse.write_targets(script):
-        if t.word is None or t.path is None:
-            return False
-        if t.path not in PROOF_SINKS:
-            written.append(os.path.basename(t.path.rstrip("/")) or t.path)
+        if t.word is None or t.path not in PROOF_SINKS:
+            return False  # a reader writes nothing but /dev/null and its own stdout / stderr
 
     def mentions(text: str) -> bool:
         flat = re.sub(r"[\\'\"]", "", text)
