@@ -174,3 +174,126 @@ def test_the_one_writer_still_sets_the_flag_outside_bash(sandbox, tmp_path):
     finally:
         if flag.exists():
             flag.unlink()
+
+
+# Bypasses the first allow-list missed: a program that is not a read-only shape runs where the flag is named (its
+# name in a here-string, a heredoc, a piped stdin or an argument with whitespace), a wrapper option mistaken for the
+# command, the name saved to a file, and a computed name in the state directory.
+BYPASS_REFUSED = [
+    "m4 <<< 'syscmd(echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag)'",
+    "m4 <<'E'\nsyscmd(echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag)\nE",
+    "cat <<'E' | m4\nsyscmd(echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag)\nE",
+    "echo 'syscmd(echo true > <F>)' | m4",
+    "m4 /dev/stdin <<< 'syscmd(echo true > <F>)'",
+    "strace -o /dev/null sh -c 'echo true > <F>'",
+    "strace -f -o /dev/null sh -c 'echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag'",
+    "bwrap --bind / / sh -c 'echo true > $CLAUDE_STATE_DIR/claude-orchestrator-consent-x.flag'",
+    """jshell <<< 'java.nio.file.Files.writeString(java.nio.file.Path.of("<F>"), "true")'""",
+    """psql -c '\\o <F>' -c "select 'true'" """,
+    """sqlite3 /tmp/db ".output <F>" "select 'true'" """,
+    "openssl enc -base64 -d -out '<F> ' <<< dHJ1ZQo=",
+    "tar -cf /tmp/a.tar --transform 's/x\\| q/claude-orchestrator-consent-x.flag/' x",
+    "tar -C $CLAUDE_STATE_DIR -xf /tmp/a.tar",
+    "tar -C <S> -xf /tmp/a.tar",
+    "unzip -o /tmp/z.zip -d $CLAUDE_STATE_DIR",
+    "printf '@ x\\n@=claude-orchestrator-consent-x.flag\\n' | zipnote -w /tmp/z.zip",
+    "git -C /tmp/r --work-tree=<S> checkout HEAD -- .",
+    "mv -T /tmp/fakestate <S>",
+    # the name written into a file, then used as a computed target in the state directory
+    "echo claude-orchestrator-consent-x.flag > /tmp/n",
+    "printf %s claude-orchestrator-consent-x.flag > /tmp/n",
+    "echo claude-orchestrator-consent-x.flag | tee /tmp/n",
+    "cat <<E > /tmp/n\nclaude-orchestrator-consent-x.flag\nE",
+    'cd $CLAUDE_STATE_DIR && echo true > "$(cat /tmp/n)"',
+    "cd $CLAUDE_STATE_DIR && echo true > $(< /tmp/n)",
+    'cd $CLAUDE_STATE_DIR && touch -- "$(cat /tmp/n)"',
+    'cd $CLAUDE_STATE_DIR && tee "$(cat /tmp/n)" <<< true',
+    'cd <S> && cp /tmp/t "$(cat /tmp/n)"',
+    'echo true > "$CLAUDE_STATE_DIR/$(cat /tmp/n)"',
+    # names built at run time by xargs, aimed at the state directory
+    "cat /tmp/n | xargs -I% touch $CLAUDE_STATE_DIR/%",
+    "cd $CLAUDE_STATE_DIR && xargs touch < /tmp/n",
+]
+# The same through xargs' own stdin and find -exec: the protected-runtime guard, which runs first, refuses these
+# through the hook, so the rule is checked on its own.
+RUNTIME_NAMES_REFUSED = [
+    "xargs -I{} touch $CLAUDE_STATE_DIR/{} < /tmp/n",
+    "find /tmp/staged -name 'c*' -exec ln -s {} $CLAUDE_STATE_DIR/ \\;",
+]
+# Harmless commands the first allow-list refused: copies and loops nowhere near the state directory, $TMPDIR when the
+# state directory is elsewhere, the flag's name in a comment, a commit message or a search, and read-only reads.
+OVERBLOCK_PASSES = [
+    "cp dist/* public/",
+    "cp * /srv/backup/",
+    'for f in src/*.c; do cp "$f" out/; done',
+    'dest=/tmp/out; for f in *.txt; do cp "$f" "$dest/"; done',
+    'out=build; for f in a b; do echo x > "$out/$f"; done',
+    'echo x > "$TMPDIR/$name"',
+    'cp "$src" "$TMPDIR/"',
+    "git log -S claude-orchestrator-consent-",
+    "git grep orchestrator-consent",
+    "git diff -- hooks/lib/allowlist.py # orchestrator-consent",
+    "python3 -c 'print(1)' # orchestrator-consent",
+    "git commit -m 'docs: mention claude-orchestrator-consent flag'",
+    "cat <F> | tee /tmp/copy",
+    "sed -n p <F>",
+    "awk 1 <F>",
+    "sort -o out.txt claude-orchestrator-consent-notes.txt",
+]
+# With the call's own cwd the state directory: a glob matches existing names only, so it cannot create the flag.
+IN_STATE_CWD_PASSES = ["echo > c*", "cp a.txt b.txt *", "sort -o out.txt claude-orchestrator-consent-notes.txt"]
+# ... while a computed name there can be anything, the flag's included.
+IN_STATE_CWD_REFUSED = ['echo true > "$(cat /tmp/n)"', 'f=$(cat /tmp/n); touch "$f"']
+
+
+def run_in(sandbox, command, cwd):
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": SID, "cwd": cwd,
+               "hook_event_name": "PreToolUse"}
+    return subprocess.run(["bash", str(SAFETY)], input=json.dumps(payload), capture_output=True, text=True,
+                          env=sandbox["env"], cwd=cwd, timeout=120)
+
+
+@pytest.mark.parametrize("command", BYPASS_REFUSED)
+def test_a_bypass_of_the_first_rule_is_refused(sandbox, command):
+    proc = run(sandbox, fill(sandbox, command))
+    assert proc.returncode == 2 and RULE in proc.stderr, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", OVERBLOCK_PASSES)
+def test_a_harmless_command_the_first_rule_refused_passes(sandbox, command):
+    proc = run(sandbox, fill(sandbox, command))
+    assert proc.returncode == 0, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", IN_STATE_CWD_PASSES)
+def test_a_glob_with_the_state_directory_as_cwd_passes(sandbox, command):
+    proc = run_in(sandbox, fill(sandbox, command), sandbox["state"])
+    assert proc.returncode == 0, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", IN_STATE_CWD_REFUSED)
+def test_a_computed_name_with_the_state_directory_as_cwd_is_refused(sandbox, command):
+    proc = run_in(sandbox, fill(sandbox, command), sandbox["state"])
+    assert proc.returncode == 2 and RULE in proc.stderr, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("command", RUNTIME_NAMES_REFUSED)
+def test_names_built_at_run_time_in_the_state_directory_are_refused(command):
+    from lib import bash_safety_rules as rules
+    assert rules.consent_flag_verdict(command, "/srv/repo", "/srv/state") is not None
+
+
+def test_tmpdir_is_the_state_directory_only_when_the_state_directory_is_tmp():
+    """A pure call (no hook, no file read): $TMPDIR and /tmp count only for the default /tmp state root."""
+    from lib import bash_safety_rules as rules
+    command = 'echo x > "$TMPDIR/$name"'
+    assert rules.consent_flag_verdict(command, "/srv/repo", "/srv/state") is None
+    assert rules.consent_flag_verdict(command, "/srv/repo", "/tmp") is not None
+    assert rules.consent_flag_verdict('cd /tmp && echo x > "$f"', "/srv/repo", "/tmp") is not None
+
+
+def test_the_rule_reads_the_flag_name_from_its_reader():
+    from lib import allowlist, bash_safety_rules as rules
+    assert rules.CONSENT_PREFIX == allowlist.DO_CONSENT_FLAG_PREFIX
+    assert rules.CONSENT_SUFFIX == allowlist.DO_CONSENT_FLAG_SUFFIX
+    assert rules.CONSENT_TOKEN in allowlist.DO_CONSENT_FLAG_PREFIX
