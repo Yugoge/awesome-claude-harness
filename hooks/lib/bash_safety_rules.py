@@ -848,34 +848,62 @@ def _subcommands(command):
     return command.replace("&&", "\n").replace("||", "\n").replace(";", "\n").split("\n")
 
 
-SENSITIVE_NAME = re.compile(r"\.env|credentials|secret|password")
+# The write mechanisms of lib/shell_parse.write_targets that put bytes into the named file: a redirection, tee,
+# a cp, mv, install, rsync or ln destination, dd of=, curl -o, wget -O, sed -i, truncate. Removal and the mode,
+# owner and ACL verbs neither read nor write a secret's bytes, so they are not this rule's.
+_SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd", "curl", "wget", "sed", "truncate"})
+# The verbs that write what they read into another file: a listed name among their operands is a secret read
+# into a file, as an argument of a command whose output is redirected into one is.
+_SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
+
+
+def _word_text(w):
+    v = w.value()
+    return v if v is not None else w.text
+
+
+def _command_name(cmd):
+    try:
+        from lib.shell_parse import resolve
+        return resolve(cmd).name
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def sensitive_redirect(command):
-    """'write' when a command redirects its output into a file named like a secret, 'redirect' when a command that
-    names such a file (an argument or an input redirection) writes its output to a file; None otherwise.
+    """'write' when a command writes a file whose name lib/sensitive_names.py lists (a redirection into it, or
+    tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming it), 'redirect' when a
+    listed file is an argument or input redirection of a command whose output goes to a file, or an operand of
+    cp, mv, install, rsync or ln; None otherwise.
 
-    Read from lib/shell_parse.py's commands, so a name inside quoted data is not a redirection. A command the parser
-    cannot read is judged on its raw text.
+    Names are matched exactly, by base name, against lib/shell_parse.py's parsed write targets and command words,
+    payloads included (eval, bash -c, a heredoc-fed shell), so a name inside quoted data or a heredoc body is no
+    redirection and `test_password_reset.py` is no password file. A command the parser cannot read is judged on
+    its raw text by substring, so it is refused more, never less.
     """
+    from lib.sensitive_names import RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_sensitive_name
     try:
-        from lib.shell_parse import parse, walk
+        from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
+        for t in write_targets(script, into=_DEFAULT_INTO):
+            text = t.path if t.path is not None else (_word_text(t.word) if t.word is not None else "")
+            writer = t.mechanism.startswith("redirect") or t.mechanism.split("-", 1)[0] in _SENSITIVE_WRITERS
+            if writer and t.mode != "delete" and is_sensitive_name(text):
+                return "write"
         for site in walk(script):
             redirs = [r for r in site.cmd.redirects if r.target is not None]
-            outputs = [r for r in redirs if r.writes()]
-            if any(SENSITIVE_NAME.search(r.target.text) for r in outputs):
-                return "write"
-            if outputs and (any(SENSITIVE_NAME.search(w.text) for w in site.cmd.words[1:])
-                            or any(SENSITIVE_NAME.search(r.target.text) for r in redirs if not r.writes())):
+            if not any(r.writes() for r in redirs) and _command_name(site.cmd) not in _SENSITIVE_COPIERS:
+                continue
+            if any(is_sensitive_name(_word_text(w)) for w in site.cmd.words[1:]) \
+                    or any(is_sensitive_name(_word_text(r.target)) for r in redirs if not r.writes()):
                 return "redirect"
         return None
     except Exception:  # noqa: BLE001
-        if grep(r"(>|>>)\s*\S*(\.env|credentials|secret|password)", command):
+        if grep(RAW_FALLBACK_WRITE, command):
             return "write"
-        if grep(r"(\.env|credentials|secret|password)\S*\s*(>|>>)", command):
+        if grep(RAW_FALLBACK_READ, command):
             return "redirect"
         return None
 
