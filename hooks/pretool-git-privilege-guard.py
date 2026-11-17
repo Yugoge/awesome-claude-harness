@@ -1530,6 +1530,12 @@ def _flat_text(command):
     return flat
 
 
+def _is_refmap(name):
+    """True for `--refmap` or a prefix of it git takes as it (`--refm`; `--ref`
+    is ambiguous with --refetch)."""
+    return len(name) >= 6 and '--refmap'.startswith(name)
+
+
 def _refspec_words(inv):
     """The words of parsed fetch or pull `inv` that git reads as refspecs, as
     written (quotes and backslashes dropped): each operand after the
@@ -1548,14 +1554,19 @@ def _refspec_words(inv):
             if not many:
                 out += rest if operands else rest[1:]
             break
-        if v is not None and v.startswith('-') and v != '-':
-            name, eq, val = v.partition('=')
-            if name == '--refmap':
+        opt = v if v is not None else words[k]  # `--refm="...$D"`: an option still
+        if opt.startswith('-') and opt != '-':
+            name, eq, val = opt.partition('=')
+            if v is None:
+                val = words[k].partition('=')[2]
+            if _is_refmap(name):
                 if eq:
                     out.append(val)
                 elif k + 1 < len(words):
                     out.append(words[k + 1])
-            if name in _FETCH_VALUE_OPTS and not eq:
+            if not eq and (_is_refmap(name) or name in _FETCH_VALUE_OPTS or (
+                    name.startswith('--') and len(name) > 3
+                    and any(o.startswith(name) for o in _FETCH_VALUE_OPTS))):
                 k += 1
         else:
             if operands and not many:

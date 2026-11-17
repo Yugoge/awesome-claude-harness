@@ -113,6 +113,11 @@ REFUSED = [
     "git fetch origin master:refs/$(echo checkpoints)/x",
     "git fetch origin --refmap \"+refs/heads/*:$MAP\" master",
     "git -c \"remote.origin.fetch=+refs/heads/*:$MAP\" fetch origin",
+    # an abbreviation git takes for --refmap (verifier round 3)
+    'git fetch --refm="refs/heads/*:$D/*" origin master',
+    "git fetch --refm 'refs/heads/*:$D/*' origin master",
+    "git fetch --refma=+refs/heads/*:refs/checkpoints/* origin master",
+    "git fetch origin master --refm +refs/heads/*:refs/checkpoints/*",
 ]
 
 PASSES = [
