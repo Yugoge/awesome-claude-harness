@@ -19,9 +19,12 @@ Four readings, each with the inputs that must still be refused:
     command of the line is inert (cat, head, tail, wc, ls, echo, printf,
     test, true, false, mkdir, pwd, grep/rg as text owners), standing alone
     and writing nothing (an output redirection only to /dev/null or another
-    descriptor), and the file is no shell startup file, Makefile, `.envrc`,
-    git config (`.gitconfig`, `~/.config/git/`) or file under `.git/`,
-    `.husky/` or `.githooks/`, every path component compared in any case.
+    descriptor; not `printf -v`), the file may land as data (no hidden
+    component or `..`, not under `~`, no `hooks` component, absolute only
+    under /tmp or /var/tmp, not a Makefile or gitconfig, in any case), and
+    the here-document is the tool command's own: nested in a `-c` string, an
+    eval or program-option string, a substitution or a process substitution
+    it is code.
     Any other command keeps it code (`... && sh < x.sh`, `make`, `cd .git`,
     `git status`, which may run what a config names). Fed to
     bash, sh, ssh, `python3 -`, `source /dev/stdin`, a group, a compound
@@ -266,6 +269,49 @@ VERIFIER_L10_L11 = [
     "cat > x.sh <<'EOF' && echo '[core] fsmonitor = sh x.sh' >> .git/config && git status\ngit push origin master\nEOF",
 ]
 
+# The verifier's l12/l13 inputs that base refuses: a written here-document
+# nested in a `-c` string or a substitution (code at any depth but the tool
+# command's own), `printf -v`, and destinations outside the closed set
+# (hidden, home, `hooks`, absolute outside /tmp).
+VERIFIER_L12_L13 = [
+    "bash -c $'cat > x.sh <<EOF\\ngit push origin master\\nEOF' && sh x.sh",
+    'bash -c "cat > x.sh <<\'EOF\'\ngit push origin master\nEOF" && sh x.sh',
+    "sh -c 'cat > x.sh <<EOF\ngit push origin master\nEOF\n' ; sh x.sh",
+    'echo "$(cat > x.sh <<\'EOF\'\ngit push origin master\nEOF\n)"; sh x.sh',
+    'printf \'%s\' "$(cat > x.sh <<\'EOF\'\ngit push origin master\nEOF\n)" && sh x.sh',
+    'git commit -m "$(cat > x.sh <<\'EOF\'\ngit push origin master\nEOF\n)" ; sh x.sh',
+    "echo `cat > x.sh <<'EOF'\ngit push origin master\nEOF\n`; sh x.sh",
+    "cat >(cat > x.sh <<'EOF'\ngit push origin master\nEOF\n) ; sh x.sh",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\ncat x.sh >/dev/fd/1",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\ncat x.sh >&3 3>.git/hooks/pre-commit",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\ncat x.sh >& .git/hooks/pre-commit",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\ncat x.sh 1<>.git/hooks/pre-commit",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\ncat x.sh >/proc/self/fd/1",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nLS_COLORS=x ls",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf -v BASH_ENV x.sh",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf -v PATH .",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nalias echo=sh; echo x.sh",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\necho() { sh x.sh; }; echo",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nenable -n echo; echo x.sh",
+    "cat > echo <<'EOF'\ngit push origin master\nEOF\necho hi",
+    "cat > ./bin/cat <<'EOF'\ngit push origin master\nEOF\nPATH=./bin cat",
+    "cat > /dev/fd/3 3>x.sh <<'EOF'\ngit push origin master\nEOF\ncat x.sh",
+    "cat > /proc/self/fd/1 <<'EOF'\ngit push origin master\nEOF\ntrue",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nrg -n 'a' --pre ./x.sh",
+    "cat > x.rc <<'EOF'\ngit push origin master\nEOF\nRIPGREP_CONFIG_PATH=x.rc rg a",
+    "cat > ~/.ssh/rc <<'EOF'\ngit push origin master\nEOF",
+    "cat > ~/.config/fish/config.fish <<'EOF'\ngit push origin master\nEOF",
+    "cat > .vscode/tasks.json <<'EOF'\ngit push origin master\nEOF",
+    "cat > .claude/settings.json <<'EOF'\ngit push origin master\nEOF",
+    "cat > ~/.claude/settings.json <<'EOF'\ngit push origin master\nEOF",
+    "cat > .pre-commit-config.yaml <<'EOF'\ngit push origin master\nEOF",
+    "cat > .GiT/HoOkS/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cat > ~/.CONFIG/Git/config <<'EOF'\ngit push origin master\nEOF",
+    "cat > ~/.config/git/attributes <<'EOF'\ngit push origin master\nEOF",
+    "cat > .git/../.git/hooks/x <<'EOF'\ngit push origin master\nEOF",
+    "cat > g/hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+]
+
 # Allowed at base too, closed on the way.
 BASE_GAPS = [
     "git grep -O\"sh -c 'git push origin master'\" foo",
@@ -277,7 +323,7 @@ BASE_GAPS = [
     "cat <<< 'git push origin master' | sh",
 ]
 
-MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + VERIFIER_L10_L11 + BASE_GAPS
+MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + VERIFIER_L10_L11 + VERIFIER_L12_L13 + BASE_GAPS
 
 # less with LESSOPEN runs any body; each is a git invocation the guard reads.
 LESS_BODIES = ["git reset --hard origin/master", "git branch -D master", "git commit -qam x"]
