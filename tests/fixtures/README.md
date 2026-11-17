@@ -2,8 +2,8 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 4
-- **Subdirectories**: 1
+- **Total files**: 5
+- **Subdirectories**: 2
 - **Naming convention**: lower
 
 ## Files
@@ -12,6 +12,7 @@
 - `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
 
 ## Subdirectories
+- `cli/`
 - `late_repair_golden/`
 <!-- /AUTO:readme-stats -->
 

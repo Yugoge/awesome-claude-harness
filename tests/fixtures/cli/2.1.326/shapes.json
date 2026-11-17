@@ -1,0 +1,1365 @@
+{
+ "stdin:PreToolUse": {
+  "cwd": [
+   "string"
+  ],
+  "effort": [
+   "object"
+  ],
+  "effort.level": [
+   "string"
+  ],
+  "hook_event_name": [
+   "string"
+  ],
+  "permission_mode": [
+   "string"
+  ],
+  "prompt_id": [
+   "string"
+  ],
+  "scratchpad_dir": [
+   "string"
+  ],
+  "session_id": [
+   "string"
+  ],
+  "tool_input": [
+   "object"
+  ],
+  "tool_input.cron": [
+   "string"
+  ],
+  "tool_input.prompt": [
+   "string"
+  ],
+  "tool_input.recurring": [
+   "boolean"
+  ],
+  "tool_name": [
+   "string"
+  ],
+  "tool_use_id": [
+   "string"
+  ],
+  "transcript_path": [
+   "string"
+  ]
+ },
+ "stdin:SessionStart": {
+  "context_tokens": [
+   "number"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "estimated_cache_write_usd": [
+   "number"
+  ],
+  "hook_event_name": [
+   "string"
+  ],
+  "prompt_cache_likely_expired": [
+   "boolean"
+  ],
+  "scratchpad_dir": [
+   "string"
+  ],
+  "seconds_since_last_response": [
+   "number"
+  ],
+  "session_id": [
+   "string"
+  ],
+  "source": [
+   "string"
+  ],
+  "transcript_path": [
+   "string"
+  ]
+ },
+ "stdin:Stop": {
+  "background_tasks": [
+   "array"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "effort": [
+   "object"
+  ],
+  "effort.level": [
+   "string"
+  ],
+  "hook_event_name": [
+   "string"
+  ],
+  "last_assistant_message": [
+   "string"
+  ],
+  "permission_mode": [
+   "string"
+  ],
+  "prompt_id": [
+   "string"
+  ],
+  "scratchpad_dir": [
+   "string"
+  ],
+  "session_crons": [
+   "array"
+  ],
+  "session_crons[]": [
+   "object"
+  ],
+  "session_crons[].id": [
+   "string"
+  ],
+  "session_crons[].prompt": [
+   "string"
+  ],
+  "session_crons[].recurring": [
+   "boolean"
+  ],
+  "session_crons[].schedule": [
+   "string"
+  ],
+  "session_id": [
+   "string"
+  ],
+  "stop_hook_active": [
+   "boolean"
+  ],
+  "transcript_path": [
+   "string"
+  ]
+ },
+ "stdin:SubagentStart": {
+  "agent_id": [
+   "string"
+  ],
+  "agent_type": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "hook_event_name": [
+   "string"
+  ],
+  "prompt_id": [
+   "string"
+  ],
+  "scratchpad_dir": [
+   "string"
+  ],
+  "session_id": [
+   "string"
+  ],
+  "transcript_path": [
+   "string"
+  ]
+ },
+ "stdin:SubagentStop": {
+  "agent_id": [
+   "string"
+  ],
+  "agent_transcript_path": [
+   "string"
+  ],
+  "agent_type": [
+   "string"
+  ],
+  "background_tasks": [
+   "array"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "effort": [
+   "object"
+  ],
+  "effort.level": [
+   "string"
+  ],
+  "hook_event_name": [
+   "string"
+  ],
+  "last_assistant_message": [
+   "string"
+  ],
+  "permission_mode": [
+   "string"
+  ],
+  "prompt_id": [
+   "string"
+  ],
+  "scratchpad_dir": [
+   "string"
+  ],
+  "session_crons": [
+   "array"
+  ],
+  "session_id": [
+   "string"
+  ],
+  "stop_hook_active": [
+   "boolean"
+  ],
+  "transcript_path": [
+   "string"
+  ]
+ },
+ "stdin:UserPromptSubmit": {
+  "cwd": [
+   "string"
+  ],
+  "hook_event_name": [
+   "string"
+  ],
+  "permission_mode": [
+   "string"
+  ],
+  "prompt": [
+   "string"
+  ],
+  "prompt_id": [
+   "string"
+  ],
+  "scratchpad_dir": [
+   "string"
+  ],
+  "session_id": [
+   "string"
+  ],
+  "transcript_path": [
+   "string"
+  ]
+ },
+ "subagent:assistant": {
+  "agentId": [
+   "string"
+  ],
+  "apiBlockIndex": [
+   "number"
+  ],
+  "attributionAgent": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "effort": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "madeBy": [
+   "string"
+  ],
+  "message": [
+   "object"
+  ],
+  "message.container": [
+   "null"
+  ],
+  "message.content": [
+   "array"
+  ],
+  "message.content[]": [
+   "object"
+  ],
+  "message.content[].caller": [
+   "object"
+  ],
+  "message.content[].id": [
+   "string"
+  ],
+  "message.content[].input": [
+   "object"
+  ],
+  "message.content[].name": [
+   "string"
+  ],
+  "message.content[].text": [
+   "string"
+  ],
+  "message.content[].type": [
+   "string"
+  ],
+  "message.context_management": [
+   "null"
+  ],
+  "message.diagnostics": [
+   "null"
+  ],
+  "message.id": [
+   "string"
+  ],
+  "message.input_transformations": [
+   "array"
+  ],
+  "message.model": [
+   "string"
+  ],
+  "message.role": [
+   "string"
+  ],
+  "message.stop_details": [
+   "null"
+  ],
+  "message.stop_reason": [
+   "string"
+  ],
+  "message.stop_sequence": [
+   "null"
+  ],
+  "message.type": [
+   "string"
+  ],
+  "message.usage": [
+   "object"
+  ],
+  "message.usage.cache_creation": [
+   "object"
+  ],
+  "message.usage.cache_creation_input_tokens": [
+   "number"
+  ],
+  "message.usage.cache_read_input_tokens": [
+   "number"
+  ],
+  "message.usage.fallback_credit": [
+   "null"
+  ],
+  "message.usage.inference_geo": [
+   "string"
+  ],
+  "message.usage.input_tokens": [
+   "number"
+  ],
+  "message.usage.iterations": [
+   "array"
+  ],
+  "message.usage.output_tokens": [
+   "number"
+  ],
+  "message.usage.output_tokens_details": [
+   "object"
+  ],
+  "message.usage.server_tool_use": [
+   "object"
+  ],
+  "message.usage.service_tier": [
+   "string"
+  ],
+  "message.usage.speed": [
+   "string"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "perTurnEffort": [
+   "string"
+  ],
+  "promptCacheRequested": [
+   "string"
+  ],
+  "requestId": [
+   "string"
+  ],
+  "requestedModel": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "toolInputStreamMs": [
+   "number"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ],
+  "wireToolInputs": [
+   "object"
+  ],
+  "wireToolInputs.<ID>": [
+   "object"
+  ],
+  "wireToolInputs.<ID>.command": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.description": [
+   "string"
+  ]
+ },
+ "subagent:attachment/hook_additional_context": {
+  "agentId": [
+   "string"
+  ],
+  "attachment": [
+   "object"
+  ],
+  "attachment.content": [
+   "array"
+  ],
+  "attachment.content[]": [
+   "string"
+  ],
+  "attachment.hookEvent": [
+   "string"
+  ],
+  "attachment.hookName": [
+   "string"
+  ],
+  "attachment.toolUseID": [
+   "string"
+  ],
+  "attachment.type": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "rendered": [
+   "array"
+  ],
+  "renderedRole": [
+   "string"
+  ],
+  "rendered[]": [
+   "object"
+  ],
+  "rendered[].content": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "subagent:attachment/hook_success": {
+  "agentId": [
+   "string"
+  ],
+  "attachment": [
+   "object"
+  ],
+  "attachment.command": [
+   "string"
+  ],
+  "attachment.content": [
+   "string"
+  ],
+  "attachment.durationMs": [
+   "number"
+  ],
+  "attachment.exitCode": [
+   "number"
+  ],
+  "attachment.hookEvent": [
+   "string"
+  ],
+  "attachment.hookName": [
+   "string"
+  ],
+  "attachment.stderr": [
+   "string"
+  ],
+  "attachment.stdout": [
+   "string"
+  ],
+  "attachment.toolUseID": [
+   "string"
+  ],
+  "attachment.type": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "subagent:user": {
+  "agentId": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "message": [
+   "object"
+  ],
+  "message.content": [
+   "array",
+   "string"
+  ],
+  "message.content[]": [
+   "object"
+  ],
+  "message.content[].content": [
+   "string"
+  ],
+  "message.content[].is_error": [
+   "boolean"
+  ],
+  "message.content[].tool_use_id": [
+   "string"
+  ],
+  "message.content[].type": [
+   "string"
+  ],
+  "message.role": [
+   "string"
+  ],
+  "parentUuid": [
+   "null",
+   "string"
+  ],
+  "permissionDecision": [
+   "object"
+  ],
+  "permissionDecision.decision": [
+   "string"
+  ],
+  "permissionDecision.reasonType": [
+   "string"
+  ],
+  "permissionDecision.ruleSource": [
+   "string"
+  ],
+  "permissionDecision.source": [
+   "string"
+  ],
+  "promptId": [
+   "string"
+  ],
+  "sandboxed": [
+   "boolean"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "sourceToolAssistantUUID": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "transcript:assistant": {
+  "apiBlockIndex": [
+   "number"
+  ],
+  "attributionSkill": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "effort": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "madeBy": [
+   "string"
+  ],
+  "message": [
+   "object"
+  ],
+  "message.container": [
+   "null"
+  ],
+  "message.content": [
+   "array"
+  ],
+  "message.content[]": [
+   "object"
+  ],
+  "message.content[].caller": [
+   "object"
+  ],
+  "message.content[].id": [
+   "string"
+  ],
+  "message.content[].input": [
+   "object"
+  ],
+  "message.content[].name": [
+   "string"
+  ],
+  "message.content[].text": [
+   "string"
+  ],
+  "message.content[].type": [
+   "string"
+  ],
+  "message.context_management": [
+   "null"
+  ],
+  "message.diagnostics": [
+   "null"
+  ],
+  "message.id": [
+   "string"
+  ],
+  "message.input_transformations": [
+   "array"
+  ],
+  "message.model": [
+   "string"
+  ],
+  "message.role": [
+   "string"
+  ],
+  "message.stop_details": [
+   "null"
+  ],
+  "message.stop_reason": [
+   "string"
+  ],
+  "message.stop_sequence": [
+   "null"
+  ],
+  "message.type": [
+   "string"
+  ],
+  "message.usage": [
+   "object"
+  ],
+  "message.usage.cache_creation": [
+   "object"
+  ],
+  "message.usage.cache_creation_input_tokens": [
+   "number"
+  ],
+  "message.usage.cache_read_input_tokens": [
+   "number"
+  ],
+  "message.usage.fallback_credit": [
+   "null"
+  ],
+  "message.usage.inference_geo": [
+   "string"
+  ],
+  "message.usage.input_tokens": [
+   "number"
+  ],
+  "message.usage.iterations": [
+   "array"
+  ],
+  "message.usage.output_tokens": [
+   "number"
+  ],
+  "message.usage.output_tokens_details": [
+   "object"
+  ],
+  "message.usage.server_tool_use": [
+   "object"
+  ],
+  "message.usage.service_tier": [
+   "string"
+  ],
+  "message.usage.speed": [
+   "string"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "perTurnEffort": [
+   "string"
+  ],
+  "promptCacheRequested": [
+   "string"
+  ],
+  "requestId": [
+   "string"
+  ],
+  "requestedModel": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "toolInputStreamMs": [
+   "number"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ],
+  "wireToolInputs": [
+   "object"
+  ],
+  "wireToolInputs.<ID>": [
+   "object"
+  ],
+  "wireToolInputs.<ID>.command": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.cron": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.description": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.max_results": [
+   "number"
+  ],
+  "wireToolInputs.<ID>.prompt": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.query": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.recurring": [
+   "boolean"
+  ],
+  "wireToolInputs.<ID>.run_in_background": [
+   "boolean"
+  ],
+  "wireToolInputs.<ID>.skill": [
+   "string"
+  ],
+  "wireToolInputs.<ID>.subagent_type": [
+   "string"
+  ]
+ },
+ "transcript:attachment/hook_additional_context": {
+  "attachment": [
+   "object"
+  ],
+  "attachment.content": [
+   "array"
+  ],
+  "attachment.content[]": [
+   "string"
+  ],
+  "attachment.hookEvent": [
+   "string"
+  ],
+  "attachment.hookName": [
+   "string"
+  ],
+  "attachment.toolUseID": [
+   "string"
+  ],
+  "attachment.type": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "rendered": [
+   "array"
+  ],
+  "renderedRole": [
+   "string"
+  ],
+  "rendered[]": [
+   "object"
+  ],
+  "rendered[].content": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "transcript:attachment/hook_success": {
+  "attachment": [
+   "object"
+  ],
+  "attachment.command": [
+   "string"
+  ],
+  "attachment.content": [
+   "string"
+  ],
+  "attachment.durationMs": [
+   "number"
+  ],
+  "attachment.exitCode": [
+   "number"
+  ],
+  "attachment.hookEvent": [
+   "string"
+  ],
+  "attachment.hookName": [
+   "string"
+  ],
+  "attachment.stderr": [
+   "string"
+  ],
+  "attachment.stdout": [
+   "string"
+  ],
+  "attachment.toolUseID": [
+   "string"
+  ],
+  "attachment.type": [
+   "string"
+  ],
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "rendered": [
+   "array"
+  ],
+  "renderedRole": [
+   "string"
+  ],
+  "rendered[]": [
+   "object"
+  ],
+  "rendered[].content": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "transcript:queue-operation": {
+  "content": [
+   "string"
+  ],
+  "operation": [
+   "string"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ]
+ },
+ "transcript:system/stop_hook_summary": {
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "hasOutput": [
+   "boolean"
+  ],
+  "hookAdditionalContext": [
+   "array"
+  ],
+  "hookCount": [
+   "number"
+  ],
+  "hookErrors": [
+   "array"
+  ],
+  "hookInfos": [
+   "array"
+  ],
+  "hookInfos[]": [
+   "object"
+  ],
+  "hookInfos[].command": [
+   "string"
+  ],
+  "hookInfos[].durationMs": [
+   "number"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "level": [
+   "string"
+  ],
+  "parentUuid": [
+   "string"
+  ],
+  "preventedContinuation": [
+   "boolean"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "stopReason": [
+   "string"
+  ],
+  "subtype": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "toolUseID": [
+   "string"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ },
+ "transcript:user": {
+  "cwd": [
+   "string"
+  ],
+  "entrypoint": [
+   "string"
+  ],
+  "gitBranch": [
+   "string"
+  ],
+  "isMeta": [
+   "boolean"
+  ],
+  "isSidechain": [
+   "boolean"
+  ],
+  "message": [
+   "object"
+  ],
+  "message.content": [
+   "array",
+   "string"
+  ],
+  "message.content[]": [
+   "object"
+  ],
+  "message.content[].content": [
+   "array",
+   "string"
+  ],
+  "message.content[].is_error": [
+   "boolean"
+  ],
+  "message.content[].text": [
+   "string"
+  ],
+  "message.content[].tool_use_id": [
+   "string"
+  ],
+  "message.content[].type": [
+   "string"
+  ],
+  "message.role": [
+   "string"
+  ],
+  "parentUuid": [
+   "null",
+   "string"
+  ],
+  "permissionDecision": [
+   "object"
+  ],
+  "permissionDecision.decision": [
+   "string"
+  ],
+  "permissionDecision.reasonType": [
+   "string"
+  ],
+  "permissionDecision.ruleSource": [
+   "string"
+  ],
+  "permissionDecision.source": [
+   "string"
+  ],
+  "permissionMode": [
+   "string"
+  ],
+  "promptId": [
+   "string"
+  ],
+  "promptSource": [
+   "string"
+  ],
+  "sandboxed": [
+   "boolean"
+  ],
+  "sessionId": [
+   "string"
+  ],
+  "sourceToolAssistantUUID": [
+   "string"
+  ],
+  "sourceToolUseID": [
+   "string"
+  ],
+  "timestamp": [
+   "string"
+  ],
+  "toolUseResult": [
+   "object"
+  ],
+  "toolUseResult.agentId": [
+   "string"
+  ],
+  "toolUseResult.agentType": [
+   "string"
+  ],
+  "toolUseResult.canContinueAgent": [
+   "boolean"
+  ],
+  "toolUseResult.commandName": [
+   "string"
+  ],
+  "toolUseResult.content": [
+   "array"
+  ],
+  "toolUseResult.content[]": [
+   "object"
+  ],
+  "toolUseResult.content[].text": [
+   "string"
+  ],
+  "toolUseResult.content[].type": [
+   "string"
+  ],
+  "toolUseResult.durable": [
+   "boolean"
+  ],
+  "toolUseResult.harnessNoteCount": [
+   "number"
+  ],
+  "toolUseResult.harnessSectionHash": [
+   "string"
+  ],
+  "toolUseResult.harnessTailCount": [
+   "number"
+  ],
+  "toolUseResult.humanSchedule": [
+   "string"
+  ],
+  "toolUseResult.id": [
+   "string"
+  ],
+  "toolUseResult.interrupted": [
+   "boolean"
+  ],
+  "toolUseResult.isImage": [
+   "boolean"
+  ],
+  "toolUseResult.matches": [
+   "array"
+  ],
+  "toolUseResult.matches[]": [
+   "string"
+  ],
+  "toolUseResult.nextFireAt": [
+   "number"
+  ],
+  "toolUseResult.noOutputExpected": [
+   "boolean"
+  ],
+  "toolUseResult.prompt": [
+   "string"
+  ],
+  "toolUseResult.query": [
+   "string"
+  ],
+  "toolUseResult.recurring": [
+   "boolean"
+  ],
+  "toolUseResult.resolvedModel": [
+   "string"
+  ],
+  "toolUseResult.status": [
+   "string"
+  ],
+  "toolUseResult.stderr": [
+   "string"
+  ],
+  "toolUseResult.stdout": [
+   "string"
+  ],
+  "toolUseResult.success": [
+   "boolean"
+  ],
+  "toolUseResult.toolStats": [
+   "object"
+  ],
+  "toolUseResult.toolStats.bashCount": [
+   "number"
+  ],
+  "toolUseResult.toolStats.editFileCount": [
+   "number"
+  ],
+  "toolUseResult.toolStats.linesAdded": [
+   "number"
+  ],
+  "toolUseResult.toolStats.linesRemoved": [
+   "number"
+  ],
+  "toolUseResult.toolStats.otherToolCount": [
+   "number"
+  ],
+  "toolUseResult.toolStats.readCount": [
+   "number"
+  ],
+  "toolUseResult.toolStats.searchCount": [
+   "number"
+  ],
+  "toolUseResult.toolsUsed": [
+   "array"
+  ],
+  "toolUseResult.toolsUsed[]": [
+   "string"
+  ],
+  "toolUseResult.totalDurationMs": [
+   "number"
+  ],
+  "toolUseResult.totalTokens": [
+   "number"
+  ],
+  "toolUseResult.totalToolUseCount": [
+   "number"
+  ],
+  "toolUseResult.total_deferred_tools": [
+   "number"
+  ],
+  "toolUseResult.usage": [
+   "object"
+  ],
+  "toolUseResult.usage.cache_creation": [
+   "object"
+  ],
+  "toolUseResult.usage.cache_creation_input_tokens": [
+   "number"
+  ],
+  "toolUseResult.usage.cache_read_input_tokens": [
+   "number"
+  ],
+  "toolUseResult.usage.fallback_credit": [
+   "null"
+  ],
+  "toolUseResult.usage.inference_geo": [
+   "string"
+  ],
+  "toolUseResult.usage.input_tokens": [
+   "number"
+  ],
+  "toolUseResult.usage.iterations": [
+   "array"
+  ],
+  "toolUseResult.usage.output_tokens": [
+   "number"
+  ],
+  "toolUseResult.usage.output_tokens_details": [
+   "object"
+  ],
+  "toolUseResult.usage.server_tool_use": [
+   "object"
+  ],
+  "toolUseResult.usage.service_tier": [
+   "string"
+  ],
+  "toolUseResult.usage.speed": [
+   "string"
+  ],
+  "turnCompanion": [
+   "boolean"
+  ],
+  "turnOrigin": [
+   "string"
+  ],
+  "turnPosition": [
+   "object"
+  ],
+  "turnPosition.promptIndex": [
+   "number"
+  ],
+  "turnPosition.turnIndex": [
+   "number"
+  ],
+  "type": [
+   "string"
+  ],
+  "userType": [
+   "string"
+  ],
+  "uuid": [
+   "string"
+  ],
+  "version": [
+   "string"
+  ]
+ }
+}

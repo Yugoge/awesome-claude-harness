@@ -528,9 +528,14 @@ class Span:
             return None
 
     def minted_id(self) -> str | None:
-        """The task id the UserPromptSubmit hook printed for the opener
-        (MINTED_LINE_RE): the first in the opener's hook context."""
-        return next((found.group(1) for found in self._opener_context(MINTED_LINE_RE)), None)
+        """The task id the UserPromptSubmit hook printed for the opener (MINTED_LINE_RE), from the
+        opener's hook context: the one id its records carry, None when they carry none or two different
+        ones (fail closed). The CLI records no identity of the hook that printed a line (CLI 2.1.325:
+        a hook_success's `command` is "command hook", or "command hook <n>" by registration order when
+        the event has several, never the hook's command line), so no record can be told for the
+        launcher's; a line another hook prints, first or not, is never taken for the id."""
+        found = {match.group(1) for match in self._opener_context(MINTED_LINE_RE)}
+        return found.pop() if len(found) == 1 else None
 
     def opener_heads(self) -> list:
         """(branch, commit) of each HEAD line the UserPromptSubmit hook printed for a /push opener
@@ -612,8 +617,10 @@ def _prompt_hook_text(attachment) -> str | None:
     """The text of a context record the CLI writes for a UserPromptSubmit hook's output, else None.
     CLI 2.1.322 writes a hook's plain stdout (what prompt-workflow.py prints) as a hook_success
     record whose content is that stdout, and a JSON additionalContext as hook_additional_context
-    whose content is a list of strings; older CLIs wrote the plain stdout as hook_additional_context.
-    A hook_success of any other event is not the prompt's context."""
+    whose content is a list of strings (CLI 2.1.325 likewise: tests/fixtures/cli); older CLIs wrote the
+    plain stdout as hook_additional_context.
+    A hook_success of any other event is not the prompt's context.
+    The one parser of the CLI's hook-output channel (tests/artifact_graph: channel:cli-hook-output)."""
     if not isinstance(attachment, dict):
         return None
     kind = attachment.get("type")
@@ -627,8 +634,7 @@ def _prompt_hook_text(attachment) -> str | None:
     else:
         return None
     if isinstance(content, list):
-        content = "\n".join(b if isinstance(b, str) else b.get("text", "") for b in content
-                            if isinstance(b, (str, dict)))
+        content = "\n".join(b for b in content if isinstance(b, str))
     return content if isinstance(content, str) else None
 
 

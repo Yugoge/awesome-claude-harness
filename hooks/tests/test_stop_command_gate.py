@@ -43,6 +43,7 @@ gate = _load(HOOKS / "stop-command-gate.py", "stop_command_gate_under_test")
 resolver = _load(REPO / "scripts" / "resolve-dev-artifact-chain.py", "resolver_under_test")
 sys.path.insert(0, str(REPO))
 from hooks.lib import obligation as chain_obligation  # noqa: E402  (the module the chain's reader imports)
+from tests.cli_shapes import synthesize  # noqa: E402  (every record below is a recorded CLI record, values filled)
 command_span = gate.command_span
 # the hooks/lib modules the gate imports by name (it puts hooks/ on sys.path)
 obligation = importlib.import_module("lib.obligation")
@@ -65,41 +66,43 @@ class TX:
         path.write_text("", encoding="utf-8")
 
     def add(self, record: dict) -> dict:
+        """Write ``record`` (synthesized from the recorded CLI fixture) with this session's values."""
         self.clock += timedelta(seconds=1)
-        record.setdefault("timestamp", self.clock.isoformat().replace("+00:00", "Z"))
-        record.setdefault("sessionId", SID)
+        record["timestamp"] = self.clock.isoformat().replace("+00:00", "Z")
+        record["sessionId"] = SID
+        if "cwd" in record:
+            record["cwd"] = os.environ.get("CLAUDE_PROJECT_DIR", "")
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
         return record
 
     def typed(self, text: str):
-        self.add({"type": "queue-operation", "operation": "enqueue", "content": text})
-        self.add({"type": "user", "message": {"role": "user", "content": text}})
+        self.add(synthesize("queue-operation", "enqueue", content=text))
+        self.add(synthesize("user", "prompt", turnOrigin="human", message__content=text))
 
     def command(self, name: str, args: str = "", context: str | None = None, body: str | None = None):
         """A typed command; with ``body``, the text the CLI recorded for it, linked to the opener
-        (parentUuid, as Span.body reads it); else an unlinked placeholder record."""
-        self.add({"type": "queue-operation", "operation": "enqueue", "content": f"/{name} {args}".strip()})
-        opener = {"uuid": f"opener-{self.clock.timestamp():.0f}"} if body is not None else {}
-        self.add({"type": "user", **opener, "message": {"role": "user", "content":
-                  f"<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>\n"
-                  f"<command-args>{args}</command-args>"}})
-        self.add({"type": "user", "isMeta": True, **({"parentUuid": opener["uuid"]} if opener else {}),
-                  "message": {"role": "user", "content": [
-                      {"type": "text", "text": f"body of {name}" if body is None else body}]}})
+        (parentUuid, as Span.body reads it); else an unlinked placeholder record. ``context``: the
+        UserPromptSubmit hook's plain stdout, which the CLI records as a hook_success record."""
+        self.add(synthesize("queue-operation", "enqueue", content=f"/{name} {args}".strip()))
+        opener = self.add(synthesize("user", "command", turnOrigin="human", message__content=(
+            f"<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>\n"
+            f"<command-args>{args}</command-args>")))
+        self.add(synthesize("user", "meta", parentUuid=opener["uuid"] if body is not None else None,
+                            message__content=[{"type": "text", "text": f"body of {name}" if body is None else body}]))
         if context:
-            self.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": context,
-                                                           "hookName": "UserPromptSubmit"}})
+            self.add(synthesize("attachment/hook_success", attachment__content=context.rstrip("\n"),
+                                attachment__stdout=context))
 
     def tool(self, name: str, tool_input: dict, ok: bool = True, result="ok", extra: dict | None = None,
              sidechain: bool = False) -> str:
         self.n += 1
         ident = f"toolu_{self.n:04d}"
-        side = {"isSidechain": True, "agentId": "a1"} if sidechain else {}
-        self.add({"type": "assistant", **side, "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": ident, "name": name, "input": tool_input}]}})
-        self.add({"type": "user", **side, **(extra or {}), "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": ident, "content": result, **({} if ok else {"is_error": True})}]}})
+        source, side = ("subagent:", {"agentId": "a1"}) if sidechain else ("", {})
+        self.add(synthesize(f"{source}assistant", "tool_use", **side, message__content=[
+            {"type": "tool_use", "id": ident, "name": name, "input": tool_input}]))
+        self.add(synthesize(f"{source}user", "tool_result", **side, **(extra or {}), message__content=[
+            {"type": "tool_result", "tool_use_id": ident, "content": result, "is_error": not ok}]))
         return ident
 
     def ask(self, answer: str):
@@ -111,7 +114,7 @@ class TX:
                   result=f'User has answered your questions: "{question}"="{answer}".')
 
     def say(self, text: str):
-        self.add({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+        self.add(synthesize("assistant", "text", message__content=[{"type": "text", "text": text}]))
 
     def todos(self, steps, done: int):
         self.tool("TodoWrite", {"todos": [
@@ -272,11 +275,10 @@ def test_a2_no_record_but_the_humans_own_command_ends_the_block(env, after):
     elif after.startswith("skill_"):  # the Skill tool's expansion of /spec or /codex
         name = after.split("_", 1)[1]
         ident = env.tx.tool("Skill", {"skill": name})
-        env.tx.add({"type": "user", "isMeta": True, "sourceToolUseID": ident, "message": {
-            "role": "user", "content": f"<command-name>/{name}</command-name><command-args></command-args>"}})
+        env.tx.add(synthesize("user", "skill", sourceToolUseID=ident, message__content=[
+            {"type": "text", "text": f"<command-name>/{name}</command-name><command-args></command-args>"}]))
     else:  # a CronCreate or ScheduleWakeup prompt, as the CLI records it (COV-7)
-        env.tx.add({"type": "user", "isMeta": True, "turnOrigin": "scheduled", "promptSource": "system",
-                    "message": {"role": "user", "content": "/spec"}})
+        env.tx.add(synthesize("user", "prompt", turnOrigin="scheduled", promptSource="system", message__content="/spec"))
     assert run(env, **extra)[0] == 2
 
 
@@ -309,21 +311,18 @@ def test_a2_the_humans_stop_or_spec_opens_an_ungated_span(env, command):
 
 
 # A2's Esc case (P5-23). Esc interrupts the turn and runs no Stop hook (D4c); the next Stop the gate
-# sees follows the human's next prompt. Record shapes, as the CLI wrote them:
-# - The interrupt: a user record holding one text block "[Request interrupted by user]", with no
-#   origin, turnOrigin or isMeta. Measured on CLI 2.1.319 (a session transcript of the harness host,
-#   2026-11-09; that record was a subagent's, isSidechain true, so the main session's is written with
-#   isSidechain false); the replay kit writes the same record (tests/replay/drivers/overnight.py).
+# sees follows the human's next prompt. Every record is the recorded CLI fixture's (tests/fixtures/cli),
+# values filled in:
+# - The interrupt: a user record holding one text block "[Request interrupted by user]", no isMeta
+#   (CLI 2.1.319, a session transcript of the harness host, 2026-11-09). The fixture's typed-prompt
+#   record carries it; turnOrigin is "human", as the gate reads an interrupt like any typed prompt.
 # - Esc during a tool call: the call's error tool_result, then "[Request interrupted by user for tool
 #   use]". Not captured on that host; written from the CLI's interrupt texts.
 # - The typed plain prompt: an enqueue and a dequeue queue-operation, then a user record with string
-#   content, origin {"kind": "human"}, promptSource "sdk", turnOrigin "human" and turnPosition.
-#   Measured on the same host, CLI 2.1.319 (the main session's typed prompts).
-# - A typed command: the same human fields on txbuild's slash-command records (tools/proto/txbuild.py).
+#   content, turnOrigin "human" (a headless recording writes "sdk") and turnPosition.
+# - A typed command: the same fields on the fixture's typed slash-command record.
 # The gate reads none of the interrupt's text or fields (D4c): it is a prompt with no command in it,
 # so like any plain prompt it continues the span.
-CLI_FIELDS = {"userType": "external", "entrypoint": "cli", "isSidechain": False, "version": "2.1.319",
-              "gitBranch": "main"}
 REJECTED = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file "
             "edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to "
             "tell you how to proceed.")
@@ -337,23 +336,21 @@ def interrupted_turn(env, during: str):
     else:
         env.tx.tool("Bash", {"command": "make build", "description": "Build"}, ok=False, result=REJECTED)
         text = "[Request interrupted by user for tool use]"
-    env.tx.add({"type": "user", **CLI_FIELDS, "cwd": str(env.project), "promptId": "prompt-esc",
-                "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+    env.tx.add(synthesize("user", "prompt", promptId="prompt-esc", turnOrigin="human",
+                          message__content=[{"type": "text", "text": text}]))
 
 
 def human_typed(env, text: str, index: int, command: str | None = None):
     """A prompt the human typed (a plain one, or with ``command`` that slash command), as the CLI records it."""
-    env.tx.add({"type": "queue-operation", "operation": "enqueue", "content": text})
-    env.tx.add({"type": "queue-operation", "operation": "dequeue"})
+    env.tx.add(synthesize("queue-operation", "enqueue", content=text))
+    env.tx.add(synthesize("queue-operation", "dequeue"))
     content = text if command is None else (f"<command-message>{command} is running…</command-message>\n"
                                             f"<command-name>/{command}</command-name>\n<command-args></command-args>")
-    env.tx.add({"type": "user", **CLI_FIELDS, "cwd": str(env.project), "permissionMode": "default",
-                "promptId": f"prompt-{index}", "origin": {"kind": "human"}, "promptSource": "sdk",
-                "turnOrigin": "human", "turnPosition": {"promptIndex": index, "turnIndex": index},
-                "message": {"role": "user", "content": content}})
+    env.tx.add(synthesize("user", "prompt" if command is None else "command", promptId=f"prompt-{index}",
+                          turnOrigin="human", turnPosition={"promptIndex": index, "turnIndex": index},
+                          message__content=content))
     if command is not None:
-        env.tx.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": [
-            {"type": "text", "text": f"body of {command}"}]}})
+        env.tx.add(synthesize("user", "meta", message__content=[{"type": "text", "text": f"body of {command}"}]))
 
 
 @pytest.mark.parametrize("during", ["reply", "tool_call"])
@@ -414,8 +411,8 @@ def test_session_families_leave_out_a_dispatch_working_on_no_task(env):
     env.tx.dispatch(f"dev-{FAMILY}", role="changelog-analyst", pipeline="commit", artifacts=[
         {"kind": "response_block", "begin": "B", "end": "E", "format": "json", "schema": "changelog-status.v1"}])
     env.tx.dispatch("20261101-120000", role="qa", result="failed", pipeline="dev")
-    env.tx.add({"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": "x", "content": "late"}]}})
+    env.tx.add(synthesize("user", "tool_result", message__content=[
+        {"type": "tool_result", "tool_use_id": "x", "content": "late", "is_error": False}]))
     assert command_span.active_span(env.tx.path).session_families() == {f"{FAMILY}-0", FAMILY, "20261101-120000"}
 
 
@@ -546,9 +543,7 @@ def test_a4_a_do_whose_minted_line_cli_2_1_322_records_as_hook_success_can_end(e
     task id although the line was there. The complete report now lets the Stop pass."""
     env.tx.command("do", "rename the helper")
     stdout = f"[/do] Consent granted.\n[/do] task-id minted: {DO_ID} — resolve via ...\n"
-    env.tx.add({"type": "attachment", "attachment": {
-        "type": "hook_success", "hookName": "UserPromptSubmit", "hookEvent": "UserPromptSubmit",
-        "content": stdout.rstrip("\n"), "stdout": stdout, "stderr": "", "exitCode": 0}})
+    env.tx.add(synthesize("attachment/hook_success", attachment__content=stdout.rstrip("\n"), attachment__stdout=stdout))
     env.tx.todos(canonical("do", "rename the helper"), len(canonical("do", "rename the helper")))
     write_files(env, ["src/a.py"])
     do_report(env, modified=["src/a.py"])
@@ -1212,8 +1207,8 @@ def test_h2_a_backdated_move_off_the_branch_holds_the_branch_the_opener_line_nam
     hook's context, detached, takes nothing away."""
     tip = commit(remotes, "t2.txt")
     assert f"[/push] HEAD at the opener: refs/heads/topic {tip}\n" in push_opener(env)
-    env.tx.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit",
-                                                     "content": f"notice\n[/push] HEAD at the opener: detached {tip}\n"}})
+    env.tx.add(synthesize("attachment/hook_additional_context",
+                          attachment__content=[f"notice\n[/push] HEAD at the opener: detached {tip}\n"]))
     backdated(remotes, *move)
     code, text = run(env)
     assert code == 2 and (f"- push: topic at {tip} is not published on refs/remotes/origin/topic since the /push "
@@ -1393,8 +1388,7 @@ def remote_lines(env, repo):
         f"{branch} {git(repo, 'rev-parse', '--verify', '-q', f'refs/remotes/{name}/{branch}', check=False) or 'none'}"
         + (f" upstream {up[1]}" if len(up) == 2 and up[0] == name else "") + "\n"
         for name in git(repo, "remote").split())
-    env.tx.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit",
-                                                     "content": text}})
+    env.tx.add(synthesize("attachment/hook_additional_context", attachment__content=[text]))
 
 
 def _steps(repo, bare, steps):
@@ -2063,7 +2057,7 @@ def test_r10_timelock_released_reads_the_humans_stop_after_dev_overnight(env):
     assert command_span.timelock_released(env.tx.path) is False
     env.tx.command("stop")
     assert command_span.timelock_released(env.tx.path) is True
-    env.tx.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": "/dev-overnight"}})
+    env.tx.add(synthesize("user", "meta", message__content=[{"type": "text", "text": "/dev-overnight"}]))
     assert command_span.timelock_released(env.tx.path) is True
 
 

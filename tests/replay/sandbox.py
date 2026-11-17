@@ -150,6 +150,16 @@ def _under(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
+def copy_framework(sb: str) -> None:
+    """The replay framework into <sb>/replay, with the recorded CLI fixture its records are built from
+    (tests/cli_shapes.py and tests/fixtures/cli, into replay/_cli/): the sandbox imports the framework
+    as the top-level package `replay`, which reaches nothing else of this repository."""
+    shutil.copytree(HERE, os.path.join(sb, "replay"), ignore=COPY_IGNORE)
+    tests, cli = os.path.dirname(HERE), os.path.join(sb, "replay", "_cli")
+    shutil.copytree(os.path.join(tests, "fixtures", "cli"), os.path.join(cli, "fixtures", "cli"), ignore=COPY_IGNORE)
+    shutil.copy2(os.path.join(tests, "cli_shapes.py"), os.path.join(cli, "cli_shapes.py"))
+
+
 def _rm(sb: str, path: str) -> None:
     if not os.path.isfile(os.path.join(sb, MARK)) or not _under(path, sb) or os.path.realpath(path) == os.path.realpath(sb):
         raise RuntimeError(f"refusing to remove {path}: not inside sandbox {sb}")
@@ -314,7 +324,7 @@ def build(tree: str, sb: str, log=print) -> dict:
     deps = _make_venv(tree, os.path.join(harness, "venv"), log)
     bytecode = _bytecode(sb, harness)
     shutil.copytree(os.path.join(harness, ".git"), os.path.join(sb, GIT_SNAPSHOT), symlinks=True)
-    shutil.copytree(HERE, os.path.join(sb, "replay"), ignore=COPY_IGNORE)
+    copy_framework(sb)
     os.makedirs(os.path.join(sb, "settings"))
     with open(os.path.join(harness, "settings.json")) as fh:
         shipped = json.load(fh)
@@ -436,7 +446,7 @@ def reset(sb: str, mode: str) -> None:
             _rm(sb, os.path.join(sb, d))
         if d != "replay":
             os.makedirs(os.path.join(sb, d))
-    shutil.copytree(HERE, os.path.join(sb, "replay"), ignore=COPY_IGNORE)  # the framework as it is now
+    copy_framework(sb)  # the framework as it is now
     os.makedirs(os.path.join(sb, "vartmp", "claude-scratch"))
     src = os.path.join(harness, PROTECTED_RUNTIME_SRC)
     if os.path.isfile(src):
