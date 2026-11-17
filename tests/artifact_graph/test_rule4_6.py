@@ -964,3 +964,150 @@ def test_a_gates_process_writes_and_decides_as_its_rule_files(tmp_path):
     assert a.producers() == ["hooks/rec-writer.py"]
     assert not rules_on(vs, a.key) & {"1-producers", "4-one-rule", "6-move", "6-recheck"}
     assert {(d.who, d.position, d.source) for d in a.decisions} == {("hooks/rec-guard.py", "G1", "differential")}
+
+
+# ------------------------------------------- a handler on the read's call chain that swallows
+
+_REC_LIB = '''
+    import json, sys
+    from pathlib import Path
+    from lib.harness_state_dir import harness_state_dir
+    class Refused(RuntimeError):
+        pass
+    def strict(sid):
+        try:
+            rec = json.loads(Path(harness_state_dir(), f"claude-rec-{sid}.json").read_text())
+        except (OSError, ValueError):
+            rec = None
+        if not rec or rec.get("ok") is not True:
+            raise Refused("not ok")
+        return rec
+    def soft(sid):
+        try:
+            return strict(sid)
+        %s:
+            %s
+'''
+_OWN_RULE = hook('''
+    import json
+    d = json.load(sys.stdin)
+    try:
+        json.loads(open(harness_state_dir() + "/claude-rec-" + d["session_id"] + ".json").read())
+    except ValueError:
+        sys.exit(2)
+''')
+_THROUGH_SOFT = hook('''
+    import json
+    from lib.rec import soft
+    d = json.load(sys.stdin)
+    try:
+        soft(d["session_id"])
+    except Exception:
+        sys.exit(2)
+''')
+
+
+def _second_decider(tmp_path, caught: str, handler: str, caller: str = _THROUGH_SOFT) -> set:
+    root = make_tree(tmp_path, {
+        "hooks/lib/rec.py": _REC_LIB % (caught, handler),
+        "hooks/w.py": hook('open(harness_state_dir() + "/claude-rec-x.json", "w").write("{}")\n'),
+        "hooks/a.py": _OWN_RULE,
+        "hooks/b.py": caller,
+    })
+    m, vs = check(root)
+    return {d.who for d in m.artifacts[REC].decisions}, rules_on(vs, REC)
+
+
+def test_a_read_under_a_handler_that_swallows_its_exception_is_no_outer_excepts_decision(tmp_path):
+    """An except clause decides on a read made inside its try only while the read's exception
+    can reach it: a handler nearer to the read on its call chain that catches what the read
+    raises (its own type, a base class of it, or everything) and neither raises, re-raises nor
+    exits ends the read's attribution there. b.py's outer `except Exception: sys.exit(2)` does
+    not decide on the record `soft` reads, so a.py is its one decider (rule (4))."""
+    for i, caught in enumerate(("except Refused", "except RuntimeError", "except Exception", "except")):
+        who, rules = _second_decider(tmp_path / str(i), caught, "return None")
+        assert "hooks/b.py" not in who, caught
+        assert "4-one-rule" not in rules, caught
+
+
+def test_a_handler_that_raises_again_or_exits_keeps_the_outer_excepts_decision(tmp_path):
+    """The counter-cases: a handler on the chain that re-raises, raises another error or exits,
+    and one that does not catch what the read raises, leave the outer except clause deciding on
+    the read: b.py is a second decider with a rule of its own (rule (4)). So is a reader whose
+    chain has no inner handler at all."""
+    for i, (caught, handler) in enumerate((
+            ("except Refused", "raise"),
+            ("except Refused", 'raise ValueError("refused")'),
+            ("except Refused", "sys.exit(2)"),
+            ("except OSError", "return None"),
+    )):
+        who, rules = _second_decider(tmp_path / str(i), caught, handler)
+        assert "hooks/b.py" in who, (caught, handler)
+        assert "4-one-rule" in rules, (caught, handler)
+    direct = hook('''
+        import json
+        from lib.rec import strict
+        d = json.load(sys.stdin)
+        try:
+            strict(d["session_id"])
+        except Exception:
+            sys.exit(2)
+    ''')
+    who, rules = _second_decider(tmp_path / "direct", "except Refused", "return None", caller=direct)
+    assert "hooks/b.py" in who and "4-one-rule" in rules
+
+
+def test_an_inner_try_of_the_same_function_that_swallows_ends_the_attribution_too(tmp_path):
+    """The handler that swallows may sit in the reader's own function, inside the try whose
+    handler exits: that outer handler is not reached by the read's exception. An inner handler
+    that does not catch what `strict` raises (Refused: it swallows the read's own I/O and parse
+    errors and raises its verdict) leaves the outer one deciding."""
+    nested = hook('''
+        import json
+        from lib.rec import strict, Refused
+        d = json.load(sys.stdin)
+        try:
+            try:
+                strict(d["session_id"])
+            except (Refused, ValueError, OSError):
+                pass
+        except Exception:
+            sys.exit(2)
+    ''')
+    who, rules = _second_decider(tmp_path / "swallow", "except Refused", "return None", caller=nested)
+    assert "hooks/b.py" not in who and "4-one-rule" not in rules
+    partial = nested.replace("except (Refused, ValueError, OSError):", "except (ValueError, OSError):")
+    who, rules = _second_decider(tmp_path / "partial", "except Refused", "return None", caller=partial)
+    assert "hooks/b.py" in who and "4-one-rule" in rules
+
+
+def test_what_a_read_raises_is_its_io_error_and_for_decoded_text_its_decoding_error(tmp_path):
+    """A read of bytes, or of text decoded with an `errors=` handler, raises the I/O error alone,
+    so `except OSError` that returns swallows it; a plain text read can also raise its decoding
+    error, which that handler does not catch, so the outer except keeps deciding."""
+    lib = '''
+        from pathlib import Path
+        from lib.harness_state_dir import harness_state_dir
+        def peek(sid):
+            try:
+                return open(Path(harness_state_dir(), f"claude-rec-{sid}.json"){how}).read()
+            except OSError:
+                return None
+    '''
+    caller = hook('''
+        import json
+        from lib.rec import peek
+        d = json.load(sys.stdin)
+        try:
+            peek(d["session_id"])
+        except Exception:
+            sys.exit(2)
+    ''')
+    for how, decides in (('', True), (', "rb"', False), (', errors="replace"', False)):
+        root = make_tree(tmp_path / str(len(how)), {
+            "hooks/lib/rec.py": lib.replace("{how}", how),
+            "hooks/w.py": hook('open(harness_state_dir() + "/claude-rec-x.json", "w").write("{}")\n'),
+            "hooks/a.py": _OWN_RULE, "hooks/b.py": caller,
+        })
+        m, vs = check(root)
+        assert ("hooks/b.py" in {d.who for d in m.artifacts[REC].decisions}) is decides, how

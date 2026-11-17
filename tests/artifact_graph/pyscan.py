@@ -16,6 +16,7 @@ reads and the literal collections rule (7) looks at.
 from __future__ import annotations
 
 import ast
+import builtins
 import re
 from dataclasses import dataclass, field
 
@@ -84,6 +85,19 @@ class ReadInfo:
     line: int
     via: tuple = ()
     verdict: frozenset = frozenset()    # fields of the returning function's own verdict (_verdict_keys)
+    escapes: frozenset = frozenset({"OSError", "ValueError"})   # what the read raises at this call
+    op: object = None                   # the read operation it was emitted as (_emit)
+    leaves: frozenset | None = None     # what escapes the function on it (_escape_sets)
+
+
+# What a read of a file raises where it happens: the I/O error, and for a read of its content
+# decoded as text without an `errors=` handler, or parsed, the decoding or parsing error too
+# (_read_errors). A call of a tree function raises, on a read it makes, what escapes that
+# function (FunctionWalk._escape_sets); "*" is an exception the scan cannot name.
+READ_ERRORS = frozenset({"OSError", "ValueError"})
+OS_ERRORS = frozenset({"OSError"})
+_BINARY_MODE = re.compile(r"[rwaxt+]*b[rwaxt+]*")
+_NOT_EXCEPTION = frozenset({"SystemExit", "KeyboardInterrupt", "GeneratorExit"})
 
 
 @dataclass
@@ -412,6 +426,7 @@ class Analyzer:
         self.summaries: dict[int, Summary] = {}
         self.in_progress: set[int] = set()
         self.memo: dict[int, V.Val] = {}
+        self.leaves: dict[int, frozenset] = {}   # id(param-effect read op) -> what escapes its function on it
         self.active: set[int] = set()
         self.depth = 0
         self.instantiated: dict[int, int] = {}
@@ -514,6 +529,22 @@ class Analyzer:
         name = fn.qual.rsplit(".", 1)[-1]
         return ROOT_FUNCTIONS.get((fn.module, name)) if "." not in fn.qual else None
 
+    def subclass_of(self, exc: str, base: str, depth: int = 0) -> bool:
+        """An exception named `exc` is a `base`: a builtin's own hierarchy, or a class of the tree
+        whose bases reach `base` (every class of the tree by that name)."""
+        if exc == base:
+            return True
+        b = getattr(builtins, base, None)
+        e = getattr(builtins, exc, None)
+        if isinstance(e, type) and issubclass(e, BaseException):
+            return isinstance(b, type) and issubclass(e, b)
+        found = [bases for mod in list(self.modules.values()) for q, bases in mod.class_bases.items()
+                 if q.rsplit(".", 1)[-1] == exc]
+        if not found or depth > 8:
+            return False
+        return all(any(self.subclass_of(_dotted(x).rsplit(".", 1)[-1], base, depth + 1)
+                       for x in bases if _dotted(x)) for bases in found)
+
     def summary(self, fi: FuncInfo) -> Summary:
         key = id(fi.node)
         if key in self.summaries:
@@ -565,6 +596,26 @@ class Analyzer:
                             changed = True
         self.exit_funcs[key] = found
         return found
+
+
+def _read_errors(mode: str, via: str, call) -> frozenset:
+    """What a read raises at its own call: a name test or a listing, and a read of bytes or of
+    text decoded with an `errors=` handler, the I/O error alone; any other read of content, the
+    decoding or JSON parsing error as well; any other read, an exception the scan cannot name."""
+    if mode in ("name", "list"):
+        return OS_ERRORS
+    if mode not in ("content", "open-dynamic") or not isinstance(call, ast.Call) or (
+            "load" in via and "json" not in via):
+        return READ_ERRORS | {"*"}      # a database, a module's source, another parser's error
+    if "json" in via:
+        return READ_ERRORS
+    consts = [a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+    consts += [k.value.value for k in call.keywords if k.arg == "mode" and isinstance(k.value, ast.Constant)
+               and isinstance(k.value.value, str)]
+    if any(k.arg == "errors" for k in call.keywords) or via.endswith("read_bytes") or any(
+            _BINARY_MODE.fullmatch(c) for c in consts):
+        return OS_ERRORS
+    return READ_ERRORS
 
 
 def _dotted(node) -> str:
@@ -742,6 +793,8 @@ class FunctionWalk:
         self.overrides: dict = {}
         self.lock_sites: set = set()
         self.handlers: list = []
+        self.raising_calls: set = set()       # ids of calls of tree functions that raise
+        self.decided: dict = {}               # id(ReadInfo) -> [M.Decision] deciding on it
 
     # ------------------------------------------------------------ evaluation
     def ev(self, node, stmt=None) -> V.Val:
@@ -1790,11 +1843,13 @@ class FunctionWalk:
                 self.an.findings.outputs.append(M.OwnerOutput(self.mod.path, self.mod.ln(vnode), "system_message", shown))
 
     def _emit(self, op: str, path: V.Val, mode: str, via: str, call, s, src: V.Val | None = None, chain=(),
-              verdict: frozenset = frozenset()) -> None:
+              verdict: frozenset = frozenset(), escapes: frozenset | None = None) -> None:
+        if escapes is None:
+            escapes = _read_errors(mode, via, call)
         o = M.Op(self.mod.path, self.mod.ln(call), op, path, mode, via, "python", self.fname, src, tuple(chain), self.mod.origin)
         self.ops.append(o)
         if op == "read":
-            self.reads.append((call, ReadInfo(path, mode, self.mod.ln(call), tuple(chain), verdict)))
+            self.reads.append((call, ReadInfo(path, mode, self.mod.ln(call), tuple(chain), verdict, escapes, o)))
 
     def _visit_call(self, call: ast.Call, s) -> None:
         kind, a, b = self.callee(call, s)
@@ -1988,6 +2043,9 @@ class FunctionWalk:
         key = (fi.module.path, fi.qual)
         self.an.calls_to.setdefault(key, []).append((self, call, s))
         summ = self.an.summary(fi)
+        if summ.raises:
+            self.raising_calls.add(id(call))
+            self.summary.raises.extend(d for d in summ.raises if d not in self.summary.raises)
         if not (summ.param_effects or summ.return_reads or summ.decisions):
             return
         binding = self.binding(fi, call, s, bound_self)
@@ -1997,11 +2055,12 @@ class FunctionWalk:
             p = V.subst_val(e.path, binding)
             src = V.subst_val(e.src, binding) if e.src is not None else None
             chain = (f"{e.component}:{e.line}",) + tuple(e.chain)
-            self._emit(e.op, p, e.mode, e.via, call, s, src=src, chain=chain, verdict=summ.verdict_keys)
+            self._emit(e.op, p, e.mode, e.via, call, s, src=src, chain=chain, verdict=summ.verdict_keys,
+                       escapes=self.an.leaves.get(id(e), READ_ERRORS))
         for r in summ.return_reads:
             p = V.subst_val(r.path, binding)
             self.reads.append((call, ReadInfo(p, r.mode, ln, (f"{fi.module.path}:{r.line}",) + tuple(r.via),
-                                              summ.verdict_keys)))
+                                              summ.verdict_keys, r.leaves if r.leaves is not None else READ_ERRORS)))
         for d in summ.decisions:
             nd = M.Decision(d.kind, ln, d.code, fi.qual, (f"{fi.module.path}:{d.line}",))
             self.decisions.append((s, nd))
@@ -2344,6 +2403,9 @@ class FunctionWalk:
                 for x in self._stmts_in(st.body):
                     for n in self._own_nodes(x):
                         rs |= call_ids.get(id(n), set())
+                # a read whose exception a handler nearer to it on its call chain catches and does
+                # not raise again raises nothing here: this try's handlers do not decide on it
+                rs = {r for r in rs if self._escaping(reads[r][1].escapes, reads[r][0], st)}
                 if not rs:
                     continue
                 for h in st.handlers:
@@ -2360,6 +2422,8 @@ class FunctionWalk:
             for st, d in self.decisions:
                 if d.kind in ("exit2", "block") and d.line > info.line and (i, id(d)) not in paired:
                     self._deciding(info, d, "order")
+        if fi is not None:
+            self._escape_sets()
         # dedupe return reads
         seen = set()
         uniq = []
@@ -2371,8 +2435,70 @@ class FunctionWalk:
         self.summary.return_reads = uniq
 
     def _deciding(self, info: ReadInfo, d: M.Decision, evidence: str, whole: bool = False) -> None:
+        self.decided.setdefault(id(info), []).append(d)
         self.an.findings.deciding.append(M.Deciding(self.mod.path, self.fname, info.line, info.path, info.mode,
                                                     d, evidence, "python", tuple(info.via), whole))
+
+    def _escape_sets(self) -> None:
+        """What escapes this function on each read it makes, for its callers' except clauses: what
+        the read raises past this function's own handlers (_escaping), and what this function raises
+        or exits with deciding on the read."""
+        for call, info in self.reads:
+            out = set(self._escaping(info.escapes, call, None))
+            for d in self.decided.get(id(info), ()):
+                if d.kind == "raise":
+                    out.add(d.detail if d.detail and d.detail != "re-raise" else "*")
+                elif d.kind in ("exit", "exit2", "block"):
+                    out.add("SystemExit")   # a block is printed, then the process exits
+            info.leaves = frozenset(out)
+            if info.op is not None:
+                self.an.leaves[id(info.op)] = info.leaves
+
+    def _escaping(self, escapes: frozenset, call, upto) -> frozenset:
+        """What of `escapes`, raised at `call`, leaves the try statements around it in this
+        function, nearest first, up to (not including) the try `upto` (None: all of them). An
+        exception goes to the first handler that catches it; one that catches it and neither raises,
+        re-raises nor exits ends it. An exception the scan cannot name ("*") ends only at a handler
+        that catches every exception, with no handler before it raising again."""
+        out = set(escapes)
+        node = self.mod.stmt_of.get(id(call))
+        while out and node is not None:
+            info = self.mod.parent.get(id(node))
+            if info is None:
+                break
+            owner, fieldname, _ = info
+            if owner is upto or isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                break
+            if isinstance(owner, (ast.Try, getattr(ast, "TryStar", ast.Try))) and fieldname == "body":
+                out = {x for x in out if not self._ends_at(owner.handlers, x)}
+            node = owner
+        return frozenset(out)
+
+    def _ends_at(self, handlers: list, exc: str) -> bool:
+        for h in handlers:
+            if self._catches(h, exc):
+                return self._swallows(h)
+            if exc == "*" and not self._swallows(h):
+                return False
+        return False
+
+    def _catches(self, h, exc: str) -> bool:
+        if h.type is None:
+            return True
+        names = {_dotted(n).rsplit(".", 1)[-1] for n in ast.walk(h.type) if isinstance(n, (ast.Name, ast.Attribute))}
+        if "BaseException" in names or "Exception" in names and exc not in _NOT_EXCEPTION:
+            return True
+        return exc != "*" and any(self.an.subclass_of(exc, n) for n in names)
+
+    def _swallows(self, h) -> bool:
+        """The handler neither raises, re-raises nor exits, itself or through a call."""
+        stmts = self._stmts_in(h.body)
+        if any(isinstance(x, ast.Raise) for x in stmts):
+            return False
+        sids = {id(x) for x in stmts}
+        if any(id(st) in sids and d.kind in ("raise", "exit", "exit2", "block") for st, d in self.decisions):
+            return False
+        return not any(id(n) in self.raising_calls for x in stmts for n in self._own_nodes(x))
 
     def _chain_uses(self) -> None:
         seeds = list(self.chain_seeds)
