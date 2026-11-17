@@ -381,6 +381,22 @@ no per-rule budget exists.
   this class: OB-L07's only keep the new `git -C`, `rg --files` and `make -n` allow entries from reaching
   another verb, option or evaluation. `git -C <dir> push --force` and `git -C <dir> reset --hard` still match no deny
   and ask because no allow entry covers them.
+  On the allow side, `permissions.allow` carries pure read-only entries so those commands stop
+  asking in default mode: `Bash(comm:*)`, `Bash(diff:*)`, `Bash(jq:*)`, `Bash(kubectl logs:*)`, the
+  exact `Bash(git fetch)`, `Bash(git fetch --all)`, `Bash(git fetch origin)`,
+  `Bash(git fetch origin main)`, `Bash(git fetch origin master)`, `Bash(git remote)`,
+  `Bash(git remote -v)`, `Bash(git remote --verbose)`, and `Bash(git remote get-url *)`,
+  `Bash(git remote show *)`. A prefix entry admits every flag its program takes (Bash rule
+  matching, code.claude.com/docs/en/permissions), so `rg` (`--pre` runs a program), `git show` and
+  `git blame` (`--output=<file>` writes), `journalctl` (`--vacuum-*`, `--rotate`, `--flush`,
+  `--setup-keys`, `--cursor-file`) and the `git fetch:*` / `git remote:*` prefixes are left out.
+  `tests/test_permission_allow_readonly.py` holds each entry's justification and checks that no
+  entry matches a mutating, program-running or file-writing neighbour under a matcher that
+  reproduces the documented rows. An allow entry decides only the prompt: every hook still runs,
+  and a redirect target is still checked against the `Edit` rules. The pre-existing
+  `Bash(git branch:*)`, `Bash(git log:*)` and `Bash(git diff:*)` entries do match
+  `git branch -D`, `git log --output=<file>` and `git diff --output=<file>`; the hook layer, not
+  this list, refuses the branch deletion.
 - **S-020** — OB-L20: each human-only command's Skill deny is the exact `Skill(<stem>)`. The docs give
   "`Skill(name)` for exact match, `Skill(name *)` for prefix match with any arguments"
   (https://code.claude.com/docs/en/skills.md, "Restrict Claude's skill access"). Measured on CLI 2.1.326 offline
