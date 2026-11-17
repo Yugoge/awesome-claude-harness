@@ -4107,8 +4107,492 @@ def all_targets_whitelisted(command, verb_re, whitelist, strip_service=False):
     return True
 
 
-def service_rules(command, view, env):
-    """BS-20/21, BS-23, BS-25..BS-31: secrets, docker, disks, kills, units, workflow state (`view`: executable view)."""
+# The command-position reading (OB-L11): each rule reads the command word lib/shell_parse.py resolves (wrappers
+# such as sudo, xargs, env, timeout and path forms peeled; eval, `bash -c`, heredoc shells, find -exec read as
+# commands) and that simple command's own arguments and redirections, so a search for the words is data. Text the
+# parser hands on unread keeps the raw reading: an interpreter's code (python -c, node -e, a heredoc fed to one)
+# for the raw-text rules, a runner's command line (watch, tmux, docker exec ...) for every rule. A command the parser
+# cannot read statically (a parse error, a computed command word or payload) is read as before, on its raw text.
+
+_CODE_CARRIER = re.compile(r"^(python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*|lua[\d.]*"
+                           r"|luajit|tclsh[\d.]*|wish|osascript|Rscript|[gmn]?awk)$")
+_CODE_OPTS = frozenset({"-c", "-e", "-E", "-p", "-r", "--eval", "--print", "-x"})
+_OPAQUE_RUNNERS = frozenset({"watch", "parallel", "script", "bwrap", "machinectl", "start-stop-daemon", "coproc",
+                             "tmux", "screen", "at", "batch", "docker", "podman", "nerdctl", "kubectl", "lxc", "incus",
+                             "vagrant", "expect", "gdb", "entr", "dtach", "abduco", "busctl", "dbus-send", "su", "sg",
+                             "runuser", "ssh", "pkexec", "sudoedit"})
+DOCKER_DAEMON_JSON = "/etc/docker/daemon.json"
+WORKFLOW_STATE_RE = r"(workflow-[^/]*\.json|\.claude/todos/)"
+DD_DEV_OK = ("null", "zero", "stdout", "stderr")
+
+
+class ServiceView:
+    """The simple commands of a command, resolved, for the service, disk, process and workflow rules.
+
+    raw: True when the parser cannot read the command statically; the rules then read the raw text as before.
+    sites: (name, args Words, Site, Resolved) per simple command that has a command word; redirect_sites: every Site.
+    code: interpreter code texts; runners: opaque runners' command lines (both read by the raw-text rules).
+    """
+
+    def __init__(self, command, cwd=None):
+        self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
+        self.exec_redirects, self.plain = [], False
+        self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+        try:
+            from lib.shell_parse import parse, resolve, walk
+            script = parse(command)
+            if script.error is not None:
+                raise ValueError(script.error.code)
+            nested = False
+            for site in walk(script):
+                r = resolve(site.cmd)
+                if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
+                    self.raw = True
+                nested = nested or tuple(site.context) != ("top",)
+                self.redirect_sites.append(site)
+                if [w.value() for w in site.cmd.words] == ["exec"]:
+                    self.exec_redirects.extend(site.cmd.redirects)  # they hold for every later command
+                name = r.name
+                if name is None:
+                    continue
+                args = list(r.args)
+                self.sites.append((name, args, site, r))
+                bodies = [x.hd.body for x in site.cmd.redirects if x.hd is not None] + \
+                         [x.target.text for x in site.cmd.redirects if x.op == "<<<" and x.target is not None]
+                line = " ".join([r.head.text] + [w.text for w in args] + bodies)
+                if _CODE_CARRIER.match(name):
+                    self.code.append(line)
+                    vals = [w.value() for w in args]
+                    reads_stdin = not any(v is None or v in _CODE_OPTS or not v.startswith("-") for v in vals)
+                    if reads_stdin and ({"pipe", "file"} & set(site.fed)):
+                        self.raw = True  # its program is another command's output
+                elif name in _OPAQUE_RUNNERS:
+                    self.runners.append(line)
+            self.plain = not (self.raw or nested or self.code or self.runners) and _plain_script(script, self)
+        except Exception:  # noqa: BLE001 - the parser unavailable or the text unreadable: the raw reading
+            self.raw, self.plain = True, False
+
+    def named(self, *names):
+        return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
+
+
+# The plain shape. Only a command made wholly of these simple commands, each with static arguments and plain
+# redirections, is read at command position alone; every other command also keeps the pre-OB-L11 whole-command
+# readings (service_rules, kill_pid_rule), so a launcher, wrapper or payload the parser does not classify (uv run,
+# npx, nsenter, git -c alias.x='!..', git rebase --exec, PAGER=..) loses no refusal the rules had before.
+_PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "ls", "echo",
+                            "printf", "wc"})
+_PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
+_PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
+                              "cat-file", "shortlog", "describe", "rev-list"})
+_PLAIN_UNSAFE_DIRS = ("/dev/", "/proc/", "/sys/", "/etc/", "/boot/", "/run/", "/var/run/")
+_SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
+_PLAIN_HEREDOC_OPS = ("<<", "<<-", "<<<")
+
+
+def _plain_word(w, params=False):
+    """A static word (literal or glob), or with `params` a parameter expansion holding no command substitution."""
+    kinds = ("lit", "glob", "param") if params else ("lit", "glob")
+    return all(p.kind in kinds for p in w.parts) and not w.substitutions()
+
+
+def _abs_norm(path, cwd="/"):
+    """The absolute normal form of a path: normpath keeps a leading `//` (POSIX leaves its meaning to the system;
+    Linux reads it as `/`), so the leading slashes are collapsed too."""
+    p = os.path.normpath(path if path.startswith("/") else os.path.join(cwd, path))
+    return "/" + p.lstrip("/") if p.startswith("/") else p
+
+
+def _plain_file(w, sv):
+    """An ordinary file (not under /dev, /proc, /sys, /etc ...) or /dev/null, named statically."""
+    v = w.value() if _plain_word(w) else None
+    if not v or v.startswith("~"):
+        return False
+    p = _abs_norm(v, sv.cwd)
+    if not v.startswith("/") and sv.named("cd", "pushd", "popd"):
+        return False
+    return all(q == "/dev/null" or q.startswith("/dev/shm/") or not (q + "/").startswith(_PLAIN_UNSAFE_DIRS)
+               for q in (p, _abs_norm(os.path.realpath(p))))
+
+
+def _plain_redirects(cmd, sv, reads_ok=True):
+    """Writes on fd 1 or 2 (or &>) to an ordinary file or /dev/null, 2>&1, >&2, N>&-; with `reads_ok` also a read
+    on fd 0 of a static file and a heredoc or here-string that expands nothing."""
+    for x in cmd.redirects:
+        if x.fd_var is not None:
+            return False
+        if x.op in _PLAIN_HEREDOC_OPS:
+            if not reads_ok or x.fd != 0:
+                return False
+            if x.hd is not None and not (x.hd.quoted or not x.hd.expansions):
+                return False
+            if x.op == "<<<" and not (x.target is not None and _plain_word(x.target)):
+                return False
+        elif x.close:
+            continue
+        elif x.op in (">&", "<&") and x.dup is not None:
+            if x.fd not in (1, 2) or x.dup not in (1, 2):
+                return False
+        elif x.op == "<":
+            if not reads_ok or x.fd != 0 or x.target is None or not _plain_word(x.target):
+                return False
+        elif x.op in (">", ">>", ">|", "&>", "&>>"):
+            if x.fd not in (1, 2, None) or x.target is None or not _plain_file(x.target, sv):
+                return False
+        else:
+            return False  # <>, a computed >& target
+    return True
+
+
+def _plain_dd(vals, sv):
+    """dd with static operands only, each of= /dev/null, /dev/stdout, /dev/stderr, /dev/fd/N or an ordinary file."""
+    if not all(v is not None and v.startswith(_DD_OPERANDS) for v in vals):
+        return False
+    for v in vals:
+        if not v.startswith("of="):
+            continue
+        path = v[3:]
+        if path.startswith("/") and _abs_norm(path) in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+            continue
+        if not path or path.startswith("~") or (not path.startswith("/") and sv.named("cd", "pushd", "popd")):
+            return False
+        p = _abs_norm(path, sv.cwd)
+        if re.match(r"^/dev/fd/[0-9]+$", p):
+            continue  # its command's redirections are plain (fd 1 and 2 only), so N is inherited or stdout/stderr
+        if (p + "/").startswith(_PLAIN_UNSAFE_DIRS) and not p.startswith("/dev/shm/"):
+            return False
+        if _dd_target_refused(path, sv):
+            return False
+    return True
+
+
+def _plain_git(words):
+    """A git read subcommand, past only -C DIR, --no-pager and -P; no -c, --config-env, alias, pager or output."""
+    vals = [w.value() if _plain_word(w) else None for w in words]
+    if None in vals:
+        return False
+    k = 0
+    while k < len(vals) and vals[k] in ("-C", "--no-pager", "-P"):
+        k += 2 if vals[k] == "-C" else 1
+    if k >= len(vals) or vals[k] not in _PLAIN_GIT_READS:
+        return False
+    return not any(v.startswith(("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--exec"))
+                   or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
+
+
+def _plain_simple(cmd, sv, piped):
+    from lib.shell_parse import resolve
+    if cmd.assignments or not cmd.words or not _plain_word(cmd.words[0]):
+        return False
+    name = cmd.words[0].value()
+    if not name or "/" in name:
+        return False
+    r = resolve(cmd)
+    if r.name != name or r.wrappers or r.payload is not None or r.unresolved or len(r.args) != len(cmd.words) - 1:
+        return False
+    args = list(cmd.words[1:])
+    vals = [w.value() if _plain_word(w) else None for w in args]
+    if piped and name not in _PLAIN_FILTERS:
+        return False
+    if name == "kill":  # a probe or a listing of literal words, or `kill -0 "$PID"` alone
+        return bool(vals) and vals[0] in ("-0", "-l", "-L") and _plain_kill_args(args[1:]) \
+            and _plain_redirects(cmd, sv, reads_ok=False)
+    if name == "dd":
+        return _plain_dd(vals, sv) and _plain_redirects(cmd, sv, reads_ok=False)
+    if name == "fdisk":
+        opts = [v for v in vals if v is None or v.startswith("-")]
+        return None not in vals and bool(opts) and all(
+            v in _FDISK_READS or re.match(r"^-[A-Za-z]*l[A-Za-z]*$", v) for v in opts) \
+            and _plain_redirects(cmd, sv, reads_ok=False)
+    if name == "git":
+        return _plain_git(args) and _plain_redirects(cmd, sv)
+    if name not in _PLAIN_READERS or None in vals:
+        return False
+    if name == "rg" and any(v.startswith("--pre") for v in vals):
+        return False
+    if name == "sed":
+        opts = [v for v in vals if v.startswith("-")]
+        rest = [v for v in vals if not v.startswith("-")]
+        if not opts or any(v not in ("-n", "--quiet", "--silent") for v in opts) or not rest \
+                or not _SED_PRINT.match(rest[0]):
+            return False
+    return _plain_redirects(cmd, sv)
+
+
+def _plain_kill_args(words):
+    """bash's kill reads -s SIG and -n NUM (attached too) after -0, -l or -L, so `kill -0 ${X:--s} KILL 4242` and
+    `kill -0 "$A" 4242` (A=-sKILL) send SIGKILL: only literal words stay plain, or one double-quoted bare parameter
+    as the sole word (one word, so it cannot be an option and a PID)."""
+    if all(p.kind == "lit" for w in words for p in w.parts) and not any(w.substitutions() for w in words):
+        return True
+    return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
+        and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
+        and not words[0].substitutions()
+
+
+def _plain_script(script, sv):
+    """True when every pipeline of the command is plain simple commands: a reader with static arguments,
+    `kill -0|-l|-L`, an fdisk listing, dd onto an ordinary file or /dev/null|stdout|stderr|fd/N, a git read; a later
+    pipe stage only a filter."""
+    from lib.shell_parse import SimpleCommand
+    for pipeline, _sep in script.items:
+        for i, stage in enumerate(pipeline.stages):
+            if not isinstance(stage, SimpleCommand) or not _plain_simple(stage, sv, i > 0):
+                return False
+    return True
+
+
+# The raw-text readings the rules had before OB-L11: `text` is the command, an interpreter's code or a runner's
+# command line; `view` the command's executable view, or that code or line itself.
+def _raw_daemon_json(text):
+    return grep(r"(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.json", text)
+
+
+def _raw_compose(text):
+    return grep(r"docker.compose\s+(down|restart|stop)", text)
+
+
+def _raw_prune(text):
+    return grep(r"docker\s+system\s+prune\s+-a", text)
+
+
+def _raw_disk(view):
+    return grep(r"^\s*(dd|mkfs|fdisk|shred)\b", view)
+
+
+def _raw_killall(view, family):
+    return grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", view)
+
+
+def _raw_kill_signal(view):
+    return grep(r"(^|[ \t;|&])(kill)[ \t]+-", view)
+
+
+def _raw_kill_pid(view):
+    return grep(r"(^|[;&|]\s*)kill\s+[0-9]", view)
+
+
+def _raw_systemctl(text, env):
+    return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", text) \
+        and not all_targets_whitelisted(text, r"systemctl\s+(stop|restart)", env["dev_systemd"], strip_service=True)
+
+
+def _raw_workflow(text, view):
+    return grep(r"(rm|mv)\s", view) and grep(WORKFLOW_STATE_RE, text)
+
+
+# The command-position readings.
+def _daemon_json_write(sv):
+    """A redirection into daemon.json; tee, cp or mv naming it; dd with of= it; sed or awk editing it in place or naming
+    it in code."""
+    for site in sv.redirect_sites:
+        if any(x.writes() and x.target is not None and DOCKER_DAEMON_JSON in x.target.text for x in site.cmd.redirects):
+            return True
+    for name, args, _s, _r in sv.sites:
+        if name == "dd":
+            for w in args:
+                v = w.value()
+                if v is None and DOCKER_DAEMON_JSON in w.text:
+                    return True
+                if v is not None and v.startswith("of=") and _abs_norm(v[3:], sv.cwd) == DOCKER_DAEMON_JSON:
+                    return True
+            continue
+        if not any(DOCKER_DAEMON_JSON in w.text for w in args):
+            continue
+        if name in ("tee", "cp", "mv"):
+            return True
+        if name in ("sed", "gsed", "awk", "gawk", "mawk", "nawk"):
+            vals = [w.value() for w in args]
+            in_place = any(v is not None and (re.match(r"^-[A-Za-z]*i", v) or v.startswith("--in-place")
+                                              or v in ("inplace", "--include=inplace")) for v in vals)
+            in_code = any(DOCKER_DAEMON_JSON in w.text and w.value() != DOCKER_DAEMON_JSON for w in args)
+            if in_place or in_code:
+                return True
+    return False
+
+
+_COMPOSE_VALUE_OPTS = frozenset({"-f", "--file", "-p", "--project-name", "--profile", "--env-file",
+                                 "--project-directory", "--ansi", "--parallel", "--progress"})
+
+
+def _docker_compose_stop(sv):
+    """The compose verb (the first non-option word after `compose`, past its global options' values) is down,
+    restart or stop; a later argument (a service name, a command `exec` or `run` runs) is data."""
+    for name, args, _s, _r in sv.named("docker", "docker-compose"):
+        vals = [w.value() for w in args]
+        if name == "docker":
+            if "compose" not in vals:
+                continue
+            vals = vals[vals.index("compose") + 1:]
+        k = 0
+        while k < len(vals) and vals[k] is not None and vals[k].startswith("-") and vals[k] != "-":
+            k += 2 if vals[k] in _COMPOSE_VALUE_OPTS else 1
+        if k < len(vals) and vals[k] in ("down", "restart", "stop"):
+            return True
+    return False
+
+
+def _docker_prune_all(sv):
+    """`docker system prune` with -a/--all after `prune`."""
+    for _n, args, _s, _r in sv.named("docker"):
+        vals = [w.value() or "" for w in args]
+        if "system" not in vals:
+            continue
+        i = vals.index("system")
+        if vals[i + 1:i + 2] == ["prune"] and any(
+                v.startswith("--all") or re.match(r"^-[A-Za-z]*a", v) for v in vals[i + 2:]):
+            return True
+    return False
+
+
+def _dd_target_refused(path, sv):
+    """True when dd writes a device other than /dev/null, zero, stdout, stderr or fd/*, another process's
+    descriptor (/proc/<pid>/fd/N), or a path it cannot read."""
+    if not path:
+        return True
+    if _dd_fd_of(_abs_norm(path) if path.startswith("/") else path) is not None:
+        return False  # a descriptor: the command's own redirections are checked as dd's targets
+    if re.match(r"^/proc/[^/]+/fd(/|$)", _abs_norm(path, "/x")):
+        return True  # /proc/<pid>/fd/N of a process other than this shell: its file cannot be read here
+    if path.startswith("~"):
+        path = os.path.expanduser(path)  # bash expands a tilde after of= too
+        if path.startswith("~"):
+            return True
+    if not path.startswith("/"):
+        if sv.named("cd", "pushd", "popd"):
+            return True  # relative to a directory the command moves to
+        path = os.path.join(sv.cwd, path)
+    paths = [_abs_norm(path)]
+    with contextlib.suppress(Exception):
+        paths.append(_abs_norm(os.path.realpath(paths[0])))
+    for p in paths:
+        if p == "/dev" or p.startswith("/dev/"):
+            rel = p[5:]
+            if not (rel in DD_DEV_OK or rel.startswith(("fd/", "shm/"))):  # /dev/shm/x: a tmpfs file
+                return True
+    return False
+
+
+def _dd_fd_of(path):
+    """The descriptor a path names (/dev/stdout, /dev/fd/N, /proc/self/fd/N ...), else None."""
+    std = {"/dev/stdin": 0, "/dev/stdout": 1, "/dev/stderr": 2}
+    if path in std:
+        return std[path]
+    m = re.match(r"^/(dev|proc/self|proc/thread-self)/fd/([0-9]+)$", path)
+    return int(m.group(2)) if m else None
+
+
+_HEREDOC_OPS = ("<<", "<<-", "<<<")
+
+
+def _dd_redirect_targets(site, fds=(), extra=()):
+    """Every file dd's simple command opens for writing, by any descriptor (N>, N>>, N<>, &>): of=/dev/fd/N,
+    /proc/self/fd/N, /dev/stdout or /dev/stderr and a >&N duplication all write one of these. Linux reopens the
+    file behind a descriptor an of= path names (`fds`), so a file opened on it for reading (3</dev/sda) is a
+    target too, followed through N>&M and N<&M duplications. `extra`: a bare `exec`'s redirections in the command."""
+    redirects = list(extra) + list(site.cmd.redirects)
+    fds = set(fds)
+    grew = True
+    while grew:
+        grew = False
+        for x in redirects:
+            if x.fd in fds and x.dup is not None and x.dup not in fds:
+                fds.add(x.dup)
+                grew = True
+
+    def named(x):
+        return bool(fds) and (x.fd in fds or (x.fd is None and x.fd_var is not None))
+    return [x.target.value() for x in redirects
+            if x.target is not None and x.dup is None and not x.close and x.op not in _HEREDOC_OPS
+            and (x.writes() or named(x))]
+
+
+_DD_OPERANDS = ("if=", "of=", "bs=", "ibs=", "obs=", "cbs=", "count=", "skip=", "seek=", "iseek=", "oseek=",
+                "conv=", "iflag=", "oflag=", "status=")
+_FDISK_READS = ("-l", "--list", "-x", "--list-details", "-V", "--version", "-h", "--help")
+
+
+def _destructive_disk(sv):
+    """dd writing a device or an unreadable of=; any mkfs, mkfs.* or shred; fdisk other than a listing."""
+    for name, args, site, _r in sv.sites:
+        if name == "dd":
+            fds = set()
+            for w in args:
+                v = w.value()
+                lead = v if v is not None else w.text
+                if lead.startswith("of="):
+                    if _dd_target_refused(v[3:] if v is not None else None, sv):
+                        return True
+                    if v[3:].startswith("/") and _dd_fd_of(_abs_norm(v[3:])) is not None:
+                        fds.add(_dd_fd_of(_abs_norm(v[3:])))
+                elif v is None and not lead.startswith(_DD_OPERANDS):
+                    return True  # a computed operand may be of=
+            if any(_dd_target_refused(t, sv) for t in _dd_redirect_targets(site, fds, sv.exec_redirects)):
+                return True
+        elif name in ("mkfs", "shred") or name.startswith("mkfs."):
+            return True
+        elif name == "fdisk":
+            if not any(v in _FDISK_READS or (v is not None and re.match(r"^-[A-Za-z]*l[A-Za-z]*$", v))
+                       for v in (w.value() for w in args)):
+                return True
+    return False
+
+
+def _kill_protected_family(sv, family):
+    rx = re.compile("(" + (re.escape(family) + "|" if family else "") + "claude|docker)")
+    return any(rx.search(w.value() if w.value() is not None else w.text)
+               for _n, args, _s, _r in sv.named("killall", "pkill") for w in args)
+
+
+def _kill_signal(sv):
+    """kill with an option other than the exact -0 (probe), -l or -L (list): -09 is SIGKILL."""
+    return any(v is not None and v.startswith("-") and v not in ("-0", "-l", "-L")
+               for _n, args, _s, _r in sv.named("kill") for v in (w.value() for w in args))
+
+
+def _kill_pid(sv):
+    return any(args and args[0].value() is not None and re.match(r"[0-9]", args[0].value())
+               for _n, args, _s, _r in sv.named("kill"))
+
+
+def _production_systemctl(sv, env):
+    for _n, args, _s, _r in sv.named("systemctl"):
+        vals = [w.value() for w in args]
+        if vals and vals[0] in ("stop", "restart") and any(
+                v is None or not v.startswith("-") and (v[:-8] if v.endswith(".service") else v)
+                not in env["dev_systemd"].split() for v in vals[1:]):
+            return True
+    return False
+
+
+def _workflow_state_removal(command, sv):
+    """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
+    from lib.shell_parse import _git_from_resolved
+    for name, args, site, r in sv.sites:
+        if name == "git":
+            # The subcommand as git reads it: past global options and their values (-C dir, -c k=v, --work-tree d).
+            invs = _git_from_resolved(r, site.context)
+            if not invs:
+                continue
+            sub, unresolved = invs[0].subcommand, invs[0].unresolved
+            if sub not in ("rm", "mv") and not (sub is None and unresolved):
+                continue
+        elif name not in ("rm", "mv"):
+            continue
+        if any(re.search(WORKFLOW_STATE_RE, w.text) for w in args):
+            return True
+        elsewhere = any(w.value() in (None, "{}") for w in args) \
+            or any(wr[0] == "xargs" for wr in r.wrappers) or "exec_argv" in site.context
+        if elsewhere and grep(WORKFLOW_STATE_RE, command):
+            return True
+    return False
+
+
+def service_rules(command, view, env, sv=None):
+    """BS-20/21, BS-23, BS-25..BS-31: secrets, docker, disks, kills, units, workflow state (`view`: executable view).
+
+    Read at command position through ServiceView (OB-L11); a command it cannot read keeps the raw-text reading."""
+    sv = sv if sv is not None else ServiceView(command)
     family = env["family"]
     sensitive = sensitive_redirect(command)
     if sensitive == "write":
@@ -4117,29 +4601,44 @@ def service_rules(command, view, env):
     elif sensitive == "redirect":
         refuse("BLOCKED: Attempting to redirect from/to sensitive file via Bash", f"Command: {command}",
                "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
-    if grep(r"(>|>>|tee|cp|mv|sed|awk)\s.*/etc/docker/daemon\.json", command):
+
+    # A rule refuses when its command-position reading refuses OR its pre-OB-L11 reading of the whole command
+    # does, unless the command is a plain shape (_plain_script), for which the command-position reading is exact.
+    def reads(raw_rule, structural):  # a raw-text rule: interpreter code and runner lines keep it
+        if sv.raw:
+            return raw_rule(command)
+        return structural() or any(raw_rule(t) for t in sv.code + sv.runners) \
+            or (not sv.plain and raw_rule(command))
+
+    def reads_view(view_rule, structural):  # an executable-view rule: runner lines keep it
+        if sv.raw:
+            return view_rule(view)
+        return structural() or any(view_rule(t) for t in sv.runners) or (not sv.plain and view_rule(view))
+
+    if reads(_raw_daemon_json, lambda: _daemon_json_write(sv)):
         refuse("BLOCKED: Modifying Docker daemon config is refused", f"Command: {command}", released_line())
-    if grep(r"docker.compose\s+(down|restart|stop)", command):
+    if reads(_raw_compose, lambda: _docker_compose_stop(sv)):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
-    if grep(r"docker\s+system\s+prune\s+-a", command):
+    if reads(_raw_prune, lambda: _docker_prune_all(sv)):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
-    if grep(r"^\s*(dd|mkfs|fdisk|shred)\b", view):
+    if reads_view(_raw_disk, lambda: _destructive_disk(sv)):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
-    if grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", view):
+    if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if grep(r"(^|[ \t;|&])(kill)[ \t]+-", view):
+    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
-    if grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) \
-            and (not prefix or not grep(re.escape(prefix), command)) \
-            and not all_targets_whitelisted(command, r"systemctl\s+(stop|restart)", env["dev_systemd"], strip_service=True):
+    if (not prefix or not grep(re.escape(prefix), command)) \
+            and reads(lambda t: _raw_systemctl(t, env), lambda: _production_systemctl(sv, env)):
         refuse("BLOCKED: systemctl stop/restart/disable/enable/reload/kill/try-restart/reload-or-restart is refused "
                    "for production services", f"Command: {command}",
                    f"Hint: only {env['dev_systemd']} is allowed{f' (and {prefix}-* takes the daemon-restart grant)' if prefix else ''}.",
                    released_line())
-    if grep(r"(rm|mv)\s", view) and grep(r"(workflow-[^/]*\.json|\.claude/todos/)", command):
+    if _raw_workflow(command, view) if sv.raw else (
+            _workflow_state_removal(command, sv) or any(_raw_workflow(t, t) for t in sv.runners)
+            or (not sv.plain and _raw_workflow(command, view))):
         refuse("BLOCKED: Deleting/moving workflow state files is refused", f"Command: {command}",
                    "These files are required by the workflow enforcement system.", released_line())
 
@@ -4207,9 +4706,12 @@ def removal_policy(payload_text, command):
                    f"fallback to allow.")
 
 
-def kill_pid_rule(command, view):
-    """BS-35: kill <pid>."""
-    if grep(r"(^|[;&|]\s*)kill\s+[0-9]", view):
+def kill_pid_rule(command, view, sv=None):
+    """BS-35: kill <pid>, read at command position (OB-L11) and, unless the command is a plain shape, on the
+    executable view as before; a command ServiceView cannot read keeps the view's reading alone."""
+    sv = sv if sv is not None else ServiceView(command)
+    if _raw_kill_pid(view) if sv.raw else (_kill_pid(sv) or any(_raw_kill_pid(t) for t in sv.runners)
+                                           or (not sv.plain and _raw_kill_pid(view))):
         refuse("BLOCKED: kill with PIDs is refused — verify the target is safe before killing", f"Command: {command}",
                    "REASON: Killing a PID can cascade to unrelated processes. Use a scoped restart instead.",
                    released_line())
@@ -5559,9 +6061,10 @@ def decide(payload_text):
     bulk_sentinel_rule(command)
     hard_ban_rule(command)
     executable = executable_view_or_raw(command)
-    service_rules(command, executable, env)
+    sv = ServiceView(command, get("cwd"))
+    service_rules(command, executable, env, sv)
     removal_policy(payload_text, command)
-    kill_pid_rule(command, executable)
+    kill_pid_rule(command, executable, sv)
     worktree_git_rules(command, view)
     git_clean_rule(command, executable, view)
     return "ALLOW"
