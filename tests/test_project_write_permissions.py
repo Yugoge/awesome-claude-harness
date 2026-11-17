@@ -15,14 +15,19 @@ permissions.ask returns the Write/Edit route to those to a prompt:
 * anchored at the settings source (a single leading slash: the harness home in both install layouts,
   code.claude.com/docs/en/permissions.md "`/path` | Path relative to the settings source"): one entry
   per top-level entry of the harness home -- each tracked file and directory, each runtime entry its
-  .gitignore names -- derived from the tree, and held to it by test_every_harness_home_entry_is_asked;
+  .gitignore names, and each name Claude Code itself reads from its config directory (CLI_READ: rules/,
+  output-styles/, CLAUDE.local.md, keybindings.json, .mcp.json, ...; in a CLAUDE_CONFIG_DIR install the
+  config directory is the harness home, and `<config>/rules/*.md` is loaded into every session like
+  CLAUDE.md) -- held to that universe by test_every_harness_home_entry_is_asked;
 * anchored at the home directory, for its dot files and dot directories: `~/.?` ... `~/.?????` and
   `~/.???????*` (every dot name of 1-5 or 7+ characters, with everything below it) and the six-character
   names `~/.config`, `~/.curlrc`, `~/.docker`, `~/.dotnet`, `~/.gradle`, `~/.mailrc`, `~/.ollama`,
   `~/.pgpass`, `~/.psqlrc`, `~/.pypirc`, `~/.rustup`, `~/.sdkman`, `~/.vscode`, `~/.wgetrc`. Not `~/.*`:
   measured, a pattern naming a directory covers what is below it, so `~/.*` (and `~/.*/**`) also covered
   `~/.claude/projects/<p>/memory/*.md`, the CLI's auto-memory, which base allowed; `.claude` is six
-  characters, so the length patterns leave it out. Another six-character dot name is not covered.
+  characters, so the length patterns leave it out. The six-character list also names `~/.cursor`,
+  `~/.gemini` (other agents' MCP configuration), `~/.rhosts`, `~/.shosts`, `~/.my.cnf`, `~/.tcshrc`,
+  `~/.bundle` and `~/.nanorc`; any other six-character dot name is written unprompted from HOME.
 
 "Rules are evaluated in order: deny, then ask, then allow" (permissions.md); every deny of the base
 settings is measured still denying below.
@@ -33,9 +38,14 @@ Harness-home paths that stay writable without a prompt, by design:
   through its cwd-relative allow entries (`Edit(docs/**)`, `Edit(scripts/**)`, `Edit(**/requirements.txt)`,
   `Edit(tests/generated/**)`) with the current directory at the clone, and an ask would newly prompt
   that. `scripts/**` is executed by settings and hooks; that exposure predates OB-L08.
-* CLI_OWNED: `projects/**` except transcripts (`Edit(/projects/**/*.jsonl)` asks) -- an ask on all of
-  it was measured prompting the CLI's own auto-memory writes (`projects/<p>/memory/*.md`), which base
-  allowed; `plans/**` -- the CLI's plan files.
+* CLI_OWNED: `projects/**` except transcripts (`Edit(/projects/**/*.jsonl)` asks), `plans/**`,
+  `workflows/**`, `jobs/**`, `agent-memory/**` -- directories where the CLI grants its own session's files
+  (auto-memory, plan files, workflow scripts, background-job scratch, subagent memory) ahead of the rules.
+  An ask over `projects/**` (or `~/.*`) was measured prompting the current session's auto-memory writes,
+  which base allowed; an ask cannot spare the current session's file and catch another's, so another
+  project's memory, a plan file, a workflow script and job scratch in a CLAUDE_CONFIG_DIR clone are written
+  unprompted (measured; base asked them).
+* a new top-level name that neither the harness nor the CLI reads.
 * the Bash output-redirect gap the owner accepted: ask rules do not reach a redirect target
   (permissions.md, Redirections: the check "covers your `Edit` allow and deny rules, protected paths, and
   the working directories"), measured so.
@@ -72,14 +82,20 @@ ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / "hooks"
 
 RESIDUAL = {"docs", "scripts", "requirements.txt", "tests/generated"}
-CLI_OWNED = {"projects", "plans"}
+CLI_OWNED = {"projects", "plans", "workflows", "jobs", "agent-memory"}
 # Entries a deny entry or the CLI's own protection already stops (permissions.deny, protected paths).
 OTHERWISE_STOPPED = {".harness-switch", ".env", "*.key", "*.pem", ".claude.json", "settings.local.json",
                      "/settings.machine.json"}
 # .gitignore lines naming a kind of file at any depth (editor, OS and log debris), not a harness-home entry.
 GENERIC = {"*.tmp", "*.log", "*.backup", "*.bak", ".DS_Store", "Thumbs.db"}
-SIX = ["config", "curlrc", "docker", "dotnet", "gradle", "mailrc", "ollama", "pgpass", "psqlrc", "pypirc", "rustup",
-       "sdkman", "vscode", "wgetrc"]
+SIX = ["bundle", "config", "cursor", "curlrc", "docker", "dotnet", "gemini", "gradle", "mailrc", "my.cnf", "nanorc",
+       "ollama", "pgpass", "psqlrc", "pypirc", "rhosts", "rustup", "sdkman", "shosts", "tcshrc", "vscode", "wgetrc"]
+# What Claude Code reads from its config directory (code.claude.com docs: memory, settings, sub-agents, slash
+# commands, skills, hooks, output styles, statusline, keybindings, MCP, plugins; and what the probes saw load).
+CLI_READ = ["agents", "commands", "skills", "hooks", "output-styles", "rules", "CLAUDE.md", "CLAUDE.local.md",
+            "settings.json", "settings.local.json", "keybindings.json", "statusline.sh", "plugins", ".mcp.json",
+            ".claude.json", "themes", "mods", "dev-mods", "ide", "teams", "memory", "hooks.json", "remote-settings.json",
+            "projects", "plans", "workflows", "jobs", "agent-memory"]
 HOME_ASKS = ["Edit(~/.?)", "Edit(~/.??)", "Edit(~/.???)", "Edit(~/.????)", "Edit(~/.?????)", "Edit(~/.???????*)"] + \
     ["Edit(~/.%s)" % n for n in SIX]
 MEASURED_ASK = [
@@ -171,24 +187,47 @@ MEASURED_ASK = [
     'Edit(/settings.json.backup.*)',
     'Edit(/*.png)',
     'Edit(/projects/**/*.jsonl)',
+    'Edit(/rules/**)',
+    'Edit(/output-styles/**)',
+    'Edit(/themes/**)',
+    'Edit(/mods/**)',
+    'Edit(/dev-mods/**)',
+    'Edit(/ide/**)',
+    'Edit(/teams/**)',
+    'Edit(/memory/**)',
+    'Edit(/CLAUDE.local.md)',
+    'Edit(/keybindings.json)',
+    'Edit(/statusline*)',
+    'Edit(/.mcp.json)',
+    'Edit(/.claude.json)',
+    'Edit(/hooks.json)',
+    'Edit(/remote-settings.json)',
     'Edit(~/.?)',
     'Edit(~/.??)',
     'Edit(~/.???)',
     'Edit(~/.????)',
     'Edit(~/.?????)',
     'Edit(~/.???????*)',
+    'Edit(~/.bundle)',
     'Edit(~/.config)',
+    'Edit(~/.cursor)',
     'Edit(~/.curlrc)',
     'Edit(~/.docker)',
     'Edit(~/.dotnet)',
+    'Edit(~/.gemini)',
     'Edit(~/.gradle)',
     'Edit(~/.mailrc)',
+    'Edit(~/.my.cnf)',
+    'Edit(~/.nanorc)',
     'Edit(~/.ollama)',
     'Edit(~/.pgpass)',
     'Edit(~/.psqlrc)',
     'Edit(~/.pypirc)',
+    'Edit(~/.rhosts)',
     'Edit(~/.rustup)',
     'Edit(~/.sdkman)',
+    'Edit(~/.shosts)',
+    'Edit(~/.tcshrc)',
     'Edit(~/.vscode)',
     'Edit(~/.wgetrc)',
 ]
@@ -615,8 +654,132 @@ MEASURED_HOME = [
     ('D HM Write .env', 'home', 'Write', '.env', 'deny', 'deny', 'deny'),
     ('D HM Write .claude/settings.json', 'home', 'Write', '.claude/settings.json', 'deny', 'deny', 'deny'),
     ('D HM Write .claude/hooks/x.py', 'home', 'Write', '.claude/hooks/x.py', 'deny', 'deny', 'deny'),
+    ('V A Write venv/lib/python3.13/site-packages/zz.pth', 'alt', 'Write', 'venv/lib/python3.13/site-packages/zz.pth', 'ask', 'allow', 'ask'),
+    ('V A Write templates/prompt-includes/y.md', 'alt', 'Write', 'templates/prompt-includes/y.md', 'ask', 'allow', 'ask'),
+    ('V A Write requirements/py313.txt', 'alt', 'Write', 'requirements/py313.txt', 'ask', 'allow', 'ask'),
+    ('V A Write private-literals.txt', 'alt', 'Write', 'private-literals.txt', 'ask', 'allow', 'ask'),
+    ('V A Write tools/x.py', 'alt', 'Write', 'tools/x.py', 'ask', 'allow', 'ask'),
+    ('V A Write hooks/x.py', 'alt', 'Write', 'hooks/x.py', 'ask', 'allow', 'ask'),
+    ('V A Write policies/x.json', 'alt', 'Write', 'policies/x.json', 'ask', 'allow', 'ask'),
+    ('V A Write new.md', 'alt', 'Write', 'new.md', 'ask', 'allow', 'allow'),
+    ('V A Write .claude.json', 'alt', 'Write', '.claude.json', 'n/a', 'n/a', 'n/a'),
+    ('V A Write rules/x.md', 'alt', 'Write', 'rules/x.md', 'ask', 'allow', 'ask'),
+    ('V A Write output-styles/x.md', 'alt', 'Write', 'output-styles/x.md', 'ask', 'allow', 'ask'),
+    ('V A Write keybindings.json', 'alt', 'Write', 'keybindings.json', 'ask', 'allow', 'ask'),
+    ('V A Write plans/x.md', 'alt', 'Write', 'plans/x.md', 'ask', 'allow', 'allow'),
+    ('V A Write projects/-p/memory/MEMORY.md', 'alt', 'Write', 'projects/-p/memory/MEMORY.md', 'ask', 'allow', 'allow'),
+    ('V A Write projects/-p/x.jsonl', 'alt', 'Write', 'projects/-p/x.jsonl', 'ask', 'allow', 'ask'),
+    ('V A Write agents/x.md', 'alt', 'Write', 'agents/x.md', 'ask', 'allow', 'ask'),
+    ('V A Write scripts/x.sh', 'alt', 'Write', 'scripts/x.sh', 'allow', 'allow', 'allow'),
+    ('V A Write docs/x.md', 'alt', 'Write', 'docs/x.md', 'allow', 'allow', 'allow'),
+    ('V A Write CLAUDE.local.md', 'alt', 'Write', 'CLAUDE.local.md', 'ask', 'allow', 'ask'),
+    ('V A Write memory/x.md', 'alt', 'Write', 'memory/x.md', 'ask', 'allow', 'ask'),
+    ('V A Write state/x.json', 'alt', 'Write', 'state/x.json', 'ask', 'allow', 'ask'),
+    ('V AH Write harness/rules/x.md', 'althome', 'Write', 'harness/rules/x.md', 'ask', 'allow', 'ask'),
+    ('V AH Write harness/venv/x.pth', 'althome', 'Write', 'harness/venv/lib/python3.13/site-packages/zz.pth', 'ask', 'allow', 'ask'),
+    ('V M Write .ssh/authorized_keys', 'home', 'Write', '.ssh/authorized_keys', 'ask', 'allow', 'ask'),
+    ('V M Write .bashrc', 'home', 'Write', '.bashrc', 'n/a', 'n/a', 'n/a'),
+    ('V M Write .yarnrc', 'home', 'Write', '.yarnrc', 'ask', 'ask', 'ask'),
+    ('V M Write .bundle/config', 'home', 'Write', '.bundle/config', 'ask', 'allow', 'ask'),
+    ('V M Write .pulumi/credentials.json', 'home', 'Write', '.pulumi/credentials.json', 'deny', 'deny', 'deny'),
+    ('V M Write .rhosts', 'home', 'Write', '.rhosts', 'ask', 'allow', 'ask'),
+    ('V M Write .shosts', 'home', 'Write', '.shosts', 'ask', 'allow', 'ask'),
+    ('V M Write .tcshrc', 'home', 'Write', '.tcshrc', 'ask', 'allow', 'ask'),
+    ('V M Write .nanorc', 'home', 'Write', '.nanorc', 'ask', 'allow', 'ask'),
+    ('V M Write .cursor/mcp.json', 'home', 'Write', '.cursor/mcp.json', 'ask', 'allow', 'ask'),
+    ('V M Write .gemini/settings.json', 'home', 'Write', '.gemini/settings.json', 'ask', 'allow', 'ask'),
+    ('V M Write .my.cnf', 'home', 'Write', '.my.cnf', 'ask', 'allow', 'ask'),
+    ('V M Write .local/bin/git', 'home', 'Write', '.local/bin/git', 'ask', 'allow', 'ask'),
+    ('V M Write .netrc', 'home', 'Write', '.netrc', 'ask', 'allow', 'ask'),
+    ('V M Write .gnupg/gpg.conf', 'home', 'Write', '.gnupg/gpg.conf', 'ask', 'allow', 'ask'),
+    ('V M Write .aws/config', 'home', 'Write', '.aws/config', 'ask', 'allow', 'ask'),
+    ('V M Write .kube/config', 'home', 'Write', '.kube/config', 'ask', 'allow', 'ask'),
+    ('V M Write .cargo/config.toml', 'home', 'Write', '.cargo/config.toml', 'ask', 'ask', 'ask'),
+    ('V M Write .zshrc', 'home', 'Write', '.zshrc', 'ask', 'ask', 'ask'),
+    ('V M Write .profile', 'home', 'Write', '.profile', 'ask', 'ask', 'ask'),
+    ('V M Write .npmrc', 'home', 'Write', '.npmrc', 'ask', 'ask', 'ask'),
+    ('V M Write .config/systemd/user/x.service', 'home', 'Write', '.config/systemd/user/x.service', 'ask', 'allow', 'ask'),
+    ('V M Write .envrc', 'home', 'Write', '.envrc', 'ask', 'ask', 'ask'),
+    ('V M Write .forward', 'home', 'Write', '.forward', 'ask', 'allow', 'ask'),
+    ('V M Write .codex/config.toml', 'home', 'Write', '.codex/config.toml', 'ask', 'allow', 'ask'),
+    ('V M Write .claude/projects/-p/memory/MEMORY.md', 'home', 'Write', '.claude/projects/-p/memory/MEMORY.md', 'ask', 'ask', 'ask'),
+    ('V M Write .claude/plans/x.md', 'home', 'Write', '.claude/plans/x.md', 'ask', 'ask', 'ask'),
+    ('V M Write .claude/rules/x.md', 'home', 'Write', '.claude/rules/x.md', 'ask', 'ask', 'ask'),
+    ('V M Write .claude/x.md', 'home', 'Write', '.claude/x.md', 'ask', 'ask', 'ask'),
+    ('V M Write .m2/settings.xml', 'home', 'Write', '.m2/settings.xml', 'ask', 'allow', 'ask'),
+    ('V M Write .pip/pip.conf', 'home', 'Write', '.pip/pip.conf', 'ask', 'allow', 'ask'),
+    ('V M Write .condarc', 'home', 'Write', '.condarc', 'ask', 'allow', 'ask'),
+    ('V M Write .gitconfig', 'home', 'Write', '.gitconfig', 'n/a', 'n/a', 'n/a'),
+    ('V M Write .git-credentials', 'home', 'Write', '.git-credentials', 'ask', 'allow', 'ask'),
+    ('V P Write src/newmodule.py', 'proj', 'Write', 'src/newmodule.py', 'ask', 'allow', 'allow'),
+    ('V P echo > notes.md', 'proj', 'Bash', 'echo X > notes.md', 'ask', 'allow', 'allow'),
+    ('V P heredoc', 'proj', 'Bash', "cat > src/gen.py <<'EOF'\nX\nEOF", 'ask', 'allow', 'allow'),
+    ('V P Write .claude/worktrees/a/src/x.py', 'proj', 'Write', '.claude/worktrees/a/src/x.py', 'ask', 'allow', 'allow'),
+    ('V P Write package.json', 'proj', 'Write', 'package.json', 'allow', 'allow', 'allow'),
+    ('V P Write .env (deny)', 'proj', 'Write', '.env', 'deny', 'deny', 'deny'),
+    ('V P Write .claude/settings.json (deny)', 'proj', 'Write', '.claude/settings.json', 'deny', 'deny', 'deny'),
+    ('V P Write .claude/hooks/x.sh (deny)', 'proj', 'Write', '.claude/hooks/x.sh', 'deny', 'deny', 'deny'),
+    ('V P sudo tee .claude/settings.json', 'proj', 'Bash', 'echo X | sudo tee .claude/settings.json', 'deny', 'deny', 'deny'),
+    ('V M Write .aws/credentials (deny)', 'home', 'Write', '.aws/credentials', 'deny', 'deny', 'deny'),
+    ('V M Write .env (deny)', 'home', 'Write', '.env', 'deny', 'deny', 'deny'),
+    ('V M Write .claude/settings.json (deny)', 'home', 'Write', '.claude/settings.json', 'deny', 'deny', 'deny'),
+    ('V M Write .claude/hooks/x.py (deny)', 'home', 'Write', '.claude/hooks/x.py', 'deny', 'deny', 'deny'),
+    ('V M Write .harness-switch/x (deny)', 'home', 'Write', '.harness-switch/x', 'deny', 'deny', 'deny'),
+    ('V A Write .env (deny)', 'alt', 'Write', '.env', 'deny', 'deny', 'deny'),
+    ('V A Write .hook-refactor-allow', 'alt', 'Write', '.hook-refactor-allow', 'ask', 'allow', 'ask'),
+    ('V P Write .claude/.hook-refactor-allow', 'proj', 'Write', '.claude/.hook-refactor-allow', 'ask', 'ask', 'ask'),
+    ('V M Write .x (1-char ~/.? vs nothing)', 'home', 'Write', '.x', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/rules/**)', 'alt', 'Write', 'rules/y.md', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/rules/**)', 'althome', 'Write', 'harness/rules/y.md', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/output-styles/**)', 'alt', 'Write', 'output-styles/y.md', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/output-styles/**)', 'althome', 'Write', 'harness/output-styles/y.md', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/themes/**)', 'alt', 'Write', 'themes/y.json', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/themes/**)', 'althome', 'Write', 'harness/themes/y.json', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/mods/**)', 'alt', 'Write', 'mods/y/index.js', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/mods/**)', 'althome', 'Write', 'harness/mods/y/index.js', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/dev-mods/**)', 'alt', 'Write', 'dev-mods/y/index.js', 'ask', 'ask', 'ask'),
+    ('N althome Edit(/dev-mods/**)', 'althome', 'Write', 'harness/dev-mods/y/index.js', 'ask', 'ask', 'ask'),
+    ('N alt Edit(/ide/**)', 'alt', 'Write', 'ide/y.lock', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/ide/**)', 'althome', 'Write', 'harness/ide/y.lock', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/teams/**)', 'alt', 'Write', 'teams/y.json', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/teams/**)', 'althome', 'Write', 'harness/teams/y.json', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/memory/**)', 'alt', 'Write', 'memory/y.md', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/memory/**)', 'althome', 'Write', 'harness/memory/y.md', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/CLAUDE.local.md)', 'alt', 'Write', 'CLAUDE.local.md', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/CLAUDE.local.md)', 'althome', 'Write', 'harness/CLAUDE.local.md', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/keybindings.json)', 'alt', 'Write', 'keybindings.json', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/keybindings.json)', 'althome', 'Write', 'harness/keybindings.json', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/statusline*)', 'alt', 'Write', 'statusline.sh', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/statusline*)', 'althome', 'Write', 'harness/statusline.sh', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/.mcp.json)', 'alt', 'Write', '.mcp.json', 'ask', 'ask', 'ask'),
+    ('N althome Edit(/.mcp.json)', 'althome', 'Write', 'harness/.mcp.json', 'ask', 'ask', 'ask'),
+    ('N alt Edit(/.claude.json)', 'alt', 'Write', '.claude.json', 'n/a', 'n/a', 'n/a'),
+    ('N althome Edit(/.claude.json)', 'althome', 'Write', 'harness/.claude.json', 'n/a', 'n/a', 'n/a'),
+    ('N alt Edit(/hooks.json)', 'alt', 'Write', 'hooks.json', 'ask', 'allow', 'ask'),
+    ('N althome Edit(/hooks.json)', 'althome', 'Write', 'harness/hooks.json', 'ask', 'allow', 'ask'),
+    ('N alt Edit(/remote-settings.json)', 'alt', 'Write', 'remote-settings.json', 'ask', 'ask', 'ask'),
+    ('N althome Edit(/remote-settings.json)', 'althome', 'Write', 'harness/remote-settings.json', 'ask', 'ask', 'ask'),
+    ('S6 home ~/.bundle', 'home', 'Write', '.bundle/x', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.cursor', 'home', 'Write', '.cursor/x', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.gemini', 'home', 'Write', '.gemini/x', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.my.cnf', 'home', 'Write', '.my.cnf', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.nanorc', 'home', 'Write', '.nanorc', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.rhosts', 'home', 'Write', '.rhosts', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.shosts', 'home', 'Write', '.shosts', 'ask', 'allow', 'ask'),
+    ('S6 home ~/.tcshrc', 'home', 'Write', '.tcshrc', 'ask', 'allow', 'ask'),
+    ('O alt plans md', 'alt', 'Write', 'plans/p.md', 'ask', 'allow', 'allow'),
+    ('O alt workflows js', 'alt', 'Write', 'workflows/w.js', 'ask', 'allow', 'allow'),
+    ('O alt jobs tmp', 'alt', 'Write', 'jobs/j1/tmp/a.txt', 'ask', 'allow', 'allow'),
+    ('O alt agent-memory md', 'alt', 'Write', 'agent-memory/a/MEMORY.md', 'allow', 'allow', 'allow'),
+    ('O alt memory md', 'alt', 'Write', 'projects/{ENC}/memory/note.md', 'allow', 'allow', 'allow'),
+    ('O proj default-install memory md', 'proj', 'Write', '../.claude/projects/{ENC}/memory/note.md', 'allow', 'allow', 'allow'),
+    ('O proj default-install plan md', 'proj', 'Write', '../.claude/plans/p.md', 'ask', 'ask', 'ask'),
+    ('O proj default-install agent-memory md', 'proj', 'Write', '../.claude/agent-memory/a/MEMORY.md', 'allow', 'allow', 'allow'),
+    ('O home .review/x.md (base allow)', 'home', 'Write', '.review/x.md', 'allow', 'allow', 'allow'),
+    ('O alt docs/x.md (base allow)', 'alt', 'Write', 'docs/x.md', 'allow', 'allow', 'allow'),
+    ('O alt scripts/x.sh (base allow)', 'alt', 'Write', 'scripts/x.sh', 'allow', 'allow', 'allow'),
+    ('O proj .claude/agents/x.md (base allow path)', 'proj', 'Write', '.claude/agents/x.md', 'ask', 'ask', 'ask'),
 ]
-
 # Base asked, now allowed, by intent: project writes (the lane's purpose), in a project, a plain clone
 # under HOME, or HOME itself for a non-dot path.
 PROJECT_WRITES = {
@@ -628,6 +791,7 @@ PROJECT_WRITES = {
     "P Write .github/workflows/x.yml", "P Write hooks/x.py (project dir)", "P Write CLAUDE.md (project)",
     "P Write settings.json (project root)", "P echo > src/.gitignore", "P echo > ./notes.md", "P echo 2>&1 out",
     "HM echo >> proj/.github/x.yml",
+    "V P Write src/newmodule.py", "V P echo > notes.md", "V P heredoc", "V P Write .claude/worktrees/a/src/x.py",
 }
 # Base asked, now allowed, owner-accepted: Bash output redirects, which ask rules do not reach.
 OPEN_REDIRECTS = {
@@ -638,8 +802,12 @@ OPEN_REDIRECTS = {
     "AH echo >> harness/CLAUDE.md", "AH echo >> harness/hooks/pretool-launch.py",
 }
 # Base asked, now allowed, residual: `scripts/**` (RESIDUAL: from HOME base asked it, from the clone base allowed it,
-# and one anchored ask cannot tell the two apart) and a new top-level name that nothing in the harness loads.
-OPEN_RESIDUAL = {"AH Write harness/scripts/x.sh", "A Write new.md"}
+# and one anchored ask cannot tell the two apart), a new top-level name neither the harness nor the CLI reads, and
+# the CLI_OWNED directories.
+OPEN_RESIDUAL = {"AH Write harness/scripts/x.sh", "A Write new.md", "V A Write new.md",
+                 # CLI_OWNED: another project's memory, plan files, workflow scripts, background-job scratch
+                 "V A Write projects/-p/memory/MEMORY.md", "V A Write plans/x.md", "O alt plans md",
+                 "O alt workflows js", "O alt jobs tmp"}
 # Base allowed, now asks: a manifest file base allowed anywhere (`Edit(**/package.json)`, ...) inside an asked
 # harness-home directory or ~/.config.
 ASK_OVERLAP = {"HM Write .config/x/package.json (cwd=home, base allow)", "K alt overlap hooks/package.json",
@@ -673,7 +841,8 @@ def _tracked() -> list[str]:
 
 
 def test_every_harness_home_entry_is_asked():
-    """Each top-level entry of the harness home -- tracked, or a runtime entry .gitignore names -- and each
+    """Each top-level entry of the harness home -- tracked, a runtime entry .gitignore names, or a name the CLI
+    reads from its config directory (CLI_READ) -- and each
     entry directly under tests/ is asked at the settings source, or is a named residual. A new top-level
     file or directory fails here until it gets an ask entry or a stated reason."""
     tracked = _tracked()
@@ -687,6 +856,9 @@ def test_every_harness_home_entry_is_asked():
             entry = "/".join(parts[:2]) if len(parts) > 2 else f
             if not _covered(entry):
                 missing.append(entry)
+    for name in CLI_READ:
+        if not _covered(name):
+            missing.append(name)
     for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith(("#", "!")):
@@ -743,8 +915,10 @@ def test_project_writes_run():
         assert now[label] == "allow", label
 
 
-@pytest.mark.parametrize("row", [r for r in MEASURED_HOME if r[0].startswith("E ")],
-                         ids=[r[0] for r in MEASURED_HOME if r[0].startswith("E ")])
+ASKED_ROWS = [r for r in MEASURED_HOME if r[0].startswith(("E ", "N ", "S6 "))]
+
+
+@pytest.mark.parametrize("row", ASKED_ROWS, ids=[r[0] for r in ASKED_ROWS])
 def test_each_harness_home_ask_prompts(row):
     """A Write to a path of each anchored ask entry, from the clone and from HOME, prompts; where the rig's harness
     dir holds the file already the Write tool's read-first check answers first (n/a), and the CLI refuses its own
@@ -756,7 +930,8 @@ def test_each_harness_home_ask_prompts(row):
 def test_residuals_stay_writable_and_memory_is_untouched():
     now = {r[0]: (r[4], r[6]) for r in MEASURED_HOME}
     for label in ("K alt residual docs/x.md", "K alt residual scripts/x.sh", "K alt residual requirements.txt",
-                  "K alt residual tests/generated/x.py", "K alt memory md", "K proj default-install memory md"):
+                  "K alt residual tests/generated/x.py", "K alt memory md", "K proj default-install memory md",
+                  "O alt agent-memory md", "O proj default-install agent-memory md", "O home .review/x.md (base allow)"):
         assert now[label] == ("allow", "allow"), label
 
 

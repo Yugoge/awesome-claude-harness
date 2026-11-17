@@ -386,26 +386,32 @@ no per-rule budget exists.
   at the settings source (a single leading slash: the harness home in both layouts) per top-level entry of the
   harness home -- every tracked file and directory (per subdirectory under `tests/`), every runtime entry its
   `.gitignore` names (`venv/`, whose interpreter `hooks/pretool-bash-safety.sh` runs, `private-literals.txt`,
-  `state/`, `plugins/`, ...), transcripts as `/projects/**/*.jsonl` -- and, for HOME's dot-state, `~/.?` ...
-  `~/.?????`, `~/.???????*` and fourteen named six-character entries (`~/.config`, `~/.docker`, `~/.pypirc`, ...).
-  Ask is checked after deny ("Rules are evaluated in order: deny, then ask, then allow",
-  code.claude.com/docs/en/permissions.md) and every base deny was measured still denying, `sudo tee` forms
-  included. `Edit(.claude/settings.local.json)` is added to deny: `hooks/pretool-harness-switch-guard.py` refuses a
-  write there only when it changes `env`, `hooks`, `disableAllHooks` or `permissions`. The decisions are measured on
-  Claude Code 2.1.326's own permission check run headless against a mock API (the test's MEASURED and MEASURED_HOME:
-  base, first commit, now); `test_every_harness_home_entry_is_asked` fails on a top-level entry with no ask and no
-  stated reason. **Harness-home paths that stay writable without a prompt:** `docs/**`, `scripts/**`,
+  `state/`, `plugins/`, ...), every name Claude Code reads from its config directory (`rules/`, which it loads into
+  every session like `CLAUDE.md`, `CLAUDE.local.md`, `output-styles/`, `keybindings.json`, `statusline*`,
+  `.mcp.json`, ...), transcripts as `/projects/**/*.jsonl` -- and, for HOME's dot-state, `~/.?` ... `~/.?????`,
+  `~/.???????*` and twenty-two named six-character entries (`~/.config`, `~/.cursor`, `~/.gemini`, `~/.rhosts`,
+  `~/.shosts`, `~/.my.cnf`, `~/.pypirc`, ...), which leave `~/.claude` out. Ask is checked after deny ("Rules are
+  evaluated in order: deny, then ask, then allow", code.claude.com/docs/en/permissions.md) and every base deny was
+  measured still denying, `sudo tee` forms included. `Edit(.claude/settings.local.json)` is added to deny:
+  `hooks/pretool-harness-switch-guard.py` refuses a write there only when it changes `env`, `hooks`,
+  `disableAllHooks` or `permissions`. The decisions are measured on Claude Code 2.1.326's own permission check run
+  headless against a mock API (the test's MEASURED and MEASURED_HOME: base, first commit, now);
+  `test_every_harness_home_entry_is_asked` fails on a tracked, gitignored or CLI-read top-level name with no ask and
+  no stated reason. **Harness-home paths that stay writable without a prompt:** `docs/**`, `scripts/**`,
   `requirements.txt` and `tests/generated/**`, which base already allowed from the clone through its cwd-relative
   entries (`scripts/**` is executed by settings and hooks; an ask would newly prompt what base allowed, and an
   anchored ask cannot spare the clone while catching HOME, so `harness/scripts/` from HOME stays allowed too);
-  `projects/**` other than transcripts and `plans/**`, the CLI's own auto-memory and plan files (an ask over
-  `projects/**`, or `~/.*`, was measured prompting auto-memory writes base allowed); a new top-level name nothing
-  loads; and Bash output redirects anywhere, which ask rules do not reach (the redirect check "covers your `Edit`
-  allow and deny rules, protected paths, and the working directories", same page) -- a gap the owner accepted. A
-  six-character HOME dot name outside the fourteen is not asked either. Measured overlap: a manifest file base allowed
-  anywhere (`**/package.json`, ...) inside an asked harness-home directory or `~/.config` now asks. Writes to
-  `.claude/hooks/` and `.claude/commands/` are also refused by `hooks/pretool-claude-config-guard.py`; `.claude/` and
-  `.git/` stay protected paths.
+  `projects/**` other than transcripts, `plans/**`, `workflows/**`, `jobs/**` and `agent-memory/**`, where the CLI
+  grants its own session's files (an ask over `projects/**`, or `~/.*`, was measured prompting the current
+  session's auto-memory writes, which base allowed; so another project's memory, a plan file, a workflow script and
+  job scratch in the clone are written unprompted, measured, where base asked); a new top-level name that neither the
+  harness nor the CLI reads; and Bash output redirects anywhere, which ask rules do not reach (the redirect check
+  "covers your `Edit` allow and deny rules, protected paths, and the working directories", same page) -- a gap the
+  owner accepted. From HOME, a six-character dot name outside the twenty-two is
+  written unprompted. Measured overlap: a manifest file base allowed anywhere (`**/package.json`,
+  ...) inside an asked harness-home directory or `~/.config` now asks. Writes to `.claude/hooks/` and
+  `.claude/commands/` are also refused by `hooks/pretool-claude-config-guard.py`; `.claude/` and `.git/` stay
+  protected paths.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
