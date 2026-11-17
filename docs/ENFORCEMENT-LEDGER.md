@@ -384,7 +384,9 @@ no per-rule budget exists.
   as `CLAUDE_CONFIG_DIR` (docs/installation.md, "Other install locations") or at the home directory it also allowed
   writes that asked before. `permissions.ask` returns the Write/Edit route to them to a prompt: one entry anchored
   at the settings source (a single leading slash: the harness home in both layouts) per top-level entry of the
-  harness home -- every tracked file and directory (per subdirectory under `tests/`), every runtime entry its
+  harness home -- every tracked file and directory (per subdirectory under `tests/`; `.claude/` file by file, as
+  `/.claude/.awesome-claude-harness`, `/.claude/specs/**` and `/.claude/state/**`, since `/.claude/**` was measured
+  prompting the CLI's own auto-memory below `~/.claude` with cwd = HOME), every runtime entry its
   `.gitignore` names (`venv/`, whose interpreter `hooks/pretool-bash-safety.sh` runs, `private-literals.txt`,
   `state/`, `plugins/`, ...), every name Claude Code reads from its config directory (`rules/`, which it loads into
   every session like `CLAUDE.md`, `CLAUDE.local.md`, `output-styles/`, `keybindings.json`, `statusline*`,
@@ -402,7 +404,7 @@ no per-rule budget exists.
   entries (`scripts/**` is executed by settings and hooks; an ask would newly prompt what base allowed, and an
   anchored ask cannot spare the clone while catching HOME, so `harness/scripts/` from HOME stays allowed too);
   `projects/**` other than transcripts, `plans/**`, `workflows/**`, `jobs/**` and `agent-memory/**`, where the CLI
-  grants its own session's files (an ask over `projects/**`, or `~/.*`, was measured prompting the current
+  grants its own session's files (an ask over `projects/**`, `/.claude/**` or `~/.*` was measured prompting the current
   session's auto-memory writes, which base allowed; so another project's memory, a plan file, a workflow script and
   job scratch in the clone are written unprompted, measured, where base asked); a new top-level name that neither the
   harness nor the CLI reads; and Bash output redirects anywhere, which ask rules do not reach (the redirect check

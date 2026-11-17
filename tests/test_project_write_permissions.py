@@ -18,7 +18,10 @@ permissions.ask returns the Write/Edit route to those to a prompt:
   .gitignore names, and each name Claude Code itself reads from its config directory (CLI_READ: rules/,
   output-styles/, CLAUDE.local.md, keybindings.json, .mcp.json, ...; in a CLAUDE_CONFIG_DIR install the
   config directory is the harness home, and `<config>/rules/*.md` is loaded into every session like
-  CLAUDE.md) -- held to that universe by test_every_harness_home_entry_is_asked;
+  CLAUDE.md) -- held to that universe by test_every_harness_home_entry_is_asked. `.claude/` is asked file by
+  file (`/.claude/.awesome-claude-harness`, its one tracked file, and the runtime `/.claude/specs/**`,
+  `/.claude/state/**`): `/.claude/**` was measured prompting the CLI's own auto-memory
+  (`~/.claude/projects/<slug>/memory/*.md`) in the default install with cwd = HOME, which base allowed;
 * anchored at the home directory, for its dot files and dot directories: `~/.?` ... `~/.?????` and
   `~/.???????*` (every dot name of 1-5 or 7+ characters, with everything below it) and the six-character
   names `~/.config`, `~/.curlrc`, `~/.docker`, `~/.dotnet`, `~/.gradle`, `~/.mailrc`, `~/.ollama`,
@@ -99,7 +102,9 @@ CLI_READ = ["agents", "commands", "skills", "hooks", "output-styles", "rules", "
 HOME_ASKS = ["Edit(~/.?)", "Edit(~/.??)", "Edit(~/.???)", "Edit(~/.????)", "Edit(~/.?????)", "Edit(~/.???????*)"] + \
     ["Edit(~/.%s)" % n for n in SIX]
 MEASURED_ASK = [
-    'Edit(/.claude/**)',
+    'Edit(/.claude/.awesome-claude-harness)',
+    'Edit(/.claude/specs/**)',
+    'Edit(/.claude/state/**)',
     'Edit(/.gitattributes)',
     'Edit(/.github/**)',
     'Edit(/.gitignore)',
@@ -430,8 +435,8 @@ MEASURED = [
 ]
 
 MEASURED_HOME = [
-    ('E alt Edit(/.claude/**)', 'alt', 'Write', '.claude/probe-x.txt', 'ask', 'ask', 'ask'),
-    ('E althome Edit(/.claude/**)', 'althome', 'Write', 'harness/.claude/probe-x.txt', 'ask', 'ask', 'ask'),
+    ('E alt .claude/probe-x.txt (protected path)', 'alt', 'Write', '.claude/probe-x.txt', 'ask', 'ask', 'ask'),
+    ('E althome .claude/probe-x.txt (protected path)', 'althome', 'Write', 'harness/.claude/probe-x.txt', 'ask', 'ask', 'ask'),
     ('E alt Edit(/.gitattributes)', 'alt', 'Write', '.gitattributes', 'ask', 'allow', 'ask'),
     ('E althome Edit(/.gitattributes)', 'althome', 'Write', 'harness/.gitattributes', 'ask', 'allow', 'ask'),
     ('E alt Edit(/.github/**)', 'alt', 'Write', '.github/probe-x.txt', 'ask', 'allow', 'ask'),
@@ -779,6 +784,24 @@ MEASURED_HOME = [
     ('O alt docs/x.md (base allow)', 'alt', 'Write', 'docs/x.md', 'allow', 'allow', 'allow'),
     ('O alt scripts/x.sh (base allow)', 'alt', 'Write', 'scripts/x.sh', 'allow', 'allow', 'allow'),
     ('O proj .claude/agents/x.md (base allow path)', 'proj', 'Write', '.claude/agents/x.md', 'ask', 'ask', 'ask'),
+    ('W M own memory cwd=HOME', 'home', 'Write', '@.claude/projects/{SLUG}/memory/MEMORY.md', 'allow', 'allow', 'allow'),
+    ('W M own memory topic cwd=HOME', 'home', 'Write', '@.claude/projects/{SLUG}/memory/t.md', 'allow', 'allow', 'allow'),
+    ('W M plan cwd=HOME', 'home', 'Write', '@.claude/plans/x.md', 'ask', 'ask', 'ask'),
+    ('W M own memory cwd=proj', 'proj', 'Write', '@.claude/projects/{SLUG}/memory/MEMORY.md', 'allow', 'allow', 'allow'),
+    ('W A Write .claude/.awesome-claude-harness', 'alt', 'Write', '.claude/.awesome-claude-harness', 'ask', 'ask', 'ask'),
+    ('W AH Write harness/.claude/.awesome-claude-harness', 'althome', 'Write', 'harness/.claude/.awesome-claude-harness', 'ask', 'ask', 'ask'),
+    ('W A Write .claude/state/x.json', 'alt', 'Write', '.claude/state/x.json', 'ask', 'ask', 'ask'),
+    ('W A Write .claude/specs/x.md', 'alt', 'Write', '.claude/specs/x.md', 'ask', 'ask', 'ask'),
+    ('W A Write .claude/x.md', 'alt', 'Write', '.claude/x.md', 'ask', 'ask', 'ask'),
+    ('W A Write rules/x.md', 'alt', 'Write', 'rules/x.md', 'ask', 'allow', 'ask'),
+    ('W A Write hooks/x.py', 'alt', 'Write', 'hooks/x.py', 'ask', 'allow', 'ask'),
+    ('W A Write venv pth', 'alt', 'Write', 'venv/lib/python3.13/site-packages/zz.pth', 'ask', 'allow', 'ask'),
+    ('W A Write docs/x.md', 'alt', 'Write', 'docs/x.md', 'allow', 'allow', 'allow'),
+    ('W A own memory', 'alt', 'Write', 'projects/{ENC}/memory/note.md', 'allow', 'allow', 'allow'),
+    ('W M Write .claude/settings.json (deny)', 'home', 'Write', '.claude/settings.json', 'deny', 'deny', 'deny'),
+    ('W M Write .claude/hooks/x.py (deny)', 'home', 'Write', '.claude/hooks/x.py', 'deny', 'deny', 'deny'),
+    ('W M Write .ssh/config', 'home', 'Write', '.ssh/config', 'ask', 'allow', 'ask'),
+    ('W P Write src/newmodule.py', 'proj', 'Write', 'src/newmodule.py', 'ask', 'allow', 'allow'),
 ]
 # Base asked, now allowed, by intent: project writes (the lane's purpose), in a project, a plain clone
 # under HOME, or HOME itself for a non-dot path.
@@ -792,6 +815,7 @@ PROJECT_WRITES = {
     "P Write settings.json (project root)", "P echo > src/.gitignore", "P echo > ./notes.md", "P echo 2>&1 out",
     "HM echo >> proj/.github/x.yml",
     "V P Write src/newmodule.py", "V P echo > notes.md", "V P heredoc", "V P Write .claude/worktrees/a/src/x.py",
+    "W P Write src/newmodule.py",
 }
 # Base asked, now allowed, owner-accepted: Bash output redirects, which ask rules do not reach.
 OPEN_REDIRECTS = {
@@ -830,9 +854,10 @@ def _anchored_asks() -> list[str]:
 
 
 def _covered(name: str) -> bool:
+    """Whether `name` (a top-level entry, or a path below one) is asked or has a stated reason."""
     if name in RESIDUAL or name in CLI_OWNED or name in OTHERWISE_STOPPED or name in GENERIC:
         return True
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in _anchored_asks())
+    return any(fnmatch.fnmatchcase(name, pattern) or name.startswith(pattern + "/") for pattern in _anchored_asks())
 
 
 def _tracked() -> list[str]:
@@ -848,8 +873,11 @@ def test_every_harness_home_entry_is_asked():
     tracked = _tracked()
     missing = []
     for top in sorted({f.split("/")[0] for f in tracked}):
-        if top != "tests" and not _covered(top):
-            missing.append(top)
+        if top == "tests" or _covered(top):
+            continue
+        # A directory asked file by file (.claude/: an ask on all of it prompts the CLI's own auto-memory).
+        below = [f for f in tracked if f.startswith(top + "/")]
+        missing += [f for f in below if not _covered(f)] if below else [top]
     for f in tracked:
         parts = f.split("/")
         if parts[0] == "tests":
@@ -869,7 +897,7 @@ def test_every_harness_home_entry_is_asked():
         if name.startswith("tests/"):
             entry = "/".join(name.split("/")[:2])
         elif "/" in name:
-            entry = name.split("/")[0]  # below a top-level entry: that entry decides
+            entry = name if _covered(name) else name.split("/")[0]  # below a top-level entry
         else:
             entry = name
         if entry != "tests" and not _covered(entry) and not _covered(line):
@@ -943,6 +971,18 @@ def test_every_change_from_base_is_accounted_for():
     assert newly_asked == ASK_OVERLAP
     newly_denied = {r[0] for r in ALL_ROWS if r[4] != "deny" and r[6] == "deny"}
     assert newly_denied and all("settings.local.json" in label for label in newly_denied)
+
+
+def test_own_auto_memory_keeps_its_base_decision():
+    """The CLI's own auto-memory below ~/.claude stays as base decided it, with cwd = HOME too (an ask over
+    `/.claude/**` was measured prompting it there), and plan files stay asked as on base."""
+    rows = {r[0]: r for r in MEASURED_HOME if r[0].startswith("W ")}
+    for label in ("W M own memory cwd=HOME", "W M own memory topic cwd=HOME", "W M own memory cwd=proj", "W A own memory",
+                  "W M plan cwd=HOME"):
+        assert rows[label][6] == rows[label][4], label
+    assert rows["W M own memory cwd=HOME"][4] == "allow"
+    assert "Edit(/.claude/**)" not in _permissions()["ask"]
+    assert "Edit(/.claude/.awesome-claude-harness)" in _permissions()["ask"]
 
 
 def test_project_local_settings_entry_is_denied():

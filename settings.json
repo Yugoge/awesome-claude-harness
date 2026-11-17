@@ -272,7 +272,9 @@
       "Skill(test:*)"
     ],
     "ask": [
-      "Edit(/.claude/**)",
+      "Edit(/.claude/.awesome-claude-harness)",
+      "Edit(/.claude/specs/**)",
+      "Edit(/.claude/state/**)",
       "Edit(/.gitattributes)",
       "Edit(/.github/**)",
       "Edit(/.gitignore)",
