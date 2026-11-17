@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 191
+- **Total files**: 192
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -82,6 +82,7 @@
 - `test_g2_spec_views.py` - subagent's stop by `spec-verify.py --strict` on the views its dispatch declares
 - `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 - `test_git_dynamic_directory.py` - `"$VIRTUAL_ENV/bin/pip" show pytest` runs pip wherever the variable points:
+- `test_git_hidden_code.py` - The classifier reads shell text, so `python3 -c 'subprocess.run(["git","push"])'`
 - `test_git_prefix_enumeration.py` - THE DEFECT
 - `test_git_residual_override.py` - Background
 - `test_git_shell_c_strings.py` - `bash -c "git commit -m y"` runs git, but the shell segment's command token is
