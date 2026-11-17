@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:38:26Z*
-**Total entries**: 265
+*Last updated: 2026-11-17T07:25:18Z*
+**Total entries**: 266
 **Convention**: kebab
 
 ## Tree
@@ -221,6 +221,7 @@ tests/
 ├── `test_permission_coverage.py` - entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn)
 ├── `test_pre_commit_dev_command_files.py` - dev-family command files as the tree holds them
 ├── `test_private_literal_rule.py` - pre-commit hook hooks/git-hooks/pre-commit
+├── `test_project_write_permissions.py` - Root cause: permissions.allow's Edit entries covered only manifests, .claude/agents|commands, .re...
 ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
