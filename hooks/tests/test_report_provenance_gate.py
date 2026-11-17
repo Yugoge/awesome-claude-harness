@@ -114,8 +114,21 @@ class World:
                 "tool_input": tool_input, "tool_use_id": "toolu_" + uuid.uuid4().hex[:24]}
         if agent:
             data.update(agent_id=agent, agent_type="qa")
+        self.record_call(agent, data["tool_use_id"], tool, tool_input)
         return subprocess.run([sys.executable, str(hook)], input=json.dumps(data), capture_output=True,
                               text=True, cwd=str(self.tmp), env=self.env(), timeout=120)
+
+    def record_call(self, agent, call_id: str, tool: str, tool_input: dict) -> None:
+        """What the CLI does before a call's hooks run: the caller's transcript (the subagent's own,
+        or the session's) records the tool_use with its id and a timestamp."""
+        path = self.agent_transcript(agent) if agent else self.transcript
+        if agent and not path.exists():
+            return
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with path.open("a") as fh:
+            fh.write(json.dumps({"type": "assistant", "timestamp": stamp, "cwd": str(self.project),
+                                 "message": {"role": "assistant", "content": [
+                                     {"type": "tool_use", "id": call_id, "name": tool, "input": tool_input}]}}) + "\n")
 
     def main_dispatches(self):
         """The main agent's next call: the QA's dispatch (its PreToolUse observes the reports)."""

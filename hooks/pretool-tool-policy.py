@@ -711,15 +711,44 @@ def _is_report(path: str, names=_REPORT_NAME) -> bool:
     return bool(names.fullmatch(name)) and folder == "dev" and os.path.basename(parent) == "docs"
 
 
+# The absolute paths the session's QA dispatches declare as their qa-report.v2 (wherever
+# they lie, docs/dev/qa/x.json or out/qa.json alike), set once per main-agent call by
+# _check_report_writes: a write of one is a write of a gate-read report.
+_DECLARED_REPORTS: frozenset = frozenset()
+
+
 def _report_path(path: str, names=_REPORT_NAME) -> bool:
     """As written (normalized) or with the links that exist now resolved."""
     path = os.path.normpath(path)
-    if _is_report(path, names):
+    if _is_report(path, names) or path in _DECLARED_REPORTS:
         return True
     try:
-        return _is_report(os.path.realpath(path), names)
+        real = os.path.realpath(path)
+        return _is_report(real, names) or real in _DECLARED_REPORTS
     except (OSError, ValueError):
         return False
+
+
+def _declared_reports(data: dict, tool_input) -> frozenset:
+    """The absolute (as written and real) paths of every qa-report.v2 a QA dispatch of the
+    session declares: started subagents, the ledger's watch list, this call's own dispatch."""
+    try:
+        from lib import report_provenance
+
+        root = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
+        if not root:
+            return frozenset()
+        rels = report_provenance.declared_reports(data.get("session_id"), root, _session_transcript(data))
+        if isinstance(tool_input, dict):
+            rels |= set(report_provenance.declared_in_prompt(tool_input.get("prompt")))
+        out = set()
+        for rel in rels:
+            path = os.path.normpath(os.path.join(root, rel))
+            out.add(path)
+            out.add(os.path.realpath(path))
+        return frozenset(out)
+    except Exception:
+        return frozenset()
 
 
 def _braces(text: str) -> list:
@@ -981,12 +1010,15 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
     (test_tool_policy_derived_permission.py's test_a_dispatch_refused_at_pretooluse_declares_nothing
     pins it as allowed; an owner decision). Whatever this misses, the e2e gate refuses by
     provenance (lib/report_provenance.py)."""
+    global _DECLARED_REPORTS
     if data.get("agent_id") or not isinstance(tool_input, dict):
         return
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if tool_name in WRITE_TOOLS or tool_name == "Bash":
+        _DECLARED_REPORTS = _declared_reports(data, None)
     if tool_name == "Bash":
         command = tool_input.get("command")
-        if not isinstance(command, str) or "report" not in command:
+        if not isinstance(command, str) or ("report" not in command and not _DECLARED_REPORTS):
             return
         try:
             hits = _bash_report_writes(command, cwd)
@@ -1004,20 +1036,29 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
     if hits:
         _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, hits[0],
                     f"write target {hits[0]} is a gate-read report (docs/dev/qa-report-*.json, "
-                    "ba-qa-report-*.json, dev-report-*.json): only the producer subagent its dispatch "
+                    "ba-qa-report-*.json, dev-report-*.json, or a path a QA dispatch of the session "
+                    "declares as its qa-report.v2): only the producer subagent its dispatch "
                     "declares writes it; the main agent never writes one (CD-6)")
         sys.exit(2)
 
 
 def _observe_reports(data: dict) -> None:
-    """Record this call's caller as the writer of every qa-report changed since the session
-    last looked (lib/report_provenance.py; the e2e gate reads it). Never refuses."""
+    """Record this call's caller as the writer of every watched QA report (docs/dev/qa-report-*.json
+    and every path a QA dispatch of the session declares, this call's own dispatch included)
+    changed since the ledger last recorded it, bound to this call's tool_use_id
+    (lib/report_provenance.py; the e2e gate reads it). Never refuses."""
     try:
         from lib import report_provenance
 
         project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
+        tool_input = data.get("tool_input")
+        declared = ()
+        if data.get("tool_name") in ("Agent", "Task") and isinstance(tool_input, dict):
+            declared = report_provenance.declared_in_prompt(tool_input.get("prompt"))
         report_provenance.observe(data.get("session_id"), project,
-                                  data.get("agent_id") or report_provenance.MAIN)
+                                  data.get("agent_id") or report_provenance.MAIN,
+                                  call=data.get("tool_use_id"), session_transcript=_session_transcript(data),
+                                  declared=declared)
     except Exception:
         pass
 
@@ -1553,6 +1594,9 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
+    provenance = os.path.join(state, "report-provenance")  # lib/report_provenance.ledger_dir
+    if _below(path, provenance) or (removed and _below(provenance, path)):
+        return "the QA report provenance ledger, which only hooks write (CD-6)"
     push = _push_input(path, state)
     if push:
         return push
