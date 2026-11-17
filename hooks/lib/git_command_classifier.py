@@ -673,7 +673,10 @@ def _segment_residual_shapes(command_text):
                              (`g\\it push`, `gi""t push`, `$'git' push`);
       dynamic_git_token      it holds an expansion and a git verb follows
                              (`$GIT push`, `${G}it commit`), unless an
-                             assignment in the text pins it to something else;
+                             assignment in the text pins it to something else
+                             or the expansion is only in its directory part
+                             (`"$VIRTUAL_ENV/bin/pip" show`, see
+                             _dynamic_only_in_directory);
       substituted_git_token  it is a command substitution and a git verb
                              follows (`$(which git) push`).
     """
@@ -704,8 +707,50 @@ def _segment_residual_shapes(command_text):
         elif sub in _GIT_SUBCOMMANDS:
             if kinds <= {'sub'}:
                 yield ('substituted_git_token', text)
-            elif not _resolves_to_non_git(raw, assigns):
+            elif not (_resolves_to_non_git(raw, assigns) or _dynamic_only_in_directory(word)):
                 yield ('dynamic_git_token', text)
+
+
+# Quotes whose text is taken as written.
+_WRITTEN_QUOTES = frozenset({shell_parse.BARE, shell_parse.SINGLE, shell_parse.DOUBLE,
+                             shell_parse.ESCAPED})
+_PLAIN_NAME_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+# Programs that run git under another name: `git*` (`git-push` runs git's push,
+# and a case-insensitive file system runs `GIT`) and hub.
+_GIT_LIKE_PREFIX = 'git'
+_GIT_LIKE_NAMES = frozenset({'hub'})
+
+
+def _dynamic_only_in_directory(word):
+    """True iff word's expansions are only in its directory part (OB-L25).
+
+    `"$VIRTUAL_ENV/bin/pip"` runs pip, wherever the variable points: each
+    expansion is a plain variable inside double quotes, so it is one field,
+    never split or globbed, and a literal `/name` after the last one fixes the
+    file name. The word runs the program a literal path ending in that name
+    runs. Refused, as before: an unquoted expansion (`$D/bin/pip`, whose value
+    may split into `git push ...`), `${G:-x}` and every other operator,
+    `$@`, a substitution, a glob or brace in the word, an expansion in the
+    file name (`"$X/bin/$Y"`), and a file name that is git-like (`git`,
+    `git-receive-pack`, `GIT`, `hub`).
+    """
+    parts = word.parts
+    last = max((k for k, p in enumerate(parts) if p.kind != 'lit'), default=None)
+    if last is None:
+        return False
+    for p in parts[:last + 1]:
+        if p.kind == 'param':
+            if p.quote != shell_parse.DOUBLE or not _PLAIN_NAME_RE.match(p.text):
+                return False
+        elif p.kind != 'lit' or p.quote not in _WRITTEN_QUOTES:
+            return False
+    tail = parts[last + 1:]
+    if any(p.kind != 'lit' or p.quote not in _WRITTEN_QUOTES for p in tail):
+        return False
+    directory, slash, name = ''.join(p.text for p in tail).rpartition('/')
+    lowered = name.lower()
+    return (bool(slash) and name not in ('', '.', '..')
+            and not lowered.startswith(_GIT_LIKE_PREFIX) and lowered not in _GIT_LIKE_NAMES)
 
 
 # ---------------------------------------------------------------------------
