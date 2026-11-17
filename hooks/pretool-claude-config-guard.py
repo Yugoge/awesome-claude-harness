@@ -157,16 +157,115 @@ def _home_spelled_out(command: str) -> str:
     return text.replace('"', '').replace("'", '')
 
 
-def _classify_bash_target(command: str) -> str:
-    """Return 'hooks', 'commands', or '' for a Bash command, as written or with the home spelled out."""
-    if not command:
-        return ''
+def _legacy_kind(command: str) -> str:
+    """The base reading: 'hooks' or 'commands' when a write word (cp, mv, tee, a redirect) comes
+    before a protected folder anywhere in the text, as written or with the home spelled out."""
     for text in dict.fromkeys((command, _home_spelled_out(command))):
         if _matches_any(text, _HOOK_PATTERNS):
             return 'hooks'
         if _matches_any(text, _CMD_PATTERNS):
             return 'commands'
     return ''
+
+
+# A protected folder named in a path: `.claude/hooks` or `.claude/commands`, as the folder itself or
+# anything below it (`cp -t .claude/hooks x`, `--target-directory=.claude/commands`).
+_PROTECTED = re.compile(r'\.claude/(hooks|commands)(?![A-Za-z0-9_.-])')
+# Commands that run their operands (or a string) as code the shared parser does not read: a write
+# they make is unknown, so where one names a protected folder the base reading decides.
+_OPAQUE = frozenset({
+    'watch', 'parallel', 'docker', 'podman', 'kubectl', 'script', 'bwrap', 'machinectl',
+    'start-stop-daemon', 'coproc', 'sg', 'awk', 'gawk', 'mawk', 'nawk', 'perl', 'ruby', 'node',
+    'php', 'lua', 'tclsh', 'expect', 'make', 'vim', 'vi', 'nvim', 'ex', 'ed', 'emacs',
+})
+_CD = frozenset({'cd', 'pushd'})
+
+
+def _protected_kind(text: str) -> str:
+    """'hooks' or 'commands' when ``text`` (with the home spelled out) names a protected folder."""
+    if not text:
+        return ''
+    for form in dict.fromkeys((text, _home_spelled_out(text))):
+        found = _PROTECTED.search(form.replace('\\', '/'))
+        if found:
+            return found.group(1)
+    return ''
+
+
+def _shell_parse():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from lib import shell_parse
+    return shell_parse
+
+
+def _cd_dirs(sp, sites) -> list:
+    """Every directory a `cd`/`pushd` in the command may leave the shell in, as written (each `cd`
+    taken from every directory an earlier one may have left), the starting directory first."""
+    dirs = ['']
+    for site, res in sites:
+        if res.name not in _CD:
+            continue
+        ops = [w for w in res.args if not (w.value() or '').startswith('-')]
+        if not ops:
+            continue
+        arg = _home_spelled_out(ops[0].text)
+        if arg.startswith(('/', '~')):
+            new = [arg]
+        else:
+            new = [os.path.join(d, arg) if d else arg for d in dirs]
+        dirs.extend(d for d in new if d not in dirs)
+        if len(dirs) > 64:
+            break
+    return dirs
+
+
+def _parsed_kind(command: str) -> tuple:
+    """(kind, settled): the protected folder ('hooks', 'commands' or '') a path the shared parser
+    reads ``command`` to write lies in, and whether that reading settles it. It does not after a
+    parse failure, or where a command it cannot read statically (a computed name, an unresolved
+    wrapper or payload, an interpreter of its own language) names a protected folder: the base
+    reading of the raw text decides as well then."""
+    sp = _shell_parse()
+    script = sp.parse(command)
+    if script.errors():
+        return '', False
+    sites = [(site, sp.resolve(site.cmd)) for site in sp.walk(script)]
+    settled = not any(
+        (res.unresolved or (res.head is not None and res.name is None) or res.name in _OPAQUE
+         or (res.name or '').startswith(('python', 'pypy')))
+        and _protected_kind(sp.cmd_source(site.cmd)) for site, res in sites)
+    dirs = _cd_dirs(sp, sites)
+    for t in sp.write_targets(script):
+        if t.mechanism == 'computed-command':
+            continue  # an operand of a command whose name is computed: no known write
+        texts = [t.path or '', (t.word.text if t.word is not None else '')]
+        if t.source and t.mode in (sp.COPY_DEST, sp.MOVE_DEST, sp.LINK) and t.path:
+            texts.append(os.path.join(t.path, os.path.basename(t.source.rstrip('/'))))
+        for text in texts:
+            spelled = _home_spelled_out(text) if text else ''
+            if not spelled:
+                continue
+            candidates = [spelled]
+            if not spelled.startswith(('/', '~', '$')):
+                candidates += [os.path.normpath(os.path.join(d, spelled)) for d in dirs if d]
+            for candidate in candidates:
+                kind = _protected_kind(candidate)
+                if kind:
+                    return kind, settled
+    return '', settled
+
+
+def _classify_bash_target(command: str) -> str:
+    """Return 'hooks', 'commands', or '' for a Bash command: the protected folder a path it writes,
+    removes or moves away lies in (each relative one also read from every `cd` target), as the
+    shared parser reads it; where the parser cannot settle it, the base reading of the raw text."""
+    if not command:
+        return ''
+    try:
+        kind, settled = _parsed_kind(command)
+    except Exception:
+        kind, settled = '', False
+    return kind or ('' if settled else _legacy_kind(command))
 
 
 def _block(message: str) -> None:
@@ -291,7 +390,7 @@ def _clean_approved_bash(command: str, data: dict) -> bool:
     for text in dict.fromkeys((command, _home_spelled_out(command))):
         for spelling in sorted(spellings, key=len, reverse=True):
             text = text.replace(spelling, ' ')
-        if _matches_any(text, _HOOK_PATTERNS) or _matches_any(text, _CMD_PATTERNS):
+        if _classify_bash_target(text):
             return False
     return True
 
