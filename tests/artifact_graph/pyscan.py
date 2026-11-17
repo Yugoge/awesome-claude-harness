@@ -96,6 +96,7 @@ class ReadInfo:
 # function (FunctionWalk._escape_sets); "*" is an exception the scan cannot name.
 READ_ERRORS = frozenset({"OSError", "ValueError"})
 OS_ERRORS = frozenset({"OSError"})
+_SWALLOWING_TESTS = frozenset({"os.path.exists", "os.path.isfile", "os.path.isdir", "os.path.lexists"})
 _BINARY_MODE = re.compile(r"[rwaxt+]*b[rwaxt+]*")
 _NOT_EXCEPTION = frozenset({"SystemExit", "KeyboardInterrupt", "GeneratorExit"})
 
@@ -602,6 +603,8 @@ def _read_errors(mode: str, via: str, call) -> frozenset:
     """What a read raises at its own call: a name test or a listing, and a read of bytes or of
     text decoded with an `errors=` handler, the I/O error alone; any other read of content, the
     decoding or JSON parsing error as well; any other read, an exception the scan cannot name."""
+    if mode == "name" and via in _SWALLOWING_TESTS:
+        return frozenset()
     if mode in ("name", "list"):
         return OS_ERRORS
     if mode not in ("content", "open-dynamic") or not isinstance(call, ast.Call) or (

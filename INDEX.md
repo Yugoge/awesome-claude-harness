@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T13:55:10Z*
-**Total entries**: 975
+*Last updated: 2026-11-17T14:25:58Z*
+**Total entries**: 977
 **Convention**: kebab
 
 ## Tree
@@ -739,12 +739,14 @@ dot-claude/
 │   │   ├── `static_half.py` - `derive(tree)` reads one harness tree and returns every record the static
 │   │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
+│   │   ├── `test_presence_faults.py` - CPython 3.10 and 3.12 (the CI versions): os.path.exists/isfile/isdir/lexists catch every OSError
 │   │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
 │   │   ├── `test_rule2.py` - Each test builds a small harness-shaped tree, derives the static half on it and runs the check's
 │   │   ├── `test_rule4_6.py` - mutation), rule (5) (the chain function's output used verbatim) and rule (6) (a deciding read
 │   │   ├── `test_sandbox_template.py` - A copied sandbox must be the built one as far as a replay can tell: the same
 │   │   ├── `test_shards.py` - The plan is computed from the drivers present at run time: every driver lands
 │   │   ├── `test_static_half.py` - Each test builds a small harness-shaped tree under tmp_path and checks the
+│   │   ├── `test_unreadable_fault.py` - Every form _PRESENCE_TEST matches answers False on a removed file or parent (ENOENT, ENOTDIR) and
 │   │   └── `values.py` - A value is one of:
 │   ├── differential/
 │   │   ├── `build_plan_legacy.py` - This is NOT production code. It is ``build_plan`` exactly as it stood at commit
