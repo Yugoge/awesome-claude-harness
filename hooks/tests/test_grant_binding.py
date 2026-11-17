@@ -266,7 +266,7 @@ def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state,
 # -- a commit message file directly in /tmp holds no rule of its own --------------------------------
 # /tmp/commit-msg-<name>.txt and /tmp/recovery-commit-<name>.txt are files like any other directly in
 # /tmp: every caller's write of one, the changelog-analyst's included, is decided as its write of another
-# file there (the main agent's passes, a role's goes by its row and the raw-temp rule).
+# file there (the main agent's passes, a role's goes by its row, the raw-temp rule and the temp-write rule).
 MSG_NAMES = ["/tmp/commit-msg-20260101-000000-r0001x.txt", "/tmp/commit-msg-bulk-a1b2.txt",
              "/tmp/commit-msg-dev-20260101-000000-2.txt", "/tmp/recovery-commit-do-20260101-000000-ab12-a1b2.txt"]
 PLAIN_TMP = "/tmp/plain-p14-message.txt"
@@ -288,12 +288,13 @@ def test_a_commit_message_name_in_tmp_is_decided_as_any_tmp_file(tmp_path, calle
                     == _decided(run(tool, plain, caller, home), PLAIN_TMP)), (tool, path)
 
 
-def test_the_main_agent_writes_and_the_changelog_analyst_does_not_write_a_message_name_in_tmp(tmp_path):
+def test_the_main_agent_and_the_changelog_analyst_write_a_message_name_in_tmp(tmp_path):
+    # A temp file is every policy role's (owner decision 2026-11-17; test_tool_policy_temp_writes.py): the
+    # analyst's Write of one passes as its Write of any other file directly in /tmp.
     home = tmp_path / "home"
     for path in MSG_NAMES:
         assert run("Bash", {"command": f"echo x > {path}"}, MAIN, home) == (0, ""), path
-        denial = _denial(*run("Write", {"file_path": path, "content": "x"}, "changelog-analyst", home))
-        assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), denial
+        assert run("Write", {"file_path": path, "content": "x"}, "changelog-analyst", home) == (0, ""), path
 
 
 def test_this_trees_recovery_route_writes_its_message_file_under_its_prefixes(tmp_path):

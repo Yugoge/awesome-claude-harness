@@ -97,10 +97,25 @@ Scratch namespace actor-exactness:
   - Every write target the prefix layer admits is additionally classified as
     owner scratch / sibling scratch / arbitrary system temp.
   - Owner scratch is allowed for every role; a SIBLING's scratch directory is
-    denied for every role; arbitrary /tmp and /var/tmp are denied for every
-    role INCLUDING one holding a bare '*' grant, which no prefix list can deny.
+    denied for every role; /tmp and /var/tmp are denied for every role
+    INCLUDING one holding a bare '*' grant, which no prefix list can deny,
+    except a temp write (below).
   - Each role's OWN pre-existing exact temp prefixes are generated from the
     policy file and survive verbatim.
+
+Temp writes (owner decision 2026-11-17; _temp_write):
+  - Every policy role writes the temp roots (/tmp, /var/tmp, $TMPDIR,
+    $CLAUDE_TMPDIR, $CLAUDE_CODE_TMPDIR) whatever its allow prefixes say; its
+    tool lists and deny prefixes still apply. lib/harness_temp_state is the
+    one definition of the temp roots and of harness state.
+  - A target qualifies when it is a plain absolute path, both of its
+    resolved views lie strictly below a temp root, and it is no harness
+    control state, no other role's claude-scratch/<role>/ directory, and in
+    neither the project, the harness home, the CLI config dir, $HOME nor a
+    repository kept in a temp root; a Bash target qualifies only when no
+    command of the string runs under a wrapper or find -exec.
+  - Any other target keeps the verdict the role rows and the raw-temp rule
+    give it: the rule lifts refusals, it adds none.
 
 Fail-safe: any unexpected exception logs to stderr and exits 0 to
 avoid bricking the tool pipeline on a hook bug. Run as a script, the process
@@ -323,12 +338,122 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
+        temp, why = _temp_write(role, target, data)
+        if temp:
+            return (True, "ok")
         return (
             False,
-            "arbitrary /tmp and /var/tmp are denied for every role; use the "
-            "managed scratch namespace .claude/scratch/<session>/<role>/<dispatch>/",
+            f"a write in a temp root is allowed only outside harness state and project trees: {why}",
         )
     return (True, "ok")
+
+
+# -- temp writes (owner decision 2026-11-17) ----------------------------------
+# Every policy role writes the temp roots (/tmp, /var/tmp, $TMPDIR, ...), never
+# the harness control state kept there; lib/harness_temp_state is the one
+# definition of both. A target the rule below does not qualify keeps the verdict
+# the role rows and the raw-temp rule give it: the rule only lifts the refusal
+# of a qualifying target, the role's tool lists and deny prefixes aside.
+_UNRESOLVED_CHARS = frozenset("$`\x00*?[]{}")
+
+
+def _inside(path: str, root: str) -> bool:
+    root = root.rstrip(os.sep) or os.sep
+    return path == root or path.startswith(root + os.sep)
+
+
+def _kept_trees(data: dict) -> list:
+    """The trees a temp write never lands in: the project, the harness home,
+    the CLI config dir and $HOME, each as written and real."""
+    from lib import claude_home
+
+    trees = [str(_project_root()), data.get("cwd") if isinstance(data.get("cwd"), str) else None,
+             os.environ.get("CLAUDE_CONFIG_DIR"), os.path.expanduser("~/.claude"), os.path.expanduser("~")]
+    try:
+        home = claude_home.resolve()
+    except Exception:
+        home = None
+    trees.append(str(home) if home else None)
+    out = []
+    for tree in trees:
+        if tree and os.path.isabs(tree):
+            out += [os.path.normpath(tree), os.path.realpath(tree)]
+    from lib import harness_temp_state
+
+    roots = set(harness_temp_state.temp_roots()) | {os.sep}  # a temp root itself keeps no tree out of it
+    return [t for t in dict.fromkeys(out) if t not in roots]
+
+
+def _in_work_tree(view: str, root: str) -> bool:
+    """Whether a directory between ``root`` (exclusive) and ``view`` holds
+    .git, or ``view`` names a .git or .claude entry: a repository kept in a temp root."""
+    parts = view[len(root.rstrip(os.sep)):].strip(os.sep).split(os.sep)
+    if ".git" in parts or ".claude" in parts:
+        return True
+    current = root
+    for part in parts[:-1]:
+        current = os.path.join(current, part)
+        if os.path.lexists(os.path.join(current, ".git")):
+            return True
+    return False
+
+
+def _bash_wrapped(command) -> bool:
+    """Whether any command the Bash string runs is under a wrapper (sudo, env,
+    timeout, xargs, ...), run by find -exec, or not read statically: its temp
+    targets keep the role rows' verdict."""
+    if not isinstance(command, str):
+        return True
+    try:
+        from lib import shell_parse
+
+        for site in shell_parse.walk(shell_parse.parse(command)):
+            res = shell_parse.resolve(site.cmd)
+            if res.wrappers or res.unresolved or "exec_argv" in site.context:
+                return True
+    except Exception:
+        return True
+    return False
+
+
+def _temp_write(role: str, target, data: dict) -> tuple:
+    """(True, None) when ``target`` is a temp write any policy role may make,
+    else (False, why). It qualifies when it is spelled as an absolute path with
+    no variable, glob or substitution; both of its resolved views (realpath and
+    entry) lie strictly below a temp root; it is not harness control state
+    (harness_temp_state.is_harness_state) nor another policy role's scratch
+    directory <temp root>/claude-scratch/<role>/; it is in none of
+    _kept_trees, no repository kept in a temp root; and, for Bash, no command
+    of the string runs under a wrapper. Never raises: a failure qualifies nothing."""
+    try:
+        if not isinstance(target, str) or not os.path.isabs(target) or set(target) & _UNRESOLVED_CHARS:
+            return (False, f"{target} is not a plain absolute path")
+        if data.get("tool_name") == "Bash" and _bash_wrapped((data.get("tool_input") or {}).get("command")):
+            return (False, f"{target} is written under a wrapper or find -exec")
+        from lib import harness_temp_state as hts
+        from lib import policy_registry
+
+        views = hts.resolved_views(target)
+        roots = hts.temp_roots()
+        below = [[r for r in roots if _inside(v, r) and v != r] for v in views]
+        if not views or not all(below):
+            return (False, f"{target} does not resolve below a temp root")
+        if hts.is_harness_state(target):
+            return (False, f"{target} is harness state ({hts.classify(target).name})")
+        roles = set((policy_registry.load_policy() or {}).get("roles") or {})
+        kept = _kept_trees(data)
+        for view, held in zip(views, below):
+            for root in held:
+                parts = view[len(root.rstrip(os.sep)):].strip(os.sep).split(os.sep)
+                if parts[0] == "claude-scratch" and len(parts) > 1 and parts[1] in roles and parts[1] != role:
+                    return (False, f"{target} is the {parts[1]} role's scratch directory")
+                if _in_work_tree(view, root):
+                    return (False, f"{target} is in a repository kept in a temp root")
+            if any(_inside(view, tree) for tree in kept):
+                return (False, f"{target} is in the project, the harness home, the CLI config dir or $HOME")
+        return (True, None)
+    except Exception as e:
+        return (False, f"{target} could not be judged ({e.__class__.__name__})")
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -1073,6 +1198,9 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = _declared_write_allowed(role, check_tool, target)
         else:
             allowed, reason = is_allowed(role, check_tool, target)
+            if (not allowed and check_tool in WRITE_TOOLS and reason.endswith("not in allowed_write_path_prefixes")
+                    and _temp_write(role, target, data)[0]):
+                allowed, reason = _declared_write_allowed(role, check_tool, target)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash":

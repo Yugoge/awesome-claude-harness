@@ -6,8 +6,9 @@ Every file or directory the harness itself keeps under `/tmp`, `/var/tmp` or `$T
 with the `path:line` that creates or reads it. `hooks/lib/harness_temp_state.py` is the one
 definition of this list: `LOCATIONS` holds one entry per row below (the **Location** column),
 `classify(path)` answers which entry a path is, `is_harness_state(path)` whether it is control
-state, and `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root. No hook uses the
-module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
+state, and `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root. `hooks/pretool-tool-policy.py`
+(`_temp_write`) uses it: a policy role writes the temp roots except the control state below
+(`hooks/tests/test_tool_policy_temp_writes.py`); `hooks/tests/test_harness_temp_state.py` pins every row.
 
 ## Roots
 

@@ -433,7 +433,8 @@ def test_a_linked_worktree_homes_other_git_files_stay_writable(tmp_path, linked_
 
 # -- every write form the shell has is read as `>` is -------------------------------------------------
 # The write forms below name their target as `echo x > T` does; each is refused where `>` is: on a
-# protected file for every caller, and by a role's row and the raw-temp rule.
+# protected file for every caller, and by a role's row and the raw-temp rule (harness state in /tmp: a
+# plain temp file is every role's, hooks/tests/test_tool_policy_temp_writes.py).
 WRITE_FORMS = ["dd if=/dev/zero of={T}", "echo x >| {T}", "echo x &> {T}", "echo x &>> {T}", "truncate -s0 {T}",
                "ln -sf /x {T}", "rsync -a /x {T}", "curl -o {T} http://h/f", "git checkout -- {T}",
                "git checkout HEAD -- {T}", "git restore {T}"]
@@ -449,7 +450,7 @@ def test_every_write_form_of_a_protected_file_is_denied(tmp_path, caller, form):
 
 @pytest.mark.parametrize("form", WRITE_FORMS)
 @pytest.mark.parametrize("caller,target,reason", [
-    ("dev", "/tmp/p14-write-form", "arbitrary /tmp and /var/tmp are denied for every role"),
+    ("dev", "/tmp/claude-grants/p14-write-form", "is harness state (sentinel-grants)"),
     ("ba", f"{PRODUCT}/src.py", "not in allowed_write_path_prefixes"),
 ])
 def test_every_write_form_meets_the_role_row_as_a_redirect_does(tmp_path, form, caller, target, reason):
@@ -457,6 +458,14 @@ def test_every_write_form_meets_the_role_row_as_a_redirect_does(tmp_path, form, 
         proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller])
         assert proc.returncode == 2 and proc.stderr.startswith("BLOCKED by tool-policy.v1: "), (command, proc.stderr)
         assert reason in json.loads(proc.stderr.splitlines()[0].split(": ", 1)[1])["deny_reason"], command
+
+
+@pytest.mark.parametrize("form", WRITE_FORMS)
+@pytest.mark.parametrize("caller", ["dev", "ba"])
+def test_every_write_form_of_a_temp_file_passes_as_a_redirect_does(tmp_path, form, caller):
+    for command in ("echo x > /tmp/p14-write-form", form.format(T="/tmp/p14-write-form")):
+        proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller])
+        assert (proc.returncode, proc.stderr) == (0, ""), (command, proc.stderr)
 
 
 @pytest.mark.parametrize("spelling", [

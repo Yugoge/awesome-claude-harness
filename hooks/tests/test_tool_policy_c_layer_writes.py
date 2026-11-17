@@ -31,7 +31,7 @@ PRE_COMMIT = os.path.join(ROOT, "hooks", "git-hooks", "pre-commit")
 GIT_HOOK = os.path.join(ROOT, ".git", "hooks", "pre-commit")
 MACHINE = os.path.join(ROOT, "settings.machine.json")
 REFUSED, ALLOWED = {"main": 2, "dev": 2}, {"main": 0, "dev": 0}
-DEV_ONLY = {"main": 0, "dev": 2}  # the dev role's rows: raw /tmp is denied to every role ($HOME is in tmp_path)
+DEV_ONLY = {"main": 0, "dev": 2}  # the dev role's rows: $HOME (in tmp_path) and harness state in /tmp are denied
 
 # (name, plain form, layer form, exit per caller)
 CASES = [
@@ -45,7 +45,10 @@ CASES = [
      f'T={PRE_COMMIT}; bash -c "echo x | tee $T"', REFUSED),
     ("$HOME in a double-quoted string", "cp notes.txt $HOME/out.txt", 'bash -c "cp notes.txt $HOME/out.txt"', DEV_ONLY),
     ("$HOME in a single-quoted string", "cp notes.txt $HOME/out.txt", "bash -c 'cp notes.txt $HOME/out.txt'", DEV_ONLY),
-    ("a raw temp redirect", "echo x > /tmp/t2-16-out", 'bash -c "echo x > /tmp/t2-16-out"', DEV_ONLY),
+    # A temp write is every policy role's (hooks/tests/test_tool_policy_temp_writes.py); harness state there is not.
+    ("a raw temp redirect", "echo x > /tmp/t2-16-out", 'bash -c "echo x > /tmp/t2-16-out"', ALLOWED),
+    ("a temp redirect into harness state", "echo x > /tmp/claude-grants/t2-16.json",
+     'bash -c "echo x > /tmp/claude-grants/t2-16.json"', DEV_ONLY),
     ("run-time words only", "mv $A $B", 'bash -c "mv $A $B"', ALLOWED),
     ("a run-time target", f"cp notes.txt $T", 'bash -c "cp notes.txt $T"', ALLOWED),
     ("no write", "cat notes.txt | wc -l", 'bash -c "cat notes.txt | wc -l"', ALLOWED),

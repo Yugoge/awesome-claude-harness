@@ -32,7 +32,8 @@ graphify cache, ...). is_harness_state() answers for "control" unless
 include_scratch=True; classify() returns either kind.
 
 Pure: reads os.environ and the filesystem's symlinks, writes nothing, and
-answers None/False for a path it cannot resolve. No hook uses it yet.
+answers None/False for a path it cannot resolve. hooks/pretool-tool-policy.py's temp-write
+rule (_temp_write) uses it.
 """
 
 from __future__ import annotations
