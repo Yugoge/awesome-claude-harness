@@ -1705,7 +1705,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
             return _block("STEP1", "indeterminate policy: xargs kill")
         # package-manager script-run / build / global install
         if head in PKG_MANAGERS:
-            if any("-g" == t or "--global" == t for t in rest):
+            if _pm_global_args([_strip_quotes(t) for t in rest]):
                 return _block("STEP1", "indeterminate policy: global package op")
             # any non-meta pm invocation is fail-closed (build/launch family)
             if not _is_meta_query(head, rest):
@@ -2596,6 +2596,104 @@ def _p6_prockill(ctx: "Context") -> Optional[Verdict]:
 
 # ── P7 GLOBALBIN_GUARD ───────────────────────────────────────────────────────
 
+def _pm_config_true(value: Optional[str]) -> bool:
+    """A boolean package-manager setting read as npm reads it: `false`, `null`, an
+    empty value and a numeric zero are false, any other text is true. A computed
+    value (None) is taken as true, so it cannot hide a global op."""
+    if value is None:
+        return True
+    v = value.strip().lower()
+    if v in ("false", "null", ""):
+        return False
+    try:
+        return float(v) != 0
+    except ValueError:
+        return True
+
+
+def _pm_global_setting(name: str, value: Optional[str]) -> bool:
+    """True if `name=value` (a config key, or an `npm_config_*` variable, any case)
+    makes a package-manager op global: `global` true, or `location` = `global`."""
+    key = name.lower().replace("-", "_")
+    if key.startswith("npm_config_"):
+        key = key[len("npm_config_"):]
+    if key == "global":
+        return _pm_config_true(value)
+    if key == "location":
+        return value is None or value.strip().lower() == "global"
+    return False
+
+
+def _pm_global_args(args: list) -> bool:
+    """True if a package manager's own arguments make it a global op: `-g`,
+    `--global`, `--global=<true>`, `--location=global`, `--location global`, a
+    `global` subcommand (yarn), or a persistent `config set global true` /
+    `set location=global`."""
+    for i, t in enumerate(args):
+        if t in ("-g", "--global"):
+            return True
+        if t.startswith(("--global=", "-g=")) and _pm_config_true(t.split("=", 1)[1]):
+            return True
+        if t == "--location=global" or (t == "--location" and i + 1 < len(args) and args[i + 1] == "global"):
+            return True
+    if args[:1] == ["global"]:  # `yarn global add <pkg>`
+        return True
+    words = [t for t in args if not t.startswith("-")]
+    if "set" in words[:2] and (words[0] in ("config", "c", "set")):
+        rest = words[words.index("set") + 1:]
+        for i, t in enumerate(rest):
+            if "=" in t and _pm_global_setting(*t.split("=", 1)):
+                return True
+            if "=" not in t and t.lower() in ("global", "location"):
+                return _pm_global_setting(t, rest[i + 1] if i + 1 < len(rest) else "true")
+    return False
+
+
+_PM_ENV_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+
+
+def _p7_global_env(command: str) -> Optional[Verdict]:
+    """A package manager run as a global op through its environment or its flags,
+    read through the shared parser (wrappers, `bash -c`, `eval` peeled): a prefix
+    or `env` assignment of `npm_config_global` / `npm_config_location` (any case),
+    one set earlier in the same text (`export`, `declare -x`, a bare assignment),
+    a `sudo VAR=value` operand, or a global flag form P7's token match misses."""
+    script = _sp.parse(command)
+    shell_env: dict = {}
+    for site in _sp.walk(script):
+        cmd = site.cmd
+        if not isinstance(cmd, _sp.SimpleCommand):
+            continue
+        r = _sp.resolve(cmd)
+        if not cmd.words:
+            for a in cmd.assignments:
+                shell_env[a.name] = a.static_value()
+            continue
+        name = r.name or ""
+        args = r.argv()
+        if name in _PM_ENV_SETTERS:
+            for w in args:
+                if w is not None and "=" in w and not w.startswith("-"):
+                    k, v = w.split("=", 1)
+                    shell_env[k] = v
+            continue
+        env = dict(shell_env)
+        env.update({a.name: a.static_value() for a in r.assignments})
+        while name and "=" in name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", name):
+            k, v = name.split("=", 1)
+            env[k] = v
+            name = os.path.basename(args[0] or "") if args else ""
+            args = args[1:]
+        if name not in PKG_MANAGERS:
+            continue
+        if any(_pm_global_setting(k, v) for k, v in env.items()
+               if k.lower().startswith("npm_config_")):
+            return _block("P7", "global package install/link (npm_config_global/location in its environment)")
+        if _pm_global_args([a or "" for a in args]):
+            return _block("P7", "global package install/link")
+    return None
+
+
 def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
     gbins = cfg.get("protected_global_bins", [])
     for sc in simple_cmds:
@@ -2607,7 +2705,7 @@ def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
             continue
         _, head, rest = cw[0]
         if head in PKG_MANAGERS:
-            is_global = any(t in ("-g", "--global") for t in rest)
+            is_global = _pm_global_args([_strip_quotes(t) for t in rest])
             is_link = any(t in ("link", "unlink") for t in rest)
             if is_global or is_link:
                 return _block("P7", "global package install/link")
@@ -4324,7 +4422,7 @@ def _anchor_globalbin_hits(sc: str, tokens: list, exec_toks: list,
         # `link` that belongs to the pm — not an unrelated wrapper option — is what
         # is matched (mirrors P7 reading the pm's `rest`).
         own = [_strip_quotes(t) for t in tokens[pm_pos + 1:]]
-        is_global = any(t in ("-g", "--global") for t in own)
+        is_global = _pm_global_args(own)
         is_link = any(t in ("link", "unlink") for t in own)
         if is_global or is_link:
             return True
@@ -4568,6 +4666,9 @@ def evaluate(command: str, cwd_base: Optional[str] = None, cfg: Optional[dict] =
     if v is not None:
         return v
     v = _p7_globalbin(simple_cmds, cfg)
+    if v is not None:
+        return v
+    v = _p7_global_env(command)
     if v is not None:
         return v
 

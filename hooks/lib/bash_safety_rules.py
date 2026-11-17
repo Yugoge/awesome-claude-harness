@@ -501,6 +501,44 @@ def daemon_restart(command, payload, prefix):
         return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
 
 
+HTTP_STOP_URL = (r"(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|(?<![-A-Za-z0-9.\]_])):[0-9]+/stop"
+                 r"(?![-A-Za-z0-9_])")
+"""A localhost port's `/stop` path segment: `/stop`, `/stop?x`, `/stop/now`, never `/stops` or `/stopwords`.
+The host may be left out (`:8080/stop`, httpie's shorthand for localhost)."""
+HTTP_CLIENTS = frozenset({"curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "http", "https", "httpie",
+                          "xh", "xhs"})
+HTTP_INTERPRETERS = re.compile(r"^(python[0-9.]*|node(js)?|deno|bun|perl|ruby|php)$")
+HTTP_LIBRARIES = r"(http\.client|aiohttp|requests|urllib|httpx|fetch\(|axios|LWP|HTTP::Tiny|Net::HTTP)"
+
+
+def http_stop(command):
+    """BS-02: the command sends a request to a localhost port's /stop. The URL may sit anywhere in the text (a
+    variable, a pipe into xargs), but a client must run: a word of some simple command the parser reaches (its
+    command, an argument, a nested payload) names an HTTP client, or names an interpreter and the text calls an
+    HTTP library. A mention alone (`grep -n 'localhost:8080/stop' tests/test_requests_client.py`) runs no client.
+    A parser failure falls back to the raw reading, which over-blocks."""
+    if not grep(HTTP_STOP_URL, command):
+        return False
+    try:
+        from lib.shell_parse import parse, resolve, walk
+        script = parse(command)
+        if script.error is not None:
+            raise ValueError(script.error)
+        names = set()
+        for site in walk(script):
+            r = resolve(site.cmd)
+            if r.unresolved == "dynamic_head":
+                return True
+            names.update(os.path.basename(w.value() or w.text) for w in getattr(site.cmd, "words", ()))
+            names.add(r.name or "")
+    except Exception:  # noqa: BLE001 - the parser unavailable: the raw reading
+        return grep(r"(curl|wget|nc\s|ncat|http\.client|aiohttp|requests)", command)
+    names = {n.strip("'\"") for n in names}
+    if names & HTTP_CLIENTS:
+        return True
+    return any(HTTP_INTERPRETERS.match(n) for n in names) and grep(HTTP_LIBRARIES, command)
+
+
 def daemon_rules(command, payload, env):
     """BS-09, BS-10, BS-12, BS-13: the protected daemon (inert while CLAUDE_PROTECTED_DAEMON_PREFIX is unset)."""
     prefix, targets = env["prefix"], env["targets"]
@@ -527,8 +565,7 @@ def daemon_rules(command, payload, env):
                        f"Command: {command}",
                        "REASON: an indirect daemon restart (systemd-run/at/crontab/nohup/timeout/dbus-send/nc/eval/bash -c/"
                        f"python -c) is the same restart. Use the user-only {hint} grant channel instead.", released_line())
-    if grep(r"(curl|wget|nc\s|ncat|http\.client|aiohttp|requests)", command) \
-            and grep(r"(localhost|127\.0\.0\.1):[0-9]+/stop", command):
+    if http_stop(command):
         refuse("BLOCKED: daemon-restart-http-stop — HTTP /stop on a localhost port is refused", f"Command: {command}",
                    "REASON: /stop on a localhost port is a daemon's shutdown endpoint; false positives on other local "
                    "services are accepted.", released_line())
