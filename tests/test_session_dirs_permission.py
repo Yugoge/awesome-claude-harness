@@ -89,6 +89,7 @@ STEMS = {
     'git commit *-F*': 'git commit -F {f}',
     'git commit *-i *': 'git commit -m x -i {f}',
     'git commit *-o *': 'git commit -m x -o {f}',
+    'git config *': 'git config --file {f} -l',
     'git diff *': 'git diff --no-index {f} /dev/null',
     'git hash-object *': 'git hash-object -w {f}',
     'git log *--patch*': 'git log --patch {f}',
@@ -96,10 +97,14 @@ STEMS = {
     'git log *-p *': 'git log -p {f}',
     'git log *-u *': 'git log -u {f}',
     'git mv *': 'git mv {f} x',
+    'git notes *--file*': 'git notes add --file={f}',
+    'git notes *-F*': 'git notes add -F {f}',
     'git restore *': 'git restore {f}',
     'git rm *': 'git rm {f}',
     'git show *': 'git show HEAD:{f}',
     'git stash *': 'git stash push {f}',
+    'git tag *--file*': 'git tag --file={f} t',
+    'git tag *-F*': 'git tag -F {f} t',
     'git update-index *': 'git update-index --add {f}',
     'gzip *': 'gzip -k {f}',
     'head *': 'head {f}',
@@ -146,6 +151,11 @@ TAILS = {"session_dirs.t*": "session_dirs.tx?", "session_dirs?*": "session_dirs?
 # the Read/Edit rules do not see (measured: each example asked or ran without these entries).
 ENTRIES = {f"Bash({stem}{tail})": tpl.format(f=spelled)
            for stem, tpl in STEMS.items() for tail, spelled in TAILS.items()}
+# A patch flag after the pickaxe argument (`git log -S session_dirs.txt -p`) prints the committed contents
+# of every change that touched the string: the flag follows the name, so these entries put the tail first.
+LOG_PATCH = {" -p*": "git log -S {f} -p", " --patch*": "git log -S {f} --patch", " -u*": "git log -S {f} -u"}
+ENTRIES.update({f"Bash(git log *{tail}{flag})": tpl.format(f=spelled)
+                for flag, tpl in LOG_PATCH.items() for tail, spelled in TAILS.items()})
 
 # The owner's must-pass forms (L16), and more of the same kind.
 MUST_PASS = [
@@ -157,7 +167,6 @@ MUST_PASS = [
     "git log --oneline -G 'session_dirs\\.txt'",
     "git log -S session_dirs.txt --oneline -- hooks/",
     "git log --pretty=oneline -S session_dirs.txt",
-    "git log -S session_dirs.txt -p",
     'grep -rn "session_dirs.txt" docs/ hooks/ | head -5',
     "git commit -m 'docs: session_dirs.txt mention'",
     'git commit -a -m "docs: mention session_dirs.txt"',
@@ -193,7 +202,7 @@ MUST_REFUSE = {
     "grep pat session_dirs.txt": [READ_RULE],
 }
 
-# Denied on the base, allowed or only prompted by the first cut of this change; each denied again.
+# Denied on the base, allowed or only prompted by an earlier cut of this change; each denied again.
 REGAINED = [
     "git log -p -- session_dirs.txt", "git log --patch -- session_dirs.txt", "git log -p session_dirs.txt",
     "git commit -m \"x\" -- session_dirs.txt", "git commit -m x -i session_dirs.txt",
@@ -203,13 +212,27 @@ REGAINED = [
     "rsync session_dirs.txt /tmp/", "install session_dirs.txt /tmp/",
     "git -C . show HEAD:session_dirs.txt", "git -C . diff -- session_dirs.txt",
     "git -C . add session_dirs.txt", "git -C . log -p -- session_dirs.txt",
+    "git log -S session_dirs.txt -p", "git log -S session_dirs.txt --patch", "git log -S session_dirs.txt -u",
+    "git log -G session_dirs.txt -p", "git notes add -F session_dirs.txt", "git notes add --file=session_dirs.txt",
+    "git tag -F session_dirs.txt t", "git tag --file=session_dirs.txt t", "git config --file session_dirs.txt -l",
+    "git config -f session_dirs.txt -l",
 ]
 
 # Refused on the base, not denied now, by choice (ledger S-018):
 # - a bare pathspec after the message cannot be told from the message, since quotes are not part of the
 #   matched text; it commits only a file already tracked, and `git add` of it is denied;
-# - an upper-case command word (rules are case-sensitive): it asks.
-NOT_DENIED_NOW = {"git commit -m x session_dirs.txt": "allow", "CAT session_dirs.txt": "ask"}
+# - an upper-case command word (rules are case-sensitive): it asks;
+# - git with a global option before the subcommand, or a subcommand without a stem: it asks.
+NOT_DENIED_NOW = {
+    "git commit -m x session_dirs.txt": "allow",
+    "CAT session_dirs.txt": "ask",
+    "git -p log -p -- session_dirs.txt": "ask",
+    "git --no-pager log -p -- session_dirs.txt": "ask",
+    "git whatchanged -p -- session_dirs.txt": "ask",
+    "git format-patch -1 -- session_dirs.txt": "ask",
+    "git archive HEAD session_dirs.txt": "ask",
+    "git difftool -- session_dirs.txt": "ask",
+}
 
 # The permission layer lets these through on the base and after alike: a heredoc body is not in the matched
 # text; only hooks/pretool-bash-safety.sh refuses them. The rest name the file through a glob no rule
@@ -325,9 +348,24 @@ MEASURED = {  # command: (base, after)
     'vim session_dirs.txt': ('deny', 'deny'),
     'nano session_dirs.txt': ('deny', 'deny'),
     'git log --pretty=oneline -S session_dirs.txt': ('deny', 'allow'),
-    'git log -S session_dirs.txt -p': ('deny', 'allow'),
+    'git log -S session_dirs.txt -p': ('deny', 'deny'),
     'cat session_dirs?txt': ('allow', 'deny'),
     'python3 -c "open(\'session_dirs\'+\'.txt\').read()"': ('allow', 'allow'),
+    'git log -S session_dirs.txt --patch': ('deny', 'deny'),
+    'git log -S session_dirs.txt -u': ('deny', 'deny'),
+    'git log -G session_dirs.txt -p': ('deny', 'deny'),
+    'git notes add -F session_dirs.txt': ('deny', 'deny'),
+    'git notes add --file=session_dirs.txt': ('deny', 'deny'),
+    'git tag -F session_dirs.txt t': ('deny', 'deny'),
+    'git tag --file=session_dirs.txt t': ('deny', 'deny'),
+    'git config --file session_dirs.txt -l': ('deny', 'deny'),
+    'git config -f session_dirs.txt -l': ('deny', 'deny'),
+    'git -p log -p -- session_dirs.txt': ('deny', 'ask'),
+    'git --no-pager log -p -- session_dirs.txt': ('deny', 'ask'),
+    'git whatchanged -p -- session_dirs.txt': ('deny', 'ask'),
+    'git format-patch -1 -- session_dirs.txt': ('deny', 'ask'),
+    'git archive HEAD session_dirs.txt': ('deny', 'ask'),
+    'git difftool -- session_dirs.txt': ('deny', 'ask'),
 }
 
 WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", "noglob"}

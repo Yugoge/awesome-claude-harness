@@ -381,7 +381,7 @@ no per-rule budget exists.
   `git log -S`/`-G`) and a commit message naming it were refused with the reads. An allow entry cannot
   carve an exception out of a deny ("Rules are evaluated in order: deny, then ask, then allow ... An allow
   rule can't carve an exception out of a deny rule", code.claude.com/docs/en/permissions.md), so it is
-  replaced by 170 deny entries: 85 stems keyed on the command word, each with two tails,
+  replaced by 186 deny entries: 90 stems keyed on the command word, each with two tails,
   `Bash(<stem>session_dirs.t*)` (the name, `.tx?`, `.t*`, a `'session_dirs.t'+'xt'` split) and
   `Bash(<stem>session_dirs?*)` (`?` in a rule is literal: a `?` glob in place of the dot). Neither tail
   matches a name that merely contains `session_dirs` (`hooks/lib/session_dirs.py`,
@@ -394,8 +394,12 @@ no per-rule budget exists.
   `tar`, `zip`, `gzip`, `echo`, `printf`) and the git forms that read, write or stage a path (`add`,
   `apply`, `blame`, `cat-file`, `checkout`, `diff`, `hash-object`, `mv`, `restore`, `rm`, `show`,
   `stash`, `update-index`, `-c`, every `-C` form, any `--output`, `log` with `-p`/`-u`/`--patch` or a
-  `--` pathspec, `commit` with `-F`/`--file`, `-i`/`--include`, `-o`/`--only` or a `--` pathspec). grep,
-  rg, `git grep`, `git log -S`/`-G` and `git commit -m` naming the file pass; their file operands,
+  `--` pathspec, `commit` with `-F`/`--file`, `-i`/`--include`, `-o`/`--only` or a `--` pathspec,
+  `notes` and `tag` with `-F`/`--file`, every `config` form), and three tail-first entries per tail,
+  `Bash(git log *session_dirs.t* -p*)`, `... --patch*)`, `... -u*)`, for a patch flag after the pickaxe
+  argument (`git log -S session_dirs.txt -p` prints the committed contents of every change that touched
+  the string). grep, rg, `git grep`, `git log -S`/`-G` without a patch flag (`--oneline`,
+  `--pretty=oneline`, `-- hooks/`) and `git commit -m` naming the file pass; their file operands,
   `-f FILE` and every redirect target stay refused by `Read(**/session_dirs.txt)` and
   `Edit(**/session_dirs.txt)`, which "apply to ... file commands Claude Code recognizes in Bash ... and
   to the targets of Bash redirections" (same page); `od`, `strings`, `cut`, `nl`, `wc`, `diff`, `base64`,
@@ -403,13 +407,17 @@ no per-rule budget exists.
   throwaway HOME against a stand-in Messages API (the test's opt-in `HARNESS_LIVE_CLI=1` case re-runs
   it): `?` in a rule is literal; rules are case-sensitive; quotes are not part of the matched text; a
   path-qualified command word matches by its name; a heredoc body is not matched at all. Refused on the
-  base and not denied now: `git commit -m x session_dirs.txt` (a bare pathspec cannot be told from the
-  message text; it commits only a file already tracked, and `git add` of it is denied) and
-  `CAT session_dirs.txt` (an upper-case command word; it asks); `while read l; do ...; done <
-  session_dirs.txt` asks, as on the base. Passing this layer before and after: `bash <<EOF` /
+  base and not denied now: allowed: `git commit -m x session_dirs.txt` (a bare pathspec cannot be told
+  from the message text; it commits only a file already tracked, and `git add` of it is denied); asked:
+  `CAT session_dirs.txt` (an upper-case command word), git with a global option before the subcommand
+  (`git -p log -p -- session_dirs.txt`, `git --no-pager log -p -- session_dirs.txt`) and git subcommands
+  without a stem (`git whatchanged -p -- session_dirs.txt`, `git format-patch -1 -- session_dirs.txt`,
+  `git archive HEAD session_dirs.txt`, `git difftool -- session_dirs.txt`). Asked on the base and after:
+  `while read l; do ...; done < session_dirs.txt`. Passing this layer before and after: `bash <<EOF` /
   `python3 - <<EOF` bodies naming the file (only `hooks/pretool-bash-safety.sh` refuses them), and a
   glob operand to grep (`grep pat session_dirs.tx?`: grep has no stem, so the search forms pass), a glob
-  no tail spells (`cat session_dirs*`, `cat session_dir?.txt`) or a name built at run time. A text rule cannot see a read that never spells the name.
+  no tail spells (`cat session_dirs*`, `cat session_dir?.txt`) or a name built at run time. A text rule
+  cannot see a read that never spells the name.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
