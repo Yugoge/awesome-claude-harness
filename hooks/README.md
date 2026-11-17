@@ -48,7 +48,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 - `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
 - `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
-- `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
+- `pretool-bash-safety.sh` - PreToolUse safety hook for Bash: the rules live in lib/bash_safety_rules.py, run in one interpreter per call.
 - `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 - `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow

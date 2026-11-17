@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T12:10:48Z*
-**Total entries**: 73
+*Last updated: 2026-11-17T15:37:41Z*
+**Total entries**: 74
 **Convention**: kebab
 
 ## Tree
@@ -28,6 +28,7 @@ lib/
 ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
+├── `bash_safety_rules.py` - Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 ├── `bash_write_targets.py` - An import shim for the hooks that read paths rather than parse trees. Every reading is
 ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
@@ -47,7 +48,7 @@ lib/
 ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
 ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
-├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
+├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
 ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
