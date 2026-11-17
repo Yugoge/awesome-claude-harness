@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T17:10:49Z*
-**Total entries**: 420
+*Last updated: 2026-11-17T18:34:36Z*
+**Total entries**: 421
 **Convention**: kebab
 
 ## Tree
@@ -252,6 +252,7 @@ hooks/
 │   ├── `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   ├── `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
+│   ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
 │   ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
@@ -265,7 +266,7 @@ hooks/
 │   ├── `test_scratch_lifecycle.py` - Covers:
 │   ├── `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
 │   ├── `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
-│   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
+│   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>)` entry in
 │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 │   ├── `test_spec_flag_prose.py` - in a /dev, /redev, /dev-command or /dev-overnight prompt as the --spec flag, and
 │   ├── `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at

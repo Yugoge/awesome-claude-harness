@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T12:10:49Z*
-**Total entries**: 297
+*Last updated: 2026-11-17T18:34:37Z*
+**Total entries**: 308
 **Convention**: kebab
 
 ## Tree
@@ -58,6 +58,7 @@ tests/
 │   └── `validation-guide.md` - AI-Driven Validation Guide
 ├── lint/
 │   ├── `__main__.py` - python3 -m tests.lint [--tree DIR] [--check NAME ...]: print the findings, exit 1 on any.
+│   ├── `cd_read.py` - A `Read()` deny rule makes the CLI ask before a relative-path read after a `cd`
 │   ├── `checks.py` - The checks by name: the six of the P12 plan in its order, then P15's prose-only check.
 │   ├── `hooks.py` - What reaches the model (the CLI's hook contract): the stderr of an exit 2; a JSON object on
 │   ├── `prompts.py` - The four prompt checks: hook strength, dead references, repeated blocks, emphasis.
@@ -228,6 +229,7 @@ tests/
 ├── `test_harness_switch.py` - Each test builds a harness home the way the full install leaves one: a git checkout of this
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 ├── `test_hero_demo_state_dir.py` - scripts/capture-hero-run.py writes the demo's single-use grant with allowlist.py's own
+├── `test_home_secret_denies.py` - OB-L19's Read/Edit secret denies are written `**/<name>`, `<name>` or a relative path, and the CLI
 ├── `test_hook_rejection_retry.py` - A hook-rejected operation is never retried on the owner's answer alone: only their /allow grant (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run.
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 ├── `test_iterate_failed_pipelines_compat.py` - It answers the call origin/master's /dev-overnight Step 17 makes (commands/dev-overnight.md:1384 ...
@@ -250,9 +252,14 @@ tests/
 ├── `test_paseo_daemon_ledger.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
 ├── `test_paseo_daemon_timers.py` - scripts/paseo-daemon-timers.py (task 20260926-111239)
 ├── `test_paseo_usage_read.py` - MANDATORY pytest facade for lane 20260828-112025-b: collects EVERY test
+├── `test_permission_allow_readonly.py` - default mode) and the proof that none of them also allows a mutating or executing neighbour
+├── `test_permission_ask_dry_run.py` - `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and `Bash(npm publish:*)` were whole-verb deny ...
 ├── `test_permission_coverage.py` - entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn)
+├── `test_permission_pipe_to_shell.py` - The CLI splits a compound command at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines and judges each
+├── `test_permission_readonly_allow.py` - Root cause: settings.json's permissions.allow had no entry for a few everyday read-only commands,...
 ├── `test_pre_commit_dev_command_files.py` - dev-family command files as the tree holds them
 ├── `test_private_literal_rule.py` - pre-commit hook hooks/git-hooks/pre-commit
+├── `test_project_write_permissions.py` - Root cause: permissions.allow's Edit entries covered only manifests, .claude/agents|commands, .re...
 ├── `test_prompt_workflow_injection_cadence.py` - The defect: ``build_overnight_continuation`` emitted ONE payload at ONE cadence
 ├── `test_prompt_workflow_liveness_tz.py` - Two defects, both reproduced before this suite was written:
 ├── `test_public_core_residue_gate.py` - These are the discriminating controls for the "Make CI FAIL (not advisory) on
@@ -270,7 +277,11 @@ tests/
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 ├── `test_score_events.py` - escaped and close_catch, and the observer
 ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
+├── `test_scratch_permissions.py` - Root cause. A Read/Edit path rule with ONE leading slash is not absolute: "`/path` = relative to ...
+├── `test_search_without_cd.py` - A `Read()` deny rule makes the CLI ask before a relative-path read after a `cd` (audit G3)
+├── `test_secret_file_denies.py` - The base globs `**/*password*`, `**/*secret*`, `**/credentials*` and `**/shadow` refused ordinary...
 ├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
+├── `test_session_dirs_permission.py` - reading, writing or executing the file stays refused at the permission layer
 ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
