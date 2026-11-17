@@ -5,13 +5,21 @@ PreToolUse Hook: Orchestrator Gate (Unified)
 Three-tier policy for the main agent:
   1. ALWAYS_ALLOWED whitelist tools pass, but Bash is capped at 5 calls
      (6th blocked) until an Agent dispatch or the next prompt resets the
-     count; other tools between the Bash calls do not.
+     count; other tools between the Bash calls do not. The built-in
+     read-only tools of READ_ONLY_ALLOWED (LSP, TaskOutput/BashOutput,
+     ReadMcpResourceTool, ListMcpResourcesTool) pass too and are not
+     counted.
   2. Non-whitelist tools are allowed once TOTAL per tool name per turn
      (2nd same-name call blocked regardless of intervening tool calls).
      Inside the session's open /dev-overnight window (lib/overnight
      window_open) an Agent dispatch also resets these counts: the unattended
      session is one turn, so there the turn's budget is the one between two
-     dispatches.
+     dispatches. The retrieval tools of RETRIEVAL_TOOLS (WebSearch,
+     WebFetch and the Context7 tools named there, each by its exact name)
+     get RETRIEVAL_MAX_PER_TURN = 3 calls per tool name per turn instead,
+     and an Agent dispatch never resets their count, overnight window
+     included: the calls of one message pass PreToolUse together, so a
+     dispatch in the same message would otherwise refill the budget.
   3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are blocked even
      with /do consent; an /allow grant naming the tool is the one way
      through.
@@ -19,7 +27,8 @@ Three-tier policy for the main agent:
 bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
 increments it. An Agent (subagent) dispatch resets it to
 {"last_tool": "Agent", "count": 0} (and, inside an open overnight window,
-empties per_tool_counts), and hooks/prompt-workflow.py removes the whole
+empties per_tool_counts but the retrieval tools' entries), and
+hooks/prompt-workflow.py removes the whole
 state file (per_tool_counts too) at each prompt. Every other tool
 (Read, TodoWrite, Glob, Grep, and any non-whitelist tool) leaves
 bash_consecutive byte-unchanged — interleaving a non-Agent tool between
@@ -78,6 +87,32 @@ ALWAYS_ALLOWED = {
     "Grep",
 }
 
+# Built-in tools that only read (code intelligence, a background task's
+# output, MCP resources): no state change for a subagent to own, so they
+# pass uncounted. Kept apart from ALWAYS_ALLOWED because the in-flight
+# refusal prints ALWAYS_ALLOWED in origin/master's wording, byte for byte.
+READ_ONLY_ALLOWED = frozenset({
+    "LSP",
+    "TaskOutput",
+    "BashOutput",
+    "ReadMcpResourceTool",
+    "ListMcpResourcesTool",
+})
+
+# Retrieval tools with their own per-turn budget. MCP tools are listed by
+# their exact name, never by a name pattern (get_*, *search*): a third-party
+# MCP server can give a side-effecting tool such a name.
+RETRIEVAL_TOOLS = frozenset({
+    "WebSearch",
+    "WebFetch",
+    "mcp__context7__resolve-library-id",
+    "mcp__context7__get-library-docs",
+    "mcp__context7__query-docs",
+    "mcp__plugin_context7_context7__resolve-library-id",
+    "mcp__plugin_context7_context7__get-library-docs",
+    "mcp__plugin_context7_context7__query-docs",
+})
+
 PERMANENTLY_BLOCKED = {
     "EnterPlanMode",
     "ExitPlanMode",
@@ -85,6 +120,12 @@ PERMANENTLY_BLOCKED = {
 
 BASH_MAX_CONSECUTIVE = 5
 NON_WHITELIST_MAX_CONSECUTIVE = 1
+RETRIEVAL_MAX_PER_TURN = 3
+
+
+def turn_limit(tool_name: str) -> int:
+    """The per-turn budget of a non-whitelisted tool name."""
+    return RETRIEVAL_MAX_PER_TURN if tool_name in RETRIEVAL_TOOLS else NON_WHITELIST_MAX_CONSECUTIVE
 
 
 def get_session_id(data: dict) -> str:
@@ -126,6 +167,9 @@ def read_streak_state(state_file: Path) -> dict:
 
 
 def update_streak(session_id: str, tool_name: str) -> int:
+    if tool_name in READ_ONLY_ALLOWED:
+        return 1  # never blocked, never counted; no state write (NB2 no-clobber)
+
     state = read_streak_state(tool_streak_path(session_id))
 
     if tool_name in ALWAYS_ALLOWED:
@@ -152,7 +196,8 @@ def update_streak(session_id: str, tool_name: str) -> int:
             return 1
     else:
         # Non-whitelist: increment the per-turn total for this tool (the
-        # NON_WHITELIST_MAX_CONSECUTIVE=1 once-per-turn limit). NB2 no-clobber:
+        # NON_WHITELIST_MAX_CONSECUTIVE=1 once-per-turn limit, or
+        # RETRIEVAL_MAX_PER_TURN for a retrieval tool). NB2 no-clobber:
         # leave bash_consecutive byte-identical (the unchanged value read from
         # disk) — do NOT reset or rebuild it. Persist ONLY the per_tool_counts
         # increment.
@@ -197,14 +242,15 @@ def in_flight(data: dict) -> bool:
 
 
 def block_permanent(tool_name: str, data: dict) -> None:
-    allowed = ", ".join(sorted(ALWAYS_ALLOWED))
     if in_flight(data):  # origin/master's (2acc29b's) wording, which the session's text was written against
+        allowed = ", ".join(sorted(ALWAYS_ALLOWED))
         sys.stderr.write(
             f"[Orchestrator Gate] Permanently blocked: {tool_name}\n"
             f"Delegate to subagents (Agent tool) or run /do to unlock.\n"
             f"Allowed without /do: {allowed}\n"
         )
         sys.exit(2)
+    allowed = ", ".join(sorted(ALWAYS_ALLOWED | READ_ONLY_ALLOWED))
     sys.stderr.write(
         f"[Orchestrator Gate] Permanently blocked: {tool_name} (/do does not unlock it).\n"
         f"Delegate to a subagent (Agent tool), or the user grants it once with /allow {tool_name}.\n"
@@ -224,7 +270,9 @@ def block_streak(tool_name: str, count: int, limit: int, data: dict) -> None:
         f"[Orchestrator Gate] BLOCKED: {tool_name} used consecutively beyond limit ({count}/{limit}): Bash "
         f"counts its calls since the last Agent dispatch or prompt, any other non-whitelisted tool its calls "
         f"this turn, whatever ran between them.\n"
-        f"Delegate to a subagent (Agent tool) or ask the user to run /do to unlock.\n"
+        + (f"{tool_name} is a retrieval tool: {RETRIEVAL_MAX_PER_TURN} calls per turn, which an Agent dispatch "
+           f"does not refill.\n" if tool_name in RETRIEVAL_TOOLS else "")
+        + "Delegate to a subagent (Agent tool) or ask the user to run /do to unlock.\n"
     )
     sys.exit(2)
 
@@ -234,8 +282,9 @@ def enforce_streak_limit(tool_name: str, count: int, data: dict) -> None:
         if tool_name == "Bash" and count > BASH_MAX_CONSECUTIVE:
             block_streak(tool_name, count, BASH_MAX_CONSECUTIVE, data)
         return
-    if count > NON_WHITELIST_MAX_CONSECUTIVE:
-        block_streak(tool_name, count, NON_WHITELIST_MAX_CONSECUTIVE, data)
+    limit = turn_limit(tool_name)
+    if count > limit:
+        block_streak(tool_name, count, limit, data)
 
 
 def main():
@@ -287,12 +336,16 @@ def main():
     # it every Write/Edit after the first was refused until the session ended.
     # Between two dispatches the budget stays one call per tool name, as one
     # interactive turn's is; outside the window nothing but a prompt resets it.
+    # The retrieval tools' counts are kept even there: the calls of one
+    # message all pass PreToolUse together, so a dispatch in the same message
+    # would refill their budget before any of them ran.
     if tool_name == "Agent":
         try:
             state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
             if overnight_window_open(data):
-                state["per_tool_counts"] = {}
+                state["per_tool_counts"] = {
+                    name: n for name, n in state["per_tool_counts"].items() if name in RETRIEVAL_TOOLS}
             write_tool_streak(sid, state)
         except Exception:
             pass

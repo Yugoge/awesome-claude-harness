@@ -45,8 +45,9 @@ Automated snapshots go to `refs/checkpoints/<branch>`; branch HEADs never advanc
 
 The main agent is the orchestrator and delegates real work to subagents. `hooks/pretool-orchestrator-gate.py` blocks (no switch; subagents are exempt, and `/do` this turn lifts every limit but the permanent one):
 
-- Always allowed: `Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `CronCreate`, `CronDelete`, `CronList`, `ScheduleWakeup`, `Bash`, `Read`, `Glob`, `Grep`. `Bash` is capped at 5 calls: the 6th waits for an `Agent` dispatch or the next prompt; other tools between the calls do not reset the count.
-- Any other tool (`Edit`, `Write`, `WebFetch`, `WebSearch`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `mcp__playwright__*`, ...): once per tool name per turn, whatever runs between; inside the session's open `/dev-overnight` window (no prompt arrives all night, so the session is one turn) an `Agent` dispatch also resets the count, as it resets Bash's.
+- Always allowed: `Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `CronCreate`, `CronDelete`, `CronList`, `ScheduleWakeup`, `Bash`, `Read`, `Glob`, `Grep`, and the read-only `LSP`, `TaskOutput`, `BashOutput`, `ReadMcpResourceTool`, `ListMcpResourcesTool`. `Bash` is capped at 5 calls: the 6th waits for an `Agent` dispatch or the next prompt; other tools between the calls do not reset the count.
+- Retrieval tools (`WebSearch`, `WebFetch` and the Context7 tools, each MCP tool listed by its exact name in the hook): 3 calls per tool name per turn; an `Agent` dispatch never refills them, the `/dev-overnight` window included.
+- Any other tool (`Edit`, `Write`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `mcp__playwright__*`, any MCP tool not listed by name, ...): once per tool name per turn, whatever runs between; inside the session's open `/dev-overnight` window (no prompt arrives all night, so the session is one turn) an `Agent` dispatch also resets the count, as it resets Bash's.
 - `EnterPlanMode`, `ExitPlanMode`: always refused, `/do` included; only an `/allow` grant naming the tool passes one call.
 
 `hooks/pretool-read-size-guard.py` (no switch) blocks the main agent's `Read` of a file over 600 lines unless `limit` is at most 600; for such a file, delegate and ask for a summary.
@@ -80,8 +81,8 @@ A subagent must not restart a long-running daemon it itself depends on to verify
 ## Working Practice
 
 - Communication: concise, technical, no emojis, accuracy over validation; cite locations as `path:line`.
-- A library or framework the user names: fetch its Context7 docs before generating library-specific code.
-- Multi-source research (5+ sources, site exploration, reflection): delegate to a subagent. Simple 1-3 search queries: `WebSearch` directly.
+- A library or framework the user names: fetch its Context7 docs before generating library-specific code (directly within the retrieval budget of 3 calls per Context7 tool per turn; more libraries than that, delegate).
+- Multi-source research (5+ sources, site exploration, reflection): delegate to a subagent. Simple 1-3 search queries: `WebSearch` directly, within the same budget of 3 per turn.
 
 ## Orchestrator Prompt Purity
 
