@@ -460,12 +460,21 @@ def test_every_write_form_meets_the_role_row_as_a_redirect_does(tmp_path, form, 
         assert reason in json.loads(proc.stderr.splitlines()[0].split(": ", 1)[1])["deny_reason"], command
 
 
-@pytest.mark.parametrize("form", WRITE_FORMS)
+@pytest.mark.parametrize("form", [f for f in WRITE_FORMS if not f.startswith("rsync")])
 @pytest.mark.parametrize("caller", ["dev", "ba"])
 def test_every_write_form_of_a_temp_file_passes_as_a_redirect_does(tmp_path, form, caller):
     for command in ("echo x > /tmp/p14-write-form", form.format(T="/tmp/p14-write-form")):
         proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller])
         assert (proc.returncode, proc.stderr) == (0, ""), (command, proc.stderr)
+
+
+@pytest.mark.parametrize("caller,reason", [("dev", "writes a tree or links (rsync)"),
+                                           ("ba", "not in allowed_write_path_prefixes")])
+def test_a_tree_writer_to_a_temp_file_keeps_the_role_row(tmp_path, caller, reason):
+    """rsync writes below the path it is given, through links already there: the temp rule
+    does not cover it, so the role rows decide as on the base (refused for dev and ba)."""
+    proc = run(tmp_path, "Bash", {"command": "rsync -a /x /tmp/p14-write-form"}, CALLERS[caller])
+    assert proc.returncode == 2 and reason in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize("spelling", [

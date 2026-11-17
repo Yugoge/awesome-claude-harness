@@ -112,8 +112,12 @@ Temp writes (owner decision 2026-11-17; _temp_write):
     resolved views lie strictly below a temp root, and it is no harness
     control state, no other role's claude-scratch/<role>/ directory, and in
     neither the project, the harness home, the CLI config dir, $HOME nor a
-    repository kept in a temp root; a Bash target qualifies only when no
-    command of the string runs under a wrapper or find -exec.
+    repository kept in a temp root (a .git, a *.git directory or a bare
+    repository); a Bash target qualifies only when no command of the string
+    runs under a wrapper or find -exec, writes a tree or links (rsync, tar,
+    cp -a/-r/-s/-l, ...), makes a link (ln, git, mount) beside another
+    command, renames away harness state or a directory that may hold it, or
+    names a directory between a temp root and the target as an operand.
   - Any other target keeps the verdict the role rows and the raw-temp rule
     give it: the rule lifts refusals, it adds none.
 
@@ -384,18 +388,150 @@ def _kept_trees(data: dict) -> list:
     return [t for t in dict.fromkeys(out) if t not in roots]
 
 
+def _looks_like_git_dir(path: str) -> bool:
+    """A bare repository or a git dir: it holds HEAD, objects/ and refs/."""
+    return (os.path.isfile(os.path.join(path, "HEAD")) and os.path.isdir(os.path.join(path, "objects"))
+            and os.path.isdir(os.path.join(path, "refs")))
+
+
 def _in_work_tree(view: str, root: str) -> bool:
     """Whether a directory between ``root`` (exclusive) and ``view`` holds
-    .git, or ``view`` names a .git or .claude entry: a repository kept in a temp root."""
+    .git, is named *.git or looks like a git dir (a bare repository), or
+    ``view`` names a .git or .claude entry: a repository kept in a temp root."""
     parts = view[len(root.rstrip(os.sep)):].strip(os.sep).split(os.sep)
     if ".git" in parts or ".claude" in parts:
         return True
     current = root
     for part in parts[:-1]:
         current = os.path.join(current, part)
-        if os.path.lexists(os.path.join(current, ".git")):
+        if (part.lower().endswith(".git") or os.path.lexists(os.path.join(current, ".git"))
+                or _looks_like_git_dir(current)):
             return True
     return False
+
+
+# A link made in the string is invisible to the realpath check, which runs
+# before the string does. Link makers leave one where a later command of the
+# same string may write through it; tree writers write below the checked path,
+# through links that are already there or that the tree brings.
+_LINK_MAKERS = frozenset({"ln", "link", "git", "mount"})
+_TREE_WRITERS = frozenset({"rsync", "tar", "bsdtar", "gtar", "cpio", "pax", "unzip", "7z", "7za", "busybox"})
+# cp options that copy no link and keep no tree: any other option may (-s, -l,
+# -a, -d, -P, -r, -R, --preserve=links, ...).
+_CP_PLAIN_SHORT = frozenset("finpuvTL")
+_CP_PLAIN_LONG = frozenset({"--force", "--interactive", "--no-clobber", "--update", "--verbose",
+                            "--remove-destination", "--no-target-directory", "--dereference",
+                            "--target-directory"})
+# mv-style commands whose source operands leave their place.
+_RENAMERS = frozenset({"mv", "rename"})
+# Commands whose operand naming a target's ancestor makes no link there.
+_ANCESTOR_SAFE = frozenset({"mkdir", "cd", "pushd", "ls", "test", "[", "stat"})
+
+
+def _cp_links(args: list) -> bool:
+    for arg in args:
+        if arg is None:
+            return True
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            if arg.split("=", 1)[0] not in _CP_PLAIN_LONG:
+                return True
+        elif arg.startswith("-") and len(arg) > 1:
+            if not set(arg[1:]) <= _CP_PLAIN_SHORT:
+                return True
+    return False
+
+
+def _carries_state(path) -> bool:
+    """Whether moving ``path`` away moves harness control state: it is state,
+    or a directory a state location can lie in (a name root, or a prefix of a
+    state pattern below one)."""
+    from fnmatch import fnmatchcase
+
+    from lib import harness_temp_state as hts
+
+    if not isinstance(path, str) or not os.path.isabs(path):
+        return True
+    if hts.is_harness_state(path):
+        return True
+    views = hts.resolved_views(path)
+    if not views:
+        return True
+    plain_file = os.path.isfile(path) and not os.path.islink(path)
+    dirs = list(hts.name_roots()) + [d for d, _ in hts.tree_dirs()]
+    for view in views:
+        if any(_inside(d, view) for d in dirs):
+            return True
+        if plain_file:
+            continue
+        for root in hts.name_roots():
+            rel = hts._below(view.casefold(), root.casefold())
+            if not rel:
+                continue
+            for loc in hts.LOCATIONS:
+                if loc.kind != hts.CONTROL:
+                    continue
+                for pattern in loc.patterns:
+                    if len(rel) < len(pattern) and all(
+                            fnmatchcase(rel[i], g.casefold()) for i, g in enumerate(pattern[:len(rel)])):
+                        return True
+    return False
+
+
+def _bash_temp_hazard(command, target: str):
+    """Why the Bash string may move ``target`` off the path the realpath check
+    saw, else None: it writes a tree or links (cp -s/-l/-a/-r, rsync, tar, ...),
+    it makes a link (ln, git, mount) beside another command, it moves
+    harness state away (an mv/rename source that is state, holds it, or is not
+    an absolute static path), or another word names a directory between a temp
+    root and ``target``. Never raises: a failure is a hazard."""
+    try:
+        from lib import shell_parse
+
+        norm = os.path.normpath(target)
+        sites = list(shell_parse.walk(shell_parse.parse(command)))
+        for site in sites:
+            res = shell_parse.resolve(site.cmd)
+            name = res.name
+            args = [w.value() for w in res.args]
+            if name in _TREE_WRITERS or (name == "cp" and _cp_links(args)):
+                return f"the command writes a tree or links ({name})"
+            if name in _LINK_MAKERS and len(sites) > 1:
+                return f"the command makes a link ({name}) another command may write through"
+            if name in _RENAMERS:
+                operands, opts_done, dest_opt = [], False, False
+                for i, arg in enumerate(args):
+                    if arg is None:
+                        return f"the {name} operands are not static"
+                    if not opts_done and arg == "--":
+                        opts_done = True
+                    elif not opts_done and arg.startswith("-") and len(arg) > 1:
+                        dest_opt = dest_opt or arg in ("-t",) or arg.startswith("--target-directory")
+                    else:
+                        operands.append(arg)
+                sources = operands if (dest_opt or name == "rename") else operands[:-1]
+                for src in sources:
+                    if _carries_state(src):
+                        return f"{name} moves away {src}, which is or may hold harness state"
+            if name in _ANCESTOR_SAFE:
+                continue
+            for word in shell_parse._site_words(site.cmd):
+                value = word.value()
+                if value is None:
+                    continue
+                for piece in value.split("="):
+                    if not os.path.isabs(piece):
+                        continue
+                    piece = os.path.normpath(piece)
+                    if piece != norm and _inside(norm, piece) and piece not in ("/", "/tmp", "/var/tmp", "/var"):
+                        from lib import harness_temp_state as hts
+
+                        if hts.is_in_temp_root(piece):
+                            return f"{piece} (a directory above the target) is also an operand"
+    except Exception:
+        return "the command could not be read"
+    return None
 
 
 def _bash_wrapped(command) -> bool:
@@ -423,8 +559,11 @@ def _temp_write(role: str, target, data: dict) -> tuple:
     entry) lie strictly below a temp root; it is not harness control state
     (harness_temp_state.is_harness_state) nor another policy role's scratch
     directory <temp root>/claude-scratch/<role>/; it is in none of
-    _kept_trees, no repository kept in a temp root; and, for Bash, no command
-    of the string runs under a wrapper. Never raises: a failure qualifies nothing."""
+    _kept_trees, no repository kept in a temp root (a .git, a *.git directory
+    or a bare repository's layout); and, for Bash, no command of the string runs
+    under a wrapper and none may move the target off the path checked here
+    (_bash_temp_hazard: links, tree writers, harness state renamed away, an
+    ancestor named as an operand). Never raises: a failure qualifies nothing."""
     try:
         if not isinstance(target, str) or not os.path.isabs(target) or set(target) & _UNRESOLVED_CHARS:
             return (False, f"{target} is not a plain absolute path")
@@ -451,6 +590,10 @@ def _temp_write(role: str, target, data: dict) -> tuple:
                     return (False, f"{target} is in a repository kept in a temp root")
             if any(_inside(view, tree) for tree in kept):
                 return (False, f"{target} is in the project, the harness home, the CLI config dir or $HOME")
+        if data.get("tool_name") == "Bash":
+            hazard = _bash_temp_hazard((data.get("tool_input") or {}).get("command"), target)
+            if hazard:
+                return (False, f"{target} may not resolve where it is checked: {hazard}")
         return (True, None)
     except Exception as e:
         return (False, f"{target} could not be judged ({e.__class__.__name__})")

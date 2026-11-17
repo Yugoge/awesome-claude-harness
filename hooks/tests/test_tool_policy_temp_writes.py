@@ -325,3 +325,90 @@ PIPELINE_CASES = [
 def test_the_registered_pipeline_decides_as_the_rule(tmp_path, role, tool, tool_input, want):
     got, refusals = pipeline(tmp_path, tool, tool_input, role)
     assert got == want, refusals
+
+
+# -- what the string itself changes before the write (verifier findings on 3dad21a7) ---------------------------
+# Each was refused on the base and allowed by the first cut of the rule; it keeps the base verdict now.
+
+def _changed_in_string(tmp_path: Path) -> list:
+    home_claude = tmp_path / "home" / ".claude"
+    home_claude.mkdir(parents=True, exist_ok=True)
+    bare = tmp_path / "bare.git"
+    (bare / "hooks").mkdir(parents=True)
+    plain_bare = tmp_path / "plainbare"
+    for sub in ("objects", "refs", "hooks"):
+        (plain_bare / sub).mkdir(parents=True)
+    (plain_bare / "HEAD").write_text("ref: refs/heads/main\n")
+    repo = tmp_path / "proj"
+    (repo / ".git").mkdir(parents=True)
+    (tmp_path / "somelink").symlink_to(home_claude)
+    link = "/tmp/tmp-writes-v3l"
+    return [
+        # 1. a link made in the same string
+        f"ln -s {home_claude} {link} && echo x > {link}/settings.json",
+        f"ln -sf {ROOT / 'hooks'} {link} ; echo x > {link}/x.py",
+        f"ln -s {repo / '.git'} {link} && echo x | tee {link}/config",
+        f"ln -s /tmp/claude-grants {link} && cp notes.txt {link}/x.json",
+        f"cd /tmp && ln -s {home_claude} tmp-writes-v3l && echo x > {link}/settings.json",
+        f"cp -s {home_claude} {link} && echo x > {link}/settings.json",
+        f"cp -a {tmp_path / 'somelink'} {link} && echo x > {link}/settings.json",
+        f"mv {tmp_path / 'somelink'} {link} && echo x > {link}/settings.json",
+        f'bash -c "ln -s {home_claude} {link}" && echo x > {link}/settings.json',
+        f"rsync -a {tmp_path / 'somelink'} /tmp/tmp-writes-v3t/",
+        f"cp -r {tmp_path / 'somelink'} /tmp/tmp-writes-v3t/",
+        # 2. harness state moved away by a rename
+        "mv /tmp/claude-grants /tmp/tmp-writes-v3/old",
+        "mv /tmp/agentic-commit /tmp/tmp-writes-v3/ac",
+        f"mv /tmp/claude-orchestrator-consent-{SID}.flag /tmp/tmp-writes-v3/f",
+        "mv -t /tmp/tmp-writes-v3/ /tmp/claude-grants",
+        "mv /tmp/claude-scratch /tmp/tmp-writes-v3/s",
+        "mv /tmp /var/tmp/tmp-writes-v3/t",
+        # 3. a bare repository kept in temp
+        f"echo x > {bare / 'hooks' / 'pre-receive'}",
+        f"echo x > {plain_bare / 'hooks' / 'pre-receive'}",
+        f"cp notes.txt {plain_bare / 'config'}",
+    ]
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_what_the_string_changes_before_the_write_keeps_the_base_verdict(tmp_path, role):
+    cases = _changed_in_string(tmp_path)
+    decided = {c: verdict(run(tmp_path, "Bash", {"command": c}, role)) for c in cases}
+    assert decided == {c: "refused" for c in cases}, decided
+
+
+STILL_ALLOWED = [
+    "mkdir -p /tmp/tmp-writes-lane/d && echo x > /tmp/tmp-writes-lane/d/out.txt",
+    "cd /tmp/tmp-writes-lane && echo x > /tmp/tmp-writes-lane/out.txt",
+    "mv /tmp/tmp-writes-lane/a.txt /tmp/tmp-writes-lane/b.txt",
+    "cp -f notes.txt /tmp/tmp-writes-lane/out.txt",
+    "cp -p -v -- notes.txt /tmp/tmp-writes-lane/out.txt",
+    "echo x > /tmp/tmp-writes-lane/a.txt && cat /tmp/tmp-writes-lane/a.txt > /tmp/tmp-writes-lane/b.txt",
+    "echo x > /tmp/tmp-writes-lane/my.git.txt",
+    "ln -sf /x /tmp/tmp-writes-lane/l",
+    "git checkout -- /tmp/tmp-writes-lane/out.txt",
+]
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("command", STILL_ALLOWED)
+def test_plain_temp_writes_beside_those_stay_allowed(tmp_path, role, command):
+    assert verdict(run(tmp_path, "Bash", {"command": command}, role)) == "allowed"
+
+
+PIPELINE_CHANGED = [
+    "ln -s {home} /tmp/tmp-writes-v3l && echo x > /tmp/tmp-writes-v3l/settings.json",
+    "mv /tmp/claude-grants /tmp/tmp-writes-v3/old",
+    "mv /tmp/agentic-commit /tmp/tmp-writes-v3/ac",
+    "echo x > {bare}/hooks/pre-receive",
+]
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("command", PIPELINE_CHANGED)
+def test_the_registered_pipeline_refuses_what_the_string_changes(tmp_path, role, command):
+    (tmp_path / "home" / ".claude").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bare.git" / "hooks").mkdir(parents=True)
+    command = command.format(home=tmp_path / "home" / ".claude", bare=tmp_path / "bare.git")
+    got, refusals = pipeline(tmp_path, "Bash", {"command": command}, role)
+    assert got == "refused", command
