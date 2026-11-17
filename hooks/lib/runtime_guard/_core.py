@@ -1705,7 +1705,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
             return _block("STEP1", "indeterminate policy: xargs kill")
         # package-manager script-run / build / global install
         if head in PKG_MANAGERS:
-            if _pm_global_args([_strip_quotes(t) for t in rest]):
+            if _pm_global_args([_strip_quotes(t) for t in rest], pm=head):
                 return _block("STEP1", "indeterminate policy: global package op")
             # any non-meta pm invocation is fail-closed (build/launch family)
             if not _is_meta_query(head, rest):
@@ -2639,21 +2639,147 @@ _PM_SUBCMDS = frozenset({
     "fund", "pkg", "query", "global", "workspace", "workspaces", "store", "patch", "import"})
 
 
-def _pm_exec_family(args: list) -> bool:
-    """True if the package manager's subcommand (the first known subcommand word
-    before `--`, so a value like `--prefix /tmp` is skipped) runs a nested
-    command: `exec`, `x`, `dlx`."""
+_PM_VALUE_OPTS = {
+    "npm": frozenset({
+        "--cache", "--prefix", "-C", "--tag", "-w", "--workspace", "--userconfig", "--globalconfig", "--registry",
+        "--loglevel", "--location", "-L", "--package", "--call", "-c", "--otp", "--scope", "--omit", "--include",
+        "--install-strategy", "--script-shell", "--node-options", "--before", "--access", "--auth-type", "--preid",
+        "--tag-version-prefix", "--save-prefix", "--editor", "--shell", "--browser", "--viewer", "--depth",
+        "--cpu", "--os", "--libc", "--ca", "--cafile", "--cert", "--key", "--proxy", "--https-proxy", "--noproxy",
+        "--umask", "--heading", "--message", "-m", "--fetch-retries", "--fetch-timeout", "--init-module",
+        "--init-author-name", "--init-author-email", "--init-author-url", "--init-license", "--init-version",
+        "--logs-dir", "--logs-max", "--maxsockets", "--sbom-format", "--sbom-type", "--expect-result-count",
+        "--replace-registry-host", "--provenance-file", "--diff", "--diff-src-prefix", "--diff-dst-prefix",
+        "--pack-destination", "--audit-level", "--lockfile-version", "--color", "--usage-file"}),
+    "pnpm": frozenset({
+        "-C", "--dir", "--filter", "-F", "--filter-prod", "--test-pattern", "--changed-files-ignore-pattern",
+        "--reporter", "--loglevel", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir",
+        "--global-dir", "--registry", "--config", "--workspace-concurrency", "--network-concurrency",
+        "--child-concurrency", "--package-import-method", "--node-linker", "--resolution-mode", "--package",
+        "--use-node-version", "--cache-dir", "--state-dir"}),
+    "yarn": frozenset({
+        "--cwd", "--modules-folder", "--cache-folder", "--global-folder", "--link-folder", "--mutex",
+        "--network-timeout", "--registry", "--use-yarnrc", "--preferred-cache-folder", "--network-concurrency",
+        "--emoji", "--https-proxy", "--proxy", "--otp", "--package", "-p"}),
+    "bun": frozenset({
+        "--cwd", "--filter", "-F", "--config", "-c", "--backend", "--cache-dir", "--registry", "--cafile", "--ca",
+        "--preload", "-r", "--require", "--import", "--env-file", "--tsconfig-override", "--define", "-d",
+        "--loader", "-l", "--elide-lines", "--main-fields", "--conditions", "--port", "--package", "-p", "--shell",
+        "--concurrent-scripts", "--network-concurrency", "--omit", "--linker"}),
+}
+"""Value-taking options of each package manager, read in its own argv before the subcommand: their next word is a
+value (`npm --cache install exec ...` names a cache directory `install`), never the subcommand."""
+_PM_FLAG_OPTS = {
+    "npm": frozenset({
+        "-y", "--yes", "--no", "-g", "--global", "-D", "--save-dev", "-S", "--save", "-E", "--save-exact", "-O",
+        "--save-optional", "-P", "--save-prod", "-B", "--save-bundle", "-s", "--silent", "-q", "--quiet", "-d",
+        "-dd", "-ddd", "--verbose", "-ws", "--workspaces", "--include-workspace-root", "--if-present",
+        "--ignore-scripts", "--json", "--parseable", "-p", "--long", "-l", "--force", "-f", "--dry-run",
+        "--offline", "--prefer-offline", "--prefer-online", "--legacy-peer-deps", "--strict-peer-deps",
+        "--no-save", "--no-audit", "--no-fund", "--foreground-scripts", "--no-color", "--unicode", "--progress",
+        "--no-progress", "--usage", "-h", "-H", "-?", "--help", "-v", "--version", "--all", "-a", "--production",
+        "--global-style", "--no-package-lock", "--package-lock-only", "--install-links", "--audit", "--fund",
+        "--update-notifier", "--no-update-notifier", "--timing", "--no-bin-links", "--bin-links"}),
+    "pnpm": frozenset({
+        "-w", "--workspace-root", "-r", "--recursive", "-g", "--global", "-D", "--save-dev", "-P", "--save-prod",
+        "-O", "--save-optional", "-E", "--save-exact", "-s", "--silent", "--stream", "--parallel", "--no-bail",
+        "--bail", "--if-present", "--frozen-lockfile", "--no-frozen-lockfile", "--prefer-offline", "--offline",
+        "--shamefully-hoist", "--ignore-scripts", "--json", "--long", "-h", "--help", "-v", "--version",
+        "--include-workspace-root", "--color", "--no-color", "--sort", "--no-sort", "--reverse", "--use-stderr",
+        "--prod", "--dev", "--no-optional", "-c", "--shell-mode", "--yes", "-y"}),
+    "yarn": frozenset({
+        "-s", "--silent", "--verbose", "--offline", "--prefer-offline", "--frozen-lockfile", "--pure-lockfile",
+        "--ignore-scripts", "--ignore-engines", "--ignore-optional", "--ignore-platform", "--json", "--no-progress",
+        "--non-interactive", "--production", "--prod", "--flat", "--force", "-W", "--ignore-workspace-root-check",
+        "-D", "--dev", "-P", "--peer", "-O", "--optional", "-E", "--exact", "-T", "--tilde", "-h", "--help",
+        "-v", "--version", "--no-lockfile", "--check-files", "--no-bin-links", "--har", "--no-default-rc",
+        "--skip-integrity-check", "--update-checksums", "--focus", "--no-node-version-check", "--no-color"}),
+    "bun": frozenset({
+        "-g", "--global", "--dev", "-D", "--development", "--optional", "--peer", "-E", "--exact",
+        "--production", "--frozen-lockfile", "--dry-run", "--force", "-f", "--silent", "--verbose", "--no-save",
+        "--save", "--ignore-scripts", "--bun", "-b", "--watch", "--hot", "--smol", "--no-install", "-i",
+        "--prefer-offline", "--prefer-latest", "--if-present", "--no-clear-screen", "-h", "--help", "-v",
+        "--version", "--trust", "--yarn", "-y", "--no-summary", "--no-verify", "--no-cache", "--only-missing",
+        "--lockfile-only", "--parallel", "--sequential"}),
+}
+"""Flag-only options of each package manager: the next word is the subcommand (or the next option)."""
+
+
+def _pm_subcmd_scan(args: list, pm: Optional[str]) -> Optional[str]:
+    """The package manager's subcommand word before `--`, skipping the values of its value-taking options; "?"
+    when a known subcommand word directly follows an option whose value-ness is unknown (it may be that option's
+    value); None when no known subcommand word is found. For an unknown package manager (`pm` None) every table
+    counts, and an option any of them takes a value for skips its next word."""
     head = args[:args.index("--")] if "--" in args else args
-    words = [t for t in head if t and not t.startswith("-")]
-    known = [t for t in words if t in _PM_SUBCMDS or t in _PM_EXEC_SUBCMDS]
-    if known:
-        return known[0] in _PM_EXEC_SUBCMDS
-    return any(t in _PM_EXEC_SUBCMDS for t in words)
+    known_words = _PM_SUBCMDS | _PM_EXEC_SUBCMDS
+    if pm in _PM_VALUE_OPTS:
+        value_opts, flag_opts = _PM_VALUE_OPTS[pm], _PM_FLAG_OPTS[pm]
+    else:
+        value_opts = frozenset().union(*_PM_VALUE_OPTS.values())
+        flag_opts = frozenset().union(*_PM_FLAG_OPTS.values()) - value_opts
+    i = 0
+    while i < len(head):
+        t = head[i]
+        if t.startswith("-") and len(t) > 1:
+            if "=" in t:
+                i += 1
+            elif t in value_opts:
+                i += 2
+            elif t not in flag_opts and i + 1 < len(head) and head[i + 1] in known_words:
+                return "?"  # `--unknown install exec -- ...`: `install` may be the option's value
+            else:
+                i += 1
+            continue
+        if t in known_words:
+            return t
+        i += 1
+    return None
+
+
+def _pm_exec_family(args: list, pm: Optional[str] = None) -> bool:
+    """True if the package manager's subcommand runs a nested command: `exec`, `x`, `dlx`, or bun's `run` (which
+    can run a binary on PATH, so it is read fail-closed). The subcommand is the first known subcommand word before
+    `--` that is no option's value (`npm --prefix install exec` runs `exec`); a known word right after an option
+    whose value-ness is unknown fails closed (exec-family). With no known word, any exec word counts."""
+    sub = _pm_subcmd_scan(args, pm)
+    if sub == "?":
+        return True
+    if sub is not None:
+        return sub in _PM_EXEC_SUBCMDS or (sub == "run" and pm in ("bun", None))
+    head = args[:args.index("--")] if "--" in args else args
+    return any(t in _PM_EXEC_SUBCMDS for t in head if t and not t.startswith("-"))
+
+
+_PM_SCRIPTS = {"npm-cli.js": "npm", "npm-cli.cjs": "npm", "npm-cli.mjs": "npm", "pnpm.cjs": "pnpm",
+               "pnpm.js": "pnpm", "pnpm.mjs": "pnpm", "yarn.js": "yarn", "yarn.cjs": "yarn", "npm.cmd": "npm",
+               "npm.exe": "npm", "pnpm.cmd": "pnpm", "pnpm.exe": "pnpm", "yarn.cmd": "yarn", "yarn.exe": "yarn",
+               "bun.exe": "bun"}
+_PM_RUNNER_SCRIPTS = {"npx-cli.js": "npx", "npx.cmd": "npx", "pnpx.cmd": "pnpx", "bunx.exe": "bunx"}
+
+
+def _pm_word(t: str) -> tuple:
+    """(kind, name) for a word that runs a package manager ("pm") or an exec runner ("runner"), in every spelling
+    that runs one: a bare or path name (`npm`, `/usr/local/bin/npm`), a version-pinned package spec (`npm@10`,
+    `npm@latest`), or the package manager's own script (`npm-cli.js`, `pnpm.cjs`, `yarn.js`, run directly or as
+    `node <path>`). Else (None, None)."""
+    base = os.path.basename(t)
+    if "@" in base and not base.startswith("@"):
+        base = base.split("@", 1)[0]
+    if base in PKG_MANAGERS:
+        return "pm", base
+    if base in _PM_EXEC_RUNNERS:
+        return "runner", base
+    if base in _PM_SCRIPTS:
+        return "pm", _PM_SCRIPTS[base]
+    if base in _PM_RUNNER_SCRIPTS:
+        return "runner", _PM_RUNNER_SCRIPTS[base]
+    return None, None
 
 
 def _pm_nested_global(tokens: list, depth: int = 0) -> bool:
     """True if a nested invocation (the argv an exec-family subcommand runs, or a
-    `-c` string) runs a package manager as a global op: a package-manager word
+    `-c` string) runs a package manager as a global op: a package-manager word in
+    any spelling (_pm_word: `npm`, `npm@10`, `npm-cli.js`, `node <path>/npm-cli.js`)
     whose own arguments are global (`npm exec -- npm i -g x`), an exec runner
     (`npx`) whose nested argv is, or a string word (`sh -c 'npm i -g x'`) read
     the same way."""
@@ -2662,10 +2788,10 @@ def _pm_nested_global(tokens: list, depth: int = 0) -> bool:
     for i, t in enumerate(tokens):
         if t is None:
             continue
-        base = os.path.basename(t)
-        if base in PKG_MANAGERS:
-            return _pm_global_args(tokens[i + 1:], depth + 1)
-        if base in _PM_EXEC_RUNNERS:
+        kind, name = _pm_word(t)
+        if kind == "pm":
+            return _pm_global_args(tokens[i + 1:], depth + 1, name)
+        if kind == "runner":
             return _pm_nested_global(_pm_runner_argv(tokens[i + 1:]), depth + 1)
         if any(c.isspace() for c in t) and _pm_nested_global(_safe_shlex(t), depth + 1):
             return True
@@ -2683,7 +2809,7 @@ def _pm_runner_argv(tokens: list) -> list:
     return []
 
 
-def _pm_global_args(args: list, depth: int = 0) -> bool:
+def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> bool:
     """True if a package manager's own arguments make it a global op: `-g`,
     `--global`, `--global=<true>`, a short cluster holding `g` (`-gD`),
     `--location=global` / `--location global` (or npm's unique abbreviations
@@ -2693,10 +2819,18 @@ def _pm_global_args(args: list, depth: int = 0) -> bool:
     global), so arguments after `--` are not its flags; but for an exec-family
     subcommand (`npm exec` / `x`, `pnpm exec` / `dlx`, `yarn exec` / `dlx`) they
     are the nested command it runs, read as a nested invocation, as is npm's
-    `-c` / `--call` string."""
+    `-c` / `--call` string, and so is bun's `run` argv. `pm` names the package
+    manager, whose option table finds the subcommand past option values; None
+    reads every table."""
     args = [a if a is not None else "" for a in args]
-    if _pm_exec_family(args):
+    if _pm_exec_family(args, pm):
         nested = args[args.index("--") + 1:] if "--" in args else []
+        if nested:
+            # `npm exec npm@10 -- i -g x`: the command word may stand before `--`, its argv after it
+            head = args[:args.index("--")]
+            k = next((j for j, t in enumerate(head) if t in _PM_EXEC_SUBCMDS or t == "run"), None)
+            if k is not None:
+                nested = head[k + 1:] + nested
         calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in ("-c", "--call")]
         calls += [t.split("=", 1)[1] for t in args if t.startswith(("--call=", "-c="))]
         if _pm_nested_global(nested, depth) or any(_pm_nested_global(_safe_shlex(c), depth + 1) for c in calls):
@@ -2775,6 +2909,17 @@ def _p7_global_env(command: str) -> Optional[Verdict]:
         env_global = any(_pm_global_setting(k, v) for k, v in env.items()
                          if k.lower().startswith("npm_config_"))
         if name not in PKG_MANAGERS:
+            # a package manager in another spelling run as the command: `npx npm@10 i -g x`, `npm@10` on PATH,
+            # `npm-cli.js i -g x`, `node <path>/npm-cli.js i -g x`
+            lead = None
+            if _pm_word(name)[0]:
+                lead = [name] + [a or "" for a in args]
+            elif name in ("node", "nodejs"):
+                k = next((j for j, a in enumerate(args) if a and not a.startswith("-")), None)
+                if k is not None and _pm_word(args[k])[0]:
+                    lead = [a or "" for a in args[k:]]
+            if lead is not None and (env_global and _pm_word(lead[0])[0] == "pm" or _pm_nested_global(lead)):
+                return _block("P7", "global package install/link")
             # `NPM_CONFIG_GLOBAL=true bash -c 'npm i x'`: the prefix reaches the nested shell's package manager
             if env_global and r.payload is not None and any(
                     isinstance(s.cmd, _sp.SimpleCommand) and _sp.resolve(s.cmd).name in PKG_MANAGERS
@@ -2783,7 +2928,7 @@ def _p7_global_env(command: str) -> Optional[Verdict]:
             continue
         if env_global:
             return _block("P7", "global package install/link (npm_config_global/location in its environment)")
-        if _pm_global_args([a or "" for a in args]):
+        if _pm_global_args([a or "" for a in args], pm=name):
             return _block("P7", "global package install/link")
     return None
 
@@ -2799,7 +2944,7 @@ def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
             continue
         _, head, rest = cw[0]
         if head in PKG_MANAGERS:
-            is_global = _pm_global_args([_strip_quotes(t) for t in rest])
+            is_global = _pm_global_args([_strip_quotes(t) for t in rest], pm=head)
             is_link = any(t in ("link", "unlink") for t in rest)
             if is_global or is_link:
                 return _block("P7", "global package install/link")
@@ -4516,7 +4661,7 @@ def _anchor_globalbin_hits(sc: str, tokens: list, exec_toks: list,
         # `link` that belongs to the pm — not an unrelated wrapper option — is what
         # is matched (mirrors P7 reading the pm's `rest`).
         own = [_strip_quotes(t) for t in tokens[pm_pos + 1:]]
-        is_global = _pm_global_args(own)
+        is_global = _pm_global_args(own, pm=os.path.basename(_strip_quotes(tokens[pm_pos])))
         is_link = any(t in ("link", "unlink") for t in own)
         if is_global or is_link:
             return True

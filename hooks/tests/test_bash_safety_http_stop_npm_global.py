@@ -295,3 +295,76 @@ def test_http_stop_refused_round3(sandbox, command):
 def test_global_package_op_refused_round3(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)
+
+
+# Verifier round 4. The exec-family subcommand is found past the values of value-taking options (`--cache install`
+# names a cache directory, not a subcommand), and a known subcommand word right after an option whose value-ness is
+# unknown keeps the argv after `--` read as nested. A nested package manager is recognised in every spelling that
+# runs one: `npm@<ver>`, `npm-cli.js`, `node <path>/npm-cli.js`, a path whose basename is a package manager, through
+# `npx`; `bun run` (which can run a PATH binary) reads its argv after `--` as nested. A URL word holding whitespace
+# or a control character, or a portless URL whose path is a stop endpoint, never lifts the client shape.
+NPM_REFUSED_R4 = [
+    "npm --cache install exec -- npm i -g ../p",
+    "npm --prefix install exec -- npm i -g x",
+    "npm --tag install exec -- npm i -g x",
+    "npm -w test exec -- npm i -g x",
+    "npm --workspace test exec -- npm i -g x",
+    "npm --cache install x -- npm i -g x",
+    "pnpm --filter test exec -- npm i -g x",
+    "pnpm -C install dlx -- npm i -g x",
+    "pnpm --dir install exec -- npm i -g x",
+    "yarn --cwd install exec -- npm i -g x",
+    "npm --unknown-opt install exec -- npm i -g x",
+    "npm exec -- node /usr/lib/node_modules/npm/bin/npm-cli.js i -g ../p",
+    "npm exec -- npm-cli.js i -g x",
+    "npm exec -- npm@10 i -g x",
+    "npm exec -- npm@latest install --global x",
+    "npm exec --package=npm@10 -- npm@10 i -g x",
+    "npm exec -- npx -y npm@10 i -g x",
+    "pnpm dlx -- npm@10 i -g x",
+    "yarn exec -- npm@10 i -g x",
+    "npm exec -- /usr/local/bin/npm i -g x",
+    "npm exec -- node ./node_modules/pnpm/bin/pnpm.cjs add -g x",
+    "bun run -- npm i -g x",
+    "npm exec npm@10 -- i -g x",
+    "npx npm@10 i -g x",
+    "node /usr/lib/node_modules/npm/bin/npm-cli.js i -g x",
+]
+NPM_ALLOWED_R4 = [
+    "npm --cache /tmp/c install x",
+    "npm -w pkg test -- -g foo",
+    "npm exec -- npm-check-updates",
+    "npm exec -- node ./scripts/build.js -g",
+    "bun run test -- -g foo",
+    "pnpm --filter web exec -- eslint .",
+    "npx eslint .",
+    "node scripts/build.js -g",
+    "NPM_CONFIG_GLOBAL=true npx eslint .",
+]
+HTTP_STOP_REFUSED_R4 = [
+    "wget -qO- 'localhost:18080/stops /../stop'",
+    "curl 'localhost:8080/stops /../stop'",
+    "curl $'localhost:8080/stops\\t/../stop'",
+    "curl localhost:8080/stops localhost/stop",
+    "curl localhost:8080/stops http://localhost/stop",
+    "curl --connect-to ::localhost:8080 localhost:8080/stops",
+    "curl --resolve x:8080:127.0.0.1 localhost:8080/stops",
+]
+
+
+@pytest.mark.parametrize("command", NPM_ALLOWED_R4)
+def test_allowed_round4(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_REFUSED_R4)
+def test_http_stop_refused_round4(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "daemon-restart-http-stop" in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", NPM_REFUSED_R4)
+def test_global_package_op_refused_round4(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)

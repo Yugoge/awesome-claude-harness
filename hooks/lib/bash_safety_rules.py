@@ -680,7 +680,7 @@ HTTP_LIFT_OPTIONS = {
               "--json", "--output", "--user", "--user-agent", "--referer", "--cookie", "--cookie-jar", "--max-time",
               "--connect-timeout", "--write-out", "--form", "--form-string", "--retry", "--retry-delay",
               "--retry-max-time", "--range", "--proxy", "--cacert", "--cert", "--key", "--url", "--url-query",
-              "--oauth2-bearer", "--limit-rate", "--max-redirs", "--resolve", "--connect-to", "--dump-header",
+              "--oauth2-bearer", "--limit-rate", "--max-redirs", "--dump-header",
               "--output-dir", "--unix-socket", "--max-filesize", "--noproxy", "--proxy-user"}, False),
     "wget": ("qvSckN", "OoaTtUP",
              {"--quiet", "--verbose", "--no-verbose", "--spider", "--server-response", "--no-check-certificate",
@@ -716,9 +716,14 @@ def _http_literal(w):
 
 def _http_path_stops(text):
     """True if a URL in text reaches a stop endpoint once percent-decoded and its dot segments removed, as the
-    client (curl normalises `/stops/../stop`) or a server may read it."""
-    for m in re.finditer(r":[0-9]+(/[^?#\s]*)", text):
-        path = m.group(1)
+    client (curl normalises `/stops/../stop`) or a server may read it. A word holding whitespace or a control
+    character always counts (a client may send `/stops /../stop` as the request path), and so does the path of a
+    portless URL word (`localhost/stop`, `http://localhost/stop`)."""
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f for c in text):
+        return True
+    portless = re.match(r"(?:[A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*(/[^?#]*)", text)
+    paths = [m.group(1) for m in re.finditer(r":[0-9]+(/[^?#]*)", text)] + ([portless.group(1)] if portless else [])
+    for path in paths:
         for _ in range(5):
             dec = urllib.parse.unquote(path)
             if dec == path:
@@ -843,10 +848,11 @@ def _http_stop_allowed(command, sites):
         the URL is a mention; or
     (b) the command is a single HTTP client invocation (curl, wget, httpie, xh), alone or piped only into pure
         filters, with no option that takes URLs or requests from elsewhere (`-K`, `--config`, `-:`, `--next`,
-        `-T`, `--variable`, wget's `-i` / `-e`, ...), every URL word a plain literal (no quote splitting, escape,
-        expansion or URL glob), and no URL path reaching `/stop` (not followed by a letter or digit) once
-        percent-decoded and its dot segments removed; so `/stops/42` and `/stopwords` pass and `/stops/../stop`
-        does not."""
+        `-T`, `--variable`, `--connect-to`, `--resolve`, wget's `-i` / `-e`, ...), every URL word a plain literal
+        (no quote splitting, escape, expansion or URL glob) holding no whitespace or control character, and no URL
+        path (with or without a port) reaching `/stop` (not followed by a letter or digit) once percent-decoded
+        and its dot segments removed; so `/stops/42` and `/stopwords` pass and `/stops/../stop`,
+        `'/stops /../stop'` and `localhost/stop` do not."""
     if all(_http_reader_ok(site, r) for site, r in sites):
         return True
     if re.search(HTTP_STOP_ANY + r"(?![A-Za-z0-9])", command):
