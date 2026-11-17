@@ -178,8 +178,8 @@ def test_a_rule_neither_release_reaches_still_says_so(sandbox):
 OVER_BLOCKS_FIXED = [
     ('git -c x=y commit -m "fix(session-recovery)"', "bash session-recovery.sh", "hard-banned script"),
     ('echo "see secret > file"', "cat .env > out.txt", "redirect from/to sensitive file"),
-    ('git commit -m "fix: avoid npm install -g"', 'bash -c "npm i -g foo"', "npm install -g"),
-    ('echo "npm install -g foo"', "sh -c 'npm install -g foo'", "npm install -g"),
+    ('git commit -m "fix: avoid npm install -g"', 'bash -c "npm i -g foo"', "global package install"),
+    ('echo "npm install -g foo"', "sh -c 'npm install -g foo'", "global package install"),
 ]
 
 
@@ -203,3 +203,40 @@ def test_a_read_of_a_grant_namespace_passes_and_a_write_is_refused(sandbox, name
         r = run(sandbox, SAFETY, write)
         assert r.returncode == 2 and label in r.stderr, (write, r.stderr)
 
+
+
+DAEMON = {"CLAUDE_PROTECTED_DAEMON_PREFIX": "demo-daemon", "CLAUDE_PROTECTED_DAEMON_TARGETS": "acct-a|acct-b"}
+
+
+def run_env(sandbox, command, extra):
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "bash-safety-rules",
+               "cwd": sandbox["repo"]}
+    return subprocess.run(["bash", str(HOOKS / SAFETY)], input=json.dumps(payload), capture_output=True, text=True,
+                          env={**sandbox["env"], **extra}, cwd=sandbox["repo"], timeout=120)
+
+
+@pytest.mark.parametrize("command,refused", [
+    ("systemctl restart demo-daemon-acct-a", True),
+    ("sudo systemctl restart demo-daemon", True),
+    ("bash -c 'systemctl stop demo-daemon-acct-b'", True),
+    ("systemctl --now restart demo-daemon", True),     # the runtime guard reads the verb past an option
+    ("echo systemctl restart demo-daemon", False),     # data, not a restart
+    ("systemctl status demo-daemon-acct-a", False),
+])
+def test_the_daemon_restart_rule_reads_the_runtime_guards_service_matcher(sandbox, command, refused):
+    """BS-09: the daemon family is the runtime guard's protected service; a restart verb of the rule refuses."""
+    r = run_env(sandbox, command, DAEMON)
+    assert ("daemon-restart-prohibition" in r.stderr) == refused, (command, r.stderr)
+
+
+def test_the_daemon_restart_rule_is_inert_without_its_variables(sandbox):
+    r = run_env(sandbox, "systemctl --now restart demo-daemon", {})
+    assert "daemon-restart-prohibition" not in r.stderr
+
+
+@pytest.mark.parametrize("command", ["npm install -g foo", "npm i --global foo", 'bash -c "npm i -g foo"',
+                                     "sh -c 'npm install -g foo'", "sudo npm install -g foo"])
+def test_a_global_npm_install_is_the_runtime_guards(sandbox, command):
+    """BS-34 merged into the runtime guard's global-install primitive, which refuses each form first."""
+    r = run(sandbox, SAFETY, command)
+    assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)

@@ -46,11 +46,7 @@ def grep(pattern, text):
 def state_dir():
     """The hook state root as lib/harness_state_dir.sh resolves it."""
     v = os.environ.get("CLAUDE_STATE_DIR", "")
-    if not v.startswith("/"):
-        return "/tmp"
-    while len(v) > 1 and v.endswith("/"):
-        v = v[:-1]
-    return v
+    return (v.rstrip("/") or "/") if v.startswith("/") else "/tmp"
 
 
 def one_slash(d):
@@ -488,13 +484,30 @@ def consume_daemon_restart_grant(unit, verb, payload, grant_dir, prefix):
                 os.close(fd)
 
 
+def daemon_restart(command, payload, prefix):
+    """The runtime guard, given the daemon family (`<prefix>`, `<prefix>-*`) as its only protected service, refuses the
+    command, and the parser reads a restart verb of DAEMON_VERBS on the systemctl or service command it runs."""
+    try:
+        from runtime_guard import _core
+        from runtime_guard.config import REQUIRED_KEYS
+        from lib.shell_parse import parse, resolve, walk
+        cfg = {"schema_version": 1, **{k: [] for k in REQUIRED_KEYS}, "protected_services": [prefix, prefix + "-*"]}
+        cwd = (payload.get("tool_input") or {}).get("cwd") or os.getcwd()
+        verbs = DAEMON_VERBS[1:-1].split("|")
+        return _core.evaluate(command, cwd, cfg)[0] == "BLOCK" and any(
+            r.name in ("systemctl", "service") and any(a in verbs for a in r.argv())
+            for r in (resolve(site.cmd) for site in walk(parse(command))))
+    except Exception:  # noqa: BLE001 - the guard or the parser unavailable: the raw reading, which over-blocks
+        return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
+
+
 def daemon_rules(command, payload, env):
     """BS-09, BS-10, BS-12, BS-13: the protected daemon (inert while CLAUDE_PROTECTED_DAEMON_PREFIX is unset)."""
     prefix, targets = env["prefix"], env["targets"]
     hint = env["grant_hint"]
     if prefix:
         prefix_re = re.escape(prefix)
-        if grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(prefix_re, command):
+        if daemon_restart(command, payload, prefix):
             alt = "|".join(re.sub(r"([][\\.^$*+?(){}])", r"\\\1", t) for t in targets.split("|")) if targets else ""
             unit_re = re.compile(prefix_re + (f"(-({alt}))?" if alt else ""))
             unit = next((m.group(0) for line in lines_of(command) for m in [unit_re.search(line)] if m), "")
@@ -982,15 +995,8 @@ def removal_policy(payload_text, command):
                    f"fallback to allow.")
 
 
-def npm_and_kill_rules(command, stripped):
-    """BS-34 (npm -g in the parser's executable view: quoted data and comments are not a run) and BS-35 (kill <pid>)."""
-    no_comments = executable_view_or_raw(command)
-    if no_comments == command:
-        no_comments = "\n".join(re.sub(r"#.*$", "", line) for line in lines_of(command))
-    if grep(r"npm\s+(install|i)\s+.*(-g|--global)", no_comments) or grep(r"npm\s+(install|i)\s+-g", no_comments):
-        refuse("BLOCKED: npm install -g is refused from this environment", f"Command: {command}",
-                   "REASON: A global install can replace a shared binary and disrupt running processes.",
-                   "Install locally, or ask the user to perform any global install manually.", released_line())
+def kill_pid_rule(command, stripped):
+    """BS-35: kill <pid>."""
     if grep(r"(^|[;&|]\s*)kill\s+[0-9]", stripped):
         refuse("BLOCKED: kill with PIDs is refused — verify the target is safe before killing", f"Command: {command}",
                    "REASON: Killing a PID can cascade to unrelated processes. Use a scoped restart instead.",
@@ -1219,7 +1225,7 @@ def decide(payload_text):
     hard_ban_rule(command)
     service_rules(command, stripped, env)
     removal_policy(payload_text, command)
-    npm_and_kill_rules(command, stripped)
+    kill_pid_rule(command, stripped)
     worktree_git_rules(command, view)
     git_clean_rule(command, stripped, view)
     return "ALLOW"
