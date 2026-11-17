@@ -507,6 +507,41 @@ def _json(raw: bytes) -> dict:
 # push.md's dispatch protocol and merge.md's Refusals: a refusal is asked ONE AskUserQuestion; "a refusal met again
 # after it is reported in the reply, not asked again". Step 5's call, by the script it runs.
 PUSH_CALL, MERGE_CALL = "execute-push.py", "merge.sh"
+_INTERPRETERS = {"python", "python3", "bash", "sh"}
+_PUSH_FLAGS = ("--repo-hash", "--branch", "--remote", "--request-id", "--repo-root")  # push.md Step 5's call
+
+
+def step5_call(command: str, call: str) -> bool:
+    """``command`` runs Step 5's script ``call`` as push.md / merge.md write it, alone: one simple command (no
+    list, pipe, subshell or second line) whose command word, after any VAR=value words and an interpreter, is the
+    script; no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
+    --no-commit). A command that only mentions the script (`echo merge.sh; false`) is none."""
+    if "\n" in command.strip():
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:
+        return False
+    operator = lambda word: bool(word) and not word.strip("();<>|&")  # noqa: E731
+    if any(operator(w) and any(c in w for c in ";|()") or w in ("&", "&&") for w in words):
+        return False
+    while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        words = words[1:]
+    if words and os.path.basename(words[0]) in _INTERPRETERS:
+        words = words[1:]
+        while words and words[0].startswith("-"):
+            words = words[1:]
+    if not words or os.path.basename(words[0]) != call:
+        return False
+    args = next((words[1:k] for k in range(1, len(words)) if operator(words[k])), words[1:])  # up to a redirect
+    if "--help" in args or "-h" in args:
+        return False
+    if call == PUSH_CALL:
+        return all(flag in args for flag in _PUSH_FLAGS)
+    rest = [a for a in args if a != "--no-commit"]
+    return len(rest) == 1 and not rest[0].startswith("-")
 
 
 def refusal_met_again(span, call: str) -> bool:
@@ -516,14 +551,13 @@ def refusal_met_again(span, call: str) -> bool:
     only: a predicate ends its turn on it only where its own reading of git meets the same refusal now (a remote
     git ls-remote cannot read; the source's merge in conflict), as close_stalled does (D25: no agent action in the
     span clears it)."""
-    word = re.compile(r"(?:^|[\s/\"'])" + re.escape(call) + r"(?=[\s\"';|&)]|$)")
     state = 0  # 1: refused; 2: refused, then answered; 3: refused again after the answer
     for use in span.uses("Bash", "AskUserQuestion"):
         if use.result_at is None:
             continue
         if use.name == "AskUserQuestion":
             state = 2 if state == 1 and use.ok else state
-        elif word.search(str(use.input.get("command") or "")):
+        elif step5_call(str(use.input.get("command") or ""), call):
             state = 0 if use.ok else (3 if state >= 2 else 1)
     return state == 3
 
@@ -649,7 +683,8 @@ def p_merge(span, root, payload) -> list[str]:
     grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
     session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup. Step 5's
     conflicts met again after the owner's answer (refusal_met_again) end it while MERGE_HEAD is at a value
-    of the source: the merge stands in conflict for the owner (aborted, it is owed again)."""
+    of the source and paths are unmerged: the merge stands in conflict for the owner (aborted, it is owed
+    again)."""
     _repository(root)
     root = _session_worktree(root, payload)
     args = span.args.split()
@@ -682,8 +717,8 @@ def p_merge(span, root, payload) -> list[str]:
                 "session since the opener names its source"]
     if _git(root, "ls-files", "-u"):
         gaps.append("merge: unmerged paths remain in the index")
-    if gaps and tips and _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD") in tips and refusal_met_again(
-            span, MERGE_CALL):
+    if gaps and tips and _git(root, "ls-files", "-u") and _git(root, "rev-parse", "--verify", "-q",
+                                                                "MERGE_HEAD") in tips and refusal_met_again(span, MERGE_CALL):
         return []  # Step 5: the source's merge stands in conflict; merge.sh refused again after the owner's answer
     return gaps
 
@@ -730,8 +765,9 @@ def p_push(span, root, payload) -> list[str]:
     for every caller but their producers (pretool-tool-policy.py), and a detach,
     reset or rewrite after the opener is no refusal: no agent's act makes one true. Step 5 met again
     after the owner's answer (refusal_met_again: push.sh's exit 1) ends it too while git ls-remote reads
-    none of the remotes judged at the URLs the opener recorded (one that lists, or a URL changed since,
-    holds it)."""
+    none of the remotes judged at the URLs the opener's remote lines recorded, also with no system or global
+    configuration (_unreachable); one that lists, a URL changed since, or an opener without remote lines
+    holds it."""
     _repository(root)
     typed = next((a for a in span.args.split() if not a.startswith("-")), None)
     since, now = _since(span), _git(root, "symbolic-ref", "--short", "-q", "HEAD")
@@ -742,15 +778,27 @@ def p_push(span, root, payload) -> list[str]:
             for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes(), again)]
 
 
-def _remote_tip(top: str, url: str, ref: str) -> tuple:
+# The environment of the reading that confirms an unreachable remote (_unreachable): no git variable of the
+# process and no system or global configuration, which an agent can write (protocol.allow=never, an http.proxy,
+# core.sshCommand=false), and no prompt.
+_ISOLATED = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+             "GIT_ASKPASS": "", "SSH_ASKPASS": "", **_GIT_ENV}
+# Its failures that say nothing of the remote's reachability: credentials it cannot give, a prompt it disables.
+_NOT_REACH = re.compile(r"terminal prompts disabled|could not read (?:username|password)|authentication failed|"
+                        r"permission denied|host key verification failed|access denied|returned error: 40[13]", re.I)
+
+
+def _remote_tip(top: str, url: str, ref: str, isolated: bool = False) -> tuple:
     """(the commit the remote at ``url`` names ``ref`` by now, None: none; why it could not be read, '')
     as the remote lists it: git ls-remote run outside the repository, so no setting of it (a URL
-    rewrite, an upload-pack or ssh command) answers; a local path is taken from the repository's top."""
+    rewrite, an upload-pack or ssh command) answers; a local path is taken from the repository's top.
+    ``isolated``: with no GIT_* variable of the process and no system or global configuration (_ISOLATED)."""
     if "://" not in url and not re.match(r"[^/]+:", url):
         url = os.path.join(top, url)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} if isolated else dict(os.environ)
     try:
         done = subprocess.run(["git", "ls-remote", "--", url, ref], cwd="/", capture_output=True, text=True,
-                              timeout=20, env={**os.environ, **_GIT_ENV})
+                              timeout=20, env={**env, **(_ISOLATED if isolated else _GIT_ENV)})
     except subprocess.TimeoutExpired:
         return None, "git ls-remote timed out"
     if done.returncode:
@@ -758,6 +806,14 @@ def _remote_tip(top: str, url: str, ref: str) -> tuple:
         return None, "git ls-remote: " + next((line for line in said if line.startswith(("fatal:", "error:"))),
                                               said[0] if said else "failed")
     return next((line.split("\t")[0] for line in done.stdout.splitlines() if line.endswith("\t" + ref)), None), ""
+
+
+def _unreachable(top: str, url: str, ref: str) -> bool:
+    """git ls-remote, isolated from every configuration an agent writes (_ISOLATED), cannot read the remote at
+    ``url`` either, and not for want of credentials or a prompt (_NOT_REACH): Step 5's push.sh exit 1 is the
+    remote's, not a setting's."""
+    held, why = _remote_tip(top, url, ref, isolated=True)
+    return held is None and bool(why) and not _NOT_REACH.search(why)
 
 
 def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=False) -> list[str]:
@@ -778,7 +834,7 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
                          f"refs/heads/{branch}") or "").split())
     up = up if up and len(up) == 2 and up[0] in remotes and (pinned is None or up[0] in pinned) else None
     top, gaps, tips, errors = _git(root, "rev-parse", "--show-toplevel") or str(root), [], {}, {}
-    unread = set()  # remotes git ls-remote could not read at the URL the opener recorded
+    unread, urls = set(), {}  # remotes git ls-remote could not read at the URL the opener recorded, and that URL
 
     def tip(remote, ref):
         if (remote, ref) not in tips:
@@ -789,6 +845,7 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
                 tips[(remote, ref)], why = _remote_tip(top, url, ref)
                 if why and tips[(remote, ref)] is None:
                     unread.add(remote)
+                    urls[remote] = url
                 if tips[(remote, ref)] and _git(root, "cat-file", "-e", f"{tips[(remote, ref)]}^{{commit}}") is None:
                     why = f"its {ref} is at {tips[(remote, ref)]}, which this repository lacks: fetch {remote}"
                 errors.update({remote: why} if why else {})
@@ -819,7 +876,9 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
         grant = importlib.import_module("lib.merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
         if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, commit):
             continue  # Step 5: "push BLOCKED by push-analyst"
-        if again and considered and all(tip(r, f"refs/heads/{branch}") is None and r in unread for r in considered):
+        if again and pinned is not None and considered and all(
+                tip(r, f"refs/heads/{branch}") is None and r in unread
+                and _unreachable(top, urls[r], f"refs/heads/{branch}") for r in considered):
             continue  # Step 5: push.sh's exit 1 met again after the owner's answer; no remote it judges reads now
         ref = up and f"refs/remotes/{up[0]}/{up[1].removeprefix('refs/heads/')}"
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (

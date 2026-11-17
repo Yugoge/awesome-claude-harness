@@ -2654,3 +2654,99 @@ def test_rc2_every_other_merge_record_or_reading_holds(env, repo, case):
         git(repo, "merge", "--abort")
     code, text = run(env)
     assert code == 2 and "no merge of feature into refs/heads/master" in text, (case, text)
+
+
+# A6-RC2 verifier: Step 5's record is a real invocation of the script, and the gate's own reading is git's, never a
+# setting an agent writes.
+@pytest.mark.parametrize("command", ["echo execute-push.py; false", f"python3 {REPO}/scripts/execute-push.py --help",
+                                     PUSH_STEP5 + "; false", f"cat {REPO}/scripts/execute-push.py"])
+def test_rc2_a_command_that_only_mentions_step_5s_script_is_no_refusal_met_again(env, remotes, command):
+    """A Bash that names execute-push.py without running Step 5's call (an echo, --help, a list, a read) records no
+    refusal: on an unreachable remote the forged fail, answer, fail sequence holds."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin")
+    unreachable(env, "origin")
+    env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
+    refusal_asked(env, "Retry the push (Recommended)")
+    env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, (command, text)
+
+
+@pytest.mark.parametrize("command", ["echo merge.sh; false", f"bash {HOOKS}/merge.sh --help"])
+def test_rc2_a_command_that_only_mentions_merge_sh_is_no_refusal_met_again(env, repo, command):
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    merge_wrapper(repo, "feature")  # the conflict stands in git
+    env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
+    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
+    env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, (command, text)
+
+
+def test_rc2_step_5s_call_is_a_real_invocation_of_the_script():
+    assert gate.step5_call(PUSH_STEP5, gate.PUSH_CALL)
+    assert gate.step5_call(PUSH_STEP5 + " --auto", gate.PUSH_CALL)
+    assert gate.step5_call(f'bash "{HOOKS}/merge.sh" "feature"', gate.MERGE_CALL)
+    assert gate.step5_call(f"bash {HOOKS}/merge.sh --no-commit feature", gate.MERGE_CALL)
+    for command, call in [("echo execute-push.py; false", gate.PUSH_CALL), (PUSH_STEP5 + " --help", gate.PUSH_CALL),
+                          (PUSH_STEP5 + " && true", gate.PUSH_CALL), (PUSH_STEP5 + " | tee x", gate.PUSH_CALL),
+                          (f"({PUSH_STEP5})", gate.PUSH_CALL), ("python3 execute-push.py", gate.PUSH_CALL),
+                          ("echo merge.sh; false", gate.MERGE_CALL), ("bash merge.sh -h", gate.MERGE_CALL),
+                          ("bash merge.sh", gate.MERGE_CALL), ("bash merge.sh feature\nfalse", gate.MERGE_CALL),
+                          ("cat merge.sh feature", gate.MERGE_CALL)]:
+        assert not gate.step5_call(command, call), command
+
+
+@pytest.mark.parametrize("forge", ["merge-head-file", "clean-no-commit-merge"])
+def test_rc2_a_merge_head_with_no_conflict_releases_nothing(env, repo, forge):
+    """Verifier (a): a source that merges cleanly, MERGE_HEAD written at its tip (by a file write, or a clean
+    `git merge --no-commit`), and the fail, answer, fail record: no path is unmerged, so no conflict stands and the
+    merge is owed."""
+    branches(repo, "feature")
+    opener_now(env, "merge", "feature")
+    if forge == "merge-head-file":
+        Path(repo, ".git", "MERGE_HEAD").write_text(git(repo, "rev-parse", "feature") + "\n")
+    else:
+        git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")
+    step5 = f'bash "{HOOKS}/merge.sh" "feature"'
+    env.tx.tool("Bash", {"command": step5}, ok=False, result="merge.sh: git merge exited 1")
+    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
+    env.tx.tool("Bash", {"command": step5}, ok=False, result="merge.sh: git merge exited 1")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, (forge, text)
+
+
+@pytest.mark.parametrize("setting", ["protocol.allow=never", "protocol.file.allow=never"])
+def test_rc2_a_configuration_that_breaks_a_reachable_remote_releases_nothing(env, remotes, monkeypatch, setting):
+    """Verifier (b): global git configuration an agent writes makes git ls-remote fail on a remote that is there.
+    The reading that confirms an unreachable remote runs with no system or global configuration: it lists origin,
+    and the push is owed."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin")
+    key, value = setting.split("=")
+    config = env.tmp / "agent-gitconfig"
+    git(env.tmp, "config", "--file", str(config), key, value)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    refusal_asked(env, "Retry the push (Recommended)")
+    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, (setting, text)
+
+
+def test_rc2_an_opener_without_remote_lines_releases_nothing(env, remotes):
+    """Verifier (c): an opener with no remote lines pins no URL, so origin set to a dead path after it is no
+    unreachable remote of the opener's: the fail, answer, fail record holds."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin", line=False)
+    git(remotes, "remote", "set-url", "origin", str(env.tmp / "nowhere.git"))
+    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    refusal_asked(env, "Retry the push (Recommended)")
+    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text, text

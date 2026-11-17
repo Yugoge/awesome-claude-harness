@@ -447,9 +447,11 @@ no per-rule budget exists.
     owner's answer, as `commands/push.md` and `commands/merge.md` prescribe: the span's
     `execute-push.py` or `merge.sh` call came back as an error, an `AskUserQuestion` after it came
     back answered (a rejected one is no answer), and the call failed again after it with no later
-    ok run, while the gate's own reading meets the refusal now: every remote the push is judged on
-    unreadable by `git ls-remote` at the URL the opener recorded, or `MERGE_HEAD` at the source's
-    tip), an exception being the gap
+    ok run (a real invocation of the script, alone, never `--help`: a command that only names it
+    records nothing), while the gate's own reading meets the refusal now: every remote the push is
+    judged on unreadable by `git ls-remote` at the URL the opener's remote lines recorded, with and
+    without system and global git configuration, and not for want of credentials; or `MERGE_HEAD`
+    at the source's tip with unmerged paths in the index), an exception being the gap
     `gate instrument failure: <type>: <message>`. It writes no file and keeps no count; the next
     compliant step clears each gap, and the human's `/stop` opens a span that is not gated. A
     completion failure (exit outside {0, 2}, a timeout, a launch error, a missing file) is decided
