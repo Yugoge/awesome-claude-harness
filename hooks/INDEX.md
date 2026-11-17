@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 401
+*Last updated: 2026-11-17T07:48:06Z*
+**Total entries**: 402
 **Convention**: kebab
 
 ## Tree
@@ -185,6 +185,7 @@ hooks/
 │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+│   ├── `test_grep_backtrack_probe_start.py` - The probe runs inside a transient systemd scope. A launch delay of systemd-run
 │   ├── `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
 │   ├── `test_hook_output_reaches_model.py` - The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 │   ├── `test_inflight_push_route.py` - COMPATIBILITY TESTS, kept only as long as hooks/pretool-tool-policy.py's _note_inflight_token_rou...
