@@ -315,6 +315,17 @@ def _harness_homes() -> list[str]:
     return homes
 
 
+def _harness_dirs() -> set:
+    """The harness home's hooks/ and scripts/ directories (as given and by realpath)."""
+    dirs = set()
+    for home in _harness_homes():
+        for sub in ('hooks', 'scripts'):
+            d = os.path.join(home, sub)
+            dirs.add(os.path.normpath(d))
+            dirs.add(os.path.realpath(d))
+    return dirs
+
+
 def _wrapper_index() -> tuple[dict, dict]:
     """realpath -> command-name, and wrapper basename -> command-name."""
     by_path, by_name = {}, {}
@@ -421,6 +432,9 @@ class _Scan:
         self.lessopen = False      # LESSOPEN / LESSCLOSE set by the command: less runs it
         self.computed_run = False  # a run target built at run time ($(...), xargs, a loop)
         self.loops = []            # (variable, list words, body script) of for/select loops
+        self.arrays = {}           # array name -> element words of `a=(...)` assignments
+        self.rgconf = []           # RIPGREP_CONFIG_PATH values the command sets (Word, str or None)
+        self.computed_targets = []  # run-target words with a part computed at run time
         script = _sp.parse(command)
         if script.error is not None:
             self.unsure = True
@@ -441,6 +455,7 @@ class _Scan:
                     self.nested.append((sp_, len(site.context), site))
         for site in self.sites:
             self._lessopen_scan(site)
+            self._array_scan(site, script)
         for site in self.sites:
             self._collect(site)
         for site in self.sites:
@@ -450,6 +465,8 @@ class _Scan:
         for site in self.sites:
             self._classify(site)
         self._uncovered()
+        if self.match is None and any(self._names_harness(w) for w in self.computed_targets):
+            self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
         if self.computed_run and self.match is None and self._harness_context():
             self.match = 'stop'  # fail closed: a run built at run time beside the wrapper
 
@@ -610,6 +627,8 @@ class _Scan:
         if name in _PLAIN_READERS:
             if name == 'rg' and any((v.startswith('--pre') and not v.startswith('--pre-glob')) or
                                     v.startswith('--hostname-bin') for v in sv):
+                return False
+            if name == 'rg' and '--no-config' not in sv and self._rg_config_progs():
                 return False
             if name == 'less' and self.lessopen:
                 return False
@@ -892,8 +911,10 @@ class _Scan:
             values = self._values(word)
         if not values:
             self.unsure = True
-            if word is not None and self._built(word):
-                self.computed_run = True
+            if word is not None:
+                self.computed_targets.append(word)
+                if self._built(word):
+                    self.computed_run = True
             return
         found_all, risky = [], False
         for value, is_glob in values:
@@ -970,6 +991,7 @@ class _Scan:
             v = vals[k]
             if v is None:
                 self.unsure = True
+                self.computed_targets.append(args[k])
                 if self._built(args[k]):
                     self.computed_run = True  # a script operand built at run time
                 return
@@ -1031,6 +1053,7 @@ class _Scan:
             v = vals[k]
             if v is None:
                 self.unsure = True
+                self.computed_targets.append(args[k])
                 if self._built(args[k]):
                     self.computed_run = True  # a script operand built at run time
                 return
@@ -1263,6 +1286,8 @@ class _Scan:
         head, is_glob = self._expand(res.head)
         if head is None or (res.unresolved == 'dynamic_head' and _sp._ASSIGN_RE.match(head)):
             self.unsure = True  # a computed command word, or `env` stopped at an assignment
+            if head is None:
+                self.computed_targets.append(res.head)
             if self._built(res.head):
                 self.computed_run = True
             return
@@ -1310,6 +1335,9 @@ class _Scan:
             self.persist = True
         if name == 'git':
             self._git(vals)
+            self._git_grep_pager(args, vals)
+        if name in ('make', 'gmake', 'bmake'):
+            self._make(site, args, vals)
         if name == 'rg':
             self._rg(args)
         if name == 'sed':
@@ -1319,6 +1347,14 @@ class _Scan:
         if name in _NO_EXEC:
             return
         if name == 'parallel' and ':::' in vals:
+            cut = vals.index(':::')
+            if all(v is not None and (v.startswith('-') or v.isdigit()) for v in vals[:cut]):
+                # no command before `:::`: parallel runs each input as a command
+                for v in vals[cut + 1:]:
+                    if v is None:
+                        self.unsure = True
+                    elif v not in (':::', '::::'):
+                        self._sub(v)
             vals = [v for v in vals if v not in (':::', '::::')]
         if not reader and named:
             if name in _CODE_RUNNERS or name in _STDIN_RUNNERS or _sp._SCRIPT_INTERP_RE.match(name):
@@ -1426,6 +1462,59 @@ class _Scan:
             t = w.text if t is None else t
             if re.match(r'''^["']?(?:LESSOPEN|LESSCLOSE)\+?=''', t or ''):
                 self.lessopen = True
+        # RIPGREP_CONFIG_PATH the command sets (prefix, env, export/declare/typeset/readonly)
+        for a in tuple(cmd.assignments) + tuple(res.assignments):
+            if a.name == 'RIPGREP_CONFIG_PATH':
+                self.rgconf.append(a.value)
+        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+            for w in res.args:
+                if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''):
+                    a = _sp.Assignment(w)
+                    if a.name == 'RIPGREP_CONFIG_PATH':
+                        self.rgconf.append(a.value)
+                    continue
+                t = w.value()
+                if t is None and 'RIPGREP_CONFIG_PATH' in (w.text or ''):
+                    self.rgconf.append(None)
+                elif t and t.startswith('RIPGREP_CONFIG_PATH='):
+                    self.rgconf.append(t.split('=', 1)[1])
+
+    def _array_scan(self, site, script):
+        """`a=(LIST)` (also after declare/local/typeset/readonly): the array is read like a
+        loop list, its uses anywhere in the command like a loop body's."""
+        cmd = site.cmd
+        res = self.res[id(site)]
+        assigns = list(cmd.assignments) + list(res.assignments)
+        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+            assigns.extend(_sp.Assignment(w) for w in res.args
+                           if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
+        for a in assigns:
+            if a.array is None or not re.match(r'^[A-Za-z_]\w*$', a.name or ''):
+                continue
+            try:
+                parsed = _sp.parse('_ ' + (a.array.text or ''))
+                first = next(iter(_sp.walk(parsed))).cmd
+                items = list(first.words[1:])
+            except Exception:
+                items = []
+                self.unsure = True
+                self.computed_run = True
+            known = self.arrays.setdefault(a.name, [])
+            if not known:
+                self.loops.append((a.name, known, [script]))
+            known.extend(items)
+
+    def _array_ref(self, word):
+        """The array name when the word is only a use of a known array (`"${a[@]}"`)."""
+        try:
+            parts = [p for p in word.parts if not (p.kind == 'lit' and p.text == '')]
+        except Exception:
+            return None
+        if len(parts) == 1 and parts[0].kind == 'param':
+            m = re.match(r'^\{?([A-Za-z_]\w*)\[[@*]\]\}?$', parts[0].text or '')
+            if m and m.group(1) in self.arrays:
+                return m.group(1)
+        return None
 
     def _existing(self, value, is_glob):
         """Existing paths a word value names (relative to every known cwd); None when the cwd is unknown."""
@@ -1519,6 +1608,8 @@ class _Scan:
                 continue
             positional.append(args[k])
             k += 1
+        if '--no-config' not in vals:
+            progs.extend(self._rg_config_progs())
         if not progs:
             return
         for p in progs:
@@ -1809,7 +1900,11 @@ class _Scan:
                 break
         if not runs:
             return
+        expanded = []
         for w in items:
+            arr = self._array_ref(w)
+            expanded.extend(self.arrays[arr] if arr is not None else [w])
+        for w in expanded:
             vals = self._values(w)
             if not vals:
                 self.unsure = True
@@ -1820,15 +1915,327 @@ class _Scan:
                     if os.path.isfile(f) and self._wrapper_file(f) is not None:
                         self.match = self.match or 'stop'
 
+    def _names_harness(self, word) -> bool:
+        """A run target with a computed part whose literal part names the harness home's
+        hooks/ or scripts/ directory (`~/.claude/hooks/$n.sh`, `$(echo ~)/.claude/hooks/x`)
+        or a wrapper basename: it may be the wrapper, and it cannot be read."""
+        try:
+            parts = list(word.parts)
+        except Exception:
+            return False
+        if _mentions(''.join(p.text or '' for p in parts if p.kind in ('lit', 'glob', 'brace'))):
+            return True
+        dirs = _harness_dirs()
+        # the literal prefix, up to the first part that is computed
+        prefix = ''
+        for k, p in enumerate(parts):
+            if p.kind == 'lit':
+                t = p.text or ''
+                if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
+                    t = self.home + t[1:]
+                prefix += t
+            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+                prefix += self.home
+            else:
+                break
+        if prefix and '/' in prefix:
+            d = prefix.rstrip('/') if prefix.endswith('/') else os.path.dirname(prefix)
+            for base in ([''] if os.path.isabs(d) else sorted(self.cwds)):
+                cand = os.path.join(base, d) if base else d
+                for q in (os.path.normpath(cand), os.path.realpath(cand)):
+                    if any(q == h or q.startswith(h + os.sep) for h in dirs):
+                        return True
+        # a literal run after a computed part that spells the directory's last two names
+        tails = {'/'.join(h.split(os.sep)[-2:]) for h in dirs if h.count(os.sep) >= 2}
+        run = ''
+        runs = []
+        for p in parts:
+            if p.kind in ('lit', 'glob', 'brace'):
+                run += p.text or ''
+            else:
+                runs.append(run)
+                run = ''
+        runs.append(run)
+        for r in runs[1:]:
+            r = os.path.normpath('/' + r)
+            for t in tails:
+                i = r.find('/' + t)
+                if i >= 0 and r[i + 1 + len(t):i + 2 + len(t)] in ('', '/'):
+                    return True
+        return False
+
+    def _rg_config_progs(self) -> list:
+        """Programs (`--pre`, `--hostname-bin`) of the rg configs the command sets; None for
+        a config the guard cannot read (computed, missing, or written by the same command)."""
+        memo = getattr(self, '_rgconf_memo', None)
+        if memo is not None:
+            return memo
+        out = []
+        for conf in self.rgconf:
+            if conf is None:
+                out.append(None)
+                continue
+            word = conf if not isinstance(conf, str) else None
+            vals = self._values(conf) if word is not None else [(conf, False)]
+            if not vals:
+                out.append(None)
+                continue
+            for v, g in vals:
+                if not v:
+                    continue  # an empty path turns the config off
+                if v[:1] == '~' and (len(v) == 1 or v[1] == '/'):
+                    v = self.home + v[1:]
+                if g or (word is not None and self._named_elsewhere(word, v)) or \
+                        (word is None and any(os.path.normpath(o) == os.path.normpath(v)
+                                              for _w, o in self.others)):
+                    out.append(None)
+                    continue
+                found = self._existing(v, False)
+                if not found:
+                    out.append(None)
+                    continue
+                for f in found:
+                    try:
+                        with open(f, errors='replace') as fh:
+                            lines = [ln.strip() for ln in fh.read(1 << 20).splitlines()]
+                    except OSError:
+                        out.append(None)
+                        continue
+                    lines = [ln for ln in lines if ln and not ln.startswith('#')]
+                    for i, ln in enumerate(lines):
+                        if ln in ('--pre', '--hostname-bin'):
+                            out.append(lines[i + 1] if i + 1 < len(lines) else None)
+                        elif ln.startswith(('--pre=', '--hostname-bin=')):
+                            out.append(ln.split('=', 1)[1])
+        self._rgconf_memo = out
+        return out
+
+    _GIT_GREP_VALUE_SHORT = 'efABCm'
+
+    def _git_grep_pager(self, args, vals):
+        """`git grep -O<prog>` / `--open-files-in-pager[=prog]` (any unique prefix) runs the
+        program on every matching file: a run when git searches in the harness home, the
+        searched paths hold the wrapper, or the program is the wrapper."""
+        k, dirs, unknown = 0, set(self.cwds), self.cwd_unknown
+        while k < len(vals):
+            v = vals[k]
+            if v is None:
+                return
+            if v == '-C' and k + 1 < len(vals):
+                d = vals[k + 1]
+                if d is None:
+                    unknown = True
+                else:
+                    d = self.home + d[1:] if d[:1] == '~' and (len(d) == 1 or d[1] == '/') else d
+                    dirs = {os.path.normpath(os.path.join(c, d)) for c in dirs}
+                k += 2
+                continue
+            if v in ('--git-dir', '--work-tree') and k + 1 < len(vals):
+                d = vals[k + 1]
+                if d is None:
+                    unknown = True
+                else:
+                    d = self.home + d[1:] if d[:1] == '~' and (len(d) == 1 or d[1] == '/') else d
+                    dirs |= {os.path.normpath(os.path.join(c, d)) for c in dirs}
+                k += 2
+                continue
+            if v.startswith(('--git-dir=', '--work-tree=')):
+                d = v.split('=', 1)[1]
+                d = self.home + d[1:] if d[:1] == '~' and (len(d) == 1 or d[1] == '/') else d
+                dirs |= {os.path.normpath(os.path.join(c, d)) for c in dirs}
+                k += 1
+                continue
+            if v in _GIT_GLOBAL_VALUE:
+                k += 2
+                continue
+            if v.startswith('-'):
+                k += 1
+                continue
+            break
+        if k >= len(vals) or vals[k] != 'grep':
+            return
+        pager, prog, operands, j = False, None, [], k + 1
+        while j < len(vals):
+            v = vals[j]
+            if v is None:
+                operands.append(args[j])
+                j += 1
+                continue
+            if v == '--':
+                operands.extend(args[j + 1:])
+                break
+            if v.startswith('--'):
+                name, eq, val = v[2:].partition('=')
+                if len(name) >= 2 and 'open-files-in-pager'.startswith(name):
+                    pager, prog = True, (val if eq else prog)
+                elif name in ('regexp', 'file', 'max-count', 'after-context', 'before-context',
+                              'context', 'max-depth', 'threads') and not eq:
+                    j += 1
+                j += 1
+                continue
+            if v.startswith('-') and len(v) > 1:
+                letters = v[1:]
+                for i, ch in enumerate(letters):
+                    if ch == 'O':
+                        pager, prog = True, (letters[i + 1:] or prog)
+                        break
+                    if ch in self._GIT_GREP_VALUE_SHORT:
+                        if not letters[i + 1:]:
+                            j += 1
+                        break
+                j += 1
+                continue
+            operands.append(args[j])
+            j += 1
+        if not pager:
+            return
+        if prog is not None:
+            pv = self.home + prog[1:] if prog[:1] == '~' and (len(prog) == 1 or prog[1] == '/') else prog
+            if _dequoted_mentions(prog) or any(self._wrapper_file(f) is not None
+                                               for f in (self._existing(pv, False) or [])):
+                self.match = self.match or 'stop'
+                return
+        homes = set()
+        for h in _harness_homes():
+            homes.add(os.path.normpath(h))
+            homes.add(os.path.realpath(h))
+        for d in dirs:
+            for q in (os.path.normpath(d), os.path.realpath(d)):
+                if any(q == h or q.startswith(h + os.sep) for h in homes):
+                    self.match = self.match or 'stop'
+                    return
+        if unknown:
+            self.unsure = True
+            self.computed_run = True
+        saved = self.cwds
+        self.cwds = dirs
+        try:
+            self._words_hold_wrapper(operands, trees=True)
+        finally:
+            self.cwds = saved
+
+    def _make(self, site, args, vals):
+        """make reads a makefile from stdin (`-f -`, `-f /dev/stdin`, a heredoc or here-string)
+        or one the same command writes: a recipe naming the wrapper, or one the guard cannot
+        read, is a run."""
+        cmd = site.cmd
+        files, k = [], 0
+        while k < len(vals):
+            v = vals[k]
+            if v is None:
+                k += 1
+                continue
+            if v == '--':
+                break
+            if v.startswith('--'):
+                name, eq, val = v.partition('=')
+                if name in ('--file', '--makefile'):
+                    files.append((val, None) if eq else (
+                        (vals[k + 1], args[k + 1]) if k + 1 < len(vals) else ('', None)))
+                    k += 1 if eq else 2
+                    continue
+                if name in ('--directory', '--include-dir', '--old-file', '--assume-old',
+                            '--what-if', '--new-file', '--assume-new') and not eq:
+                    k += 2
+                    continue
+                k += 1
+                continue
+            if v.startswith('-') and len(v) > 1:
+                letters = v[1:]
+                for i, ch in enumerate(letters):
+                    if ch == 'f':
+                        rest = letters[i + 1:]
+                        files.append((rest, None) if rest else (
+                            (vals[k + 1], args[k + 1]) if k + 1 < len(vals) else ('', None)))
+                        if not rest:
+                            k += 1
+                        break
+                    if ch in 'CIoW':
+                        if not letters[i + 1:]:
+                            k += 1
+                        break
+                k += 1
+                continue
+            k += 1
+        # a -f operand that could not be read at all (computed)
+        for idx, w in enumerate(args):
+            if vals[idx] is None and idx > 0 and vals[idx - 1] in ('-f', '--file', '--makefile'):
+                files.append((None, w))
+        texts, unreadable = [], False
+        if not files and any(os.path.basename(ov or '') in ('GNUmakefile', 'makefile', 'Makefile')
+                             for _ow, ov in self.others):
+            texts.append(self.command)  # the default makefile is written by this command
+            for _ow, ov in self.others:
+                if ov and os.path.basename(ov) not in ('GNUmakefile', 'makefile', 'Makefile'):
+                    texts.extend(self._file_texts(ov))
+        for v, w in files:
+            if v is None:
+                if 'pipe' in site.fed or any(r.fd == 0 for r in cmd.redirects):
+                    unreadable = True  # a computed name beside a makefile on stdin
+                else:
+                    self.unsure = True
+                    self.computed_run = True
+                continue
+            if v in ('-',) + _STDIN_FILES or v.startswith('/dev/fd/'):
+                got = False
+                for red in cmd.redirects:
+                    if red.fd != 0:
+                        continue
+                    got = True
+                    if red.hd is not None:
+                        texts.append(red.hd.body)
+                    elif red.op == '<<<':
+                        t = red.target.value() if red.target is not None else None
+                        if t is None:
+                            unreadable = True
+                        else:
+                            texts.append(t)
+                    elif red.target is not None:
+                        tv = self._expand(red.target)[0]
+                        if tv is None or self._named_elsewhere(red.target, tv):
+                            unreadable = True
+                            if tv is not None:
+                                texts.append(self.command)
+                        else:
+                            texts.extend(self._file_texts(tv))
+                if not got and 'pipe' in site.fed:
+                    unreadable = True
+                continue
+            if w is not None and self._named_elsewhere(w, v):
+                texts.append(self.command)  # the makefile is written by this command
+                for _ow, ov in self.others:
+                    if ov and os.path.normpath(ov) != os.path.normpath(v):
+                        texts.extend(self._file_texts(ov))
+        for t in texts:
+            t = re.sub(r'\\\n\t?', '', t)
+            if _dequoted_mentions(t) or _dequoted_mentions(self._sed_unescape(t)):
+                self.match = self.match or 'stop'
+                return
+        if unreadable:
+            self.match = self.match or 'stop'
+
+    def _file_texts(self, value) -> list:
+        """The text of the existing regular files a value names (bounded)."""
+        if value[:1] == '~' and (len(value) == 1 or value[1] == '/'):
+            value = self.home + value[1:]
+        out = []
+        for f in (self._existing(value, False) or [])[:8]:
+            if not os.path.isfile(f):
+                continue
+            if self._wrapper_file(f) is not None:
+                out.append('stop.sh')
+                continue
+            try:
+                with open(f, errors='replace') as fh:
+                    out.append(fh.read(1 << 20))
+            except OSError:
+                continue
+        return out
+
     def _harness_context(self) -> bool:
         """The command runs in the harness home's hooks/ or scripts/ directory, names one of
         them or a name directly in one, or names a file that is a wrapper."""
-        dirs = set()
-        for home in _harness_homes():
-            for sub in ('hooks', 'scripts'):
-                d = os.path.join(home, sub)
-                dirs.add(os.path.normpath(d))
-                dirs.add(os.path.realpath(d))
+        dirs = _harness_dirs()
 
         def inside(p):
             """The directory itself, or a non-directory name directly in it."""
@@ -1843,6 +2250,8 @@ class _Scan:
         for site in self.sites:
             words.extend(self._words(site.cmd))
         for _v, items, _b in self.loops:
+            words.extend(items)
+        for items in self.arrays.values():
             words.extend(items)
         for w in words:
             vals = self._values(w) if w is not None else None
