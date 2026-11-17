@@ -348,6 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
+| S-014 | permission-layer-ask:kubectl-apply-create-npm-publish | advisory | unexercised | source-level | settings.json:269 @3698c04e | tests/test_permission_ask_dry_run.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -361,7 +362,20 @@ no per-rule budget exists.
   stem outside CONTROL that no harness text calls through the Skill tool. `Skill(codex:*)` is
   not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
   under `--codex`, and `subagentstop-codex-enforce.py` (R-022, run by the producer gate H-092)
-  requires the ledger entry that call's PostToolUse (H-050) writes.
+  requires the ledger entry that call's PostToolUse (H-050) writes. Since OB-L21 (`@3698c04e`,
+  S-014) `permissions.ask` is no longer empty: it holds the three entries that left deny.
+- **S-014** — OB-L21 (owner decision): `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and
+  `Bash(npm publish:*)` moved from `permissions.deny` to `permissions.ask`, because a whole-verb deny
+  refused the harmless dry runs (`kubectl apply --dry-run=client -f k8s/deploy.yaml`,
+  `kubectl create deployment web --image=nginx --dry-run=client -o yaml`, `npm publish --dry-run`) and
+  "An allow rule can't carve an exception out of a deny rule" (code.claude.com/docs/en/permissions.md,
+  "Manage permissions"). Every call of the three verbs now prompts, a dry run or a real run alike;
+  none runs unasked. `Bash(npm:*)` in allow also matches `npm publish`, and the ask entry wins:
+  "Rules are evaluated in order: deny, then ask, then allow ... a matching ask rule prompts even when
+  a more specific allow rule also matches the same call" (same page). No allow entry covers
+  `kubectl apply` or `kubectl create`. `Bash(kubectl delete:*)` and `Bash(yarn publish:*)` stay
+  deny. The test models the documented order and subcommand split; it was not observed on a host,
+  so the row is `advisory` / `source-level`.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
   finds no git in suppresses its own backstop.
