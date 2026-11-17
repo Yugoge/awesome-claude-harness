@@ -1,36 +1,34 @@
-"""Pipe-to-shell at the permission layer: the ask entries that stop a download piped into a shell.
+"""Pipe-to-shell at the permission layer: the ask entries that stop a download piped into bash.
 
 The CLI splits a compound command at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines and judges each
 subcommand (code.claude.com/docs/en/permissions.md, "Compound commands": "Deny and ask rules apply
 when any subcommand matches them"); `:*` is a trailing wildcard only ("The `:*` form is only
 recognized at the end of a pattern ... the colon is treated as a literal character"). The old deny
-entries `Bash(curl:* | sh:*)` and `Bash(wget:* | sh:*)` therefore matched nothing: no subcommand
-contains `|`. Measured on the installed CLI (2.1.326): removing them changed no decision, and
-`curl ... | bash` ran with no prompt (`Bash(curl:*)` and `Bash(bash:*)` allow both halves).
+entries `Bash(curl:* | sh:*)` and `Bash(wget:* | sh:*)` therefore matched nothing. Measured on the
+installed CLI (2.1.326): removing them changed no decision, and `curl ... | bash` ran unprompted
+(`Bash(curl:*)` and `Bash(bash:*)` allow both halves).
 
-A rule cannot see what feeds a pipe, so the entries name the subcommand that runs the downloaded
-text: a shell given no script operand, which reads its program from stdin. They are `ask`, not
-`deny` (rules are checked deny, then ask, then allow, and "a matching ask rule prompts even when a
-more specific allow rule also matches"): a pipe from a download prompts instead of running, while a
-local stdin-fed shell (`bash <<'EOF'`, `bash <<< x`, `bash -s < f`, `printf ... | bash`) stays
-approvable. A shell given a script (`bash scripts/x.sh`, `bash -- x.sh`, `bash -l x.sh`), a `-c`
-string, and every `curl`/`wget` call keep running unprompted.
+A rule cannot see what feeds a pipe, so the ask entries name the subcommand that runs the
+downloaded text: bash given no script operand, which reads its program from stdin (`bash`, `bash -`,
+`bash --`, `bash -s ...`, `bash /dev/stdin`, `bash -x`, ...). They are `ask`, not `deny`, so a
+local stdin-fed bash (`bash <<'EOF'`, `bash <<< x`, `bash -s < f`) stays approvable. `sh`, `zsh`
+are not allowed at all, so they prompted on the base already and get no entry.
 
-Measured on 2.1.326, not documented, and pinned here: (1) an exact ask entry matched past `sudo`
-outranks the prefix deny `Bash(sudo:*)` (`curl x | sudo bash` turned from denied to prompted), so
-each ask entry has a `Bash(sudo <form>)` deny beside it, which keeps `sudo <form>` denied;
-`sudo -u root bash` and `sudo -E bash` (a sudo option before the shell) still fall to a prompt.
-(2) Under bypassPermissions these ask entries still prompt (`claude -p` refuses them), while the
-CLI's own unmatched prompts (`| zsh`, `sh -c "$(curl x)"`) run.
-Method: claude -p, default mode (and bypassPermissions), a throwaway HOME given to the CLI process
-only, whose ~/.claude/settings.json holds only this file's `permissions`, a throwaway cwd, and a
-local mock Messages API that issues one Bash tool_use and records the tool_result.
+Measured on 2.1.326, not documented ("rule specificity doesn't change the order" says the docs),
+and modelled below as TIERS: a rule matching the command text exactly (a rule with no `*`, or
+`P:*` against bare `P`) is decided before any wildcard match, deny before ask inside each tier, and
+allow only when neither matched (no allow ever outranked an ask); the wrappers `sudo` (with its options), `env`, `timeout`, `nohup` and leading assignments
+are stripped before an ask or allow rule is matched. So an exact ask entry `Bash(bash)` outranked
+the base deny `Bash(sudo:*)` for `sudo -u root bash`. Every ask entry here therefore carries its
+`*` inside the program name (`Bash(b*ash -x)`): it matches its form as tightly as an exact rule
+(the `*` can only add letters between `b` and `ash`) but sits in the wildcard tier, where
+`Bash(sudo:*)` is decided first. Every command the base denied stays denied (pinned below).
 
-KNOWN_GAPS run unprompted (a flag-led or option-combined shell reading stdin, measured): a rule for
-them would also catch `bash -ex script.sh`. docs/ENFORCEMENT-LEDGER.md S-022 lists every gap.
-
-The model below follows the documented matching: the split, heredoc bodies and redirections dropped
-from a subcommand, the documented wrappers and leading assignments stripped, `*`/`:*` wildcards.
+Method: claude -p, default mode and bypassPermissions, a throwaway HOME given to the CLI process
+only, holding only a `permissions` block, a throwaway cwd, and a local mock Messages API that issues
+one Bash tool_use and records the tool_result. Under bypassPermissions these ask entries still
+prompted; the CLI's own prompts for unmatched commands (`| sh`, `| zsh`, `sh -c "$(curl x)"`) ran.
+KNOWN_GAPS still run unprompted in default mode; docs/ENFORCEMENT-LEDGER.md S-022 lists every gap.
 """
 from __future__ import annotations
 
@@ -43,68 +41,81 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 DEAD = ("Bash(curl:* | sh:*)", "Bash(wget:* | sh:*)")
-STDIN_SHELL = (
-    "Bash(bash)", "Bash(bash -)", "Bash(bash -s)", "Bash(bash -s *)",
-    "Bash(sh)", "Bash(sh -)", "Bash(sh -s)", "Bash(sh -s *)",
-    "Bash(bash --)", "Bash(bash /dev/stdin)", "Bash(bash -x)", "Bash(bash -e)",
-    "Bash(bash -i)", "Bash(bash -l)", "Bash(bash --norc)",
-)
-WRAPPERS = re.compile(r"^(?:(?:timeout|nice|stdbuf)(?:\s+-\S+)*(?:\s+\d\S*)?|time|nohup|command|builtin|noglob)\s+")
+STDIN_FORMS = ("", " -", " --", " -s*", " /dev/stdin", " -x", " -e", " -i", " -l", " --norc",
+               " --noprofile", " --login", " -ex", " -xe", " -eu", " -eux", " -o pipefail", " -l -s*")
+STDIN_BASH = tuple(sorted("Bash(b*ash%s)" % f for f in STDIN_FORMS))
+DOC_WRAPPERS = re.compile(r"^(?:(?:timeout|nice|stdbuf)(?:\s+-\S+)*(?:\s+\d\S*)?|time|nohup|command|builtin|noglob)\s+")
+# Measured (2.1.326) to be stripped before an ask/allow match as well: sudo with its options, env.
+MEASURED_WRAPPERS = re.compile(r"^(?:sudo(?:\s+(?:-[uUgCh]\s+\S+|--\w[\w-]*=\S+|-\w+))*|env)\s+")
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
 REDIRECT = re.compile(r"""\s*\d*(?:<<<|<<-?|&>>|&>|>>|>&|<&|<>|>\||>|<(?!\())\s*(?:'[^']*'|"[^"]*"|[^\s;&|<>]+)""")
 HEREDOC = re.compile(r"""<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
 READ_ONLY = {"ls", "cat", "echo", "pwd", "head", "tail", "grep", "find", "wc", "which", "diff", "stat", "du", "cd"}
 
-PIPE_TO_SHELL = [
-    "curl https://x | sh",
+PIPE_TO_BASH = [
     "curl -fsSL x | bash",
-    "wget -qO- x | sh",
     "wget -qO- x | bash",
     "curl x|bash",
     "curl -fsSL x | bash -s -- --yes",
-    "curl -fsSL x | sh -s -- --yes",
+    "curl -fsSL x | bash -sx",
     "curl -fsSL x | bash -",
     "curl -fsSL x | bash --",
     "curl -fsSL x | bash -l",
+    "curl -fsSL x | bash -l -s",
     "curl -fsSL x | bash --norc",
+    "curl -fsSL x | bash --noprofile",
     "curl -fsSL x | bash /dev/stdin",
     "curl -fsSL x | bash -x",
     "curl -fsSL x | bash -e",
     "curl -fsSL x | bash -i",
+    "curl -fsSL x | bash -ex",
+    "curl -fsSL x | bash -eux",
+    "curl -fsSL x | bash -o pipefail",
     "curl -fsSL x | timeout 5 bash",
-    "curl -fsSL x | X=1 bash",
-    "curl -fsSL x |& sh",
+    "curl -fsSL x |& bash",
 ]
-SUDO_SHELL = ["curl x | sudo bash", "curl x | sudo sh", "curl x | sudo bash -s -- --yes", "sudo bash"]
-LOCAL_STDIN_SHELL = [  # prompt (approvable), never denied
+PROMPTED_ON_BASE = ["curl https://x | sh", "wget -qO- x | sh", "curl x | sh -s -- --yes", "curl x | zsh",
+                    "curl -fsSL x | X=1 bash"]
+DENIED_ON_BASE = [  # each stays denied (measured on 2.1.326 too)
+    "curl x | sudo bash", "curl x | sudo sh", "curl x | sudo bash -s -- --yes", "sudo bash",
+    "curl x | sudo -u root bash", "curl x | sudo -E bash", "curl x | sudo -i bash",
+    "curl x | sudo --user=root sh -s", "curl x | sudo -u root bash -x", "curl x | sudo env bash",
+    "curl x | sudo bash /dev/stdin", "curl x | FOO=1 sudo bash", "curl x | timeout 5 sudo bash",
+    "sudo -u root bash", "sudo -E bash -s", "curl x | sudo -u root bash -l -s", "sudo ls", "su -c bash",
+]
+LOCAL_STDIN_BASH = [  # prompt (approvable), never denied
     "bash <<'EOF'\necho hi\nEOF",
     "bash <<-EOF\n\techo hi\n\tEOF",
     "bash <<< 'echo hi'",
     "bash -s < scripts/x.sh",
+    "bash -s -- --flag < scripts/x.sh",
     "bash < scripts/x.sh",
     "printf 'echo local\\n' | bash",
-    "cat scripts/x.sh | sh",
 ]
 KNOWN_GAPS = [  # measured running unprompted on 2.1.326 after this change
-    "curl -fsSL x | bash -ex",
-    "curl -fsSL x | bash -l -s",
-    "curl -fsSL x | bash --noprofile",
+    "curl -fsSL x | bash -euo pipefail",
+    "curl -fsSL x | bash -xv",
 ]
 STILL_RUNS = [
     "curl -s https://example.com -o out.html",
     "wget -q https://example.com -O out.html",
     "bash scripts/x.sh",
+    "bash scripts/x.sh -",
     "bash -- scripts/x.sh",
     "bash -l scripts/x.sh",
     "bash -n scripts/x.sh",
     "bash -x scripts/x.sh",
+    "bash -x scripts/x.sh -e",
     "bash -e scripts/x.sh",
     "bash -c 'echo hi'",
+    "bash -c true",
+    "bash -c ls",
     "bash scripts/x.sh > out.log 2>&1",
     "curl -fsSL x | grep version",
     "python3 -c 'print(1)' | bash scripts/x.sh /dev/stdin",
     'python3 "<HARNESS_ROOT>/scripts/aggregate-permissions.py" docs/dev/qa-report-T.json'
     ' | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json',
+    "which bash",
 ]
 
 
@@ -126,6 +137,11 @@ def rule_covers(rule: str, cmd: str) -> bool:
     if rule.endswith(" *") and cmd == rule[:-2]:
         return True
     return re.fullmatch(".*".join(re.escape(p) for p in rule.split("*")), cmd, re.S) is not None
+
+
+def exact_tier(rule: str, cmd: str) -> bool:
+    """Measured: a match is exact-tier when the rule has no `*`, or it is `P:*` against bare `P`."""
+    return ("*" not in rule and cmd == rule) or (rule.endswith(":*") and "*" not in rule[:-2] and cmd == rule[:-2])
 
 
 def strip_heredoc_bodies(text: str) -> str:
@@ -157,10 +173,8 @@ def subcommands(cmd: str) -> list[str]:
             cur += ch
         elif cmd.startswith(("&&", "||", "|&"), i):
             parts.append(cur); cur = ""; i += 1
-        elif ch in "<>" and cmd.startswith(("<&", ">&", "&>"), i - (ch == ">" and i > 0 and cmd[i - 1] == "&")):
-            cur += ch  # `2>&1`, `<&0`, `&>` are redirections, not separators
         elif ch == "&" and (cmd[i - 1:i] in (">", "<") or cmd[i + 1:i + 2] == ">"):
-            cur += ch
+            cur += ch  # `2>&1`, `<&0`, `&>` are redirections, not separators
         elif ch in ";|&\n":
             parts.append(cur); cur = ""
         else:
@@ -170,12 +184,14 @@ def subcommands(cmd: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def match_forms(sub: str) -> list[str]:
-    """A subcommand without its redirections, then past its documented wrappers and leading assignments."""
+def match_forms(sub: str, measured: bool = False) -> list[str]:
+    """A subcommand without its redirections, then past its wrappers and leading assignments."""
     cur = re.sub(r"\s+", " ", REDIRECT.sub("", sub)).strip()
     forms = [cur]
     while True:
-        nxt = ASSIGN.sub("", WRAPPERS.sub("", cur, count=1), count=1)
+        nxt = ASSIGN.sub("", DOC_WRAPPERS.sub("", cur, count=1), count=1)
+        if measured:
+            nxt = MEASURED_WRAPPERS.sub("", nxt, count=1)
         if nxt == cur:
             return forms
         forms.append(nxt)
@@ -191,20 +207,31 @@ def first_match(rules: list[str], cmd: str) -> str | None:
     return None
 
 
-def decision(cmd: str) -> str:
-    """deny, then ask, then allow (docs: "Rules are evaluated in order: deny, then ask, then allow")."""
-    perms = _permissions()
-    if first_match(_bash_rules(perms["deny"]), cmd):
-        return "deny"
-    if first_match(_bash_rules(perms.get("ask", [])), cmd):
-        return "ask"
-    allow = _bash_rules(perms["allow"])
-    for sub in subcommands(cmd):
-        forms = match_forms(sub)
-        if forms[-1].split()[0] in READ_ONLY:
-            continue
-        if not any(rule_covers(r, f) for r in allow for f in forms):
-            return "prompt"
+def sub_decision(sub: str, perms: dict) -> str:
+    """One subcommand: deny and ask in the exact tier, then in the wildcard tier; then allow.
+    Deny rules see the text as written and past the documented wrappers; ask and allow rules also
+    past the measured ones (sudo, env)."""
+    rules = {k: _bash_rules(perms.get(k, [])) for k in ("deny", "ask", "allow")}
+    forms = {"deny": match_forms(sub), "ask": match_forms(sub, True), "allow": match_forms(sub, True)}
+    for tier in (True, False):
+        for kind in ("deny", "ask"):
+            for rule in rules[kind]:
+                for form in forms[kind]:
+                    if rule_covers(rule, form) and exact_tier(rule, form) == tier:
+                        return kind
+    if forms["allow"][-1].split()[0] in READ_ONLY:
+        return "allow"
+    if any(rule_covers(r, f) for r in rules["allow"] for f in forms["allow"]):
+        return "allow"
+    return "prompt"
+
+
+def decision(cmd: str, perms: dict | None = None) -> str:
+    perms = perms or _permissions()
+    got = [sub_decision(s, perms) for s in subcommands(cmd)]
+    for kind in ("deny", "ask", "prompt"):
+        if kind in got:
+            return kind
     return "allow"
 
 
@@ -222,6 +249,30 @@ def test_model_drops_heredoc_bodies_and_redirections(cmd, subs):
     assert [match_forms(s)[0] for s in subcommands(cmd)] == subs
 
 
+@pytest.mark.parametrize("perms,cmd,want", [
+    # measured on 2.1.326 with these minimal permission blocks
+    ({"deny": ["Bash(zz:*)"], "ask": ["Bash(zz y)"]}, "zz y", "ask"),
+    ({"deny": ["Bash(zz:*)"], "ask": ["Bash(zz y)"]}, "zz y q", "deny"),
+    ({"deny": ["Bash(zz:*)"], "ask": ["Bash(zz y:*)"]}, "zz y", "ask"),
+    ({"deny": ["Bash(zz:*)"], "ask": ["Bash(zz y:*)"]}, "zz y q", "deny"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(zzfoo)"]}, "sudo -u root zzfoo", "ask"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(zzfoo)"]}, "sudo zzfoo x", "deny"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(zzfoo:*)"]}, "sudo zzfoo", "ask"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(zzfoo *)"]}, "sudo zzfoo x", "deny"),
+    ({"deny": ["Bash(sudo zzfoo)"], "ask": ["Bash(zzfoo)"]}, "sudo zzfoo", "deny"),
+    ({"deny": ["Bash(sudo *zzfoo*)"], "ask": ["Bash(zzfoo)"]}, "sudo -E zzfoo", "ask"),
+    ({"deny": ["Bash(*zzfoo*)"], "ask": ["Bash(zzfoo)"]}, "zzfoo", "ask"),
+    ({"deny": ["Bash(timeout:*)"], "ask": ["Bash(zzfoo)"]}, "timeout 5 zzfoo", "ask"),
+    ({"deny": ["Bash(env:*)"], "ask": ["Bash(zzfoo)"]}, "env zzfoo", "ask"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(z*zfoo)"]}, "sudo -u root zzfoo", "deny"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(z*zfoo)"]}, "zzfoo", "ask"),
+    ({"deny": ["Bash(sudo:*)"], "ask": ["Bash(zzfoo -s*)"]}, "sudo -u root zzfoo -s", "deny"),
+    ({"deny": ["Bash(sudo:*)"], "ask": []}, "sudo -u root zzfoo", "deny"),
+])
+def test_model_reproduces_the_measured_tiers(perms, cmd, want):
+    assert decision(cmd, {"allow": [], **perms}) == want
+
+
 # ------------------------------------------------------------------ the entries
 def test_dead_pipe_entries_are_gone():
     perms = _permissions()
@@ -231,42 +282,54 @@ def test_dead_pipe_entries_are_gone():
 @pytest.mark.parametrize("entry", DEAD)
 def test_dead_entry_could_never_match(entry):
     rule = _bash_rules([entry])
-    for cmd in PIPE_TO_SHELL + STILL_RUNS + LOCAL_STDIN_SHELL + [entry[5:-1]]:
+    for cmd in PIPE_TO_BASH + STILL_RUNS + LOCAL_STDIN_BASH + [entry[5:-1]]:
         assert first_match(rule, cmd) is None, cmd
 
 
-def test_stdin_shell_entries_are_ask_not_deny():
+def test_stdin_bash_entries_are_ask():
     perms = _permissions()
-    assert set(STDIN_SHELL) <= set(perms.get("ask", [])), sorted(set(STDIN_SHELL) - set(perms.get("ask", [])))
-    assert not set(STDIN_SHELL) & set(perms["deny"])
+    assert set(STDIN_BASH) <= set(perms.get("ask", [])), sorted(set(STDIN_BASH) - set(perms.get("ask", [])))
+    assert not set(STDIN_BASH) & set(perms["deny"])
 
 
-def test_each_ask_entry_has_its_sudo_deny():
-    """Measured: an exact ask matched past `sudo` outranks `Bash(sudo:*)`; the mirror keeps `sudo <form>` denied."""
-    perms = _permissions()
-    missing = ["Bash(sudo " + a[5:] for a in perms.get("ask", []) if a.startswith("Bash(")
-               and "Bash(sudo " + a[5:] not in perms["deny"]]
-    assert not missing, missing
+def test_no_ask_entry_sits_in_the_exact_tier():
+    """An exact-tier ask outranks a wildcard deny past a wrapper (measured): every ask entry needs a
+    `*` that is not a trailing `:*`, which matches its bare prefix in the exact tier."""
+    for entry in _bash_rules(_permissions().get("ask", [])):
+        assert "*" in entry.replace(":*", "") , entry
 
 
-@pytest.mark.parametrize("cmd", PIPE_TO_SHELL)
-def test_pipe_to_shell_prompts(cmd):
+@pytest.mark.parametrize("cmd", PIPE_TO_BASH)
+def test_pipe_to_bash_prompts(cmd):
     assert decision(cmd) == "ask"
 
 
-@pytest.mark.parametrize("cmd", SUDO_SHELL)
-def test_sudo_shell_stays_denied(cmd):
+@pytest.mark.parametrize("cmd", PROMPTED_ON_BASE)
+def test_base_prompts_still_prompt(cmd):
+    assert decision(cmd) in ("ask", "prompt")
+
+
+@pytest.mark.parametrize("cmd", DENIED_ON_BASE)
+def test_every_base_deny_stays_denied(cmd):
+    base_like = {**_permissions(), "ask": []}
+    assert decision(cmd, base_like) == "deny"
     assert decision(cmd) == "deny"
 
 
-@pytest.mark.parametrize("cmd", LOCAL_STDIN_SHELL)
-def test_local_stdin_shell_prompts_and_is_not_denied(cmd):
+def test_exact_tier_asks_would_have_downgraded_sudo():
+    """The first rework's exact `Bash(bash)` ask: the model shows the downgrade the tiers cause."""
+    exact = {**_permissions(), "ask": ["Bash(bash)"]}
+    assert decision("curl x | sudo -u root bash", exact) == "ask"
+
+
+@pytest.mark.parametrize("cmd", LOCAL_STDIN_BASH)
+def test_local_stdin_bash_prompts_and_is_not_denied(cmd):
     assert decision(cmd) == "ask"
 
 
 @pytest.mark.parametrize("cmd", KNOWN_GAPS)
 def test_known_gaps_still_run(cmd):
-    """Pinned so a later rule that closes one shows up here (move it to PIPE_TO_SHELL then)."""
+    """Pinned so a later rule that closes one shows up here (move it to PIPE_TO_BASH then)."""
     assert decision(cmd) == "allow"
 
 
@@ -278,14 +341,14 @@ def test_plain_downloads_and_scripts_still_run(cmd):
 def test_no_shell_wide_rule():
     perms = _permissions()
     wide = {"Bash(sh:*)", "Bash(bash:*)", "Bash(sh *)", "Bash(bash *)", "Bash(curl:*)", "Bash(wget:*)",
-            "Bash(bash -*)", "Bash(bash -x *)", "Bash(bash -l *)", "Bash(bash -- *)"}
+            "Bash(bash -*)", "Bash(bash -x *)", "Bash(bash -l *)", "Bash(bash -- *)", "Bash(b*ash *)"}
     assert not wide & (set(perms["deny"]) | set(perms.get("ask", [])))
     assert {"Bash(curl:*)", "Bash(wget:*)", "Bash(bash:*)"} <= set(perms["allow"])
 
 
 # ------------------------------------------------------------------ harness texts
 def _shell_blocks():
-    """Each fenced shell block of the harness texts, continuation lines joined, heredoc bodies dropped."""
+    """Each fenced shell block of the harness texts, continuation lines joined."""
     fence = re.compile(r"^\s*```(\w*)\s*$")
     for base in ("commands", "agents", "skills", "templates", "docs"):
         for path in sorted((REPO / base).rglob("*.md")):
@@ -307,9 +370,9 @@ def test_harness_heredoc_reading_is_block_based():
     assert [match_forms(s)[0] for s in subcommands(text)] == ["cat", "bash scripts/x.sh"]
 
 
-def test_no_harness_text_runs_a_stdin_shell():
+def test_no_harness_text_runs_a_stdin_bash():
     """No shell block in the command, agent, skill, template or doc texts reaches an ask entry."""
-    rules = [e[5:-1] for e in STDIN_SHELL]
+    rules = _bash_rules(STDIN_BASH)
     hits, blocks = [], list(_shell_blocks())
     assert len(blocks) > 100 and any("<<" in b for _, b in blocks)  # the scan reaches real text, heredocs included
     for where, block in blocks:
