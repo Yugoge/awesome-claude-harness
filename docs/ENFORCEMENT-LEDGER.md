@@ -501,6 +501,13 @@ no per-rule budget exists.
   `sudo -i bash`, `sudo --user=root sh -s` and `sudo env bash`; without a wrapper an exact ask
   `Bash(zz y)` outranks the deny `Bash(zz:*)` for `zz y`. A rule whose `*` matches empty text
   (`Bash(b*ash)` for `bash`) stays in the wildcard tier, where `Bash(sudo:*)` is decided first.
+  The `*` is not confined to the program name: it spans any text, spaces and `/` included, so each
+  entry matches every subcommand that starts with `b` and ends with `ash<form>`. **Collateral
+  prompts** (ran on the base, prompt now; measured): a bash script whose path ends in `ash`, bare or
+  followed by a listed form, such as `bash scripts/flash`, `bash /opt/x.bash`,
+  `bash scripts/x.bash -s`, `bash scripts/x.bash -x`. Other `b...` commands ending that way
+  (`brew install bash`) prompted on the base already, since `bash` is the only allowed program
+  starting with `b`.
   Measured (`claude -p`, a throwaway HOME given to the CLI process only and holding only this file's
   `permissions`, a local mock Messages API issuing one Bash call and reading the tool result): every
   command denied on the base stays denied (`sudo bash`, `| sudo bash|sh`, `| sudo -u root bash [-x]`,
@@ -516,11 +523,15 @@ no per-rule budget exists.
   matches did not, so `curl x | sh`, `| sh -s -- <args>`, `cat x.sh | sh`, `| zsh`, `source <(curl x)`,
   `sh -c "$(curl x)"`, `bash -c "$(curl x)"` and `eval "$(curl x)"` ran there. **Trade-off:** a prompt
   is not a refusal; interactively the owner can approve a pipe-to-shell, a headless run refuses it
-  because nobody answers. **Under-defence that remains:** `curl x | bash -euo pipefail`, `| bash -xv`
-  and any other option combination outside the list run unprompted in every mode (a wider pattern
-  would also catch `bash -c ...` or `bash -x script.sh`); the bypassPermissions forms just named; and
+  because nobody answers. **Under-defence that remains** (measured running unprompted in every mode):
+  option forms outside the list, `curl x | bash -euo pipefail`, `| bash -xv`, `| bash -v`,
+  `| bash -u`, `| bash -lx`, `| bash --posix`, `| bash -O extglob`, `| bash --rcfile /dev/null`, and
+  any other option combination (a wider pattern would also catch `bash -c ...` or
+  `bash -x script.sh`); operand forms naming stdin another way, `| bash /dev/fd/0`,
+  `| bash /proc/self/fd/0`, `| bash -- -`; the bypassPermissions forms just named; and
   `curl x | doas bash`, which only prompts (doas was never denied). tests/test_permission_pipe_to_shell.py
-  models the tiers, reproduces the minimal measurements and pins all of these (KNOWN_GAPS). The label
+  models the tiers, reproduces the minimal measurements and pins all of these (KNOWN_GAPS,
+  KNOWN_COLLATERAL). The label
   stays `advisory`: the evidence is a hand measurement, not a host-observed corpus case.
 
 ---
