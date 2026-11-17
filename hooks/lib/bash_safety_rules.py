@@ -775,6 +775,8 @@ def _relaxation_shape_ok(command, carries):
     for site, res in sites:
         if site.dynamic or site.templated or res.unresolved is not None or (res.name is None and site.cmd.words):
             return False
+        if _shape_word_computed(site.cmd):
+            return False
         heads = {res.name} | {n for n, _o in res.wrappers}
         if site.cmd.words and site.cmd.words[0].value() is not None:
             heads.add(site.cmd.words[0].value().rsplit("/", 1)[-1])
@@ -791,6 +793,17 @@ def _relaxation_shape_ok(command, carries):
         return _shape_strict_ok(command, carries, sites)
     except Exception:  # noqa: BLE001
         return False
+
+
+_SHAPE_COMPUTED_PARTS = frozenset({"brace", "cmdsub", "backtick", "procsub_in", "procsub_out"})
+
+
+def _shape_word_computed(cmd):
+    """True when a word of the simple command (assignment, command, argument or redirection target) holds a brace
+    expansion or a command or process substitution: its words are not the ones written, so the strict shape does
+    not take it."""
+    from lib.shell_parse import active_parts
+    return any(p.kind in _SHAPE_COMPUTED_PARTS for w in _site_words(cmd) for p in active_parts(w.parts))
 
 
 _SHAPE_ENV_OK_RE = re.compile(r"LC_[A-Z]+|LANG|TZ|NO_COLOR|TERM")
@@ -953,7 +966,8 @@ def _shape_strict_ok(command, carries, sites):
             names = {res.name} | {n for n, _o in res.wrappers}
             if any(n is not None and _SHAPE_RUNS_FILE.fullmatch(n) for n in names) or \
                     any("/" in (w.value() or "/") for w in heads) or \
-                    (res.name == "find" and any(w.value() in _BULK_FIND_ACTIONS for w in res.args)):
+                    (res.name == "find" and any(w.value() in _BULK_FIND_ACTIONS for w in res.args)) or \
+                    (res.name in _BULK_FILTERS and not _bulk_static_args(res.name, res.args)):
                 return False
     if writer:
         try:
@@ -1214,6 +1228,36 @@ def _bulk_word_mentions(w):
     return _bulk_mentions(w.text) or _bulk_mentions(w.value() or "")
 
 
+_BULK_GLOB_SAFE = frozenset({"ls", "stat", "cat", "wc", "head", "tail", "grep", "egrep", "fgrep", "jq", "test", "[",
+                             "cut", "nl", "column", "tr"})
+"""Readers and filters with no option that runs a program or writes a file: a glob of theirs that could expand to
+an option (`grep -l <name> *.py`) only changes what they read or print."""
+
+
+def _bulk_static_args(name, args):
+    """True when every word is a plain literal or a glob whose option, if any, is fixed by its literal text.
+
+    A glob passes when its literal prefix is non-empty and does not start with `-` (`hooks/*.py`), spells a whole
+    long option before `=` (`--include=*.py`, its key checked as a literal), follows a `--`, or belongs to a command
+    of _BULK_GLOB_SAFE. A variable, a `${x:-..}` default, a brace expansion or a `$(..)`/backtick substitution can
+    spell an option (find -exec/-fprintf, rg --pre, file -C, git --ext-diff/--output) that no literal check sees, so
+    beside a protected name a reader or filter takes none."""
+    ended = False
+    for w in args:
+        v = w.value()
+        if v is not None:
+            ended = ended or v == "--"
+            continue
+        if any(p.kind not in ("lit", "glob") for p in w.parts):
+            return False
+        prefix = w.static_prefix()
+        if ended or (prefix and not prefix.startswith("-")) or re.fullmatch(r"--[A-Za-z0-9][A-Za-z0-9-]*=.*", prefix):
+            continue
+        if name not in _BULK_GLOB_SAFE:
+            return False
+    return True
+
+
 def _bulk_standalone(w):
     """A word that is the protected path or a writer script, not text that merely contains the name.
 
@@ -1462,6 +1506,8 @@ def _relaxed_bulk_sentinel_decision(cmd):
             return 'DENY'
         if named and name not in _BULK_FILTERS | _BULK_BENIGN and any(w.value() is None for w in res.args):
             return 'DENY'
+        if named and name in _BULK_FILTERS and not _bulk_static_args(name, res.args):
+            return 'DENY'
         if not (any(_bulk_word_mentions(w) for w in words) or any(_bulk_mentions(b) for b in bodies)):
             continue
         if any(_bulk_word_mentions(a.word) for a in tuple(c.assignments) + tuple(res.assignments)) or \
@@ -1476,7 +1522,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
                 re.fullmatch(r"-[a-zA-Z]*[ce][a-zA-Z]*", w.value() or "") for w in res.args)):
             return 'DENY'
         if name in _BULK_READERS:
-            vals = [w.value() or "" for w in res.args]
+            vals = [w.value() if w.value() is not None else w.static_prefix() for w in res.args]
             if name == "rg" and any(v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals):
                 return 'DENY'
             if name == "file" and any(v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals):

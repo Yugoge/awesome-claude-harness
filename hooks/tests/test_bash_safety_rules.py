@@ -646,3 +646,55 @@ def test_a_filter_with_listed_options_or_a_plain_sudo_still_reads(sandbox, comma
     cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
     r = run(sandbox, SAFETY, cmd)
     assert r.returncode == 0, (cmd, r.stderr)
+
+
+# OB-L13 verifier round 6: a reader's or filter's option word that is computed (a variable, a `${x:-..}` default, a
+# brace expansion, a `$(..)` or backtick substitution) escaped the literal-option checks (find -exec/-fprintf, rg
+# --pre, file -C, git --ext-diff/--output) and ran the writer or forged the sentinel; refused through the real hook.
+OB_L13_ROUND6_REFUSALS = [
+    f"x=-exec; find {_W} $x python3 {{{{}}}} ';'",
+    f"find {_W} {{{{-exec,}}}} python3 {{{{}}}} ';'",
+    f"find {_W} ${{{{x:--exec}}}} python3 {{{{}}}} +",
+    f"find {_W} $(echo -exec) python3 {{{{}}}} ';'",
+    f"find {_W} `echo -exec` python3 {{{{}}}} ';'",
+    f"x=-fprintf; find /etc/hostname $x {_SENT} '{{{{\"kind\":\"bulk\"}}}}'",
+    f"find /etc/hostname {{{{-fprintf,}}}} {_SENT} '{{{{\"kind\":\"bulk\"}}}}'",
+    f"x=-exec; find /tmp/forged.json $x cp {{{{}}}} {_SENT} ';'",
+    f"x=--pre=python3; rg $x foo {_W}",
+    f"rg ${{{{x:---pre=python3}}}} foo {_W}",
+    f"x=-C; file $x -m {_SENT}",
+    f"o=--ext-diff; git diff $o -- {_W}",
+    f"o=--output; git diff $o={_SENT} --no-index a b",
+    f"cat {_W} | sort $(echo --compress-program=sh)",
+    f"cat {_W} | head {{{{-n,1}}}}",
+    f"rg --pre=* foo {_W}",
+    f"find {_W} -ex* python3 {{{{}}}} ';'",
+    f"find {_W} * python3 {{{{}}}} ';'",
+    f"git diff --out*={_SENT} --no-index a b",
+    f"file -* {_SENT}",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND6_REFUSALS)
+def test_a_computed_reader_option_beside_a_protected_name_is_refused(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 2 and "bulk-commit-sentinel-write" in r.stderr, (cmd, r.stderr)
+
+
+OB_L13_ROUND6_PASSES = [
+    f"grep -l {_W} hooks/*.py",
+    f"grep -l {_W} *.py",
+    f"grep -rn {_W} --include=*.py .",
+    f"ls -l {_W} *",
+    f"grep -n x -- {_W} *",
+    f"ls {{S}}/claude-bulk-commit-sentinel-*",
+    f"find {_W} -name '*.py' -print",
+]
+
+
+@pytest.mark.parametrize("command", OB_L13_ROUND6_PASSES)
+def test_a_reader_with_a_glob_operand_beside_a_protected_name_still_reads(sandbox, command):
+    cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
+    r = run(sandbox, SAFETY, cmd)
+    assert r.returncode == 0, (cmd, r.stderr)
