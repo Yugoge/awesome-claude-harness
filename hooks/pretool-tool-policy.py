@@ -791,21 +791,22 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
     return own
 
 
-def _declared_write_allowed(role: str, tool: str, target):
+def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True):
     """The role's denials on the declaring dispatch's own write: its tool
     lists, deny prefixes and an unreadable policy, never its allow prefixes."""
     from lib import policy_registry
 
     if policy_registry.load_policy() is None:
-        return is_allowed(role, tool, target)
+        return is_allowed(role, tool, target, carveouts)
     role_pol = policy_registry.get_role_policy(role)
     if role_pol.get("_unknown_role"):
-        return is_allowed(role, tool, target)
+        return is_allowed(role, tool, target, carveouts)
     tool_check = policy_registry._check_tool_lists(role_pol, tool)
     if tool_check is not None:
         return tool_check
-    if policy_registry._path_in_prefixes(target, role_pol.get("denied_write_path_prefixes", [])):
-        return (False, f"write target {target} matches denied_write_path_prefixes")
+    denial = policy_registry._write_denial(role_pol, target, carveouts)
+    if denial is not None:
+        return (False, denial)
     return (True, "ok")
 
 
@@ -1051,6 +1052,38 @@ def _approved_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
+_STAGING_MODES = ("link", "copy-dest", "move-dest")
+
+
+def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
+    """The Bash write targets a write carve-out may not admit: each path that
+    another operation of the same command first makes as a link, copy or move
+    destination, at the path itself or at a directory above it
+    (`ln -s ../test_x.py tests/reports/s && echo x > tests/reports/s`,
+    `mv lnk tests/reports/d && echo x > tests/reports/d/f`). The realpath
+    check (policy_registry._in_carveout) reads the tree before the command
+    runs, so such a target is judged as if the row had no carve-out; split the
+    two into separate calls. None means every target (the command could not
+    be read): no carve-out applies to any of them."""
+    if tool_name != "Bash" or not isinstance(tool_input, dict):
+        return set()
+    try:
+        from lib import bash_write_targets as bwt
+        from lib import policy_registry
+
+        command = tool_input.get("command") or ""
+        found = [(bwt._render(t, command), t.mode) for t in bwt.extract_bash_write_targets_with_modes(command)]
+        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _STAGING_MODES]
+        out = set()
+        for j, (path, _) in enumerate(found):
+            if path and any(i != j and policy_registry._path_is_prefix(s, os.path.abspath(path))
+                            for i, s in staged):
+                out.add(path)
+        return out
+    except Exception:
+        return None
+
+
 def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset(),
                    approved: set = frozenset()) -> None:
     """Iterate targets, exit 2 on first deny. For Bash, each write target is
@@ -1066,13 +1099,15 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     apply to it.
     """
     check_tool = "Write" if tool_name == "Bash" else tool_name
+    restaged = _restaged_targets(tool_name, data.get("tool_input"))
     for target in targets:
+        carveouts = restaged is not None and target not in restaged
         if check_tool in WRITE_TOOLS and target in approved and target not in own:
             allowed, reason = _approved_write_allowed(role, check_tool, target)
         elif check_tool in WRITE_TOOLS and target in own:
-            allowed, reason = _declared_write_allowed(role, check_tool, target)
+            allowed, reason = _declared_write_allowed(role, check_tool, target, carveouts)
         else:
-            allowed, reason = is_allowed(role, check_tool, target)
+            allowed, reason = is_allowed(role, check_tool, target, carveouts)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash":
