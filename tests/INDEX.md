@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T01:38:26Z*
-**Total entries**: 265
+*Last updated: 2026-11-17T07:33:14Z*
+**Total entries**: 267
 **Convention**: kebab
 
 ## Tree
@@ -51,6 +51,7 @@ tests/
 │   └── `validation-guide.md` - AI-Driven Validation Guide
 ├── lint/
 │   ├── `__main__.py` - python3 -m tests.lint [--tree DIR] [--check NAME ...]: print the findings, exit 1 on any.
+│   ├── `cd_read.py` - A `Read()` deny rule makes the CLI ask before a relative-path read after a `cd`
 │   ├── `checks.py` - The checks by name: the six of the P12 plan in its order, then P15's prose-only check.
 │   ├── `hooks.py` - What reaches the model (the CLI's hook contract): the stderr of an exit 2; a JSON object on
 │   ├── `prompts.py` - The four prompt checks: hook strength, dead references, repeated blocks, emphasis.
@@ -238,6 +239,7 @@ tests/
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
 ├── `test_score_events.py` - escaped and close_catch, and the observer
 ├── `test_score_log.py` - renderers (owner summary, /rating view, dispatch view and main line, P13-3). Its callers are hook...
+├── `test_search_without_cd.py` - A `Read()` deny rule makes the CLI ask before a relative-path read after a `cd` (audit G3)
 ├── `test_sendmessage_policy.py` - The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
 ├── `test_session_index.py` - Each update-index call of scripts/lib/session_index.py's sync (the --cacheinfo one for a modified...
 ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
