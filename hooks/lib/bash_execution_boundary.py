@@ -1337,11 +1337,15 @@ def text_names_removal(text):
 # PROVEN_SAFE_REMOVAL only when EVERY operand is proven here; anything this
 # cannot prove keeps FORBIDDEN_REMOVAL filesystem_removal. The proof reads the
 # filesystem (realpath, the entries a recursive removal or a glob reaches) at
-# hook time, as prove_git_rm reads the repository.
+# hook time, as prove_git_rm reads the repository. So the rm must be the command
+# string's one command (analyze, Analyzer.commands) and no path may hold a symlink
+# (realpath == normpath): nothing in the same string can change what was proven.
+# Residual: a symlink made by a separate background call after the hook ran.
 _RM_SHORT_OPTS = frozenset("fiIrRdv")
 _RM_LONG_OPTS = frozenset(("--force", "--recursive", "--dir", "--verbose", "--one-file-system",
                            "--preserve-root", "--preserve-root=all"))
-_RM_ENTRY_CAP = 4096  # entries one proof may read; more is "cannot prove", never allow
+_RM_ENTRY_CAP = 4096
+_RM_PSEUDO_FS = ("/proc", "/dev", "/sys")  # resolved per process, never a temp path  # entries one proof may read; more is "cannot prove", never allow
 
 
 def _rm_harness_homes():
@@ -1368,7 +1372,15 @@ def _rm_target_proven(path, hts, protected):
         return False
     if any(c in (".", "..") for c in path.split(os.sep)):
         return False
+    norm = os.path.normpath(path)
+    if any(norm == d or norm.startswith(d + os.sep) for d in _RM_PSEUDO_FS):
+        return False
     real = os.path.realpath(path)
+    # No symlink anywhere on the path, the last component included: GNU rm follows a
+    # symlinked directory in the path (and the last one under a trailing slash), and a
+    # path is judged here only as the filesystem stands when the hook runs.
+    if real != norm:
+        return False
     parent = os.path.realpath(os.path.dirname(path.rstrip(os.sep)) or os.sep)
     roots = hts.temp_roots()
     # The file removed (full realpath) and the directory entry removed (its resolved parent)
@@ -1522,6 +1534,9 @@ class Analyzer:
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        # Every command the walk reached, at any depth (substitutions, aliases, heredoc
+        # bodies included). temp_root_removal holds only when it is the one command.
+        self.commands = 0
         self._head, self.direct = None, False
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
@@ -2095,6 +2110,7 @@ class Analyzer:
         redirs = [t[1] for t in toks if t[0] == "R"]
         if not words and not redirs:
             return
+        self.commands += 1
         for r in redirs:
             if r.op in ("<<", "<<-"):
                 self.note("heredoc", r.off)
@@ -3749,6 +3765,14 @@ def analyze(raw):
                                  for o in undischarged[:5]))
     if az.overflow:
         az.add_terminal(UNRESOLVED, "boundary_limit_exceeded", str(MAX_BOUNDARIES))
+    # A temp-root rm is proven against the filesystem as the hook sees it. Any other
+    # command in the same string (an `ln -s`, `mv`, `cd`, an interpreter, a background
+    # job ...) could change that filesystem before or while rm runs, so the proof holds
+    # only when the rm is the string's one command.
+    for b in az.boundaries if az.commands != 1 else ():
+        if b["reason"] == "temp_root_removal":
+            b.update(verdict=FORBIDDEN_REMOVAL, reason="filesystem_removal",
+                     detail="rm (temp-root removal is not the only command)")
     for b in az.boundaries if az.git_rm_unresolved else ():  # git rm's directory unknown
         if b["reason"] == "git_rm_recoverable":
             b.update(verdict=FORBIDDEN_REMOVAL, reason="git_rm_worktree",

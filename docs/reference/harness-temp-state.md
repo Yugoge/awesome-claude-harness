@@ -8,7 +8,7 @@ definition of this list: `LOCATIONS` holds one entry per row below (the **Locati
 `classify(path)` answers which entry a path is, `is_harness_state(path)` whether it is control
 state, and `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root. The removal policy of
 `hooks/pretool-bash-safety.sh` (`hooks/lib/bash_execution_boundary.py`, `rm_temp_targets_proven`)
-uses it to allow a plain `rm` of temp-root paths that are not control state; `hooks/tests/test_harness_temp_state.py` pins every row.
+uses it to allow a plain `rm` of temp-root paths that are not control state (only as the command string's one command, on a path with no symlink; a symlink a separate background call creates after the hook ran is a residual race); `hooks/tests/test_harness_temp_state.py` pins every row.
 
 ## Roots
 

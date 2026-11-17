@@ -134,11 +134,67 @@ def test_a_final_component_glob_inside_a_temp_dir(roots):
     allowed("rm -rf %s/none-*" % w)  # no match: rm is handed the literal pattern
 
 
-def test_inside_ordinary_control_flow_at_top_level(roots):
+def test_alone_with_a_trailing_ampersand_or_redirection(roots):
     w = _work(roots["tmp"])
-    allowed("cd /; rm -rf %s && echo done" % w)
-    allowed("if true; then rm -f %s/a.csv; fi" % w)
-    allowed("ls %s | wc -l; rm -rf %s" % (w, w))
+    allowed("rm -rf %s &" % w)
+    allowed("rm -rfv %s > /dev/null 2>&1" % w)
+
+
+# -- the removal is proven only as the string's one command, on a path with no symlink ----------
+# Reproducers from the verifier (rejecting 927224ff): each is refused on the base, was allowed on
+# 927224ff (the link did not exist yet when the hook resolved the path, or /proc/self resolved in
+# the hook's own process), and is refused again.
+# {tmp} a temp dir, {config} a harness home outside it, {repo} a git checkout outside it.
+REPRODUCERS = [
+    "ln -s {config} {tmp}/x; rm -rf {tmp}/x/hooks",
+    "ln -s / /tmp/n; rm -rf /tmp/n/etc",
+    "ln -s {config} {tmp}/x && rm -rf {tmp}/x/",
+    "ln -s {repo} {tmp}/x && rm -rf {tmp}/x/*",
+    "ln -s {repo}/.git {tmp}/x; rm -rf {tmp}/x/",
+    "cd {tmp} && ln -s / x && rm -rf {tmp}/x/etc",
+    "rm -rf {tmp}/x/etc & ln -s / {tmp}/x",
+    "mv {repo}/.git {tmp}/y; rm -rf {tmp}/y",
+    "python3 -c 'import os;os.symlink(\"/\",\"/tmp/n\")'; rm -rf /tmp/n/etc",
+]
+
+
+def _places(roots):
+    repo = roots["outside"] / "repo"
+    (repo / ".git").mkdir(parents=True, exist_ok=True)
+    return {"tmp": roots["tmp"], "config": roots["home"] / ".claude", "repo": repo}
+
+
+@pytest.mark.parametrize("cmd", REPRODUCERS)
+def test_a_link_or_move_made_in_the_same_string(roots, cmd):
+    refused(cmd.format(**_places(roots)))
+
+
+@pytest.mark.parametrize("cmd", ["cd /; rm -rf {tmp}/work && echo done", "if true; then rm -f {tmp}/work/a.csv; fi",
+                                 "ls {tmp}/work | wc -l; rm -rf {tmp}/work", "true; rm -rf {tmp}/work",
+                                 "rm -rf {tmp}/work; rm -rf {tmp}/work2", "rm -rf {tmp}/work > >(cat)",
+                                 "coproc rm -rf {tmp}/work; echo", "(rm -rf {tmp}/work) & wait"])
+def test_any_second_command_refuses(roots, cmd):
+    _work(roots["tmp"])
+    refused(cmd.format(**roots))
+
+
+def test_no_symlink_anywhere_on_the_path(roots):
+    w = _work(roots["tmp"])
+    (roots["tmp"] / "l").symlink_to(w)  # a link to a temp dir: GNU rm -r through `l/` empties work
+    refused("rm -rf %s/l/" % roots["tmp"])
+    refused("rm -rf %s/l/sub" % roots["tmp"])
+    refused("rm -f %s/l/a.csv" % roots["tmp"])
+    refused("rm -rf %s/l/*" % roots["tmp"])
+    refused("rm -f %s/l" % roots["tmp"])  # the link itself: refused too (fail closed)
+    (w / "inner").symlink_to(roots["outside"])
+    allowed("rm -rf %s" % w)  # rm -r removes a link inside the tree, never its target
+
+
+def test_proc_dev_and_sys(roots, monkeypatch):
+    monkeypatch.chdir(roots["tmp"])  # /proc/self/cwd would resolve into a temp root
+    for cmd in ("rm -rf /proc/self/cwd/passwd", "cd /etc && rm -rf /proc/self/cwd/passwd",
+                "rm -f /proc/self/root/tmp/x", "rm -f /dev/shm/x", "rm -f /dev/null", "rm -rf /sys/x"):
+        refused(cmd)
 
 
 # -- dangerous neighbours stay refused --------------------------------------------------------------
@@ -380,6 +436,14 @@ def test_pipeline_allows_a_temp_removal(pipeline, cmd, subagent):
     results = _pipeline(pipeline, cmd.format(tmp=pipeline["tmp"]), subagent)
     blocked = {h: r for h, r in results.items() if r[0] != 0}
     assert not blocked, blocked
+
+
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "dev"])
+@pytest.mark.parametrize("cmd", REPRODUCERS + ["cd /etc && rm -rf /proc/self/cwd/passwd"])
+def test_pipeline_refuses_the_reproducers(pipeline, cmd, subagent):
+    command = cmd.format(tmp=pipeline["tmp"], config=pipeline["config"], repo=pipeline["repo"])
+    code, err = _run(pipeline, "pretool-bash-safety.sh", command, subagent, 0)
+    assert code == 2 and "removal-policy" in err, (command, code, err)
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "dev"])
