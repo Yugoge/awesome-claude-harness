@@ -348,6 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
+| S-019 | permission-layer-secret-file-denies | advisory | unexercised | source-level | settings.json:267 @62301f20 | tests/test_secret_file_denies.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -375,6 +376,22 @@ no per-rule budget exists.
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
+- **S-019** — OB-L19: `permissions.deny` refuses secret files by name, for `Read` and `Edit` alike
+  (`*.key`, `*.pem` Read only): `.env` and `.env.*` (every valued variant, an unknown one included),
+  password stores (`password.txt`, `passwords.csv`, `*_password.txt`, `db_password`, ...), secrets files
+  (`secrets.yaml`, `secrets.toml`, `secrets.json`, `.secrets`, `client_secret*.json`, ...), credentials files
+  (`credentials`, `credentials.json`, `credentials.csv`, ...), `**/etc/shadow`, `**/passwd`, `//etc/shadow`,
+  `//etc/passwd`. The substring globs `**/*password*`, `**/*secret*`, `**/credentials*` and `**/shadow` are
+  gone: the CLI matches case-insensitively and against every directory on the path, so they refused ordinary
+  source (`src/auth/ForgotPassword.tsx`, `src/components/Shadow/index.tsx`). The three template names
+  `.env.example`, `.env.sample`, `.env.template` are re-admitted by `!` negations at the end of the deny list,
+  one set per tool; negation is not in the permission docs and was measured on Claude Code 2.1.326 (last
+  match wins within a tool's list; a negation before the rule it lifts lifts nothing, so a reordered list
+  over-blocks the templates again and never leaks). The row stays `advisory`/`source-level`: the measurement
+  (a real CLI driven offline through a local stand-in API, method in the test's docstring) is recorded in
+  `tests/test_secret_file_denies.py`, not in the black-box corpus. Not covered: a file under the home
+  outside the project (`~/.aws/credentials`, `~/.env`; `**/` anchors at the current directory), and
+  contents read by an interpreter (`python3 -c 'open(".env")'`), which no Read rule reaches.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
