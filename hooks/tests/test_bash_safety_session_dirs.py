@@ -444,3 +444,32 @@ def test_a_directory_glob_or_another_dirs_file_passes(sandbox, command):
     for subagent in (False, True):
         r = run(sandbox, command, subagent)
         assert r.returncode == 0, (command, r.stderr)
+
+
+# A git log option that takes the next word as its value shifts `-S` into value position, so the name after it is a
+# pathspec git reads; an option off the scanner's known lists, of any search program or git call, is never an
+# allowed mention.
+SHIFTED = [
+    "git log -p -I -S session_dirs.txt",
+    "git log -p --ignore-matching-lines -S session_dirs.txt",
+    "git log -p --word-diff-regex -S session_dirs.txt",
+    "git log -p --anchored -S session_dirs.txt",
+    "git log --exclude -S session_dirs.txt",
+    "git log --all -p -I -S session_dirs.txt",
+    "git log -p --rotate-to -S session_dirs.txt",
+    "git log -p --skip-to -S session_dirs.txt",
+    "git log -p --line-prefix -S session_dirs.txt",
+    "git log -p --src-prefix -S session_dirs.txt",
+    "git log -p --dst-prefix -S session_dirs.txt",
+    "git log --some-future-option -S session_dirs.txt",
+    "git log -Q -S session_dirs.txt",
+]
+
+
+@pytest.mark.parametrize("command", SHIFTED)
+def test_a_git_log_option_that_shifts_the_pattern_is_refused(sandbox, command):
+    for subagent in (False, True):
+        r = run(sandbox, command, subagent)
+        assert r.returncode == 2, (command, r.stdout, r.stderr)
+        assert "session_dirs.txt is never read, written or executed" in r.stderr, (command, r.stderr)
+        assert "neither releases it" in r.stderr
