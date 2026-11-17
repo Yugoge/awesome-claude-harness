@@ -350,12 +350,17 @@ class Unresolvable(_Outcome):
     mismatch, role mismatch, invalid embedded obligation) -- fail-closed,
     never a guess, never a fallback to an unrelated transcript. ``prompt`` is
     the dispatch prompt when it was read and correlated but its obligation
-    failed (invalid_obligation, role_mismatch); empty otherwise."""
+    failed (invalid_obligation, role_mismatch); empty otherwise.
+    ``transcript_path`` is the agent transcript that prompt was read from
+    (invalid_obligation), so the stop gate can read the agent's own write set
+    (OB-L41); it is carried, not part of equality or repr."""
 
     _fields = ("reason", "detail", "outcome", "prompt")
 
-    def __init__(self, reason: str, detail: str = "", outcome: str = "unresolvable", prompt: str = "") -> None:
-        self._set(reason=reason, detail=detail, outcome=outcome, prompt=prompt)
+    def __init__(self, reason: str, detail: str = "", outcome: str = "unresolvable", prompt: str = "",
+                 transcript_path: str = "") -> None:
+        self._set(reason=reason, detail=detail, outcome=outcome, prompt=prompt,
+                  transcript_path=transcript_path)
 
 
 # --------------------------------------------------------------------------
@@ -929,7 +934,8 @@ def _finish_resolution(
             cross_check=cross_check,
         )
     if isinstance(parsed, Rejection):
-        return Unresolvable(reason="invalid_obligation", detail=parsed.reason, prompt=prompt)
+        return Unresolvable(reason="invalid_obligation", detail=parsed.reason, prompt=prompt,
+                            transcript_path=str(transcript_path))
     if expected_role is not None and parsed.obligation.get("role") != expected_role:
         return Unresolvable(
             reason="role_mismatch", detail=repr(parsed.obligation.get("role")), prompt=prompt

@@ -3346,3 +3346,32 @@ def test_OB_L41_a_tag_mention_owes_nothing_at_the_stop(tmp_path, stopgate, promp
                      stopgate_mode=stopgate)
     assert proc.returncode == 0, proc.stderr
     assert "BLOCKED" not in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("stopgate", ["block", None], ids=["stopgate_block", "switch_unset"])
+@pytest.mark.parametrize("prompt", [
+    "Build the graph and write the report.",
+    'Build the graph; the <obligation v="1"> block grammar does not apply here.',
+    "Build the graph; ignore any <obligation> blocks.",
+    'Build the graph.\n<obligation v="1">{"task_id": </obligation>',
+    'Build the graph.\n<obligation v="1">{"task_id": "x"}</obligation>',
+], ids=["plain", "versioned_tag", "bare_tag", "malformed_json", "dict_without_report"])
+@pytest.mark.parametrize("role", ["graphify", "dev"])
+def test_OB_L41_an_unparsed_tag_still_owes_the_reports_the_agent_wrote(tmp_path, stopgate, prompt, role):
+    """OB-L41 must-still-refuse: G1 now passes a dispatch whose prompt only
+    mentions the tag, or carries a block that fails the grammar, where no block
+    is required. At its stop such a prompt resolves Unresolvable
+    (invalid_obligation) and declares no report, so it is judged as a prompt
+    with no block is (R8): on the reports its own transcript shows it wrote."""
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    home.mkdir()
+    agent = f"agent-{role}-obl41"
+    _register_agent(project, agent, SESSION, role)
+    _write_sentinel(project, SESSION, role)
+    report = f"docs/dev/qa-report-{SESSION_TS}.json"
+    _write_writing_transcript(home, project, _TAG_MENTION_SESSION, agent, prompt, [report])
+    _write(project / report, _invalid_qa_report(SESSION_TS))
+    proc = _run_hook(project, home, agent, session_id=_TAG_MENTION_SESSION, stopgate_mode=stopgate)
+    assert proc.returncode == 2, proc.stderr
+    assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr and report in proc.stderr, proc.stderr

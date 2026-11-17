@@ -1034,10 +1034,15 @@ def main() -> None:
     # its own transcript shows it wrote (R8). Each producer is judged on its
     # own reports at its own stop, never on a sibling lane's.
     # validate_report_artifact decides the dev, qa and do report kinds and
-    # skips every other.
+    # skips every other. A prompt whose block fails the grammar and declares no
+    # report (it only mentions the tag, or its body is no JSON object or names no
+    # json artifact) is judged as one without a block: G1 lets such a dispatch
+    # through wherever no block is required (OB-L41), so it owes what it wrote.
     declared = _dispatch_obligation(getattr(resolution, "prompt", None))
     rels = [a.get("path") for a in declared.get("artifacts") or [] if isinstance(a, dict) and a.get("kind") == "json"]
-    if not declared and isinstance(resolution, obligation.NoObligationInPrompt):
+    unparsed = (isinstance(resolution, obligation.Unresolvable) and resolution.reason == "invalid_obligation"
+                and not rels and getattr(resolution, "transcript_path", ""))
+    if (not declared and isinstance(resolution, obligation.NoObligationInPrompt)) or unparsed:
         written = command_span.write_set(resolution.transcript_path, project_dir, excluded=())
         rels = sorted(written.written) if written else []
     report_paths = [Path(project_dir) / r for r in rels if obligation._legal_repo_relative_path(r)]
