@@ -348,6 +348,7 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
+| S-014 | git-hidden-in-interpreter-code-or-script:pretool-git-privilege-guard.py | advisory | exercised | component-tested | hooks/pretool-git-privilege-guard.py:1 @ac4fe5ee | hooks/tests/test_git_hidden_code.py | component-tested |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -475,6 +476,23 @@ no per-rule budget exists.
     (task_id, sid, nonce, repo_root, branch, expected_head, created_at, expires_at) that
     `pretool-git-privilege-guard.py` (H-031) consumes; it exits 2 when it has no session id or
     cannot resolve the repository, branch or HEAD the grant binds.
+- **S-014** — GIT-2: git run out of the shell's sight. `hidden_git_texts`
+  (`hooks/lib/git_command_classifier.py`) reads the inline code of `python`/`python3`/`pypy -c`,
+  `perl -e`/`-E`, `ruby -e` and `node -e`/`-p`/`--eval`/`--print` lexically: the token `git`,
+  then words separated only by blanks, quotes, commas, `[` or backquotes, whose subcommand is one
+  the guard protects, reads as `git <words>` (conservative: `print("git push")` is refused too).
+  It reads a script file named by a literal path that exists and is readable at hook time,
+  relative to the payload's cwd, up to 256 KiB and not binary (`bash`/`sh`/`dash`/`zsh`/`ksh
+  FILE`, `source FILE`, `. FILE`, `./FILE` without a python/perl/ruby/node shebang) as shell
+  text; files under the harness's own `hooks/` and `scripts/` (the /push and /merge wrappers)
+  are not read. The guard refuses a push or commit found there, and the rules /do releases
+  unless /do holds and the operation cannot move the protected branch; an /allow grant naming
+  the whole command passes it, except a force or delete push. **Unseen (residual):** a computed
+  or missing script path, a path relative to a `cd` earlier in the command, a script another
+  script runs, an interpreter file (`python3 x.py`, `./x.py`) and the modules any code imports,
+  code or git arguments built at run time, `eval` of a computed string, `make` and other build
+  tools, git aliases and hooks from configuration, a file over the size cap, and a file changed
+  between the hook and the run.
 
 ---
 

@@ -146,7 +146,7 @@ from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command 
 from lib.agent_resolver import resolve_agent_type  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
-    classify_git_command, _unquote_token, GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS)
+    classify_git_command, hidden_git_texts, _unquote_token, GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS)
 # Commit-grant provenance (minted_by) and the hook-written changelog-analyst
 # dispatch attestation, shared with scripts/write-commit-grant.py and
 # hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
@@ -1337,6 +1337,54 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
     )
 
 
+# ---------------------------------------------------------------------------
+# Hidden git (GIT-2): interpreter inline code and script files the command runs
+# (hidden_git_texts). A guarded operation found there is refused: push and
+# commit always (their routes are the literal command: /push, /commit), the
+# rules /do releases unless /do consent holds and the operation cannot move the
+# protected branch. An /allow grant naming the whole command passes it, except a
+# force or delete push, which nothing passes. The harness's own hooks/ and
+# scripts/ are not read: /push and /merge run their wrappers from there.
+# ---------------------------------------------------------------------------
+
+_HARNESS_ROOT = Path(__file__).resolve().parent.parent
+_TRUSTED_SCRIPT_DIRS = (str(_HARNESS_ROOT / 'hooks'), str(_HARNESS_ROOT / 'scripts'))
+
+
+def _hidden_git_refusal(text, invocations, do_consent):
+    """Why a hidden git text is refused, or ''."""
+    if _looks_like_git_push(invocations):
+        return 'git push'
+    if _looks_like_git_commit(invocations):
+        return 'git commit'
+    for rule in _DO_RELEASED:
+        if rule(invocations) and not (do_consent and not _moves_protected_branch(text, invocations)):
+            return 'git operation (%s)' % rule.__name__.replace('_looks_like_', '').replace('_', ' ')
+    return ''
+
+
+def _evaluate_hidden_git(command, data, do_consent):
+    for origin, text in hidden_git_texts(command, _hook_cwd(data), _TRUSTED_SCRIPT_DIRS):
+        invocations = classify_git_command(text)[0]
+        if not invocations:
+            continue
+        what = _hidden_git_refusal(text, invocations, do_consent)
+        if not what:
+            continue
+        pushes = [[_unquote_token(t) for t in inv.args] for inv in invocations
+                  if inv.subcommand == 'push']
+        if not any(_push_forces_or_deletes(a) for a in pushes) and _check_git_allowlist(command, data):
+            continue
+        _block(
+            '\nBLOCKED: agent %s hidden in %s.\n' % (what, origin)
+            + 'Command excerpt: %s\n' % command[:200]
+            + 'Git it runs: %s\n' % text.strip()[:200]
+            + 'Git run from interpreter code or a script file is judged as if '
+            'typed; push and commit go only through /push and /commit, and the '
+            'rest only as a literal git command the guard can read.\n'
+        )
+
+
 def _evaluate_command(command, data, do_consent=False):
     # do_consent: the main agent holds /do consent, which releases the rules in
     # _DO_RELEASED and adds none: what one of them refuses stays refused when it
@@ -1391,6 +1439,7 @@ def _evaluate_command(command, data, do_consent=False):
                 + '         --reason "<why this command must run as written>"\n'
                 + '     Command sha256: %s\n' % digest
             )
+    _evaluate_hidden_git(command, data, do_consent)
     if not invocations:
         return
     # An /allow grant settles every command but a push, whose force/delete refusal
