@@ -13,7 +13,7 @@ Activation logic:
      whatever the registry holds and whatever form the session id takes:
      the qa-report.v2 artifact it declares is the report judged, at exactly
      the path declared (missing: exit 2 naming that path; holding exactly the
-     content the main agent wrote, or another subagent, as
+     content the main agent wrote, or a QA of an earlier round, as
      lib/report_provenance.py recorded it, with no Write of that content in
      this QA's own transcript, or a
      provenance ledger that cannot be trusted: exit 2, CD-6); one that declares
@@ -205,12 +205,13 @@ def _enforce_own_writer(
     """Exit 2 when the declared report's current content comes from the main agent
     (lib/report_provenance.py verdict: the latest record of that content is the main
     agent's observation, or a subagent's whose witnesses the hook did not write), or from a
-    subagent other than this QA (its trusted record names another writer), and this QA's own
+    subagent other than this QA launched before this QA was (an earlier round), and this QA's own
     transcript holds no Write of exactly that content; exit 2 too when the
     provenance ledger cannot be trusted (unreadable, unwritable, held locked, its chain
     broken): the gate fails closed (CD-6)."""
     try:
-        held = report_provenance.verdict(session_id, project_dir, rel, session_transcript, agent=agent_id)
+        held = report_provenance.verdict(session_id, project_dir, rel, session_transcript, agent=agent_id,
+                                            agent_transcript=transcript)
     except report_provenance.LedgerError as exc:
         sys.stderr.write(
             f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) {session_context}: "

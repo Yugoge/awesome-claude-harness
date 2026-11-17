@@ -632,12 +632,35 @@ def _trusted(records: list, index: int, rel: str) -> bool:
     return by in (actor, MAIN) if spec.get("bg") is True else by == actor
 
 
-def verdict(session_id: str, project_dir, rel: str, session_transcript=None, agent=None) -> str | None:
+def _same_round(records: list, index: int, rel: str, agent_transcript) -> bool:
+    """The QA whose stop is judged was already launched, by a launch record declaring ``rel``,
+    when record ``index`` was written: the latest launch record whose prompt is the one its own
+    transcript holds precedes the record (parallel QAs of one round; a QA launched after another
+    QA wrote the report is of a later round)."""
+    try:
+        from lib import obligation
+
+        sha = _prompt_sha(obligation.read_first_record_prompt(agent_transcript)) if agent_transcript else None
+    except Exception:
+        sha = None
+    if not sha:
+        return False
+    launch = None
+    for j, record in enumerate(records):
+        spec = record.get("launch") if _is_call(record) and record.get("agent") == MAIN else None
+        if isinstance(spec, dict) and spec.get("prompt") == sha and rel in (spec.get("declared") or []):
+            launch = j
+    return launch is not None and launch < index
+
+
+def verdict(session_id: str, project_dir, rel: str, session_transcript=None, agent=None,
+            agent_transcript=None) -> str | None:
     """"main" when report ``rel``'s current content comes from the main agent: the latest
     record of that content is the main agent's, or a subagent's whose witnesses the hook did
-    not write (_trusted); with ``agent`` (the QA whose stop is judged), the trusted writer's
-    agent id when it is another subagent (a QA the main agent had write the content is not
-    this QA's evidence); None when it is ``agent`` or no record holds it. LedgerError when
+    not write (_trusted); with ``agent`` (the QA whose stop is judged, ``agent_transcript`` its
+    own transcript), the trusted writer's agent id when it is another subagent of an earlier
+    round (_same_round: a QA launched after another QA wrote the content is not judged on it);
+    None when it is ``agent``, a parallel QA of the same round, or no record holds it. LedgerError when
     the ledger cannot be trusted (the gate refuses). ``session_transcript`` is not read: no
     transcript content is evidence of a launch or a witness."""
     root = _root(project_dir)
@@ -658,7 +681,8 @@ def verdict(session_id: str, project_dir, rel: str, session_transcript=None, age
             continue
         if record.get("actor") == MAIN or not _trusted(records, index, rel):
             return MAIN
-        if isinstance(agent, str) and agent and record.get("actor") != agent:
+        if isinstance(agent, str) and agent and record.get("actor") != agent and \
+                not _same_round(records, index, rel, agent_transcript):
             return record.get("actor")
         return None
     return None
