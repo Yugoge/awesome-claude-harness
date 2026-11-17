@@ -1062,7 +1062,12 @@ def _dg_read_handler(t, base, words):
         i = _dg_spec_reads(t["docker_global"], words[1:])
         return i is not None and not (
             set(words[1 + i:]) & (_DG_DOCKER_EXEC | t["docker_rm"]))
-    if base == "kubectl":
+    if base == "kubectl":  # the analyzer runs whatever follows `--` as a command; so is it read here
+        if "--" in words[1:]:
+            payload = words[words.index("--", 1) + 1:]
+            if payload and not _degraded_command_is_plain(t, payload, 1):
+                return False
+            words = words[:words.index("--", 1)]
         return not set(words[1:]) & _DG_KUBECTL_EXEC
     if base == "find":
         return not set(words[1:]) & t["find_ops"]
@@ -1134,7 +1139,12 @@ def _degraded_command_is_plain(t, words, depth=0):
             return False
     if set(_dg_last_words(words[1:])) & set(t["selectors"].get(head, ())):
         return False
-    return not any(_dg_sensitive(t, w) and w not in _DG_READ_HANDLERS for w in rest)
+    if any(_dg_sensitive(t, w) and w not in _DG_READ_HANDLERS for w in rest):
+        return False
+    # A read-handler name past the head may start a forwarded command (`kubectl x -- find … -delete`, `nice git …`):
+    # what follows it is read as that command.
+    return all(_degraded_command_is_plain(t, words[i:], depth + 1)
+               for i in range(1, len(words)) if base[i] in _DG_READ_HANDLERS)
 
 
 def _dg_commands(text):

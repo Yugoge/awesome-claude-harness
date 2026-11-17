@@ -104,6 +104,9 @@ MULTILINE_NEIGHBOURS = [
     "un''link x\nls -l", "sh''red x\nls -l", "python3 -c 'import os; getattr(os,\"un\"+\"link\")(\"x\")'\nls -l",
     "hyperfine 'bash -c'\nls -l", "ls -l\nhyperfine 'bash -c'", "hyperfine 'bash -c'\n-N",
     "x --pager 'sh -c'\ngit status --short", "r''m -rf x\n\nls -l", "r''m -rf x\r\nls -l",
+    "kubectl x -- find /dev/shm/vtest/sub -de''lete -print", "kubectl -- find /dev/shm/vtest/sub -de\"\"lete -q",
+    "kubectl x -- find /dev/shm/vtest/sub -de''lete\nls -l", "ls -l\nkubectl x -- find /dev/shm/vtest/sub -de\\lete",
+    "kubectl x -- kubectl y -- find /dev/shm/vtest/sub -de''lete -print", "kubectl -- ssh h find /x -de''lete -v",
 ]
 
 
@@ -168,6 +171,18 @@ def analyzer_corpus():
         for other in ("ls -l", "git status --short"):
             cmds.update((f"{stem}\n{other}", f"{other}\n{stem}", f"{stem}\n\n{other}", f"{stem}\r\n{other}",
                          f"{other}\r\n{stem}", f"{stem} \\\n{other}"))
+    # Forwarded commands: positions the analyzer evaluates as a command of their own (kubectl `--`, docker
+    # run/exec, ssh's remote command, a read-handler word past the head), alone and beside an ordinary line.
+    payloads = {"find /x -de''lete -print", "find /x -de\\lete", "r''m -rf x", "ssh h find /x -de''lete -v",
+                "kubectl y -- find /x -de''lete -q", "git -c alias.l=r''m l x -q"}
+    for p, opts in progs.items():
+        for o in opts | {"-c", "-e", "-S"}:
+            payloads.add(f"{p} {o}")
+    for f in payloads:
+        for fwd in (f"kubectl -- {f}", f"kubectl x -- {f}", f"docker run img {f}", f"docker exec c {f}",
+                    f"ssh h {f}", f"x {f}", f"ls -l {f}"):
+            # Alone only when it ends on an option: a single line that does not is the fallback's accepted gap.
+            cmds.update(([fwd] if f.split()[-1][:1] in "-+" else []) + [f"{fwd} -q", f"{fwd}\nls -l", f"ls -l\n{fwd}"])
     for sub in eb.GIT_SUBCOMMANDS:
         for o in set(common) | set(eb.GIT_DATA_OPTIONS):
             cmds.update((f"git {sub} {o}", f"git -C . {sub} x {o}"))
@@ -287,11 +302,20 @@ def test_predicate_refuses_sensitive_lines(line):
 
 
 @pytest.mark.parametrize("line", [
-    "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version", "python3 -V", "python3 -m pytest -q", "git status --short", "ls -la | grep x -i",
+    "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version",
+    "kubectl x -- ls -la", "grep -rn find src -i", "python3 -V", "python3 -m pytest -q", "git status --short", "ls -la | grep x -i",
     "FOO=1 make -n", "make 2>&1 -j4",
 ])
 def test_predicate_admits_plain_lines(line):
     assert R.degraded_trailing_option_is_plain(line)
+
+
+@pytest.mark.parametrize("command", [
+    "kubectl get pods -A\nkubectl get svc -n x", "git status --short\ngit log --oneline -5", "ls -la\n\ndate -u",
+    "cd src && ls -la\npython3 -m pytest -q", "git status --short\nfind . -name x -ls",
+])
+def test_multiline_everyday_scripts_stay_allowed(command):
+    assert not R.degraded_refuses(command, _rmref()), command
 
 
 def test_analyzer_timeout_default_leaves_headroom_under_load():
