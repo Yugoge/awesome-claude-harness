@@ -565,7 +565,8 @@ def _proof_reader(res, env: dict) -> bool:
     if name == "sed":
         return _sed(plain) == []
     if name in AWKS:
-        program = _awk(plain)  # None for -f / --file / -i / --include / -l / --load / -E / --exec
+        at = _awk_at(plain)  # None for -f / --file / -i / --include / -l / --load / -E / --exec
+        program = plain[at] if at is not None else None
         return (program is not None and not AWK_OUTPUT.search(program) and "getline" not in program
                 and not AWK_LOADS.search(program))
     if name == "git":
