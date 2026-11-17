@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 980
+*Last updated: 2026-11-17T06:44:24Z*
+**Total entries**: 983
 **Convention**: kebab
 
 ## Tree
@@ -73,6 +73,7 @@ dot-claude/
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
 │   │   ├── `harness-gaps-found-20261005.md` - Harness gaps found during the 2026-10-05 tree-to-zero campaign
 │   │   ├── `harness-issues-backlog.md` - harness 问题清单：/dev 会话里发现的新 harness 问题只记录于此、不在该会话修；harness 的 /spec 会话处理它们，条目的 spec 落库后删除
+│   │   ├── `harness-temp-state.md` - Harness temp state inventory
 │   │   ├── `install-compatibility-matrix.md` - Install compatibility matrix
 │   │   ├── `launch-plan.md` - Launch Plan — ROI-ranked channels, gated on recorded evidence
 │   │   ├── `lock-file-handling.md` - Git Lock File Handling
@@ -155,6 +156,7 @@ dot-claude/
 │   │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   │   ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
 │   │   ├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
+│   │   ├── `harness_temp_state.py` - Is a resolved path harness temp state, and which temp root is it in: the one definition
 │   │   ├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
 │   │   ├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 │   │   ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
@@ -264,6 +266,7 @@ dot-claude/
 │   │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 │   │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
+│   │   ├── `test_harness_temp_state.py` - Each inventoried temp location classifies, symlink-safely, under every root spelling
 │   │   ├── `test_hook_launch.py` - - settings.json registers at most one Python process per event (the CI check of row L7), and a
 │   │   ├── `test_hook_output_reaches_model.py` - The CLI (code.claude.com/docs/en/hooks): plain stdout reaches the model on SessionStart and
 │   │   ├── `test_inflight_push_route.py` - COMPATIBILITY TESTS, kept only as long as hooks/pretool-tool-policy.py's _note_inflight_token_rou...
