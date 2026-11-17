@@ -478,8 +478,12 @@ def test_real_default_roots_without_fakes(monkeypatch):
 # --- crosses_mount / mount_points -------------------------------------------
 
 def _mountinfo(tmp_path, *points, name="mountinfo"):
-    """A mountinfo file listing `points` (already escaped as the kernel writes them)."""
-    lines = ["%d 1 0:%d / %s rw,relatime - ext4 /dev/x rw" % (20 + i, i, p) for i, p in enumerate(points)]
+    """A mountinfo file listing `points` (already escaped as the kernel writes them).
+    A point is a path (its own dev, root "/") or a (path, dev, root) tuple."""
+    lines = []
+    for i, point in enumerate(points):
+        path, dev, root = point if isinstance(point, tuple) else (point, "0:%d" % (100 + i), "/")
+        lines.append("%d 1 %s %s %s rw,relatime - ext4 /dev/x rw" % (20 + i, dev, root, path))
     path = tmp_path / name
     path.write_text("\n".join(lines) + "\n")
     return str(path)
@@ -513,11 +517,66 @@ def test_mount_points_unreadable_or_empty_raises(tmp_path):
         hts.mount_points(str(empty))
 
 
-def test_crosses_mount_ignores_mounts_at_or_above_the_temp_root(roots, tmp_path):
-    tmp, _ = roots
-    info = _mountinfo(tmp_path, "/", str(tmp.parent), str(tmp), "/proc")
+def test_crosses_mount_ignores_the_slash_mount_and_a_tmpfs_at_tmp(roots, tmp_path):
+    tmp, var_tmp = roots
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "0:50", "/"),
+                      (str(var_tmp), "0:51", "/"), ("/proc", "0:21", "/"))
     assert not hts.crosses_mount(str(tmp / "a" / "b"), mountinfo=info)
     assert not hts.crosses_mount(str(tmp / "a"), below=True, mountinfo=info)
+    assert not hts.crosses_mount(str(var_tmp / "x"), mountinfo=info)
+
+
+def test_crosses_mount_a_mount_above_a_system_temp_root_is_not_ignored(roots, tmp_path):
+    tmp, _ = roots
+    # The parent of /tmp is neither "/" nor a temp root: a bind there carries /tmp.
+    info = _mountinfo(tmp_path, "/", str(tmp.parent))
+    assert hts.crosses_mount(str(tmp / "a"), mountinfo=info)
+
+
+def test_crosses_mount_bind_at_tmp_with_a_subdirectory_root(roots, tmp_path):
+    tmp, _ = roots
+    # `mount --bind /home/x /tmp`: field 4 names the bound directory, not "/".
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "254:0", "/srv/victim"))
+    assert hts.crosses_mount(str(tmp / "x"), mountinfo=info)
+
+
+def test_crosses_mount_bind_at_tmp_sharing_a_dev_outside_temp(roots, tmp_path):
+    tmp, _ = roots
+    # `mount --bind / /tmp`: root "/", but the dev is the root filesystem's.
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "254:0", "/"))
+    assert hts.crosses_mount(str(tmp / "x"), mountinfo=info)
+    # Another filesystem's dev, also mounted outside temp: still a bind.
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), ("/srv", "0:60", "/"),
+                      (str(tmp), "0:60", "/"), name="mi2")
+    assert hts.crosses_mount(str(tmp / "x"), mountinfo=info)
+    # The same dev mounted again inside the temp roots does not make it a bind.
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "0:61", "/"),
+                      (str(tmp / "sub"), "0:61", "/"), name="mi3")
+    assert not hts.crosses_mount(str(tmp / "x"), mountinfo=info)
+
+
+def test_crosses_mount_at_tmpdir_and_between(roots, tmp_path, monkeypatch):
+    tmp, _ = roots
+    inner = tmp / "a" / "b"
+    inner.mkdir(parents=True)
+    monkeypatch.setenv("TMPDIR", str(inner))
+    for point in (str(inner), str(tmp / "a")):
+        info = _mountinfo(tmp_path, ("/", "254:0", "/"), (point, "0:70", "/"),
+                          name="mi-" + os.path.basename(point))
+        assert hts.crosses_mount(str(inner / "x"), mountinfo=info)
+        assert hts.crosses_mount(str(inner / "x"), below=True, mountinfo=info)
+    # A bind at /tmp itself, seen from a path under TMPDIR.
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "254:0", "/"), name="mi-tmp")
+    assert hts.crosses_mount(str(inner / "x"), mountinfo=info)
+    # Plain: only "/" and a tmpfs at /tmp.
+    info = _mountinfo(tmp_path, ("/", "254:0", "/"), (str(tmp), "0:71", "/"), name="mi-ok")
+    assert not hts.crosses_mount(str(inner / "x"), mountinfo=info)
+
+
+def test_parse_mountinfo_entries_fields():
+    text = "36 35 98:0 /mnt\\0401 /mnt/with\\040space rw - ext3 /dev/sda1 rw\n"
+    (entry,) = hts.parse_mountinfo_entries(text)
+    assert (entry.dev, entry.root, entry.point) == ("98:0", "/mnt 1", "/mnt/with space")
 
 
 def test_crosses_mount_at_the_target(roots, tmp_path):
@@ -555,9 +614,10 @@ def test_crosses_mount_uses_the_deepest_temp_root(roots, tmp_path, monkeypatch):
     scratch = var_tmp / "claude-scratch"
     scratch.mkdir()
     monkeypatch.setenv("TMPDIR", str(scratch))
-    # A mount at TMPDIR itself holds that temp root: ignored.
-    info = _mountinfo(tmp_path, "/", str(scratch))
-    assert not hts.crosses_mount(str(scratch / "x"), mountinfo=info)
+    # A mount under TMPDIR is judged against TMPDIR, the deepest root.
+    info = _mountinfo(tmp_path, "/", str(scratch / "m"))
+    assert hts.crosses_mount(str(scratch / "m" / "x"), mountinfo=info)
+    assert not hts.crosses_mount(str(scratch / "other"), mountinfo=info)
 
 
 def test_crosses_mount_fails_closed(roots, tmp_path):
@@ -597,6 +657,17 @@ def test_crosses_mount_reads_the_real_mountinfo(roots):
         pytest.skip("no /proc/self/mountinfo on this platform")
     assert "/" in hts.mount_points()
     assert hts.crosses_mount(str(tmp / "x")) is False
+
+
+def test_real_host_lets_plain_tmp_pass(monkeypatch):
+    """On this host's real mountinfo and the real /tmp, /var/tmp, a plain temp path
+    is not disqualified, so temp allows built on crosses_mount keep working."""
+    if not os.path.exists(hts.MOUNTINFO_PATH):
+        pytest.skip("no /proc/self/mountinfo on this platform")
+    for var in ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    assert hts.crosses_mount("/tmp/harness-temp-state-probe/x") is False
+    assert hts.crosses_mount("/var/tmp/harness-temp-state-probe", below=True) is False
 
 
 @pytest.fixture
