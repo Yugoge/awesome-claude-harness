@@ -376,18 +376,27 @@ no per-rule budget exists.
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
-- **S-019** — OB-L19: `permissions.deny` refuses secret files by name, for `Read` and `Edit` alike
-  (`*.key`, `*.pem` Read only): `.env` and `.env.*` (every valued variant, an unknown one included),
-  password stores (`password.txt`, `passwords.csv`, `*_password.txt`, `db_password`, ...), secrets files
-  (`secrets.yaml`, `secrets.toml`, `secrets.json`, `.secrets`, `client_secret*.json`, ...), credentials files
-  (`credentials`, `credentials.json`, `credentials.csv`, ...), `**/etc/shadow`, `**/passwd`, `//etc/shadow`,
-  `//etc/passwd`. The substring globs `**/*password*`, `**/*secret*`, `**/credentials*` and `**/shadow` are
-  gone: the CLI matches case-insensitively and against every directory on the path, so they refused ordinary
-  source (`src/auth/ForgotPassword.tsx`, `src/components/Shadow/index.tsx`). The three template names
-  `.env.example`, `.env.sample`, `.env.template` are re-admitted by `!` negations at the end of the deny list,
-  one set per tool; negation is not in the permission docs and was measured on Claude Code 2.1.326 (last
-  match wins within a tool's list; a negation before the rule it lifts lifts nothing, so a reordered list
-  over-blocks the templates again and never leaks). The row stays `advisory`/`source-level`: the measurement
+- **S-019** — OB-L19: `permissions.deny` refuses secret files by the shape of their name, any extension,
+  for `Read` and `Edit` alike (`*.key`, `*.pem` Read only): `.env` and `.env.*` (every valued variant, an
+  unknown one included); `password`, `passwords`, `password.*`, `passwords.*`, `.password*`, `*_password`,
+  `*_password.*`, `*-password.*`; `secret`, `secrets`, `secret.*`, `secrets.*`, `.secret*`, `*_secret.*`,
+  `*-secret.*`, `*_secrets.*`, `*-secrets.*`, `client_secret*.json`; `credentials`, `credentials.*`;
+  `**/etc/shadow`, `**/passwd`, `//etc/shadow`, `//etc/passwd`. The substring globs `**/*password*`,
+  `**/*secret*`, `**/credentials*` and `**/shadow` are gone: the CLI matches case-insensitively and against
+  every directory on the path, so they refused ordinary source (`src/auth/ForgotPassword.tsx`,
+  `src/components/Shadow/index.tsx`). `!` negations at the end of the deny list, one set per tool, lift
+  what is not a secret: the templates `.env.example`, `.env.sample`, `.env.template`; directories named
+  `secret`, `secrets`, `password`, `passwords`, `*_password` (`!**/passwords/`: a file of that name stays
+  refused, Laravel's `auth/passwords/` opens); and source or doc files of those names
+  (`!**/*password*.<ext>` and the same for `secret`, `credentials`, over code and doc extensions only).
+  Readable now and refused on the base, on purpose: files inside those directories whose own name is not
+  a secret name, and `shadow` outside `etc/`. Negation is not in the permission docs and was measured on
+  Claude Code 2.1.326: last match wins within a tool's list, so a negation before the rule it lifts lifts
+  nothing (a reordered list over-blocks again and never leaks); a name negation does not pierce a
+  directory rule written `dir/**` but does pierce one written `dir/*`, so a future same-list `dir/*` deny
+  would be opened for these names (`test_no_deny_rule_a_name_negation_could_pierce` refuses such a rule).
+  Only deny entries and same-list negations changed, no allow or ask rule, so no deny is downgraded by any
+  rule-tier ordering. The row stays `advisory`/`source-level`: the measurement
   (a real CLI driven offline through a local stand-in API, method in the test's docstring) is recorded in
   `tests/test_secret_file_denies.py`, not in the black-box corpus. Not covered: a file under the home
   outside the project (`~/.aws/credentials`, `~/.env`; `**/` anchors at the current directory), and
