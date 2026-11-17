@@ -86,6 +86,19 @@ STILL_REFUSED = [
     "git push --dry-run --receive-pack=sh .",    # names a program to run
     "git push --dry-run --exec sh .",
     "git push --dry-run 'ext::sh -c x'",
+    # an address given as an option's separate value
+    "git push -n --repo 'ext::sh -c git% push% origin% master'",
+    "git push --dry-run --repo 'ext::sh -c x'",
+    "git push -n --rep 'ext::sh -c x'",
+    "git push -n --push-option x --repo 'ext::sh -c x'",
+    "git push -n --repo=ext::x",
+    "git push -n -o 'ext::sh -c x' origin HEAD",
+    "git push -n --push-option 'ext::sh -c x' origin HEAD",
+    "git push -n --repo",                        # no value at all
+    'git push -n --repo "$R"',                   # a computed value
+    "git push -n --receive sh .",                # an abbreviated --receive-pack
+    "git commit --dry-run -m",
+    'git commit --dry-run -m "$M"',
     "git commit -m --dry-run",                   # the message
     "git commit -m x -- --dry-run",              # a pathspec
     "git commit --dry-run --no-dry-run -m x",
