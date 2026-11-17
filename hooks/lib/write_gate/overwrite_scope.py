@@ -16,18 +16,20 @@ without following links; the parent's realpath plus the entry; and the full real
     processes;
   * another session's scratch: a directory below a temp or name root whose .owner record
     names a different session;
-  * a gate-read artifact (is_gate_read_artifact): anything below an artifact root
-    (docs/dev/, docs/clean/, docs/test/, tests/generated/) except a top-level markdown draft
-    whose name carries none of GATE_READ_PREFIXES. Every artifact path a command or agent
+  * a gate-read artifact (is_gate_read_artifact, case folded): anything below
+    tests/generated/, tests/reports/, tests/scripts/ or tests/instructions/, and anything
+    below docs/dev/, docs/clean/ or docs/test/ except a top-level markdown draft whose name
+    carries none of GATE_READ_PREFIXES. Every artifact path a command or agent
     declares in an obligation, and every templated artifact name a command, hook or step
     script refers to, falls inside it: hooks/tests/test_write_gate_overwrite_exempt.py
     scans for them, so a new declared artifact cannot fall outside the set silently;
-  * a `.claude` or `.git` component outside a `.claude/scratch/` directory, and the harness
-    home (lib/claude_home.py);
+  * a `.claude` or `.git` component (case folded) outside a project's `.claude/scratch/`
+    directory, and the harness home (lib/claude_home.py), its own .claude/scratch/ included;
   * a file with more than one hard link (a link in temp to a tracked file would otherwise
     pass as a temp file);
-  * a file git tracks (in the index, matched as a literal pathspec), or one git cannot answer
-    for.
+  * a file git tracks (in the index, matched as a literal pathspec), one git cannot answer
+    for, and any file in a work tree nested inside another (a `git init` or a `.git` file in
+    a project subdirectory would otherwise hide the project's index).
 
 Exempt, once nothing above holds, when the realpath is:
 
@@ -42,13 +44,14 @@ Exempt, once nothing above holds, when the realpath is:
     .env and .vscode/... stay protected).
 
 Own output versus gate-read artifact: the line is the reader, not the writer. A draft no gate,
-command or step script reads (docs/dev/arch-probe.md, docs/codex/notes.md, build/out.txt) may
-be replaced; a report, context, ticket, manifest or spec that a later gate trusts keeps the
+command or step script reads (a role's /tmp/claude-scratch/<role>/ or docs/codex/ notes,
+build/out.txt, or docs/dev/arch-probe.md for an actor tool-policy lets write docs/dev/) may be
+replaced; a report, context, ticket, manifest, grant or spec that a later gate trusts keeps the
 Edit-only rule even when untracked, so a Write-only role writes it once, complete.
 
-Known limit: an artifact a dispatch's obligation declares at a path no command template uses
+Known limits: an artifact a dispatch's obligation declares at a path no command template uses
 (the producer-stop gate reads any declared path) is protected only if it lies under an
-artifact root or is tracked.
+artifact root or is tracked; a file in a submodule or other nested work tree is never exempt.
 """
 from __future__ import annotations
 
@@ -60,8 +63,12 @@ import sys
 _HOOKS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _LIB = os.path.join(_HOOKS_DIR, "lib")
 
-# Directories whose files gates, commands and step scripts read as evidence.
-ARTIFACT_ROOTS = (("docs", "dev"), ("docs", "clean"), ("docs", "test"), ("tests", "generated"))
+# Directories whose files gates, commands and step scripts read as evidence. In the first set
+# a top-level markdown draft outside GATE_READ_PREFIXES is no artifact; in the second every
+# file is (generated tests and manifests, /test's reports, validators and instructions).
+ARTIFACT_ROOTS = (("docs", "dev"), ("docs", "clean"), ("docs", "test"))
+WHOLE_ARTIFACT_ROOTS = (("tests", "generated"), ("tests", "reports"), ("tests", "scripts"),
+                        ("tests", "instructions"))
 # Name families of the artifacts read there (every templated name the harness refers to).
 GATE_READ_PREFIXES = (
     "acceptance-criteria-", "ba-panel-", "ba-qa-report-", "ba-spec-", "cleanliness-inspector-report-",
@@ -72,13 +79,14 @@ GATE_READ_PREFIXES = (
     "requirement-answers-", "requirement-round-", "rule-context-", "spec-",
     "style-inspector-report-", "style-partial-", "style-plan-", "style-report-",
     "test-writer-report-", "ticket-", "user-approvals-", "user-requirement-",
+    "execution-context-", "execution-report-", "validation-report-", "validator-registry-",
 )
 _PROTECTED_COMPONENTS = (".claude", ".git")
 # harness_temp_state scratch locations agents write their own output into.
 AGENT_SCRATCH = ("claude-scratch", "codex-outputs", "graphify-cache")
-# Two git calls at most, each well inside the rule's 5 s budget (lib/write_gate/__init__.py):
+# Three git calls at most, together inside the rule's 5 s budget (lib/write_gate/__init__.py):
 # an overrun of this fail-open rule would let the Write through; a git timeout here refuses.
-_GIT_TIMEOUT = 2.0
+_GIT_TIMEOUT = 1.4
 _NO_REPO = "no-repo"
 
 
@@ -90,16 +98,25 @@ def _hts():
 
 
 def is_gate_read_artifact(path: str) -> bool:
-    """True when `path` (one view, absolute) lies below an artifact root and is not a
-    top-level markdown draft outside GATE_READ_PREFIXES."""
-    parts = [p for p in path.split(os.sep) if p]
+    """True when `path` (one view, absolute) lies below a whole artifact root, or below an
+    artifact root and is not a top-level markdown draft outside GATE_READ_PREFIXES. Case is
+    folded, as harness_temp_state folds it (a case-insensitive filesystem maps
+    docs/dev/Commit-QA-Report-T1.md onto the artifact)."""
+    parts = [p.casefold() for p in path.split(os.sep) if p]
     for i in range(len(parts) - 2):
-        if (parts[i], parts[i + 1]) in ARTIFACT_ROOTS:
+        pair = (parts[i], parts[i + 1])
+        if pair in WHOLE_ARTIFACT_ROOTS:
+            return True
+        if pair in ARTIFACT_ROOTS:
             rel = parts[i + 2:]
             name = rel[-1]
             if len(rel) > 1 or not name.endswith(".md") or name.startswith(GATE_READ_PREFIXES):
                 return True
     return False
+
+
+def _has_protected_component(path: str) -> bool:
+    return any(c.casefold() in _PROTECTED_COMPONENTS for c in path.split(os.sep))
 
 
 def _views(file_path: str) -> tuple:
@@ -172,8 +189,10 @@ def _in_harness_home(real: str) -> bool:
 
 
 def _in_project_scratch(real: str) -> bool:
-    parts = real.split(os.sep)
-    return any(parts[i] == ".claude" and parts[i + 1] == "scratch" for i in range(len(parts) - 2))
+    """Below a project's .claude/scratch/ (never the harness home's own)."""
+    parts = [p.casefold() for p in real.split(os.sep)]
+    return (any(parts[i] == ".claude" and parts[i + 1] == "scratch" for i in range(len(parts) - 2))
+            and not _in_harness_home(real))
 
 
 def _git(cwd: str, *args: str):
@@ -188,17 +207,32 @@ def _git(cwd: str, *args: str):
         return None, "", ""
 
 
-def _work_tree(real: str):
-    """(top, tracked): (_NO_REPO, False) outside any work tree, (None, None) when git cannot
-    answer (the caller then refuses)."""
-    d = os.path.dirname(real)
+def _top(d: str):
+    """The work tree top holding directory `d`: _NO_REPO outside any, None when git cannot
+    answer."""
     rc, out, err = _git(d, "rev-parse", "--is-inside-work-tree", "--show-toplevel")
     if rc is not None and rc != 0 and "not a git repository" in err:
-        return _NO_REPO, False
+        return _NO_REPO
     lines = out.splitlines()
     if rc != 0 or len(lines) < 2 or lines[0].strip() != "true":
+        return None
+    return os.path.realpath(lines[1].strip())
+
+
+def _work_tree(real: str):
+    """(top, tracked): (_NO_REPO, False) outside any work tree, (None, None) when git cannot
+    answer or the work tree is nested inside another (the caller then refuses). A nested
+    work tree (a `git init` or a `.git` file in a project subdirectory) would answer for
+    its own index alone, so a file the enclosing project tracks would read as untracked."""
+    d = os.path.dirname(real)
+    top = _top(d)
+    if top == _NO_REPO:
+        return _NO_REPO, False
+    if top is None:
         return None, None
-    top = os.path.realpath(lines[1].strip())
+    parent = os.path.dirname(top)
+    if parent != top and _top(parent) != _NO_REPO:
+        return None, None  # nested in (or unsure of) an enclosing work tree
     rc, out, _ = _git(d, "ls-files", "-z", "--", os.path.basename(real))
     if rc != 0:
         return None, None
@@ -227,8 +261,7 @@ def overwrite_exempt(file_path: str, session_id: str) -> bool:
         if any(is_gate_read_artifact(v) for v in views):
             return False
         project_scratch = _in_project_scratch(real)
-        if not project_scratch and (any(c in _PROTECTED_COMPONENTS for c in real.split(os.sep))
-                                    or _in_harness_home(real)):
+        if not project_scratch and (_has_protected_component(real) or _in_harness_home(real)):
             return False
         if os.stat(real).st_nlink > 1:
             return False

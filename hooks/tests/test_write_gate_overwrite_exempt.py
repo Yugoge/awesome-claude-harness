@@ -322,8 +322,10 @@ def test_hardlink_in_temp_to_a_tracked_file_refused(lab):
 # --- the gate-read set is pinned against what the harness declares and reads ------------------
 
 _DECL = re.compile(r'"kind"\s*:\s*"[a-z_-]+"\s*,\s*"path"\s*:\s*"([^"\\]+)')
-_TEMPLATED = re.compile(r"(?:docs/(?:dev|clean|test)|tests/generated)/[A-Za-z0-9_.{}<>$*/-]*[<{$*]"
-                        r"[A-Za-z0-9_.{}<>$*/-]*")
+_TEMPLATED = re.compile(r"(?:docs|tests)/[a-z_-]+/[A-Za-z0-9_.{}<>$*/-]*[<{$*][A-Za-z0-9_.{}<>$*/-]*")
+# docs/ and tests/ directories whose templated files no gate, command or step script reads as
+# evidence: codex output kept for the human (commands/codex.md) and /clean's archive.
+_NOT_ARTIFACT_DIRS = ("docs/codex/", "docs/archive/")
 _PLACEHOLDER = re.compile(r"<[^<>]*>|\{[^{}]*\}|\$\{[^{}]*\}|\$[A-Za-z_]+|\*")
 
 
@@ -359,8 +361,10 @@ def test_every_declared_obligation_artifact_is_gate_read():
 
 
 def test_every_templated_artifact_name_is_gate_read():
-    """Each templated artifact name a command, hook or step script refers to is gate-read."""
-    refs = {(rel, m.group(0)) for rel, text in _harness_sources() for m in _TEMPLATED.finditer(text)}
+    """Each templated file name under docs/<dir>/ or tests/<dir>/ that a command, agent, hook or
+    step script refers to is gate-read, but for the _NOT_ARTIFACT_DIRS."""
+    refs = {(rel, m.group(0)) for rel, text in _harness_sources() for m in _TEMPLATED.finditer(text)
+            if not m.group(0).startswith(_NOT_ARTIFACT_DIRS)}
     # A name that is nothing but a placeholder (docs/dev/<x>.md in a docstring) names no family.
     refs = {(rel, path) for rel, path in refs
             if not re.fullmatch(r"(<[^<>]*>|\{[^{}]*\})(\.[a-z]+)?", path.rsplit("/", 1)[-1])}
@@ -374,3 +378,69 @@ def test_a_draft_outside_every_family_is_not_gate_read():
     assert not _gate_read("docs/clean/notes.md")
     assert _gate_read("docs/dev/commit-qa-report-T1.md")
     assert _gate_read("docs/test/edge-case-analysis.json")
+
+
+# --- round 2: nested work trees, case, /test's reports, the harness home's scratch -------------
+
+def _tracked_core(lab) -> Path:
+    core = _existing(lab["proj"] / "src" / "core2.py", "core\n")
+    subprocess.run(["git", "-C", str(lab["proj"]), "add", "src/core2.py"], check=True)
+    return core
+
+
+def test_nested_git_file_does_not_hide_the_projects_index(lab):
+    """Route A: a new src/.git file pointing at another repository makes src/ a work tree of
+    its own; a file the project tracks there stays refused."""
+    core = _tracked_core(lab)
+    other = lab["tmp"] / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    (lab["proj"] / "src" / ".git").write_text(f"gitdir: {other / '.git'}\n")
+    assert _refused(_write(lab, core))
+    assert _refused(_write(lab, core, agent="dev"))
+
+
+def test_git_init_in_a_subdirectory_does_not_hide_the_projects_index(lab):
+    """Route B: `git init src` then a Write onto the tracked src/core2.py."""
+    core = _tracked_core(lab)
+    subprocess.run(["git", "init", "-q", str(lab["proj"] / "src")], check=True)
+    assert _refused(_write(lab, core))
+    assert _refused(_write(lab, core, agent="dev"))
+
+
+@pytest.mark.parametrize("rel", [
+    "docs/dev/Commit-QA-Report-T1.md",
+    "Docs/Dev/qa-report-T1.json",
+    "docs/clean/CLEANUP-EXECUTION-R1.json",
+])
+def test_gate_read_families_fold_case(lab, rel):
+    assert _refused(_write(lab, _existing(lab["proj"] / rel)))
+
+
+def test_dot_claude_folds_case(lab):
+    assert _refused(_write(lab, _existing(lab["proj"] / ".Claude" / "settings.json", "{}\n")))
+
+
+@pytest.mark.parametrize("rel", [
+    "tests/reports/validator-registry-R1.json",
+    "tests/reports/execution-context-R1.json",
+    "tests/reports/completion-R1.md",
+    "tests/scripts/validate-login.py",
+    "tests/instructions/login.md",
+])
+def test_test_command_reports_and_validators_refused(lab, rel):
+    assert _refused(_write(lab, _existing(lab["proj"] / rel)))
+
+
+def test_harness_home_scratch_is_not_project_scratch(lab, monkeypatch, tmp_path):
+    """The harness home's own .claude/scratch/ is not exempt; a project's is."""
+    sys.path.insert(0, str(ROOT / "hooks" / "lib" / "write_gate"))
+    sys.path.insert(0, str(ROOT / "hooks" / "lib"))
+    import claude_home
+    import overwrite_scope
+    home = tmp_path / "hh" / ".claude"
+    monkeypatch.setattr(claude_home, "resolve", lambda: home)
+    f = _existing(home / "scratch" / "n.md")
+    assert not overwrite_scope._in_project_scratch(os.path.realpath(f))
+    assert not overwrite_scope.overwrite_exempt(str(f), SID)
+    g = _existing(lab["proj"] / ".claude" / "scratch" / "n.md")
+    assert overwrite_scope._in_project_scratch(os.path.realpath(g))
