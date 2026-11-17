@@ -7,7 +7,8 @@ command can neither run code of its choosing nor write a file. Everything else
 is False: a text the parser cannot read, a compound (subshell, group, if,
 loop, function), a background ``&``, an assignment prefix (``PAGER=``,
 ``GIT_*=``, ``PATH=``), any substitution, process substitution, parameter or
-arithmetic expansion, a heredoc or here-string, any redirection but output
+arithmetic expansion, a word that still spells one after quote removal
+(bash's ``test -v 'a[$(cmd)]'`` runs cmd), a heredoc or here-string, any redirection but output
 thrown into /dev/null or one standard stream duplicated onto the other, a
 command named by a path, and a pipeline with any stage outside PROGRAMS. Silence
 never proves: a program, option or form not listed here is not read-only.
@@ -87,6 +88,13 @@ def _any_args(_args) -> bool:
 def _printf(args) -> bool:
     # printf -v NAME assigns a shell variable (PATH, say) a later command reads.
     return not any(a.startswith("-v") for a in args)
+
+
+def _test(args) -> bool:
+    # bash's test -v / -R read their operand as a variable name whose subscript
+    # is evaluated arithmetically, running a $(...) inside it even when the
+    # word was single-quoted: test -v 'a[$(cmd)]' runs cmd.
+    return not any(a in ("-v", "-R") for a in args)
 
 
 def _cd(args) -> bool:
@@ -322,12 +330,14 @@ _ANY_ARGS = frozenset({
     "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "nl", "tac", "stat", "du", "df", "pwd",
     "echo", "true", "false", "basename", "dirname", "realpath", "readlink", "cut", "tr", "comm",
     "paste", "column", "rev", "fold", "expand", "unexpand", "diff", "cmp", "md5sum", "sha1sum",
-    "sha256sum", "sha512sum", "cksum", "uname", "whoami", "id", "test", "[", "which",
+    "sha256sum", "sha512sum", "cksum", "uname", "whoami", "id", "which",
 })
 
 # Programs with a per-argument check; their arguments must be static words.
 _CHECKED = {
     "printf": _printf,
+    "test": _test,
+    "[": _test,
     "cd": _cd,
     "find": _find,
     "rg": _rg,
@@ -360,6 +370,22 @@ def _redirect_ok(r) -> bool:
     return False
 
 
+# Text bash expands when it meets it again inside an arithmetic context (an
+# array subscript, an integer operand), quoted or not.
+_CODE_MARKS = ("$(", "`", "${", "$[")
+
+
+def _holds_code(word) -> bool:
+    """True when a word, after quote removal, still spells a substitution or an
+    expansion: a later arithmetic reading of it (test -v 'a[$(cmd)]', an
+    integer operand, a printf %d argument) would run or expand it. Such text is
+    never needed to read the tree, so every program counts it."""
+    text = word.value()
+    if text is None:
+        text = word.raw.text
+    return any(m in text for m in _CODE_MARKS)
+
+
 def _command_ok(cmd) -> bool:
     if not isinstance(cmd, SimpleCommand) or cmd.assignments or not cmd.words:
         return False
@@ -371,6 +397,8 @@ def _command_ok(cmd) -> bool:
         return False
     res = resolve(cmd)
     if res.name != name or res.payload is not None or res.unresolved is not None or res.wrappers:
+        return False
+    if any(_holds_code(w) for w in cmd.words):
         return False
     rest = cmd.words[1:]
     if name in _ANY_ARGS:

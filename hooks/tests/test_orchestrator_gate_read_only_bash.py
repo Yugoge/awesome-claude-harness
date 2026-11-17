@@ -86,6 +86,12 @@ ADVERSARIAL = [
     "nice ls", "time python3 x", "eval ls", "bash -c ls", "alias ls=python3; ls", "ls &", "(ls)",
     "{ ls; }", "f(){ ls; }; f", "/bin/ls", "./ls", "ls; python3 x", "cd $HOME", "tee f", "cp a b",
     "rm f", "touch f", "mkdir d",
+    # bash's test -v/-R evaluate the operand's subscript arithmetically, running a $(...) in it even when
+    # single-quoted; any word still spelling a substitution or expansion after quote removal counts
+    "test -v 'a[$(python3 x.py)]'", "[ -v 'a[$(touch /tmp/x)]' ]", "echo ok && test -v 'x[$(python3 x.py)]'",
+    "test -v x", "[ -R x ]", "test ! -v 'a[1]'", "test 'a[$(id)]' -eq 1", "[ 'a[`id`]' -lt 2 ]",
+    "printf '%d' 'a[$(id)]'", "echo 'a[$(id)]'", "cd 'a[$(id)]'", "wc -l 'a[${x}]'", "grep '$((1))' f",
+    "cat 'a[$[1]]'", "ls \"$(id)\"",
 ]
 
 
@@ -179,6 +185,14 @@ def test_background_read_only_call_counts(tmp_path):
     for _ in range(5):
         assert s.allowed("git status --short", run_in_background=True)
     assert not s.allowed("git status --short", run_in_background=True)
+
+
+@pytest.mark.parametrize("command", ["test -v 'a[$(python3 x.py)]'", "[ -v 'a[$(touch /tmp/x)]' ]",
+                                     "echo ok && test -v 'x[$(python3 x.py)]'"])
+def test_arithmetic_subscript_code_counts_through_the_launcher(tmp_path, command):
+    """test -v 'a[$(cmd)]' runs cmd in bash: through hooks/pretool-launch.py it is counted."""
+    s = Session(tmp_path)
+    assert [s.allowed(command, hook=LAUNCH) for _ in range(6)] == [True] * 5 + [False]
 
 
 def test_registered_pipeline(tmp_path):
