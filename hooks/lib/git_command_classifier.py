@@ -458,16 +458,31 @@ _FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
 _NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
 
 
+def _writes_file(redir):
+    """True iff redir, on any descriptor, may write the file it names.
+
+    `>`, `>>`, `>|`, `&>`, `&>>`, `<>` (read-write), and `>&` with a word
+    that is no descriptor number or `-` (`>& file` writes the file).
+    """
+    if redir.op in _WRITE_REDIRS or redir.op == '<>':
+        return True
+    if redir.op == '>&':
+        target = _value(redir.target)[0]
+        return not (target.isdigit() or target == '-')
+    return False
+
+
 def _written_paths(cmds, k, end):
     """(paths, unknown): the files the pipe cmds[k:end] writes, and whether one cannot be named.
 
-    Paths come from write redirections and tee's operands. A command that
+    Paths come from every redirection that may write a file (_writes_file,
+    on any descriptor: `1<>.git/config` too) and tee's operands. A command that
     copies its input to a file (`cp /dev/stdin x.sh`), or a path computed at
     run time, makes the set unknown.
     """
     paths, unknown = [], False
     for cmd in cmds[k:end]:
-        targets = [r.target for r in cmd.redirs if r.op in _WRITE_REDIRS and r.target is not None]
+        targets = [r.target for r in cmd.redirs if r.target is not None and _writes_file(r)]
         values = _values(cmd.words)
         idx, name = _command_name(cmd.words, values)
         if idx is not None and name in _FILE_COPIERS:

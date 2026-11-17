@@ -88,6 +88,7 @@ MUST_PASS = [
     + "git push origin master" + NL + "EOF" + NL + "ls -la /tmp/n 2>/dev/null",
     "tee x <<'EOF'" + NL + "git push origin master" + NL + "EOF" + NL + "cat x",
     "cat <<'EOF' > x" + NL + "git push origin master" + NL + "EOF" + NL + "wc -l x",
+    "cat > docs/x <<'EOF' 2>&1" + NL + "git push origin master" + NL + "EOF",
     "grep -c x <<< 'a; git push origin master'",
 ]
 
@@ -312,6 +313,15 @@ VERIFIER_L12_L13 = [
     "cat > g/hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
 ]
 
+# Every redirection that may write a file, on any descriptor, names a written
+# path the destination rule checks: the last redirection of fd 1 wins.
+WRITE_FORMS = [
+    _doc("cat > docs/x <<'EOF' " + form)
+    for form in ("1<>.git/config", "<>.git/config", "2<>.git/config", ">&.git/config",
+                 ">& .git/config", "1>&.git/config", "&>.git/config", "&>>.git/config",
+                 "1>|.git/config", "3>.git/config")
+]
+
 # Allowed at base too, closed on the way.
 BASE_GAPS = [
     "git grep -O\"sh -c 'git push origin master'\" foo",
@@ -323,7 +333,7 @@ BASE_GAPS = [
     "cat <<< 'git push origin master' | sh",
 ]
 
-MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + VERIFIER_L10_L11 + VERIFIER_L12_L13 + BASE_GAPS
+MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + VERIFIER_L10_L11 + VERIFIER_L12_L13 + WRITE_FORMS + BASE_GAPS
 
 # less with LESSOPEN runs any body; each is a git invocation the guard reads.
 LESS_BODIES = ["git reset --hard origin/master", "git branch -D master", "git commit -qam x"]
