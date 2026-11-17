@@ -1,17 +1,8 @@
-"""`gh pr checkout` and its detach option, as pretool-block-branch-pr-worktree.py reads it.
+"""`gh pr checkout` passes pretool-block-branch-pr-worktree.py in every form.
 
-`gh pr checkout` creates a local branch for the pull request unless it is told to
-detach (`--detach`) or gh stops before it runs. The option table comes from
-`gh pr checkout --help` (gh 2.89) and gh's flag parser, spf13/pflag, measured on
-that gh with no credentials (a parsed command reaches the login message, a
-rejected one prints the parse error and does nothing):
-
-  * `--detach` is a long-only boolean; it has no short form, so `-d` is an
-    unknown shorthand and gh exits without checking anything out;
-  * pflag accepts no abbreviation of a long option (`--det`, `--bran`);
-  * a boolean takes a value only as `--detach=<bool>` (strconv.ParseBool), and
-    the last one given wins; `-b`/`--branch` and `-R`/`--repo` take a value, the
-    next word whatever it looks like.
+Creating a branch is allowed, so the hook lets every `gh pr checkout` through,
+whether gh detaches, stops before it runs, or checks the pull request out on a
+new local branch, for the main agent and a subagent alike.
 
 Run with: python3 -m pytest hooks/tests/test_block_branch_pr_worktree_gh_checkout.py
 """
@@ -117,13 +108,13 @@ def test_a_checkout_that_creates_no_branch_passes(cmd, tmp_path):
 
 
 @pytest.mark.parametrize('cmd', STILL_CREATES)
-def test_a_checkout_that_creates_a_branch_is_refused(cmd, tmp_path):
-    assert _rc(cmd, tmp_path) == 2, cmd
+def test_a_checkout_that_creates_a_branch_passes(cmd, tmp_path):
+    assert _rc(cmd, tmp_path) == 0, cmd
 
 
 @pytest.mark.parametrize('cmd', ['gh pr checkout 19', 'gh pr checkout 19 --detach=false'])
-def test_a_subagent_is_refused_the_same_way(cmd, tmp_path):
-    assert _rc(cmd, tmp_path, agent_id='sub-1', session_id='s') == 2
+def test_a_subagent_passes_the_same_way(cmd, tmp_path):
+    assert _rc(cmd, tmp_path, agent_id='sub-1', session_id='s') == 0
 
 
 @pytest.mark.parametrize('cmd', ['gh pr checkout 19 -d', 'gh pr checkout 19 --detach=true'])

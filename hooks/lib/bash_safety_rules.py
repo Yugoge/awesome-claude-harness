@@ -174,7 +174,6 @@ def commit_guard(payload):
     import itertools
     import shlex
     H = HOOKS
-    from lib.bash_context_strip import _process_heredocs
     from lib.git_command_classifier import _command_token_index, _git_subcommand
     from lib.claude_home import load_settings
     s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
@@ -234,7 +233,7 @@ def commit_guard(payload):
     def scan(text, depth=0, lg=False, gc=()):  # lg: quotes gone, so every $( and ` counts; gc: inherited -c globals
         if depth >= 5:
             return unread('nesting past the expansion limit') if gitish(text) else None
-        t = _process_heredocs(text)
+        t = heredoc_data_blanked(text)
         w = words(t)
         for sep, grp in itertools.groupby(zip(w, w if lg else words(defuse(t))),
                                           lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
@@ -395,40 +394,38 @@ def run_commit_guard(payload, command, home):
 
 # ── Views for the released rules ─────────────────────────────────────────────
 
-def context_stripped(command):
-    """The command with non-executable text blanked (lib/bash_context_strip.py); the raw command if that fails."""
-    try:
-        from lib.bash_context_strip import strip_non_executable_contexts
-        limit = duration(os.environ.get("CLAUDE_HOOK_CONTEXT_TIMEOUT", ""), "2s")
-        if limit is None:
-            return command
-        out = with_alarm(limit, strip_non_executable_contexts, command) if limit else strip_non_executable_contexts(command)
-        return str(out).rstrip("\n")
-    except BaseException:  # noqa: BLE001
-        return command
+def heredoc_data_blanked(text):
+    """text with the body of each heredoc no shell reads blanked, newlines kept; text when it does not parse."""
+    from lib.shell_parse import parse, walk
+    script = parse(text)
+    if script.error is not None:
+        return text
+    read = {s.script.source for s in walk(script, into=("cmdsub", "backtick", "procsub", "heredoc_shell", "pipe_shell"))
+            if s.context[-1] in ("heredoc_shell", "pipe_shell")}
+    out = list(text)
+    for site in walk(script, into=("cmdsub", "backtick", "procsub")):
+        for r in site.cmd.redirects:
+            if r.hd is not None and r.hd.body not in read:
+                a, b = r.hd.body_span
+                out[max(a, 0):b] = [c if c == "\n" else " " for c in out[max(a, 0):b]]
+    return "".join(out)
 
 
 class GitView:
-    """The git invocations of lib/git_command_classifier.py over the stripped view and the raw -c strings."""
+    """The git invocations lib/shell_parse.py reads, nested shells included; none, and not ok, when it cannot parse."""
 
-    def __init__(self, stripped, command):
+    def __init__(self, command):
         self.ok, self.invs = False, []
-        if not grep("git", stripped + "\n" + command):
-            self.ok = True
-            return
         try:
-            import lib.git_command_classifier as gc
-            from lib.bash_context_strip import strip_non_executable_contexts as norm
-            layers = [stripped + "\n"] + [norm(t) for t in list(gc.iter_shell_texts(command))[1:]]
-            self.invs = [{"subcommand": inv.subcommand, "args": list(inv.args), "path_qualified": bool(inv.path_qualified),
-                          "nested": k > 0}
-                         for k, text in enumerate(layers) for inv in gc._segment_invocations(text)]
-            self.ok = all((i["subcommand"] is None or isinstance(i["subcommand"], str))
-                          and all(isinstance(a, str) for a in i["args"]) for i in self.invs)
+            from lib.shell_parse import git_invocations, parse
+            script = parse(command)
+            if script.error is None:
+                self.invs = [{"subcommand": g.subcommand, "args": [a if a is not None else "" for a in g.args],
+                              "path_qualified": g.path_qualified, "nested": g.context != ("top",), "git": g}
+                             for g in git_invocations(script)]
+                self.ok = True
         except Exception:  # noqa: BLE001
             self.ok, self.invs = False, []
-        if not self.ok:
-            self.invs = []
 
     def any_sub(self, sub):
         return any(i["subcommand"] == sub for i in self.invs)
@@ -526,7 +523,7 @@ def daemon_rules(command, payload, env):
                            f"Command: {command}",
                            f"REASON: no agent restarts {prefix}-* by any path.",
                            f"Hint: user must run {hint} <target> from a real TTY first.", released_line())
-        if grep(prefix_re, command) \
+        if grep(prefix_re, command) and grep(r"(^|[^-\w])(systemctl|service)([^-\w]|$)", command) \
                 and grep(r"(restart|stop|disable|enable|reload|kill|try-restart|reload-or-restart|kick|cycle|bounce|hup|HUP)", command) \
                 and grep(r"(systemd-run|^|\s)((at|batch)\s|crontab\s|nohup\s|disown\s|watch\s|timeout\s|dbus-send|busctl|nc\s|ncat\s"
                          r"|eval\s|bash\s+-c|sh\s+-c|zsh\s+-c|python3?\s+-c|node\s+-[ce]|perl\s+-e|ruby\s+-e)", command):
@@ -1083,40 +1080,31 @@ GC_EXECCTX_RE = (rf"(^|{GC_SEP}){GC_GIT}{GC_GOPT}\s+(rebase{GC_ANYTOK}\s+(-x|--e
 def git_clean_verdict(command, view):
     """ALLOW only for a provable dry run; BLOCK:nested / BLOCK:trust / BLOCK:exclude / BLOCK:dryrun otherwise.
 
-    Trust first: every raw argument is a plain literal (T1), the raw and stripped passes see the same cleans (T2),
-    and no xargs injects arguments (T3). Then a separate-value exclude eats the next token, and the effective
+    Trust first: every argument is written as a plain literal and read statically (T1), and no xargs injects
+    arguments (T3). Then a separate-value exclude eats the next token, and the effective
     dry-run state is read up to the first `--`, last one wins, default off.
     """
-    from lib.git_command_classifier import _basename, _command_token_index, _git_subcommand, _segments, _unquote_token
+    from lib.shell_parse import resolve
     literal = re.compile(r'^[A-Za-z0-9_./=+:@,-]*$')
     pos_dry = re.compile(r'^--d(r(y(-(r(u(n)?)?)?)?)?)?$')
     neg_dry = re.compile(r'^--no-d(r(y(-(r(u(n)?)?)?)?)?)?$')
     exclude = re.compile(r'^--e(x(c(l(u(d(e)?)?)?)?)?)?$')
     cluster = re.compile(r'^-[A-Za-z]+$')
     coarse, shell_cmd, exec_ctx = (re.compile(p) for p in (GIT_CLEAN_OCCURRENCE_RE, GC_SHELL_RE, GC_EXECCTX_RE))
-    raw = []
-    for seg in _segments(command):
-        toks = seg.split()
-        idx = _command_token_index(toks) if toks else None
-        if idx is None or _basename(_unquote_token(toks[idx])) != 'git':
-            continue
-        sub, args = _git_subcommand(toks[idx + 1:])
-        if sub == 'clean':
-            raw.append((args, any(_basename(_unquote_token(t)) == 'xargs' for t in toks[:idx])))
+    raw = [i for i in view.invs if i["subcommand"] == "clean"]
     # More `git … clean` occurrences than resolved invocations means one sits where the walk cannot see it.
     if shell_cmd.search(command) or exec_ctx.search(command):
         found = max(len(coarse.findall(command.replace('"', q).replace("'", q))) for q in (' ', ''))
     else:
         found = len(coarse.findall(command))
-    if found > len(raw):
+    if found > len([i for i in raw if not i["nested"]]):
         return 'BLOCK:nested'
-    stripped = [i for i in view.invs if i.get('subcommand') == 'clean']
-    if len(raw) != len(stripped):
-        return 'BLOCK:trust'
-    for (raw_args, injected), inv in zip(raw, stripped):
-        if injected or not all(literal.match(t) for t in raw_args):
+    for inv in raw:
+        g = inv["git"]
+        injected = g.cmd is not None and any(w[0] == "xargs" for w in resolve(g.cmd).wrappers)
+        if injected or g.unresolved or None in g.args or not all(literal.match(w.text) for w in g.arg_words):
             return 'BLOCK:trust'
-        args = inv.get('args', [])
+        args = inv["args"]
         if any(a == '-e' or (cluster.match(a) and a.endswith('e')) or (exclude.match(a) and '=' not in a) for a in args):
             return 'BLOCK:exclude'
         state = False
@@ -1138,7 +1126,7 @@ def git_clean_verdict(command, view):
 
 def git_clean_rule(command, stripped, view):
     """BS-43: `git clean` passes only as a provable dry run. A clean the classifier cannot resolve (a wrapper prefix,
-    a nested shell payload) is found by the occurrence grammar over the raw and stripped text, with quotes
+    a nested shell payload) is found by the occurrence grammar over the raw text and the executable view, with quotes
     neutralised when a shell or an exec-taking git subcommand holds command position, and fails closed."""
     has_inv = view.ok and view.any_sub("clean")
     verdict = ""
@@ -1226,8 +1214,7 @@ def decide(payload_text):
     env = environment()
     daemon_rules(command, payload, env)
     commit_artifact_rules(command, state_dir())
-    stripped = context_stripped(command)
-    view = GitView(stripped, command)
+    view = GitView(command)
     bulk_sentinel_rule(command)
     hard_ban_rule(command)
     executable = executable_view_or_raw(command)
@@ -1235,7 +1222,7 @@ def decide(payload_text):
     removal_policy(payload_text, command)
     kill_pid_rule(command, executable)
     worktree_git_rules(command, view)
-    git_clean_rule(command, stripped, view)
+    git_clean_rule(command, executable, view)
     return "ALLOW"
 
 
