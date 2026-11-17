@@ -372,3 +372,38 @@ def test_a_link_is_judged_by_both_its_names(box):
             (work / link).symlink_to(work / target)
         rc, err = write(box, str(work / link), "the state: %s/\n" % STATE)
         assert rc == 2 and "naming the switch's state" in err, (link, err)
+
+
+# Round 5: an Edit or MultiEdit of an existing prose file whose resulting document cannot be computed
+# or read exactly (bytes that are no UTF-8, an old_string the file does not hold byte for byte) is
+# refused when its text names the state, as before the lane: the client may apply the edit after a
+# lossy decode or a quote normalisation, leaving `touch ~/.claude/.harness-switch/off # tail`.
+UNKNOWN_DOCUMENTS = [
+    (b"tou\xe9XYoff # tail\n", "�XY"),
+    ("tou‘X’off # tail\n".encode("utf-8"), "'X'"),
+]
+
+
+@pytest.mark.parametrize("before,old", UNKNOWN_DOCUMENTS)
+@pytest.mark.parametrize("tool", ["Edit", "MultiEdit"])
+def test_an_edit_whose_document_cannot_be_computed_is_refused(box, tool, before, old):
+    f = box["work"] / "docs" / ("unknown-%s-%d.md" % (tool, len(before)))
+    f.parent.mkdir(exist_ok=True)
+    f.write_bytes(before)
+    edit = {"old_string": old, "new_string": "ch ~/.claude/.harness-switch/"}
+    ti = dict(edit, file_path=str(f)) if tool == "Edit" else {"file_path": str(f), "edits": [edit]}
+    rc, err = call(box, tool, ti)
+    assert rc == 2 and "naming the switch's state" in err, (tool, before, err)
+
+
+# Round 5: a first word naming a path passes only as the directory's own path ending in `/`;
+# `.,:!` glued on after that slash names a file in the directory, which bash runs.
+GLUED_FIRST_WORDS = ["/any/prefix/.harness-switch/:", "/any/prefix/.harness-switch/,",
+                     "/any/prefix/.harness-switch/!", "%s/:" % STATE, "%s/." % STATE]
+
+
+@pytest.mark.parametrize("word", GLUED_FIRST_WORDS)
+@pytest.mark.parametrize("rest", ["", " notes"])
+def test_a_first_word_naming_a_file_in_the_directory_is_refused(box, word, rest):
+    rc, err = write(box, "docs/n.md", "%s%s\n" % (word, rest))
+    assert rc == 2 and "naming the switch's state" in err, (word, rest, err)

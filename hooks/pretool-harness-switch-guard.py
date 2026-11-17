@@ -1965,13 +1965,13 @@ def _is_command(word: str) -> bool:
 
 def _runs_nothing(word: str) -> bool:
     """Whether bash, given `word` as a command (a line's first word or an inline-code run's text),
-    provably runs nothing: the directory's own path ending in `/` (a directory never runs), or a
-    plain name, no path, that is no reserved word, builtin or program (trailing `.,:!` read off too)."""
+    provably runs nothing: the directory's own path ending in `/` with nothing glued on after it (a
+    directory never runs; `dir/:` names a file in it), or a plain name, no path, that is no reserved
+    word, builtin or program (trailing `.,:!` read off too)."""
     if not word:
         return True
     if "/" in word or word.startswith("~"):
-        return harness_switch.DIR_NAME in word and word.rstrip(".,:!").endswith(harness_switch.DIR_NAME + "/") \
-            and not PROSE_META.search(word)
+        return word.endswith(harness_switch.DIR_NAME + "/") and not PROSE_META.search(word)
     return not (_is_command(word) or _is_command(word.rstrip(".,:!")))
 
 
@@ -2015,7 +2015,7 @@ def _dir_mention(line: str) -> bool:
     return not any(w.startswith("-") or ("/" in w and w not in dirs) for w in words)
 
 
-def _names_state(names: tuple, text: str, doc=None) -> bool:
+def _names_state(names: tuple, text: str, doc=None, exact=True) -> bool:
     """Whether a written file's text names the switch's state in a way that may change it: any
     mention in a file of any kind but prose (.md, .txt, .rst; by every one of `names`, the path as
     written and as resolved, so a link named x.sh is no prose); in prose, judged on the whole
@@ -2023,12 +2023,15 @@ def _names_state(names: tuple, text: str, doc=None) -> bool:
     refused unless EVERY line is plain (_plain_line: bash runs nothing for it and it opens no quote,
     group, substitution or continuation) and every line naming the state is a bare directory
     mention (_dir_mention) outside a fenced code block, since a rule judging lines one by one cannot
-    tell what bash makes of the lines around them."""
+    tell what bash makes of the lines around them. `exact` False (an Edit or MultiEdit of a file
+    that exists but whose resulting document cannot be read or computed byte for byte: no UTF-8, an
+    old_string it does not hold) refuses prose whose call text names the state, since the client may
+    apply the edit after a lossy decode or quote normalisation to a document not judged here."""
     prose = all(n.lower().endswith(PROSE) for n in names)
     if harness_switch.DIR_NAME not in text and not (prose and isinstance(doc, str)
                                                      and harness_switch.DIR_NAME in doc):
         return False
-    if not prose:
+    if not prose or (not exact and harness_switch.DIR_NAME in text):
         return True
     body = doc if isinstance(doc, str) and harness_switch.DIR_NAME in doc else text
     fenced = False
@@ -2113,17 +2116,18 @@ def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
         change = _settings_change(_held(named[0]), _edit_result(tool, ti, before))
         if change and not _granted(tool, ti, data or {}):
             return _refuse_settings(tool, change, raw)
-    doc = None
+    doc, exact = None, True
     prose = all(n.lower().endswith(PROSE) for n in (name, os.path.basename(raw)))
     if (harness_switch.DIR_NAME in text or prose) and tool in ("Write", "Edit", "MultiEdit"):
         try:
             with open(path, encoding="utf-8") as fh:
                 doc = _edit_result(tool, ti, fh.read())
+            exact = isinstance(doc, str)  # the file exists: an edit not computed on it is unknown
         except (FileNotFoundError, NotADirectoryError):
-            doc = _edit_result(tool, ti, None)
+            doc = _edit_result(tool, ti, None)  # no file: an edit with an old_string applies nowhere
         except (OSError, UnicodeDecodeError):
-            doc = None
-    if _names_state((name, os.path.basename(raw)), text, doc) and not _in_harness_checkout(path):
+            doc, exact = None, tool == "Write"
+    if _names_state((name, os.path.basename(raw)), text, doc, exact) and not _in_harness_checkout(path):
         return refuse("this %s writes a file naming the switch's state (%s), outside the harness" % (tool, raw))
     return 0
 
