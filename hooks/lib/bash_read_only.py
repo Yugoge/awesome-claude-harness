@@ -15,7 +15,14 @@ never proves: a program, option or form not listed here is not read-only. A
 check reads options as GNU getopt does (an option after an operand still
 parses, a long option may be abbreviated or take ``=``), and one that admits no
 operand refuses ``--``, after which a dash-named word is an operand (GNU
-``uniq -- -in -out`` writes ``-out``).
+``uniq -- -in -out`` writes ``-out``). A mini-language is admitted only in a
+small grammar matched over the whole text, never split on a separator first:
+a sed script (each -e word on its own) is commands p d = q Q and s/// with the
+default / delimiter, line-number, $ or /RE/ addresses, and regex text without
+``[`` ``{`` ``}`` ``#``, a newline or an escape other than a few literal ones
+(GNU sed reads ``/[]/p;s/]/e cmd #/`` as one address and an ``e`` command); an
+awk program may not spell system, a pipe, a redirection, getline, close,
+fflush, ``@``, ``/inet``, ARGV or ARGC anywhere in its text.
 
 The verdict reads the shell_parse tree (``parse``, ``walk``, ``resolve``,
 ``write_targets``) and is cross-checked against the independent byte scan of
@@ -135,19 +142,29 @@ def _uniq(args) -> bool:
     return all(a.startswith("-") and a not in ("-", "--") for a in args)
 
 
-_SED_ADDR = r"(?:\d+|\$|/(?:[^/\\\n]|\\.)*/[IM]*)"
-_SED_RANGE = r"\s*(?:%s(?:\s*,\s*%s)?)?\s*!?\s*" % (_SED_ADDR, _SED_ADDR)
-_SED_SIMPLE_RE = re.compile(r"^%s(?:p|d|=|q\d*|Q\d*)\s*$" % _SED_RANGE)
-_SED_SUBST_RE = re.compile(r"^%ss/(?:[^/\\\n]|\\.)*/(?:[^/\\\n]|\\.)*/[gpiImM0-9]*\s*$" % _SED_RANGE)
+# A sed script is admitted only when this small grammar matches the WHOLE of
+# it: commands p d = q Q and s///, each with an optional address (a line
+# number, $, or /RE/ with the I or M modifier), an optional range and !, and
+# separated by ;. The s command takes the flags g p i I m M and a count, never
+# e w W. A regex or replacement may hold only letters, digits, space and
+# _ . , : = + * ? ^ $ ( ) | & % @ -, and a backslash only before one of
+# . / \ * ^ $ ( ) & + ? | or a digit 1-9. Everything else is refused because
+# GNU sed reads it differently from a naive split: [ (a / or ; inside a
+# bracket expression is literal, so /[]/p;s/]/e cmd #/ is one address and an e
+# command), { } (blocks), # (comments, #n), a newline, other delimiters
+# (s|a|b|, \cREc), the escapes \n \c \d \o \x \w \L \U and a trailing \
+# (which joins the next -e word, as GNU sed joins -e words with newlines).
+_SED_TEXT = r"(?:[A-Za-z0-9 _.,:=+*?^$()|&%@-]|\\[./\\*^$()&+?|1-9])*"
+_SED_ADDR = r"(?:[0-9]+|\$|/%s/[IM]{0,2})" % _SED_TEXT
+_SED_COMMAND = (r" *(?:%s(?:,%s)?)? *!? *(?:[pd=]|[qQ][0-9]*|s/%s/%s/[gpiImM0-9]*) *"
+                % (_SED_ADDR, _SED_ADDR, _SED_TEXT, _SED_TEXT))
+_SED_SCRIPT_RE = re.compile(r"%s(?:;%s)*;? *" % (_SED_COMMAND, _SED_COMMAND))
 
 
 def _sed_script_ok(script: str) -> bool:
-    """Only print, delete, line-number, quit and s/// with flags g p i I m M N:
-    never w, W, r, R, e (the s///e and s///w flags included), nor a block."""
-    pieces = [p for p in re.split(r"[;\n]", script) if p.strip()]
-    if not pieces:
-        return False
-    return all(_SED_SIMPLE_RE.match(p) or _SED_SUBST_RE.match(p) for p in pieces)
+    """True only when the grammar above matches the whole script (one -e
+    word, --expression= value or script operand)."""
+    return bool(script) and _SED_SCRIPT_RE.fullmatch(script) is not None
 
 
 _SED_LONG_FLAGS = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
@@ -193,8 +210,13 @@ def _sed(args) -> bool:
 
 
 # Words an awk program may not hold: running a command, writing a file or a
-# pipe, reading one by name, loading code.
-_AWK_FORBIDDEN_TEXT = ("system", "|", ">", "getline", "@", "close", "fflush", "/inet")
+# pipe, reading one by name, loading code. The match is on the raw program
+# text, so a word inside a string, regex literal or comment counts too (awk's
+# tokenizer can only see less than this scan does: a backslash-newline splits
+# an identifier, it never joins one). ARGV and ARGC are refused because
+# assigning them names input files the text need not spell: gawk opens a
+# concatenated "/in" "et/tcp/..." element as a network connection.
+_AWK_FORBIDDEN_TEXT = ("system", "|", ">", "getline", "@", "close", "fflush", "/inet", "ARGV", "ARGC")
 
 
 def _awk(args) -> bool:

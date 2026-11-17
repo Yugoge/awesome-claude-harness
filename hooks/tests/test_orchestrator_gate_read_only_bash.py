@@ -108,6 +108,31 @@ END_OF_OPTIONS = [
 ]
 
 
+# A mini-language checker that splits on a separator before it knows where a regex ends diverges from
+# the real parser: GNU sed takes / and ; inside a bracket expression literally, so /[]/p;s/]/e cmd #/ is
+# ONE address (regex `[]/p;s/]`) followed by the e command, which runs `cmd`. A sed script is now
+# admitted only by a small grammar matched over the whole script; awk's ARGV/ARGC can name input files
+# (gawk's /inet/ network files included) that the program text need not spell.
+MINI_LANGUAGE = [
+    "sed '/[]/p;s/]/e touch PWNED #/' g", "sed -n '/[]/p;s/]/e touch PWNED #/' g",
+    "sed '/[]/p;s/]/w out/' g", "sed '/[^]/p;s/]/e id/' g", "sed '/[]/d;s/]/W out/' g",
+    "sed -e '/[]/p;s/]/e id #/' g", "sed -n -e 1p -e '/[]/p;s/]/w out/' g",
+    "sed -n -e '/[]/p' -e 's/]/e id/' g", "sed --expression='/[]/p;s/]/e id/' g",
+    "sed -n --expression=1p --expression='/[^]/p;s/]/w out/' g", "sed -ne '/[]/p;s/]/e id/' g",
+    "sed -E '/[]/p;s/]/e id/' g", "sed -z -s --posix '/[]/p;s/]/e id/' g", "sed -n -- '/[]/p;s/]/e id/' g",
+    "awk 'BEGIN{ARGV[1]=\"/in\" \"et/tcp/0/h/80\"; ARGC=2}{print}'",
+    "awk -v f=/etc/hostname 'BEGIN{ARGV[ARGC++]=f}{print}'", "awk 'BEGIN{ARGC=3}{print}' a",
+]
+
+# Shapes the sed grammar still admits; each was checked against GNU sed 4.9 --debug to parse as the
+# grammar reads it (-E, -z, -s and --posix change no admitted parse, they only make some scripts errors).
+SED_GRAMMAR = [
+    "sed -n 1,5p f", "sed -n '$p' f", "sed -n '10,20p' f", "sed 's/a/b/g' f", "sed '/x/d' f",
+    "sed -n '/x/Ip' f", "sed -n -e 1p -e '$p' f", "sed --expression=s/a/b/ f", "sed -E 's/(a|b)+/x/g' f",
+    "sed -n 's/a\\/b/c/2p;$p;q3' f", "sed '1!d' f", "sed -n '/x/,/y/p' f", "sed 's/\\(a\\)\\1/\\&x/' f",
+    "sed -n -- p f", "sed -z -s --posix 1p f",
+]
+
 @pytest.mark.parametrize("command", MUST_PASS + MORE_READ_ONLY)
 def test_read_only_command_is_proven(command):
     assert is_read_only(command) is True
@@ -218,6 +243,23 @@ def test_uniq_end_of_options_counts_through_the_launcher(tmp_path):
     s = Session(tmp_path)
     assert [s.allowed("uniq -- -a -b", hook=LAUNCH) for _ in range(6)] == [True] * 5 + [False]
 
+
+@pytest.mark.parametrize("command", MINI_LANGUAGE)
+def test_mini_language_hidden_write_or_exec_is_not_proven(command):
+    assert is_read_only(command) is False
+
+
+@pytest.mark.parametrize("command", SED_GRAMMAR)
+def test_sed_grammar_shape_is_proven(command):
+    assert is_read_only(command) is True
+
+
+def test_sed_bracket_e_command_counts_through_the_launcher(tmp_path):
+    """sed '/[]/p;s/]/e touch PWNED #/' runs `touch PWNED` in GNU sed: through hooks/pretool-launch.py it
+    is counted, so the sixth consecutive call is refused."""
+    s = Session(tmp_path)
+    command = "sed '/[]/p;s/]/e touch PWNED #/' g"
+    assert [s.allowed(command, hook=LAUNCH) for _ in range(6)] == [True] * 5 + [False]
 
 def test_registered_pipeline(tmp_path):
     """Through hooks/pretool-launch.py, the PreToolUse hook settings.json registers for every tool."""
