@@ -12,6 +12,10 @@ Three-tier policy for the main agent:
      counted.
   2. Non-whitelist tools are allowed once TOTAL per tool name per turn
      (2nd same-name call blocked regardless of intervening tool calls).
+     A Write, Edit, MultiEdit or NotebookEdit of a file inside the session's
+     own scratch directory (the harness's <TMPDIR>/<sid> or the CLI's
+     scratchpad; scratch_write) passes uncounted (OB-L04); any other file,
+     a gate-read artifact or harness state file included, counts.
      Inside the session's open /dev-overnight window (lib/overnight
      window_open) an Agent dispatch also resets these counts: the unattended
      session is one turn, so there the turn's budget is the one between two
@@ -80,11 +84,14 @@ finally:
 
 import json
 import os
+import re
+import stat
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import is_subagent_context  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.allowlist import (  # noqa: E402
     has_do_consent, match_sentinel_grant_for_tool, read_tool_ran, tool_streak_path, write_tool_streak)
 
@@ -341,6 +348,132 @@ def read_only_bash(data: dict) -> bool:
         return False
 
 
+# OB-L04: the file-writing tools whose main-agent write into the session's own
+# scratch directory passes uncounted, and the input key naming the file.
+SCRATCH_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+                       "NotebookEdit": "notebook_path"}
+# The harness session scratch root when TMPDIR is unset: hooks/session-scratch-init.sh's.
+HARNESS_SCRATCH_DEFAULT_ROOT = "/var/tmp/claude-scratch"
+# A session id usable as one path component (hooks/doc_sync/notice.py's guard).
+_SCRATCH_SID = re.compile(r"[A-Za-z0-9_.-]{1,128}")
+
+
+def _inside(path: str, root: str) -> bool:
+    """path is root or lies below it; both absolute and normalized."""
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def _real_abs(value) -> str | None:
+    return os.path.realpath(value) if isinstance(value, str) and os.path.isabs(value) else None
+
+
+def _scratch_overlaps_harness(scratch: str, data: dict) -> bool:
+    """The scratch directory holds, or sits inside, a directory the harness
+    reads or keeps state in.
+
+    Tree roots (a gate reads files anywhere below them: the project, the
+    payload's cwd, the harness home, the CLI config dir and the transcripts'
+    dir, the git-blessed grant dir) must not overlap it either way. Flat roots
+    (the harness reads named entries at their top: the state dir, CLAUDE_TMPDIR,
+    the daemon-restart grant dir, doc-sync's state root) may hold it, as /tmp
+    holds the CLI's scratchpad, but must not be it or sit inside it."""
+    tree = [os.environ.get("CLAUDE_PROJECT_DIR"), data.get("cwd"), os.environ.get("CLAUDE_HOME"),
+            os.environ.get("CLAUDE_CONFIG_DIR"), str(Path.home() / ".claude"),
+            str(Path(__file__).resolve().parent.parent), os.environ.get("CLAUDE_GIT_BLESSED_GRANT_DIR")]
+    transcript = data.get("transcript_path")
+    if isinstance(transcript, str) and os.path.isabs(transcript):
+        tree.append(os.path.dirname(transcript))
+    flat = [harness_state_dir(), os.environ.get("CLAUDE_TMPDIR"), os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_DIR"),
+            os.environ.get("CLAUDE_DOC_SYNC_STATE_ROOT")]
+    for root in filter(None, map(_real_abs, tree)):
+        if _inside(root, scratch) or _inside(scratch, root):
+            return True
+    return any(_inside(root, scratch) for root in filter(None, map(_real_abs, flat)))
+
+
+def _session_scratch_of(real: str, sid: str) -> str | None:
+    """The session scratch directory holding the resolved path real, or None.
+
+    Two directories are the session's scratch, each named by its session id:
+      * the harness's, <TMPDIR or /var/tmp/claude-scratch>/<sid>, which
+        hooks/session-scratch-init.sh creates and whose .owner record names the
+        session (lib/scratch_owner, the rule the SessionEnd sweep removes it by);
+      * the CLI's scratchpad, <CLAUDE_CODE_TMPDIR or TMPDIR or /tmp>/claude-<uid>/
+        <project>/<sid>/scratchpad.
+    Each must exist as a real directory: no symlink from its root down."""
+    candidates = []
+    root = os.environ.get("TMPDIR") or HARNESS_SCRATCH_DEFAULT_ROOT
+    if os.path.isabs(root):
+        candidates.append((os.path.join(os.path.realpath(root), sid), True))
+    root = os.environ.get("CLAUDE_CODE_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
+    if os.path.isabs(root):
+        base = os.path.join(os.path.realpath(root), f"claude-{os.getuid()}")
+        if _inside(real, base) and real != base:
+            parts = os.path.relpath(real, base).split(os.sep)
+            if len(parts) >= 3 and parts[0] not in (".", "..") and parts[1] == sid and parts[2] == "scratchpad":
+                candidates.append((os.path.join(base, parts[0], sid, "scratchpad"), False))
+    for scratch, owned in candidates:
+        if real == scratch or not _inside(real, scratch):
+            continue
+        try:
+            if not stat.S_ISDIR(os.lstat(scratch).st_mode) or os.path.realpath(scratch) != scratch:
+                continue
+        except OSError:
+            continue
+        if owned:
+            from lib.scratch_owner import owns_scratch_dir
+            if not owns_scratch_dir(scratch, sid):
+                continue
+        return scratch
+    return None
+
+
+def scratch_write(tool_name: str, data: dict) -> bool:
+    """The main agent's Write/Edit/MultiEdit/NotebookEdit writes a file inside
+    the session's own scratch directory (OB-L04), so it uses no slot.
+
+    The file is resolved as the kernel reaches it: a relative path against the
+    payload's cwd, every symlink followed. It counts when its path has a `..`
+    component; when it resolves outside the scratch directory (a symlink in
+    scratch to the project included); when it is an existing file that is not a
+    regular file or has a second hard link; when its name at the scratch
+    directory's top is a dot name or doc-sync's notice state (the harness's own
+    .owner and notice files there); and when the scratch directory holds or
+    sits in a directory the harness reads (_scratch_overlaps_harness). Fails
+    closed: any error counts."""
+    try:
+        sid = data.get("session_id")
+        if not isinstance(sid, str) or sid in (".", "..") or not _SCRATCH_SID.fullmatch(sid):
+            return False
+        tool_input = data.get("tool_input")
+        target = tool_input.get(SCRATCH_WRITE_TOOLS[tool_name]) if isinstance(tool_input, dict) else None
+        if not isinstance(target, str) or not target or "\0" in target:
+            return False
+        if ".." in target.split("/"):
+            return False
+        if not os.path.isabs(target):
+            cwd = data.get("cwd")
+            if not isinstance(cwd, str) or not os.path.isabs(cwd):
+                return False
+            target = os.path.join(cwd, target)
+        real = os.path.realpath(target)
+        scratch = _session_scratch_of(real, sid)
+        if scratch is None:
+            return False
+        top = os.path.relpath(real, scratch).split(os.sep)[0]
+        if top.startswith(".") or top.startswith("doc-sync-notices-"):
+            return False
+        if _scratch_overlaps_harness(scratch, data):
+            return False
+        try:
+            st = os.lstat(real)
+        except FileNotFoundError:
+            return True
+        return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+    except Exception:
+        return False
+
+
 def overnight_window_open(data: dict) -> bool:
     """The payload's session has its own /dev-overnight record with end_time
     ahead and no human-typed /stop after its /dev-overnight (lib/overnight
@@ -505,6 +638,14 @@ def main():
         block_permanent(tool_name, data)
 
     if has_do_consent(data):
+        sys.exit(0)
+
+    # A Write/Edit/MultiEdit/NotebookEdit of a file in the session's own scratch
+    # directory (scratch_write: resolved through symlinks, never a harness or
+    # gate-read path) passes without a slot and without a state write (OB-L04),
+    # so it neither uses nor refills the turn's one write of a project file. The
+    # other hooks still judge it.
+    if tool_name in SCRATCH_WRITE_TOOLS and scratch_write(tool_name, data):
         sys.exit(0)
 
     # A Write that pretool-write-guard.sh will reject (overwrite of an EXISTING

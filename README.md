@@ -154,7 +154,7 @@ These hooks keep the main session's context lean, so real work happens in the ag
 | Guardrail | What it refuses | Why | Hook |
 |---|---|---|---|
 | Bash streak cap | The main agent's next `Bash` call after a short run of them, until it dispatches an agent or you type the next prompt; a command proven read-only (`git status`, `rg`, `ls`, ...) is not counted | Delegate before shell output floods the orchestrator's context | `hooks/pretool-orchestrator-gate.py` |
-| Once per turn | A second call of the same non-whitelisted tool (`Edit`, `Write`, `NotebookEdit`, ...) by the main agent in one turn; a fourth for a retrieval tool (`WebSearch`, `WebFetch`, Context7) | Real edits belong in an agent's clean context | `hooks/pretool-orchestrator-gate.py` |
+| Once per turn | A second call of the same non-whitelisted tool (`Edit`, `Write`, `NotebookEdit`, ...) by the main agent in one turn (a write into the session's own scratch directory is not counted); a fourth for a retrieval tool (`WebSearch`, `WebFetch`, Context7) | Real edits belong in an agent's clean context | `hooks/pretool-orchestrator-gate.py` |
 | Read-size cap | The main agent reading a large file whole instead of a slice | One file must not swamp the context; delegate a summary | `hooks/pretool-read-size-guard.py` |
 | Write over existing | `Write` onto a file that already exists, so the change goes through `Edit` | A whole-file rewrite from memory loses content with no diff to catch it | `hooks/lib/write_gate/overwrite.py` (in the write gate) |
 | No background dispatch | An agent dispatch without `run_in_background: false`, and a `SendMessage` to anyone but this session's own finished subagent dispatched with no obligation outside a gated command | A background agent escapes the pipeline's checks; only `/restart`'s recovery message may resume a cut one | `hooks/pretool-block-background-tasks.py` |
@@ -215,7 +215,7 @@ Who may do what, and which grant lets an operation through. The full grant lifec
 | Actor | Edit, Write | git commit | git push | git reset --hard | Break-glass |
 |---|---|---|---|---|---|
 | You, in your own shell | yes | yes | yes | yes | not needed |
-| Main agent | once per tool per turn; free under `/do` | not itself: the `/commit` grant is spent only by the changelog analyst `/commit` dispatches; or a matching `/allow` | through `/push`, or a matching `/allow` | under `/do` unless it can move the protected branch, or a matching `/allow` | `/do` for one turn, never for commit, push or protected files; `/allow` for one operation |
+| Main agent | once per tool per turn (its own session scratch: uncounted); free under `/do` | not itself: the `/commit` grant is spent only by the changelog analyst `/commit` dispatches; or a matching `/allow` | through `/push`, or a matching `/allow` | under `/do` unless it can move the protected branch, or a matching `/allow` | `/do` for one turn, never for commit, push or protected files; `/allow` for one operation |
 | Subagent | its role's write paths | only the changelog analyst `/commit` dispatched, under that grant | a matching `/allow` only | a matching `/allow` only | `/allow` only; subagents never get `/do` |
 
 The commit grant is single-use and time-boxed, and the guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command, never a substring of the raw text; it is time-boxed and is consumed once the call it matched has ended, whatever the result.

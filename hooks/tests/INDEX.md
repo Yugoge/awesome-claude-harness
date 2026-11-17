@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T08:10:30Z*
-**Total entries**: 195
+*Last updated: 2026-11-17T10:29:36Z*
+**Total entries**: 196
 **Convention**: kebab
 
 ## Tree
@@ -112,6 +112,7 @@ tests/
 ├── `test_orchestrator_gate_read_budget.py` - hooks/pretool-orchestrator-gate.py allowed the main agent one call per non-whitelisted tool name ...
 ├── `test_orchestrator_gate_read_only_bash.py` - hooks/pretool-orchestrator-gate.py counted every main-agent Bash call toward its cap of 5, so a t...
 ├── `test_orchestrator_gate_refused_refund.py` - hooks/pretool-orchestrator-gate.py counts a call at PreToolUse, before the other hooks have decided
+├── `test_orchestrator_gate_scratch_write.py` - hooks/pretool-orchestrator-gate.py allows the main agent one call per non-whitelisted tool name per
 ├── `test_overnight_a12_timelock_cases.py` - A12 (prompts/P5.md acceptance 12; prompts/short/P5.md A12) says, of the overnight time-lock:
 ├── `test_overnight_cycle_contract.py` - - No seed file: the exploration (steps 2-4) passes the dispatch hook in cycles
 ├── `test_overnight_git_config_write_guard.py` - The keystone's core.hooksPath lives in the repository's git config. bubblewrap's
