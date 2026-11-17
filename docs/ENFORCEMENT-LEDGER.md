@@ -345,6 +345,7 @@ no per-rule budget exists.
 | S-011 | command-script:push.sh | advisory | unexercised | source-level | hooks/push.sh:1 @4ffb9279 | none yet | source-level |
 | S-012 | command-script:merge.sh | advisory | unexercised | source-level | hooks/merge.sh:1 @4ffb9279 | none yet | source-level |
 | S-013 | command-script:write-commit-grant.py | advisory | unexercised | source-level | scripts/write-commit-grant.py:1 @4ffb9279 | none yet | source-level |
+| S-018 | permission-layer-session-dirs-deny | advisory | unexercised | component-tested | settings.json:188 @d1abc798 | tests/test_session_dirs_permission.py | component-tested |
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
@@ -375,6 +376,29 @@ no per-rule budget exists.
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
+- **S-018** — OB-L16 (owner decision): the one deny `Bash(*session_dirs.txt*)` matched any command
+  text naming the file, so a search for the name (`grep -rn session_dirs.txt docs/`, `rg`, `git grep`,
+  `git log -S`) and a commit message naming it were refused with the reads. An allow entry cannot carve
+  an exception out of a deny ("Rules are evaluated in order: deny, then ask, then allow ... An allow rule
+  can't carve an exception out of a deny rule", code.claude.com/docs/en/permissions.md), so it is
+  replaced by 61 deny entries keyed on the command word, `Bash(<word> *session_dirs*)` (and
+  `Bash(python*session_dirs*)`): the shells and evaluators (`bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`,
+  `eval`, `exec`, `source`, `.`, `env`, `xargs`, `for`), the interpreters (`python*`, `node`, `bun`,
+  `deno`, `perl`, `ruby`, `php`, `awk`, `npm`, `npx`, `docker`), the file commands (`cat`, `head`,
+  `tail`, `sed`, `sort`, `uniq`, `tee`, `cp`, `mv`, `ln`, `rm`, `chmod`, `touch`, `truncate`, `md5sum`,
+  `find`, `curl`, `wget`, `echo`, `printf`) and the git forms that read, write or stage a path (`add`,
+  `apply`, `blame`, `cat-file`, `checkout`, `diff`, `hash-object`, `mv`, `restore`, `rm`, `show`,
+  `stash`, `update-index`, `-c`, any `--output`, and `commit -F`/`--file`). grep, rg, `git grep`,
+  `git log` and `git commit -m` naming the file pass; their file operands, `-f FILE` and every
+  redirect target stay refused by `Read(**/session_dirs.txt)` and `Edit(**/session_dirs.txt)`, which
+  "apply to ... file commands Claude Code recognizes in Bash ... and to the targets of Bash
+  redirections" (same page). Measured on Claude Code 2.1.326 headless with a throwaway HOME against a
+  stand-in Messages API (the test's opt-in `HARNESS_LIVE_CLI=1` case re-runs it): `?` in a rule is
+  literal, rules are case-sensitive, quotes are not part of the matched text, a path-qualified command
+  word matches by its name, and a heredoc body is not matched at all, so `bash <<EOF` / `python3 - <<EOF`
+  bodies naming the file pass this layer (as they did under the old deny) and only
+  `hooks/pretool-bash-safety.sh` refuses them; a glob operand to grep (`grep pat session_dirs.tx?`)
+  passes every layer, before and after. A text rule cannot see a read that never spells the name.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
