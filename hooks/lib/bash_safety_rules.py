@@ -563,7 +563,7 @@ ARTIFACT_NS_CAPTURE_RE = r"""(^|[\s;|&(])[A-Za-z_][A-Za-z0-9_]*=['"]?"""
 ARTIFACT_VAR_WRITE_RE = r"""(>>?[&|]?\s*['"]?\$\{?[A-Za-z_]|""" + ARTIFACT_WRITE_VERB_RE + r""".*\$\{?[A-Za-z_])"""
 
 
-def writes_namespace(command, ns_re):
+def _relaxed_writes_namespace(command, ns_re):
     """A write into a namespace: a redirection whose target it is, a listed verb handed it in its own simple command,
     a verb fed it by xargs, or the namespace captured in a variable and then written through one (the whole command
     read as one line, so a heredoc body counts).
@@ -596,6 +596,193 @@ def writes_namespace(command, ns_re):
         or (listed and grep(ARTIFACT_VAR_WRITE_RE, one))
         or (grep(ARTIFACT_NS_CAPTURE_RE + ns_re, one) and grep(ARTIFACT_VAR_WRITE_RE, one))
         or grep(ARTIFACT_NS_CAPTURE_RE + ns_re + "[^;|&]*" + ARTIFACT_WRITE_VERB_RE, one))
+
+
+def writes_namespace(command, ns_re):
+    """A write into a namespace: a redirection whose target it is, a listed verb handed it, or the namespace captured
+    in a variable and then written through one.
+
+    Positional, not semantic. The per-simple-command reading (_relaxed_writes_namespace) decides alone only a
+    command of the strict shape _relaxation_shape_ok accepts, where a name cannot flow from one simple command into
+    another. Any other command (a function, a loop or other compound that carries the namespace, a capture builtin,
+    `$1`, `$_`, `${!v}` ...) also gets the whole-line reading below (the command read as one line, so a heredoc body
+    counts; a listed verb anywhere before the namespace is a write, and so is a listed verb or a redirection handed
+    any expansion, since set --, printf -v, read, getopts or ${!v} may have put the namespace in it), and a write by
+    either is a write, so no refusal of the whole-line reading is lost. Residual over-block: a read is refused when
+    an enumerated verb stands before the namespace in its own command for another reason (`cp <ns> /tmp/x`), when an
+    interpreter does the reading, and for a command outside the strict shape when a verb stands anywhere before the
+    namespace, a verb is handed any expansion, or a compound only reads it
+    (`for f in <ns>*; do python3 -m json.tool "$f"; done`). Residual under-block: a verb not listed, or a path
+    assembled at run time, writes through. It raises the cost of a hand-written file; the barrier is
+    hooks/pretool-git-privilege-guard.py, which honours only a pipeline-minted grant claimed by the dispatched
+    subagent that holds the matching attestation.
+    """
+    if not grep(ns_re, command):
+        return False
+    if _relaxation_shape_ok(command, lambda text: grep(ns_re, text)):
+        return _relaxed_writes_namespace(command, ns_re)
+    one = command.replace("\n", " ")
+    return bool(
+        grep(r""">>?[&|]?\s*['"]?""" + ns_re, command)
+        or grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one)
+        or (grep(ARTIFACT_NS_CAPTURE_RE + ns_re, one) and grep(ARTIFACT_VAR_WRITE_RE, one))
+        or grep(ARTIFACT_NS_CAPTURE_RE + ns_re + "[^;|&]*" + ARTIFACT_WRITE_VERB_RE, one)
+        or grep(r""">>?[&|]?\s*['"]?\$|""" + ARTIFACT_WRITE_VERB_RE + r".*\$", one)
+        or _relaxed_writes_namespace(command, ns_re))
+
+
+_SHAPE_CAPTURE_BUILTINS = frozenset({"set", "read", "mapfile", "readarray", "getopts", "declare", "typeset", "local",
+                                     "export", "readonly", "let", "trap", "alias", "eval", "source", ".", "unset",
+                                     "shopt", "enable", "builtin", "hash", "coproc", "exec", "caller", "fc",
+                                     "history", "compgen", "complete", "bind", "unalias", "wait", "printf"})
+"""Builtins that store a word in a variable, positional parameter, alias, trap or function, or run text as code;
+printf only with -v (checked below)."""
+_SHAPE_PARAM_RE = re.compile(r"[#!]?([0-9@*!?$#-]|_(?![A-Za-z0-9_])|BASH|FUNCNAME|PIPESTATUS|OPTARG|OPTIND"
+                             r"|REPLY|MAPFILE|COMP_|READLINE_)|!.*|[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?@.*")
+"""Positional, special, indirect (`${!v}`) and transforming (`${v@P}`) expansions, and the variables builtins fill:
+each carries text from somewhere other than the word itself."""
+_SHAPE_HISTORY_RE = re.compile(r"!([$*^:!#]|-?[0-9])")
+"""A history expansion (`!$`, `!!`, `!-1`) outside single quotes: inert in a non-interactive shell, still read as a
+carried word."""
+
+
+def _unquoted_single(text):
+    """The text with its single-quoted and $'..' spans blanked (they are inert); double quotes are kept."""
+    out, i, n, dq = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            dq = not dq
+        elif c == "'" and not dq:
+            j = text.find("'", i + 1)
+            if j < 0:
+                return text
+            out.append("''")
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _shape_params(command):
+    """The text of every active parameter expansion (`1`, `1%/`, `!v`, `_` ...) in every simple command the walk
+    reaches, its heredoc bodies and every compound's header and redirections, nested ones included; None when the
+    text does not parse."""
+    try:
+        from lib.shell_parse import active_parts
+        sites = _parsed_sites(command)
+        compounds = _shape_compounds(command)
+        if sites is None or compounds is None:
+            return None
+        parts = []
+        for site, _res in sites:
+            for w in _site_words(site.cmd):
+                parts.extend(active_parts(w.parts))
+            for r in site.cmd.redirects:
+                if r.hd is not None:
+                    parts.extend(active_parts(r.hd.expansions))
+        for k, _piped in compounds:
+            for w in list(k.header) + [r.target for r in k.redirects if r.target is not None]:
+                parts.extend(active_parts(w.parts))
+        out, seen = [], set()
+        while parts:
+            part = parts.pop()
+            if id(part) in seen:
+                continue
+            seen.add(id(part))
+            if part.kind == "param":
+                out.append(part.text)
+            parts.extend(part.inner())
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_GIT_PROGRAM_ENV_RE = re.compile(r"(^|[^A-Za-z0-9_])(GIT_EXTERNAL_DIFF|GIT_PAGER|PAGER|GIT_EDITOR|EDITOR|VISUAL"
+                                 r"|GIT_SEQUENCE_EDITOR|GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_EXEC_PATH"
+                                 r"|GIT_CONFIG[A-Za-z0-9_]*|GIT_DIR|GIT_WORK_TREE|GIT_TEMPLATE_DIR|GIT_PROXY_COMMAND"
+                                 r"|GIT_DIFF_OPTS|LESSOPEN|LESSCLOSE|BASH_ENV|ENV)([^A-Za-z0-9_]|$)")
+"""Environment variables that make git (or a shell it starts) run a program of their choosing."""
+
+
+def _shape_compounds(command):
+    """(compound, piped) for every compound command in the text (payloads, substitutions and compound bodies too),
+    piped when it is a stage of a pipeline of more than one; None when the text does not parse."""
+    try:
+        from lib.shell_parse import parse, active_parts, Compound, _nested_scripts
+        top = parse(command)
+        if top.error is not None:
+            return None
+        stack, seen, out = [top] + list(_nested_scripts(top)), set(), []
+        while stack:
+            script = stack.pop()
+            if id(script) in seen or not hasattr(script, "items"):
+                continue
+            seen.add(id(script))
+            for pl, _sep in script.items:
+                for stage in pl.stages:
+                    if not isinstance(stage, Compound):
+                        continue
+                    out.append((stage, len(pl.stages) > 1))
+                    stack.extend(b for b in stage.body if hasattr(b, "items"))
+                    for w in list(stage.header) + [r.target for r in stage.redirects if r.target is not None]:
+                        stack.extend(p.body for p in active_parts(w.parts) if p.body is not None)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _relaxation_shape_ok(command, carries):
+    """True when no protected name can flow from one simple command into another, so each may be read on its own.
+
+    `carries(text)` says whether a text names what the calling rule protects. The whole command parses and holds:
+    no function definition; no compound command (a loop, if, case, group, subshell or coproc feeds its body from a
+    word list, a redirection or a here-string) unless it is [[ ]] or (( )), or it carries no protected name (in its
+    text, with quotes and backslashes taken out), has no redirection of its own, is no pipeline stage and no heredoc
+    is in the command; no builtin that stores a word or runs text (set, read, mapfile, readarray, getopts, declare,
+    typeset, local, export, readonly, let, trap, alias, eval, source, printf -v ...); no computed or unreadable
+    command word; no positional, special, indirect or transforming expansion ($1, $@, $_, ${!v}, ${v@P}, BASH_*);
+    and, beside a git, no variable that makes git run a program. Fail closed: anything not read is not ok.
+    """
+    if _SHAPE_HISTORY_RE.search(_unquoted_single(command)):
+        return False
+    params = _shape_params(command)
+    if params is None or any(_SHAPE_PARAM_RE.match(t) or "BASH_" in t for t in params):
+        return False
+    compounds = _shape_compounds(command)
+    if compounds is None:
+        return False
+    for k, piped in compounds:
+        if k.kind in ("cond", "arith"):
+            continue
+        text = command[k.span[0]:k.span[1]]
+        if k.kind in ("function", "coproc") or not text or piped or k.redirects or "<<" in command \
+                or "$'" in text or carries(text) or carries(re.sub(r"""[\\'"]""", "", text)):
+            return False
+    sites = _parsed_sites(command)
+    if sites is None:
+        return False
+    for site, res in sites:
+        if site.dynamic or site.templated or res.unresolved is not None or (res.name is None and site.cmd.words):
+            return False
+        heads = {res.name} | {n for n, _o in res.wrappers}
+        if site.cmd.words and site.cmd.words[0].value() is not None:
+            heads.add(site.cmd.words[0].value().rsplit("/", 1)[-1])
+        if heads & (_SHAPE_CAPTURE_BUILTINS - {"printf"}):
+            return False
+        if res.name == "git" and any(w.value() in ("config", "alias") for w in res.args):
+            return False
+        if "printf" in heads and any((w.value() or "-v").startswith("-") and "v" in (w.value() or "-v")
+                                     for w in site.cmd.words[1:]):
+            return False
+    if re.search(r"(^|[^A-Za-z0-9_])git([^A-Za-z0-9_]|$)", command) and _GIT_PROGRAM_ENV_RE.search(command):
+        return False
+    return True
 
 
 def _site_words(cmd):
@@ -760,6 +947,8 @@ _GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit"
                         "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
 """git subcommands that take a protected name as a path or message to read, never as code or an output file."""
 _GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
+"""Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
 _BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
 """Builtins whose arguments are assignments: a name in one is carried in a variable to a later command."""
 
@@ -785,6 +974,20 @@ def _bulk_standalone(w):
     return v.rsplit("/", 1)[-1].startswith(BULK_NAMES[0]) and not any(c in v for c in " \t\n")
 
 
+_GIT_INERT_CONFIG_RE = re.compile(r"(color|log|format|advice|i18n|column|status|blame|grep|pretty|diff\.(color|"
+                                  r"renames|noprefix|mnemonicprefix|algorithm|indentheuristic|statgraphwidth|context|"
+                                  r"interhunkcontext|relative|submodule|ignoresubmodules|dirstat|wserrorhighlight))"
+                                  r"(\.[^=]*)?(=.*)?|core\.(quotepath|abbrev)(=.*)?|core\.pager=(less|cat|more)|safe\.directory=.*",
+                                  re.IGNORECASE)
+"""`git -c` settings that only change how git prints: any other (diff.external, core.pager, core.editor,
+core.hooksPath, core.sshCommand, include.path, alias.*, a filter or a credential helper ...) can make git run a
+program, so beside a protected name it is refused."""
+
+
+def _git_config_inert(setting):
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting))
+
+
 def _git_runs_bulk_name(res):
     """A git that names one of the names may run or write it.
 
@@ -800,9 +1003,13 @@ def _git_runs_bulk_name(res):
             break
         if _bulk_word_mentions(args[k]):
             return True
+        if v.startswith("--exec-path=") or v.startswith("--config-env"):
+            return True
         if v in _GIT_VALUE_OPTS and k + 1 < len(args):
             k += 1
             if _bulk_word_mentions(args[k]):
+                return True
+            if v == "-c" and not _git_config_inert(args[k].value()):
                 return True
         k += 1
     if k >= len(args):
@@ -823,6 +1030,135 @@ def _git_runs_bulk_name(res):
 
 
 def bulk_sentinel_decision(cmd):
+    """PURE_READ, DENY or TOKENIZER_ERROR for a command naming the bulk-commit sentinel or its writers.
+
+    The per-simple-command reading (_relaxed_bulk_sentinel_decision) decides only a command of the strict shape
+    _relaxation_shape_ok accepts. Any other command gets the one-bare-read reading (_base_bulk_sentinel_decision)
+    first: its refusal stands, and when it passes the per-command reading must pass too. Residual over-block: a
+    compound, a function or a builtin capture next to a name is refused even when it only reads
+    (`for f in hooks/*.py; do grep -l write-bulk-commit-sentinel.py "$f"; done`).
+    """
+    if _relaxation_shape_ok(cmd, _bulk_mentions):
+        return _relaxed_bulk_sentinel_decision(cmd)
+    verdict = _base_bulk_sentinel_decision(cmd)
+    if verdict != 'PURE_READ':
+        return verdict
+    return _relaxed_bulk_sentinel_decision(cmd)
+
+
+def _active_substitution(text):
+    """True when $( <( >( or ` is live: unquoted, or $( and ` inside "..". '..' and $'..' bodies are inert."""
+    unq, single, double, ansi = 0, 1, 2, 3
+    state, i, n = unq, 0, len(text)
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if state == unq:
+            if c == "$" and nxt == "'":
+                state, i = ansi, i + 2
+                continue
+            if (c in "$<>" and nxt == "(") or c == "`":
+                return True
+            if c in "'\"":
+                state = single if c == "'" else double
+            elif c == "\\" and nxt:
+                i += 1
+            i += 1
+        elif state == single:
+            state = unq if c == "'" else single
+            i += 1
+        elif state == double:
+            if c == "\\" and nxt:
+                i += 2
+                continue
+            if (c == "$" and nxt == "(") or c == "`":
+                return True
+            state = unq if c == '"' else double
+            i += 1
+        else:
+            if c == "\\" and nxt:
+                i += 2
+                continue
+            state = unq if c == "'" else ansi
+            i += 1
+    return False
+
+
+def _ansi_decode(s):
+    escapes = {'n': '\n', 't': '\t', 'r': '\r', 'a': '\a', 'b': '\b', 'f': '\f', 'v': '\v', '\\': '\\', "'": "'", '"': '"'}
+
+    def repl(m):
+        g = m.group(0)
+        if g[1] in 'xUu01234567':
+            return chr(int(g[2:], 16)) if g[1] in 'xUu' else chr(int(g[2:] if g[1] == '0' else g[1:], 8))
+        return escapes.get(g[1], g)
+    try:
+        return re.sub(r'\\(?:x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8}|u[0-9a-fA-F]{4}|0[0-7]{1,3}|[0-7]{1,3}|[ntrabfv\\\'"])', repl, s)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _base_bulk_sentinel_decision(cmd):
+    """PURE_READ, DENY or TOKENIZER_ERROR for a command naming the bulk-commit sentinel or its writers.
+
+    Only one bare read of the protected path passes (one of ls stat cat file wc head tail grep jq find test [, or
+    git): no separator, newline, substitution, recursive shell, eval/source, leading assignment, keyword, xargs,
+    redirection, tee, or find write action (its ANSI-C spellings decoded). The sentinel is minted only by the
+    userprompt-bulk-commit-capability hook, never from Bash. A name that appears only inside a longer argument is
+    text, not a reference.
+    """
+    import shlex
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lex.commenters = ''
+    lex.whitespace_split = True
+    try:
+        tokens = list(lex)
+    except ValueError:
+        return 'TOKENIZER_ERROR'
+    if '\n' in cmd or _active_substitution(cmd):
+        return 'DENY'
+    compound = {';', '&&', '||', '|', '&', '|&', ';;'}
+    if any(t in compound for t in tokens):
+        return 'DENY'
+    shells = {'bash', 'sh', 'zsh', 'dash', 'python', 'python3', 'node', 'perl', 'ruby'}
+    for i, t in enumerate(tokens[:-1]):
+        nxt = tokens[i + 1]
+        if t in shells and (nxt in ('-c', '-e') or (nxt.startswith('-') and re.match(r'^-[a-zA-Z]*[ce][a-zA-Z]*$', nxt))):
+            return 'DENY'
+    if any(t in ('eval', 'source', '.') and (i == 0 or tokens[i - 1] in compound) for i, t in enumerate(tokens)):
+        return 'DENY'
+    if tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        return 'DENY'
+    keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select'}
+    redirects = {'>', '>>', '<', '<>', '>|', '&>', '&>>', '>&', '<&', '<<', '<<-', '<<<'}
+    if any(t in keywords or t in redirects for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
+        return 'DENY'
+    actions = {'-exec', '-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}
+    for t in tokens:
+        decoded = _ansi_decode(t.replace('$', ''))
+        if t in actions or t.replace('$', '') in actions or decoded is None or decoded in actions:
+            return 'DENY'
+    standalone = in_arg = False
+    for t in tokens:
+        for script in BULK_NAMES[1:]:
+            if t == script or t.endswith('/' + script):
+                standalone = True
+            elif script in t:
+                in_arg = True
+        if t.rsplit('/', 1)[-1].startswith(BULK_NAMES[0]) and not any(c in t for c in ' \t\n'):
+            standalone = True
+        elif BULK_NAMES[0] in t:
+            in_arg = True
+    if in_arg and not standalone:
+        return 'PURE_READ'
+    if tokens and tokens[0] in ('git', 'ls', 'stat', 'cat', 'file', 'wc', 'head', 'tail', 'grep', 'jq', 'find', 'test', '['):
+        return 'PURE_READ'
+    return 'DENY'
+
+
+
+
+def _relaxed_bulk_sentinel_decision(cmd):
     """PURE_READ, DENY or TOKENIZER_ERROR for a command naming the bulk-commit sentinel or its writers.
 
     Each simple command lib/shell_parse.py's walk reaches (nested payloads included) is read on its own. One that
@@ -857,6 +1193,8 @@ def bulk_sentinel_decision(cmd):
         bodies += [r.target.text for r in c.redirects if r.op == "<<<" and r.target is not None]
         fed = "pipe" in site.fed or any(n == "xargs" for n, _o in res.wrappers)
         if named and (site.dynamic or (fed and name not in _BULK_FILTERS)):
+            return 'DENY'
+        if named and name not in _BULK_FILTERS | _BULK_BENIGN and any(w.value() is None for w in res.args):
             return 'DENY'
         if not (any(_bulk_word_mentions(w) for w in words) or any(_bulk_mentions(b) for b in bodies)):
             continue
