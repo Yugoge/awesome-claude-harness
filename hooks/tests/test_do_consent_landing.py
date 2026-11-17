@@ -110,13 +110,15 @@ def test_gate_and_firewall_honour_do_for_the_main_agent_only(product):
     edit = {"file_path": str(product.repo / "README.md"), "old_string": "toy", "new_string": "t"}
     assert product.hook(GATE, "Edit", edit).returncode == 0
     assert product.hook(GATE, "Edit", edit).returncode == 0  # a second Edit in the turn
-    assert product.bash(FIREWALL, "git checkout -b feature/x").returncode == 0
-    assert product.bash(FIREWALL, "git checkout -b feature/x", subagent=True).returncode == 2
+    assert product.bash(FIREWALL, "git worktree add ../wt").returncode == 0
+    assert product.bash(FIREWALL, "git worktree add ../wt", subagent=True).returncode == 2
+    assert product.bash(FIREWALL, "git checkout -b feature/x", subagent=True).returncode == 0
     product.prompt("next turn")  # D5: /do consent lasts one turn
     assert not product.flag().exists()
     assert product.hook(GATE, "Edit", edit).returncode == 0
     assert product.hook(GATE, "Edit", edit).returncode == 2
-    assert product.bash(FIREWALL, "git checkout -b feature/x").returncode == 2
+    assert product.bash(FIREWALL, "git worktree add ../wt").returncode == 2
+    assert product.bash(FIREWALL, "git checkout -b feature/x").returncode == 0
 
 
 def test_guard_honours_do_for_an_operation_it_still_covers(product):

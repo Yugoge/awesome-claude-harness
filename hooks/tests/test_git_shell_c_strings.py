@@ -78,17 +78,20 @@ REFUSED = [
     (SAFETY, "git stash"),
     (SAFETY, "git checkout HEAD -- ."),
     (SAFETY, "git restore --source=HEAD -- ."),
+    (BRANCH, "git worktree add ../wt"),
+]
+SUBAGENT = [(PRIVILEGE, "git commit -m y"), (PRIVILEGE, "git push --force origin master"), (SAFETY, "git stash"),
+            (BRANCH, "git worktree add ../wt")]
+# Branch and PR creation: the worktree hook allows them, plain and wrapped.
+ALLOWED = [
     (BRANCH, "git update-ref refs/heads/x HEAD"),
     (BRANCH, "git checkout -b feat"),
     (BRANCH, "git switch -c feat"),
     (BRANCH, "git branch feat"),
-    (BRANCH, "git worktree add ../wt"),
     (BRANCH, "git stash branch feat"),
     (BRANCH, "git fetch origin master:feat"),
     (BRANCH, "gh pr create --fill"),
 ]
-SUBAGENT = [(PRIVILEGE, "git commit -m y"), (PRIVILEGE, "git push --force origin master"), (SAFETY, "git stash"),
-            (BRANCH, "git checkout -b feat")]
 
 UNRESOLVED = [
     'X="git commit -m y"; bash -c "$X"',
@@ -97,7 +100,6 @@ UNRESOLVED = [
     'bash -c "`cat cmd.txt`"',
     'bash -c "git $SUB"',
     "bash -c 'bash -c \"$X\"'",
-    "bash -c $'git commit -m y'",
     'bash -c "git status',
 ]
 
@@ -289,7 +291,7 @@ def _run(sandbox, hook, command, subagent=False):
 def verdicts(sandbox):
     """Exit code of every (hook, command, subagent) run the hook cases below read."""
     runs = set()
-    for actor, cases in ((False, REFUSED), (True, SUBAGENT)):
+    for actor, cases in ((False, REFUSED), (True, SUBAGENT), (False, ALLOWED), (True, ALLOWED)):
         for hook, plain in cases:
             runs.add((hook, plain, actor))
             runs.update((hook, tmpl.format(plain), actor) for tmpl in WRAPPERS.values())
@@ -336,11 +338,19 @@ def test_wrapped_form_is_refused_like_the_plain_one_for_a_subagent(verdicts, hoo
     assert verdicts[(hook, wrapped, True)] == 2, wrapped
 
 
+@pytest.mark.parametrize("hook,plain,form", _pairs(ALLOWED))
+@pytest.mark.parametrize("subagent", [False, True])
+def test_wrapped_form_is_allowed_like_the_plain_one(verdicts, hook, plain, form, subagent):
+    assert verdicts[(hook, plain, subagent)] == 0, plain
+    wrapped = WRAPPERS[form].format(plain)
+    assert verdicts[(hook, wrapped, subagent)] == 0, wrapped
+
+
 def _calls(command):
     return [(inv.subcommand, tuple(inv.args)) for inv in iter_git_invocations(command)]
 
 
-@pytest.mark.parametrize("plain", sorted({p for h, p in REFUSED if p.startswith("git ")}))
+@pytest.mark.parametrize("plain", sorted({p for h, p in REFUSED + ALLOWED if p.startswith("git ")}))
 @pytest.mark.parametrize("form", list(WRAPPERS))
 def test_the_classifier_yields_the_plain_invocation_inside_every_wrapper(plain, form):
     wrapped = WRAPPERS[form].format(plain)
@@ -355,6 +365,7 @@ def test_the_classifier_yields_the_plain_invocation_inside_every_wrapper(plain, 
     'bash -c "git commit -m y">/dev/null', "xargs -I{} sh -c 'git commit -m y' < list",
     "cat <<'EOF'\nit's a note\nEOF\nbash -c 'git commit -m y'",
     'bash $OPTS -c "git commit -m y"', 'bash $X "git commit -m y"', _nest("git commit -m y", 4),
+    "bash -c $'git commit -m y'",
 ])
 def test_other_spellings_of_a_shell_string_resolve(command):
     assert ("commit", ("-m", "y")) in _calls(command), command
@@ -502,7 +513,7 @@ def test_a_run_time_value_reads_as_a_placeholder_in_its_layer():
 
 def test_a_shell_named_in_a_commit_message_is_data():
     assert _calls("git commit -m 'run bash -c \"git push\" later'") == [
-        ("commit", ("-m", "'run", "bash", "-c", '"git', 'push"', "later'"))]
+        ("commit", ("-m", "'run bash -c \"git push\" later'"))]
 
 
 def test_every_residual_kind_is_one_the_override_route_accepts():
