@@ -19,7 +19,9 @@ Where an invocation is found:
     here-document or here-string a reader may run (_here_docs_are_data: one
     only cat, tee or another data reader reads runs just its expansion's
     substitutions, unless the text holds a group, a compound command or an
-    `exec` with redirections, or runs the file the data is written to);
+    `exec` with redirections; one written to a file is data only when every
+    other command of the text is inert (cat, ls, grep, git status, ...) and the
+    file is no shell startup file, Makefile, `.envrc` or file under `.git/`);
   - every shell `-c` string, every program option's value (`rg --pre`), and
     what echo or printf print into a pipe a shell reads, each read as a
     command line of its own (_shell_layers);
@@ -421,55 +423,97 @@ def _opens_compound(cmd):
     return bool(values) and values[0] in _COMPOUND_WORDS
 
 
+# A here-document whose pipe writes a file is data only when nothing on the
+# same line can run that file: every other command of the text is inert, and
+# the file is none a shell, git, make or direnv runs or reads by itself. The
+# rule is closed: a command not listed keeps the here-document code, so the
+# many ways to run a file (`sh < x.sh`, `cat x.sh | sh`, `sh x.*`, `cp x.sh y
+# && sh y`, `xargs`, `find -exec`, `make`) need no list of their own.
+#
+# Inert commands print, count, list, test or make directories, and run nothing
+# they are given. chmod is absent (its +x is the step to running a file), as
+# are cp, mv, xargs, find, make and every shell and interpreter.
+_INERT_COMMANDS = frozenset({
+    'cat', 'head', 'tail', 'wc', 'ls', 'echo', 'printf', 'test', '[',
+    'true', 'false', 'mkdir', 'cd', 'pwd',
+})
+# grep and rg are inert as text owners (_is_text_only); git as one of these
+# reading subcommands, with no global option but these.
+_INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
+_INERT_GIT_SUBCOMMANDS = frozenset({'status', 'diff', 'log'})
+_INERT_GIT_GLOBALS = frozenset({'--no-pager', '-P'})
+# Files run or read as code with no command naming them (by basename, any
+# case), and directories whose files are (git and husky hooks).
+_CODE_FILES = frozenset({
+    '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile',
+    '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout', '.kshrc', '.envrc',
+    'makefile', 'gnumakefile', '.gitattributes', '.gitconfig', '.gitmodules',
+})
+_CODE_DIRS = frozenset({'.git', '.husky', '.githooks'})
+# Commands that copy their input to a file a word of theirs names.
+_FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
+_NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
+
+
 def _written_paths(cmds, k, end):
-    """(paths, runtime): the files the pipe cmds[k:end] writes: write redirections and tee's operands."""
-    paths, runtime = [], False
+    """(paths, unknown): the files the pipe cmds[k:end] writes, and whether one cannot be named.
+
+    Paths come from write redirections and tee's operands. A command that
+    copies its input to a file (`cp /dev/stdin x.sh`), or a path computed at
+    run time, makes the set unknown.
+    """
+    paths, unknown = [], False
     for cmd in cmds[k:end]:
-        for r in cmd.redirs:
-            if r.op in _WRITE_REDIRS and r.target is not None and r.io in (None, '1', '2'):
-                paths.append(_value(r.target))
+        targets = [r.target for r in cmd.redirs if r.op in _WRITE_REDIRS and r.target is not None]
         values = _values(cmd.words)
         idx, name = _command_name(cmd.words, values)
-        if idx is not None and name == 'tee':
-            paths.extend(_value(w) for w in cmd.words[idx + 1:] if not _value(w)[0].startswith('-'))
-    out = []
-    for value, rt in paths:
-        if rt:
-            runtime = True
-        elif value not in ('/dev/null', '/dev/stdout', '/dev/stderr'):
-            out.append(_basename(value))
-    return out, runtime
+        if idx is not None and name in _FILE_COPIERS:
+            unknown = True
+        elif idx is not None and name == 'tee':
+            targets += [w for w in cmd.words[idx + 1:] if not _value(w)[0].startswith('-')]
+        for word in targets:
+            value, runtime = _value(word)
+            if runtime:
+                unknown = True
+            elif value not in _NULL_FILES:
+                paths.append(value)
+    return paths, unknown
 
 
-def _runs_file(cmd, names, runtime):
-    """True iff the simple command cmd may run one of the files names (basenames) as a script.
+def _is_code_file(path):
+    """True iff path names a file run or read as code by itself: _CODE_FILES, _CODE_DIRS."""
+    parts = [part for part in path.split('/') if part]
+    return bool(parts) and (parts[-1].lower() in _CODE_FILES or any(p in _CODE_DIRS for p in parts))
 
-    It does when its command word is one of them (`./x.sh`), or when it is a
-    shell, `source`/`.`, an interpreter or eval and a word of it holds one
-    (`sh x.sh`, `bash -c 'sh x.sh'`). runtime: a written path is computed at
-    run time, so any such command given a word, or a command word computed at
-    run time, may run it.
+
+def _is_inert(cmd, written):
+    """True iff the simple command cmd is inert (_INERT_COMMANDS and the rest), as written.
+
+    It stands alone: no assignment, wrapper or reserved word before its
+    command word, which is static, holds no `/` and names no written file
+    (written, basenames), and no substitution in its words.
     """
+    for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
+        if any(kind in ('sub', 'procsub') for kind, _src, _off in word.segs):
+            return False
+    if not cmd.words:
+        return True
     values = _values(cmd.words)
-    idx = _command_token_index(values)
-    if idx is None:
-        runner, idx = True, 0
-    else:
-        word = values[idx]
-        if _value(cmd.words[idx])[1]:
-            return True
-        if _basename(word) in names:
-            return True
-        base = _basename(word)
-        runner = (bool(_SHELL_NAME_RE.match(base)) or base in ('source', '.', 'eval', 'exec')
-                  or base in _OPAQUE_INTERPRETERS
-                  or any(regex.match(base) for regex, _spec in _INTERPRETERS))
-    if not runner:
+    if _command_token_index(values) != 0:
         return False
-    args = values[idx + 1:] if values else []
-    if runtime:
-        return bool(args)
-    return any(name in arg for arg in args for name in names)
+    name, runtime = _value(cmd.words[0])
+    if runtime or '/' in name or name in written:
+        return False
+    if name in _INERT_COMMANDS:
+        return True
+    if name in _INERT_TEXT_OWNERS:
+        return _is_text_only(cmd.words)
+    if name != 'git':
+        return False
+    gargs = values[1:]
+    k = _git_subcommand_index(gargs)
+    return (k is not None and gargs[k] in _INERT_GIT_SUBCOMMANDS
+            and all(v in _INERT_GIT_GLOBALS for v in gargs[:k]))
 
 
 def _here_docs_are_data(toks, cmds, k):
@@ -480,8 +524,9 @@ def _here_docs_are_data(toks, cmds, k):
     A here-document in a text with a group or a compound command (`{ cat
     <<'EOF'; } | bash`, `for ...; do cat <<'EOF'; done | sh`) or an `exec`
     with redirections counts as code, as does one whose output a substitution
-    captures (see _code_commands), and one written to a file that a later
-    command of the text runs (`cat > x.sh <<'EOF' ... && sh x.sh`, _runs_file).
+    captures (see _code_commands). One whose pipe writes a file is data only
+    when the file is named, is no _CODE_FILES one, and every other command of
+    the text is inert (_is_inert): `cat > x.sh <<'EOF' ... && sh < x.sh` is code.
     """
     if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(map(_opens_compound, cmds)):
         return False
@@ -494,10 +539,13 @@ def _here_docs_are_data(toks, cmds, k):
         j += 1
         if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
             break
-    names, runtime = _written_paths(cmds, k, j)
-    if not (names or runtime):
+    paths, unknown = _written_paths(cmds, k, j)
+    if not (paths or unknown):
         return True
-    return not any(_runs_file(cmd, names, runtime) for cmd in cmds[j:])
+    if unknown or any(map(_is_code_file, paths)):
+        return False
+    written = {_basename(p) for p in paths}
+    return all(_is_inert(cmd, written) for n, cmd in enumerate(cmds) if not k <= n < j)
 
 
 def _code_commands(text, depth=0, captured=False):
@@ -673,11 +721,14 @@ def _is_stdin_consumer(words):
     """True iff the command of words reads what a pipe feeds it as text: _STDIN_CONSUMERS.
 
     A consumer given an option whose value is a program (_PROGRAM_OPTIONS,
-    `sort --compress-program=sh`, any spelling or abbreviation) is not one.
+    `sort --compress-program=sh`, any spelling or abbreviation), or with an
+    assignment before it (`SORTOPTS=x sort`), is not one.
     """
     values = _values(words)
     idx, name = _command_name(words, values)
     if idx is None or name not in _STDIN_CONSUMERS or _basename(values[idx]) != name:
+        return False
+    if any(_ENV_ASSIGN_RE.match(v) for v in values[:idx]):
         return False
     return not any(_long_opt_named(v, _PROGRAM_OPTIONS.get(name, ())) for v in values[idx + 1:])
 

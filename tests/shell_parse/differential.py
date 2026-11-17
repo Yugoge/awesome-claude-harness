@@ -259,6 +259,14 @@ def _label_items(reader, c, n, items):
     return None
 
 
+_HERE_STRING_RE = re.compile(r"""<<<\s*(\$?'[^']*'|"(?:[^"\\]|\\.)*"|[^\s;&|<>()]+)""")
+
+
+def _here_string_words(c):
+    """The words of ``c``'s here-strings, as written: what follows each ``<<<``."""
+    return _HERE_STRING_RE.findall(c)
+
+
 def differences(c, m, n):
     """[(reader, label or None, detail)] for every fact of ``m`` that ``n`` does not hold."""
     out = []
@@ -337,7 +345,7 @@ def differences(c, m, n):
                 label = "O6:old reads quoted/option/heredoc data as code"
             elif c.startswith("eval "):
                 label = "old over-reads eval (bash joins the word values)"
-            elif "<<<" in c and s_ and s_ in c.split("<<<", 1)[1]:
+            elif s_ and any(tok in w and s_ in w for w in _here_string_words(c)):
                 # The classifier reads a here-string its reader may run as
                 # code (OB-L24); shell_parse does not yet: a gap of the new view.
                 label = "gap:old reads a here-string its reader may run; the new view does not"

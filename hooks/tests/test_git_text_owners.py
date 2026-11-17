@@ -13,13 +13,18 @@ Four readings, each with the inputs that must still be refused:
     text. They are not text owners: their own arguments are read, and a sort
     given `--compress-program` (any spelling) is no consumer. less is not
     one: LESSOPEN, set inline or inherited, runs what it reads;
-  - a here-document read only by cat, tee or another data reader, or
-    redirected to a file, is data: it runs only the substitutions its
-    expansion performs. Fed to bash, sh, ssh, `python3 -`, `source
-    /dev/stdin`, a group, a compound command (for, while, until, if, case,
-    select), an `exec` with redirections or a process substitution, written
-    to a file the same line runs (`cat > x.sh <<'EOF' ... && sh x.sh`), or
-    captured by a substitution whose output may run, it stays code; a
+  - a here-document read only by cat, tee or another data reader is data:
+    it runs only the substitutions its expansion performs. Written to a file
+    (a redirection or tee), it is data only under a closed rule: every other
+    command of the line is inert (cat, head, tail, wc, ls, echo, printf,
+    test, true, false, mkdir, cd, pwd, grep/rg as text owners, git status,
+    diff or log), standing alone, and the file is no shell startup file,
+    Makefile, `.envrc`, `.gitattributes` or file under `.git/` or `.husky/`;
+    any other command keeps it code (`... && sh < x.sh`, `make`). Fed to
+    bash, sh, ssh, `python3 -`, `source /dev/stdin`, a group, a compound
+    command (for, while, until, if, case, select), an `exec` with
+    redirections or a process substitution, copied by cp or dd, or captured
+    by a substitution whose output may run, it stays code; a
     substitution is data when its command is text-only and keeps its input
     as data (`git commit -m "$(cat <<'EOF' ...)"`). A here-string is read
     the same way (`sh <<< 'git push'`);
@@ -71,9 +76,10 @@ MUST_PASS = [
     "grep -n 'x; git push' f | sort | uniq -c | tail -3",
     heredoc("tee /tmp/a.md > /dev/null", "git reset --hard origin/master"),
     "cat <<'EOF' | sort | nl" + NL + "git push origin master" + NL + "EOF",
-    # A written file the same line only reads, or a different script it runs.
+    # A written file the rest of the line only reads with inert commands.
     "cat > x.sh <<'EOF' && cat x.sh" + NL + "git push origin master" + NL + "EOF",
-    "cat > notes.md <<'EOF' && sh build.sh" + NL + "git push origin master" + NL + "EOF",
+    "mkdir -p /tmp/n && cat > /tmp/n/notes.md <<'EOF' && wc -l /tmp/n/notes.md" + NL
+    + "git push origin master" + NL + "EOF" + NL + "git --no-pager diff --stat",
     "grep -c x <<< 'a; git push origin master'",
 ]
 
@@ -156,7 +162,7 @@ REGRESSIONS = [
     "PAGER='x; git push origin master' git log --grep=i",
     "env GIT_EXTERNAL_DIFF='x; git push origin master' git log --grep=i -p --ext-diff",
     "export GIT_EXTERNAL_DIFF='x; git push origin master'; git log --grep=i -p --ext-diff",
-    # A here-document written to a file the same line runs.
+    # A here-document written to a file, with a command on the line that runs it.
     _doc("cat > x.sh <<'EOF'", NL + "sh x.sh"),
     "cat > x.sh <<'EOF' && sh x.sh" + NL + PUSH + NL + "EOF",
     "cat <<'EOF' | tee -a x.sh >/dev/null && sh x.sh" + NL + PUSH + NL + "EOF",
@@ -165,6 +171,37 @@ REGRESSIONS = [
     "cat > x.sh <<'EOF' && . ./x.sh" + NL + PUSH + NL + "EOF",
     "cat > /tmp/x.sh <<'EOF' && bash /tmp/x.sh" + NL + PUSH + NL + "EOF",
     "cat > x.sh <<'EOF' && bash -c 'sh x.sh'" + NL + PUSH + NL + "EOF",
+]
+
+# A here-document written to a file is data only when every other command of
+# the line is inert and the file is none run by itself; these run the body.
+WRITTEN_AND_RUN = [
+    _doc("cat > x.sh <<'EOF'", NL + "sh < x.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "bash -s < x.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "cat x.sh | sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "sh x.*"),
+    _doc("cat > x.sh <<'EOF'", NL + "sh ./*.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "cp x.sh y.sh && sh y.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "mv x.sh y && sh y"),
+    _doc("cat > x.sh <<'EOF'", NL + "s=x.sh; sh $s"),
+    _doc("cat > x.sh <<'EOF'", NL + "xargs -a x.sh -I{} sh -c {}"),
+    _doc("cat > x.sh <<'EOF'", NL + "xargs sh -c < x.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "find . -name 'x.sh' -exec sh {} \\;"),
+    _doc("cat > Makefile <<'EOF'", NL + "make"),
+    "cat > Makefile <<'EOF'" + NL + "all:" + NL + "\t" + PUSH + NL + "EOF" + NL + "make",
+    _doc("cp /dev/stdin x.sh <<'EOF'", NL + "sh x.sh"),
+    _doc("cat <<'EOF' > ~/.bashrc", NL + "bash -i -c true"),
+    _doc("cat <<'EOF' >> .git/hooks/post-checkout", NL + "chmod +x .git/hooks/post-checkout"),
+    "cat > x.sh <<'EOF' ; sh < x.sh" + NL + PUSH + NL + "EOF",
+    "cat > x.sh <<'EOF' && sh <x.sh" + NL + PUSH + NL + "EOF",
+    # A file run or read by itself is code even alone on the line.
+    _doc("cat > ~/.bashrc <<'EOF'"),
+    _doc("cat >> ~/.zshenv <<'EOF'"),
+    _doc("tee .git/hooks/pre-commit <<'EOF'"),
+    _doc("cat > .husky/pre-push <<'EOF'"),
+    _doc("cat > .envrc <<'EOF'"),
+    # A stdin consumer with an assignment before it is no consumer.
+    _doc("cat <<'EOF' | SORTOPTS=x sort"),
 ]
 
 # Allowed at base too, closed on the way.
@@ -178,7 +215,7 @@ BASE_GAPS = [
     "cat <<< 'git push origin master' | sh",
 ]
 
-MUST_REFUSE += REGRESSIONS + BASE_GAPS
+MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + BASE_GAPS
 
 # less with LESSOPEN runs any body; each is a git invocation the guard reads.
 LESS_BODIES = ["git reset --hard origin/master", "git branch -D master", "git commit -qam x"]
