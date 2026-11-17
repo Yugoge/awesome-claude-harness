@@ -43,7 +43,7 @@ recordings were made meanwhile (§1).
 
 1. **The CLI deprecates or removes TodoWrite**: a CHANGELOG entry says so, or the upgrade check of
    §1 goes red (TodoWrite no longer loads, or no longer behaves as recorded, under the shipped
-   settings on the production model).
+   settings on the production model while the Task tools still load there).
 2. **A Task-only capability is genuinely needed**: `metadata` on a step, the agent-teams shared
    list, or a `TaskCompleted` gate.
 
@@ -88,20 +88,23 @@ starts only when the owner schedules it.
    facts and later lanes build on fixtures instead of memory. About 60 lines of recorder change plus
    one local recording. It needs P15-L1's recorder, which is **not on master at `a21dcbf9`**
    (branch `claude/p15-l1-cli-fixtures`; L0 waits for it to merge).
-2. **Check TodoWrite on every CLI upgrade.** One recorded run under the shipped settings
-   (`CLAUDE_CODE_ENABLE_TASKS="false"`, `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`,
-   `ENABLE_TOOL_SEARCH="false"`) on the production model, asserting that:
+2. **Check TodoWrite on every CLI upgrade.** Two recorded runs on the production model: one under
+   the shipped settings (`CLAUDE_CODE_ENABLE_TASKS="false"`, `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`,
+   `ENABLE_TOOL_SEARCH="false"`), one with `CLAUDE_CODE_ENABLE_TASKS` unset for the second bullet,
+   asserting that:
    - TodoWrite loads without ToolSearch and a whole-list write behaves as recorded;
-   - a task-tracking tool family is available on the production model at all;
+   - the Task family loads in the second run (a task-tracking family is available on the
+     production model at all);
    - the CLI CHANGELOG has no TodoWrite or Task-tool deprecation (F12).
 
-   A failing first bullet or a TodoWrite deprecation is trigger 1; no task-tracking family on the
-   production model, or a Task-tool deprecation, is not a reason to migrate and goes to the owner
-   as its own decision. The check fits P15-L1's CLI fixture canary once that is on master.
+   A failing first bullet while the second holds, or a TodoWrite deprecation, is trigger 1; a
+   failing second bullet or a Task-tool deprecation is not a reason to migrate and goes to the
+   owner as its own decision. The check fits P15-L1's CLI fixture canary once that is on master.
 
 L1 (the dual-read adapter, §4) is the one lane that would pay off even without a migration: it
-moves the one direct TodoWrite reader (`pretool-subagent-enforce.py:63`) onto lib and tests every
-checklist reader (§7). It is still not scheduled; pulling it forward is an owner decision.
+moves `pretool-subagent-enforce.py:63`, the one checklist reader outside the validator and the
+stop gate that walks TodoWrite uses itself instead of `last_todos()`, onto the adapter, and tests
+every checklist reader (§7). It is still not scheduled; pulling it forward is an owner decision.
 
 ---
 
@@ -137,7 +140,7 @@ Files that never name TodoWrite but depend on whole-list semantics are counted i
 | Area | Files | Est. changed lines | Rename-class | Redesign / medium |
 |---|---|---:|---|---|
 | Core state and validation hooks | 6 | ~590 | none | redesign: `todo_canonical.py`, `command_span.py`, `pretool-todo-validate.py`; medium: workflow gate, `prompt-workflow.py`, stop gate |
-| Other hooks and config | 12 + 1 new | ~110 | `settings.json:21`; launcher rules; orchestrator whitelist (+ frozen in-flight wording, §3.6); prompt-purity `:74`; spec-block-foreground `:88` | new task-owner guard (~35); `.claude/tasks/` write refusal (new, L2b); `posttool-todo-tracker.py`; `posttool-overnight-loop.py`; `pretool-subagent-enforce.py` |
+| Other hooks and config | 12 + 1 new | ~110 | `settings.json:21`; launcher rules; orchestrator whitelist; prompt-purity `:74`; spec-block-foreground `:88` | new task-owner guard (~35); `.claude/tasks/` write refusal (new, L2b); `posttool-todo-tracker.py`; `posttool-overnight-loop.py`; `pretool-subagent-enforce.py`; frozen in-flight wording (`pretool-orchestrator-gate.py:199-205`, §3.6) |
 | Command text and scripts | ~19 | ~50 (adapter route) / ~110 (reshaped canonical format) | `CLAUDE.md:48`; `dev.md:13`; `dev-command.md:8`; `close.md:103`; `restart.md:123`; `scripts/todo/*.py` docstrings | `dev-overnight.md:882` reset and `:627` 11g detour; ledger rows H-008, H-018, H-037, H-051, H-054 |
 | Unit tests | 27 + 3 new | ~1,060 + ~360 | `tests/test_restart_command.py` docstring, validator script name | 8 existing files redesigned, frozen in-flight wording (`test_orchestrator_gate_in_flight.py:32-35`, §3.6), new risk tests, recorder extension, a shared recording-based task builder (~150) |
 | Replay | ~20 | ~650 | driver step labels | simulator, pipeline, overnight driver, `_deadend`, `test_live_landing` |
@@ -406,9 +409,11 @@ through the `cli_record` loader; no hook is changed.
   `toolUseResult.task.id`; update: `toolUseResult.success`), read from the `type: user` record.
 - `before` (the state before a given tool use) is supported; `first_list()` is added; the lock stays
   `not_started` until N creates exist.
-- `pretool-subagent-enforce.py:60-67`, the one reader that takes TodoWrite uses itself (`:63`),
-  moves onto the adapter. The readers already on it (`hooks/lib/requirement_round.py:156`,
-  `span.last_todos()`; `hooks/pretool-block-background-tasks.py:74-88` and
+- `pretool-subagent-enforce.py:60-67` walks TodoWrite uses itself (`:63`) and moves onto the
+  adapter; the validator (`:267`, `:342`) and the stop gate's first list
+  (`stop-command-gate.py:302`) do too and move in L2a and L2b. The readers already on it
+  (`hooks/lib/requirement_round.py:156`, `span.last_todos()`;
+  `hooks/pretool-block-background-tasks.py:74-88` and
   `hooks/pretool-spec-block-foreground-agent.py:32-40`, `checklist().todos` with the canonical
   fallback) get fold tests, including a partial list (k of N created: /spec's `total` stays N).
 - Production still runs TodoWrite.
@@ -420,8 +425,8 @@ mixed span; an upper-bound test on the workflow gate's per-call read cost.
 ### L2a — write-side validation and isolation
 
 - `pretool-todo-validate.py` gains per-call checks for TaskCreate/TaskUpdate (§3.1), the ports of
-  Rule 7, `_counted_in_flight` and `_started_at`, and the 11g rule (§3.5). The TodoWrite branch
-  stays as it is.
+  Rule 7, `_counted_in_flight` and `_started_at`, and, if §3.5's narrow 11g transition is chosen,
+  that rule. The TodoWrite branch stays as it is.
 - The task-owner guard and the teammate rule (§3.2).
 - The dispatch gap closed in `pretool-subagent-enforce.py:296-300` (§3.5).
 - The reset window derived from the transcript, admitting the reset's deletes or status rollbacks
@@ -580,7 +585,7 @@ Stated as of `a21dcbf9`; re-check each before a lane edits it.
 - `hooks/lib/command_span.py:9-12` (E7), `:270-275` (sidechain skip), `:290-296` (ok =
   `not is_error`, `:294`), `:438-448` (`last_todos`)
 
-**Checklist readers L1 covers (only subagent-enforce bypasses lib).**
+**Checklist readers L1 covers (of these, only subagent-enforce walks TodoWrite uses itself).**
 - `hooks/pretool-subagent-enforce.py:60-67` (`_current_step_label`; `:63` reads TodoWrite uses),
   `:296-300` (fail-open)
 - `hooks/lib/requirement_round.py:156` (`span.last_todos()`)
