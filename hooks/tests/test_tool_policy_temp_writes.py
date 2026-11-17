@@ -22,8 +22,11 @@ HOME, CLI config dir, state dir and git config; only symlinks under tmp_path are
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,9 +73,18 @@ def _payload(tool: str, tool_input: dict, role: str | None, project: str) -> str
     return json.dumps(payload)
 
 
+def _in_mount_ns(binds, command: str) -> list:
+    """argv running `command` in a private mount namespace holding each (source, mount point) bind."""
+    mounts = " && ".join(f"mount --bind {shlex.quote(str(a))} {shlex.quote(str(b))}" for a, b in binds)
+    return ["unshare", "-m", "--propagation", "private", "bash", "-c", f"{mounts} && {command}"]
+
+
 def run(tmp_path: Path, tool: str, tool_input: dict, role: str | None, project: str = PRODUCT,
-        extra: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(HOOK)], input=_payload(tool, tool_input, role, project),
+        extra: dict | None = None, binds=None) -> subprocess.CompletedProcess:
+    argv = [sys.executable, str(HOOK)]
+    if binds:
+        argv = _in_mount_ns(binds, "exec " + " ".join(shlex.quote(a) for a in argv))
+    return subprocess.run(argv, input=_payload(tool, tool_input, role, project),
                           capture_output=True, text=True, cwd=str(tmp_path), env=_env(tmp_path, project, extra),
                           timeout=60)
 
@@ -282,7 +294,7 @@ def _registered(tool: str) -> list:
     return out
 
 
-def pipeline(tmp_path: Path, tool: str, tool_input: dict, role: str) -> str:
+def pipeline(tmp_path: Path, tool: str, tool_input: dict, role: str, binds=None) -> str:
     """Every PreToolUse registration matching the tool, as the CLI runs them: one refusal refuses."""
     raw = _payload(tool, tool_input, role, PRODUCT)
     env = _env(tmp_path, PRODUCT)
@@ -290,7 +302,8 @@ def pipeline(tmp_path: Path, tool: str, tool_input: dict, role: str) -> str:
     (tmp_path / "state").mkdir(exist_ok=True)
     refused = []
     for command in _registered(tool):
-        proc = subprocess.run(["bash", "-c", command], input=raw, capture_output=True, text=True, env=env,
+        argv = _in_mount_ns(binds, command) if binds else ["bash", "-c", command]
+        proc = subprocess.run(argv, input=raw, capture_output=True, text=True, env=env,
                               cwd=str(tmp_path), timeout=90)
         try:
             out = json.loads(proc.stdout) if proc.stdout.strip() else {}
@@ -412,3 +425,118 @@ def test_the_registered_pipeline_refuses_what_the_string_changes(tmp_path, role,
     command = command.format(home=tmp_path / "home" / ".claude", bare=tmp_path / "bare.git")
     got, refusals = pipeline(tmp_path, "Bash", {"command": command}, role)
     assert got == "refused", command
+
+
+# -- a mount under a temp root carries the path elsewhere (lane 2 verifier finding) ------------------------------
+# A bind mount made by an earlier call (`mount --bind ~/.claude /tmp/b3`) leaves realpath equal to the path and
+# st_dev equal to the temp root's, so neither shows it. harness_temp_state.crosses_mount does: a target it
+# reports keeps the base verdict (refused for every role).
+
+def _hook_module(tmp_path: Path, monkeypatch):
+    for key in [k for k in os.environ if k.startswith("CLAUDE")]:
+        monkeypatch.delenv(key)
+    for key, value in _env(tmp_path, PRODUCT).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.syspath_prepend(str(ROOT / "hooks"))
+    spec = importlib.util.spec_from_file_location("tool_policy_temp_writes_hook", HOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _mountinfo(tmp_path: Path, *points: str) -> str:
+    lines = ["%d 1 0:%d / %s rw,relatime - ext4 /dev/x rw" % (20 + i, i, p) for i, p in enumerate(("/",) + points)]
+    path = tmp_path / "mountinfo"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+MOUNT_CASES = [
+    # (mount points besides "/", target, qualifies)
+    ((), "/tmp/tmp-writes-m/out.txt", True),
+    (("/tmp/tmp-writes-other",), "/tmp/tmp-writes-m/out.txt", True),
+    (("/tmp/tmp-writes-m/sub",), "/tmp/tmp-writes-m/out.txt", True),
+    (("/tmp",), "/tmp/tmp-writes-m/out.txt", True),
+    (("/tmp/tmp-writes-m",), "/tmp/tmp-writes-m/out.txt", False),
+    (("/tmp/tmp-writes-m",), "/tmp/tmp-writes-m/a/b/out.txt", False),
+    (("/tmp/tmp-writes-m/out.txt",), "/tmp/tmp-writes-m/out.txt", False),
+    (("/var/tmp/tmp-writes-m",), "/var/tmp/tmp-writes-m/settings.json", False),
+]
+
+
+@pytest.mark.parametrize("points,target,qualifies", MOUNT_CASES,
+                         ids=[f"{'+'.join(p) or 'root only'}:{t}" for p, t, _ in MOUNT_CASES])
+@pytest.mark.parametrize("tool", ["Bash", "Write"])
+def test_a_mount_on_the_path_disqualifies_the_target(tmp_path, monkeypatch, points, target, qualifies, tool):
+    hook = _hook_module(tmp_path, monkeypatch)
+    tool_input = {"command": f"echo x > {target}"} if tool == "Bash" else {"file_path": target, "content": "x"}
+    data = {"tool_name": tool, "tool_input": tool_input, "cwd": PRODUCT}
+    got, why = hook._temp_write("qa", target, data, mountinfo=_mountinfo(tmp_path, *points))
+    assert got is qualifies, why
+    if not qualifies:
+        assert "mount" in why, why
+
+
+@pytest.mark.parametrize("mountinfo", ["", "garbage\n", None])
+def test_an_unreadable_mount_table_qualifies_nothing(tmp_path, monkeypatch, mountinfo):
+    hook = _hook_module(tmp_path, monkeypatch)
+    path = str(tmp_path / "missing-mountinfo") if mountinfo is None else str(tmp_path / "mi")
+    if mountinfo is not None:
+        Path(path).write_text(mountinfo)
+    target = "/tmp/tmp-writes-m/out.txt"
+    data = {"tool_name": "Write", "tool_input": {"file_path": target, "content": "x"}, "cwd": PRODUCT}
+    assert hook._temp_write("qa", target, data, mountinfo=path)[0] is False
+
+
+def _can_bind(tmp_path: Path) -> bool:
+    if not shutil.which("unshare"):
+        return False
+    (tmp_path / "probe-src").mkdir()
+    (tmp_path / "probe-dst").mkdir()
+    proc = subprocess.run(_in_mount_ns([(tmp_path / "probe-src", tmp_path / "probe-dst")], "true"),
+                          capture_output=True, timeout=30)
+    return proc.returncode == 0
+
+
+def _bound(tmp_path: Path) -> tuple:
+    """Stand-ins bound under the temp root (never the real ones): (binds, {name: (tool, input)})."""
+    config = tmp_path / "home" / ".claude"
+    hooks = tmp_path / "proj" / ".git" / "hooks"
+    grants = tmp_path / "state" / "claude-grants"
+    for d in (config, hooks, grants):
+        d.mkdir(parents=True, exist_ok=True)
+    (config / "settings.json").write_text("{}")
+    mounts = {name: tmp_path / f"mnt-{name}" for name in ("config", "hooks", "grants")}
+    for m in mounts.values():
+        m.mkdir()
+    binds = [(config, mounts["config"]), (hooks, mounts["hooks"]), (grants, mounts["grants"])]
+    cases = {
+        "> bound config": ("Bash", {"command": f"echo x > {mounts['config'] / 'settings.json'}"}),
+        "Write bound config": ("Write", {"file_path": str(mounts["config"] / "settings.json"), "content": "x"}),
+        "tee bound .git/hooks": ("Bash", {"command": f"echo x | tee {mounts['hooks'] / 'pre-commit'}"}),
+        "cp bound grants": ("Bash", {"command": f"cp notes.txt {mounts['grants'] / 'x.json'}"}),
+    }
+    return binds, cases
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_bind_mount_under_a_temp_root_keeps_the_base_verdict(tmp_path, role):
+    if not _can_bind(tmp_path):
+        pytest.skip("mounting is not permitted here")
+    binds, cases = _bound(tmp_path)
+    decided = {name: verdict(run(tmp_path, tool, ti, role, binds=binds)) for name, (tool, ti) in cases.items()}
+    assert decided == {name: "refused" for name in cases}, decided
+    # The same namespace leaves a plain temp write beside the mounts allowed.
+    plain = str(tmp_path / "work" / "out.txt")
+    assert verdict(run(tmp_path, "Write", {"file_path": plain, "content": "x"}, role, binds=binds)) == "allowed"
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("case", ["> bound config", "Write bound config", "tee bound .git/hooks", "cp bound grants"])
+def test_the_registered_pipeline_refuses_a_write_through_a_bind_mount(tmp_path, role, case):
+    if not _can_bind(tmp_path):
+        pytest.skip("mounting is not permitted here")
+    binds, cases = _bound(tmp_path)
+    tool, tool_input = cases[case]
+    got, _ = pipeline(tmp_path, tool, tool_input, role, binds=binds)
+    assert got == "refused", case
