@@ -197,7 +197,7 @@ Order of effects for one repository, in one continuously held fd-9 transaction s
 
 ### Phase 4: Pre-staged verification
 
-When `DRYRUN=true`, first save the exact index file bytes (a copy under `/tmp/claude-scratch/changelog-analyst/`) and install an exit trap that restores those bytes on every success or error return: a tree id alone loses index extensions and pre-existing staged state. A dry run never changes HEAD or worktree bytes.
+When `DRYRUN=true`, stage into a temporary copy of the index, never the index itself. In the dry run's one Bash process, before any staging, `cp -p` the index file (the path `git -C "<GIT_ROOT>" rev-parse --path-format=absolute --git-path index` prints) to a fresh path under `/tmp/claude-scratch/changelog-analyst/` (e.g. `dryrun-index-<unique>`), both paths literal (the guards refuse a copy source they cannot resolve), and `export GIT_INDEX_FILE=` that copy: every later dry-run stage, unstage and `--cached` read uses it. The copy keeps the index extensions and pre-existing staged state; the index itself is only read, so its bytes stay identical and nothing is restored (a copy back onto it is a `.git/` write the role's write policy refuses). A dry run never changes HEAD or worktree bytes.
 
 Before staging, list the index with `git -C "${GIT_ROOT}" diff --cached --name-only`. For every cached file outside the classified and filtered set run `git -C "${GIT_ROOT}" restore --staged -- "<file>"` and log `Pre-staged verify: unstaged <file> (not in classified set)`.
 
@@ -264,7 +264,7 @@ A tracked-modified file that is absent from the dev-report, from `ARTIFACT_CHAIN
 
 ### Phase 8: Execute commit (or dry-run)
 
-If `DRYRUN=true`: surface the commit message and the staged file list, restore the pre-run index bytes (Phase 4) and stop. The dry-run message falls under CP-1: report the text in your own output, or Write it to `MSGFILE` and let Bash do only a minimal `cat "${MSGFILE}"`; never an inline `echo`, `printf` or heredoc. Plain paths may be printed normally.
+If `DRYRUN=true`: surface the commit message and the staged file list (read from Phase 4's index copy) and stop; the index itself was never written. The dry-run message falls under CP-1: report the text in your own output, or Write it to `MSGFILE` and let Bash do only a minimal `cat "${MSGFILE}"`; never an inline `echo`, `printf` or heredoc. Plain paths may be printed normally.
 
 In bulk mode each subsystem group's commit uses the skip-and-continue pattern of Error handling.
 
@@ -344,7 +344,7 @@ If several close-reports exist for the session (`ls -rt ${CONTROL_ROOT}/docs/dev
 
 ## Dry-run mode
 
-A dry run classifies and stages the candidate set (Phases 1-6 run normally) and stops BEFORE the commit. Staging only materializes the plan: emit `PLAN_GROUPS` entries `{repo, commit_message, files[]}`, then restore the exact pre-run index bytes (Phase 4). `/commit` Step 6 reviews each planned file staging-independently (per path `git diff --text HEAD` plus an on-disk read, never `git diff --cached`, since in multi-group bulk only the last group stays staged).
+A dry run classifies and stages the candidate set (Phases 1-6 run normally) and stops BEFORE the commit. Staging only materializes the plan, in Phase 4's temporary index copy: emit `PLAN_GROUPS` entries `{repo, commit_message, files[]}`; the index itself stays byte-identical, never written. `/commit` Step 6 reviews each planned file staging-independently (per path `git diff --text HEAD` plus an on-disk read, never `git diff --cached`, since in multi-group bulk only the last group stays staged).
 
 **DRYRUN guard (NON-NEGOTIABLE).** Under `DRYRUN=true` there is no `git commit`, no `--allow-empty` recovery commit, no push-gate token, no grant consumed, and never `push_gate_reconciled` (that status asserts a token was written, and `/commit` then announces `/push` unblocked). `/commit` Step 6 runs a real internal `DRYRUN=true` pass over exactly the reconcilable and recoverable states.
 
