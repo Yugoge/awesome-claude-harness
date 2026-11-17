@@ -314,10 +314,13 @@ QA6_GIT_ARGUMENT_DENY = [
     "git filter-branch --tree-filter 'git clean -fd' HEAD",
 ]
 
-# The consistency this buys, pinned as an EQUALITY rather than as two verdicts:
-# the same text must be classified the same way wherever it sits. The old
-# asymmetry (`echo '<clean>'` denies, `git commit -m '<clean>'` passes) was not
-# a policy, it was the third fail-open wearing a policy's clothes.
+# The consistency this buys: the same text must never be judged MORE leniently
+# behind git than behind a data command. The old asymmetry (`echo '<clean>'`
+# denies, `git commit -m '<clean>'` passes) was not a policy, it was the third
+# fail-open wearing a policy's clothes. OB-L30 lifted the echo side to NONE
+# (echo is proven to execute nothing), so the pin is now an ordering - git
+# argument text stays DENY and is never below the echo verdict - instead of the
+# former equality, which pinned exactly the over-block that lane removed.
 QA6_SAME_TEXT_SAME_VERDICT = [
     ("echo 'git clean -fd'", "git commit -m 'git clean -fd'"),
     ("echo 'git clean -fd'", "git log --grep='git clean -fd'"),
@@ -509,9 +512,15 @@ def test_qa7_overmodelled_env_escapes_are_a_disclosed_cost_not_a_protection(comm
 
 @pytest.mark.parametrize("behind_echo,behind_git", QA6_SAME_TEXT_SAME_VERDICT)
 def test_qa6_the_same_argument_text_is_judged_the_same_behind_git(behind_echo, behind_git):
-    assert decide(behind_echo)[0] == decide(behind_git)[0], (
-        "argument text that denies behind `echo` must not pass behind `git`: "
-        "the difference was never a policy, it was the fail-open that let "
+    strictness = {"NONE": 0, "SNAPSHOT": 1, "DENY": 2}
+    git_verdict = decide(behind_git)[0]
+    assert git_verdict == "DENY", (
+        "argument text behind a git command must stay scanned: `git rebase -x "
+        "'<clean>'` runs it, got %s for %r" % (git_verdict, behind_git)
+    )
+    assert strictness[git_verdict] >= strictness[decide(behind_echo)[0]], (
+        "argument text must never be judged more leniently behind `git` than "
+        "behind `echo`: the difference was the fail-open that let "
         "`git rebase -x '<clean>'` through"
     )
 

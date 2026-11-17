@@ -41,10 +41,21 @@ payload delivered on stdin by here-string or here-document.
 
 Accepted over-blocks (cost usability under an active grant, never data):
 argument text that reduces to a destructive clean denies wherever it sits
-(`echo git clean -fd`, `git commit -m 'add git clean guard'`), because the same
-text executes under `git rebase -x`; a `cd`/`pushd`/`popd` word anywhere in a
-command that also holds a destructive clean denies; and a command nested more
-than `_MAX_EMBED_DEPTH` payloads deep denies even when it holds no clean.
+behind a git command (`git commit -m 'add git clean guard'`,
+`git log --grep='git clean -fd'`) or any command not PROVEN to execute
+nothing, because the same text executes under `git rebase -x`. Since OB-L30
+the one exception is a command proven inert by _inert_data_commands (echo,
+grep, rg, cat ... at the top level, with no substitution, no rebinding of the
+name, no pipe into anything else and no file written beside another command):
+its arguments and its heredoc / here-string content are data, so
+`grep -rn "git clean -fd" docs/` and `cat > notes.md <<'EOF'` with a body
+naming a clean are NONE. Anything that proof cannot establish is scanned
+exactly as before, so `echo '<clean>' | sh` and `$(echo <clean>)` still deny.
+A heredoc fed to a git command (`git commit -F - <<EOF`) or to a substitution
+(`"$(cat <<'EOF' ...)"`) stays in the argument-text class. A
+`cd`/`pushd`/`popd` word anywhere in a command that also holds a destructive
+clean denies; and a command nested more than `_MAX_EMBED_DEPTH` payloads deep
+denies even when it holds no clean.
 
 Exit codes (CLI): 0 = NONE, 10 = SNAPSHOT, 11 = DENY. Reason text on stdout.
 """
@@ -147,47 +158,81 @@ def _static_word(word):
     return _Word("".join(out), dynamic), bodies
 
 
-def _read(text, info):
-    """The command segments of text: lists of _Word, one per simple command.
+def _commands(text, info):
+    """The simple commands of text, in order, each keeping what is attached to it.
+
+    Each command is a dict: words (its _Word list, command word included),
+    stdin (here-string operand words), bodies (here-document and substitution
+    body texts, its redirection targets' included), redirs ((Redir, target
+    _Word or None) pairs) and next_op (the operator that ended it, None for the
+    last). info collects "substitution", "subshell" and "function" (a `name()`
+    definition: an OP `(` directly followed by an OP `)`).
+    """
+    def fresh():
+        return {"words": [], "stdin": [], "bodies": [], "redirs": [], "next_op": None}
+
+    commands, current, at_start, prev = [], fresh(), True, None
+    for tok in _tokens(text):
+        if tok[0] == "OP":
+            if tok[1] == "(" and at_start:
+                info["subshell"] = True
+            if tok[1] == ")" and prev == "(":
+                info["function"] = True
+            current["next_op"] = tok[1]
+            commands.append(current)
+            current, at_start, prev = fresh(), True, tok[1]
+            continue
+        at_start, prev = False, None
+        if tok[0] == "R":
+            redir = tok[1]
+            if redir.heredoc is not None:
+                current["bodies"].append(redir.heredoc[2].text)
+                current["redirs"].append((redir, None))
+            elif redir.target is not None:
+                word, bodies = _static_word(redir.target)
+                if bodies:
+                    info["substitution"] = True
+                current["bodies"].extend(bodies)
+                current["redirs"].append((redir, word))
+                if redir.op == "<<<":
+                    current["stdin"].append(word)
+            continue
+        word, bodies = _static_word(tok[1])
+        current["words"].append(word)
+        if bodies or any(kind in _BODY_PARTS for kind, _s, _o in tok[1].segs):
+            info["substitution"] = True
+        current["bodies"].extend(bodies)
+    commands.append(current)
+    return commands
+
+
+def _segments(commands, info, exempt=frozenset()):
+    """The command segments of commands: lists of _Word, one per simple command.
 
     Substitution bodies and here-document bodies are segments of their own, and
     so is a here-string's operand: `bash <<< '<payload>'` runs the payload as
     `bash -c '<payload>'` does. Stdin content is a command string, never an
     argument, so it never joins the words of the command it feeds (`git clean
     -fd <<< '-n'` really deletes). Other redirection targets are file paths
-    and are dropped. info collects "substitution" and "subshell".
+    and are dropped. A command whose index is in ``exempt`` (decide() alone
+    passes the ones _inert_data_commands proved inert) contributes nothing: its
+    arguments and its stdin content are data that nothing executes.
     """
-    segments, current, extra = [], [], []
-    at_start = True
-    for tok in _tokens(text):
-        if tok[0] == "OP":
-            if tok[1] == "(" and at_start:
-                info["subshell"] = True
-            segments.append(current)
-            current, at_start = [], True
+    segments, extra = [], []
+    for k, command in enumerate(commands):
+        if k in exempt:
             continue
-        at_start = False
-        if tok[0] == "R":
-            redir = tok[1]
-            if redir.heredoc is not None:
-                extra.append(redir.heredoc[2].text)
-            elif redir.target is not None:
-                word, bodies = _static_word(redir.target)
-                if bodies:
-                    info["substitution"] = True
-                extra.extend(bodies)
-                if redir.op == "<<<":
-                    segments.append([word])
-            continue
-        word, bodies = _static_word(tok[1])
-        current.append(word)
-        if bodies or any(kind in _BODY_PARTS for kind, _s, _o in tok[1].segs):
-            info["substitution"] = True
-        extra.extend(bodies)
-    segments.append(current)
+        segments.extend([word] for word in command["stdin"])
+        segments.append(command["words"])
+        extra.extend(command["bodies"])
     for body in extra:
         segments.extend(_read(body, info))
     return [seg for seg in segments if seg]
+
+
+def _read(text, info):
+    """The command segments of text (_segments of its _commands, none exempt)."""
+    return _segments(_commands(text, info), info)
 
 
 def _all_words(segments):
@@ -445,6 +490,150 @@ def _cwd_indeterminate(words, info, raw: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Argument DATA versus executed command words (OB-L30).
+#
+# The region scan above treats every argument as possibly-executed text, and it
+# must: `git rebase -x`, `timeout`, `flock` and any unknown name run their
+# arguments. What it may not do is read the arguments of a command that is
+# PROVEN to execute nothing, whose output provably reaches nothing that
+# executes either. That proof is positive and narrow; every condition below
+# that cannot be established leaves the command scanned exactly as before.
+#
+#   - The command word is a literal, unshadowed name from _ARG_INERT_COMMANDS:
+#     programs whose operands are patterns, text or file names and that have no
+#     option which runs a program (rg only without any `--pre*` option and
+#     without an expansion that could supply one). Membership can only ever
+#     REMOVE a scan; an unlisted name keeps the scan, so the list is not the
+#     wrapper-enumeration mistake turned around.
+#   - Only reserved words and the option-free `command`/`builtin`/`time` may
+#     precede it: an assignment or a wrapper option ends the proof.
+#   - The command text is analysed at the TOP level only. Inside an embedded
+#     payload (`bash -c '...'`, `git rebase -x '...'`) the text is already being
+#     executed by something whose output use is unknown, so nothing is exempt.
+#   - No command or process substitution anywhere: `$(echo git clean -fd)` runs
+#     the echoed text, and so does a substitution fed by a heredoc.
+#   - Nothing in the text can rebind the name: no function definition, no
+#     alias/unalias/enable/hash/shopt/source/./eval word, no PATH, BASH_ENV or
+#     ENV assignment or operand.
+#   - Every pipe consumer anywhere in the text (`|` and `|&`) is itself such a
+#     command, so `echo '<clean>' | sh` and `{ echo '<clean>'; } | bash` keep
+#     the scan.
+#   - If anything writes a file (an output redirection other than /dev/null or
+#     an fd duplication, or a `tee` operand), EVERY command in the text must be
+#     such a command, so `echo '<clean>' > x.sh && sh x.sh` keeps the scan.
+#
+# A command proven inert contributes nothing to the clean scan: neither its
+# argument words nor its here-string / heredoc content. A heredoc fed to any
+# other command (`bash <<EOF`, `git commit -F - <<EOF`) is still scanned.
+# ---------------------------------------------------------------------------
+_ARG_INERT_COMMANDS = frozenset({
+    "echo", "cat", "grep", "egrep", "fgrep", "rg",
+    "head", "tail", "wc", "cut", "tr", "nl", "tee",
+})
+_FILE_WRITING_DATA_COMMANDS = frozenset({"tee"})
+_DATA_PREFIX = frozenset({
+    "!", "{", "then", "else", "elif", "do", "if", "while", "until",
+    "time", "command", "builtin",
+})
+_SHADOWING_WORDS = frozenset({
+    "alias", "unalias", "enable", "hash", "function", "shopt",
+    "source", "eval",
+})
+_SHADOWING_NAMES = ("PATH", "BASH_ENV", "ENV")
+_PIPE_OPS = ("|", "|&")
+
+
+def _data_head(words):
+    """Index of the first word after the reserved-word / option-free prefix."""
+    i = 0
+    while i < len(words) and not words[i].dynamic and words[i].text in _DATA_PREFIX:
+        i += 1
+    return i
+
+
+def _is_inert_data_command(command) -> bool:
+    words = command["words"]
+    i = _data_head(words)
+    if i >= len(words):
+        return False
+    head = words[i]
+    if head.dynamic or head.text not in _ARG_INERT_COMMANDS:
+        return False
+    if head.text == "rg":
+        for word in words[i + 1:]:
+            if word.dynamic or word.text.startswith("--pre"):
+                return False
+    return True
+
+
+def _writes_a_file(command) -> bool:
+    for redir, target in command["redirs"]:
+        if not redir.writes():
+            continue  # input, here-document, fd duplication or close
+        if target is None or target.dynamic:
+            return True
+        if target.text == "/dev/null":
+            continue
+        return True
+    words = command["words"]
+    i = _data_head(words)
+    if i < len(words) and words[i].text in _FILE_WRITING_DATA_COMMANDS:
+        operands = [w for w in words[i + 1:] if not w.text.startswith("-")]
+        if any(w.text != "/dev/null" for w in operands):
+            return True
+    return False
+
+
+def _is_shadowing(info, commands, inert) -> bool:
+    """True when anything in the text could rebind a command name: a function
+    definition anywhere, or - in any command NOT itself proven inert, whose
+    words are therefore not known to be mere data - a rebinding builtin word or
+    a PATH / BASH_ENV / ENV name or assignment. `.` counts only as a command
+    word, so `grep -rn '<text>' .` keeps its search root."""
+    if info.get("function"):
+        return True     # `name() { ... }` - a function definition
+    for k, command in enumerate(commands):
+        if k in inert:
+            continue
+        words = command["words"]
+        head = _data_head(words)
+        if head < len(words) and words[head].text == ".":
+            return True
+        for word in words:
+            text = word.text
+            if text in _SHADOWING_WORDS:
+                return True
+            for name in _SHADOWING_NAMES:
+                if text == name or text.startswith(name + "=") or text.startswith(name + "+="):
+                    return True
+    return False
+
+
+def _inert_data_commands(commands, info, raw: str):
+    """Return the indices of the commands whose arguments and stdin content are
+    data, under the conditions set out above; an empty set whenever any of the
+    whole-text conditions cannot be established."""
+    if info["substitution"] or any(marker in raw for marker in _SUBST_MARKERS):
+        return frozenset()
+    inert = {k for k, c in enumerate(commands) if _is_inert_data_command(c)}
+    if not inert:
+        return frozenset()
+    if _is_shadowing(info, commands, inert):
+        return frozenset()
+    for k, command in enumerate(commands):
+        if command["next_op"] in _PIPE_OPS and k + 1 not in inert:
+            return frozenset()
+    if any(_writes_a_file(c) for c in commands):
+        for k, command in enumerate(commands):
+            if k in inert:
+                continue
+            if all(w.text in _RESERVED_DECORATORS for w in command["words"]):
+                continue
+            return frozenset()
+    return frozenset(inert)
+
+
 def decide(command_text: str):
     """Return (verdict, reason) for one Bash command.
 
@@ -453,8 +642,12 @@ def decide(command_text: str):
     redirects the target, and the effective working directory is provably the
     hook's own. Every other reducible clean denies."""
     info = {"substitution": False, "subshell": False}
-    segments = _read(command_text, info)
-    words = _all_words(segments)
+    commands = _commands(command_text, info)
+    # The cwd and environment-redirect predicates below keep reading EVERY word,
+    # data included: they only run once a clean was found, and an inert command
+    # never moving the cwd is not something this module needs to prove.
+    words = _all_words(_segments(commands, info))
+    segments = _segments(commands, info, _inert_data_commands(commands, info, command_text))
 
     destructive = False
     provable = True
