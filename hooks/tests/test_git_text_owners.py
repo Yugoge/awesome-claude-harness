@@ -4,23 +4,37 @@ Four readings, each with the inputs that must still be refused:
 
   - text owners: rg (without `--pre`/`--pre-glob`, or a config file it is
     pointed at), `git grep` (without `-O`) and `git log --grep`, with no
-    `-c`/`--config-env` before the subcommand, leave their quoted arguments
-    unexecuted, as grep does. ag and ack are not text owners: their `--pager`
-    runs a shell;
-  - stdin consumers: head, tail, wc, sort, uniq, cut, tr, less, column and nl
-    read what a pipe feeds them as text, so a pipe into one keeps a grep
-    pattern text. They are not text owners: their own arguments are read
-    (`sort --compress-program`);
-  - a here-document read only by cat, tee or another data reader, or
-    redirected to a file, is data: it runs only the substitutions its
-    expansion performs. Fed to bash, sh, ssh, `python3 -`, `source
-    /dev/stdin`, a group or a process substitution, or captured by a
-    substitution whose output may run, it stays code; a substitution is
-    data when its command is text-only and keeps its input as data
-    (`git commit -m "$(cat <<'EOF' ...)"`);
+    `-c`/`--config-env` before the subcommand and no assignment before git
+    (`GIT_EXTERNAL_DIFF=...`, `GIT_CONFIG_COUNT=...`, `GIT_PAGER=...`),
+    leave their quoted arguments unexecuted, as grep does. ag and ack are not
+    text owners: their `--pager` runs a shell;
+  - stdin consumers: head, tail, wc, sort, uniq, cut, tr, column and nl read
+    what a pipe feeds them as text, so a pipe into one keeps a grep pattern
+    text. They are not text owners: their own arguments are read, and a sort
+    given `--compress-program` (any spelling) is no consumer. less is not
+    one: LESSOPEN, set inline or inherited, runs what it reads;
+  - a here-document read only by cat, tee or another data reader is data:
+    it runs only the substitutions its expansion performs. Written to a file
+    (a redirection or tee), it is data only under a closed rule: every other
+    command of the line is inert (cat, head, tail, wc, ls, echo, printf,
+    test, true, false, mkdir, pwd, grep/rg as text owners), standing alone
+    and writing nothing (an output redirection only to /dev/null or another
+    descriptor), and the file is no shell startup file, Makefile, `.envrc`,
+    git config (`.gitconfig`, `~/.config/git/`) or file under `.git/`,
+    `.husky/` or `.githooks/`, every path component compared in any case.
+    Any other command keeps it code (`... && sh < x.sh`, `make`, `cd .git`,
+    `git status`, which may run what a config names). Fed to
+    bash, sh, ssh, `python3 -`, `source /dev/stdin`, a group, a compound
+    command (for, while, until, if, case, select), an `exec` with
+    redirections or a process substitution, copied by cp or dd, or captured
+    by a substitution whose output may run, it stays code; a
+    substitution is data when its command is text-only and keeps its input
+    as data (`git commit -m "$(cat <<'EOF' ...)"`). A here-string is read
+    the same way (`sh <<< 'git push'`);
   - a program option's value is a command line of its own (`rg --pre`,
-    `ag --pager`, `sort --compress-program`), and what echo or printf print
-    into a pipe a shell reads is shell text (`echo "git push" | sh`).
+    `ag --pager`, `sort --compress-program`, `git grep -O`), and what echo or
+    printf print into a pipe a shell reads is shell text (`echo "git push" |
+    sh`, `printf '%s' 'git push' | sh`), its backslash escapes decoded.
 
 The guard runs as a subprocess with a scratch HOME, state dir and repository,
 with a main-agent payload and a subagent payload.
@@ -65,6 +79,13 @@ MUST_PASS = [
     "grep -n 'x; git push' f | sort | uniq -c | tail -3",
     heredoc("tee /tmp/a.md > /dev/null", "git reset --hard origin/master"),
     "cat <<'EOF' | sort | nl" + NL + "git push origin master" + NL + "EOF",
+    # A written file the rest of the line only reads with inert commands.
+    "cat > x.sh <<'EOF' && cat x.sh" + NL + "git push origin master" + NL + "EOF",
+    "mkdir -p /tmp/n && cat > /tmp/n/notes.md <<'EOF' && wc -l /tmp/n/notes.md" + NL
+    + "git push origin master" + NL + "EOF" + NL + "ls -la /tmp/n 2>/dev/null",
+    "tee x <<'EOF'" + NL + "git push origin master" + NL + "EOF" + NL + "cat x",
+    "cat <<'EOF' > x" + NL + "git push origin master" + NL + "EOF" + NL + "wc -l x",
+    "grep -c x <<< 'a; git push origin master'",
 ]
 
 # A commit's message is text; the guard still refuses an agent's commit without
@@ -105,6 +126,168 @@ MUST_REFUSE = [
     '"$(cat <<\'EOF\'' + NL + "git push origin master" + NL + "EOF" + NL + ')"',
     'git commit -m "$(cat <<EOF' + NL + "$(git push origin master)" + NL + "EOF" + NL + ')"',
 ]
+
+
+PUSH = "git push origin master"
+
+
+def _doc(head, tail=""):
+    return head + NL + PUSH + NL + "EOF" + tail
+
+
+# Inputs the independent verifier found allowed at 87bf6d9 although base
+# refused them, and that really run git.
+REGRESSIONS = [
+    # A data here-document inside a compound command whose output a shell reads.
+    _doc("for f in 1; do cat <<'EOF'; done | sh"),
+    _doc("if true; then cat <<'EOF'; fi | sh"),
+    _doc("while true; do cat <<'EOF'; break; done | bash"),
+    _doc("until false; do cat <<'EOF'; break; done | sh"),
+    _doc("case x in x) cat <<'EOF';; esac | sh"),
+    _doc("select v in a; do cat <<'EOF'; break; done | sh"),
+    "for f in 1; do" + NL + "  cat <<'EOF'" + NL + PUSH + NL + "EOF" + NL + "done | sh",
+    "while true; do" + NL + "  cat <<'EOF'" + NL + PUSH + NL + "EOF" + NL + "  break" + NL + "done | bash",
+    # less runs its input through LESSOPEN; a sort given a compressor feeds it.
+    _doc("cat <<'EOF' | LESSOPEN='|-sh %s' less"),
+    _doc("LESSOPEN='|-sh %s' less <<'EOF'"),
+    _doc("export LESSOPEN='|-sh %s'; cat <<'EOF' | less"),
+    _doc("sort -S 1 -T . --compress-program=sh - /usr/share/dict/words <<'EOF'"),
+    _doc("cat <<'EOF' | sort -S 1 -T . --compress-program=sh - /usr/share/dict/words"),
+    _doc("cat <<'EOF' | sort -S 1 --compress=sh -"),
+    _doc("cat <<'EOF' | sort -S 1 --compress-prog sh -"),
+    # An assignment before git log --grep or git grep may make git run a program.
+    "GIT_EXTERNAL_DIFF='x; git push origin master' git log --grep=i -p --ext-diff",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0='x; git push origin master'"
+    " git log --grep=i -p --ext-diff",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='x; git push origin master'"
+    " git grep -n i",
+    "GIT_EXTERNAL_DIFF='x; git push origin master' git grep -n 'i'",
+    "GIT_CONFIG_PARAMETERS=\"'core.pager'='x; git push origin master'\" git log --grep=i",
+    "GIT_PAGER='x; git push origin master' git log --grep=i",
+    "PAGER='x; git push origin master' git log --grep=i",
+    "env GIT_EXTERNAL_DIFF='x; git push origin master' git log --grep=i -p --ext-diff",
+    "export GIT_EXTERNAL_DIFF='x; git push origin master'; git log --grep=i -p --ext-diff",
+    # A here-document written to a file, with a command on the line that runs it.
+    _doc("cat > x.sh <<'EOF'", NL + "sh x.sh"),
+    "cat > x.sh <<'EOF' && sh x.sh" + NL + PUSH + NL + "EOF",
+    "cat <<'EOF' | tee -a x.sh >/dev/null && sh x.sh" + NL + PUSH + NL + "EOF",
+    "cat > x.sh <<'EOF' && chmod +x x.sh && ./x.sh" + NL + PUSH + NL + "EOF",
+    "cat > x.sh <<'EOF' && source x.sh" + NL + PUSH + NL + "EOF",
+    "cat > x.sh <<'EOF' && . ./x.sh" + NL + PUSH + NL + "EOF",
+    "cat > /tmp/x.sh <<'EOF' && bash /tmp/x.sh" + NL + PUSH + NL + "EOF",
+    "cat > x.sh <<'EOF' && bash -c 'sh x.sh'" + NL + PUSH + NL + "EOF",
+]
+
+# A here-document written to a file is data only when every other command of
+# the line is inert and the file is none run by itself; these run the body.
+WRITTEN_AND_RUN = [
+    _doc("cat > x.sh <<'EOF'", NL + "sh < x.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "bash -s < x.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "cat x.sh | sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "sh x.*"),
+    _doc("cat > x.sh <<'EOF'", NL + "sh ./*.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "cp x.sh y.sh && sh y.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "mv x.sh y && sh y"),
+    _doc("cat > x.sh <<'EOF'", NL + "s=x.sh; sh $s"),
+    _doc("cat > x.sh <<'EOF'", NL + "xargs -a x.sh -I{} sh -c {}"),
+    _doc("cat > x.sh <<'EOF'", NL + "xargs sh -c < x.sh"),
+    _doc("cat > x.sh <<'EOF'", NL + "find . -name 'x.sh' -exec sh {} \\;"),
+    _doc("cat > Makefile <<'EOF'", NL + "make"),
+    "cat > Makefile <<'EOF'" + NL + "all:" + NL + "\t" + PUSH + NL + "EOF" + NL + "make",
+    _doc("cp /dev/stdin x.sh <<'EOF'", NL + "sh x.sh"),
+    _doc("cat <<'EOF' > ~/.bashrc", NL + "bash -i -c true"),
+    _doc("cat <<'EOF' >> .git/hooks/post-checkout", NL + "chmod +x .git/hooks/post-checkout"),
+    "cat > x.sh <<'EOF' ; sh < x.sh" + NL + PUSH + NL + "EOF",
+    "cat > x.sh <<'EOF' && sh <x.sh" + NL + PUSH + NL + "EOF",
+    # A file run or read by itself is code even alone on the line.
+    _doc("cat > ~/.bashrc <<'EOF'"),
+    _doc("cat >> ~/.zshenv <<'EOF'"),
+    _doc("tee .git/hooks/pre-commit <<'EOF'"),
+    _doc("cat > .husky/pre-push <<'EOF'"),
+    _doc("cat > .envrc <<'EOF'"),
+    # A stdin consumer with an assignment before it is no consumer.
+    _doc("cat <<'EOF' | SORTOPTS=x sort"),
+]
+
+# The verifier's l10/l11 inputs that base refuses: inert commands that write or
+# configure git, git itself, cd into a sensitive directory, sensitive
+# destinations in any case, and written files a later command runs.
+VERIFIER_L10_L11 = [
+    "cd .git && cat > hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cd .git/hooks && cat > pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cd .husky && cat > pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cd ~ && cat > .bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat > ../.git/hooks/x <<'EOF'\ngit push origin master\nEOF",
+    "cat > ./.bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat > .GIT/hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "cat > .Bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat >| .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat &> .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat >> .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat 2> .git/hooks/pre-push <<'EOF'\ngit push origin master\nEOF",
+    "cat 3> .git/hooks/pre-push <<'EOF' >&3\ngit push origin master\nEOF",
+    "exec cat > x <<'EOF'\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\necho y > .git/hooks/post-checkout",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf y >> ~/.bashrc",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit status",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit log -1",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit diff",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit -P log -1",
+    "cat > notes.md <<'EOF'\ngit push origin master\nEOF\ngit --no-pager diff",
+    "cat > .git/hooks/x <<'EOF'\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nx.sh",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nls; x.sh",
+    "cat > ls <<'EOF'\ngit push origin master\nEOF\nPATH=.:$PATH ls",
+    "cat > cat <<'EOF'\ngit push origin master\nEOF\nchmod +x cat",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncd x",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\necho $(sh x)",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\necho `sh x`",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nrg --pre sh x .",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nrg --pre=./x foo .",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit log --grep=x -p --ext-diff",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --ext-diff",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit log --format=%H",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --no-index x /dev/null",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --textconv",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit log --output=.git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ngit diff --output=.git/hooks/pre-commit x",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nhead -c 100 x > .git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x > .git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x >> ~/.bashrc",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x | tee .git/hooks/pre-commit",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncat x > ~/.config/git/config",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\nprintf '%s' x > Makefile",
+    "cat > x <<'EOF'\ngit push origin master\nEOF\ncommand cat x",
+    "tee x .git/hooks/pre-commit <<'EOF'\ngit push origin master\nEOF",
+    "tee -a ~/.bashrc <<'EOF'\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf '[core]\\n\\tfsmonitor = sh x.sh\\n' >> .git/config\ngit status",
+    "cat > x.sh <<'EOF'\ngit push origin master\nEOF\nprintf '[diff]\\n\\texternal = sh x.sh\\n' > ~/.config/git/config\ngit diff",
+    "cat > x.sh <<'EOF' && echo '[diff] external = sh x.sh' >> .git/config && git diff\ngit push origin master\nEOF",
+    "cat > x.sh <<'EOF' && echo '[core] fsmonitor = sh x.sh' >> .git/config && git status\ngit push origin master\nEOF",
+]
+
+# Allowed at base too, closed on the way.
+BASE_GAPS = [
+    "git grep -O\"sh -c 'git push origin master'\" foo",
+    "git grep --open-files-in-pager=\"sh -c 'git push origin master'\" foo",
+    "printf '%s' 'git push origin master' | sh",
+    "echo -e 'git\\x20push origin master' | sh",
+    "printf 'git\\040push origin master' | sh",
+    "sh <<< 'git push origin master'",
+    "cat <<< 'git push origin master' | sh",
+]
+
+MUST_REFUSE += REGRESSIONS + WRITTEN_AND_RUN + VERIFIER_L10_L11 + BASE_GAPS
+
+# less with LESSOPEN runs any body; each is a git invocation the guard reads.
+LESS_BODIES = ["git reset --hard origin/master", "git branch -D master", "git commit -qam x"]
+
+
+@pytest.mark.parametrize("body", LESS_BODIES)
+def test_less_with_a_preprocessor_runs_its_input(body):
+    for head in ("cat <<'EOF' | LESSOPEN='|-sh %s' less", "LESSOPEN='|-sh %s' less <<'EOF'"):
+        invocations, residuals = classify_git_command(head + NL + body + NL + "EOF")
+        assert [inv.subcommand for inv in invocations] == [body.split()[1]] or residuals, head
 
 
 def pushes(command):

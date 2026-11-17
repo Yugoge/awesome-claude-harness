@@ -16,8 +16,13 @@ Where an invocation is found:
     redirections and wrappers (_command_token_index), is git: `/usr/bin/git`,
     `"git"`;
   - the commands of every substitution and process substitution, and of every
-    here-document a reader may run (_here_docs_are_data: one only cat, tee or
-    another data reader reads runs just its expansion's substitutions);
+    here-document or here-string a reader may run (_here_docs_are_data: one
+    only cat, tee or another data reader reads runs just its expansion's
+    substitutions, unless the text holds a group, a compound command or an
+    `exec` with redirections; one written to a file is data only when every
+    other command of the text is inert and writes nothing (cat, ls, grep, ...)
+    and the file is no shell startup file, Makefile, `.envrc`, git config or
+    file under `.git/`);
   - every shell `-c` string, every program option's value (`rg --pre`), and
     what echo or printf print into a pipe a shell reads, each read as a
     command line of its own (_shell_layers);
@@ -26,7 +31,9 @@ Where an invocation is found:
     words unexecuted (_is_text_only: echo, printf, grep, rg, `git commit`,
     `git grep`, `git log --grep`), the command is one line with no
     substitution, and no pipe feeds a command that is neither text-only nor
-    a stdin consumer (_is_stdin_consumer: head, sort, wc, ...).
+    a stdin consumer (_is_stdin_consumer: head, sort, wc, ...; not less, and
+    not a sort given `--compress-program`). `git grep` and `git log --grep`
+    are text-only only with no assignment before git.
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
@@ -398,16 +405,139 @@ def _here_doc_code(redir, code):
         return [body.text]
 
 
+# Words that open or close a compound command. A here-document inside one
+# (`for ...; do cat <<'EOF'; done | sh`) may reach whatever reads the
+# compound's output, so, as with a group, the text's here-documents are code.
+_COMPOUND_WORDS = frozenset({
+    'for', 'select', 'while', 'until', 'if', 'then', 'elif', 'else', 'fi',
+    'do', 'done', 'case', 'esac', 'function', 'coproc', '{', '}',
+})
+# Redirections that write a file.
+_WRITE_REDIRS = frozenset({'>', '>>', '>|', '&>', '&>>'})
+
+
+def _opens_compound(cmd):
+    """True iff the simple command cmd opens or closes a group or compound command."""
+    values = _values(cmd.words[:2])
+    if values[:1] in (['!'], ['time']):
+        values = values[1:]
+    return bool(values) and values[0] in _COMPOUND_WORDS
+
+
+# A here-document whose pipe writes a file is data only when nothing on the
+# same line can run that file: every other command of the text is inert, and
+# the file is none a shell, git, make or direnv runs or reads by itself. The
+# rule is closed: a command not listed keeps the here-document code, so the
+# many ways to run a file (`sh < x.sh`, `cat x.sh | sh`, `sh x.*`, `cp x.sh y
+# && sh y`, `xargs`, `find -exec`, `make`) need no list of their own.
+#
+# Inert commands print, count, list, test or make directories, run nothing
+# they are given and, as _is_inert requires, write nothing. chmod is absent
+# (its +x is the step to running a file), cd (it moves the written file's
+# relative path into `.git/` or a home directory), git (its config and
+# attributes run programs: `core.fsmonitor`, `diff.external`), cp, mv, xargs,
+# find, make, tee and every shell and interpreter.
+_INERT_COMMANDS = frozenset({
+    'cat', 'head', 'tail', 'wc', 'ls', 'echo', 'printf', 'test', '[',
+    'true', 'false', 'mkdir', 'pwd',
+})
+# grep and rg are inert as text owners (_is_text_only).
+_INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
+# Files run or read as code with no command naming them, by basename, and
+# directories whose files are (git's and husky's); every component is compared
+# case-insensitively. A `git` directory under `.config` holds git's config.
+_CODE_FILES = frozenset({
+    '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases',
+    '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout', '.kshrc',
+    '.envrc', 'makefile', 'gnumakefile', '.gitattributes', '.gitconfig', 'gitconfig',
+    '.gitmodules',
+})
+_CODE_DIRS = frozenset({'.git', '.husky', '.githooks'})
+# Commands that copy their input to a file a word of theirs names.
+_FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
+_NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
+
+
+def _written_paths(cmds, k, end):
+    """(paths, unknown): the files the pipe cmds[k:end] writes, and whether one cannot be named.
+
+    Paths come from write redirections and tee's operands. A command that
+    copies its input to a file (`cp /dev/stdin x.sh`), or a path computed at
+    run time, makes the set unknown.
+    """
+    paths, unknown = [], False
+    for cmd in cmds[k:end]:
+        targets = [r.target for r in cmd.redirs if r.op in _WRITE_REDIRS and r.target is not None]
+        values = _values(cmd.words)
+        idx, name = _command_name(cmd.words, values)
+        if idx is not None and name in _FILE_COPIERS:
+            unknown = True
+        elif idx is not None and name == 'tee':
+            targets += [w for w in cmd.words[idx + 1:] if not _value(w)[0].startswith('-')]
+        for word in targets:
+            value, runtime = _value(word)
+            if runtime:
+                unknown = True
+            elif value not in _NULL_FILES:
+                paths.append(value)
+    return paths, unknown
+
+
+def _is_code_file(path):
+    """True iff path names a file run or read as code by itself: _CODE_FILES, _CODE_DIRS."""
+    parts = [part.lower() for part in path.split('/') if part]
+    return bool(parts) and (parts[-1] in _CODE_FILES or any(p in _CODE_DIRS for p in parts)
+                            or any(a == '.config' and b == 'git' for a, b in zip(parts, parts[1:])))
+
+
+def _is_inert(cmd, written):
+    """True iff the simple command cmd is inert (_INERT_COMMANDS and the rest), as written.
+
+    It stands alone: no assignment, wrapper or reserved word before its
+    command word, which is static, holds no `/` and names no written file
+    (written, basenames), no substitution in its words, and it writes
+    nothing: an output redirection only to /dev/null or another descriptor
+    (`2>&1`, `>&2`).
+    """
+    for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
+        if any(kind in ('sub', 'procsub') for kind, _src, _off in word.segs):
+            return False
+    for r in cmd.redirs:
+        target = None if r.target is None else _value(r.target)[0]
+        if r.op in _WRITE_REDIRS or r.op == '<>':
+            if target != '/dev/null':
+                return False
+        elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):
+            return False
+    if not cmd.words:
+        return True
+    values = _values(cmd.words)
+    if _command_token_index(values) != 0:
+        return False
+    name, runtime = _value(cmd.words[0])
+    if runtime or '/' in name or name in written:
+        return False
+    if name in _INERT_COMMANDS:
+        return True
+    return name in _INERT_TEXT_OWNERS and _is_text_only(cmd.words)
+
+
 def _here_docs_are_data(toks, cmds, k):
     """True iff the here-documents of cmds[k] are read as data.
 
     They are when every command of the pipe cmds[k] starts reads its input as
     data (_reads_input_as_data): `cat > notes.md <<'EOF'`, `cat <<'EOF' | sort`.
-    A here-document in a text with a group (`{ cat <<'EOF'; } | bash`) counts
-    as code, as does one whose output a substitution captures (see _code_commands).
+    A here-document in a text with a group or a compound command (`{ cat
+    <<'EOF'; } | bash`, `for ...; do cat <<'EOF'; done | sh`) or an `exec`
+    with redirections counts as code, as does one whose output a substitution
+    captures (see _code_commands). One whose pipe writes a file is data only
+    when the file is named, is no _CODE_FILES one, and every other command of
+    the text is inert and writes nothing (_is_inert): `cat > x.sh <<'EOF' ...
+    && sh < x.sh` and `... && git status` are code.
     """
-    if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(
-            _values(cmd.words[:1]) == ['{'] for cmd in cmds):
+    if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(map(_opens_compound, cmds)):
+        return False
+    if any(cmd.redirs and _values(cmd.words)[:1] == ['exec'] for cmd in cmds):
         return False
     j = k
     while True:
@@ -415,14 +545,22 @@ def _here_docs_are_data(toks, cmds, k):
             return False
         j += 1
         if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
-            return True
+            break
+    paths, unknown = _written_paths(cmds, k, j)
+    if not (paths or unknown):
+        return True
+    if unknown or any(map(_is_code_file, paths)):
+        return False
+    written = {_basename(p) for p in paths}
+    return all(_is_inert(cmd, written) for n, cmd in enumerate(cmds) if not k <= n < j)
 
 
 def _code_commands(text, depth=0, captured=False):
     """(commands, exact): every simple command text runs, its bodies' commands after it.
 
     A here-document read as data (_here_docs_are_data) runs only the
-    substitutions its expansion performs. captured: text is a substitution's
+    substitutions its expansion performs; a here-string not read as data is
+    read as commands too. captured: text is a substitution's
     body, whose output the outer command may run (`eval "$(cat <<'EOF' ...)"`),
     so its here-documents count as code. A substitution's output is data when
     its command is text-only and keeps its input as data, as is every command
@@ -440,10 +578,16 @@ def _code_commands(text, depth=0, captured=False):
             for body in subst:
                 out.extend(_code_commands(body, depth + 1, held)[0])
             docs = [r for r in cmd.redirs if r.heredoc is not None]
-            code = bool(docs) and (captured or not _here_docs_are_data(toks, cmds, k))
+            strings = [r for r in cmd.redirs if r.op == '<<<' and r.target is not None]
+            code = bool(docs or strings) and (captured or not _here_docs_are_data(toks, cmds, k))
             for redir in docs:
                 for body in _here_doc_code(redir, code):
                     out.extend(_code_commands(body, depth + 1, captured)[0])
+            if code:
+                # A here-string is a here-document of one word: code when its
+                # reader may run it (`sh <<< 'git push'`).
+                for redir in strings:
+                    out.extend(_code_commands(_value(redir.target)[0], depth + 1, captured)[0])
     return out, exact
 
 
@@ -508,7 +652,8 @@ _TEXT_ONLY_COMMANDS = frozenset({'echo', 'printf', 'grep'})
 # git subcommands whose quoted arguments are text (`git commit -m "a; git push"`).
 _TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
 # git subcommands whose quoted arguments are text when git is given no
-# configuration on its command line (a `-c` value may name a program git runs):
+# configuration on its command line (a `-c` value may name a program git runs)
+# and no assignment before it (`GIT_EXTERNAL_DIFF=... git log`):
 # `git grep` without `-O`/`--open-files-in-pager` (that option runs a pager),
 # and `git log` reading a `--grep` pattern.
 _TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
@@ -518,9 +663,13 @@ _GIT_CONFIG_OPTS = ('-c', '--config-env')
 _RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
 # Commands that read what a pipe feeds them as text and never run it. They are
 # not text-only: their own arguments may name a program (`sort
-# --compress-program`), so only their place in a pipe is relaxed.
+# --compress-program`), and one given such an option (_PROGRAM_OPTIONS) is no
+# consumer, whatever its value: sort hands its input to the compressor. less is
+# absent: LESSOPEN and LESSCLOSE name an input preprocessor (`|-sh %s` runs
+# what it reads), and they may come from the inherited environment, which the
+# command line cannot show.
 _STDIN_CONSUMERS = frozenset({
-    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'less', 'column', 'nl',
+    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl',
 })
 
 
@@ -561,6 +710,11 @@ def _is_text_only(words):
         return True
     if sub not in _TEXT_SEARCH_GIT_SUBCOMMANDS:
         return False
+    # An assignment before git may name a program it runs or the config it
+    # reads (GIT_EXTERNAL_DIFF, GIT_CONFIG_COUNT/KEY_n/VALUE_n,
+    # GIT_CONFIG_PARAMETERS, GIT_PAGER, PAGER, HOME, GIT_DIR, ...).
+    if any(_ENV_ASSIGN_RE.match(v) for v in values[:idx]):
+        return False
     if any(v in _GIT_CONFIG_OPTS or v.startswith('--config-env=') for v in gargs[:k]):
         return False
     rest = gargs[k + 1:]
@@ -571,10 +725,19 @@ def _is_text_only(words):
 
 
 def _is_stdin_consumer(words):
-    """True iff the command of words reads what a pipe feeds it as text: _STDIN_CONSUMERS."""
+    """True iff the command of words reads what a pipe feeds it as text: _STDIN_CONSUMERS.
+
+    A consumer given an option whose value is a program (_PROGRAM_OPTIONS,
+    `sort --compress-program=sh`, any spelling or abbreviation), or with an
+    assignment before it (`SORTOPTS=x sort`), is not one.
+    """
     values = _values(words)
     idx, name = _command_name(words, values)
-    return idx is not None and name in _STDIN_CONSUMERS and _basename(values[idx]) == name
+    if idx is None or name not in _STDIN_CONSUMERS or _basename(values[idx]) != name:
+        return False
+    if any(_ENV_ASSIGN_RE.match(v) for v in values[:idx]):
+        return False
+    return not any(_long_opt_named(v, _PROGRAM_OPTIONS.get(name, ())) for v in values[idx + 1:])
 
 
 def _reads_input_as_data(cmd):
@@ -1138,14 +1301,29 @@ _PROGRAM_OPTIONS = {
     'ack': ('--pager',),
     'sort': ('--compress-program',),
 }
-_PROGRAM_HINT_RE = re.compile(r'(?:\A|[\s/;&|(`\'"])(?:rg|ag|ack|sort)\b')
+_PROGRAM_HINT_RE = re.compile(r'(?:\A|[\s/;&|(`\'"])(?:rg|ag|ack|sort|git)\b')
 # Commands that print their arguments, and the shell reads what they print
 # when a pipe feeds it (`echo "git push" | sh`).
 _PRINTERS = frozenset({'echo', 'printf'})
+# The backslash escapes printf and `echo -e` print as characters: `\xHH`, an
+# octal `\NNN` or `\0NNN`, and the letters. Read whatever the options say.
+_ESCAPE_RE = re.compile(r'\\(x[0-9A-Fa-f]{1,2}|0?[0-7]{1,3}|[abefnrtv\\])')
+_ESCAPE_LETTERS = {'a': '\a', 'b': '\b', 'e': '\x1b', 'f': '\f', 'n': '\n', 'r': '\r',
+                   't': '\t', 'v': '\v', '\\': '\\'}
+
+
+def _unescape(match):
+    code = match.group(1)
+    if code in _ESCAPE_LETTERS:
+        return _ESCAPE_LETTERS[code]
+    return chr(int(code[1:], 16) if code[0] == 'x' else int(code, 8))
 
 
 def _program_option_values(words, idx):
     """Yield (value, runtime) for each option of words[idx] whose value is a program it runs."""
+    if _basename(words[idx][0]) == 'git':
+        yield from _git_grep_pager_values(words, idx)
+        return
     names = _PROGRAM_OPTIONS.get(_basename(words[idx][0]))
     if not names:
         return
@@ -1161,6 +1339,24 @@ def _program_option_values(words, idx):
                 i += 1
                 yield words[i]
         i += 1
+
+
+def _git_grep_pager_values(words, idx):
+    """Yield (value, runtime) for each pager `git grep` is told to run: `-O<cmd>`, `--open-files-in-pager=<cmd>`."""
+    values = [value for value, _runtime in words[idx + 1:]]
+    k = _git_subcommand_index(values)
+    if k is None or values[k] != 'grep':
+        return
+    for i in range(idx + 1 + k + 1, len(words)):
+        value, runtime = words[i]
+        if value == '--':
+            return
+        if _long_opt_named(value, ('--open-files-in-pager',)) and '=' in value:
+            yield value.split('=', 1)[1], runtime
+        elif value.startswith('-') and not value.startswith('--') and 'O' in value:
+            rest = value[value.index('O') + 1:]
+            if rest:
+                yield rest, runtime
 
 
 def _runs_c_string(words):
@@ -1191,7 +1387,11 @@ def _printed_to_shell(cmds, feeds, k, idx):
             while args and _basename(words[idx][0]) == 'echo' and re.fullmatch(r'-[neE]+', args[0]):
                 args = args[1:]
             text = ' '.join(args)
-            return text.replace('\\n', '\n').replace('\\t', '\t')
+            if _basename(words[idx][0]) == 'printf':
+                # A format may print its arguments each on a line of its own
+                # (`printf '%s\n' 'git push'`) or as they stand (`'%s'`).
+                text += '\n' + '\n'.join(args[1:])
+            return _ESCAPE_RE.sub(_unescape, text)
         j += 1
     return None
 
