@@ -921,17 +921,88 @@ def service_rules(command, stripped, env):
 
 # ── Removal policy (BS-32, BS-33) ────────────────────────────────────────────
 
+# Degraded question 3: a line that ends on an option is plain only when none of its commands names a program
+# whose missing operand could be code or a command (a shell's -c, env -S, an interpreter's -e, a wrapper's
+# command), or a removal program. Any word in any command of the line counts, so `nice bash -c`,
+# `docker run img sh -c` and `bash -c; ls -la` stay refused; a word the tokenizer cannot read refuses.
+DEGRADED_TRAILING_OPTION = re.compile(r"(^|[ \t])[-+][A-Za-z0-9=_-]*[ \t]*$")
+_DG_SHELL = re.compile(r"(ba|da|z|k|mk|pdk|ya|tc|c|a|rba|lk|po|fi)?sh[0-9.]*|fish")
+_DG_INTERP = re.compile(r"(python|pypy|ipython|perl|ruby|irb|node|nodejs|deno|bun|php|lua|luajit|tclsh|wish|Rscript|"
+                        r"julia|osascript|expect|jshell|g?awk|mawk|nawk|g?sed)[0-9.]*")
+_DG_PROGRAMS = frozenset(
+    "sudo doas su runuser env exec command builtin eval source nohup nice ionice time timeout setsid xargs parallel "
+    "chroot unshare nsenter taskset chrt stdbuf flock watch script systemd-run at batch busybox toybox strace ltrace "
+    "gdb fakeroot firejail bwrap proot npx bunx pnpx uvx pipx trap coproc "
+    "rm rmdir unlink shred srm wipe wipefs truncate rsync dd".split())
+_DG_FIND_ACTIONS = frozenset("-exec -execdir -ok -okdir -delete -fprint -fprint0 -fprintf -fls".split())
+_DG_INFO = frozenset(("--version", "--help"))
+_DG_CODE_MODULES = frozenset("code runpy pdb timeit cProfile profile trace idlelib doctest IPython".split())
+
+
+def _degraded_command_is_plain(words):
+    """One simple command (assignments stripped): no shell, interpreter, wrapper or removal program in any word.
+
+    `<program> --version|--help` alone is plain for any program, `<interpreter> -V` alone for an interpreter, and
+    `python… -m <module> …` is plain when the words after the module are and the module does not run code it is
+    handed (code, runpy, pdb, timeit, ...)."""
+    if not words:
+        return False
+    base = [w.rsplit("/", 1)[-1] for w in words]
+    if len(words) == 2 and (words[1] in _DG_INFO or (words[1] == "-V" and _DG_INTERP.fullmatch(base[0]))):
+        return True
+    if words[0] in (".", "source"):
+        return False
+    rest = base
+    if re.fullmatch(r"(python|pypy)[0-9.]*", base[0]) and len(words) > 2 and words[1] == "-m" \
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", words[2]) and words[2] not in _DG_CODE_MODULES:
+        rest = base[3:]
+    if any(_DG_SHELL.fullmatch(b) or _DG_INTERP.fullmatch(b) or b in _DG_PROGRAMS for b in rest):
+        return False
+    if "find" in base and _DG_FIND_ACTIONS.intersection(words):
+        return False
+    return not ("git" in base and "clean" in base)
+
+
+def degraded_trailing_option_is_plain(line):
+    """True when a line that ends on an option is provably plain (see _degraded_command_is_plain)."""
+    import shlex
+    try:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if not tokens or not DEGRADED_TRAILING_OPTION.search(" " + tokens[-1]):
+        return False
+    commands, words = [], []
+    for tok in tokens:
+        if tok and set(tok) <= set(";&|()"):
+            commands.append(words)
+            words = []
+        elif not (tok and set(tok) <= set("<>&")):
+            words.append(tok)
+    commands.append(words)
+    for words in commands:
+        while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0]):
+            words = words[1:]
+        if words and not _degraded_command_is_plain(words):
+            return False
+    return True
+
+
 def removal_policy(payload_text, command):
     """Every execution boundary must be proven inert or a safe removal by lib/bash_execution_boundary.py.
 
     The analyzer runs in its own process under a time and memory limit. When it gives no usable verdict the
     command passes only if it is provably plain: no removal reference (lib/pol_degraded_removal_reference.ere), no
-    assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), and no trailing
-    option or operator.
+    assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), no line ending on a
+    dangling operator or redirect, and no line ending on an option unless degraded_trailing_option_is_plain()
+    proves that line's commands name no shell, interpreter, exec wrapper or removal program.
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
     decision = ""
-    limit = duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "5s")
+    limit = duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")
     if os.access(analyzer, os.R_OK) and limit is not None:
         try:
             mem_kb = int(os.environ.get("CLAUDE_HOOK_BOUNDARY_MEM_KB", "") or "524288")
@@ -975,7 +1046,8 @@ def removal_policy(payload_text, command):
         refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                    f"missing or empty. Denied conservatively.", f"Command: {command}")
     if grep(rmref, command) or grep(r"[\]$`\[?*{}!]|<<", command) or grep(r"\\$", command) \
-            or grep(r"(^|[ \t])[-+][A-Za-z0-9=_-]*[ \t]*$", command) or grep(r"[<>|&;][ \t]*$", command):
+            or any(DEGRADED_TRAILING_OPTION.search(ln) and not degraded_trailing_option_is_plain(ln)
+                   for ln in lines_of(command)) or grep(r"[<>|&;][ \t]*$", command):
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
                    "usable verdict, and this command is not provably plain. Denied conservatively.",
                    f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; never widen this "
