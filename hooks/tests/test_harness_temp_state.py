@@ -257,13 +257,25 @@ def test_temp_root_alias_like_private_tmp(tmp_path, monkeypatch):
         assert hts.temp_root_of(str(base / "anything")) == str(real)
 
 
-def test_temp_roots_tmpdir_unset_empty_relative(roots, monkeypatch):
+def test_temp_roots_tmpdir_unset_empty_relative(roots, tmp_path, monkeypatch):
+    """Fail closed: an unset, empty, relative or "/" TMPDIR never widens what is temp."""
     tmp, var_tmp = roots
     expected = (str(tmp), str(var_tmp))
     assert hts.temp_roots() == expected
+    (tmp_path / "relative" / "dir").mkdir(parents=True)
     for value in ("", "relative/dir", "/", "//"):
         monkeypatch.setenv("TMPDIR", value)
         assert hts.temp_roots() == expected
+        assert not hts.is_in_temp_root("/etc/x")
+        assert not hts.is_in_temp_root("x", cwd=str(tmp_path / "relative" / "dir"))
+    # A relative TMPDIR still counts for state detection, against the cwd.
+    monkeypatch.setenv("TMPDIR", "relative/dir")
+    cwd = str(tmp_path)
+    target = "relative/dir/claude-git-blessed/t.grant"
+    assert hts.classify(target, cwd=cwd).name == "git-blessed-grants"
+    assert hts.temp_root_of(target, cwd=cwd) is None
+    assert str(tmp_path / "relative" / "dir") in hts.name_roots(cwd=cwd)
+    assert str(tmp_path / "relative" / "dir") not in hts.temp_roots()
 
 
 def test_temp_roots_tmpdir_set_trailing_slash_and_duplicate(roots, tmp_path, monkeypatch):
@@ -349,9 +361,99 @@ def test_relative_state_dir_falls_back_to_default(roots, monkeypatch):
 def test_pathlike_and_bad_input(roots):
     tmp, _ = roots
     assert hts.classify(tmp / "claude-do-task-s.json").name == "do-task-sidecar"
-    assert hts.classify(None) is None
-    assert hts.classify(123) is None
     assert hts.resolved_views("") == ()
+    # Not a path at all: an error, never a silent "not state".
+    for bad in (None, 123, 1.5, object()):
+        with pytest.raises(TypeError):
+            hts.classify(bad)
+        with pytest.raises(TypeError):
+            hts.is_harness_state(bad)
+        with pytest.raises(TypeError):
+            hts.is_in_temp_root(bad)
+
+
+def test_bytes_paths_are_decoded_not_failed_open(roots):
+    tmp, _ = roots
+    raw = os.fsencode(str(tmp / "claude-commit-grant-s-n.json"))
+    assert hts.classify(raw).name == "git-grant"
+    assert hts.is_harness_state(raw)
+    assert hts.is_in_temp_root(raw)
+    assert hts.classify(os.fsencode("claude-grants/x.json"), cwd=str(tmp)).name == "sentinel-grants"
+    # Undecodable bytes survive through surrogateescape and still match.
+    odd = os.fsencode(str(tmp / "claude-grants")) + b"/\xff\xfe.json"
+    assert hts.classify(odd).name == "sentinel-grants"
+
+
+def test_root_slash_is_a_name_root_but_never_a_temp_root(roots, monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/")
+    assert os.sep not in hts.temp_roots()
+    assert not hts.is_in_temp_root("/etc/passwd")
+    assert hts.temp_root_of("/claude-git-blessed/t.grant") is None
+    assert hts.classify("/claude-git-blessed/t.grant").name == "git-blessed-grants"
+    assert hts.classify("/etc/passwd") is None
+    monkeypatch.delenv("TMPDIR")
+    assert hts.classify("/claude-allow-daemon-restart-web.flag") is None
+    monkeypatch.setenv("CLAUDE_TMPDIR", "/")
+    assert hts.classify("/claude-allow-daemon-restart-web.flag").name == "daemon-restart-grant"
+    assert not hts.is_in_temp_root("/claude-allow-daemon-restart-web.flag")
+
+
+@pytest.mark.parametrize("var,rel,name", [
+    ("TMPDIR", "claude-git-blessed/t.grant", "git-blessed-grants"),
+    ("CLAUDE_TMPDIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
+    ("CLAUDE_DAEMON_RESTART_GRANT_DIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
+    ("TMP", "sid1/doc-sync-notices-main.json", "doc-sync-notices"),
+    ("TEMP", "sid1/doc-sync-notices-main.json", "doc-sync-notices"),
+])
+def test_relative_name_root_vars_resolve_against_cwd(roots, tmp_path, monkeypatch, var, rel, name):
+    work = tmp_path / "work"
+    (work / "rel-root").mkdir(parents=True)
+    monkeypatch.setenv(var, "rel-root")
+    assert hts.classify(f"rel-root/{rel}", cwd=str(work)).name == name
+    assert hts.classify(str(work / "rel-root" / rel), cwd=str(work)).name == name
+    # Without cwd= the process cwd is used.
+    monkeypatch.chdir(work)
+    assert hts.classify(str(work / "rel-root" / rel)).name == name
+    # Never a temp root.
+    assert not hts.is_in_temp_root(str(work / "rel-root" / rel), cwd=str(work))
+
+
+@pytest.mark.parametrize("var,rel,name", [
+    ("CLAUDE_GIT_BLESSED_GRANT_DIR", "t.grant", "git-blessed-grants"),
+    ("CLAUDE_CAPABILITY_STATE_DIR", "s.json", "capability-state"),
+    ("XDG_RUNTIME_DIR", "claude-capability/s.json", "capability-state"),
+])
+def test_relative_tree_vars_resolve_against_cwd(roots, tmp_path, monkeypatch, var, rel, name):
+    work = tmp_path / "work"
+    (work / "rel-dir").mkdir(parents=True)
+    monkeypatch.setenv(var, "rel-dir")
+    assert hts.classify(str(work / "rel-dir" / rel), cwd=str(work)).name == name
+    monkeypatch.chdir(work)
+    assert hts.classify(f"rel-dir/{rel}").name == name
+    assert not hts.is_in_temp_root(f"rel-dir/{rel}")
+
+
+@pytest.mark.parametrize("rel", [
+    "CLAUDE-GRANTS/x.json", "Claude-Commit-Grant-s-n.json", "claude-orchestrator-CONSENT-s.flag",
+    "AGENTIC-COMMIT/push/x", "sid1/.OWNER",
+])
+def test_control_names_match_case_insensitively(roots, rel):
+    tmp, _ = roots
+    loc = hts.classify(str(tmp / rel))
+    assert loc is not None and loc.kind == hts.CONTROL
+
+
+def test_control_root_matches_case_insensitively(roots, tmp_path, monkeypatch):
+    state = tmp_path / "State"
+    state.mkdir()
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(state))
+    # On a case-insensitive filesystem /…/state names the same directory.
+    assert hts.classify(str(tmp_path / "state" / "claude-tool-streak-s.json")).name == "tool-streak"
+    # Temp roots stay case-sensitive: case folding never widens what is temp.
+    tmp, _ = roots
+    upper = str(tmp).upper()
+    if upper != str(tmp):
+        assert not hts.is_in_temp_root(upper + "/x")
 
 
 def test_the_module_writes_nothing(roots):
