@@ -224,10 +224,9 @@ def test_ac4_concurrent_external_writer_not_silently_clobbered(mod, scenario, mo
 
 # ---------------------------------------------------------------------------
 # AC5 -- file-scope isolation: the four named files this cycle must not
-# touch stay byte-identical to their state at the start of this dev cycle
-# (frozen sha256 constants; these files were already dirty from unrelated,
-# concurrently in-flight work, so a HEAD-vs-working-tree diff is not the
-# right check here -- see docs/dev/ticket-20260919-135733.md's AC5).
+# touch are unchanged by the commit that added this test file (checked
+# against that commit's own diff in git history, not a HEAD-vs-working-tree
+# diff, so unrelated dirty work on disk cannot affect it).
 # ---------------------------------------------------------------------------
 
 _FORBIDDEN_PATHS = (
@@ -245,13 +244,8 @@ def test_ac5_forbidden_files_untouched():
     whatever bytes happen to be sitting in a shared working tree -- makes
     this checkout-stable: it does not care what a concurrent, unrelated
     session has dirtied on disk, and it gives the identical answer whether
-    run against a clean checkout of the landed commit or against today's
-    dirty working tree. Before that commit exists (this cycle has no
-    landing channel yet -- dev may not `git commit`, only `/commit` may),
-    there is nothing yet in git history that could violate the invariant,
-    so the loop below has nothing to find; the check activates for real
-    the moment this cycle's own commit is created, and stays correct on
-    every future checkout of it. If the commit that added this file has
+    run against a clean checkout or a dirty working tree. A tree where no
+    commit adds this file (an uncommitted copy) has nothing to check. If the commit that added this file has
     no parent -- a root commit, such as a public copy's first publish
     under D30, which adds every file at once, these four included -- its
     diff says nothing about the original landing commit in the private

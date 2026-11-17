@@ -251,7 +251,9 @@ def load_sentinel_grant_for_task(task_id: str) -> dict | None:
         matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     except Exception:
         pass
-    return _read_sentinel_grant_file(matches[0])
+    # Read in the grant directory by its name: the same file, and a read the artifact check
+    # places there (tests/artifact_graph), not at any path.
+    return _read_sentinel_grant_file(Path(SENTINEL_GRANT_DIR) / matches[0].name)
 
 
 def match_sentinel_grant_for_tool(session_id: str, tool_name: str) -> dict | None:

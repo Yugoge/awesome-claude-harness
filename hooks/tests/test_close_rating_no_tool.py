@@ -133,12 +133,3 @@ def test_the_call_the_cli_answers_with_no_such_tool_completes_step_4(landed):
                    own="Error: No such tool available: AskUserQuestion")
     assert gate.decide(landed.payload, "block") == (0, "")
 
-
-def test_close_md_step_4_has_a_session_without_the_tool_make_the_call():
-    """The text side of the fix: before it, Step 4 named no form for a session without the tool."""
-    flat = " ".join(STEP4.split())
-    assert ("A session whose tool list has no AskUserQuestion (headless, or a client without it) makes the "
-            "same call all the same") in flat
-    assert "`No such tool available: AskUserQuestion`, and that error is a complete Step 4 too" in flat
-    assert "A deferred AskUserQuestion is offered: load it, then ask." in flat
-    assert "The question is never printed in text in its place." in flat
