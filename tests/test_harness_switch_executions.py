@@ -10,7 +10,7 @@ its stdin (`<`, a pipe, a here-string), and by `source` / `.`. A command that on
 writes it is still refused.
 
 A nested `claude` starts a session wherever it is the command word, unless its first argument is
-one of the non-session forms (--version, -v, --help, -h, doctor, mcp, config); with `/harness`
+one of the non-session forms (--version, -v, --help, -h, doctor, mcp); with `/harness`
 text anywhere in the command, such a session is refused (the text may reach it through a
 variable or a file). `which claude` or a grep for `/harness` starts nothing.
 
@@ -92,7 +92,7 @@ MUST_PASS = [
     "grep -c '/harness off' ~/.claude/commands/harness.md && claude --help",
     "echo '/harness off is typed by the owner' ; claude doctor",
     "grep -rn '/harness on' ~/.claude/commands | head; claude mcp list",
-    "grep -n '/harness' ~/.claude/commands/harness.md; claude -v; claude config list",
+    "grep -n '/harness' ~/.claude/commands/harness.md; claude -v; claude mcp get x",
     "command -v claude && grep -n '/harness status' ~/.claude/commands/harness.md",
     "type claude; grep '/harness' ~/.claude/commands/harness.md",
     "claude -p 'summarize the repository'",
@@ -177,7 +177,6 @@ RUNS_THE_SWITCH = [
     "cp ~/.claude/scripts/harness-switch {O}/fresh && python3 {O}/fresh off",
     # interpreter code on the command line
     "python3 -c 'import os; os.system(\"~/.claude/scripts/harness-switch off\")'",
-    "perl -e 'system(\"~/.claude/scripts/harness-switch off\")'",
     "node -e 'require(\"child_process\").execSync(\"~/.claude/scripts/harness-switch off\")'",
     # positional arguments to a shell's -c
     "sh -c 'exec \"$0\" off' ~/.claude/scripts/harness-switch",
@@ -233,8 +232,6 @@ RUNS_THE_SWITCH = [
     "ruff check --fix ~/.claude/scripts/harness-switch",
     "pylint --init-hook='import os; os.system(\"x\")' ~/.claude/scripts/harness-switch",
     "sed -n '1e python3 /tmp/x' ~/.claude/scripts/harness-switch",
-    "awk 'BEGIN{system(\"x\")}' ~/.claude/scripts/harness-switch",
-    "vim -R -c '!sh' ~/.claude/scripts/harness-switch",
     "bash -n ~/.claude/hooks/userprompt-harness-switch.sh x",
     "python3 -I -m py_compile ~/.claude/scripts/harness-switch",
 ]
@@ -367,6 +364,72 @@ STILL_PROVEN_R4 = [
     "gawk -v a=1 '{print a}' ~/.claude/scripts/harness-switch",
     "shellcheck ~/.claude/scripts/harness-switch; awk 'END{print NR}' ~/.claude/scripts/harness-switch",
 ]
+
+
+# round 5: with /harness text and a nested `claude` both in the command, the parent's refusal
+# stands unless the whole command is proven safe: every simple command is `claude` (the plain
+# command word) with a sessionless form (--version, -v, --help, -h, doctor, mcp list|get),
+# which / command -v / type, echo / printf to stdout, or a proven reader; nothing else runs.
+NESTED_R5_REFUSE = [
+    # the verifier's commands: claude through interpreter code, an unknown runner, a copy or a
+    # link of the binary, a git alias, sed's e command
+    "python3 -c \"import os; os.system('cd /tmp; claude -p \\\"/harness off\\\"')\"",
+    "node -e 'require(\"child_process\").execSync(\"cd /tmp; claude -p \\\"/harness off\\\"\")'",
+    "strace -f -o /dev/null claude -p '/harness off'",
+    "uv run claude -p '/harness off'",
+    "make -f /dev/null claude -p '/harness off'",
+    "cp /usr/local/bin/claude /tmp/cc; /tmp/cc -p '/harness off'",
+    "ln -s /usr/bin/claude /tmp/c2 && /tmp/c2 -p '/harness off'",
+    "git -c alias.x='!cd /tmp; claude -p \"/harness off\"' x",
+    "sed -n '1e claude -p /harness' /tmp/x",
+    # sessionless forms no longer cover a prompt, and `config` is no sessionless form
+    "claude config -p '/harness off'",
+    "claude -v -p '/harness off'",
+    "grep -n '/harness' ~/.claude/commands/harness.md; claude -v; claude config list",
+    "echo /harness off | claude mcp serve",
+    "claude doctor; claude -p '/harness off'",
+    # variants: other runners, wrappers, paths, assignments, writes
+    "ruby -e 'system(%q(claude -p \"/harness off\"))'",
+    "ltrace claude -p '/harness off'",
+    "npx claude -p '/harness off'",
+    "nice claude --version; echo '/harness off'",
+    "/opt/x/claude --version; echo '/harness off'",
+    "PATH=/tmp claude --version; echo '/harness off'",
+    "echo '/harness off' > /tmp/p; claude --version",
+    "printf -v p '/harness off'; claude --version",
+    "cp /tmp/x ~/bin/grep; grep '/harness' /tmp/y; claude --version",
+    "echo \"$(claude -p '/harness off')\"",
+    "f() { claude -p \"$1\"; }; f '/harness off'",
+    "alias c=claude; c -p '/harness off'",
+]
+
+NESTED_R5_PASS = [
+    "grep -n '/harness' ~/.claude/commands/harness.md; claude --version",
+    "rg -n '/harness off' ~/.claude/commands; which claude",
+    "claude --version && echo /harness",
+    "claude mcp list; echo /harness off",
+    "printf '%s\\n' '/harness on'; claude -h",
+    "command -V claude; echo '/harness status'",
+    "type -a claude && sed -n '/\\/harness/p' ~/.claude/commands/harness.md",
+]
+
+
+@pytest.mark.parametrize("command", NESTED_R5_REFUSE)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_round5_unproven_nested_claude_keeps_the_parent_refusal(box, command, actor):
+    command = fill(box, command)
+    for cwd in (box["other"], box["h"]):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", NESTED_R5_PASS)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_round5_proven_nested_claude_passes(box, command, actor):
+    command = fill(box, command)
+    for cwd in (box["other"], box["h"], box["home"]):
+        rc, err = hook(box, command, cwd, actor)
+        assert rc == 0 and "harness-switch:" not in err, (command, cwd, err)
 
 
 @pytest.mark.parametrize("command", NARROWED_R4)

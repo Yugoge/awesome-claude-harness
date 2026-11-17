@@ -277,7 +277,9 @@ def _runs_text(script) -> bool:
 
 
 SWITCH_FILES = (os.path.join(HOME, "scripts", "harness-switch"), os.path.join(HOME, "hooks", "userprompt-harness-switch.sh"))
-SESSIONLESS = ("--version", "-v", "--help", "-h", "doctor", "mcp", "config")  # claude's forms that start no session
+SESSIONLESS = ("--version", "-v", "--help", "-h", "doctor", "mcp")  # claude's forms that start no session
+CLAUDE_LOOKUPS = (("which",), ("which", "-a"), ("command", "-v"), ("command", "-V"), ("type",), ("type", "-a"),
+                  ("type", "-t"), ("type", "-p"), ("type", "-P"))  # find claude on PATH; run nothing
 PY_READERS = ("py_compile", "compileall", "tokenize", "tabnanny", "pyclbr", "dis", "ast")  # python -m: it reads
 INTERP_VALUE = {"python": "WXQ", "perl": "IM", "ruby": "IrCE", "node": "r", "nodejs": "r", "bun": "r", "php": "dc",
                 "shell": "oO"}  # short options whose value is the next word
@@ -535,6 +537,52 @@ def _proof_reader(res, env: dict) -> bool:
     if kind == "shell":
         return name in ("bash", "sh") and len(args) == 2 and args[0] == "-n" and not args[1].startswith(("-", "+"))
     return False
+
+
+def _harmless_nested(script) -> bool:
+    """Whether a command holding both /harness text and a nested `claude` provably starts no
+    session that could read the text: every simple command (substitutions and function bodies
+    included) is, with no assignment, wrapper or path-named command word, either `claude` with a
+    sessionless form alone (--version, -v, --help, -h, doctor, `mcp list` / `mcp get <name>`),
+    which / command -v|-V / type of plain names, echo, printf without -v, or a proven reader
+    (_proof_reader); and nothing writes a file but /dev/null, /dev/stdout, /dev/stderr. Anything
+    else (interpreter code, a text runner, an unknown runner, a copy or link of the binary, git with
+    -c or an alias, sed's e) keeps the parent's refusal."""
+    env = dict(os.environ)
+    for t in shell_parse.write_targets(script):
+        if t.word is None or t.path not in PROOF_SINKS:
+            return False
+    for site in shell_parse.walk(script):
+        cmd = site.cmd
+        if site.dynamic or cmd.assignments or not cmd.words:
+            return False
+        res = shell_parse.resolve(cmd)
+        if res.unresolved or res.assignments or res.wrappers or res.payload is not None or res.head is None:
+            return False
+        head = res.head.value()
+        if head is None or "/" in head or res.head is not cmd.words[0]:
+            return False
+        if head == "claude":
+            args = [w.value() for w in res.args]
+            if any(a is None for a in args) or not args:
+                return False
+            if not (len(args) == 1 and args[0] in SESSIONLESS and args[0] != "mcp"
+                    or len(args) == 2 and args == ["mcp", "list"]
+                    or len(args) == 3 and args[:2] == ["mcp", "get"] and not args[2].startswith("-")):
+                return False
+            continue
+        words = [w.value() for w in cmd.words]
+        if all(w is not None for w in words) and any(
+                tuple(words[:len(k)]) == k and words[len(k):] and all(
+                    not w.startswith("-") and "/" not in w for w in words[len(k):]) for k in CLAUDE_LOOKUPS):
+            continue
+        if head == "echo" or head == "printf" and not any(
+                (w.value() or "-v").startswith("-v") for w in res.args[:1]):
+            continue
+        if res.name == head and _proof_reader(res, env):
+            continue
+        return False
+    return True
 
 
 def _harmless_read(script, dirs: list, ident: list) -> bool:
@@ -1784,6 +1832,9 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                       "hook off")
     script, sites = shell_parse.parse(command), []
     if script.error is not None and TYPED.search(command) and NESTED.search(command):  # text the parser cannot read
+        return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
+                      "the switch as a prompt")
+    if TYPED.search(command) and NESTED.search(command) and not _harmless_nested(script):  # unproven: as the parent
         return refuse("this Bash command types /harness into a Claude Code session, where it would reach "
                       "the switch as a prompt")
     settings, segments = _settings_files(), list(_commands(script, "all", every_word=True, sites=sites))
