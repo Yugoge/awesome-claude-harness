@@ -93,8 +93,8 @@ class Session:
 
     def bash_limit(self) -> subprocess.CompletedProcess:
         for i in range(5):
-            assert self.gate("Bash", {"command": f"echo {i}"}).returncode == 0
-        return self.gate("Bash", {"command": "echo 5"})
+            assert self.gate("Bash", {"command": f"python3 -c {i}"}).returncode == 0
+        return self.gate("Bash", {"command": "python3 -c 5"})
 
     def write_limit(self) -> subprocess.CompletedProcess:
         assert self.gate("Write", {"file_path": str(self.project / "a.md"), "content": "x"}).returncode == 0
@@ -159,7 +159,7 @@ def test_in_flight_keeps_the_rule_and_the_counts(in_flight):
     after five is refused with the same count; a second Write is refused, a third counts on."""
     for _ in range(2):
         for i in range(5):
-            assert in_flight.gate("Bash", {"command": f"echo {i}"}).returncode == 0
+            assert in_flight.gate("Bash", {"command": f"python3 -c {i}"}).returncode == 0
         assert in_flight.gate("Agent", {"subagent_type": "dev", "prompt": "x"}).returncode == 0
     assert in_flight.bash_limit().stderr == BASE_BASH
     assert in_flight.write_limit().returncode == 2

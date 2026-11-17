@@ -130,7 +130,7 @@ flowchart TD
 The main agent's purity is enforced at two points:
 
 **The orchestrator gate** (`hooks/pretool-orchestrator-gate.py`, `PreToolUse` matcher `*`):
-- **Whitelisted tools** are always allowed; `Bash` is additionally capped at 5 *consecutive* same-name calls (the 6th blocks).
+- **Whitelisted tools** are always allowed; `Bash` is additionally capped at 5 *consecutive* same-name calls (the 6th blocks); a command `hooks/lib/bash_read_only.py` proves read-only from its shell_parse tree is not counted.
 - **Read-only built-ins** (`LSP`, `TaskOutput`, `BashOutput`, `ReadMcpResourceTool`, `ListMcpResourcesTool`) are always allowed and not counted.
 - **Retrieval tools** (`WebSearch`, `WebFetch` and the Context7 tools, each MCP tool listed by exact name, never by a name pattern) get `RETRIEVAL_MAX_PER_TURN = 3` calls per tool name per turn; an `Agent` dispatch never refills that budget, the overnight window included, because the calls of one message pass `PreToolUse` together.
 - **Refused calls give their slot back.** The gate counts at `PreToolUse`, before the other hooks have decided, so it holds each counted call by its `tool_use_id`; the next counted call gives back the slot of one the transcript records as an `is_error` result with no `PostToolUse`/`PostToolUseFailure` event (`hooks/posttool-orchestrator-ran.py` logs every call the CLI ran). A call that ran, a non-zero exit included, stays counted; no result or command text decides it.

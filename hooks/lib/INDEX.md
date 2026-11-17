@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T03:15:40Z*
-**Total entries**: 72
+*Last updated: 2026-11-17T08:10:30Z*
+**Total entries**: 73
 **Convention**: kebab
 
 ## Tree
@@ -27,6 +27,7 @@ lib/
 ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
 ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 ├── `bash_execution_boundary.py` - THE ALGEBRA.  Every execution-bearing
+├── `bash_read_only.py` - ``is_read_only(command)`` is True only when every simple command in ``command``
 ├── `bash_write_targets.py` - An import shim for the hooks that read paths rather than parse trees. Every reading is
 ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits

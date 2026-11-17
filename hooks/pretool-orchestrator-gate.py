@@ -5,7 +5,8 @@ PreToolUse Hook: Orchestrator Gate (Unified)
 Three-tier policy for the main agent:
   1. ALWAYS_ALLOWED whitelist tools pass, but Bash is capped at 5 calls
      (6th blocked) until an Agent dispatch or the next prompt resets the
-     count; other tools between the Bash calls do not. The built-in
+     count; other tools between the Bash calls do not. A Bash command that
+     lib/bash_read_only proves read-only (OB-L03) passes uncounted. The built-in
      read-only tools of READ_ONLY_ALLOWED (LSP, TaskOutput/BashOutput,
      ReadMcpResourceTool, ListMcpResourcesTool) pass too and are not
      counted.
@@ -327,6 +328,19 @@ def update_streak(session_id: str, tool_name: str, data: dict | None = None) -> 
         return counts[tool_name]
 
 
+def read_only_bash(data: dict) -> bool:
+    """The payload's Bash command is proven read-only (lib/bash_read_only), in
+    the foreground. Fails closed: any error, or a background run, counts."""
+    try:
+        tool_input = data.get("tool_input")
+        if not isinstance(tool_input, dict) or tool_input.get("run_in_background"):
+            return False
+        from lib.bash_read_only import is_read_only
+        return is_read_only(tool_input.get("command"))
+    except Exception:
+        return False
+
+
 def overnight_window_open(data: dict) -> bool:
     """The payload's session has its own /dev-overnight record with end_time
     ahead and no human-typed /stop after its /dev-overnight (lib/overnight
@@ -514,6 +528,13 @@ def main():
                 sys.exit(0)
         except OSError:
             pass
+
+    # A Bash command lib/bash_read_only proves read-only (it can neither run
+    # code of its choosing nor write a file, read from the shell_parse tree)
+    # passes without a slot and without a state write (OB-L03). The other
+    # hooks still judge it; anything not proven read-only counts.
+    if tool_name == "Bash" and read_only_bash(data):
+        sys.exit(0)
 
     count = update_streak(sid, tool_name, data)
     enforce_streak_limit(tool_name, count, data)
