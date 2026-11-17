@@ -69,7 +69,8 @@ PROSE_MENTIONS = [
     ("/tmp/audit-notes.md", "The switch keeps its state in %s/.\n" % STATE),
     ("/tmp/audit-notes.md", "The switch keeps its state in `%s/`.\n" % STATE),
     ("docs/notes.md", "The switch keeps its state in %s/.\n" % STATE),
-    ("docs/notes.md", "# Notes\n\nThe switch's state lives in `%s/`, read by the owner.\n" % STATE),
+    ("docs/notes.md", "# Notes\n\nThe switch keeps its state in `%s/`, read by the owner.\n" % STATE),
+    ("docs/notes.md", "# Notes\n\nThe switch keeps its state in `%s/`.\n\n- Nothing else.\n1. Finished\n" % STATE),
     ("docs/notes.txt", "state dir: %s/\n" % STATE),
     ("docs/notes.rst", "The state lives in ``%s/``.\n" % STATE),
     ("docs/NOTES.MD", "The STATE lives in .harness-switch/ under the home.\n"),
@@ -168,6 +169,47 @@ PROVEN_MENTION_BYPASSES = [
     "The state is in `ls %s/`" % STATE,
     "The state is in %s/ = x" % STATE,
 ]
+
+# Round 3: a rule judging lines one by one cannot prove what bash makes of the lines around them, so
+# the whole file is judged: every line plain (no metacharacter or quote, a first word that runs
+# nothing), not only the lines naming the directory. Each form below passed 2dae2504.
+WHOLE_FILE_FORMS = [
+    "a=(\n%s/\n)\nmkdir -p \"${a[0]}\"; touch \"${a[0]}off\"" % STATE,
+    "eval \"f(\"\"){ mkdir -p \\$1; touch \\$1off; }\"\nf %s/" % STATE,
+    "touch \"$(printf %%s\n%s/\n)off\"" % STATE,
+    "x=$(\n%s/\n)" % STATE,
+    "{ mkdir -p\n%s/\n}" % STATE,
+    "f() {\nmkdir -p\n}\nf\n%s/" % STATE,
+    "\\shopt -s expand_aliases\n\\alias The='mkdir -p'\nThe state is in %s/" % STATE,
+    "declare -f The\nThe state is in %s/" % STATE,
+    "builtin eval The\nThe state is in %s/" % STATE,
+    "command mv off\n%s/" % STATE,
+    "Typeset the notes\nThe state is in %s/" % STATE,
+    "Note\rmkdir %s/" % STATE,
+    "It is the owner's state:\n%s/" % STATE,
+    "# Notes\n\nThe switch's state lives in `%s/`, read by the owner." % STATE,
+    "The `touch` notes\nThe state is in %s/" % STATE,
+    "./run notes\nThe state is in %s/" % STATE,
+]
+
+
+@pytest.mark.parametrize("line", WHOLE_FILE_FORMS)
+@pytest.mark.parametrize("path", ["docs/n.md", "/tmp/audit-notes.md", "docs/n.txt"])
+def test_prose_is_judged_as_a_whole_file(box, line, path):
+    rc, err = write(box, path, "Some notes.\n\n%s\n" % line)
+    assert rc == 2 and "naming the switch's state" in err, (path, line, err)
+
+
+def test_an_edit_not_naming_the_state_is_judged_in_the_document_it_leaves(box):
+    f = box["work"] / "docs" / "whole.md"
+    f.parent.mkdir(exist_ok=True)
+    f.write_text("The state is in %s/\n" % STATE)
+    rc, err = call(box, "Edit", {"file_path": str(f), "old_string": "The state is in", "new_string": "a=(\nx"})
+    assert rc == 2 and "naming the switch's state" in err, err
+    rc, err = call(box, "Edit", {"file_path": str(f), "old_string": "The state", "new_string": "The switch's state"})
+    assert rc == 2 and "naming the switch's state" in err, err
+    rc, err = call(box, "Edit", {"file_path": str(f), "old_string": "The state", "new_string": "The whole state"})
+    assert rc == 0, err
 
 
 @pytest.mark.parametrize("line", VERIFIER_FORMS + PROVEN_MENTION_BYPASSES)
