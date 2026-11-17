@@ -778,7 +778,7 @@ def render_rows() -> dict[str, list[tuple[str, str]]]:
 # --------------------------------------------------------------------------------------
 
 PROOF_HEADER = ("Counted from the repository", "Now", "CI fails when")
-COMMANDS_HEADER = ("Command", "Group", "Typed by", "What it does")
+COMMANDS_HEADER = ("Command", "What it does", "Group", "Typed by")
 AGENTS_HEADER = ("Agent", "What it does")
 
 _CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
@@ -911,8 +911,8 @@ def render_commands() -> str:
     lines = []
     for c in shown:
         usage = f"/{c['name']}" + (f" {c['argument_hint']}" if c["argument_hint"] else "")
-        lines.append((md_cell(code_span(usage)), c["group"], "owner only" if c["human_only"] else "owner or agent",
-                      md_cell(c["summary"])))
+        lines.append((md_cell(code_span(usage)), md_cell(c["summary"]), c["group"],
+                      "owner only" if c["human_only"] else "owner or agent"))
     note = f"{len(shown)} commands, generated from the frontmatter of `commands/*.md`."
     if len(shown) < len(rows):
         note += (" An optional module's own commands are described with the module in the "
