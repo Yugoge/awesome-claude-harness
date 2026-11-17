@@ -1,7 +1,7 @@
 {
-  "context_tokens": 36313,
+  "context_tokens": 0,
   "cwd": "<CWD>",
-  "estimated_cache_write_usd": 0.2905,
+  "estimated_cache_write_usd": 0,
   "hook_event_name": "SessionStart",
   "prompt_cache_likely_expired": false,
   "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",

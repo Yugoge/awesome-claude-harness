@@ -25,8 +25,9 @@
 #   hook stdin and the first subagent's meta file. Home, cwd, uuids, agent ids and timestamps
 #   become placeholders; every other string becomes "<redacted>" unless its key is a structural one
 #   (type, hookEvent, ...) or it is a marker this script's own hooks print; a task-notification
-#   keeps its tags, its ids (as placeholders) and its status, its text redacted. No prompt or
-#   system-prompt text is kept.
+#   keeps its tags, its ids (as placeholders) and its status, its text redacted. Token, request
+#   and cost counts and a clock time kept as a number become 0. No prompt or system-prompt text
+#   is kept.
 # Cost: about $3.50 and 5 min for the ten runs on CLI 2.1.326 (the two cut runs wait for their
 #   agent to be busy); it needs the CLI's model access. Run it on a CLI upgrade,
 #   when scripts/canary-verify.sh prints its re-record advisory. Never in CI (owner decision O1).
@@ -188,6 +189,9 @@ KEEP = {"type", "subtype", "role", "hookEvent", "hookName", "hook_event_name", "
         "resolvedModel", "promptCacheRequested", "speed", "status", "decision", "reasonType", "ruleSource",
         "kind", "commandMode", "requestShape"}
 MARKERS = re.compile(r"^(fixture-plain-stdout|fixture-additional-context)-[A-Za-z]+\n?$")
+# Numbers that tell an account's usage (token, request and cost counts) or the recording's clock.
+USAGE_COUNT = re.compile(r"(tokens|Tokens|_usd|_requests)$")
+TIME_NUMBERS = {"nextFireAt"}
 
 CWD_SLUG = re.sub(r"[^A-Za-z0-9]", "-", cwd)
 AGENT_IDS = sorted({p.stem[len("agent-"):] for p in projects.glob("**/agent-*.jsonl")}, key=len, reverse=True)
@@ -232,6 +236,9 @@ def clean(value, key=None):
         if s != value and not re.search(r"\s", s):  # an id or a path, its machine parts replaced
             return s
         return "<redacted>"
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and key is not None \
+            and (USAGE_COUNT.search(key) or key in TIME_NUMBERS):
+        return 0  # a usage or cost count, or a clock time as a number: 0 keeps its shape
     return value
 
 def wanted(rec):
