@@ -921,8 +921,10 @@ def service_rules(command, stripped, env):
 
 # ── Removal policy (BS-32, BS-33) ────────────────────────────────────────────
 
-# Degraded question 3: a line on which a command ends on an option is plain only when every command on it, and every
-# shell string inside a quoted argument, is one the analyzer's own tables (lib/bash_execution_boundary.py: SHELLS,
+# Degraded question 3: once a command on any line ends on an option, every command on every line must have a head on
+# the allowlist _DG_ALLOW below (fail-closed by construction: an unlisted head refuses as the base fallback did).
+# The layers that follow still apply to an allowed command: no command on it, and no
+# shell string inside a quoted argument, may be one the analyzer's own tables (lib/bash_execution_boundary.py: SHELLS,
 # INTERPRETERS, AWKS, WRAPPERS, REMOVAL_EXES, its `_h_*` handlers, INERT_ARGV_CONSUMERS and SELECTOR_DATA_OPTIONS)
 # prove cannot be missing an operand that is code, a command or a value, and no word on it names a program from
 # those tables or the degraded-only extras below. The
@@ -946,7 +948,8 @@ _DG_EXTRA_PROGRAMS = frozenset(
 _DG_FIND_EXTRA = frozenset("-fprint -fprint0 -fprintf -fls".split())
 _DG_FD_EXEC = frozenset("-x -X --exec --exec-batch".split())
 _DG_INFO = frozenset(("--version", "--help"))
-_DG_CODE_MODULES = frozenset("code runpy pdb timeit cProfile profile trace idlelib doctest IPython".split())
+_DG_CODE_MODULES = frozenset("code runpy pdb timeit cProfile profile trace idlelib doctest IPython asyncio "
+                             "unittest pytest".split())
 # Handler-owned heads given a narrower reading below instead of a blanket refusal; any other handler refuses.
 _DG_READ_HANDLERS = frozenset(("git", "docker", "kubectl", "find", "hash", "ssh"))
 _DG_DOCKER_EXEC = frozenset("run exec create start attach debug cp commit".split())
@@ -975,7 +978,7 @@ def _degraded_tables():
     if _DG_TABLES is None:
         def load():
             import bash_execution_boundary as eb
-            handlers = frozenset(n[3:] for n in dir(eb.Analyzer) if n.startswith("_h_"))
+            handlers = frozenset(n[3:] for n in dir(eb.Analyzer) if n.startswith("_h_") and len(n) > 3)
             return {
                 "eb": eb, "handlers": handlers, "shells": frozenset(eb.SHELLS),
                 "interps": frozenset(eb.INTERPRETERS), "awks": frozenset(eb.AWKS),
@@ -996,7 +999,7 @@ def _degraded_tables():
 
 
 def _dg_handler(t, base):
-    return base.replace("-", "_").replace(".", "_") in t["handlers"]
+    return bool(base) and base.replace("-", "_").replace(".", "_") in t["handlers"]
 
 
 def _dg_sensitive(t, base):
@@ -1105,7 +1108,10 @@ def _dg_value_is_plain(t, value, depth):
         parsed = _dg_commands(value)
         return parsed is not None and depth < _DG_MAX_NESTING and all(
             _degraded_command_is_plain(t, words, depth + 1) for words in parsed[0])
-    return not _dg_sensitive(t, value.rsplit("/", 1)[-1])
+    if "=" in value and not _dg_value_is_plain(t, value.split("=", 1)[1], depth):
+        return False  # `--checkpoint-action=exec=sh`: the value after a second `=` is read too
+    base = value.rsplit("/", 1)[-1]
+    return not (_dg_sensitive(t, base) and base not in _DG_READ_HANDLERS)
 
 
 def _dg_last_words(words):
@@ -1220,6 +1226,211 @@ def _dg_quoted_head(line):
     return False
 
 
+# ── The degraded allowlist: the only heads a trailing-option command may have ──
+# Once any command on any line ends on an option-like word, every command on every line must have a head below, in a
+# form its entry accepts; anything else refuses exactly as the base fallback did. An entry is a program whose options
+# neither run a program or code (from argv, stdin or a file it is pointed at) nor write outside its own operands; the
+# reason is given per group. The denylist layers (analyzer-table exec options, removal references in dequoted words,
+# git command text, shell strings inside words) still apply to every allowed command.
+
+
+def _dg_any(t, words):
+    return True
+
+
+def _dg_options_only(*allowed):
+    """At least one option, only the listed ones, and no operand (an operand would be a value to set; bare, some of
+    these act: `ssh-add` loads keys, `gpg` reads stdin)."""
+    return lambda t, words: len(words) > 1 and all(w in allowed for w in words[1:])
+
+
+def _dg_no(*refused):
+    """Any form but the listed options (exact, `--opt=value`, or a short cluster holding the letter)."""
+    longs = tuple(r for r in refused if r.startswith("--"))
+    shorts = "".join(r[1] for r in refused if len(r) == 2 and r[0] == "-")
+
+    def check(t, words):
+        for w in words[1:]:
+            if w.split("=", 1)[0] in longs or w in refused:
+                return False
+            if shorts and len(w) > 1 and w[0] == "-" and w[1] != "-" and any(c in shorts for c in w[1:]):
+                return False
+        return True
+    return check
+
+
+def _dg_subcommands(*allowed, refused=()):
+    """A program whose first word after it is one of `allowed` (or a sole --version/--help), without `--` and
+    without any word in `refused`."""
+    def check(t, words):
+        if len(words) == 2 and words[1] in _DG_INFO:
+            return True
+        return len(words) > 1 and words[1] in allowed and "--" not in words and not set(words) & set(refused)
+    return check
+
+
+# git: read and local-history subcommands. No global option but --no-pager/-P/--version/--help (so no -c,
+# --config-env, -C, --exec-path, --git-dir: config and paths that can name a program from argv). Writes stay inside
+# the repository the command is run in (add, commit, fetch, pull); a pager, diff driver or filter the repository's
+# own config names runs for every git command, trailing option or not, and is not argv. The git-command-text layer
+# still refuses ext::, upload-pack and `git grep -O`.
+_DG_GIT_GLOBAL_OK = frozenset(("--no-pager", "-P", "--version", "--help"))
+_DG_GIT_READ = {
+    "status": None, "log": None, "diff": None, "show": None, "rev-parse": None, "describe": None, "shortlog": None,
+    "ls-files": None, "ls-tree": None, "ls-remote": None, "cherry": None, "count-objects": None, "blame": None,
+    "grep": None, "fetch": None, "add": ("-i", "--interactive", "-p", "--patch", "-e", "--edit"),
+    "commit": None, "pull": None, "version": None, "help": None, "range-diff": None, "merge-base": None,
+    "show-ref": None, "rev-list": None, "cat-file": None, "whatchanged": None, "worktree": ("add", "remove",
+    "move", "prune", "repair", "lock", "unlock"), "notes": ("add", "copy", "append", "edit", "merge", "remove",
+    "prune"), "reflog": ("expire", "delete", "drop"), "fsck": ("--lost-found",),
+    "branch": ("-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "--delete", "--move", "--copy", "--force",
+               "--set-upstream-to", "--unset-upstream", "--edit-description"),
+    "tag": ("-d", "-a", "-s", "-u", "-f", "-m", "-F", "-e", "--delete", "--annotate", "--sign", "--force",
+            "--message", "--file", "--edit"),
+    "remote": None, "config": None, "stash": None,
+}
+
+
+def _dg_git(t, words):
+    i = 1
+    while i < len(words) and words[i] in _DG_GIT_GLOBAL_OK:
+        i += 1
+    if i >= len(words):
+        return True  # `git --version`
+    sub, rest = words[i], words[i + 1:]
+    if sub not in _DG_GIT_READ:
+        return False
+    if sub == "remote":  # listing only: `git remote`, `git remote -v`, `git remote show|get-url x`
+        return not rest or rest[0] in ("-v", "--verbose", "show", "get-url")
+    if sub == "config":  # reading only: --list/--get*, or one key
+        reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
+                 "--local", "--system", "--name-only", "-z", "--null")
+        return all(w in reads or w.startswith("--get") for w in rest if w.startswith("-")) and \
+            (any(w in ("-l", "--list") or w.startswith("--get") for w in rest) or
+             len([w for w in rest if not w.startswith("-")]) <= 1)
+    if sub == "stash":  # listing only
+        return bool(rest) and rest[0] in ("list", "show")
+    refused = _DG_GIT_READ[sub] or ()
+    return _dg_no(*[r for r in refused if r.startswith("-")])(t, [sub] + rest) and not set(rest) & {
+        r for r in refused if not r.startswith("-")}
+
+
+# docker / kubectl: read subcommands only, never `--` (kubectl runs what follows it).
+_DG_DOCKER_READ = frozenset("ps images logs inspect version info stats top port history events".split())
+_DG_KUBECTL_READ = frozenset("get describe logs version explain api-resources api-versions cluster-info top "
+                             "config".split())
+
+
+def _dg_docker(t, words):
+    if len(words) == 2 and words[1] in ("--version", "-v", "--help"):
+        return True
+    rest = words[1:]
+    if rest and rest[0] in ("network", "volume", "image", "container", "system", "compose") and len(rest) > 1:
+        rest = rest[1:]  # `docker network ls`, `docker compose ps`
+        return rest[0] in _DG_DOCKER_READ | {"ls", "df"} and "--" not in rest
+    return bool(rest) and rest[0] in _DG_DOCKER_READ and "--" not in rest
+
+
+def _dg_kubectl(t, words):
+    if "--" in words:
+        return False
+    if len(words) > 2 and words[1] == "config":
+        return words[2] in ("view", "current-context", "get-contexts", "get-clusters", "get-users")
+    return len(words) > 1 and words[1] in _DG_KUBECTL_READ
+
+
+def _dg_python(t, words):
+    """An interpreter only reports its version; `python -m pip` only its read forms."""
+    if len(words) == 2 and words[1] in ("--version", "-V", "-VV"):
+        return True
+    return len(words) > 3 and words[1:3] == ["-m", "pip"] and _DG_PIP(t, words[2:])
+
+
+_DG_PIP = _dg_subcommands("list", "show", "freeze", "--version", "-V", "check")
+
+_DG_ALLOW = {
+    # Text and file readers: options select, format or count; operands are files read (sort -o writes its operand).
+    **dict.fromkeys(("cat", "head", "tail", "wc", "nl", "od", "xxd", "hexdump", "base64", "md5sum", "sha1sum",
+                     "sha256sum", "sha512sum", "cksum", "b2sum", "cmp", "comm", "paste", "column", "cut", "tr",
+                     "uniq", "diff", "file", "stat", "fold", "fmt", "expand", "unexpand", "tac",
+                     "rev", "strings", "basename", "dirname", "realpath", "readlink", "seq", "true", "false",
+                     "sleep", "yes", "echo", "printf", "jq", "yq", "pwd", "cd", "pushd", "popd", "type"), _dg_any),
+    "sort": _dg_no("--compress-program"),  # its one program-valued option
+    "ls": _dg_any, "tree": _dg_no("-o"),  # tree -o writes a file it names
+    # Relocators: copy, move or create their operands; the analyzer's relocator class (no option runs a program).
+    **dict.fromkeys(("cp", "mv", "mkdir", "touch", "ln"), _dg_any),
+    "du": _dg_any, "df": _dg_any, "find": lambda t, w: not set(w[1:]) & t["find_ops"],  # actions refuse
+    "fd": lambda t, w: not _DG_FD_EXEC.intersection(w),
+    # Search tools: patterns and paths are data; rg's preprocessor and decompressor options run programs.
+    **dict.fromkeys(("grep", "egrep", "fgrep", "rgrep"), _dg_any),
+    "rg": _dg_no("--pre", "--pre-glob", "--hostname-bin", "-z", "--search-zip"),
+    # System inspection: read-only reports. A bare name or option only (hostname/date/stty/ulimit can set).
+    **dict.fromkeys(("uname", "whoami", "id", "groups", "nproc", "uptime", "free", "ps", "top", "lscpu", "lsblk",
+                     "ss", "netstat", "lsof", "locale", "tty", "printenv", "which", "whereis", "cal"),
+                    _dg_any),
+    "date": _dg_no("-s", "--set", "-f", "--file"),
+    "hostname": lambda t, w: all(x.startswith("-") for x in w[1:]),
+    "stty": _dg_options_only("-a", "--all", "-g", "--save"),
+    "ulimit": _dg_options_only("-a"),
+    "set": lambda t, w: all(x[:1] in "-+" for x in w[1:]),  # shell options only, no positional reset
+    "hash": _dg_options_only("-r", "-l", "-t", "-d"),
+    "history": lambda t, w: all(x.isdigit() for x in w[1:]),
+    # Documentation: the analyzer's exec options (-P, --pager, -H, -B) refuse in the consumer layer.
+    **dict.fromkeys(("man", "info", "apropos", "whatis"), _dg_any),
+    "apt": _dg_subcommands("show", "list", "search", "policy", "depends", "rdepends", "showsrc"),
+    "apt-cache": _dg_subcommands("show", "search", "policy", "depends", "rdepends", "showpkg"),
+    # Version control and orchestration CLIs, read forms (see above).
+    "git": _dg_git, "docker": _dg_docker, "kubectl": _dg_kubectl,
+    "helm": _dg_subcommands("list", "ls", "version", "status", "history"),
+    "terraform": _dg_subcommands("version", "fmt"),  # fmt rewrites its operand files, loads no provider
+    "gh": _dg_subcommands("--version"), "aws": _dg_subcommands("--version"),
+    "gcloud": _dg_subcommands("--version"),
+    # Interpreters and package tools: version reports and read forms only.
+    **dict.fromkeys(("python", "python3", "python2"), _dg_python),
+    "pip": _DG_PIP, "pip3": _DG_PIP,
+    "npm": _dg_subcommands("ls", "list", "--version", "-v", "view", "outdated"),
+    "pnpm": _dg_subcommands("--version", "-v", "ls", "list"), "yarn": _dg_subcommands("--version", "-v"),
+    "node": _dg_subcommands("--version", "-v"), "deno": _dg_subcommands("--version"),
+    "bun": _dg_subcommands("--version"), "cargo": _dg_subcommands("--version", "-V"),
+    "rustc": _dg_subcommands("--version", "-V"), "go": _dg_subcommands("version", "env"),
+    "java": _dg_subcommands("-version", "--version"), "javac": _dg_subcommands("-version", "--version"),
+    "mvn": _dg_subcommands("-v", "--version"),
+    # Linters and formatters that parse files and load no code from their configuration (eslint, prettier, mypy,
+    # pylint and flake8 can: JS configs and plugins), so not those.
+    "ruff": _dg_subcommands("check", "format", "--version"), "black": _dg_any, "isort": _dg_any,
+    "shellcheck": _dg_any,
+    # Keys and agents: listing only.
+    "ssh-add": _dg_options_only("-l", "-L"),
+    "gpg": _dg_options_only("--list-keys", "-k", "--list-secret-keys", "-K", "--fingerprint", "--version"),
+    "ssh": _dg_options_only("-V"),
+    # Database clients: listing databases or the version only, alone (no stdin, no -c/-f/-e)
+    # (bare, they read SQL, and its shell escapes, from stdin).
+    "psql": lambda t, w: len(w) == 2 and w[1] in ("-l", "--list", "--version", "-V"),
+    "mysql": lambda t, w: len(w) == 2 and w[1] in ("--version", "-V"),
+    "openssl": _dg_subcommands("version"),
+}
+# Any other head ending a command on an option-like word may still report its version or usage, alone, unless it
+# is a wrapper, a handler-owned program, a removal program or one of the degraded extras.
+
+
+def _dg_allowlisted(t, words):
+    """True when this simple command's head and form are on the allowlist above."""
+    while words and words[0] in t["drop"]:
+        words = words[1:]
+    if not words:
+        return True
+    if re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0]):
+        return False  # an assignment prefix (LD_PRELOAD=, PAGER=, GIT_*=) can make any program run another
+    head = words[0]
+    if "/" in head or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", head):
+        return False  # a path is whatever file sits there, not the program the allowlist names
+    entry = _DG_ALLOW.get(head)
+    if entry is not None:
+        return entry(t, words)
+    return len(words) == 2 and words[1] in _DG_INFO and not (
+        head in t["wrappers"] or _dg_handler(t, head) or head in t["removal"])
+
+
 def degraded_trailing_option_is_plain(line):
     """True when every command on the line is provably plain (degraded_refuses asks it of every line once any line
     ends a command on an option)."""
@@ -1227,7 +1438,7 @@ def degraded_trailing_option_is_plain(line):
     parsed = _dg_commands(line) if t is not None else None
     if parsed is None:
         return False
-    return all(_degraded_command_is_plain(t, words) for words in parsed[0])
+    return all(_dg_allowlisted(t, words) and _degraded_command_is_plain(t, words) for words in parsed[0])
 
 
 def _dg_unbalanced(command):
@@ -1265,8 +1476,8 @@ def removal_policy(payload_text, command):
     command passes only if it is provably plain: no removal reference (lib/pol_degraded_removal_reference.ere), no
     assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), no line ending on a
     dangling operator or redirect, balanced quoting, no command head holding whitespace or shell syntax, and no
-    command ending on an option-like word unless degraded_trailing_option_is_plain() proves its line plain from the
-    analyzer's own tables (degraded_refuses).
+    command ending on an option-like word unless every command on every line has an allowlisted head (_DG_ALLOW) and
+    passes degraded_trailing_option_is_plain()'s table-derived layers (degraded_refuses), within a 3 s bound.
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
     decision = ""

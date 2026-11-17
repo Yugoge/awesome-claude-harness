@@ -48,16 +48,22 @@ EVERYDAY_TRAILING_OPTION = [
     "stty -a", "ulimit -a", "wc -l", "grep -n foo file -r", "grep foo file.txt -i", "grep -w foo -R", "rg --files",
     "rg foo --hidden", "rg --type-list", "find . -empty", "find . -size +1M", "find . -mtime -1",
     "find . -name foo -ls", "tree -a", "tree src -d", "uniq -c", "jq -c", "python3 --version", "python3 -V",
-    "python --version", "python3 -m pytest -q", "python3 -m pytest -x", "python3 -m pytest tests -v",
-    "python3 -m pip --version", "pip --version", "pytest -q", "pytest -x", "pytest -v", "pytest --co -q",
-    "ruff check src --fix", "ruff format --check", "cargo --version", "cargo build --release", "cargo fmt --check",
-    "rustc --version", "java -version", "javac -version", "mvn -v", "make -j4", "make -n", "cmake --version",
-    "gcc --version", "clang --version", "docker ps -a", "docker compose up -d", "docker stats --no-stream",
-    "kubectl get pods -A", "kubectl version --client", "terraform fmt -check", "aws --version", "gcloud --version",
-    "gh --version", "ss -tlnp", "netstat -tlnp", "set -e", "set -x", "set +x", "hash -r", "ls --help",
-    "git --help", "bc -l", "psql -l", "mysql --version", "ssh -V", "ssh-add -l", "gpg --list-keys", "base64 -d",
+    "python --version", "python3 -m pip --version", "pip --version", "ruff check src --fix", "ruff format --check",
+    "cargo --version", "rustc --version", "java -version", "javac -version", "mvn -v", "cmake --version",
+    "gcc --version", "clang --version", "docker ps -a", "docker stats --no-stream", "kubectl get pods -A",
+    "kubectl version --client", "terraform fmt -check", "aws --version", "gcloud --version", "gh --version",
+    "ss -tlnp", "netstat -tlnp", "set -e", "set -x", "set +x", "hash -r", "ls --help", "git --help", "psql -l",
+    "mysql --version", "ssh -V", "ssh-add -l", "gpg --list-keys", "base64 -d",
     "git status --short && git diff --stat", "git log --oneline | head -5", "cd src && ls -la",
     "git diff | head -50", "history | tail -20", "git log -p -1", "sort file.txt | uniq -c | sort -rn",
+]
+
+# Everyday commands the allowlist refuses in degraded mode on purpose: they run code the repository holds (a test
+# suite, a Makefile, build scripts, a compose file's containers) or read a program from stdin (bc).
+ALLOWLIST_REFUSED_EVERYDAY = [
+    "bc -l", "cargo build --release", "cargo fmt --check", "docker compose up -d", "make -j4", "make -n",
+    "pytest --co -q", "pytest -q", "pytest -v", "pytest -x", "python3 -m pytest -q", "python3 -m pytest -x",
+    "python3 -m pytest tests -v",
 ]
 
 # Forms the degraded fallback must keep refusing: removals, assembly channels, and the structurally incomplete forms
@@ -95,7 +101,8 @@ SHELL_STRING_WORDS = [
     "hyperfine 'bash -c' -N", "tmux new -d 'sh -c' -x", "fzf --preview 'bash -c' -m", "nodemon --exec 'env -S' -q",
     "foo --pager 'sh -c' -x", "ssh-agent 'bash -c' -x", "bash\\ -c", "\"bash -c\" -x", "env\\ -S", "'sh -c' -s",
     "sh\\ -c -x", "\"git -C\" . difftool x -n -x", "\"/usr/bin/sudo --close-from\" -x", "nsenter\\ -t", "\"rg -r\" -x",
-    "\"xargs -0\" -x", "x 'a \"bash -c\"' -x", "x -d 'ls; sh -c' -x", "PAGER='sh -c' man ls -a", "PAGER=/bin/sh man ls -a",
+    "\"xargs -0\" -x", "x 'a \"bash -c\"' -x", "x -d 'ls; sh -c' -x", "PAGER='sh -c' man ls -a",
+    "PAGER=/bin/sh man ls -a",
 ]
 
 
@@ -128,7 +135,7 @@ GIT_COMMAND_TEXT = [
 MENTIONS = [
     "grep -rn git . -i", "rg ssh -l", "rg -n 'ssh' . -i", "echo docker -n", "echo hash -n", "man ssh -a", "man git -a",
     "apt show git -a", "grep -rn hash src -l", "ls ssh -l", "ls find git docker kubectl ssh hash -l",
-    "kubectl x -- ls -la", "git push -u origin main",
+    "git push -u origin main", "ls src/ -la", "cp a out/ -v", "git log --grep=ssh --oneline -5",
 ]
 
 
@@ -170,7 +177,9 @@ def analyzer_corpus():
         progs.setdefault(p, set())
     progs.setdefault("git", set()).update(eb.GIT_GLOBAL["bool"] | eb.GIT_GLOBAL["val"])
     progs.setdefault("docker", set()).update(eb.DOCKER_GLOBAL["bool"] | eb.DOCKER_GLOBAL["val"])
-    cmds = set(ANALYZER_REFUSED_EXEC_OPTIONS)
+    cmds = set(ANALYZER_REFUSED_EXEC_OPTIONS) | set(STDIN_CODE_AND_NESTED_VALUES)
+    for head in REPL_HEADS:  # programs reading code from stdin or a file, fed or not, alone and beside a line
+        cmds.update((f"{head} -q", f"printf x | {head} -s", f"{head} -v\nls -l", f"ls -l\nprintf x | {head}"))
     for p, opts in progs.items():
         for o in opts | set(common):
             cmds.update((f"{p} {o}", f"{p} x {o}", f"/usr/bin/{p} {o}", f"ls -la; {p} {o}", f"FOO=1 {p} x {o}"))
@@ -324,9 +333,9 @@ def test_predicate_refuses_sensitive_lines(line):
 
 
 @pytest.mark.parametrize("line", [
-    "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version",
-    "kubectl x -- ls -la", "grep -rn find src -i", "python3 -V", "python3 -m pytest -q", "git status --short", "ls -la | grep x -i",
-    "FOO=1 make -n", "make 2>&1 -j4",
+    "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version", "grep -rn find src -i",
+    "ls src/ -la", "cp a out/ -v", "git log --grep=ssh --oneline -5", "python3 -m pip list -v", "python3 -V",
+    "git status --short", "ls -la | grep x -i", "date -u 2>&1 -R",
 ])
 def test_predicate_admits_plain_lines(line):
     assert R.degraded_trailing_option_is_plain(line)
@@ -334,10 +343,72 @@ def test_predicate_admits_plain_lines(line):
 
 @pytest.mark.parametrize("command", [
     "kubectl get pods -A\nkubectl get svc -n x", "git status --short\ngit log --oneline -5", "ls -la\n\ndate -u",
-    "cd src && ls -la\npython3 -m pytest -q", "git status --short\nfind . -name x -ls",
+    "cd src && ls -la\ngit diff --stat", "git status --short\nfind . -name x -ls",
 ])
 def test_multiline_everyday_scripts_stay_allowed(command):
     assert not R.degraded_refuses(command, _rmref()), command
+
+
+# Real deletions the denylist layers missed (round 6): a program reading code from stdin, or a second `=` value.
+STDIN_CODE_AND_NESTED_VALUES = [
+    "printf '%s%s -rf /dev/shm/v/s' r m | tar -cf /dev/null /etc/hostname --checkpoint=1 "
+    "--checkpoint-action=exec=sh -v",
+    "printf '%s%s -rf /dev/shm/v/s' r m | tar -cf /dev/null /etc/hostname --checkpoint=1 "
+    "--checkpoint-action=exec=sh\ngit status --short",
+    "printf 'x' | tar -cf /dev/null /etc/hostname --checkpoint=1 --checkpoint-action=exec=python3 -v",
+    "echo 'import shutil;getattr(shutil,\"r\"+\"mtree\")(\"/dev/shm/v/s\")' | python3 -m asyncio -q",
+    "echo 'import shutil;getattr(shutil,\"r\"+\"mtree\")(\"/dev/shm/v/s\")' | python3 -m asyncio\nls -l",
+    "printf 'all:;%s%s -rf /dev/shm/v/s' r m | make -f - -s", "printf 'syscmd(%s%s -rf /dev/shm/v/s)' r m | m4 -s",
+    "printf 'syscmd(%s%s -rf /dev/shm/v/s)' r m | m4\nls -l",
+    "ls -l; printf '.shell %s%s -rf /dev/shm/v/s\\n' r m | sqlite3 -bail",
+    "printf '.system %s%s -rf /dev/shm/v/s' r m | sqlite3 -batch", "kubectl x -- ls -la",
+]
+
+# Heads that run code they read (an interpreter, a REPL, a database shell, a macro processor) are not on the
+# allowlist; any of them ending a command on an option refuses, stdin-fed or not.
+REPL_HEADS = ["python3 -m asyncio", "m4", "sqlite3", "duckdb", "psql", "mysql", "dc", "ed", "awk", "perl", "ruby",
+              "lua", "tclsh", "jshell", "ghci", "bc", "node", "make -f -", "gawk", "php", "Rscript", "osascript"]
+
+
+@pytest.mark.parametrize("head", REPL_HEADS)
+@pytest.mark.parametrize("shape", ["{h} -q", "printf x | {h} -s", "ls -l; {h} -batch", "{h} -v\nls -l",
+                                   "ls -l\nprintf x | {h}"])
+def test_code_reading_heads_refuse(head, shape):
+    assert R.degraded_refuses(shape.format(h=head), _rmref()), shape.format(h=head)
+
+
+@pytest.mark.parametrize("command", ALLOWLIST_REFUSED_EVERYDAY)
+def test_everyday_code_runners_refuse_in_degraded_mode(command):
+    assert R.degraded_refuses(command, _rmref()), command
+
+
+def test_allowlist_holds_no_program_the_analyzer_models_as_running_code():
+    """Every allowlisted head is outside the analyzer's shells, interpreters, awks, wrappers and removal programs; the
+    handler-owned ones (git, docker, kubectl, find, hash, ssh) and python are read through their own narrow entry."""
+    narrow = {"git", "docker", "kubectl", "find", "hash", "ssh", "python", "python3", "python2", "node", "deno",
+              "bun", "set"}
+    t = R._degraded_tables()
+    for head in R._DG_ALLOW:
+        if head in narrow:
+            continue
+        assert not (head in t["shells"] or head in t["interps"] or head in t["awks"] or head in t["wrappers"]
+                    or head in t["removal"] or R._dg_handler(t, head)), head
+
+
+@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
+def test_stdin_code_and_nested_values_refuse_end_to_end(mode, tmp_path):
+    hook = None
+    if mode == "crash":
+        dst = tmp_path / "hooks"
+        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        analyzer = dst / "lib" / "bash_execution_boundary.py"
+        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
+            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
+        hook = str(dst / "pretool-bash-safety.sh")
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))),
+                              STDIN_CODE_AND_NESTED_VALUES))
+    assert not [c for c, code, _err in results if code != 2], (mode, results)
 
 
 @pytest.mark.parametrize("mode", sorted(MODES))
