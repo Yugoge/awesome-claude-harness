@@ -26,8 +26,8 @@
 #   become placeholders; every other string becomes "<redacted>" unless its key is a structural one
 #   (type, hookEvent, ...) or it is a marker this script's own hooks print; a task-notification
 #   keeps its tags, its ids (as placeholders) and its status, its text redacted. Token, request
-#   and cost counts and a clock time kept as a number become 0. No prompt or system-prompt text
-#   is kept.
+#   and cost counts and a clock time kept as a number become 0. A model id becomes <MODEL> (one
+#   stand-in per distinct model: <MODEL_2>, ...). No prompt or system-prompt text is kept.
 # Cost: about $3.50 and 5 min for the ten runs on CLI 2.1.326 (the two cut runs wait for their
 #   agent to be busy); it needs the CLI's model access. Run it on a CLI upgrade,
 #   when scripts/canary-verify.sh prints its re-record advisory. Never in CI (owner decision O1).
@@ -192,6 +192,16 @@ MARKERS = re.compile(r"^(fixture-plain-stdout|fixture-additional-context)-[A-Za-
 # Numbers that tell an account's usage (token, request and cost counts) or the recording's clock.
 USAGE_COUNT = re.compile(r"(tokens|Tokens|_usd|_requests)$")
 TIME_NUMBERS = {"nextFireAt"}
+# A model id, as a model key's value or inside any string, becomes one stand-in per distinct model
+# (<MODEL>, then <MODEL_2>, ...); a CLI marker such as "<synthetic>" stays.
+MODEL_KEYS = {"model", "requestedModel", "resolvedModel"}
+MODEL_ID = re.compile(r"\bclaude-(?:\d[\w.-]*?-)?(?:opus|sonnet|haiku|instant)[\w.\[\]-]*")
+MODELS = {}
+
+def model_standin(model):
+    if model not in MODELS:
+        MODELS[model] = "<MODEL>" if not MODELS else f"<MODEL_{len(MODELS) + 1}>"
+    return MODELS[model]
 
 CWD_SLUG = re.sub(r"[^A-Za-z0-9]", "-", cwd)
 AGENT_IDS = sorted({p.stem[len("agent-"):] for p in projects.glob("**/agent-*.jsonl")}, key=len, reverse=True)
@@ -203,7 +213,8 @@ def scrub(s):
         s = s.replace(agent, "<AGENT_ID>")
     s = UUID.sub("<UUID>", s)
     s = TS.sub("<TIMESTAMP>", s)
-    return API_ID.sub("<ID>", s)
+    s = API_ID.sub("<ID>", s)
+    return MODEL_ID.sub(lambda m: model_standin(m.group(0)), s)
 
 # A task-notification keeps its tags, its ids (placeholders), its status and a scrubbed output-file
 # path; the text of every other tag is redacted.
@@ -231,6 +242,8 @@ def clean(value, key=None):
         s = scrub(value)
         if s.startswith("<task-notification>") and s.rstrip().endswith("</task-notification>"):
             return notification(s)
+        if key in MODEL_KEYS and s and not s.startswith("<"):  # an alias or an id MODEL_ID misses
+            return model_standin(s)
         if not s or key in KEEP or MARKERS.match(s) or (key == "command" and CLI_COMMAND_LABEL.match(s)):
             return s
         if s != value and not re.search(r"\s", s):  # an id or a path, its machine parts replaced
