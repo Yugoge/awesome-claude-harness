@@ -86,9 +86,13 @@ AWK_OUTPUT = re.compile(r"[>|]|\bsystem\b|@\s*[A-Za-z_]")  # print > file, print
 # program or may call one; a harmless `@` use such as "@ind_str_asc" is refused too (fail-closed)
 AWK_ENV = re.compile(r"\b(?:AWKPATH|AWKLIBPATH|GAWK_PERSIST_FILE)\b")  # what awk loads, a file gawk writes: named
 # anywhere in the command (before awk, after env, exported, declared), they make every awk in it no reader
-AWK_SHADOW = re.compile(  # PATH assigned (prefix, export, plain), or a function or alias named awk: in the same
-    r"\bPATH\+?=|\b(?:g|m|n)?awk\s*\(\s*\)|\bfunction\s+(?:g|m|n)?awk\b|\balias\b.*?\b(?:g|m|n)?awk=",
-    re.S)  # command, the `awk` that runs may be another program: every awk in it is no reader
+AWK_NAME_SAFE = frozenset({  # the commands that cannot change which program the name `awk` runs: with only these
+    "cat", "grep", "egrep", "fgrep", "head", "tail", "wc", "ls", "echo", "printf", "sed", "test", "[", "true",
+    "false", ":", "cd", "pwd"} | set(AWKS))  # (printf without -v, sed that only reads, awk proven a reader), any
+AWK_NAME_READERS = READ_ONLY - {"find", "less", "more", "printf"}  # other reader _read_only passes (nl, cut, ...), no
+# assignment word (POSIXLY_CORRECT=1 before a command aside), no function definition and no output redirection
+# onto an awk name or a computed name, anywhere in the command, an awk in it is the program it names (_awk_trusted)
+AWK_OUT_OPS = (">", ">>", ">|", "&>", "&>>", "<>")
 AWK_UNSAFE = frozenset("{}*?[]$`~!")  # unquoted, a character the shell may expand (brace, glob, $, `, ~, !)
 AWK_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SED_FLAGS = set("nErsuzb")  # sed's short options that take no value and write nothing
@@ -918,6 +922,67 @@ def _proven_literal(raw: str) -> bool:
     return True
 
 
+def _has_function(script) -> bool:
+    """Whether `script`, or a compound command in it, defines a function."""
+    for pl, _sep in script.items:
+        for stage in pl.stages:
+            if isinstance(stage, shell_parse.Compound) and (
+                    stage.kind == "function" or any(_has_function(b) for b in stage.body)):
+                return True
+    return False
+
+
+def _awk_name_safe(site) -> bool:
+    """Whether one simple command leaves the name `awk` resolving as before (AWK_NAME_SAFE)."""
+    cmd = site.cmd
+    if site.dynamic or site.templated:
+        return False
+    if any(not (a.name == "POSIXLY_CORRECT" and a.static_value() == "1" and cmd.words) for a in cmd.assignments):
+        return False
+    for r in cmd.redirects:
+        if r.op in AWK_OUT_OPS and r.target is not None:
+            target = r.target.value()
+            if target is None or os.path.basename(target) in AWKS:
+                return False
+    if not cmd.words:
+        return True
+    plain = [w.value() for w in cmd.words]
+    head = plain[0]
+    if head is None or ("/" in head and os.path.basename(head) not in AWKS):
+        return False
+    name = os.path.basename(head)
+    if ASSIGNMENT.match(head):
+        return False
+    if name in AWK_NAME_READERS and name not in AWK_NAME_SAFE:
+        return None not in plain and _read_only(plain)
+    if name not in AWK_NAME_SAFE:
+        return False
+    if name == "printf":
+        return not (len(plain) > 1 and plain[1] is not None and plain[1].startswith("-") and plain[1] != "--")
+    if name == "sed":
+        return None not in plain and _sed(plain) is not None
+    if name in AWKS:
+        at = _awk_at([w if w is not None else "-" for w in plain])
+        return at is not None and plain[at] is not None and _proven_literal(cmd.words[at].raw.text) \
+            and not AWK_OUTPUT.search(plain[at])
+    return True
+
+
+def _awk_trusted(command) -> bool:
+    """Whether every awk in `command` runs the awk program: the command names no AWK_ENV variable, the
+    parser reads all of it, it defines no function, and every simple command in it, nested ones too
+    (substitutions, payloads), is _awk_name_safe. An allow rule: hash, export, declare, typeset,
+    readonly, local, read, mapfile, printf -v, eval, source, ., alias, enable, set, shopt, any
+    assignment or any other command makes every awk in it no reader."""
+    text = command.source if isinstance(command, shell_parse.Script) else command
+    if AWK_ENV.search(text or ""):
+        return False
+    script = command if isinstance(command, shell_parse.Script) else shell_parse.parse(command)
+    if script.errors() or _has_function(script) or any(_has_function(s) for s in shell_parse._nested_scripts(script)):
+        return False
+    return all(_awk_name_safe(site) for site in shell_parse.walk(script))
+
+
 def _raw_words(cmd) -> list | None:
     """A parsed SimpleCommand's words as raw shell text, aligned with _commands' words for it
     (assignments, words, each redirection's operator and target); None for no parsed command."""
@@ -1301,7 +1366,7 @@ def _written_by(words: list, written: list, awk: bool = False, interpreter: bool
 def writes_settings_file(command: str) -> bool:
     """True when `command` writes a settings*.json file, in any directory: one of the words it
     writes (_written_by; an interpreter whose -c text shows no write reads) names one."""
-    sites, awk = [], not AWK_ENV.search(command) and not AWK_SHADOW.search(command)
+    sites, awk = [], _awk_trusted(command)
     segments = list(_commands(command, "code", sites=sites))
     return any(NAMES_SETTINGS.search(w) for (words, written), cmd in zip(segments, sites)
                for w in _written_by(words, written, awk=awk, interpreter=True, members=False,
@@ -1405,7 +1470,7 @@ def settings_writes(command: str, cwd: str) -> list:
     git_dirs = [d for w, _ in segments for d in _git_dirs(w, cwd)]
     every_dir, chain = list(dict.fromkeys(_cd_dirs(segments, cwd) + git_dirs)), _chain(script, cwd)
     out, seen, home = [], set(), _settings_files()
-    awk = not AWK_ENV.search(command) and not AWK_SHADOW.search(command)
+    awk = _awk_trusted(script)
     for (words, written), cmd in zip(segments, sites):
         plain = _argv(words)
         if not plain:

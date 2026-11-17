@@ -441,3 +441,78 @@ def test_awk_with_a_proven_literal_program_reads(box, command):
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 0, (command, cwd, err)
+
+
+AWK_REBOUND = [  # a command that can change which program the name `awk` runs makes awk no reader
+    "hash -p /usr/bin/tee awk; awk 'NR<=1' .claude/settings.json",
+    "hash -p /usr/bin/tee awk\nawk 'NR<=1' .claude/settings.json",
+    "hash -p/usr/bin/tee awk && awk 'NR<=1' .claude/settings.json",
+    "export PA\"\"TH=/tmp/x:$PATH; awk 'NR<=1' .claude/settings.json",
+    "declare -x PA\"\"TH=/tmp/x\nawk 'NR<=1' .claude/settings.json",
+    "typeset PA''TH=/tmp/x; awk 'NR<=1' .claude/settings.json",
+    "readonly PA''TH=/tmp/x; awk 'NR<=1' .claude/settings.json",
+    "read PATH < /tmp/x/p; awk 'NR<=1' .claude/settings.json",
+    "mapfile -t PATH < /tmp/x/p; awk 'NR<=1' .claude/settings.json",
+    "printf -v PATH /tmp/x; awk 'NR<=1' .claude/settings.json",
+    "PA\\TH=/tmp/x awk 'NR<=1' .claude/settings.json",
+    "aw\\k() { tee \"$@\"; }\nawk 'NR<=1' .claude/settings.json",
+    "function aw\\k { tee \"$@\"; }\nawk 'NR<=1' .claude/settings.json",
+    "aw''k() { cat \"$@\"; }; awk 'NR<=1' .claude/settings.json",
+    "eval 'aw''k() { tee \"$@\"; }'\nawk 'NR<=1' .claude/settings.json",
+    "eval 'aw''k() { tee \"$@\"; }'; awk 'NR<=1' .claude/settings.json",
+    ". /tmp/x/defs\nawk 'NR<=1' .claude/settings.json",
+    "source /tmp/x/defs; awk 'NR<=1' .claude/settings.json",
+    "shopt -s expand_aliases\nalias aw\\k=tee\nawk 'NR<=1' .claude/settings.json",
+    "shopt -s expand_aliases\nalias a\"\"wk=tee\nawk 'NR<=1' .claude/settings.json",
+    "enable -f /tmp/x/awk.so awk\nawk 'NR<=1' .claude/settings.json",
+    "X=1; awk 'NR<=1' .claude/settings.json",
+    "FOO=1 awk 'NR<=1' .claude/settings.json",
+    "awk 'BEGIN{system(\"cp /tmp/x/awk /tmp/bin/awk\")}' /dev/null; awk 'NR<=1' .claude/settings.json",
+    "echo x > /tmp/bin/awk; awk 'NR<=1' .claude/settings.json",
+    "cd /tmp && hash -p /usr/bin/tee awk; awk 'NR<=1' {F}",
+]
+
+
+@pytest.mark.parametrize("command", AWK_REBOUND)
+def test_awk_after_a_command_that_may_rebind_its_name_is_no_reader(box, command):
+    command = fill(box, command)
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "cat .claude/settings.json | awk 'NR<=1'",
+    "awk 'NR<=1' .claude/settings.json > /dev/null",
+    "awk 'NR<=1' .claude/settings.json 2>&1 | head -n 3",
+    "ls .claude && awk '{print $1}' .claude/settings.json | wc -l",
+    "grep -n x .claude/settings.json; awk 'NR<=1' .claude/settings.json",
+    "echo start; printf '%s\\n' x; awk 'NR<=1' .claude/settings.json",
+    "sed -n 1p .claude/settings.json; awk 'NR<=1' .claude/settings.json",
+    "test -f .claude/settings.json && awk 'NR<=1' .claude/settings.json",
+    "\\awk 'NR<=1' .claude/settings.json",
+])
+def test_awk_among_allow_listed_commands_still_reads(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "awk 'NR<=20' .claude/settings.json ; nl .claude/settings.json",
+    "cut -c1-5 .claude/settings.json; awk 'NR<=1' .claude/settings.json",
+])
+def test_awk_beside_another_reader_still_reads(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+@pytest.mark.parametrize("command", [
+    "find /tmp -fprint /tmp/bin/awk; awk 'NR<=1' .claude/settings.json",
+    "rg --pre /tmp/x/p x /tmp; awk 'NR<=1' .claude/settings.json",
+])
+def test_awk_beside_a_reader_that_writes_or_runs_a_program_is_no_reader(box, command):
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2 and "harness-switch:" in err, (command, cwd, err)
