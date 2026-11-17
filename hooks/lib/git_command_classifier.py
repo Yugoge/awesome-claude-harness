@@ -56,6 +56,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import sys
 
 try:
@@ -1862,6 +1863,165 @@ def classify_git_command(command_text):
             return               # git-free
     """
     return list(iter_git_invocations(command_text)), list(_residual_shapes(command_text))
+
+
+# ---------------------------------------------------------------------------
+# Hidden git: interpreter inline code and script files (GIT-2)
+#
+# The scan above reads shell text. Git run from an interpreter's inline code
+# (`python3 -c 'subprocess.run(["git","push"])'`) or from a script file the
+# command runs (`bash push.sh`) is not shell text it sees. hidden_git_texts
+# yields, for each, shell text the caller judges as it judges a command:
+#   - inline code (python/pypy -c, perl -e/-E, ruby -e, node -e/-p/--eval/
+#     --print): the token `git`, then words separated only by blanks, quotes,
+#     commas, `[` or backquotes, whose subcommand is in _HIDDEN_GIT_SUBCOMMANDS,
+#     read as `git <words>`. Lexical and conservative: `print("git push")` reads
+#     as a push.
+#   - a script file named by a literal path that exists and is readable at hook
+#     time, relative to cwd, under _HIDDEN_SCRIPT_MAX bytes and not binary:
+#     `bash|sh|dash|zsh|ksh FILE`, `source FILE`, `. FILE`, and a command word
+#     with a `/` (`./x.sh`) whose first line is not a python, pypy, perl, ruby
+#     or node shebang. Its text is shell text; the commands in it are scanned
+#     for inline code in turn, once.
+#     A file under a directory in `trusted` (the harness's own hooks/ and
+#     scripts/, whose wrappers /push and /merge run) is not read.
+# Unseen (docs/git-protection-kernel.md, GIT-2): a computed or missing path, a
+# script another script runs, code built at run time, interpreter files and the
+# modules they import, make, git aliases.
+# ---------------------------------------------------------------------------
+
+_HIDDEN_GIT_SUBCOMMANDS = frozenset({
+    'push', 'commit', 'merge', 'reset', 'rebase', 'branch', 'update-ref', 'symbolic-ref',
+    'commit-tree', 'cherry-pick', 'pull', 'filter-branch', 'filter-repo', 'fast-import',
+    'revert', 'am', 'replace', 'fetch', 'checkout', 'switch', 'worktree',
+})
+_HIDDEN_CODE_OPTIONS = (
+    (re.compile(r'(?:python|pypy)[0-9.]*\Z'), 'c', ()),
+    (re.compile(r'perl[0-9.]*\Z'), 'eE', ()),
+    (re.compile(r'ruby[0-9.]*\Z'), 'e', ()),
+    (re.compile(r'node(?:js)?[0-9.]*\Z'), 'ep', ('--eval', '--print')),
+)
+_HIDDEN_SHELLS = frozenset({'bash', 'sh', 'dash', 'zsh', 'ksh', 'source', '.'})
+_HIDDEN_SHELL_VALUE_OPTS = frozenset({'-o', '+o', '-O', '+O', '--rcfile', '--init-file'})
+_HIDDEN_SCRIPT_MAX = 256 * 1024
+_HIDDEN_GIT_RE = re.compile(r'(?<![\w.-])git(?![\w.-])')
+_HIDDEN_WORD_RE = re.compile(r'[\w.:/+@^~=%-]+')
+_HIDDEN_GAP_RE = re.compile(r'[\s\'",`\[]*\Z')
+_HIDDEN_SHEBANG_CODE_RE = re.compile(r'#!.*\b(?:python|pypy|perl|ruby|node)')
+
+
+def _hidden_code_git_texts(code):
+    """`git <words>` for every git invocation code names with a guarded subcommand."""
+    for match in _HIDDEN_GIT_RE.finditer(code):
+        words, pos = [], match.end()
+        for word in _HIDDEN_WORD_RE.finditer(code, pos):
+            if not _HIDDEN_GAP_RE.match(code[pos:word.start()]) or len(words) >= 32:
+                break
+            words.append(word.group())
+            pos = word.end()
+        sub, _rest = _git_subcommand(words)
+        if sub in _HIDDEN_GIT_SUBCOMMANDS:
+            yield 'git ' + ' '.join(shlex.quote(w) for w in words)
+
+
+def _hidden_inline_code(name, argv):
+    """The words an interpreter's argv may run as inline code, or None when name
+    is not one. Every option word naming the program is read, wherever it is:
+    the scan does not model which options take a value (`python3 -X dev -c`)."""
+    spec = next((s for s in _HIDDEN_CODE_OPTIONS if s[0].match(name or '')), None)
+    if spec is None:
+        return None
+    _re, letters, longs = spec
+    codes = []
+    for i, arg in enumerate(argv):
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if arg is None or not arg.startswith('-') or arg in ('-', '--'):
+            continue
+        if arg.startswith('--'):
+            opt, eq, val = arg.partition('=')
+            if opt in longs:
+                codes.append(val if eq else nxt)
+            continue
+        for k, ch in enumerate(arg[1:]):
+            if ch in letters:
+                codes.append(arg[k + 2:] or nxt)
+                break
+    return [c for c in codes if c]
+
+
+def _hidden_script_path(name, head, argv):
+    """(path, as_shell) for the script file the command runs, or None."""
+    if name in _HIDDEN_SHELLS:
+        skip = False
+        for arg in argv:
+            if arg is None:
+                return None
+            if skip:
+                skip = False
+            elif arg in _HIDDEN_SHELL_VALUE_OPTS:
+                skip = True
+            elif name in ('source', '.') or not arg.startswith(('-', '+')):
+                return (arg, True) if arg not in _STDIN_PATHS else None
+            elif 'c' in arg[1:] and not arg.startswith('--') or arg == '-s':
+                return None
+        return None
+    if head and '/' in head and _basename(head) != 'git':
+        return head, None
+    return None
+
+
+def _hidden_script_text(path, cwd, trusted):
+    """The text of the readable script file at path, or None."""
+    try:
+        full = os.path.join(cwd or os.getcwd(), os.path.expanduser(path))
+        real = os.path.realpath(full)
+        if any(real.startswith(os.path.join(os.path.realpath(t), '')) for t in trusted):
+            return None
+        if not os.path.isfile(real) or os.path.getsize(real) > _HIDDEN_SCRIPT_MAX:
+            return None
+        with open(real, 'rb') as fp:
+            data = fp.read(_HIDDEN_SCRIPT_MAX + 1)
+    except (OSError, ValueError):
+        return None
+    if b'\0' in data[:8192]:
+        return None
+    return data.decode('utf-8', 'replace')
+
+
+def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
+    """Yield (origin, shell_text) for git the command runs out of the shell's sight.
+
+    origin names the interpreter code or script file; shell_text is what the
+    caller judges as a command (see the section comment above).
+    """
+    script = shell_parse.parse(command_text)
+    if script.error is not None:
+        return
+    for site in shell_parse.walk(script):
+        resolved = shell_parse.resolve(site.cmd)
+        name = resolved.name
+        argv = resolved.argv()
+        codes = _hidden_inline_code(name, argv)
+        if codes is not None:
+            for code in codes:
+                for text in _hidden_code_git_texts(code):
+                    yield '%s inline code' % name, text
+            continue
+        if _depth:
+            continue
+        head = resolved.head.value() if resolved.head is not None else None
+        found = _hidden_script_path(name, head, argv)
+        if found is None:
+            continue
+        path, as_shell = found
+        text = _hidden_script_text(path, cwd, trusted)
+        if text is None:
+            continue
+        if as_shell is None and _HIDDEN_SHEBANG_CODE_RE.match(text.partition('\n')[0]):
+            continue  # an interpreter file: unseen, like `python3 x.py`
+        yield 'script %s' % path, text
+        for origin, inner in hidden_git_texts(text, cwd, trusted, _depth + 1):
+            yield 'script %s: %s' % (path, origin), inner
 
 
 if __name__ == '__main__':
