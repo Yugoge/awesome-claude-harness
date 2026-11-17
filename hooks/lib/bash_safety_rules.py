@@ -1393,14 +1393,17 @@ def _restore_wide_from_ref(args):
     return source and (worktree or not staged)
 
 
-def _worktree_raw_fallback(command):
-    """The pre-parser patterns, for a command lib/shell_parse.py cannot read (fail closed)."""
+def _worktree_raw_fallback(command, globals_=False):
+    """The pre-parser patterns, for a command lib/shell_parse.py cannot read (fail closed). With globals_ (the
+    quote-neutralised pass over a payload the parser may not read), git global options and their values
+    (-C x, -c k=v, --git-dir=..., --no-pager ...) may stand between git and the subcommand, per the GC_GOPT grammar."""
+    g = rf"git{GC_GOPT}\s+" if globals_ else r"git\s+"
     return {
-        "push": grep(r"git\s+stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
-        or grep(r"git\s+stash\s+-[ua]+\b", command),
-        "bare": grep(r"git\s+stash\s*($|[;&|])", command),
-        "checkout": grep(r"git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
-        "restore": grep(r"git\s+restore\b", command) and grep(r"(--source\b|-s\b)", command)
+        "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
+        or grep(g + r"stash\s+-[ua]+\b", command),
+        "bare": grep(g + r"stash\s*($|[;&|])", command),
+        "checkout": grep(g + r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
+        "restore": grep(g + r"restore\b", command) and grep(r"(--source\b|-s\b)", command)
         and grep(r"--\s+(\.|\*|[^ /]+/)\s*($|[;&|])", command),
     }
 
@@ -1441,7 +1444,7 @@ def worktree_git_rules(command, invs, view=None, shape=False):
                 # A shell (any word ending in sh: fish, csh ...) or an exec-taking git subcommand in command position
                 # runs a quoted string the parser may not read as one: match with the quotes neutralised, and a bare
                 # stash found only there (inside quotes) counts as a push, as the base view counts a nested bare stash.
-                quoted = _worktree_raw_fallback(code.replace('"', " ").replace("'", " "))
+                quoted = _worktree_raw_fallback(code.replace('"', " ").replace("'", " "), globals_=True)
                 quoted["push"] = quoted["push"] or (quoted["bare"] and not unaccounted["bare"])
                 unaccounted = {k: unaccounted[k] or quoted[k] for k in unaccounted}
             base = _worktree_base_hits(command, view) if view is not None else _worktree_raw_fallback(command)

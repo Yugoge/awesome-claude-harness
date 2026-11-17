@@ -205,6 +205,20 @@ STILL_PASS += [
 ]
 
 
+# Git global options (with their values) between git and the subcommand in a payload of a shell the parser does
+# not read (fish, tcsh) do not hide the subcommand from the quote-neutralised pass.
+MUST_REFUSE += [
+    ("fish -c 'git -C x stash'", STASH),
+    ('fish -c "git -C x stash"', STASH),
+    ("fish -c 'git -C x stash push'", STASH),
+    ("fish -c 'git -C x stash -u'", STASH),
+    ("fish -c 'git --no-pager stash'", STASH),
+    ("fish -c 'git -c core.pager=cat stash push'", STASH),
+    ("fish -c 'git -C x checkout HEAD -- .'", CHECKOUT),
+    ("fish -c 'git -C x restore --source=HEAD -- src/'", RESTORE),
+    ("tcsh -c 'git -C x stash'", STASH),
+]
+
 @pytest.mark.parametrize("command", MUST_PASS + STILL_PASS)
 def test_data_naming_a_git_subcommand_passes(sandbox, command):
     r = run(sandbox, command)
