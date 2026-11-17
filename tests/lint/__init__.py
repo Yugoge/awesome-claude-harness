@@ -1,6 +1,6 @@
 """Prompt and hook lint: the P12 principles, checked by CI instead of by discipline.
 
-Six checks, each over the tree it is given (`Tree`), each a list of `Finding`s:
+Seven checks, each over the tree it is given (`Tree`), each a list of `Finding`s:
 
   hook-strength      a prompt says a hook blocks while docs/ENFORCEMENT-LEDGER.md says
                      that by default it only warns or is off
@@ -10,6 +10,8 @@ Six checks, each over the tree it is given (`Tree`), each a list of `Finding`s:
   unreachable-output a registered hook prints, but can only exit 0, so its output
                      never reaches the model
   two-writers        a state file has two writers (derived by the artifact check)
+  prose-only         a test asserts only that text is present in a doc and runs no code
+                     that consumes the doc (tests/lint/prose.py has the rule)
 
 `python3 -m tests.lint [--tree DIR] [--check NAME ...]` prints the findings and exits 1
 when there are any. tests/lint/test_lint_tree.py runs each check on this tree; it is

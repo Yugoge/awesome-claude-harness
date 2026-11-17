@@ -60,17 +60,49 @@ def test_the_map_path_is_the_dispatch_registry_with_a_task_keyed_name() -> None:
     assert _tool_output() == WANT
 
 
-def test_ba_dispatches_name_the_registry_by_dev_session_id() -> None:
-    """The name ba.md's path uses is the one each BA dispatch binds in its FIRST ACTION line."""
-    dev = (REPO / "commands" / "dev.md").read_text(encoding="utf-8")
-    step4 = dev.split("### Step 4:", 1)[1].split("\n### ", 1)[0]
-    assert ".claude/dev-registry/<DEV_SESSION_ID>/ba.json" in step4
-    command = (REPO / "commands" / "dev-command.md").read_text(encoding="utf-8")
-    assert "`DEV_SESSION_ID` (`dev-command-<timestamp>`) names the registry directory" in command
-    assert "As `/dev` Step 4" in command.split("### Step 4:", 1)[1].split("\n### ", 1)[0]
-    overnight = (REPO / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
-    ba = overnight[overnight.index('Agent(subagent_type: "ba")'):]
-    assert ".claude/dev-registry/$DEV_SESSION_ID/ba.json" in ba.split("\n```", 1)[0]
+def _section(text: str, start: str) -> str:
+    return text.split(start, 1)[1].split("\n### ", 1)[0]
+
+
+def _ba_first_action(command: str) -> tuple[str, str]:
+    """The BA dispatch's FIRST ACTION path in a command's text, and the registry name that cycle binds."""
+    read = re.compile(r"FIRST ACTION: Read (\S+/ba\.json)")
+    if command == "/dev-overnight":
+        text = (REPO / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
+        dispatch = text[text.index('Agent(subagent_type: "ba")'):].split("\n```", 1)[0]
+        assert re.search(r'^DEV_SESSION_ID="\$SID"$', text, re.M)
+        return read.search(dispatch).group(1), "0b5c2b4e-1f0a-4a8e-9d55-3c1f2a7e6b10"
+    step4 = read.search(_section((REPO / "commands" / "dev.md").read_text(encoding="utf-8"), "### Step 4:"))
+    if command == "/dev":
+        return step4.group(1), f"dev-{TS}"
+    # /dev-command runs /dev's Step 4 dispatch under its own registry name
+    text = (REPO / "commands" / "dev-command.md").read_text(encoding="utf-8")
+    assert re.search(r"^As `/dev` Step 4", _section(text, "### Step 4:"), re.M)
+    name = re.search(r"`DEV_SESSION_ID` \(`([^`]+)`\) names the registry directory", text).group(1)
+    return step4.group(1), name.replace("<timestamp>", TS)
+
+
+@pytest.mark.parametrize("command", ["/dev", "/dev-command", "/dev-overnight"])
+def test_ba_dispatch_registers_in_the_registry_its_map_path_names(tmp_path, command) -> None:
+    """BA's FIRST ACTION Read, filled as each command fills it, is the read pretool-cp-checkin.py turns into
+    the sentinel and the agent-index entry of the registry that cycle's start armed, and of no other."""
+    path, name = _ba_first_action(command)
+    registry = tmp_path / ".claude" / "dev-registry" / name
+    registry.mkdir(parents=True)
+    for slot in ("<PROJECT_ROOT>", "<MAIN_ROOT>"):
+        path = path.replace(slot, str(tmp_path))
+    path = path.replace("<DEV_SESSION_ID>", name).replace("$DEV_SESSION_ID", name)
+    payload = {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": path},
+               "agent_id": "agent-ba-1", "agent_type": "ba", "session_id": "s-1", "cwd": str(tmp_path)}
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_HOME"}
+    env.update(CLAUDE_PROJECT_DIR=str(tmp_path), HOME=str(tmp_path / "home"))
+    run = subprocess.run([sys.executable, str(REPO / "hooks" / "pretool-cp-checkin.py")], input=json.dumps(payload),
+                         capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 0, run.stderr
+    assert json.loads((registry / "ba.json").read_text(encoding="utf-8")) == {"agent_type": "ba", "session_id": name}
+    index = json.loads((tmp_path / ".claude" / "dev-registry" / "agent-index.json").read_text(encoding="utf-8"))
+    assert index == {"agent-ba-1": {"agent_type": "ba", "dev_session_id": name}}
+    assert sorted(p.name for p in registry.parent.iterdir()) == sorted([name, "agent-index.json", "agent-index.json.lock"])
 
 
 def _run_map(project: Path, cycle: str) -> Path:

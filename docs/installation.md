@@ -260,13 +260,22 @@ The report ends in one of three results, each with its own exit code:
 | Result | Exit | Meaning |
 |---|---|---|
 | `PASS` | 0 | Every check was measured by this run and passed. Blocking capability and the four deep checks have no probe yet, so no run reaches it today. |
-| `FAIL` | 1 | A check was measured and failed, named on the `RESULT` line: a lifecycle event whose `hooks/capability-canary.py` is not registered for it in any settings layer (`not_wired`), a live receipt that failed its cross-checks, or an unusable binding. |
+| `FAIL` | 1 | A check was measured and failed, named on the `RESULT` line: a lifecycle event with no receipt whose `hooks/capability-canary.py` no settings layer doctor reads registers for it (`not_wired`; it reads the harness home's layers, the home's `.claude/settings.json` and the session's project's two `.claude` layers), a canary that fired on another host event (`misregistered`), a live receipt that failed an identity or session cross-check, or an unusable binding. A receipt that passes every cross-check and whose host event name matches is taken as proof the event is wired, wherever the registration lives; doctor cannot tell host dispatch from a hand-run canary. |
 | `NOT_PROVABLE_HERE` | 4 | Nothing failed, but the named checks cannot be measured from where doctor runs. Each line says the one action that proves it. |
 
 Where doctor runs never makes it fail. A Bash call inside a session sees no hook event while it
 runs (its PreToolUse fires before it starts, its PostToolUse after it exits), and a terminal has
 no host at all, so a registered event with no receipt in the window is `NOT_PROVABLE_HERE`, never
-`FAIL`. To prove a session's own PreToolUse and PostToolUse, run `scripts/doctor --strict
+`FAIL`. So is a receipt that arrived but is not tied to the window (the run's nonce never reached
+that session's transcript, or the transcript did not change in the window): a busy session's other
+tool calls fire canaries too. The session's project is the working directory its transcript
+records (one that no longer exists leaves it unknown), else, unless doctor probes another
+session, `CLAUDE_PROJECT_DIR` or the nearest directory above doctor's own with
+`.claude/settings*.json` or a git toplevel, never your HOME or the harness home. When it cannot be
+known, an event with no receipt and no registration in the layers read is `FAIL` when those
+layers wire the canary for other events (a partial wiring doctor can see), and
+`NOT_PROVABLE_HERE`, naming what was read, when they wire it for none. Run without a session and without `--session-id`, each event's
+action says to rerun inside a session or with `--session-id` of a running session. To prove a session's own PreToolUse and PostToolUse, run `scripts/doctor --strict
 --timeout 60` there as a background task and read its output once while it waits: that read is a
 tool call inside the window, and it puts the run's nonce (the `probe open` line on stderr) in the
 transcript. From a terminal, `--session-id <id> --timeout 120` probes a running session; the

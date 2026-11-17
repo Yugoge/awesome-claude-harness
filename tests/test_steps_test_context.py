@@ -198,12 +198,18 @@ def test_no_path_in_test_md_ends_in_a_placeholder():
     """hooks/lib/declared_paths reads every "path" in the command files as a path a dispatch may declare. A value
     that ends in a placeholder and a suffix ("tests/scripts/<name>.py") makes every target with that suffix
     declarable, so every such write reads the session transcript (hooks/tests/test_tool_policy_derived_permission.py).
-    The Step 10 template therefore names its validator path in full, as the base template did."""
-    text = (ROOT / "commands" / "test.md").read_text(encoding="utf-8")
-    values = re.findall(r'"path"\s*:\s*"([^"]*)"', text)
-    assert values, "the Step 10 template carries a validator path"
-    for value in values:
-        assert not re.search(r"[<{][^<>{}]*[>}][^/]*$", value), f'"path": "{value}" ends in a placeholder'
+    The Step 10 template therefore names its validator path in full, as the base template did: each path of
+    test.md, read and shaped by declared_paths itself, has a fixed last part."""
+    sys.path.insert(0, str(ROOT))
+    try:
+        from hooks.lib import declared_paths
+    finally:
+        sys.path.pop(0)
+    values = declared_paths._TEMPLATE_PATH_RE.findall((ROOT / "commands" / "test.md").read_text(encoding="utf-8"))
+    shapes = {value: declared_paths._shape(value) for value in values}
+    assert shapes, "the Step 10 template carries a validator path"
+    loose = {value: shape for value, shape in shapes.items() if shape is None or shape[0] not in ("parts", "last")}
+    assert loose == {}, f"paths whose last part is a placeholder: {loose}"
 
 
 def test_execution_context_takes_the_passed_status_and_a_failed_status_is_not_all_valid(tmp_path):
