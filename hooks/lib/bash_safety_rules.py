@@ -939,7 +939,7 @@ _HTTPIE_OPTIONS = (_HTTPIE_LONG_VALUES, _HTTPIE_LONG_FLAGS, "pPosaA", "jfmhbvdcq
                    {"o": "output", "d": "download"})
 _CLIENT_OPTIONS = {
     "curl": (_CURL_LONG_VALUES, _CURL_LONG_FLAGS, "EKCbcdDFPHhmoxUQreXYytzTuAw", "aqfGgI0ik46jlLMn:NZ#pJORSs231BvV",
-             {"o": "output", "O": "remote-name", "J": "remote-header-name", "g": "globoff"}),
+             {"o": "output", "O": "remote-name", "J": "remote-header-name", "g": "globoff", "K": "config"}),
     "wget": (_WGET_LONG_VALUES, _WGET_LONG_FLAGS, "aABDeiIlOoPQRtTUwX", "VhbdqvFcNS46xErkKmpHL",
              {"O": "output-document"}),
     "aria2c": (_ARIA2C_LONG_VALUES, _ARIA2C_LONG_FLAGS, "dDoiIlsxkjtmuU", "cqZVhv",
@@ -1033,7 +1033,9 @@ def _network_output(name, values):
     -O, --remote-name, --remote-name-all or -J; aria2c without -o/--out; http, https, httpie or xh with -d or
     --download, in a cluster or abbreviated, and no -o/--output), and its URL operands by word index
     (_client_args). An option that may mean one naming the output is taken as naming it, so the caller keeps its
-    check rather than lifting it."""
+    check rather than lifting it. A config file can turn such an option on (a curl config holding `remote-name`),
+    so curl -K/--config, wget --config and aria2c --conf-path name the output after the URL, and so does httpie
+    or xh without -o/--output, whose default options file can add --download."""
     options, urls, closed = _client_args(name, values)
 
     def may(opt):
@@ -1052,22 +1054,22 @@ def _network_output(name, values):
     if name == "curl":
         globoff = any(names == {"globoff"} for names, _ in options) \
             and not any(v is not None and v.startswith("--no-") for v in values)
-        named = may("remote-name") or may("remote-name-all") or may("remote-header-name") or hashed \
-            or (globbed and not globoff)
+        named = may("remote-name") or may("remote-name-all") or may("remote-header-name") or may("config") \
+            or hashed or (globbed and not globoff)
         to_file = any("output" in names and val != "-" for names, val in options)
         return named or to_file, named, urls
     if name == "wget":
         document = last("output-document")
         unsure = any("output-document" in names and len(names) > 1 for names, _ in options)
-        return document != "-", document is None or unsure or hashed, urls
+        return document != "-", document is None or unsure or hashed or may("config"), urls
     if name == "aria2c":
         # -Z/--force-sequential downloads each URI under its own name whatever -o says; -i/--input-file reads URIs
         # and per-URI options from a file; a parameterized URI expands into several.
-        sequential = may("force-sequential") or may("input-file")
+        sequential = may("force-sequential") or may("input-file") or may("conf-path")
         return True, last("out") is None or sequential or hashed or globbed, urls
     download = may("download")
     output = last("output") is not None
-    return download or output, closed or hashed or (download and not output), urls
+    return download or output, closed or hashed or not output, urls
 
 
 # The options of cp, mv, ln, install and rsync that take a value as the next word (or the rest of a short cluster):
@@ -1155,8 +1157,9 @@ def sensitive_redirect(command):
     anywhere; a report, log or template as a write target; a template as a cp or cat source; a URL as a network
     client's positional operand or curl `--url` value whose output file it does not name (not `file:`, not
     host-less, not host `.` or `..`; not with an output value holding `#`, a curl URL holding `{`, `}`, `[` or `]`
-    without -g/--globoff, nor aria2c without -o or with -Z/--force-sequential, -i/--input-file or a parameterized
-    URI), never as an option's value, a redirection or write target or another
+    without -g/--globoff, nor aria2c without -o or with -Z/--force-sequential, -i/--input-file, --conf-path or a
+    parameterized URI, nor curl -K/--config or wget --config, nor httpie or xh without -o/--output), never as an
+    option's value, a redirection or write target or another
     command's operand; a `file:` URL a network client reads into its own output file
     (curl -o, wget -O) is a secret read; a code file copied onto a code-file name; a source-code or Markdown/reST
     operand of cp, mv, install, rsync, ln or sed -i (is_code_or_doc_operand). A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on

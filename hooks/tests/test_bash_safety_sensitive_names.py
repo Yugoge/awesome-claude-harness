@@ -463,6 +463,35 @@ def test_a_globbed_url_or_a_sequential_aria2c_download_is_refused(sandbox, comma
     assert r.returncode == 2 and READ in r.stderr, (command, r.stderr)
 
 
+# A client's config file can turn on an output named after the URL (a curl config holding `remote-name` writes
+# ./.env), so curl -K/--config (any spelling, abbreviation or cluster), wget --config, aria2c --conf-path, and httpie
+# or xh without -o/--output (their default options file can add --download) take the URL exemption away.
+CONFIG_NAMES_OUTPUT = [
+    "printf 'remote-name\\n' | curl -K - http://127.0.0.1:8000/.env > /tmp/log",
+    "curl -K cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl -Kcfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl -sK cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl --config cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl --config=cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl --conf cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl --confi cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "curl -s -o /tmp/out -K cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "wget -O - --config cfg http://127.0.0.1:8000/.env > /tmp/log",
+    "aria2c --conf-path cfg -o out http://127.0.0.1:8000/.env > /tmp/log",
+    "aria2c --conf-path=cfg -o out http://127.0.0.1:8000/.env > /tmp/log",
+    "aria2c --conf cfg -o out http://127.0.0.1:8000/.env > /tmp/log",
+    "http http://127.0.0.1:8000/.env > /tmp/log",
+    "https https://x/.env > /tmp/log",
+    "xh https://x/.env > /tmp/log",
+]
+
+
+@pytest.mark.parametrize("command", CONFIG_NAMES_OUTPUT)
+def test_a_client_config_file_takes_the_url_exemption_away(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and READ in r.stderr, (command, r.stderr)
+
+
 # With globbing off and a literal output, or aria2c with -o alone, the URL exemption still holds.
 @pytest.mark.parametrize("command", [
     'curl -s -g "https://example.com/docs/password-policy" -o /tmp/p.html > /tmp/log',
