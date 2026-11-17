@@ -49,7 +49,9 @@ DRY_RUNS = [
     "kubectl create deployment web --image=nginx --dry-run=client -o yaml",
     "npm publish --dry-run",
 ]
-# Must still prompt or be refused: never run unasked.
+# Must still prompt or be refused: these forms never run unasked. Not covered, and measured running unasked on
+# the base and after OB-L21 alike (outside this lane): `bash -c "npm publish"` (allow Bash(bash:*)),
+# `npm --registry=URL publish` and `npm pub` (allow Bash(npm:*)), `echo publish | xargs npm` (allow Bash(xargs:*)).
 REAL_RUNS = [
     "kubectl apply -f k8s/deploy.yaml",
     "kubectl apply --dry-run=none -f x",
