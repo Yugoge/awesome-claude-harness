@@ -509,13 +509,16 @@ def _json(raw: bytes) -> dict:
 PUSH_CALL, MERGE_CALL = "execute-push.py", "merge.sh"
 _INTERPRETERS = {"python", "python3", "bash", "sh"}
 _PUSH_FLAGS = ("--repo-hash", "--branch", "--remote", "--request-id", "--repo-root")  # push.md Step 5's call
+_STEP5_PATHS = {PUSH_CALL: HARNESS / "scripts" / PUSH_CALL, MERGE_CALL: HOOKS / MERGE_CALL}  # <HARNESS_ROOT>/...
 
 
-def step5_call(command: str, call: str) -> bool:
+def step5_call(command: str, call: str, ref: str | None = None) -> bool:
     """``command`` runs Step 5's script ``call`` as push.md / merge.md write it, alone: one simple command (no
-    list, pipe, subshell or second line) whose command word, after any VAR=value words and an interpreter, is the
-    script; no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
-    --no-commit). A command that only mentions the script (`echo merge.sh; false`) is none."""
+    list, pipe, subshell, second line or VAR=value prefix) whose command word, after an interpreter, is this
+    harness's own script (<HARNESS_ROOT>/scripts/execute-push.py, <HARNESS_ROOT>/hooks/merge.sh, by an absolute
+    path); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
+    --no-commit), ``ref`` where given. Arguments end at a redirect (`2>&1`). A command that only mentions the
+    script (`echo merge.sh; false`), another file of its name, or another ref is none."""
     if "\n" in command.strip():
         return False
     try:
@@ -527,24 +530,27 @@ def step5_call(command: str, call: str) -> bool:
     operator = lambda word: bool(word) and not word.strip("();<>|&")  # noqa: E731
     if any(operator(w) and any(c in w for c in ";|()") or w in ("&", "&&") for w in words):
         return False
-    while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
-        words = words[1:]
+    if words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        return False  # GIT_DIR=... and the like run it elsewhere
     if words and os.path.basename(words[0]) in _INTERPRETERS:
         words = words[1:]
         while words and words[0].startswith("-"):
             words = words[1:]
-    if not words or os.path.basename(words[0]) != call:
+    path = os.path.expanduser(words[0]) if words else ""
+    if not os.path.isabs(path) or os.path.realpath(path) != os.path.realpath(_STEP5_PATHS[call]):
         return False
     args = next((words[1:k] for k in range(1, len(words)) if operator(words[k])), words[1:])  # up to a redirect
+    if len(args) < len(words) - 1 and args and args[-1].isdigit():
+        args = args[:-1]  # the descriptor of `2>&1`
     if "--help" in args or "-h" in args:
         return False
     if call == PUSH_CALL:
         return all(flag in args for flag in _PUSH_FLAGS)
     rest = [a for a in args if a != "--no-commit"]
-    return len(rest) == 1 and not rest[0].startswith("-")
+    return len(rest) == 1 and not rest[0].startswith("-") and (ref is None or rest[0] == ref)
 
 
-def refusal_met_again(span, call: str) -> bool:
+def refusal_met_again(span, call: str, ref: str | None = None) -> bool:
     """Step 5's call (a Bash naming the script ``call``) came back as an error, an AskUserQuestion after it came
     back answered (ok: a rejected question is no answer, and the CLI stops the turn for the owner), and the call,
     run after that answer, came back as an error again; no later run of it came back ok. The transcript's record
@@ -557,7 +563,7 @@ def refusal_met_again(span, call: str) -> bool:
             continue
         if use.name == "AskUserQuestion":
             state = 2 if state == 1 and use.ok else state
-        elif step5_call(str(use.input.get("command") or ""), call):
+        elif step5_call(str(use.input.get("command") or ""), call, ref):
             state = 0 if use.ok else (3 if state >= 2 else 1)
     return state == 3
 
@@ -683,7 +689,8 @@ def p_merge(span, root, payload) -> list[str]:
     grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
     session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup. Step 5's
     conflicts met again after the owner's answer (refusal_met_again) end it while MERGE_HEAD is at a value
-    of the source and paths are unmerged: the merge stands in conflict for the owner (aborted, it is owed
+    of the source, paths are unmerged and git's merge-tree of the two commits conflicts (_conflicts), the
+    record being merge.sh on this source: the merge stands in conflict for the owner (aborted, it is owed
     again)."""
     _repository(root)
     root = _session_worktree(root, payload)
@@ -717,10 +724,24 @@ def p_merge(span, root, payload) -> list[str]:
                 "session since the opener names its source"]
     if _git(root, "ls-files", "-u"):
         gaps.append("merge: unmerged paths remain in the index")
-    if gaps and tips and _git(root, "ls-files", "-u") and _git(root, "rev-parse", "--verify", "-q",
-                                                                "MERGE_HEAD") in tips and refusal_met_again(span, MERGE_CALL):
+    merging = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+    if gaps and tips and merging in tips and _git(root, "ls-files", "-u") and _conflicts(
+            root, f"refs/heads/{default}", merging) and refusal_met_again(span, MERGE_CALL, ref):
         return []  # Step 5: the source's merge stands in conflict; merge.sh refused again after the owner's answer
     return gaps
+
+
+def _conflicts(root, default: str, source: str) -> bool:
+    """HEAD is on ``default`` and git's own three-way merge of it with ``source`` conflicts (git merge-tree
+    --write-tree exits 1): from the commits alone, so no index entry or MERGE_HEAD an agent writes makes one."""
+    if _git(root, "symbolic-ref", "-q", "HEAD") != default:
+        return False
+    try:
+        done = subprocess.run(["git", "-C", str(root), "merge-tree", "--write-tree", "--no-messages", default, source],
+                              capture_output=True, timeout=60, env={**os.environ, **_GIT_ENV})
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 1
 
 
 def _opener_branch(root, since: float) -> str | None:

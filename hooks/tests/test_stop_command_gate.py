@@ -2750,3 +2750,59 @@ def test_rc2_an_opener_without_remote_lines_releases_nothing(env, remotes):
     env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
     code, text = run(env)
     assert code == 2 and f"- push: topic at {head} is not published" in text, text
+
+
+# A6-RC2 verifier, round 2 (B1): the conflict is git's three-way merge of the commits, never an index entry or a
+# MERGE_HEAD an agent writes; Step 5's record runs this harness's merge.sh on the /merge's own source.
+def forge_conflict(repo):
+    """MERGE_HEAD written at feature's tip and stage 1-3 entries for base.txt written into the index: what a
+    conflict looks like to `git ls-files -u`, with no conflict between the commits."""
+    Path(repo, ".git", "MERGE_HEAD").write_text(git(repo, "rev-parse", "feature") + "\n")
+    blob = git(repo, "rev-parse", "HEAD:base.txt")
+    done = subprocess.run(["git", "-C", str(repo), "update-index", "--index-info"], text=True, capture_output=True,
+                          input="".join(f"100644 {blob} {stage}\tbase.txt\n" for stage in (1, 2, 3)))
+    assert done.returncode == 0 and git(repo, "ls-files", "-u"), done.stderr
+
+
+def merge_record(env, command):
+    """The fail, answer, fail record of Step 5 with ``command`` as its call."""
+    env.tx.tool("Bash", {"command": command}, ok=False, result="merge.sh: git merge exited 1 - likely conflicts.")
+    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
+    env.tx.tool("Bash", {"command": command}, ok=False, result="merge.sh: git merge exited 1 - likely conflicts.")
+
+
+def test_rc2_forged_stage_entries_over_a_clean_merge_release_nothing(env, repo):
+    branches(repo, "feature")
+    opener_now(env, "merge", "feature")
+    forge_conflict(repo)
+    merge_record(env, f'bash "{HOOKS}/merge.sh" "feature"')
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, text
+
+
+@pytest.mark.parametrize("record", ["fake-script-path", "no-such-ref", "another-ref", "git-dir-prefix"])
+def test_rc2_a_step_5_record_that_is_not_this_merge_releases_nothing(env, repo, record):
+    """The conflict stands in git; the record is another file named merge.sh, merge.sh on a ref that is not the
+    /merge's source, or merge.sh with GIT_DIR pointing elsewhere: no refusal of this merge was met again."""
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    merge_wrapper(repo, "feature")
+    fake = env.tmp / "fake" / "merge.sh"
+    command = {"fake-script-path": f"bash {fake} feature", "no-such-ref": f"bash {HOOKS}/merge.sh no-such-ref",
+               "another-ref": f"bash {HOOKS}/merge.sh master",
+               "git-dir-prefix": f"GIT_DIR=/x bash {HOOKS}/merge.sh feature"}[record]
+    merge_record(env, command)
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text, (record, text)
+
+
+def test_rc2_merge_sh_with_its_output_redirected_is_step_5s_call(env, repo):
+    """`merge.sh <ref> 2>&1`: the redirect ends the arguments; the call is Step 5's and the conflict is git's."""
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    merge_wrapper(repo, "feature")
+    merge_record(env, f'bash "{HOOKS}/merge.sh" "feature" 2>&1')
+    assert run(env) == (0, "")
+    assert gate.step5_call(f"bash {HOOKS}/merge.sh feature 2>&1", gate.MERGE_CALL, "feature")
+    assert gate.step5_call(f"bash {HOOKS}/merge.sh feature > /dev/null", gate.MERGE_CALL, "feature")
+    assert not gate.step5_call(f"bash {HOOKS}/merge.sh other 2>&1", gate.MERGE_CALL, "feature")

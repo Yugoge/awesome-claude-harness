@@ -447,11 +447,13 @@ no per-rule budget exists.
     owner's answer, as `commands/push.md` and `commands/merge.md` prescribe: the span's
     `execute-push.py` or `merge.sh` call came back as an error, an `AskUserQuestion` after it came
     back answered (a rejected one is no answer), and the call failed again after it with no later
-    ok run (a real invocation of the script, alone, never `--help`: a command that only names it
-    records nothing), while the gate's own reading meets the refusal now: every remote the push is
+    ok run (a real invocation of the harness's own script by its absolute path, alone, with no
+    `VAR=value` prefix, never `--help`, `merge.sh` on the /merge's own source: a command that only
+    names it, another file of its name or another ref records nothing), while the gate's own reading meets the refusal now: every remote the push is
     judged on unreadable by `git ls-remote` at the URL the opener's remote lines recorded, with and
     without system and global git configuration, and not for want of credentials; or `MERGE_HEAD`
-    at the source's tip with unmerged paths in the index), an exception being the gap
+    at the source's tip with unmerged paths in the index, HEAD on the default branch and git's own
+    `merge-tree --write-tree` of the two commits conflicting), an exception being the gap
     `gate instrument failure: <type>: <message>`. It writes no file and keeps no count; the next
     compliant step clears each gap, and the human's `/stop` opens a span that is not gated. A
     completion failure (exit outside {0, 2}, a timeout, a launch error, a missing file) is decided
