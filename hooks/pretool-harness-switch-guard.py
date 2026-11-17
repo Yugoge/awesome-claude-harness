@@ -104,7 +104,7 @@ GIT_WRITE_ENV = re.compile(  # a variable naming a file or directory git creates
     r"GIT_(?:INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)\Z")
 GIT_CARRIED = re.compile(  # a variable that hands git a program, config or repository: its value matters
     r"(?:GIT_(?:EXTERNAL_DIFF|SSH_COMMAND|SSH|ASKPASS|PAGER|EDITOR|SEQUENCE_EDITOR|EXEC_PATH|DIR|COMMON_DIR"
-    r"|WORK_TREE|CONFIG\w*|TRACE\w*|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)|SSH_ASKPASS|PAGER|EDITOR|VISUAL|HOME|XDG_CONFIG_HOME)\Z")
+    r"|WORK_TREE|TEMPLATE_DIR|CONFIG\w*|TRACE\w*|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)|SSH_ASKPASS|PAGER|EDITOR|VISUAL|HOME|XDG_CONFIG_HOME)\Z")
 UNKNOWN = "/?unknown-value?"  # the value of a variable the command sets in a way not read here
 LESS_ENV = re.compile(r"\bLESS\w*")  # less's own environment: LESS, LESSOPEN, LESSKEY, ...
 GIT_CONFIG_SOURCE = re.compile(  # where git reads its global and system config from (GIT_TREE_ENV aside)
@@ -115,6 +115,16 @@ GIT_ABBREVIATING = {"grep": ("textconv", "open-files-in-pager"), "cat-file": ("t
 GIT_HARMLESS_LONG = ("text",)  # a reader's own option spelled as a prefix of one of those
 GIT_GREP_ARG_SHORTS = "efABCm"  # git grep's short options whose value is the rest of the word
 GIT_CONFIG_VALUE_OPTS = ("-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url")
+GIT_CONFIG_LONG = (  # git config's long options (old flags and the subcommands' options); git takes a unique prefix
+    "global", "system", "local", "worktree", "file", "blob", "get", "get-all", "get-regexp", "get-urlmatch",
+    "replace-all", "add", "unset", "unset-all", "rename-section", "remove-section", "list", "fixed-value",
+    "edit", "get-color", "get-colorbool", "type", "no-type", "bool", "int", "bool-or-int", "path",
+    "expiry-date", "null", "name-only", "includes", "no-includes", "show-origin", "show-scope", "show-names",
+    "default", "comment", "value", "url", "all", "regexp", "append")
+GIT_CONFIG_SHORT_VALUE = "ft"  # -f <file>, -t <type>; -l, -e, -z take none
+GIT_INIT_LONG = ("template", "bare", "quiet", "shared", "separate-git-dir", "initial-branch", "object-format",
+                 "ref-format")  # git init's long options; git takes a unique prefix
+GIT_INIT_VALUE = ("separate-git-dir", "initial-branch", "object-format", "ref-format", "template")
 GIT_CONFIG_NO_SET = ("--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool",
                      "--list", "-l", "--unset", "--unset-all", "--remove-section", "--blob", "-e", "--edit",
                      "get", "list", "unset", "remove-section", "edit")  # git config forms that set no value
@@ -491,6 +501,21 @@ def _grep_opens_program(word: str, less_env: bool = False) -> bool:
     return False
 
 
+def _long_option(word: str, names: tuple):
+    """The long option `word` (`--name` or `--name=value`) names among `names`, as git's
+    parse-options reads it: the exact name, else the one name it is a unique prefix of, a
+    `--no-` negation read the same way; None when it names none or several."""
+    name = word[2:].partition("=")[0]
+    if name in names:
+        return name
+    hits = [n for n in names if name and n.startswith(name)]
+    if len(hits) == 1:
+        return hits[0]
+    if name.startswith("no-") and _long_option("--" + name[3:], names):
+        return "no-" + _long_option("--" + name[3:], names)
+    return None
+
+
 def _config_sets_program(rest: list, ran_in: list, in_home: bool, settings: set, less_env: bool) -> bool:
     """Whether `git config <rest>` persists a program key (_program_setting, judged as a -c: alias.*,
     core.pager, core.hooksPath, include.path, a `!` value, ...) in a config the harness home's git
@@ -498,29 +523,76 @@ def _config_sets_program(rest: list, ran_in: list, in_home: bool, settings: set,
     home. `git config <key> <value>`, --add, --replace-all and `set` set one; --get*, --list, -l,
     --unset*, --remove-section, --blob, --edit and their `get` / `list` / ... words set none. A
     section rename (--rename-section, rename-section) can make any section a program key's: it
-    counts as one."""
-    files, pos, rename, it = [], [], False, iter(rest)
+    counts as one. Options are read as git reads them: a long option by any unique prefix
+    (`--ty`, `--fil=`, `--rename-s`), short ones clustered with -f / -t taking the rest of the word
+    or the next one (`-t path`, `-zt path`), and every word after `--` positional; an unknown or
+    ambiguous option fails closed where the config, or any of its words, is in the home."""
+    files, pos, rename, unknown, it = [], [], False, False, iter(rest)
     for w in it:
-        opt, eq, value = w.partition("=")
-        if w.startswith("-") and w in GIT_CONFIG_NO_SET:
-            return False
-        if w == "--rename-section":
-            rename = True
-        elif w in GIT_CONFIG_VALUE_OPTS or (eq and w.startswith("--") and opt in GIT_CONFIG_VALUE_OPTS):
-            value = value if eq else next(it, "")
-            files += [value] if opt in ("-f", "--file") else []
-        elif w.startswith("-f") and not w.startswith("--"):
-            files.append(w[2:])
-        elif not w.startswith("-") or w == "-":
+        if w == "--":
+            pos += list(it)
+            break
+        if w.startswith("--"):
+            opt, eq, value = w[2:].partition("=")
+            name = _long_option(w, GIT_CONFIG_LONG)
+            if name is None:
+                unknown = True
+                continue
+            if "--" + name in GIT_CONFIG_NO_SET:
+                return False
+            if name == "rename-section":
+                rename = True
+            elif "--" + name in GIT_CONFIG_VALUE_OPTS:
+                value = value if eq else next(it, "")
+                files += [value] if name == "file" else []
+        elif w.startswith("-") and w != "-":
+            for j, c in enumerate(w[1:], 1):
+                if c in "le":
+                    return False
+                if c in GIT_CONFIG_SHORT_VALUE:
+                    value = w[j + 1:] or next(it, "")
+                    files += [value] if c == "f" else []
+                    break
+                if c != "z":
+                    unknown = True
+        else:
             pos.append(w)
     if files:
         in_home = _in_home([_resolve(f, r) for f in files for r in ran_in], settings)
     if pos[:1] and pos[0] in GIT_CONFIG_NO_SET:
         return False
+    if unknown:  # git may read any word as its file: one in the home, or the home's own config, fails closed
+        return in_home or _in_home([_resolve(w.partition("=")[2] if w.startswith("-") else w, r)
+                                    for w in rest for r in ran_in if w.strip("-")], settings)
     if rename or pos[:1] == ["rename-section"]:
         return in_home
     pos = pos[1:] if pos[:1] == ["set"] else pos
     return in_home and len(pos) >= 2 and _program_setting("-c", pos[0] + "=" + pos[1], less_env)
+
+
+def _init_template(rest: list, ran_in: list, settings: set, env_template: bool) -> bool:
+    """Whether `git init <rest>`, run from each of `ran_in`, copies a template directory the
+    command chooses (--template=<dir> by any unique prefix, or GIT_TEMPLATE_DIR, `env_template`)
+    into a repository in the harness home: where git runs, or its <directory> operand. Its hooks
+    and config then run there, as -c init.templateDir would."""
+    template, target, it = env_template, None, iter(rest)
+    for w in it:
+        if w == "--":
+            target = next(it, None) if target is None else target
+            break
+        if w.startswith("--"):
+            name = _long_option(w, GIT_INIT_LONG)
+            if name == "template" or name is None:
+                template = True  # an unknown or ambiguous option fails closed
+            if name in GIT_INIT_VALUE and "=" not in w:
+                next(it, None)
+        elif w in ("-b",):
+            next(it, None)
+        elif not w.startswith("-") and target is None:
+            target = w
+    if not template:
+        return False
+    return _in_home(ran_in + ([_resolve(target, r) for r in ran_in] if target else []), settings)
 
 
 def _read_only(words: list) -> bool:
@@ -925,6 +997,12 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
                 return refuse("this Bash command has git config persist a key naming a program (alias.*, "
                               "core.pager, core.hooksPath, include.path, ...) or a `!` value in config the harness "
                               "home's git reads, which can rewrite the home's settings or the switch's state")
+            if git.sub is not None and words[git.sub] == "init" and _init_template(
+                    words[git.sub + 1:], ran_in, settings,
+                    any(x.startswith("GIT_TEMPLATE_DIR=") for x in shared + words[:git.sub])):
+                return refuse("this Bash command runs git init on a repository in the harness home with a "
+                              "template directory the command chooses (--template, GIT_TEMPLATE_DIR), whose hooks "
+                              "and config can rewrite the home's settings or the switch's state")
             if git.sub is not None and words[git.sub] == "grep" and _in_home(ran_in, settings) and any(
                     _grep_opens_program(w, less_env) for w in words[git.sub + 1:]):
                 return refuse("this Bash command runs git grep in the harness home with -O<cmd> / "

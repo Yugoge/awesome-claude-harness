@@ -924,3 +924,109 @@ def test_round5_away_from_home_passes(box, command):
     for cwd in (box["other"], box["proj"]):
         rc, err = hook(box, command, cwd)
         assert rc == 0, (command, cwd, err)
+
+
+# --- round 6: git config's -t, long-option prefixes, `--`; git init's templates ------------------
+
+ROUND6_REFUSED = [
+    # -t, git config's short --type, takes a value
+    "git -C ~/.claude config -t path core.fsmonitor /tmp/p",
+    "git -C ~/.claude config -tpath core.fsmonitor /tmp/p",
+    "git -C ~/.claude config -zt path core.fsmonitor /tmp/p",
+    # unique prefixes of git config's long options
+    "git -C ~/.claude config --ty path core.fsmonitor /tmp/p",
+    "git -C ~/.claude config --t path core.fsmonitor /tmp/p",
+    "git -C ~/.claude config --ty=path core.fsmonitor /tmp/p",
+    "git -C /tmp/x config --fil ~/.claude/.git/config core.fsmonitor /tmp/p",
+    "git -C /tmp/x config --fil=~/.claude/.git/config core.fsmonitor /tmp/p",
+    "git -C /tmp/x config --fi ~/.claude/.git/config alias.x '!sh'",
+    "git -C /tmp/x config -f~/.claude/.git/config alias.x '!sh'",
+    "git -C ~/.claude config --repl core.fsmonitor /tmp/p",
+    "git -C ~/.claude config --ad include.path /tmp/i",
+    "git -C ~/.claude config --rename-s alias core",
+    "git -C ~/.claude config --renam x alias",
+    "git -C ~/.claude config --defa x core.pager /tmp/p",
+    "git -C ~/.claude config --comm note core.pager /tmp/p",
+    # an unknown or ambiguous long option there fails closed
+    "git -C ~/.claude config --in core.pager /tmp/p",
+    "git -C ~/.claude config --bogus core.pager /tmp/p",
+    # after `--` every word is positional
+    "git -C ~/.claude config -- include.path -x",
+    "git -C ~/.claude config -- alias.x -x",
+    "git -C ~/.claude config -- alias.x --get",
+    "git -C ~/.claude config -- core.pager -l",
+    # git init's template directory, by option or environment
+    "git -C ~/.claude init --template=/tmp/t",
+    "git -C ~/.claude init --template /tmp/t",
+    "git -C ~/.claude init --templ=/tmp/t",
+    "git -C ~/.claude init --te /tmp/t",
+    "git -C ~/.claude init -q --template=/tmp/t",
+    "cd ~/.claude && git init --template=/tmp/t",
+    "git -C /tmp/x init --template=/tmp/t ~/.claude",
+    "nice git -C ~/.claude init --template=/tmp/t",
+    "GIT_TEMPLATE_DIR=/tmp/t git -C ~/.claude init",
+    "env GIT_TEMPLATE_DIR=/tmp/t git -C ~/.claude init",
+    "export GIT_TEMPLATE_DIR=/tmp/t; git -C ~/.claude init",
+    "GIT_TEMPLATE_DIR=/tmp/t; export GIT_TEMPLATE_DIR; git -C ~/.claude init",
+    "declare -x GIT_TEMPLATE_DIR=/tmp/t; git -C ~/.claude init",
+    "printf -v GIT_TEMPLATE_DIR %s /tmp/t; export GIT_TEMPLATE_DIR; git -C ~/.claude init",
+    "GIT_TEMPLATE_DIR=/tmp/t bash -c 'git -C ~/.claude init'",
+    "GIT_TEMPLATE_DIR=/tmp/t sudo git -C ~/.claude init",
+    "GIT_TEMPLATE_DIR=/tmp/t git -C /tmp/x init ~/.claude",
+]
+
+
+@pytest.mark.parametrize("command", ROUND6_REFUSED)
+def test_round6_under_defence_refused(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 2, (command, cwd, err)
+        assert "BLOCKED: harness-switch" in err
+
+
+ROUND6_PASS = [
+    "git -C ~/.claude config --get core.pager",
+    "git -C ~/.claude config --list",
+    "git -C ~/.claude config user.name x",
+    "git -C ~/.claude config core.pager cat",
+    "git -C ~/.claude config -t bool core.fsmonitor true",
+    "git -C ~/.claude config --ty bool core.fsmonitor false",
+    "git -C ~/.claude config --show-origin --get core.pager",
+    "git -C ~/.claude config --show-o --get core.pager",
+    "git -C ~/.claude config --default x --get core.pager",
+    "git -C ~/.claude config --defa x --get core.pager",
+    "git -C ~/.claude config -t path --get core.hooksPath",
+    "git -C ~/.claude config --null --list",
+    "git -C ~/.claude config -lz",
+    "git -C ~/.claude config --get-r alias",
+    "git -C ~/.claude config -- user.name x",
+    "git -C ~/.claude init",
+    "git -C ~/.claude init -q",
+    "GIT_TEMPLATE_DIR=/tmp/t git -C ~/.claude log -3",
+]
+
+
+@pytest.mark.parametrize("command", ROUND6_PASS)
+def test_round6_harmless_passes(box, command):
+    for cwd in cwds(box):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
+
+
+ROUND6_AWAY_PASS = [
+    "git -C {proj} config -t path core.fsmonitor /tmp/p",
+    "git -C {proj} config --ty path core.fsmonitor /tmp/p",
+    "git -C {proj} config --bogus core.pager /tmp/p",
+    "git -C {proj} config -- alias.x -x",
+    "git -C {proj} init --template=/tmp/t",
+    "GIT_TEMPLATE_DIR=/tmp/t git -C {proj} init",
+    "git -C {proj} config --fil /tmp/x.cfg alias.x '!sh'",
+]
+
+
+@pytest.mark.parametrize("command", ROUND6_AWAY_PASS)
+def test_round6_away_from_home_passes(box, command):
+    command = command.format(proj=box["proj"])
+    for cwd in (box["other"], box["proj"]):
+        rc, err = hook(box, command, cwd)
+        assert rc == 0, (command, cwd, err)
