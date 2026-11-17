@@ -354,6 +354,7 @@ no per-rule budget exists.
 | S-014 | permission-layer-read-only-allow-and-its-ask-guards | advisory | exercised | component-tested | settings.json:81 @263d9c7a | tests/test_permission_readonly_allow.py | component-tested |
 | S-015 | permission-layer-project-writes | advisory | unexercised | component-tested | settings.json:158 @c1f2e447 | tests/test_project_write_permissions.py | component-tested |
 | S-016 | permission-layer-scratch-reach | advisory | unexercised | source-level | settings.json:167 @d1abc798 | tests/test_scratch_permissions.py | source-level |
+| S-017 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -614,6 +615,15 @@ no per-rule budget exists.
     (task_id, sid, nonce, repo_root, branch, expected_head, created_at, expires_at) that
     `pretool-git-privilege-guard.py` (H-031) consumes; it exits 2 when it has no session id or
     cannot resolve the repository, branch or HEAD the grant binds.
+- **S-017** — the CLI, not a hook: while `settings.json` has any `Read()` deny rule (`:236-248`), it
+  asks for approval when a read command reads a relative path after a `cd` in a compound command.
+  The deny rules stay (they keep `cat .env` denied); CLAUDE.md Working Practice states the
+  convention instead (a path operand, no `cd`). `tests/lint/cd_read.py` reports, one line at a
+  time, a `cd` or `pushd` joined by `&&`, `;` or `||` to one of its listed read commands (grep,
+  rg, cat, sed, find, git, ...) in CLAUDE.md, commands/, agents/ or skills/ Markdown, and a
+  CLAUDE.md with no line naming `cd`, `Read()` and a path operand while a `Read()` deny exists. A
+  compound split across lines, or a read command it does not list, is not reported. Prose only:
+  nothing stops an agent from writing the compound, and the CLI then asks.
 
 ---
 
