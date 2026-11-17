@@ -227,7 +227,8 @@ def test_five_changed_hook_files_take_the_predicate_under_a_second(tmp_path, har
 # whose realpath and every path it was written by (normalised, unresolved) lie
 # in a `fixtures` directory directly under a `tests` directory below hooks/ or
 # scripts/ is not parsed, unless pytest collects it
-# (test_*.py, *_test.py, conftest.py) or it has another hard link.
+# (test_*.py, *_test.py, conftest.py), it has another hard link, or a live
+# symlink (outside tests/fixtures) resolves to it or to a directory holding it.
 
 def test_deliberately_invalid_parser_fixtures_under_tests_fixtures_are_not_checked(tmp_path, harness):
     home, s = harness[0], _agent(tmp_path, "dev")
@@ -309,3 +310,36 @@ def test_live_hook_that_is_a_symlink_into_fixtures_is_still_refused(tmp_path, ha
     x = fixtures / "impl.py"
     assert x.read_text(encoding="utf-8") == BROKEN_PY
     _blocked(_stop(s, harness, calls), x, _compiled(x))
+
+
+def test_fixture_written_by_its_own_path_that_a_live_symlink_names_is_still_refused(tmp_path, harness):
+    """hooks/live.py is a symlink to hooks/tests/fixtures/impl.py; the dev writes
+    the fixture path, which leaves the live hook broken: the file is parsed."""
+    home, s = harness[0], _agent(tmp_path, "dev")
+    live, x = home / "hooks" / "live.py", home / "hooks" / "tests" / "fixtures" / "impl.py"
+    base._write(x, "x = 1\n")
+    live.symlink_to(x)
+    calls = [_write(x, BROKEN_PY)]
+    _blocked(_stop(s, harness, calls), x, _compiled(x))
+
+
+def test_fixture_inside_a_directory_a_live_directory_symlink_names_is_still_refused(tmp_path, harness):
+    """scripts/pkglink is a symlink to hooks/tests/fixtures/pkg; the dev writes
+    hooks/tests/fixtures/pkg/mod.sh, which is live as scripts/pkglink/mod.sh."""
+    home, s = harness[0], _agent(tmp_path, "dev")
+    pkg = home / "hooks" / "tests" / "fixtures" / "pkg"
+    pkg.mkdir(parents=True)
+    (home / "scripts" / "pkglink").symlink_to(pkg, target_is_directory=True)
+    x = pkg / "mod.sh"
+    proc = _stop(s, harness, [_write(x, BROKEN_SH)])
+    assert proc.returncode == 2 and f"  - {x}: harness_syntax_error\n    " in proc.stderr, proc.stderr
+
+
+def test_a_symlink_inside_fixtures_does_not_make_a_fixture_live(tmp_path, harness):
+    """A fixture symlink to another fixture names no live path: both stay unchecked."""
+    home, s = harness[0], _agent(tmp_path, "dev")
+    fixtures = home / "hooks" / "tests" / "fixtures"
+    x = fixtures / "bad.py"
+    calls = [_write(x, BROKEN_PY)]
+    (fixtures / "alias.py").symlink_to(x)
+    _unchecked(_stop(s, harness, calls))
