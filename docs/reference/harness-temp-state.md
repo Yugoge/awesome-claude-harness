@@ -91,12 +91,17 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
 realpath cannot see a bind mount: as root, `mount --bind ~/.claude /tmp/b3` leaves `/tmp/b3`
 resolving to itself (same `st_dev` too, when both are on one filesystem), while `rm -rf /tmp/b3`
 or a write to `/tmp/b3/settings.json` reaches the mounted directory. `crosses_mount(path, *,
-below=False, cwd=None, mountinfo=None)` reads `/proc/self/mountinfo` (`mount_points()`, field 5
-with its `\040`-style octal escapes undone, each realpath'd) and is True when a mount point lies
-between the path's temp root and the path, the path itself included, or with `below=True`
-anywhere under it (for a recursive removal). Mounts at or above the temp root, such as a tmpfs
-`/tmp` or the root filesystem, are ignored. It is a disqualifier only and fails closed: True
-when the path is in no temp root, when mountinfo cannot be read or parsed, or on any error.
+below=False, cwd=None, mountinfo=None)` reads `/proc/self/mountinfo` (`mount_entries()`: fields
+3, 4 and 5, the dev, the root within the filesystem and the mount point, with their `\040`-style
+octal escapes undone and the point realpath'd) and is True when a mount point lies between the
+path's temp root and the path, the path itself included, or with `below=True` anywhere under it
+(for a recursive removal). A mount at or above the path's (innermost) temp root is ignored only
+when it is the `/` mount, or a filesystem of its own mounted exactly at `/tmp` or `/var/tmp`:
+root `/` and a dev that no mount outside the temp roots shares (a tmpfs `/tmp`). Any other mount
+there makes it True: one at `TMPDIR`, one between `/tmp` and `TMPDIR`, or a bind at `/tmp`
+(`mount --bind / /tmp` shares the root filesystem's dev; `mount --bind <dir> /tmp` has root
+`<dir>`). It is a disqualifier only and fails closed: True when the path is in no temp root,
+when mountinfo cannot be read or parsed, or on any error.
 A caller allowing a temp write or removal requires `is_in_temp_root(p) and not crosses_mount(p)`.
 
 ## Limitations

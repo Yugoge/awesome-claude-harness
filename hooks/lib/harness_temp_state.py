@@ -338,9 +338,20 @@ def _unescape_mount_field(field: str) -> str:
     return _OCTAL.sub(lambda m: chr(int(m.group(1), 8)), field)
 
 
-def parse_mountinfo(text: str) -> Tuple[str, ...]:
-    """The mount points (field 5) of mountinfo text, unescaped, in order.
-    Raises ValueError on a line with fewer than 5 fields."""
+@dataclass(frozen=True)
+class MountEntry:
+    """One /proc/self/mountinfo line: field 3 (dev, "major:minor"), field 4
+    (root, the directory of the filesystem that is mounted, unescaped) and
+    field 5 (point, the mount point, unescaped; realpath'd by mount_entries())."""
+
+    dev: str
+    root: str
+    point: str
+
+
+def parse_mountinfo_entries(text: str) -> Tuple[MountEntry, ...]:
+    """Every line of mountinfo text as a MountEntry, in order. Raises ValueError
+    on a line with fewer than 5 fields."""
     out = []
     for line in text.splitlines():
         if not line.strip():
@@ -348,31 +359,68 @@ def parse_mountinfo(text: str) -> Tuple[str, ...]:
         fields = line.split(" ")
         if len(fields) < 5:
             raise ValueError("malformed mountinfo line: %r" % line)
-        out.append(_unescape_mount_field(fields[4]))
+        out.append(MountEntry(fields[2], _unescape_mount_field(fields[3]),
+                              _unescape_mount_field(fields[4])))
     return tuple(out)
+
+
+def parse_mountinfo(text: str) -> Tuple[str, ...]:
+    """The mount points (field 5) of mountinfo text, unescaped, in order.
+    Raises ValueError on a line with fewer than 5 fields."""
+    return tuple(entry.point for entry in parse_mountinfo_entries(text))
+
+
+def mount_entries(mountinfo: Optional[str] = None) -> Tuple[MountEntry, ...]:
+    """Every mount of /proc/self/mountinfo (or the file `mountinfo`), each point
+    realpath'd; stacked mounts are all kept. Raises OSError when it cannot be
+    read and ValueError when it is malformed or empty."""
+    with open(mountinfo or MOUNTINFO_PATH, encoding="utf-8", errors="surrogateescape") as handle:
+        entries = parse_mountinfo_entries(handle.read())
+    if not entries:
+        raise ValueError("no mount points in %s" % (mountinfo or MOUNTINFO_PATH))
+    return tuple(MountEntry(e.dev, e.root, _real(e.point) or e.point) for e in entries)
 
 
 def mount_points(mountinfo: Optional[str] = None) -> Tuple[str, ...]:
     """Realpath'd, deduplicated mount points from /proc/self/mountinfo (or the
     file `mountinfo`). Raises OSError when it cannot be read and ValueError when
     it is malformed or empty: there is always at least the root mount."""
-    with open(mountinfo or MOUNTINFO_PATH, encoding="utf-8", errors="surrogateescape") as handle:
-        points = parse_mountinfo(handle.read())
-    if not points:
-        raise ValueError("no mount points in %s" % (mountinfo or MOUNTINFO_PATH))
-    return _dedupe(points)
+    return _dedupe(entry.point for entry in mount_entries(mountinfo))
 
 
 def _strictly_below(path: str, root: str) -> bool:
     return bool(_below(path, root))
 
 
+def _benign_upper_mount(entry: MountEntry, entries: Sequence[MountEntry],
+                        roots: Sequence[str]) -> bool:
+    """A mount at or above a path's temp root that cannot carry the path out of
+    temp: the "/" mount, or a filesystem of its own (root "/", a dev no mount
+    outside the temp roots shares, e.g. a tmpfs) mounted exactly at /tmp or
+    /var/tmp. Anything else there (a mount at TMPDIR, one between /tmp and
+    TMPDIR, a bind at /tmp) is not."""
+    if entry.point == os.sep:
+        return True
+    system = _dedupe(SYSTEM_TEMP_ROOTS)
+    if entry.point not in system or entry.root != "/":
+        return False
+    for other in entries:
+        if other is entry or other.dev != entry.dev:
+            continue
+        inside = any(other.point == r or _strictly_below(other.point, r) for r in roots)
+        if not inside:
+            return False
+    return True
+
+
 def crosses_mount(path, *, below: bool = False, cwd: Optional[str] = None,
                   mountinfo: Optional[str] = None) -> bool:
-    """True when a mount point lies between `path`'s temp root and `path`
-    (the target itself included), or with below=True anywhere under `path`
-    (for a recursive removal). Mounts at or above the temp root (the one that
-    holds the temp root itself) are ignored. Checked in both resolved views.
+    """True when a mount may carry `path` out of its temp root: a mount point
+    between the temp root and `path` (the target itself included), with
+    below=True one anywhere under `path` (for a recursive removal), or any mount
+    at or above the temp root other than the "/" mount and a filesystem of its
+    own mounted exactly at /tmp or /var/tmp (see _benign_upper_mount). Checked
+    in both resolved views.
 
     A disqualifier only, and fail closed: True when the path is in no temp root,
     when mountinfo cannot be read or parsed, or on any other error. It never
@@ -381,15 +429,18 @@ def crosses_mount(path, *, below: bool = False, cwd: Optional[str] = None,
         views = resolved_views(path, cwd)
         if not views:
             return True
-        mounts = mount_points(mountinfo)
+        entries = mount_entries(mountinfo)
         roots = temp_roots()
         for view in views:
             root = max((r for r in roots if _strictly_below(view, r)), key=len, default=None)
             if root is None:
                 return True
-            for mount in mounts:
+            for entry in entries:
+                mount = entry.point
                 if mount == root or _strictly_below(root, mount):
-                    continue  # the mount holding the temp root, or one above it
+                    if not _benign_upper_mount(entry, entries, roots):
+                        return True  # at or above the temp root, and not plain temp
+                    continue
                 if not _strictly_below(mount, root):
                     continue  # elsewhere in the tree
                 if mount == view or _strictly_below(view, mount):
@@ -399,4 +450,3 @@ def crosses_mount(path, *, below: bool = False, cwd: Optional[str] = None,
         return False
     except Exception:
         return True
-
