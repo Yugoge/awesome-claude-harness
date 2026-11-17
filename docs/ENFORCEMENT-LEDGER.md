@@ -362,6 +362,22 @@ no per-rule budget exists.
   not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
   under `--codex`, and `subagentstop-codex-enforce.py` (R-022, run by the producer gate H-092)
   requires the ledger entry that call's PostToolUse (H-050) writes.
+  On the allow side, `permissions.allow` carries pure read-only entries so those commands stop
+  asking in default mode: `Bash(comm:*)`, `Bash(diff:*)`, `Bash(jq:*)`, `Bash(kubectl logs:*)`, the
+  exact `Bash(git fetch)`, `Bash(git fetch --all)`, `Bash(git fetch origin)`,
+  `Bash(git fetch origin main)`, `Bash(git fetch origin master)`, `Bash(git remote)`,
+  `Bash(git remote -v)`, `Bash(git remote --verbose)`, and `Bash(git remote get-url *)`,
+  `Bash(git remote show *)`. A prefix entry admits every flag its program takes (Bash rule
+  matching, code.claude.com/docs/en/permissions), so `rg` (`--pre` runs a program), `git show` and
+  `git blame` (`--output=<file>` writes), `journalctl` (`--vacuum-*`, `--rotate`, `--flush`,
+  `--setup-keys`, `--cursor-file`) and the `git fetch:*` / `git remote:*` prefixes are left out.
+  `tests/test_permission_allow_readonly.py` holds each entry's justification and checks that no
+  entry matches a mutating, program-running or file-writing neighbour under a matcher that
+  reproduces the documented rows. An allow entry decides only the prompt: every hook still runs,
+  and a redirect target is still checked against the `Edit` rules. The pre-existing
+  `Bash(git branch:*)`, `Bash(git log:*)` and `Bash(git diff:*)` entries do match
+  `git branch -D`, `git log --output=<file>` and `git diff --output=<file>`; the hook layer, not
+  this list, refuses the branch deletion.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
   finds no git in suppresses its own backstop.
