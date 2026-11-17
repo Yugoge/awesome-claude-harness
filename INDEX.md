@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T18:43:43Z*
-**Total entries**: 999
+*Last updated: 2026-11-17T22:12:08Z*
+**Total entries**: 1005
 **Convention**: kebab
 
 ## Tree
@@ -904,6 +904,12 @@ dot-claude/
 │   ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 │   ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 │   ├── `test_harness_switch.py` - Each test builds a harness home the way the full install leaves one: a git checkout of this
+│   ├── `test_harness_switch_cd_chain.py` - A Bash command's written word (test_harness_switch_written_words.py) is read from the directory in
+│   ├── `test_harness_switch_executions.py` - count only where a Bash command RUNS them
+│   ├── `test_harness_switch_git_options.py` - `git -C <dir> diff ...` reads; `-C <dir>` (or `-c k=v`, `--git-dir=`, `--no-pager`, ...) is no
+│   ├── `test_harness_switch_prompt_mention.py` - A CronCreate, ScheduleWakeup or SendMessage prompt reaches UserPromptSubmit as if the owner typed
+│   ├── `test_harness_switch_write_content.py` - Naming the switch's state <H>/.harness-switch/ in a written file is refused outside a harness
+│   ├── `test_harness_switch_written_words.py` - A Bash command writes the home's settings files, the switch's state or a Claude Code settings
 │   ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 │   ├── `test_hero_demo_state_dir.py` - scripts/capture-hero-run.py writes the demo's single-use grant with allowlist.py's own
 │   ├── `test_hook_rejection_retry.py` - A hook-rejected operation is never retried on the owner's answer alone: only their /allow grant (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run.
