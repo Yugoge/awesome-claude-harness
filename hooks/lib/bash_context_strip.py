@@ -313,9 +313,10 @@ def _process_segment(segment: str) -> str:
                 out_d.append(text)
         return "".join(out_d)
 
+    keep = _git_own_words(tokens, cmd_idx)
     out: list[str] = []
     for i, (text, kind) in enumerate(tokens):
-        if i <= cmd_idx:
+        if i <= cmd_idx or i in keep:
             out.append(text)
         elif kind == "single":
             out.append("")
@@ -328,6 +329,72 @@ def _process_segment(segment: str) -> str:
         else:
             out.append(text)
     return "".join(out)
+
+
+# git's global options that take the next word as their value.
+_GIT_GLOBAL_VALUE_OPTS = frozenset({
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+    "--config-env", "--attr-source", "--shallow-file",
+})
+_QUOTING_RE = re.compile(r"\\|\$(?=['\"])|['\"]")
+
+
+def _words_from(tokens: list[tuple[str, str]], start: int) -> list[list[int]]:
+    """The shell words from tokens[start] on, each a list of adjacent token indexes."""
+    words: list[list[int]] = []
+    current: list[int] = []
+    for i in range(start, len(tokens)):
+        kind = tokens[i][1]
+        if kind == "comment":
+            break
+        if kind == "space":
+            if current:
+                words.append(current)
+            current = []
+            continue
+        current.append(i)
+    if current:
+        words.append(current)
+    return words
+
+
+def _git_own_words(tokens: list[tuple[str, str]], cmd_idx: int) -> set[int]:
+    """Indexes of the tokens a git command's decision reads, kept as written (OB-L26).
+
+    The shell removes quotes before git runs, so `g'i't 'reset' '--hard'` is a
+    hard reset; blanking its quoted tokens as data left `gt  ` for the rules
+    to read. For a command word that names git once quotes and backslashes are
+    removed, the tokens of the command word, the global options and their
+    values, the subcommand, and every later word that is one option (it
+    starts with `-` and holds no blank) stay as written, quotes included, for
+    the classifier to decode; other quoted words are stripped as before.
+    """
+    words = _words_from(tokens, cmd_idx)
+    if not words:
+        return set()
+
+    def value(word: list[int]) -> str:
+        return _QUOTING_RE.sub("", "".join(tokens[i][0] for i in word))
+
+    if _basename(value(words[0])) != "git":
+        return set()
+    keep = set(words[0])
+    k = 1
+    while k < len(words):  # global options, then the subcommand
+        keep.update(words[k])
+        v = value(words[k])
+        if v in _GIT_GLOBAL_VALUE_OPTS and k + 1 < len(words):
+            keep.update(words[k + 1])
+            k += 2
+            continue
+        k += 1
+        if not v.startswith("-"):
+            break
+    for word in words[k:]:
+        v = value(word)
+        if v.startswith("-") and not any(ch.isspace() for ch in v):
+            keep.update(word)
+    return keep
 
 
 def _process_shell_interp(tokens: list[tuple[str, str]], cmd_idx: int) -> str:

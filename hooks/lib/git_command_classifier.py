@@ -1,96 +1,54 @@
-"""Shared git-command classifier for security hooks.
+"""Git invocations in a Bash command, read through the shared shell parser.
 
-Provides iter_git_invocations() — a token-aware parser that detects git
-invocations in shell command strings, including path-qualified forms such
-as /usr/bin/git and ./git.  Closes RISK-3 (path-qualified git bypass) in
-pretool-git-privilege-guard.py and pretool-bash-safety.sh.
+classify_git_command(text) returns (invocations, residuals). Callers that
+enforce policy must not read an empty invocation list as "no git runs":
 
-Root cause (2026-07-04): GIT_COMMAND_RE / GIT_CMD_RE anchor classes
-  [\\s;&|()`] / [[:space:];&|()`] omit '/', so path-qualified tokens like
-  /usr/bin/git and ./git never matched the pattern.
+  invocations  a GitInvocation(cmd_token, path_qualified, subcommand, args) per
+               git command; cmd_token is the command word as written;
+               the subcommand and every option are read as git receives them,
+               quotes and backslashes removed (`git 'push' '--force'` is push
+               with --force); an operand and a word with a run-time part stay
+               as written (`'a b c'`, `"$msg"`), and an abbreviated long option
+               reads as its full name.
+  residuals    (kind, text) for a command the scan cannot resolve that may be
+               git: dynamic_git_token
+               (`$GIT push`), substituted_git_token (`$(which git) push`) and
+               unresolved_shell_string (a shell `-c` string it cannot clear).
 
-Primitives moved from pretool-block-branch-pr-worktree.py (lines 115-219)
-so they are importable by other hooks via lib.git_command_classifier.
-
-# Known scope boundaries (arch-F7) — CLOSED 2026-09-03, see below.
-#   - `env -i/-u/-P` flags before the git token: NOW handled, via
-#     _WRAPPER_VALUE_FLAGS / _WRAPPER_POSITIONALS in _command_token_index().
-#   - Leading shell redirections (e.g. `2>/dev/null git push`): NOW handled,
-#     via _REDIRECT_RE in _command_token_index().
-#   - Shell reserved words in front of the command word (`if ! git …`,
-#     `then git …`, `do git …`, `while ! git …`): NOW handled, via
-#     _SHELL_PREFIX_KEYWORDS.  Before this fix _command_token_index() returned
-#     the index of the KEYWORD, whose basename is never 'git', so
-#     iter_git_invocations() yielded NOTHING and every guard built on it was a
-#     no-op for those forms — including `if ! git commit …`, which is this
-#     repository's own documented error-handling idiom.
-#
-# Residual (accepted, documented, and DETECTED rather than silently dropped):
-#   A command whose command-token cannot be resolved statically — an obfuscated
-#   token (`g\\it`, `gi""t`), a parameter expansion (`$GIT push`), or a
-#   command-position command-substitution (`$(which git) push`) — is reported
-#   through classify_git_command()'s `residuals` channel so a caller can fail
-#   closed instead of mistaking an unparseable command for a git-free one.
-#
-# Shell `-c` strings (2026-11-07): `bash -c "git commit -m y"` runs git under
-#   the command token `bash`.  Each shell's `-c` string is resolved and
-#   classified as a command line of its own (see _shell_layers()); one the
-#   scan cannot clear is the residual `unresolved_shell_string`.
-#
-# Git-shaped `-c` strings only (2026-11-08, PR #15 review finding 1): that
-#   residual refused `bash -c "cd $DIR && npm test"`, text the scan could not
-#   lex and every here-document body.  A string holding a run-time value is a
-#   residual only when it is git-shaped (_may_run_git), and a here-document is
-#   shell text only when a shell may read it (_reads_as_shell).
-#
-# Run-time code in a `-c` layer (2026-11-08, train 2): that narrowing let a
-#   layer hand its run-time text to a shell or an interpreter inside it
-#   (`bash -c "echo $X | sh"`, `bash -c "python3 -c $P"`, `bash -c "watch $X"`).
-#   Such a layer is also a residual when a command in it may run text computed
-#   at run time as shell or code (_runs_runtime_code).
-#
-# Fail closed on the unknown (2026-11-08, train 2): a list of dangerous programs
-#   can never be complete, so _command_runs_runtime_code now refuses a run-time
-#   word given to a program it does NOT model, keeping it only for the programs
-#   known to treat their words as data (_DATA_ONLY_COMMANDS).  So a layer running
-#   `octave --eval $X`, `erl -eval $X`, `chroot / $X`, `strace $X` or
-#   `find . -exec $X \\;` is a residual, a run-time environment assignment to a
-#   command (`BASH_ENV=$F bash …`, `NODE_OPTIONS=--require=$F node …`) is one
-#   unless the variable cannot load code (_SAFE_ENV_VARS), and a run-time `-c`
-#   value the outer shell built by running code (`bash -c "y=$(echo $X | sh)"`)
-#   is one.  echo/printf/grep and the data commands keep their run-time word.
-#
-# Closing the data-only gaps (2026-11-08, train 2 review): the data-only list had
-#   admitted programs that fail the safe-to-add test.  docker/podman/kubectl are
-#   exec-style launchers (`run`/`exec` take a command, `build` runs a Dockerfile),
-#   so `docker $X`, `docker run img $X` and `kubectl exec p -- $X` are residuals;
-#   only a static data sub-command keeps the word (`docker push $IMAGE`,
-#   _launcher_runs_runtime).  curl loads code through `--engine` and `-K`/`--config`,
-#   so a run-time value in those option positions is a residual (_curl_runs_runtime)
-#   while a bare URL operand stays data.  HOME loads code (user site `.pth` files,
-#   `~/.node_modules`, `~/.ssh/config` ProxyCommand) and left _SAFE_ENV_VARS.  And
-#   a bare run-time assignment to an unsafe name (`NODE_OPTIONS=$X; node x.js`)
-#   reaches a later command through `set -a`, a later `export`, or an already
-#   exported name, so it is a residual too (_bare_runtime_assignment_reaches_command).
+Where an invocation is found:
+  - a simple command whose command word, past assignments, reserved words,
+    redirections and wrappers (_command_token_index), is git: `/usr/bin/git`,
+    `"git"`, and any spelling the shell reads as git (`\\git`, `g'i't`,
+    `$'git'`; _is_git_word);
+  - the commands of every substitution and process substitution, and of every
+    here-document or here-string a reader may run (_here_docs_are_data: one
+    only cat, tee or another data reader reads runs just its expansion's
+    substitutions, unless the text holds a group, a compound command or an
+    `exec` with redirections; one written to a file is data only when every
+    other command of the text is inert and writes nothing (cat, ls, grep, ...),
+    the file may land as data (_is_code_file: no hidden or `hooks` component,
+    not under `~`, absolute only under /tmp), and the here-document is in the
+    tool command itself, not in a `-c` string or substitution);
+  - every shell `-c` string, every program option's value (`rg --pre`), and
+    what echo or printf print into a pipe a shell reads, each read as a
+    command line of its own (_shell_layers);
+  - quoted text after a separator, given to a command that may run it
+    (`python3 -c "x; git push"`), unless that command is known to leave its
+    words unexecuted (_is_text_only: echo, printf, grep, rg, `git commit`,
+    `git grep`, `git log --grep`), the command is one line with no
+    substitution, and no pipe feeds a command that is neither text-only nor
+    a stdin consumer (_is_stdin_consumer: head, sort, wc, ...; not less, and
+    not a sort given `--compress-program`). `git grep` and `git log --grep`
+    are text-only only with no assignment before git.
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
   CMD_INPUT='command text' python3 hooks/lib/git_command_classifier.py
   Output: JSON array of {"subcommand": str, "args": list, "path_qualified": bool,
   "nested": bool}; `nested` marks an invocation inside a shell `-c` string.
-
-Prefilter hint for callers:
-  printf '%s\\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' before spawning
-  python3 to avoid unnecessary subprocess overhead.
-
-Normalization contract:
-  iter_git_invocations() and classify_git_command() normalise their own input,
-  in CLI mode too, so a caller passes the command as written (see
-  iter_git_invocations). pretool-bash-safety.sh's COMMAND_CONTEXT_STRIPPED, an
-  already-normalised command, reads the same. That view no longer shows where
-  a `-c` string ends, so with CMD_RAW=stdin the caller writes the view, a NUL,
-  then the raw command: the strings are resolved from the raw command and each
-  one is normalized the same way before it is classified.
+  With CMD_RAW=stdin the input is a normalised view of the command, a NUL, then
+  the raw command: the view is read for the command's own invocations, and the
+  `-c` strings are resolved from the raw command and normalised the same way.
 """
 
 import collections
@@ -100,94 +58,42 @@ import os
 import re
 import sys
 
+try:
+    from lib import shell_parse
+except ImportError:  # run as a script: hooks/lib is on sys.path
+    import shell_parse
+
+# One table each, in the parser.
+GIT_GLOBAL_FLAGS = shell_parse.GIT_GLOBAL_FLAGS
+GIT_GLOBAL_VALUE_OPTS = shell_parse.GIT_GLOBAL_VALUE_OPTS
+LexError, Src, ansi_decode, lex = (shell_parse.LexError, shell_parse.Src,
+                                   shell_parse.ansi_decode, shell_parse.lex)
+resolve_long_option = shell_parse.resolve_long_option
+
+
 # ---------------------------------------------------------------------------
-# Primitives (moved verbatim from pretool-block-branch-pr-worktree.py:115-219)
+# Segment splitter, for the callers that still read segments of their own
 # ---------------------------------------------------------------------------
 
 
 def _segments(c):
-    """Split on shell separators ; \\n | & && || ` ( ) into command segments.
-
-    Parens open a new command segment in exactly THREE cases, all of which put
-    an embedded command into command position:
-      1. command-substitution / process-substitution introducers `$(`, `<(`, `>(`
-         — the text after the opener is a command (e.g. `echo $(git checkout -b
-         x)` must classify the inner `git checkout -b x`).
-      2. a real subshell `(` in command position (the current buffer is empty or
-         all whitespace), e.g. `(git checkout -b x)`.
-    A matching `)` only closes a boundary we actually opened (depth-tracked).
-    This avoids shredding argument-internal parens such as a git
-    `--format %(refname)` / `--format=%(refname)` spec, whose `%(`/`)` are part of
-    a single argument token (the `(` is preceded by `%`, not `$`/`<`/`>`, and is
-    not in command position) — splitting those would orphan a trailing positional
-    branch name (e.g. `git branch --format %(refname) nb`) into a segment without
-    `git branch`, defeating creation detection (the dangerous under-block
-    direction). Backtick substitution is split via the `` ` `` separator below.
-
-    A `\\` immediately followed by a newline is a line CONTINUATION, not a
-    separator: both characters are folded away before the newline can open a
-    boundary, so a single logical command written across multiple physical
-    lines (`python3 x.py \\\n  --flag a \\\n  --flag b`) stays one segment and
-    its trailing flags are not orphaned into segments of their own (root cause
-    of the 2026-10-05 execute-push grant-guard false rejection — see
-    `_segments_with_kind()` for the exact fold condition).
-    """
+    """Split on shell separators ; \\n | & && || ` ( ) into command segments."""
     return [seg for seg, _kind, _in_quote in _segments_with_kind(c)]
 
 
 def _segments_with_kind(c):
-    """_segments(), but each segment is paired with the boundary that OPENED it.
+    """(segment_text, kind, in_quote) for each segment of c.
 
-    Returns a list of (segment_text, kind, in_quote) where kind is one of:
-      'start'          — the first segment of the string
-      'separator'      — opened by ; \\n | & && || or a subshell/substitution `(`
-      'subst_close'    — opened by the `)` that closed a command substitution
-                         whose introducer sat in COMMAND POSITION
-
-    Only 'subst_close' is new information, and it exists for one reason: the
-    text after such a `)` is the ARGUMENT LIST of a command whose NAME was
-    produced by the substitution (`$(which git) push --force`).  The command
-    name is therefore unknowable statically, and the classifier must be able to
-    say "unknown", not "no git" — see _residual_shapes().  A substitution that
-    was NOT in command position (`echo $(date) status`) continues an existing
-    argument list and is reported as 'separator', so it raises nothing.
-
-    `in_quote` (added 2026-09-03) is True when the boundary that OPENED this
-    segment fell inside an unterminated ' or " — i.e. the segment is a
-    continuation line of a MULTI-LINE string literal, not a command.  It is
-    computed by a PASSIVE OBSERVER: quote state is tracked alongside the scan
-    but is never consulted when deciding where to split.  That is deliberate
-    and load-bearing.  Making the splitter itself quote-aware would stop
-    carving `git push --force` out of a multi-line quoted body, silently
-    REMOVING an enumeration that iter_git_invocations() reports today — the
-    dangerous under-block direction.  Only _residual_shapes() and
-    iter_git_invocations() read the flag.
-
-    Backslash-newline folding (2026-10-05) is a NARROW exception to the
-    "never consulted when deciding where to split" rule above, and it does
-    not weaken it: a `\\<newline>` pair is not a quoted separator being
-    suppressed, it is a construct bash itself deletes before the separator
-    would ever exist, in or out of double quotes (`a="x\\<newline>y"` -> `xy`;
-    verified against bash directly). The fold fires only when `esc` is true
-    at a `\n`, i.e. the immediately preceding character was a single
-    unescaped backslash NOT inside single quotes (the `not sq` guard on
-    `esc`'s own assignment below). That precisely excludes the two shapes
-    that must NOT fold:
-      * a backslash INSIDE single quotes (`'line1\\<newline>line2'`) never
-        sets `esc` (bash: single quotes suppress all escaping), so the
-        newline still opens a real 'separator' boundary — unchanged, and
-        still the deliberate quote-blind split the ENUMERATION MONOTONICITY
-        tests above depend on;
-      * a backslash that is itself ESCAPED (`\\\\<newline>`, i.e. a literal
-        trailing backslash) consumes its OWN escape one character earlier
-        (the `if esc: esc = False` branch) and leaves `esc` False by the
-        time the newline is reached, so that newline also still splits.
+    The split ignores quoting. `(` opens a segment after `$`, `<`, `>` or in
+    command position; a `)` closes only a boundary that was opened. kind is
+    'start', 'separator', or 'subst_close' (opened by the `)` of a substitution
+    in command position). in_quote: the boundary that opened the segment fell
+    inside a ' or " string. A backslash-newline outside single quotes joins the
+    lines, as bash does.
     """
     out, buf, i, n = [], [], 0, len(c)
-    # Stack of bools: was this open-paren's introducer in command position?
     subshell_stack = []
     kind = 'start'
-    # Passive quote tracking; see `in_quote` in the docstring.
     sq = dq = esc = False
     in_quote = False
 
@@ -199,35 +105,17 @@ def _segments_with_kind(c):
         out.append((''.join(buf), kind, in_quote))
         buf = []
         kind = 'subst_close' if cmd_pos_close else next_kind
-        # The NEXT segment opens in whatever quote state we are in right now.
         in_quote = sq or dq
-        # Every separator branch routes through here, so this is the one place
-        # a dangling escape (a `\` immediately before a separator) is cleared.
         esc = False
 
     while i < n:
         two = c[i:i + 2]
         if two in ('&&', '||'):
             _flush('separator'); i += 2; continue
-        # Command/process substitution introducers open a command boundary; the
-        # introducer char (`$`/`<`/`>`) is dropped from the outer segment.
         if two in ('$(', '<(', '>('):
             subshell_stack.append(_buf_is_cmd_position())
             _flush('separator'); i += 2; continue
         ch = c[i]
-        # Backslash-newline is a real shell LINE CONTINUATION, not a command
-        # boundary: bash deletes both characters and joins the next physical
-        # line onto this one (verified: `a="x\<newline>y"` -> `xy`, no space
-        # inserted). `esc` is true here iff the immediately preceding char was
-        # an unescaped backslash outside single quotes -- exactly bash's own
-        # continuation condition: a backslash inside '...' never sets esc (the
-        # `not sq` guard below), so a single-quoted multi-line literal keeps
-        # splitting on its embedded newline exactly as before (quote-blind by
-        # design, see the class docstring); an ESCAPED backslash (`\\`) before
-        # the newline consumes its own escape one char earlier and leaves esc
-        # False, so a literal trailing `\\` still splits as a real boundary.
-        # Because esc can only just have been set by the previous character,
-        # buf's last char is always the backslash that set it.
         if ch == '\n' and esc:
             buf.pop()
             esc = False
@@ -241,8 +129,6 @@ def _segments_with_kind(c):
         if ch == ')' and subshell_stack:
             was_cmd_position = subshell_stack.pop()
             _flush('separator', cmd_pos_close=was_cmd_position); i += 1; continue
-        # Quote/escape bookkeeping. Reached only for chars that are NOT
-        # separators, so it cannot influence where a split happens.
         if esc:
             esc = False
         elif ch == '\\' and not sq:
@@ -261,106 +147,49 @@ def _basename(tok):
 
 
 def _unquote_token(tok):
-    """Strip balanced surrounding quotes: `"/usr/bin/git"` -> `/usr/bin/git`.
-
-    Added 2026-08-08 (task dev-20260719-150041-a). Bash removes quotes before
-    exec, so `"/usr/bin/git" clean -fd` runs git — but the raw token basenames
-    to `git"`, so iter_git_invocations() recorded NO invocation and every guard
-    built on it (bash-safety, git-privilege, runtime_guard) silently missed the
-    command. Additive: a new helper, no existing signature or behaviour of
-    _basename / _git_subcommand / _command_token_index is changed
-    (pretool-block-branch-pr-worktree.py imports _git_subcommand directly).
-    """
+    """Strip balanced surrounding quotes: `"/usr/bin/git"` -> `/usr/bin/git`."""
     t = tok.strip()
     while len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'"):
         t = t[1:-1]
     return t
 
 
-# Command WRAPPERS that prefix the real command token (basename match). The real
-# command token is the first token after skipping leading env-var assignments
-# (NAME=VALUE) and any of these wrappers. Only that one command token is
-# classified — text that merely mentions git/gh later in the segment (e.g.
-# `echo gh pr new`) is therefore NOT a creation.
-_WRAPPERS = {
-    'sudo', 'doas', 'env', 'xargs', 'time', 'nohup', 'setsid', 'stdbuf',
-    'ionice', 'command', 'builtin', 'nice',
-    # Added 2026-09-03: these also put the NEXT word in command position.
-    'exec', 'eval', 'timeout', 'flock', 'chrt', 'taskset', 'unbuffer',
-}
+# ---------------------------------------------------------------------------
+# The command word
+# ---------------------------------------------------------------------------
 
-# Shell RESERVED WORDS (and the `!` negation operator) that may be followed
-# IMMEDIATELY by a command word in the same segment.  Sourced from bash(1)
-# "RESERVED WORDS": ! case coproc do done elif else esac fi for function if in
-# select then time until while { } [[ ]].
-#
-# Included only where the grammar puts a COMMAND after the word.  Deliberately
-# EXCLUDED, because the following token is a NAME/WORD and skipping it would
-# manufacture a false git invocation out of e.g. `for git in a b; do …`:
-#   for, select, case, in, function
-# Also excluded because they TERMINATE a construct rather than introduce a
-# command: fi, done, esac, }, ]], [[.
-# `time` is already covered by _WRAPPERS above.
+# Wrappers that put the next word in command position, their flags that take
+# the next word as a value, and the operands before the command word: the
+# parser's wrapper tables (shell_parse.WRAPPERS, PEEL), plus `eval`, whose words
+# are a command line.
+_WRAPPER_SPECS = {name: entry for table in (shell_parse.WRAPPERS, shell_parse.PEEL)
+                  for name, entry in table.items() if entry is not None}
+_WRAPPERS = set(_WRAPPER_SPECS) | {'eval'}
+_WRAPPER_VALUE_FLAGS = {name: spec['val'] for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
+_WRAPPER_POSITIONALS = {name: fixed for name, (_spec, fixed) in _WRAPPER_SPECS.items() if fixed}
+
+# Reserved words (and `!`) after which the grammar puts a command word. `for`,
+# `select`, `case`, `in` and `function` are followed by a name, and `fi`,
+# `done`, `esac`, `}`, `]]`, `[[` end a construct, so they are not here.
 _SHELL_PREFIX_KEYWORDS = {
     'if', 'elif', 'then', 'else', 'while', 'until', 'do', '!', '{', 'coproc',
 }
 
-# Leading redirections, attached (`2>/dev/null`, `>out`, `&>log`, `{fd}>f`) and
-# bare-operator (`2> /dev/null` — operator token, then its target token).
+# Leading redirections, attached (`2>/dev/null`, `{fd}>f`) or bare (`2> f`).
 _REDIRECT_RE = re.compile(
     r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?'
     r'(?:<<<|<<-|<<|>>|&>>|&>|>&|<&|>\||<>|>|<)'
 )
 
-# Wrapper flags that consume the FOLLOWING token as their value.  Keyed by
-# wrapper basename because the same short flag means different things to
-# different wrappers: `sudo -n` is --non-interactive and takes NO value, while
-# `nice -n` is the adjustment and DOES.  A single flat set would eat the `git`
-# token of `sudo -n git status` and silently reopen the bypass.
-_WRAPPER_VALUE_FLAGS = {
-    'env': {'-u', '--unset'},
-    'sudo': {'-u', '--user', '-g', '--group', '-U', '--other-user',
-             '-p', '--prompt', '-r', '--role', '-t', '--type',
-             '-C', '--close-from', '-h', '--host'},
-    'doas': {'-u', '-C'},
-    'nice': {'-n', '--adjustment'},
-    'ionice': {'-c', '--class', '-n', '--classdata', '-p', '--pid'},
-    'chrt': {'-p'},
-    'taskset': {'-p', '-c', '--cpu-list'},
-    'xargs': {'-n', '--max-args', '-P', '--max-procs', '-I', '--replace',
-              '-L', '--max-lines', '-s', '--max-chars', '-d', '--delimiter',
-              '-E', '-a', '--arg-file'},
-    'timeout': {'-s', '--signal', '-k', '--kill-after'},
-    'flock': {'-w', '--wait', '-E', '--conflict-exit-code'},
-    'exec': {'-a'},
-}
-
-# Wrappers taking a mandatory POSITIONAL argument before the command word:
-# `timeout <duration> git …`, `flock <file|fd> git …`.
-_WRAPPER_POSITIONALS = {'timeout': 1, 'flock': 1}
-
 _ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=')
 
 
 def _command_token_index(toks):
-    """Return the index of the segment's COMMAND token, or None.
+    """Index of the command word among toks, or None.
 
-    Skips every construct the shell permits BEFORE a command word:
-      * env-var assignments            FOO=1  FOO+=1  arr[0]=1
-      * shell reserved words           if  elif  then  else  while  until  do
-                                       !  {  coproc
-      * redirections                   2>/dev/null   >out   2> /dev/null
-      * command wrappers               sudo env time nice timeout flock exec …
-      * a wrapper's own option flags   env -i   env -u FOO   nice -n 5
-      * a wrapper's positional arg     timeout 30   flock /tmp/lock
-
-    Returns the index of the first real command token.
-
-    Before 2026-09-03 this skipped only assignments and bare wrappers, so the
-    command token of `if ! git commit -m x` resolved to `if` and the segment was
-    classified as non-git.  Every consumer of this function — and of
-    iter_git_invocations() built on it — was therefore blind to the entire
-    keyword/prefix family.
+    Skips assignments (`FOO=1`, `arr[0]=1`), reserved words, redirections,
+    wrappers, a wrapper's own flags and their values, and its positional
+    argument (`timeout 30`, `flock /tmp/lock`).
     """
     i = 0
     n = len(toks)
@@ -380,8 +209,6 @@ def _command_token_index(toks):
             continue
         m = _REDIRECT_RE.match(t)
         if m:
-            # Attached target (`2>/dev/null`) consumes one token; a bare
-            # operator (`2>`) consumes its target token as well.
             i += 1 if len(t) > m.end() else 2
             continue
         base = _basename(_unquote_token(t))
@@ -390,12 +217,8 @@ def _command_token_index(toks):
             pending_positionals = _WRAPPER_POSITIONALS.get(base, 0)
             i += 1
             continue
-        # A wrapper's own flags sit between the wrapper and the command word.
         if last_wrapper and t.startswith('-') and t != '--':
-            if t in _WRAPPER_VALUE_FLAGS.get(last_wrapper, ()):
-                i += 2
-            else:
-                i += 1
+            i += 2 if t in _WRAPPER_VALUE_FLAGS.get(last_wrapper, ()) else 1
             continue
         if last_wrapper and t == '--':
             i += 1
@@ -404,40 +227,8 @@ def _command_token_index(toks):
     return None
 
 
-# The git global-option table: the options git accepts between `git` and the
-# subcommand, as git parses them. git 2.43 accepts each form below but
-# --super-prefix (dropped before it), --shallow-file=<file> (it takes the two-word
-# form only), --no-lazy-fetch and --no-advice (added after 2.43); the table keeps
-# them for the gits that take them. Every hook that locates a git subcommand or
-# reads a global option uses it.
-#   GIT_GLOBAL_VALUE_OPTS  take a value as the next word, the long ones also as
-#                          `--opt=<value>`; git rejects `-C<dir>` and `-cname=value`.
-#   GIT_GLOBAL_FLAGS       take no separate value; `--exec-path` and `--list-cmds`
-#                          take theirs only as `=<value>` (a bare `git --exec-path`
-#                          prints the path and exits).
-GIT_GLOBAL_VALUE_OPTS = frozenset({
-    '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix',
-    '--config-env', '--attr-source', '--shallow-file',
-})
-GIT_GLOBAL_FLAGS = frozenset({
-    '-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects',
-    '--literal-pathspecs', '--no-literal-pathspecs', '--glob-pathspecs',
-    '--noglob-pathspecs', '--icase-pathspecs', '--no-optional-locks',
-    '--no-lazy-fetch', '--no-advice', '--html-path', '--man-path', '--info-path',
-    '-v', '--version', '-h', '--help', '--exec-path', '--list-cmds',
-})
-# The value options' name before the table split, for the code that still imports
-# it (the privilege guard's commit reads and the branch hook on another stream):
-# every lookup is "does this option take the next word?", which the table answers.
-# The old set differed: it held --exec-path, whose value git takes only as
-# `--exec-path=<dir>` (a bare one prints the path and exits, running no
-# subcommand), and lacked --attr-source and --shallow-file, so it read
-# `git --attr-source HEAD commit` as the subcommand `HEAD`.
-_GIT_GLOBAL_VALUE = GIT_GLOBAL_VALUE_OPTS
-
-
-def _git_subcommand(args):
-    """Return (subcommand, remaining_args) skipping git global options."""
+def _git_subcommand_index(args):
+    """Index of the subcommand among git's args (global options skipped), or None."""
     i = 0
     while i < len(args):
         a = args[i]
@@ -447,14 +238,19 @@ def _git_subcommand(args):
         if a.startswith('-'):
             i += 1
             continue
-        return a, args[i + 1:]
-    return None, []
+        return i
+    return None
 
 
-# Git subcommands, used ONLY by the residual detector below to decide whether an
-# unresolvable command token is followed by something that looks like a git verb.
-# It is a precision filter, not a policy list: it exists so that
-# `$(cat f) status` is treated as suspicious while `$(cat f) --version` is not.
+def _git_subcommand(args):
+    """Return (subcommand, remaining_args) skipping git global options."""
+    i = _git_subcommand_index(args)
+    return (None, []) if i is None else (args[i], args[i + 1:])
+
+
+# Git subcommands. Used only to decide whether an unresolvable command word is
+# followed by a git verb: `$(cat f) status` is suspicious, `$(cat f) --version`
+# is not.
 _GIT_SUBCOMMANDS = frozenset("""
 add am annotate apply archive bisect blame branch bundle checkout cherry
 cherry-pick citool clean clone commit commit-tree config count-objects
@@ -469,49 +265,18 @@ update-ref verify-commit verify-pack whatchanged worktree write-tree
 """.split())
 
 _EXPANSION_RE = re.compile(r'\$[A-Za-z_{(]|\$\d|`')
-
-# A leading `NAME=VALUE` assignment, anchored to the START of a segment.  It is
-# match()ed per-segment rather than searched over the whole command text so that
-# a `;` inside a string literal (`echo "x;G=echo"`) cannot fabricate one.
-_ASSIGN_RE = re.compile(
-    r'^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|\'[^\']*\'|\S*)')
 _VARREF_RE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)')
 
 
-def _assignments(segments):
-    """Map NAME -> set of statically-visible values assigned in this command text.
-
-    Only segments that are NOT inside a quote contribute, so string DATA that
-    happens to contain `NAME=value` cannot seed the map.
-    """
-    out = {}
-    for seg, _kind, in_quote in segments:
-        if in_quote:
-            continue
-        m = _ASSIGN_RE.match(seg)
-        if m:
-            out.setdefault(m.group(1), set()).add(_unquote_token(m.group(2)))
-    return out
-
-
 def _resolves_to_non_git(tok, assigns):
-    """True iff tok's expansions are pinned BY THIS SAME TEXT to something not git.
+    """True iff tok's expansions are pinned by this same text to something not git.
 
-    This does not relax the fail-closed rule, it discharges it: the rule is
-    "unknown command token => refuse", and a token whose value the command text
-    assigns two lines earlier is not unknown.  `L="python3 ledger.py"; $L init`
-    runs python3, and `init` being spelled the same as a git verb is a
-    coincidence of English.
-
-    Every path where the value is not pinned returns False (keep refusing):
-    no assignment in this text, MORE THAN ONE distinct assigned value (ordering
-    is unknowable statically), an empty value, or a value that is itself an
-    expansion.  Substitution is applied to the WHOLE token and re-checked, so
-    `G=g; ${G}it push` still reassembles to `git` and is still refused.
-
-    Known limitation: an assignment that is syntactically present but does not
-    execute (`false && G=echo`) is treated as pinning.  Closing that requires
-    control-flow analysis.
+    `L="python3 ledger.py"; $L init` runs python3. Every path where the value
+    is not pinned returns False: no assignment in this text, more than one
+    distinct value, an empty value, or a value that is itself an expansion.
+    Substitution is applied to the whole token and re-checked, so
+    `G=g; ${G}it push` still reassembles to `git`. An assignment that does not
+    execute (`false && G=echo`) still counts as pinning.
     """
     refs = _VARREF_RE.findall(tok)
     if not refs:
@@ -532,229 +297,775 @@ def _resolves_to_non_git(tok, assigns):
     return bool(words) and os.path.basename(_unquote_token(words[0])) != 'git'
 
 
-def _dequote_all(tok):
-    """Remove EVERY quote and escape char, as the shell would before exec.
+# ---------------------------------------------------------------------------
+# Reading text with the shared lexer
+# ---------------------------------------------------------------------------
 
-    `_unquote_token` only strips BALANCED surrounding quotes, so it correctly
-    resolves `"git"` but not `g\\it`, `gi""t` or `"gi"t` — all three of which the
-    shell executes as `git`.  This is deliberately more aggressive than
-    `_unquote_token` and is used ONLY to RAISE SUSPICION (never to classify an
-    invocation), so its over-eagerness cannot create a silent allow.
+_RUNTIME = '\x00'  # stands for text the shell computes at run time
+# A run-time value as a layer's text shows it: an expansion no assignment pins.
+_RUNTIME_PLACEHOLDER = '${__runtime__}'
+_RUNTIME_PLACEHOLDER_RE = re.compile(re.escape(_RUNTIME_PLACEHOLDER))
+# Word parts the shell computes at run time, and those that run commands.
+_DYNAMIC_PARTS = frozenset({'param', 'sub', 'arith', 'procsub'})
+_BODY_PARTS = frozenset({'sub', 'arith', 'procsub'})
+# Text the lexer cannot read is read again with its quoting, then all its shell
+# syntax, removed: the words survive.
+_DEGRADE = (re.compile(r'[\'"`\\]'), re.compile(r'[\'"`\\$()<>]'))
+_MAX_DATA_DEPTH = 16
+# Characters without which quoted text holds no command after a separator.
+_DATA_HINT_RE = re.compile(r'[;\n|&`(]')
+_NOT_DROPPABLE_RE = re.compile(r'\n|\$\(|<\(|>\(|`')
+
+
+class _Cmd:
+    """One simple command: its words, its redirections, and the operator before it."""
+
+    __slots__ = ('words', 'redirs', 'opener')
+
+    def __init__(self, words, redirs, opener):
+        self.words, self.redirs, self.opener = words, redirs, opener
+
+
+def _lex(text, degrade=True):
+    """(tokens, exact): lex() of text, degraded when it cannot be read as written."""
+    try:
+        return lex(Src.from_raw(text)), True
+    except LexError:
+        if not degrade:
+            raise
+    for pattern in _DEGRADE:
+        try:
+            return lex(Src.from_raw(pattern.sub(' ' if pattern is _DEGRADE[1] else '', text))), False
+        except LexError:
+            continue
+    return [], False
+
+
+def _group(toks):
+    """The simple commands of a token list."""
+    cmds, words, redirs, opener = [], [], [], None
+    for tok in toks:
+        if tok[0] == 'W':
+            words.append(tok[1])
+        elif tok[0] == 'R':
+            redirs.append(tok[1])
+        else:
+            if words or redirs:
+                cmds.append(_Cmd(words, redirs, opener))
+                words, redirs = [], []
+                opener = tok[1]
+            elif tok[1] != '(' and not (tok[1] == '\n' and opener in ('|', '|&', '&&', '||')):
+                # A group opened after a pipe is fed by it; a line ending in
+                # an operator goes on to the next line's command.
+                opener = tok[1]
+    if words or redirs:
+        cmds.append(_Cmd(words, redirs, opener))
+    return cmds
+
+
+def _value(word):
+    """(value, runtime): the word as its command receives it, run-time parts _RUNTIME."""
+    out, runtime = [], False
+    for kind, src, _off in word.segs:
+        if kind == 'ansi':
+            out.append(ansi_decode(src.text))
+        elif kind in _DYNAMIC_PARTS:
+            out.append(_RUNTIME)
+            runtime = True
+        elif kind == 'arraylit':
+            out.append('(' + src.text + ')')
+        else:
+            out.append(src.text)
+    value = ''.join(out)
+    return value, runtime or _RUNTIME in value
+
+
+def _subst_bodies(cmd):
+    """The substitution bodies of cmd's words and redirection targets."""
+    out = []
+    for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
+        out.extend(src.text for kind, src, _off in word.segs if kind in _BODY_PARTS)
+    return out
+
+
+def _bodies(cmd):
+    """The texts cmd runs as commands of their own: substitutions, then here-documents."""
+    return _subst_bodies(cmd) + [r.heredoc[2].text for r in cmd.redirs if r.heredoc is not None]
+
+
+def _here_doc_code(redir, code):
+    """The texts a here-document runs as commands: its body when code, else its substitutions.
+
+    An unquoted delimiter has the outer shell expand the body first, running its
+    substitutions whoever reads it; a body whose expansions the lexer cannot
+    read counts as code.
     """
-    return tok.replace('"', '').replace("'", '').replace('\\', '')
+    _delim, quoted, body = redir.heredoc
+    if code:
+        return [body.text]
+    if quoted:
+        return []
+    try:
+        return _expand_here_doc(body.text)[1]
+    except LexError:
+        return [body.text]
 
 
-def _is_command_name_shaped(tok):
-    """True iff tok could be a COMMAND NAME at all, rather than a shard of prose.
+# Words that open or close a compound command. A here-document inside one
+# (`for ...; do cat <<'EOF'; done | sh`) may reach whatever reads the
+# compound's output, so, as with a group, the text's here-documents are code.
+_COMPOUND_WORDS = frozenset({
+    'for', 'select', 'while', 'until', 'if', 'then', 'elif', 'else', 'fi',
+    'do', 'done', 'case', 'esac', 'function', 'coproc', '{', '}',
+})
+# Redirections that write a file.
+_WRITE_REDIRS = frozenset({'>', '>>', '>|', '&>', '&>>'})
 
-    Measured against 71,598 real harness commands: a naive `.split()` breaks a
-    multi-word quoted string (`"git clean -n "`, `'git ls-files ...`) into a
-    leading token carrying ONE unbalanced quote.  Those are string literals
-    inside embedded Python/JSON heredocs, not command names — the shell never
-    execs them — and they accounted for 147 of 150 raw residual hits.  Three
-    structural tests separate them from real command names:
 
-      * quotes must BALANCE.  `gi""t` / `"gi"t` / `''git` are all `git` to the
-        shell and balance; `"git` (an opened string) does not.
-      * no BACKSLASH-ESCAPED QUOTE (`\\"`).  A backslash before a quote is
-        string-literal escaping from an embedding language; a backslash before
-        an ordinary character (`g\\it`) is shell escaping of a command name.
-      * no TRAILING backslash.  It escapes nothing inside the token, so it
-        cannot be part of a command NAME.  In practice it is _segments()
-        splitting a grep alternation (`grep "ls-files\\|git\\|tracked"`) at the
-        `|`, leaving the fragment `git\\`.  No genuine obfuscation (`g\\it`,
-        `\\git`, `gi""t`) ends in a backslash.
+def _opens_compound(cmd):
+    """True iff the simple command cmd opens or closes a group or compound command."""
+    values = _values(cmd.words[:2])
+    if values[:1] in (['!'], ['time']):
+        values = values[1:]
+    return bool(values) and values[0] in _COMPOUND_WORDS
 
-    Extracted from _is_obfuscation_candidate() 2026-09-03 so the DYNAMIC branch
-    of _residual_shapes() can apply the same test.  That branch previously
-    checked only "looks like an expansion" + "next word is a git verb", so any
-    line of string DATA beginning with an expansion-shaped shard was refused —
-    and the git subcommand set is full of ordinary English verbs (init status
-    log config add clean help describe pull show grep mv rm tag).
+
+# A here-document whose pipe writes a file is data only when nothing on the
+# same line can run that file: every other command of the text is inert, and
+# the file is none a shell, git, make or direnv runs or reads by itself. The
+# rule is closed: a command not listed keeps the here-document code, so the
+# many ways to run a file (`sh < x.sh`, `cat x.sh | sh`, `sh x.*`, `cp x.sh y
+# && sh y`, `xargs`, `find -exec`, `make`) need no list of their own.
+#
+# Inert commands print, count, list, test or make directories, run nothing
+# they are given and, as _is_inert requires, write nothing. chmod is absent
+# (its +x is the step to running a file), cd (it moves the written file's
+# relative path into `.git/` or a home directory), git (its config and
+# attributes run programs: `core.fsmonitor`, `diff.external`), cp, mv, xargs,
+# find, make, tee and every shell and interpreter.
+_INERT_COMMANDS = frozenset({
+    'cat', 'head', 'tail', 'wc', 'ls', 'echo', 'printf', 'test', '[',
+    'true', 'false', 'mkdir', 'pwd',
+})
+# grep and rg are inert as text owners (_is_text_only).
+_INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
+# Where a written here-document may land as data. The rule is closed: a path
+# with a hidden component (`.git/`, `.bashrc`, `.claude/`, `.vscode/`,
+# `.config/`, and `..`, which leaves the tree), one under the home directory
+# (`~`), one with a `hooks` component (`core.hooksPath`), an absolute one
+# outside /tmp and /var/tmp, and one of these names (any case, files a tool
+# runs by name) is code. Names a tool runs that need no dot:
+_CODE_FILES = frozenset({'makefile', 'gnumakefile', 'gitconfig'})
+_CODE_DIRS = frozenset({'hooks'})
+_DATA_ROOTS = ('/tmp/', '/var/tmp/')
+# Commands that copy their input to a file a word of theirs names.
+_FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
+_NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
+
+
+def _writes_file(redir):
+    """True iff redir, on any descriptor, may write the file it names.
+
+    `>`, `>>`, `>|`, `&>`, `&>>`, `<>` (read-write), and `>&` with a word
+    that is no descriptor number or `-` (`>& file` writes the file).
     """
-    if tok.count('"') % 2 or tok.count("'") % 2:
-        return False
-    if '\\"' in tok or "\\'" in tok:
-        return False
-    if tok.endswith('\\'):
-        return False
-    return True
+    if redir.op in _WRITE_REDIRS or redir.op == '<>':
+        return True
+    if redir.op == '>&':
+        target = _value(redir.target)[0]
+        return not (target.isdigit() or target == '-')
+    return False
 
 
-def _is_obfuscation_candidate(tok):
-    """True iff tok is a plausibly-obfuscated COMMAND NAME rather than prose."""
-    return _is_command_name_shaped(tok) and os.path.basename(_dequote_all(tok)) == 'git'
+def _written_paths(cmds, k, end):
+    """(paths, unknown): the files the pipe cmds[k:end] writes, and whether one cannot be named.
+
+    Paths come from every redirection that may write a file (_writes_file,
+    on any descriptor: `1<>.git/config` too) and tee's operands. A command that
+    copies its input to a file (`cp /dev/stdin x.sh`), or a path computed at
+    run time, makes the set unknown.
+    """
+    paths, unknown = [], False
+    for cmd in cmds[k:end]:
+        targets = [r.target for r in cmd.redirs if r.target is not None and _writes_file(r)]
+        values = _values(cmd.words)
+        idx, name = _command_name(cmd.words, values)
+        if idx is not None and name in _FILE_COPIERS:
+            unknown = True
+        elif idx is not None and name == 'tee':
+            targets += [w for w in cmd.words[idx + 1:] if not _value(w)[0].startswith('-')]
+        for word in targets:
+            value, runtime = _value(word)
+            if runtime:
+                unknown = True
+            elif value not in _NULL_FILES:
+                paths.append(value)
+    return paths, unknown
+
+
+def _is_code_file(path):
+    """True iff a here-document written to path may be run or read as code by a tool (see _CODE_FILES)."""
+    if path.startswith('~') or (path.startswith('/') and not path.startswith(_DATA_ROOTS)):
+        return True
+    parts = [part.lower() for part in path.split('/') if part and part != '.']
+    return (not parts or parts[-1] in _CODE_FILES
+            or any(p.startswith('.') or p in _CODE_DIRS for p in parts))
+
+
+def _is_inert(cmd, written):
+    """True iff the simple command cmd is inert (_INERT_COMMANDS and the rest), as written.
+
+    It stands alone: no assignment, wrapper or reserved word before its
+    command word, which is static, holds no `/` and names no written file
+    (written, basenames), no substitution in its words, and it writes
+    nothing: an output redirection only to /dev/null or another descriptor
+    (`2>&1`, `>&2`).
+    """
+    for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
+        if any(kind in ('sub', 'procsub') for kind, _src, _off in word.segs):
+            return False
+    for r in cmd.redirs:
+        target = None if r.target is None else _value(r.target)[0]
+        if r.op in _WRITE_REDIRS or r.op == '<>':
+            if target != '/dev/null':
+                return False
+        elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):
+            return False
+    if not cmd.words:
+        return True
+    values = _values(cmd.words)
+    if _command_token_index(values) != 0:
+        return False
+    name, runtime = _value(cmd.words[0])
+    if runtime or '/' in name or name in written:
+        return False
+    if name == 'printf' and any(v == '-v' or v.startswith('-v') for v in values[1:2]):
+        return False  # `printf -v PATH .` assigns a variable
+    if name in _INERT_COMMANDS:
+        return True
+    return name in _INERT_TEXT_OWNERS and _is_text_only(cmd.words)
+
+
+def _here_docs_are_data(toks, cmds, k, nested=False):
+    """True iff the here-documents of cmds[k] are read as data.
+
+    They are when every command of the pipe cmds[k] starts reads its input as
+    data (_reads_input_as_data): `cat > notes.md <<'EOF'`, `cat <<'EOF' | sort`.
+    A here-document in a text with a group or a compound command (`{ cat
+    <<'EOF'; } | bash`, `for ...; do cat <<'EOF'; done | sh`) or an `exec`
+    with redirections counts as code, as does one whose output a substitution
+    captures (see _code_commands). One whose pipe writes a file is data only
+    when the file is named, may land as data (_is_code_file), and every other command of
+    the text is inert and writes nothing (_is_inert): `cat > x.sh <<'EOF' ...
+    && sh < x.sh` and `... && git status` are code. nested: the text is not
+    the tool command itself but a `-c` string, an eval or program-option
+    string, a substitution or a here-document body, whose surroundings the
+    rule cannot see (`bash -c "cat > x.sh <<'EOF' ..." && sh x.sh`), so a
+    here-document there that writes a file is code.
+    """
+    if any(tok[0] == 'OP' and tok[1] == '(' for tok in toks) or any(map(_opens_compound, cmds)):
+        return False
+    if any(cmd.redirs and _values(cmd.words)[:1] == ['exec'] for cmd in cmds):
+        return False
+    j = k
+    while True:
+        if not _reads_input_as_data(cmds[j]):
+            return False
+        j += 1
+        if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
+            break
+    paths, unknown = _written_paths(cmds, k, j)
+    if not (paths or unknown):
+        return True
+    if nested or unknown or any(map(_is_code_file, paths)):
+        return False
+    written = {_basename(p) for p in paths}
+    return all(_is_inert(cmd, written) for n, cmd in enumerate(cmds) if not k <= n < j)
+
+
+def _code_commands(text, depth=0, captured=False, nested=False):
+    """(commands, exact): every simple command text runs, its bodies' commands after it.
+
+    A here-document read as data (_here_docs_are_data) runs only the
+    substitutions its expansion performs; a here-string not read as data is
+    read as commands too. captured: text is a substitution's
+    body, whose output the outer command may run (`eval "$(cat <<'EOF' ...)"`),
+    so its here-documents count as code. A substitution's output is data when
+    its command is text-only and keeps its input as data, as is every command
+    a pipe feeds from it (`git commit -m "$(cat <<'EOF' ...)"`).
+    """
+    toks, exact = _lex(text)
+    cmds = _group(toks)
+    out = []
+    nested = nested or depth > 0
+    for k, cmd in enumerate(cmds):
+        out.append(cmd)
+        if depth < _MAX_DATA_DEPTH:
+            subst = _subst_bodies(cmd)
+            held = bool(subst) and (captured or not (_is_text_only(cmd.words)
+                                                     and _here_docs_are_data(toks, cmds, k, nested)))
+            for body in subst:
+                out.extend(_code_commands(body, depth + 1, held, nested)[0])
+            docs = [r for r in cmd.redirs if r.heredoc is not None]
+            strings = [r for r in cmd.redirs if r.op == '<<<' and r.target is not None]
+            code = bool(docs or strings) and (captured or not _here_docs_are_data(toks, cmds, k, nested))
+            for redir in docs:
+                for body in _here_doc_code(redir, code):
+                    out.extend(_code_commands(body, depth + 1, captured, nested)[0])
+            if code:
+                # A here-string is a here-document of one word: code when its
+                # reader may run it (`sh <<< 'git push'`).
+                for redir in strings:
+                    out.extend(_code_commands(_value(redir.target)[0], depth + 1, captured, nested)[0])
+    return out, exact
+
+
+def _values(words):
+    return [_value(w)[0] for w in words]
+
+
+def _is_git_word(word):
+    """True iff the command word word runs git: its text names git once quotes are
+    removed (`"/usr/bin/git"`, `"$HOME/bin/git"`), or its value does and the shell
+    computes none of it (`\\git`, `g'i't`, `gi""t`, `$'git'`). The shell removes
+    quotes and backslashes before it runs a word, so a spelling is judged as the
+    git it runs, not refused as an unknown binary (OB-L26)."""
+    if _basename(_unquote_token(word.raw.text)) == 'git':
+        return True
+    value, runtime = _value(word)
+    return not runtime and _basename(value) == 'git'
+
+
+def _is_option_word(value):
+    """True for one option as git receives it: it starts with `-` and holds no blank."""
+    return value.startswith('-') and not any(ch.isspace() for ch in value)
+
+
+def _invocations(words, aliases=None, depth=0, seen=frozenset()):
+    """The GitInvocation of a simple command whose command word is git, then its alias's.
+
+    An alias the invocation defines with `-c alias.<name>=<value>` (or inherits
+    from the git that ran it) is read too: a `!` value is shell text git runs
+    with the arguments, any other value the git arguments the name stands for.
+    """
+    values = _values(words)
+    idx = _command_token_index(values)
+    if idx is None:
+        return
+    token = words[idx].raw.text
+    if not _is_git_word(words[idx]):
+        return
+    path_qualified = '/' in (token if _value(words[idx])[1] else values[idx])
+    gvals = values[idx + 1:]
+    k = _git_subcommand_index(gvals)
+    # The subcommand and every option as git receives them, quotes and
+    # backslashes removed (`'push'`, `p\ush`, `$'\x70ush'`, `'--hard'`), so a
+    # decision never depends on how they were quoted (OB-L26); an operand
+    # (`'a b c'`, `"/tmp/m.txt"`) and a word the shell computes at run time
+    # (`"$msg"`) stay as written.
+    words_seen = [v if not _value(w)[1] and (j == k or _is_option_word(v)) else w.raw.text
+                  for j, (w, v) in enumerate(zip(words[idx + 1:], gvals))]
+    if k is None:
+        yield GitInvocation(token, path_qualified, None, [])
+        return
+    sub = words_seen[k]
+    # An abbreviated long option git accepts reads as its full name (`--har`).
+    args = [seen if full == value else full
+            for seen, value, full in ((s, v, resolve_long_option(sub, v))
+                                      for s, v in zip(words_seen[k + 1:], gvals[k + 1:]))]
+    yield GitInvocation(token, path_qualified, sub, args)
+    aliases = dict(aliases or {})
+    i = 0
+    while i < k:
+        opt = gvals[i]
+        pair = gvals[i + 1] if opt in ('-c', '--config-env') and i + 1 < k else (
+            opt[len('--config-env='):] if opt.startswith('--config-env=') else '')
+        key, eq, val = pair.partition('=')
+        if eq and key.lower().startswith('alias.'):
+            aliases[key[len('alias.'):].lower()] = val if opt == '-c' else None
+        i += 2 if opt in GIT_GLOBAL_VALUE_OPTS else 1
+    name = gvals[k].lower()
+    body = aliases.get(name)
+    # git refuses an alias that reaches itself again, so a loop runs nothing more.
+    if body is None or name in seen or depth >= _MAX_SHELL_DEPTH:
+        return
+    rest = ' '.join(w.raw.text for w in words[idx + 2 + k:])
+    text = body[1:] + ' ' + rest if body.startswith('!') else 'git %s %s' % (body, rest)
+    for cmd in _code_commands(text, nested=True)[0]:
+        yield from _invocations(cmd.words, aliases, depth + 1, seen | {name})
+
+
+# Commands known to leave their arguments and their standard input unexecuted:
+# echo and printf print them, grep reads its pattern as text. Every other
+# command, a launcher (`python3 -c`, `su -c`, `find -exec`, `ssh`) included, may
+# run quoted text it is given. ag and ack are absent: their `--pager` runs a
+# shell.
+_TEXT_ONLY_COMMANDS = frozenset({'echo', 'printf', 'grep'})
+# git subcommands whose quoted arguments are text (`git commit -m "a; git push"`).
+_TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
+# git subcommands whose quoted arguments are text when git is given no
+# configuration on its command line (a `-c` value may name a program git runs)
+# and no assignment before it (`GIT_EXTERNAL_DIFF=... git log`):
+# `git grep` without `-O`/`--open-files-in-pager` (that option runs a pager),
+# and `git log` reading a `--grep` pattern.
+_TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
+_GIT_CONFIG_OPTS = ('-c', '--config-env')
+# rg reads its pattern as text, unless a preprocessor runs (`--pre`,
+# `--pre-glob`) or a config file it is pointed at may add one.
+_RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
+# Commands that read what a pipe feeds them as text and never run it. They are
+# not text-only: their own arguments may name a program (`sort
+# --compress-program`), and one given such an option (_PROGRAM_OPTIONS) is no
+# consumer, whatever its value: sort hands its input to the compressor. less is
+# absent: LESSOPEN and LESSCLOSE name an input preprocessor (`|-sh %s` runs
+# what it reads), and they may come from the inherited environment, which the
+# command line cannot show.
+_STDIN_CONSUMERS = frozenset({
+    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl',
+})
+
+
+def _long_opt_named(value, names):
+    """True iff value is one of the long options names, or an abbreviation of one, `=value` aside."""
+    opt = value.split('=', 1)[0]
+    return len(opt) > 2 and opt.startswith('--') and any(name.startswith(opt) for name in names)
+
+
+def _command_name(words, values):
+    """(index, name) of the command word of words, or (None, None) when eval reads the line again."""
+    idx = _command_token_index(values)
+    if idx is None:
+        return None, None
+    # `eval echo "x; git push"` reads echo's quoted text again as shell code.
+    if any(_basename(v) == 'eval' for v in values[:idx]):
+        return None, None
+    return idx, _basename(_unquote_token(words[idx].raw.text))
+
+
+def _is_text_only(words):
+    """True iff the command of words is known to leave its arguments and input unexecuted."""
+    values = _values(words)
+    idx, name = _command_name(words, values)
+    if idx is None:
+        return False
+    if name == 'rg':
+        if any(_ENV_ASSIGN_RE.match(v) and v.startswith('RIPGREP_CONFIG_PATH') for v in values[:idx]):
+            return False
+        return _basename(values[idx]) == 'rg' and not any(
+            _long_opt_named(v, _RG_PROGRAM_OPTS) for v in values[idx + 1:])
+    if name != 'git':
+        return _basename(values[idx]) in _TEXT_ONLY_COMMANDS
+    gargs = values[idx + 1:]
+    k = _git_subcommand_index(gargs)
+    sub = None if k is None else gargs[k]
+    if sub in _TEXT_ONLY_GIT_SUBCOMMANDS:
+        return True
+    if sub not in _TEXT_SEARCH_GIT_SUBCOMMANDS:
+        return False
+    # An assignment before git may name a program it runs or the config it
+    # reads (GIT_EXTERNAL_DIFF, GIT_CONFIG_COUNT/KEY_n/VALUE_n,
+    # GIT_CONFIG_PARAMETERS, GIT_PAGER, PAGER, HOME, GIT_DIR, ...).
+    if any(_ENV_ASSIGN_RE.match(v) for v in values[:idx]):
+        return False
+    if any(v in _GIT_CONFIG_OPTS or v.startswith('--config-env=') for v in gargs[:k]):
+        return False
+    rest = gargs[k + 1:]
+    if sub == 'grep':
+        return not any((v.startswith('-') and not v.startswith('--') and 'O' in v)
+                       or _long_opt_named(v, ('--open-files-in-pager',)) for v in rest)
+    return any(v == '--grep' or v.startswith('--grep=') for v in rest)
+
+
+def _is_stdin_consumer(words):
+    """True iff the command of words reads what a pipe feeds it as text: _STDIN_CONSUMERS.
+
+    A consumer given an option whose value is a program (_PROGRAM_OPTIONS,
+    `sort --compress-program=sh`, any spelling or abbreviation), or with an
+    assignment before it (`SORTOPTS=x sort`), is not one.
+    """
+    values = _values(words)
+    idx, name = _command_name(words, values)
+    if idx is None or name not in _STDIN_CONSUMERS or _basename(values[idx]) != name:
+        return False
+    if any(_ENV_ASSIGN_RE.match(v) for v in values[:idx]):
+        return False
+    return not any(_long_opt_named(v, _PROGRAM_OPTIONS.get(name, ())) for v in values[idx + 1:])
+
+
+def _reads_input_as_data(cmd):
+    """True iff the simple command cmd keeps its standard input as data.
+
+    A text-only command, a _DATA_ONLY_COMMANDS one (`cat`, `tee`), a stdin
+    consumer, `git commit` (`-F -`), and a command of redirections alone do;
+    a shell, an interpreter (`python3 -`), `source /dev/stdin`, `ssh`, a
+    command named at run time and every command not known do not. A command
+    that hands its input to a process substitution (`tee >(sh)`, `> >(sh)`) or
+    to a descriptor of its own (`>&3`) does not either.
+    """
+    for word in cmd.words + [r.target for r in cmd.redirs if r.target is not None]:
+        if any(kind == 'procsub' for kind, _src, _off in word.segs):
+            return False
+    for r in cmd.redirs:
+        if r.op in ('>&', '<&', '&>', '&>>') and r.target is not None:
+            if _value(r.target)[0] not in ('1', '2', '-') and r.op in ('>&', '<&'):
+                return False
+    if not cmd.words:
+        return True
+    values = _values(cmd.words)
+    idx, name = _command_name(cmd.words, values)
+    if idx is None or _value(cmd.words[idx])[1]:
+        return False
+    if _is_text_only(cmd.words) or _is_stdin_consumer(cmd.words):
+        return True
+    return name in _DATA_ONLY_COMMANDS and _basename(values[idx]) == name
+
+
+def _data_invocations(value, depth=0):
+    """Git invocations in quoted text a command is given, read as shell text.
+
+    The text before its first separator continues the word it sits in; the
+    commands after it, every substitution in it, and the same reading of each
+    word in it count.
+    """
+    if depth > _MAX_DATA_DEPTH or not _DATA_HINT_RE.search(value):
+        return
+    toks, _exact = _lex(value)
+    head = next((k for k, tok in enumerate(toks) if tok[0] == 'OP'), len(toks))
+    for tok in toks[:head]:
+        word = tok[1] if tok[0] == 'W' else tok[1].target
+        if word is not None:
+            yield from _word_invocations(word, depth + 1)
+    for cmd in _group(toks[head + 1:]):
+        yield from _invocations(cmd.words)
+        for word in cmd.words:
+            yield from _word_invocations(word, depth + 1)
+        for body in _bodies(cmd):
+            for inner in _code_commands(body, depth + 1)[0]:
+                yield from _cmd_invocations(inner, depth + 1)
+
+
+def _word_invocations(word, depth):
+    """Invocations in one word of quoted text: its substitutions' commands, then its text."""
+    for kind, src, _off in word.segs:
+        if kind in _BODY_PARTS:
+            for cmd in _code_commands(src.text, depth)[0]:
+                yield from _cmd_invocations(cmd, depth)
+    yield from _data_invocations(_value(word)[0], depth)
+
+
+def _cmd_invocations(cmd, depth):
+    yield from _invocations(cmd.words)
+    for word in cmd.words:
+        yield from _data_invocations(_value(word)[0], depth + 1)
+
+
+def _segment_invocations(command_text, tagged=False, nested=False):
+    """iter_git_invocations() for command_text itself, its `-c` strings aside.
+
+    tagged: yield (invocation, quoted) instead, quoted when the invocation was
+    read from quoted text a command is given.
+    """
+    cmds, exact = _code_commands(command_text, nested=nested)
+    droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
+                 and not any(cmd.opener in ('|', '|&') and not _is_text_only(cmd.words)
+                             and not _is_stdin_consumer(cmd.words) for cmd in cmds))
+    for cmd in cmds:
+        for inv in _invocations(cmd.words):
+            yield (inv, False) if tagged else inv
+        if droppable and _is_text_only(cmd.words):
+            continue
+        for word in cmd.words:
+            for inner in _data_invocations(_value(word)[0]):
+                yield (inner, True) if tagged else inner
+
+
+def _segment_residual_shapes(command_text, nested=False):
+    """Yield (kind, text) for command words that may be git but did not resolve.
+
+    Only a command word raises one, so git in argument position (`grep git .`,
+    `echo "git status"`) raises nothing. A word whose value is `git` with no
+    run-time part (`g\\it push`, `gi""t push`, `$'git' push`) is no residual: the
+    shell removes its quotes, so it is read as the git invocation it is and
+    judged on its merits (OB-L26; obfuscated_git_token stays a kind an override
+    may name, and is no longer raised):
+      dynamic_git_token      it holds an expansion and a git verb follows
+                             (`$GIT push`, `${G}it commit`), unless an
+                             assignment in the text pins it to something else
+                             or the expansion is only in its directory part
+                             (`"$VIRTUAL_ENV/bin/pip" show`, see
+                             _dynamic_only_in_directory);
+      substituted_git_token  it is a command substitution and a git verb
+                             follows (`$(which git) push`).
+    """
+    cmds, _exact = _code_commands(command_text, nested=nested)
+    assigns = {}
+    for cmd in cmds:
+        raws = [w.raw.text for w in cmd.words]
+        if raws[:1] == ['export']:
+            raws = raws[1:]
+        if raws and _ENV_ASSIGN_RE.match(raws[0]):
+            name, _eq, value = raws[0].partition('=')
+            assigns.setdefault(name.rstrip('+'), set()).add(_unquote_token(value))
+    for cmd in cmds:
+        values = _values(cmd.words)
+        idx = _command_token_index(values)
+        if idx is None:
+            continue
+        word = cmd.words[idx]
+        raw = word.raw.text
+        # A static spelling of git (`\\git`, `g'i't`) is an invocation (_is_git_word).
+        if _is_git_word(word):
+            continue
+        text = ' '.join(w.raw.text for w in cmd.words)
+        sub = _git_subcommand(values[idx + 1:])[0]
+        kinds = {kind for kind, _src, _off in word.segs}
+        if not kinds & _DYNAMIC_PARTS:
+            continue
+        if sub in _GIT_SUBCOMMANDS:
+            if kinds <= {'sub'}:
+                yield ('substituted_git_token', text)
+            elif not (_resolves_to_non_git(raw, assigns) or _dynamic_only_in_directory(word)):
+                yield ('dynamic_git_token', text)
+
+
+# Quotes whose text is taken as written.
+_WRITTEN_QUOTES = frozenset({shell_parse.BARE, shell_parse.SINGLE, shell_parse.DOUBLE,
+                             shell_parse.ESCAPED})
+_PLAIN_NAME_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+# Programs that run git under another name: `git*` (`git-push` runs git's push,
+# and a case-insensitive file system runs `GIT`) and hub.
+_GIT_LIKE_PREFIX = 'git'
+_GIT_LIKE_NAMES = frozenset({'hub'})
+
+
+def _dynamic_only_in_directory(word):
+    """True iff word's expansions are only in its directory part (OB-L25).
+
+    `"$VIRTUAL_ENV/bin/pip"` runs pip, wherever the variable points: each
+    expansion is a plain variable inside double quotes, so it is one field,
+    never split or globbed, and a literal `/name` after the last one fixes the
+    file name. The word runs the program a literal path ending in that name
+    runs. Refused, as before: an unquoted expansion (`$D/bin/pip`, whose value
+    may split into `git push ...`), `${G:-x}` and every other operator,
+    `$@`, a substitution, a glob or brace in the word, an expansion in the
+    file name (`"$X/bin/$Y"`), and a file name that is git-like (`git`,
+    `git-receive-pack`, `GIT`, `hub`).
+    """
+    parts = word.parts
+    last = max((k for k, p in enumerate(parts) if p.kind != 'lit'), default=None)
+    if last is None:
+        return False
+    for p in parts[:last + 1]:
+        if p.kind == 'param':
+            if p.quote != shell_parse.DOUBLE or not _PLAIN_NAME_RE.match(p.text):
+                return False
+        elif p.kind != 'lit' or p.quote not in _WRITTEN_QUOTES:
+            return False
+    tail = parts[last + 1:]
+    if any(p.kind != 'lit' or p.quote not in _WRITTEN_QUOTES for p in tail):
+        return False
+    directory, slash, name = ''.join(p.text for p in tail).rpartition('/')
+    lowered = name.lower()
+    return (bool(slash) and name not in ('', '.', '..')
+            and not lowered.startswith(_GIT_LIKE_PREFIX) and lowered not in _GIT_LIKE_NAMES)
 
 
 # ---------------------------------------------------------------------------
 # Shell `-c` strings
 # ---------------------------------------------------------------------------
-# A shell's `-c` string is a command line the shell parses again, so the
-# segment walk above sees only the shell's name as the command token.  The scan
-# below reads the command text with the shell's own quoting rules, finds each
-# shell in command position and its `-c` string, and returns that string as a
-# command line of its own; iter_git_invocations() and _residual_shapes() then
-# treat it exactly as they treat a plain command.
-#
-# A string holding an expansion or substitution the OUTER shell performs
-# (outside single quotes; the inner shell parses its run-time value as
-# commands) is read the same way, each run-time value a placeholder.  It is the
-# residual `unresolved_shell_string` only when it is git-shaped
-# (_may_run_git): the narrow test the plain-text residual uses finds git in it,
-# or one of its command words is a run-time value with no static word after it
-# that clears it.  So `bash -c "git $SUB"` and `bash -c "$CMD"` are residuals,
-# and `bash -c "cd $DIR && npm test"` runs npm, as `cd $DIR && npm test` does.
+# A shell's `-c` string is a command line the shell parses again, so it is read
+# as one (_shell_layers). A string holding a value the outer shell computes at
+# run time is read with each such value a placeholder, and is the residual
+# `unresolved_shell_string` when it is git-shaped (_may_run_git) or may run
+# run-time text as shell or code (_runs_runtime_code). `bash -c "git $SUB"` and
+# `bash -c "$CMD"` are residuals; `bash -c "cd $DIR && npm test"` runs npm.
 # Text whose quoting the scan cannot follow is a residual when what follows its
 # shell `-c` is git-shaped; a string nested deeper than _MAX_SHELL_DEPTH always
-# is.  A here-document is shell text only when a shell may read it
+# is. A here-document is shell text only when a shell may read it
 # (_reads_as_shell); for any other reader it runs only the substitutions the
 # outer shell performs to expand it, and none when its delimiter is quoted.
 #
-# A string holding a run-time value is also the residual when it, or a string
-# it runs, may run text computed at run time as shell or code
-# (_runs_runtime_code), as a run-time command word already is: a shell or an
-# interpreter fed that text through a pipe, a here-string, a here-document or a
-# file, or given it as its script or code; source and `.` given a run-time
-# file; eval, trap and the launchers that hand their arguments to a shell given
-# a run-time word.  `bash -c "echo $X | sh"` is a residual, as dfc90534 had it,
-# while `echo $X | sh` alone keeps its plain-text decision (P9-31).  Because a
-# list of dangerous programs can never be complete, the rule fails closed: a
-# program it does not model, given a run-time word, runs it (so the layer is a
-# residual) unless the program keeps its words as data (_DATA_ONLY_COMMANDS); an
-# exec-style launcher (docker/podman/kubectl) runs a run-time word unless its
-# sub-command is a static data one (_launcher_runs_runtime); curl loads code
-# through a run-time `--engine`/`-K`/`--config` value (_curl_runs_runtime); a
-# run-time environment assignment to a command may load code unless the variable
-# cannot (_SAFE_ENV_VARS), and a bare one to an unsafe name reaches a later
-# command the same way (_bare_runtime_assignment_reaches_command); and a run-time
-# `-c` value the outer shell built by running code (`bash -c "y=$(echo $X | sh)"`)
-# is a residual too.
+# _runs_runtime_code fails closed: a list of dangerous programs can never be
+# complete, so a program it does not model, given a run-time word, runs it,
+# unless the program keeps its words as data (_DATA_ONLY_COMMANDS). An
+# exec-style launcher runs a run-time word unless its sub-command is a static
+# data one; curl loads code through a run-time `--engine`/`-K`/`--config`; a
+# run-time environment assignment may load code unless the variable cannot
+# (_SAFE_ENV_VARS), and a bare one to an unsafe name reaches a later command;
+# and a run-time `-c` value the outer shell built by running code
+# (`bash -c "y=$(echo $X | sh)"`) is a residual too.
 
 _MAX_SHELL_DEPTH = 4
-# A shell is known by the SHAPE of its name (bash, sh, dash, zsh, ksh93, rbash,
-# ...), as pretool-bash-safety.sh's clean rule knows it: a name list is what let
-# unlisted shells through there.  No dot before `sh`: `deploy.sh` is a script.
+# A shell is known by the shape of its name (bash, sh, dash, zsh, ksh93, ...).
+# No dot before `sh`: `deploy.sh` is a script.
 _SHELL_NAME_RE = re.compile(r'[^/\s.]*sh[0-9.]*\Z')
 _SHELL_HINT_RE = re.compile(r'sh[0-9.]*["\']?\s')
-# A shell word, its options, then an option cluster holding `c`: what makes a
-# text the scan cannot lex a residual rather than git-free.
+# A shell word, its options, then an option cluster holding `c`.
 _SHELL_C_SHAPE_RE = re.compile(r'sh[0-9.]*["\']?\s+(?:[-+]\S*\s+(?:\w+\s+)?)*-[A-Za-z]*c')
-_REDIR_OP_RE = re.compile(r'&>>?|<<<|<<-|<<|>>|>&|<&|>\||<>|>|<')
-_REDIR_WORD_RE = re.compile(r'[0-9]*(?:%s)' % _REDIR_OP_RE.pattern)
-_RUNTIME = '\x00'  # stands for text the shell computes at run time
-# A run-time value as a layer's text shows it: an expansion no assignment pins.
-_RUNTIME_PLACEHOLDER = '${__runtime__}'
-_RUNTIME_PLACEHOLDER_RE = re.compile(re.escape(_RUNTIME_PLACEHOLDER))
 # Commands that hand their standard input to a shell, besides the shells.
 _STDIN_SHELL_COMMANDS = frozenset({
     'ssh', 'su', 'runuser', 'source', '.', 'at', 'batch', 'parallel', 'script',
 })
 
-# _runs_runtime_code's tables.  Commands that run their arguments as shell text
-# or code, or hand them to a shell, in ways the scan does not model (builtins
-# that keep shell text for later, launchers, GNU sed's `e`, an editor's -c):
-# any run-time word among their arguments, and any input fed to them, may run.
+# Commands that run their arguments as shell text or code, or hand them to a
+# shell, in ways the scan does not model: any run-time word among their
+# arguments, and any input fed to them, may run.
 _RUNTIME_ARG_COMMANDS = frozenset({
     'alias', 'trap', 'at', 'batch', 'parallel', 'runuser', 'screen', 'script',
     'ssh', 'su', 'tmux', 'watch', 'sed', 'gsed', 'ex', 'nvim', 'vi', 'view', 'vim',
 })
-# A list of dangerous programs can never be complete, so _command_runs_runtime_code
-# fails closed: a program it does not otherwise model, given a run-time word, is
-# assumed to run it as a command or as code.  _DATA_ONLY_COMMANDS names the
-# programs known to keep their words (and input) as data — a filename, a URL, a
-# host, a number, a target — never a command or code to execute.  Anything not
-# listed and not modelled elsewhere (a shell, an interpreter, source/`.`, the
-# _RUNTIME_ARG_COMMANDS, the exec-style launchers, a launcher naming a shell) is
-# refused on a run-time word.
-# Membership is the safe-to-add test: a program belongs here only when NO option
-# or operand of it runs a command or loads code.  So `tar` (--to-command/`-I`),
-# `rsync`/`nc`/`scp` (their command options), `find` (-exec), `sort`
-# (--compress-program), `wget` (--use-askpass), and every interpreter and
-# launcher are deliberately absent; a run-time word to any of them stays refused.
-#
-# Removed from this list (2026-11-08, train 2 review), because each FAILS the
-# safe-to-add test — an option or sub-command of it runs a command or loads code:
-#   docker, podman, kubectl — exec-style launchers.  `run`/`exec` take a command,
-#     `build` runs a Dockerfile, and a run-time sub-command can be any of these.
-#     Modelled by _launcher_runs_runtime: a run-time word is data only with a
-#     static DATA sub-command (`docker push $IMAGE`).
-#   curl — `--engine` loads a crypto engine (a shared library) and `-K`/`--config`
-#     reads a config file that can set any option, `--engine` among them, so an
-#     unquoted run-time word in an option-value position loads code.  Modelled by
-#     _curl_runs_runtime: a bare operand run-time word (a URL) stays data, a
-#     run-time value of a code-loading option is refused.
+# Programs known to keep their words and input as data: a filename, a URL, a
+# host, a number, never a command or code. A program belongs here only when no
+# option or operand of it runs a command or loads code, so `tar`, `rsync`,
+# `nc`, `scp`, `find`, `sort`, `wget`, `curl`, the launchers and every
+# interpreter are absent.
 _DATA_ONLY_COMMANDS = frozenset({
-    # the file, text and information utilities whose operands are data
     'cat', 'tee', 'cd', 'pwd', 'ls', 'head', 'tail', 'wc', 'uniq', 'cut',
     'tr', 'rev', 'tac', 'nl', 'fold', 'paste', 'join', 'comm', 'column', 'cp', 'mv',
     'rm', 'ln', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown', 'chgrp', 'stat', 'file',
     'readlink', 'realpath', 'basename', 'dirname', 'mktemp', 'truncate', 'du', 'df',
     'date', 'seq', 'true', 'false', 'test', 'sleep', 'diff', 'cmp', 'base64', 'cksum',
     'md5sum', 'sha1sum', 'sha256sum', 'od', 'hexdump', 'xxd', 'strings',
-    # network fetch and lookups whose operands are a URL or a host, not a command
     'ping', 'host', 'dig', 'nslookup',
 })
-# Exec-style container/cluster launchers: `run`/`exec` take a command, `build`
-# runs a Dockerfile, so a run-time sub-command or a run-time word under one of
-# those is a command.  _launcher_runs_runtime keeps a run-time word as data ONLY
-# when the sub-command is static and one of _LAUNCHER_DATA_SUBCOMMANDS, whose
-# operands are image/container/resource names or files — never a command or code.
-# `docker exec c bash -c $X` is caught by the embedded-shell launcher scan before
-# this; `docker $X` (run-time sub-command) and `docker run img $X` are refused.
+# Exec-style launchers: `run`/`exec` take a command, `build` runs a Dockerfile.
 _EXEC_LAUNCHERS = frozenset({'docker', 'podman', 'kubectl'})
-# Sub-commands of an exec-style launcher whose remaining words are data — image,
-# container, resource or file names — and that run no command and load no code:
-# image/registry transfer (push/pull/tag/save/load), and read-only reporting.
-# Deliberately absent: run, exec, attach, build, create, cp, apply, edit, debug,
-# port-forward, proxy and every sub-command that takes or runs a command.
+# Their sub-commands whose remaining words are image, container, resource or
+# file names, and that run no command and load no code.
 _LAUNCHER_DATA_SUBCOMMANDS = frozenset({
     'push', 'pull', 'tag', 'save', 'load', 'images', 'ps', 'inspect', 'logs',
     'version', 'info', 'login', 'logout', 'history', 'port', 'top',
     'get', 'describe', 'cluster-info', 'api-resources', 'api-versions',
 })
 # curl options that load code when given a run-time value: `--engine` loads a
-# crypto engine shared library; `-K`/`--config` reads a config file that can set
-# any curl option, `--engine` among them.  A run-time value bound to one of these
-# is refused; a bare operand (a URL/host) stays data (_curl_runs_runtime).
+# shared library; `-K`/`--config` reads a file that can set any option.
 _CURL_CODE_LONG_OPTS = frozenset({'--config', '--engine'})
 _CURL_CODE_SHORT_OPTS = frozenset({'K'})
-# Variables whose run-time value, assigned to a command's environment, cannot load
-# code.  The inverse of _DATA_ONLY_COMMANDS: a run-time environment assignment is
-# refused unless the variable is listed, because BASH_ENV, ENV, NODE_OPTIONS,
-# PERL5OPT, PYTHONSTARTUP, RUBYOPT, LD_PRELOAD and their kind each turn a run-time
-# value into code the next command runs, and such a list can never be complete.
-# HOME was removed (2026-11-08, train 2 review): a run-time HOME loads code — the
-# Python user-site directory and its `.pth` files, `~/.node_modules`, and
-# `~/.ssh/config`'s ProxyCommand all live under it.  The rest were re-checked the
-# same way and kept: the locale/charset names (LANG, LANGUAGE, LC_*) select a
-# compiled locale, not a code path (GCONV_PATH/LOCPATH, which do, are absent);
-# TZ/TERM name a tzfile/terminfo entry read as data; COLUMNS/LINES are numbers;
-# PWD/OLDPWD/USER/LOGNAME/HOSTNAME/TMPDIR/DISPLAY are plain strings a program
-# reads, not a module/script path it loads; the color flags are booleans.
+# Variables whose run-time value, assigned to a command's environment, cannot
+# load code: locale names select a compiled locale, TZ/TERM name a data file,
+# the rest are numbers, flags or plain strings. HOME is absent: the Python user
+# site, `~/.node_modules` and `~/.ssh/config` live under it.
 _SAFE_ENV_VARS = frozenset({
     'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES',
     'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'PWD',
     'OLDPWD', 'USER', 'LOGNAME', 'HOSTNAME', 'TMPDIR', 'DISPLAY', 'NO_COLOR',
     'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
 })
-# A shell named among another command's words (`find -exec sh -c`, `docker exec
-# c bash`), by name: the shape _SHELL_NAME_RE reads also matches `push`.
+# A shell named among another command's words (`find -exec sh -c`), by name:
+# the shape _SHELL_NAME_RE reads also matches `push`.
 _EMBEDDED_SHELL_RE = re.compile(r'(?:ba|rba|da|a|z|k|mk|c|tc|fi|y|pw)?sh[0-9.]*\Z')
-# Interpreters whose option grammar the scan does not model: as above.
+# Interpreters whose option grammar the scan does not model.
 _OPAQUE_INTERPRETERS = frozenset({
     'bun', 'deno', 'elixir', 'expect', 'groovy', 'guile', 'irb', 'julia',
     'osascript', 'powershell', 'racket', 'sbcl', 'scala', 'ts-node', 'tsx',
 })
 # Interpreters by the shape of their name, and how each is told its program
-# (_interpreter_runs_runtime).  program: short options whose value is the
-# program (inline code, or a file or module it runs); value: short options
-# whose value may load code, unless `data` names them; both take the rest of
-# their cluster, else the next word.  attached: short options whose value is
-# only the rest of their cluster.  long_program, long_value: the long forms,
-# `--opt=value` or `--opt value`.  stdin: with no program named it reads one
-# from standard input.  stop: an option naming the program ends the options.
-# The first operand is the program unless an option named one; the words after
-# the program are its arguments.  An option no table names takes no value.
+# (_interpreter_runs_runtime). program: short options whose value is the
+# program; value: short options whose value may load code, unless `data` names
+# them; both take the rest of their cluster, else the next word. attached:
+# short options whose value is only the rest of their cluster. long_program,
+# long_value: the long forms. stdin: with no program named it reads one from
+# standard input. stop: an option naming the program ends the options.
 _Interpreter = collections.namedtuple(
     '_Interpreter', 'program value attached long_program long_value data stdin stop')
 _NODE_VALUE_OPTIONS = frozenset({  # `node --help`, v22: the options shown with `=...`
@@ -802,256 +1113,80 @@ _STDIN_PATHS = frozenset({'-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0'})
 _MAX_CODE_DEPTH = 64
 
 
-def _skip_backtick(text, i):
-    """Index just past the backtick closing a substitution whose body starts at i."""
-    while i < len(text):
-        if text[i] == '\\':
-            i += 2
-        elif text[i] == '`':
-            return i + 1
-        else:
-            i += 1
-    raise ValueError('unterminated backtick')
-
-
-def _skip_dquote(text, i):
-    """Index just past the `"` closing a double-quoted string whose body starts at i."""
-    while i < len(text):
-        ch = text[i]
-        if ch == '\\':
-            i += 2
-        elif ch == '"':
-            return i + 1
-        elif ch == '`':
-            i = _skip_backtick(text, i + 1)
-        elif text.startswith(('$(', '${'), i):
-            i = _skip_group(text, i + 2, ')' if text[i + 1] == '(' else '}')
-        else:
-            i += 1
-    raise ValueError('unterminated double quote')
-
-
-def _skip_group(text, i, close):
-    """Index just past the `close` ending a $( ) or ${ } whose body starts at i."""
-    opener, depth = '(' if close == ')' else '{', 1
-    while i < len(text):
-        ch = text[i]
-        if ch == '\\':
-            i += 2
-            continue
-        if ch == "'":
-            j = text.find("'", i + 1)
-            if j < 0:
-                raise ValueError('unterminated single quote')
-            i = j + 1
-            continue
-        if ch == '"':
-            i = _skip_dquote(text, i + 1)
-            continue
-        if ch == '`':
-            i = _skip_backtick(text, i + 1)
-            continue
-        if ch == opener:
-            depth += 1
-        elif ch == close:
-            depth -= 1
-            if depth == 0:
-                return i + 1
-        i += 1
-    raise ValueError('unterminated substitution')
-
-
-def _expansion(text, i, quoted=False):
-    """(end, body) of the expansion at text[i] (`$` or a backtick), or None for a plain `$`.
-
-    body is the text a substitution runs as commands (None for a parameter).
-    quoted: text[i] is inside double quotes, where `$'` and `$"` are a plain `$`.
-    """
-    if text[i] == '`':
-        end = _skip_backtick(text, i + 1)
-        return end, re.sub(r'\\([\\`$])', r'\1', text[i + 1:end - 1])
-    nxt = text[i + 1:i + 2]
-    if nxt in ('(', '{'):
-        end = _skip_group(text, i + 2, ')' if nxt == '(' else '}')
-        return end, text[i + 2:end - 1]
-    if quoted and nxt in ('"', "'"):
-        return None
-    if nxt == "'":  # $'...': its escapes are not modelled, so its value is unknown here
-        j = i + 2
-        while j < len(text) and text[j] != "'":
-            j += 2 if text[j] == '\\' else 1
-        if j >= len(text):
-            raise ValueError("unterminated $'")
-        return j + 1, None
-    if nxt == '"':  # $"...": a translated string
-        return _skip_dquote(text, i + 2), None
-    if nxt.isdigit() or (nxt and nxt in '@*#?-$!'):
-        return i + 2, None
-    if nxt.isalpha() or nxt == '_':
-        j = i + 2
-        while j < len(text) and (text[j].isalnum() or text[j] == '_'):
-            j += 1
-        return j, None
-    return None
-
-
 def _shell_words(text, info=None):
-    """Split shell text into simple commands of words, with the shell's quoting.
+    """Split shell text into simple commands of words, as the shell reads them.
 
-    Returns (commands, bodies).  A command is a list of (value, runtime) words:
-    value is the word as the command receives it, quotes and escapes removed and
-    each expansion replaced by _RUNTIME; runtime is True when it holds one (text
-    already holding _RUNTIME keeps it run-time, whatever quotes it).
-    bodies are texts that run as commands of their own: the bodies of $( ),
-    backtick and <( ) >( ) substitutions, and what here-documents run
-    (_here_doc_texts).  Raises ValueError on quoting the scan cannot follow.
+    Returns (commands, bodies). A command is a list of (value, runtime) words,
+    redirections left out: value is the word as the command receives it, each
+    run-time part _RUNTIME; runtime is True when it holds one. bodies are the
+    texts that run as commands of their own: substitution bodies, then what
+    here-documents run (_here_doc_texts). Raises LexError on text the lexer
+    cannot read.
 
     info, a dict, receives what may feed run-time text to each command's
     standard input: info['feeds'] holds a set per command, of 'pipe' (a pipe,
     or a group a pipe feeds), 'here-document' (one whose body holds a run-time
-    value), 'here-string' and 'file' (a run-time word); info['body_fed'] holds
-    a flag per body, True when the body's commands may read such input (a
-    >( ) body, a substitution in a command a pipe feeds, what a shell runs
-    from a run-time here-document).
+    value), 'here-string' and 'file' (a run-time word); info['body_fed'] a flag
+    per body, True when its commands may read such input (a >( ) body, a
+    substitution in a command a pipe feeds, what a shell runs from a run-time
+    here-document); info['body_owner'] the command each body belongs to (None
+    for a >( ) body) and info['body_subst_count'] how many leading bodies are
+    substitutions.
     """
-    cmds, words, bodies, heredocs, docs = [], [], [], [], []
-    # The command each body belongs to (None: a >( ) body) and whether it is
-    # fed besides; whether a pipe feeds each command, and each open group.
-    owners, piped, groups = [], [], []
-    st = {'buf': [], 'runtime': False, 'inword': False, 'quoted': False,
-          'pending': None, 'sep': None, 'opener': None}
-
-    def add(part, runtime=False, quoted=False):
-        st['buf'].append(part)
-        st['inword'] = True
-        st['runtime'] = st['runtime'] or runtime or _RUNTIME in part
-        st['quoted'] = st['quoted'] or quoted
-        st['sep'] = None
-
-    def end_word():
-        if st['inword']:
-            value = ''.join(st['buf'])
-            if st['pending']:
-                # The command this word belongs to is cmds[len(cmds)] once it ends.
-                heredocs.append((value, st['pending'] == '<<-', st['quoted'], len(cmds)))
-                st['pending'] = None
-            elif value.lstrip('0123456789') in ('<<', '<<-'):
-                st['pending'] = value.lstrip('0123456789')
-            words.append((value, st['runtime']))
-        st.update(buf=[], runtime=False, inword=False, quoted=False)
+    toks = lex(Src.from_raw(text))
+    cmds, bodies, owners, redirs_of, piped, groups, docs = [], [], [], [], [], [], []
+    words, redirs = [], []
+    opener = sep = None
+    line_start = 0
 
     def end_cmd():
-        end_word()
-        if not words:
+        nonlocal words, redirs
+        if not (words or redirs):
             return False
-        fed = st['opener'] in ('|', '|&') or any(groups)
-        cmds.append(list(words))
+        k = len(cmds)
+        fed = opener in ('|', '|&') or any(groups)
+        for word in words + [r.target for r in redirs if r.target is not None]:
+            for kind, src, off in word.segs:
+                if kind in _BODY_PARTS:
+                    bodies.append(src.text)
+                    outward = kind == 'procsub' and text[off:off + 1] == '>'
+                    owners.append((None if outward else k, False))
+        values = [_value(w) for w in words]
+        cmds.append(values)
+        redirs_of.append(redirs)
         piped.append(fed)
-        if words[0][0] == '{':
+        if values and values[0][0] == '{':
             groups.append(fed)
-        elif words[0][0] == '}' and groups:
+        elif values and values[0][0] == '}' and groups:
             groups.pop()
-        del words[:]
+        words, redirs = [], []
         return True
 
-    def expand(i, quoted=False):
-        exp = _expansion(text, i, quoted)
-        if exp is None:
-            add('$')
-            return i + 1
-        end, body = exp
-        if body is not None:
-            bodies.append(body)
-            owners.append((len(cmds), False))
-        add(_RUNTIME, runtime=True)
-        return end
-
-    i, n = 0, len(text)
-    while i < n:
-        ch = text[i]
-        if ch == '\\':
-            if text[i + 1:i + 2] != '\n':  # a backslash-newline joins the lines
-                add(text[i + 1:i + 2], quoted=True)
-            i += 2
-        elif ch == "'":
-            j = text.find("'", i + 1)
-            if j < 0:
-                raise ValueError('unterminated single quote')
-            add(text[i + 1:j], quoted=True)
-            i = j + 1
-        elif ch == '"':
-            add('', quoted=True)
-            i += 1
-            while text[i:i + 1] != '"':
-                if i >= n:
-                    raise ValueError('unterminated double quote')
-                if text[i] == '\\' and text[i + 1:i + 2] in ('$', '`', '"', '\\', '\n'):
-                    add(text[i + 1].replace('\n', ''))
-                    i += 2
-                elif text[i] in '$`':
-                    i = expand(i, quoted=True)
-                else:
-                    add(text[i])
-                    i += 1
-            i += 1
-        elif ch in '$`':
-            i = expand(i)
-        elif ch in ' \t':
-            end_word()
-            i += 1
-        elif ch == '#' and not st['inword']:
-            j = text.find('\n', i)
-            i = n if j < 0 else j
-        elif ch == '\n':
-            end_cmd()
-            i += 1
-            # A line ending in `|`, `&&` or `||` goes on past the bodies below.
-            dangling = st['sep'] in ('|', '|&', '&&', '||')
+    for tok in toks:
+        if tok[0] != 'OP':
+            (words if tok[0] == 'W' else redirs).append(tok[1])
+            sep = None
+            continue
+        op = tok[1]
+        ended = end_cmd()
+        if op == '\n':
+            # A line ending in `|`, `&&` or `||` goes on past its here-documents.
+            dangling = sep in ('|', '|&', '&&', '||')
+            stop = len(cmds) + (1 if dangling else 0)
+            for k in range(line_start, len(cmds)):
+                docs.extend((r.heredoc[2].text, r.heredoc[1], k, stop)
+                            for r in redirs_of[k] if r.heredoc is not None)
+            line_start = len(cmds)
             if not dangling:
-                st['opener'] = None
-            for delim, tabs, quoted, owner in heredocs:  # the body follows the line that opened it
-                body = []
-                while i < n:
-                    j = text.find('\n', i)
-                    j = n if j < 0 else j
-                    line, i = text[i:j], j + 1
-                    if (line.lstrip('\t') if tabs else line) == delim:
-                        break
-                    body.append(line)
-                docs.append(('\n'.join(body), quoted, owner, len(cmds) + (1 if dangling else 0)))
-            del heredocs[:]
-        elif ch in '<>' and text[i + 1:i + 2] == '(':
-            end = _skip_group(text, i + 2, ')')
-            bodies.append(text[i + 2:end - 1])
-            owners.append((None if ch == '>' else len(cmds), False))
-            add(_RUNTIME, runtime=True)
-            i = end
-        elif ch in '<>' or text.startswith('&>', i):
-            if st['inword'] and not ''.join(st['buf']).isdigit():
-                end_word()
-            m = _REDIR_OP_RE.match(text, i)
-            add(m.group())
-            i = m.end()
-            end_word()
-        elif ch in ';&|()':
-            ended = end_cmd()
-            op = text[i:i + 2] if text[i:i + 2] in ('&&', '||', '|&') else ch
-            if op == '(':  # a group opened where a pipe's reader starts is fed by it
-                groups.append(st['opener'] in ('|', '|&') and not ended)
-            elif op == ')' and groups:
-                groups.pop()
-            st['sep'] = st['opener'] = op
-            i += len(op)
-        else:
-            add(ch)
-            i += 1
+                opener = None
+            continue
+        if op == '(':
+            groups.append(opener in ('|', '|&') and not ended)
+        elif op == ')' and groups:
+            groups.pop()
+        sep = opener = op
     end_cmd()
-    # A here-document's readers: the commands of the line that opened it, from
-    # its own on (a pipe or a group there may hand it on), and the command after
-    # the body when that line goes on past it.
     doc_fed = [False] * len(cmds)
-    # Every body appended so far is a substitution ($( ), backtick, <( ) >( ))
-    # the shell runs to build a word; the here-document bodies come after it.
     n_subst = len(bodies)
     for body, quoted, owner, stop in docs:
         texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])))
@@ -1062,26 +1197,21 @@ def _shell_words(text, info=None):
         owners.extend([(owner, runtime)] * len(texts))
     if info is not None:
         feeds = []
-        for k, cmd in enumerate(cmds):
+        for k, redirs in enumerate(redirs_of):
             kinds = {'pipe'} if piped[k] else set()
             if doc_fed[k]:
                 kinds.add('here-document')
-            for (op, _runtime), (_target, runtime) in zip(cmd, cmd[1:]):
-                bare = op.lstrip('0123456789')
-                if runtime and bare == '<<<':
+            for r in redirs:
+                if r.target is None or not _value(r.target)[1]:
+                    continue
+                if r.op == '<<<':
                     kinds.add('here-string')
-                elif runtime and bare in ('<', '<>') and op[:len(op) - len(bare)] in ('', '0'):
+                elif r.op in ('<', '<>') and r.io in (None, '0'):
                     kinds.add('file')
             feeds.append(kinds)
         info['feeds'] = feeds
         info['body_fed'] = [owner is None or extra or (owner < len(piped) and piped[owner])
                             for owner, extra in owners]
-        # The command each body is a substitution/here-document of (None: a >( )
-        # body, which belongs to no one command), and how many leading bodies are
-        # substitutions.  A run-time `-c` operand whose value the OUTER shell built
-        # by running a substitution (`-c "y=$(sh <<< $X)"`) inherits that body's
-        # run-time code, which the collapsed operand hides; a here-document is
-        # input, not part of the operand word, so it is excluded.
         info['body_owner'] = [owner for owner, _extra in owners]
         info['body_subst_count'] = n_subst
     return cmds, bodies
@@ -1090,11 +1220,10 @@ def _shell_words(text, info=None):
 def _reads_as_shell(words):
     """True iff the simple command `words` may run its standard input as shell commands.
 
-    A shell (by the shape of its name), a command named at run time, a
-    command that hands its input to a shell (_STDIN_SHELL_COMMANDS), one that
-    names a shell among its words (`ssh host bash -s`, `docker exec -i c sh`),
-    and a wrapper with no command (`sudo -i`, `sudo -s`) may; `cat`, `tee`,
-    `python3` and `git commit -F -` read it as data.
+    A shell (by the shape of its name), a command named at run time, a command
+    that hands its input to a shell (_STDIN_SHELL_COMMANDS), one that names a
+    shell among its words (`ssh host bash -s`), and a wrapper with no command
+    (`sudo -i`) may; `cat`, `tee`, `python3` and `git commit -F -` read it as data.
     """
     values = [value for value, _runtime in words]
     idx = _command_token_index(values)
@@ -1111,42 +1240,31 @@ def _here_doc_texts(body, quoted, shell_reads):
 
     With an unquoted delimiter the outer shell expands the body first, running
     its substitutions whoever reads it; a shell reading it then parses the
-    expanded text, each expansion a run-time value.  A quoted delimiter leaves
-    the body as written.  A body whose expansions the scan cannot follow is
-    read as shell text, whoever reads it.
+    expanded text. A quoted delimiter leaves the body as written. A body whose
+    expansions the lexer cannot read is read as shell text, whoever reads it.
     """
     if quoted:
         return [body] if shell_reads else []
     try:
         text, subs = _expand_here_doc(body)
-    except ValueError:
+    except LexError:
         return [body]
     return subs + ([text] if shell_reads else [])
 
 
 def _expand_here_doc(body):
-    """(text, substitutions) of a here-document body the outer shell expands, each expansion _RUNTIME.
+    """(text, substitutions) of an unquoted here-document's body, each expansion _RUNTIME.
 
-    Raises ValueError on an expansion the scan cannot follow.
+    Such a body expands as a double-quoted word does, its `"` characters plain
+    text. Raises LexError on an expansion the lexer cannot read.
     """
-    out, subs, i = [], [], 0
-    while i < len(body):
-        ch = body[i]
-        # In such a body `\` quotes only $, `, \ and a newline; quotes are text.
-        if ch == '\\' and body[i + 1:i + 2] in ('$', '`', '\\', '\n'):
-            out.append(body[i + 1].replace('\n', ''))
-            i += 2
-            continue
-        exp = _expansion(body, i, quoted=True) if ch in '$`' else None
-        if exp is None:
-            out.append(ch)
-            i += 1
-            continue
-        end, sub = exp
-        if sub is not None:
-            subs.append(sub)
-        out.append(_RUNTIME)
-        i = end
+    mark = '\x01'
+    out, subs = [], []
+    for tok in lex(Src.from_raw('"%s"' % body.replace('"', mark))):
+        for kind, src, _off in tok[1].segs:
+            if kind in _BODY_PARTS:
+                subs.append(src.text.replace(mark, '"'))
+            out.append(_RUNTIME if kind in _DYNAMIC_PARTS else src.text.replace(mark, '"'))
     return ''.join(out), subs
 
 
@@ -1156,7 +1274,7 @@ def _here_doc_is_runtime(body, quoted):
         return _RUNTIME in body
     try:
         return _RUNTIME in _expand_here_doc(body)[0]
-    except ValueError:
+    except LexError:
         return True
 
 
@@ -1178,8 +1296,7 @@ def _shell_c_operand(words, i):
             i += 2 if value in ('--rcfile', '--init-file') else 1
         elif len(value) > 1 and value[0] in '-+':
             seen_c = seen_c or 'c' in value[1:]
-            # -o / -O take an option name each
-            i += 1 + value[1:].count('o') + value[1:].count('O')
+            i += 1 + value[1:].count('o') + value[1:].count('O')  # -o / -O take a name
         else:
             break
     return i if (seen_c or maybe_c) and i < len(words) else None
@@ -1188,21 +1305,19 @@ def _shell_c_operand(words, i):
 def _shell_c_strings(text, fed=False):
     """Yield (kind, string, fed, built_by_code) for each shell `-c` string text runs.
 
-    kind 'text': a string the scan resolved.  'runtime': one holding a value the
+    kind 'text': a string the scan resolved. 'runtime': one holding a value the
     outer shell computes at run time, each such value _RUNTIME in it.
-    'unlexable', with text itself: quoting the scan cannot follow, in text that
-    has a shell's `-c` shape.  fed: the string's shell may read run-time text
-    on its standard input (_shell_words' feeds, or text that is fed itself).
-    built_by_code: a 'runtime' operand whose value the outer shell built by
-    running a substitution that runs run-time code (`-c "y=$(echo $X | sh)"`);
-    the collapsed operand no longer shows it, so the layer is a residual.
+    'unlexable', with text itself: text the lexer cannot read, with a shell's
+    `-c` shape. fed: the string's shell may read run-time text on its standard
+    input. built_by_code: a 'runtime' operand the outer shell built by running
+    a substitution that runs run-time code (`-c "y=$(echo $X | sh)"`).
     """
-    if not _SHELL_HINT_RE.search(text):
+    if not (_SHELL_HINT_RE.search(text) or _PROGRAM_HINT_RE.search(text)):
         return
     info = {}
     try:
         cmds, bodies = _shell_words(text, info)
-    except Exception:  # quoting the scan cannot follow, or nesting past the interpreter's own limit
+    except Exception:  # text the lexer cannot read, or nesting past the interpreter's limit
         if _SHELL_C_SHAPE_RE.search(text):
             yield 'unlexable', text, fed, False
         return
@@ -1210,7 +1325,14 @@ def _shell_c_strings(text, fed=False):
     for k, (words, feeds) in enumerate(zip(cmds, info['feeds'])):
         values = [v for v, _runtime in words]
         idx = _command_token_index(values)
-        if idx is None or words[idx][1] or not _SHELL_NAME_RE.match(_basename(values[idx])):
+        if idx is None or words[idx][1]:
+            continue
+        for value, runtime in _program_option_values(words, idx):
+            yield ('runtime' if runtime else 'text'), value, fed or bool(feeds), False
+        printed = _printed_to_shell(cmds, info['feeds'], k, idx)
+        if printed is not None:
+            yield ('runtime' if _RUNTIME in printed else 'text'), printed, fed or bool(feeds), False
+        if not _SHELL_NAME_RE.match(_basename(values[idx])):
             continue
         op = _shell_c_operand(words, idx + 1)
         if op is None:
@@ -1224,32 +1346,137 @@ def _shell_c_strings(text, fed=False):
         yield from _shell_c_strings(body, fed or body_fed)
 
 
-def _may_run_git(text, runtime_re=_RUNTIME_PLACEHOLDER_RE):
-    """True iff text, read as plain command lines, runs git or may: git-shaped.
+# Options whose value is a program the command runs, read as a command line of
+# its own: rg's preprocessor, ag's and ack's pager (run by a shell), and
+# sort's compressor. A long option may be abbreviated.
+_PROGRAM_OPTIONS = {
+    'rg': ('--pre',),
+    'ag': ('--pager',),
+    'ack': ('--pager',),
+    'sort': ('--compress-program',),
+}
+_PROGRAM_HINT_RE = re.compile(r'(?:\A|[\s/;&|(`\'"])(?:rg|ag|ack|sort|git)\b')
+# Commands that print their arguments, and the shell reads what they print
+# when a pipe feeds it (`echo "git push" | sh`).
+_PRINTERS = frozenset({'echo', 'printf'})
+# The backslash escapes printf and `echo -e` print as characters: `\xHH`, an
+# octal `\NNN` or `\0NNN`, and the letters. Read whatever the options say.
+_ESCAPE_RE = re.compile(r'\\(x[0-9A-Fa-f]{1,2}|0?[0-7]{1,3}|[abefnrtv\\])')
+_ESCAPE_LETTERS = {'a': '\a', 'b': '\b', 'e': '\x1b', 'f': '\f', 'n': '\n', 'r': '\r',
+                   't': '\t', 'v': '\v', '\\': '\\'}
 
-    The narrow test of the plain-text residual: a git invocation, or a command
-    token _segment_residual_shapes() reports (`$G push`).  A command word that
-    holds a run-time value (runtime_re) is git-shaped too unless a static word
-    that is neither a git verb nor git follows it: with nothing static after
-    it, the subcommand is part of the value (`$CMD`, `$X $Y`, `$SUDO git push`).
-    Segments opened inside a quote are text, as there.
+
+def _unescape(match):
+    code = match.group(1)
+    if code in _ESCAPE_LETTERS:
+        return _ESCAPE_LETTERS[code]
+    return chr(int(code[1:], 16) if code[0] == 'x' else int(code, 8))
+
+
+def _program_option_values(words, idx):
+    """Yield (value, runtime) for each option of words[idx] whose value is a program it runs."""
+    if _basename(words[idx][0]) == 'git':
+        yield from _git_grep_pager_values(words, idx)
+        return
+    names = _PROGRAM_OPTIONS.get(_basename(words[idx][0]))
+    if not names:
+        return
+    i = idx + 1
+    while i < len(words):
+        value, runtime = words[i]
+        if value == '--':
+            return
+        if _long_opt_named(value, names):
+            if '=' in value:
+                yield value.split('=', 1)[1], runtime
+            elif i + 1 < len(words):
+                i += 1
+                yield words[i]
+        i += 1
+
+
+def _git_grep_pager_values(words, idx):
+    """Yield (value, runtime) for each pager `git grep` is told to run: `-O<cmd>`, `--open-files-in-pager=<cmd>`."""
+    values = [value for value, _runtime in words[idx + 1:]]
+    k = _git_subcommand_index(values)
+    if k is None or values[k] != 'grep':
+        return
+    for i in range(idx + 1 + k + 1, len(words)):
+        value, runtime = words[i]
+        if value == '--':
+            return
+        if _long_opt_named(value, ('--open-files-in-pager',)) and '=' in value:
+            yield value.split('=', 1)[1], runtime
+        elif value.startswith('-') and not value.startswith('--') and 'O' in value:
+            rest = value[value.index('O') + 1:]
+            if rest:
+                yield rest, runtime
+
+
+def _runs_c_string(words):
+    """True iff the simple command `words` is a shell given a `-c` string, which it runs instead of its input.
+
+    What that string does with the input is the string's own reading (_shell_layers, fed).
     """
-    if any(True for _ in _segment_invocations(text)) or any(True for _ in _segment_residual_shapes(text)):
+    values = [value for value, _runtime in words]
+    idx = _command_token_index(values)
+    return (idx is not None and not words[idx][1] and bool(_SHELL_NAME_RE.match(_basename(values[idx])))
+            and _shell_c_operand(words, idx + 1) is not None)
+
+
+def _printed_to_shell(cmds, feeds, k, idx):
+    """The text cmds[k], an echo or printf, prints into a pipe that a shell reads, else None.
+
+    The pipe runs on from cmds[k] through each command a pipe feeds (a shell
+    given a `-c` string runs that string, not its input); a printf's or `echo -e`'s escapes are read as the characters they stand for,
+    a newline included.
+    """
+    words = cmds[k]
+    if _basename(words[idx][0]) not in _PRINTERS:
+        return None
+    j = k + 1
+    while j < len(cmds) and 'pipe' in feeds[j]:
+        if _reads_as_shell(cmds[j]) and not _runs_c_string(cmds[j]):
+            args = [value for value, _runtime in words[idx + 1:]]
+            while args and _basename(words[idx][0]) == 'echo' and re.fullmatch(r'-[neE]+', args[0]):
+                args = args[1:]
+            text = ' '.join(args)
+            if _basename(words[idx][0]) == 'printf':
+                # A format may print its arguments each on a line of its own
+                # (`printf '%s\n' 'git push'`) or as they stand (`'%s'`).
+                text += '\n' + '\n'.join(args[1:])
+            return _ESCAPE_RE.sub(_unescape, text)
+        j += 1
+    return None
+
+
+def _may_run_git(text, runtime_re=_RUNTIME_PLACEHOLDER_RE):
+    """True iff text, read as command lines, runs git or may: git-shaped.
+
+    A git invocation or a residual command word, or a command word holding a
+    run-time value (runtime_re) with no static word after it that is neither
+    a git verb nor git: with nothing static after it, the subcommand is part of
+    the value (`$CMD`, `$X $Y`, `$SUDO git push`).
+    """
+    if any(True for _ in _segment_invocations(text, nested=True)) or any(
+            True for _ in _segment_residual_shapes(text, nested=True)):
         return True
-    for seg, _kind, in_quote in _segments_with_kind(text):
-        toks = [] if in_quote else seg.split()
-        idx = _command_token_index(toks) if toks else None
-        if idx is None or not runtime_re.search(toks[idx]):
+    for cmd in _code_commands(text, nested=True)[0]:
+        values = _values(cmd.words)
+        idx = _command_token_index(values)
+        if idx is None or not runtime_re.search(cmd.words[idx].raw.text):
             continue
-        nxt = toks[idx + 1] if idx + 1 < len(toks) else ''
-        if (not nxt or runtime_re.search(nxt) or nxt in _GIT_SUBCOMMANDS
+        if idx + 1 >= len(values):
+            return True
+        nxt = cmd.words[idx + 1].raw.text
+        if (runtime_re.search(nxt) or values[idx + 1] in _GIT_SUBCOMMANDS
                 or _basename(_unquote_token(nxt)) == 'git'):
             return True
     return False
 
 
 def _unlexable_may_run_git(text):
-    """True iff, in text the scan cannot lex, what follows a shell's `-c` is git-shaped.
+    """True iff, in text the lexer cannot read, what follows a shell's `-c` is git-shaped.
 
     That text is read as _may_run_git() reads a string, its quote characters
     dropped and every expansion a run-time value.
@@ -1266,10 +1493,10 @@ def _runs_runtime_code(text, fed=False, depth=0):
 
     text is a -c layer as its shell reads it (_RUNTIME for each value the outer
     shell computes; the expansions the layer's own shell performs are run-time
-    too).  fed: its standard input may carry run-time text, which every command
-    in it inherits.  A command (_command_runs_runtime_code), or one in a
+    too). fed: its standard input may carry run-time text, which every command
+    in it inherits. A command (_command_runs_runtime_code), or one in a
     substitution or here-document it runs, that may run such text makes it
-    True; so does text the scan cannot lex even with its quotes dropped.
+    True; so does text the lexer cannot read even with its quotes dropped.
     """
     if depth > _MAX_CODE_DEPTH:
         return True
@@ -1277,7 +1504,7 @@ def _runs_runtime_code(text, fed=False, depth=0):
     try:
         cmds, bodies = _shell_words(text, info)
     except Exception:
-        try:  # read as _unlexable_may_run_git() reads such text: quotes dropped
+        try:
             cmds, bodies = _shell_words(re.sub(r'[\'"\\]', '', text), info)
         except Exception:
             return True
@@ -1293,18 +1520,14 @@ def _runs_runtime_code(text, fed=False, depth=0):
 def _bare_runtime_assignment_reaches_command(cmds):
     """True iff a bare run-time assignment to an unsafe name reaches a later command.
 
-    A bare assignment (`NODE_OPTIONS=$X` as a command of its own, not a prefix to
-    one) sets no environment by itself, but its value reaches a later command's
-    environment through `set -a`, through a later `export NAME`, or because NAME
-    is already exported.  So once such an assignment to a name outside
-    _SAFE_ENV_VARS has appeared, a later command that is not data-only (it runs a
-    program — `node x.js`, `export NODE_OPTIONS`) may load that value as code.
-    `NODE_OPTIONS=$X node x.js` (a prefix on one command) is handled directly in
-    _command_runs_runtime_code; this is the cross-command residual it cannot see.
+    A bare assignment (`NODE_OPTIONS=$X` as a command of its own) sets no
+    environment by itself, but its value reaches a later command through
+    `set -a`, a later `export NAME`, or an already exported NAME. So once such
+    an assignment to a name outside _SAFE_ENV_VARS has appeared, a later
+    command that is not data-only may load that value as code.
     """
     pending = False
     for words in cmds:
-        words = _without_redirections(words)
         values = [value for value, _runtime in words]
         idx = _command_token_index(values)
         if idx is None:
@@ -1323,20 +1546,16 @@ def _bare_runtime_assignment_reaches_command(cmds):
 def _command_runs_runtime_code(words, fed):
     """True iff the simple command `words` may run run-time text as shell or code.
 
-    fed: its standard input may carry run-time text.  It may when eval comes
-    before a run-time word; when a run-time value is assigned to its environment
-    under a variable that can load code (_SAFE_ENV_VARS is the inverse list);
-    when its program is named at run time and is fed, given a run-time word, or
-    git-shaped as _may_run_git() reads it; when it is source or `.` given a
-    run-time file or fed; when it is one of _RUNTIME_ARG_COMMANDS given a
-    run-time word or fed; and when it is a shell or an interpreter, or one is
-    named among its words, that may run such text (_runner_runs_runtime).  echo,
-    printf and grep, and the _DATA_ONLY_COMMANDS, keep their words and input as
-    data.  Any OTHER command is assumed, fail closed, to run a run-time word of
-    its own as a command or as code: the list of dangerous programs can never be
-    complete, so a program the scan does not know is refused on a run-time word.
+    fed: its standard input may carry run-time text. It may when eval comes
+    before a run-time word; when a run-time value is assigned to its
+    environment under a variable that can load code; when its program is named
+    at run time and is fed, given a run-time word, or git-shaped; when it is
+    source or `.` given a run-time file or fed; when it is one of
+    _RUNTIME_ARG_COMMANDS given a run-time word or fed; and when it is a shell
+    or an interpreter, or one is named among its words, that may run such text.
+    echo, printf, grep and the _DATA_ONLY_COMMANDS keep their words and input
+    as data. Any other command is assumed to run a run-time word of its own.
     """
-    words = _without_redirections(words)  # _shell_words' feeds read those
     values = [value for value, _runtime in words]
     idx = _command_token_index(values)
     # eval reads every word after it as shell text again, the command word too.
@@ -1345,15 +1564,15 @@ def _command_runs_runtime_code(words, fed):
             return True
     if idx is None:  # `sudo -i`, a bare xargs: a wrapper with no command reads its input
         return fed and any(_basename(value) in _WRAPPERS for value in values)
-    # A run-time value assigned to the command's environment (NAME=<run-time>)
-    # may be code the command loads (BASH_ENV, NODE_OPTIONS, ...).  Fail closed:
-    # refuse unless the variable is one that cannot load code (_SAFE_ENV_VARS).
     for v, runtime in words[:idx]:
         if runtime and _ENV_ASSIGN_RE.match(v) and (
                 v.split('=', 1)[0].rstrip('+').split('[', 1)[0] not in _SAFE_ENV_VARS):
             return True
     args = words[idx + 1:]
     if words[idx][1]:
+        # A wrapper (`chroot /jail $X arg`, `timeout 5 $X`) runs the run-time word.
+        if any(_basename(v) in _WRAPPERS for v in values[:idx]):
+            return True
         nxt = args[0][0] if args else None
         return bool(fed or nxt is None or any(runtime for _v, runtime in args)
                     or nxt in _GIT_SUBCOMMANDS or _basename(nxt) == 'git')
@@ -1373,17 +1592,10 @@ def _command_runs_runtime_code(words, fed):
     if any(_runner_runs_runtime(_basename(value), words[p + 1:], fed, embedded=True)
            for p, (value, runtime) in enumerate(words) if p > idx and not runtime):
         return True
-    # An exec-style launcher (docker/podman/kubectl): a run-time word is a command
-    # unless the sub-command is a static data one (`docker push $IMAGE`).
     if name in _EXEC_LAUNCHERS:
         return _launcher_runs_runtime(name, args)
-    # curl loads code through `--engine` and `-K`/`--config`; a bare operand
-    # (a URL/host) stays data.
     if name == 'curl':
         return _curl_runs_runtime(args)
-    # Fail closed on a program the scan does not otherwise model: a run-time word
-    # of its own may be a command or code it runs (octave --eval, chroot, strace,
-    # find -exec, ...).  The _DATA_ONLY_COMMANDS keep such a word as data.
     if name in _DATA_ONLY_COMMANDS:
         return False
     return any(runtime for _v, runtime in args)
@@ -1393,60 +1605,44 @@ def _launcher_runs_runtime(name, args):
     """True iff an exec-style launcher (docker/podman/kubectl) given args runs a run-time word.
 
     The first word that is neither an option nor a run-time value is the
-    sub-command.  A static data sub-command (_LAUNCHER_DATA_SUBCOMMANDS) keeps
-    the words after it as data (`docker push $IMAGE`); a run-time sub-command
-    (`docker $X`), or a command-bearing one given a run-time word
-    (`docker run img $X`, `kubectl exec p -- $X`, `docker build $X`), runs it.
+    sub-command. A static data sub-command keeps the words after it as data
+    (`docker push $IMAGE`); a run-time sub-command (`docker $X`), or a
+    command-bearing one given a run-time word (`docker run img $X`), runs it.
     """
     for i, (value, runtime) in enumerate(args):
         if runtime:
-            return True  # the sub-command (or a preceding option's value) is run-time
+            return True
         if value.startswith('-'):
             continue
         if value in _LAUNCHER_DATA_SUBCOMMANDS:
             return False
         return any(rt for _v, rt in args[i + 1:])
-    return False  # no sub-command word: no run-time word to run as a command
+    return False
 
 
 def _curl_runs_runtime(args):
-    """True iff curl given args is handed a run-time value that loads code.
+    """True iff curl given args gets a run-time value that loads code.
 
-    `--engine <v>` loads a crypto engine shared library and `-K`/`--config <v>`
-    reads a config file that can set any option (`--engine` among them), so a
-    run-time value in one of those positions is refused — attached (`--engine=$X`,
-    `-K$X`) or as the next word (`--engine $X`, `-K $X`).  A bare operand
-    run-time word (a URL/host) and a run-time value of any other option stay data.
+    A run-time value of `--engine` or `-K`/`--config`, attached (`--engine=$X`,
+    `-K$X`) or as the next word, is refused; a run-time operand (a URL) and a
+    run-time value of any other option stay data.
     """
     for i, (value, _runtime) in enumerate(args):
         if value.startswith('--'):
             name = value.split('=', 1)[0]
             if name in _CURL_CODE_LONG_OPTS:
                 if '=' in value:
-                    if _RUNTIME in value:  # `--engine=$X`
+                    if _RUNTIME in value:
                         return True
-                elif i + 1 < len(args) and args[i + 1][1]:  # `--engine $X`
+                elif i + 1 < len(args) and args[i + 1][1]:
                     return True
         elif value.startswith('-') and len(value) > 1:
             if any(ch in _CURL_CODE_SHORT_OPTS for ch in value[1:]):
-                if _RUNTIME in value:  # `-K$X`, a run-time value attached
+                if _RUNTIME in value:
                     return True
-                if i + 1 < len(args) and args[i + 1][1]:  # `-K $X`
+                if i + 1 < len(args) and args[i + 1][1]:
                     return True
     return False
-
-
-def _without_redirections(words):
-    """words without its redirection operators (_shell_words' own words) and their targets."""
-    out, target = [], False
-    for value, runtime in words:
-        if target:
-            target = False
-        elif not runtime and _REDIR_WORD_RE.fullmatch(value):
-            target = True
-        else:
-            out.append((value, runtime))
-    return out
 
 
 def _runner_runs_runtime(name, args, fed, embedded=False):
@@ -1470,7 +1666,7 @@ def _shell_args_run_runtime(args, as_command):
     """True iff a shell given args may run run-time text: as its script, its -c string or an option.
 
     A run-time word where the shell reads an option may be -c, -s or a script;
-    --rcfile, --init-file, -o and -O take the next word.  as_command: the
+    --rcfile, --init-file, -o and -O take the next word. as_command: the
     shell is a command word, whose -c string _shell_layers() reads as a layer
     of its own; otherwise a run-time -c string runs here.
     """
@@ -1505,7 +1701,7 @@ def _interpreter_runs_runtime(spec, args):
 
     runtime: a run-time value may be code it runs: a word where it reads an
     option, the value of an option that names its program or may load code, or
-    its program operand.  The words after its program are the program's own.
+    its program operand. The words after its program are the program's own.
     stdin: it reads its program from standard input.
     """
     named = False  # an option named the program: the first operand is an argument
@@ -1567,13 +1763,9 @@ def _shell_layers(command_text):
     """(texts, unresolved) for command_text.
 
     texts: command_text, then the text of every shell `-c` string it runs, in
-    the order they appear, resolved recursively up to _MAX_SHELL_DEPTH levels;
-    a value the outer shell computes at run time reads as _RUNTIME_PLACEHOLDER.
-    unresolved: the strings the scan cannot clear: a string holding a run-time
-    value that is git-shaped (_may_run_git() over it and every string it runs)
-    or may run run-time text as shell or code (_runs_runtime_code() over the
-    same), text it cannot lex whose `-c` string is git-shaped, and a string
-    nested past the limit.
+    order, resolved recursively up to _MAX_SHELL_DEPTH levels; a value the outer
+    shell computes at run time reads as _RUNTIME_PLACEHOLDER. unresolved: the
+    strings the scan cannot clear (see the section comment above).
     """
     texts, unresolved = [], []
     codes = []  # each text as its shell reads it, and whether its input is fed
@@ -1608,69 +1800,16 @@ def iter_shell_texts(command_text):
 
 
 def _residual_shapes(command_text):
-    """Yield (kind, segment) for command tokens that MIGHT be git but did not parse.
-
-    Every shell `-c` string the text runs is examined like the text itself, and
-    one the scan cannot clear (_shell_layers) is the kind `unresolved_shell_string`.
-    """
+    """Yield (kind, text) for command words that may be git but did not resolve, in every layer."""
     texts, unresolved = _shell_layers(command_text)
-    for text in texts:
-        yield from _segment_residual_shapes(text)
+    for k, text in enumerate(texts):
+        yield from _segment_residual_shapes(text, nested=k > 0)
     for text in unresolved:
         yield ('unresolved_shell_string', text)
 
 
 RESIDUAL_KINDS = frozenset({'obfuscated_git_token', 'dynamic_git_token',
                             'substituted_git_token', 'unresolved_shell_string'})
-
-
-def _segment_residual_shapes(command_text):
-    """Yield (kind, segment) for command tokens that MIGHT be git but did not parse.
-
-    This is the answer to "an empty invocation list must not mean 'no git'".
-    It is deliberately NARROW: it fires only on the segment's COMMAND TOKEN, so
-    the overwhelmingly common `grep git .` / `echo "git status"` / `cat git.md`
-    shapes — git in ARGUMENT position, behind a resolvable command name — raise
-    nothing at all and stay on the fast permissive path.
-
-    Kinds:
-      obfuscated_git_token  — the command token de-obfuscates to `git` but did
-                              not classify as git (`g\\it push`, `gi""t push`)
-      dynamic_git_token     — the command token contains an unexpanded
-                              parameter/command expansion and the next word is a
-                              git verb (`$GIT push`, `${G}it commit`)
-      substituted_git_token — the segment's command NAME was produced by a
-                              command substitution in command position and the
-                              first word here is a git verb (`$(which git) push`)
-    """
-    segments = _segments_with_kind(command_text)
-    assigns = _assignments(segments)
-    for seg, kind, in_quote in segments:
-        if in_quote:
-            # Mechanism (b): this segment is a continuation line of a multi-line
-            # string literal, so its first token is DATA, not a command word.
-            continue
-        toks = seg.split()
-        if not toks:
-            continue
-        idx = _command_token_index(toks)
-        if idx is None:
-            continue
-        tok = toks[idx]
-        if os.path.basename(_unquote_token(tok)) == 'git':
-            continue  # resolved normally; iter_git_invocations already has it
-        sub, _rest = _git_subcommand(toks[idx + 1:])
-        if _is_obfuscation_candidate(tok):
-            yield ('obfuscated_git_token', seg)
-        elif (_EXPANSION_RE.search(tok) and sub in _GIT_SUBCOMMANDS
-                # Mechanism (a): the shape filter the obfuscation branch has
-                # always applied. An unbalanced quote means `.split()` cut a
-                # string literal in half; the shell never execs that shard.
-                and _is_command_name_shaped(tok)
-                and not _resolves_to_non_git(tok, assigns)):
-            yield ('dynamic_git_token', seg)
-        elif kind == 'subst_close' and idx == 0 and tok in _GIT_SUBCOMMANDS:
-            yield ('substituted_git_token', seg)
 
 
 # ---------------------------------------------------------------------------
@@ -1683,58 +1822,18 @@ GitInvocation = collections.namedtuple(
 )
 
 
-def _invocation(seg):
-    """The GitInvocation of a segment whose command token is git, else None."""
-    toks = seg.split()
-    idx = _command_token_index(toks) if toks else None
-    if idx is None:
-        return None
-    token = toks[idx]
-    # Unquote before basenaming: bash strips the quotes before exec, so
-    # `"/usr/bin/git"` and `'git'` are git invocations (fail-closed fix).
-    if os.path.basename(_unquote_token(token)) != 'git':
-        return None
-    subcommand, remaining_args = _git_subcommand(toks[idx + 1:])
-    return GitInvocation(cmd_token=token, path_qualified=('/' in token),
-                         subcommand=subcommand, args=remaining_args)
-
-
 def iter_git_invocations(command_text):
     """Yield GitInvocation for every git invocation in command_text.
 
-    Each shell segment's command token is found past wrappers, env-var
-    assignments, reserved words and redirections; it is git when its basename,
-    balanced surrounding quotes stripped, is `git` (/usr/bin/git, "git").
-    path_qualified is True when the token contains a '/'. _git_subcommand()
-    skips git's global options: `/usr/bin/git -C repo push --force` -> 'push',
-    ['--force'].
-
-    The input is normalised here, so callers pass the command as written. The
-    splitter is quote-blind, so a segment it opens inside a quote may be text
-    (`echo "tip; git commit -m x"`) or code (`bash -c "cd x; git push"`,
-    `python3 -c "os.system('cd x; git push')"`, `su -c "..."`). Such a segment
-    counts unless the command owning the quote is known to leave its arguments
-    unexecuted (_is_text_only: `echo`, `printf`, `grep`, `git commit`), the
-    command is one line without command substitution, and no `|` in it feeds a
-    command not known to leave its input unexecuted (`echo "..." | sh` runs the
-    text). Any other owner, a launcher this module does not know included,
-    fails closed. Elsewhere (an unclosed quote, a quote across lines, a
-    substitution, where a comment, a heredoc or nested quoting can mislead a
-    static reading) every segment counts. Each invocation keeps its tokens as
-    written.
-
-    The text of every shell `-c` string command_text runs is walked the same
-    way, after command_text's own segments (see _shell_layers()). An
-    invocation in such a string is then read twice: in the string's own text,
-    as the shell runs it, and by the quote-blind scan of the text holding the
-    string, its words cut at the quote (`bash -c "cd x; git push"` reads
-    `push"`). That in-quote reading is not yielded again when a later text
-    yields the same invocation, quotes and backslashes aside, one for one; an
-    in-quote invocation no later text yields (the inner shell reads it as
-    text, the string went unresolved, a launcher that is not a shell) is
-    yielded as the scan read it.
+    path_qualified is True when the command word contains a '/'. The text of
+    every shell `-c` string command_text runs is read the same way, after
+    command_text's own commands. An invocation in such a string is read twice:
+    as the shell runs the string, and as quoted text the shell is given; the
+    quoted reading is not yielded again when a later text yields the same
+    invocation, quotes and backslashes aside.
     """
-    layers = [list(_segment_invocations(text, tagged=True)) for text in iter_shell_texts(command_text)]
+    layers = [list(_segment_invocations(text, tagged=True, nested=k > 0))
+              for k, text in enumerate(iter_shell_texts(command_text))]
     for k, layer in enumerate(layers):
         later = collections.Counter(_bare_invocation(inv) for rest in layers[k + 1:] for inv, _q in rest)
         for inv, quoted in layer:
@@ -1751,126 +1850,26 @@ def _bare_invocation(inv):
     return tuple(w for w in words if w)
 
 
-def _segment_invocations(command_text, tagged=False):
-    """iter_git_invocations() for command_text's own segments only.
-
-    tagged: yield (invocation, quoted) instead, quoted when the segment holding
-    the invocation was opened inside a quote."""
-    # The appended ';' opens a last, empty segment that is in a quote exactly
-    # when command_text ends inside one.
-    text = command_text + ';'
-    segments = _segments_with_kind(text)
-    starts = [i for i, (_seg, _kind, in_quote) in enumerate(segments) if not in_quote]
-    droppable = (not re.search(r'\n|\$\(|<\(|>\(|`', command_text)
-                 and not _pipes_into_unknown(segments, text))
-    for start, end in zip(starts, starts[1:] + [len(segments)]):
-        for inv, quoted in _owned_invocations([seg for seg, _kind, _q in segments[start:end]],
-                                              droppable and end < len(segments)):
-            yield (inv, quoted) if tagged else inv
-
-
-def _owned_invocations(group, droppable):
-    """(invocation, quoted) of a segment opened outside quotes and the in-quote ones after it.
-
-    The in-quote ones are text, and dropped, only when `droppable` and the
-    segment's command is known to leave its arguments unexecuted.
-    """
-    written = [_invocation(seg) for seg in group]
-    if written[0]:
-        yield written[0], False
-    if droppable and _is_text_only(group[0]):
-        return
-    yield from ((inv, True) for inv in written[1:] if inv)
-
-
-# Commands known to leave their arguments and their standard input unexecuted.
-# Measured over the P9 R6 corpus (the hooks' tests, adversarial-runs.md, the A6
-# strings): `echo` and `printf` are the only non-git commands there owning a
-# quoted git invocation that is text; `grep` reads its quoted pattern as text.
-# Every other command is unknown, so a launcher (`python3 -c`, `su -c`,
-# `find -exec`, `ssh`, `watch`, `xargs sh -c`) fails closed.
-_TEXT_ONLY_COMMANDS = frozenset({'echo', 'printf', 'grep'})
-# git subcommands whose quoted arguments are text (`git commit -m "a; git push"`).
-_TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
-
-
-def _is_text_only(seg):
-    """True iff seg's command is known to leave its arguments and input unexecuted."""
-    toks = seg.split()
-    idx = _command_token_index(toks) if toks else None
-    if idx is None:
-        return False
-    # `eval echo "x; git push"` reads echo's quoted text again as shell code.
-    if any(_basename(_unquote_token(t)) == 'eval' for t in toks[:idx]):
-        return False
-    word = _basename(_unquote_token(toks[idx]))
-    if word != 'git':
-        return word in _TEXT_ONLY_COMMANDS
-    sub, rest = _git_subcommand(toks[idx + 1:])
-    options = toks[idx + 1:len(toks) - len(rest) - 1]
-    # A config value can name a program git runs (core.editor, an alias).
-    return (sub in _TEXT_ONLY_GIT_SUBCOMMANDS
-            and not any(o.startswith(('-c', '--config-env')) for o in options))
-
-
-def _pipes_into_unknown(segments, text):
-    """True iff a `|` outside quotes feeds a command that is not _is_text_only.
-
-    `text` is the one-line, substitution-free string `segments` was split from,
-    so the segments and the separators between them rebuild it exactly; a
-    separator that does not read back fails closed.
-    """
-    pos, sep = 0, ''
-    for seg, _kind, in_quote in segments:
-        if sep == '|' and not in_quote and not _is_text_only(seg):
-            return True
-        pos += len(seg)
-        sep = text[pos:pos + 2] if text[pos:pos + 2] in ('&&', '||') else text[pos:pos + 1]
-        if pos < len(text) and sep not in ('&&', '||', ';', '|', '&', '(', ')'):
-            return True
-        pos += len(sep)
-    return False
-
-
 def classify_git_command(command_text):
-    """Return (invocations, residuals) — the fail-closed-capable entry point.
+    """Return (invocations, residuals): list(iter_git_invocations()), list(_residual_shapes()).
 
-    `invocations` is exactly `list(iter_git_invocations(command_text))`.
-    `residuals` is a list of (kind, segment) from _residual_shapes(): command
-    tokens that could not be resolved statically but look like they could be
-    git. That scan reads the command as written, skipping segments opened in a
-    quote: the normaliser's view empties the quoted command words
-    (`env -i "$GIT" push`) it exists to report.
-
-    Callers that enforce policy MUST NOT treat an empty `invocations` list as
-    proof that no git runs.  The correct fail-closed test is:
+    The fail-closed test for a caller:
 
         invocations, residuals = classify_git_command(cmd)
         if residuals:
-            refuse(...)          # unparseable AND git-shaped
+            refuse(...)          # unresolvable and git-shaped
         if not invocations:
-            return               # genuinely git-free: stay fast and permissive
-
-    Splitting the two keeps the permissive fast path intact for the vast
-    majority of traffic (no git token in command position at all) while denying
-    the narrow, precise case the old `if not invocations: return` swallowed.
+            return               # git-free
     """
     return list(iter_git_invocations(command_text)), list(_residual_shapes(command_text))
 
 
-# ---------------------------------------------------------------------------
-# CLI __main__ — JSON output mode
-# ---------------------------------------------------------------------------
-
 if __name__ == '__main__':
-    # Read from CMD_INPUT env var or stdin.
     cmd_text = os.environ.get('CMD_INPUT', '')
     if not cmd_text:
         cmd_text = sys.stdin.read()
 
     if os.environ.get('CMD_RAW') == 'stdin':
-        # A normalized view, a NUL, then the raw command it was made from: the
-        # view no longer shows where a `-c` string ends (normalization contract).
         cmd_text, _nul, raw = cmd_text.partition('\0')
         try:
             from bash_context_strip import strip_non_executable_contexts as _norm
@@ -1881,7 +1880,7 @@ if __name__ == '__main__':
         layers = list(iter_shell_texts(cmd_text))
     results = []
     for k, text in enumerate(layers):
-        for inv in _segment_invocations(text):
+        for inv in _segment_invocations(text, nested=k > 0):
             results.append({
                 'subcommand': inv.subcommand,
                 'args': inv.args,
