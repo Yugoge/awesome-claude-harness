@@ -49,7 +49,7 @@ The main agent is the orchestrator and delegates real work to subagents. `hooks/
 - Any other tool (`Edit`, `Write`, `WebFetch`, `WebSearch`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `mcp__playwright__*`, ...): once per tool name per turn, whatever runs between; inside the session's open `/dev-overnight` window (no prompt arrives all night, so the session is one turn) an `Agent` dispatch also resets the count, as it resets Bash's.
 - `EnterPlanMode`, `ExitPlanMode`: always refused, `/do` included; only an `/allow` grant naming the tool passes one call.
 
-`hooks/pretool-read-size-guard.py` (no switch) blocks the main agent's `Read` of a file over 600 lines unless `limit` is at most 600; for such a file, delegate and ask for a summary.
+`hooks/pretool-read-size-guard.py` (no switch) blocks the main agent's `Read` of a file over 600 lines unless the Read returns at most 600 lines (`limit`, default 2000, counted from the 1-based `offset`); for such a file, delegate and ask for a summary.
 
 Pass `run_in_background: false` on every `Agent`/`Task` dispatch, since they run in the background by default. `hooks/pretool-block-background-tasks.py` (no switch; subagents and `/do` exempt) blocks a dispatch without it, a `Bash` call with `run_in_background: true`, every `Workflow` call and every `SendMessage` lesson 16 does not allow. Its one dispatch exception is `/spec`'s background `Explore` agent while a `/spec` interview's checklist has an open step.
 

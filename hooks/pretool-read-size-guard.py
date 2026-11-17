@@ -2,7 +2,8 @@
 """
 PreToolUse Hook: Read Size Guard
 
-Blocks the main agent from reading files larger than 600 lines.
+Blocks the main agent from reading files larger than 600 lines when the Read
+would return more than 600 lines: min(limit or 2000, total - offset + 1).
 Subagents (agent_id present) are exempt.
 Binary files (images, PDFs) are exempt.
 """
@@ -28,6 +29,7 @@ BINARY_EXTENSIONS = {
 }
 LINE_LIMIT = 600
 CHUNK_LIMIT = 600
+READ_DEFAULT_LIMIT = 2000  # the Read tool returns this many lines when limit is absent
 
 
 def is_exempt(data, file_path):
@@ -49,10 +51,27 @@ def count_lines(file_path):
         return -1
 
 
-def is_bounded_chunk(tool_input):
-    """Allow offset+limit Reads when chunk size <= CHUNK_LIMIT."""
-    requested_limit = tool_input.get("limit")
-    return isinstance(requested_limit, int) and 0 < requested_limit <= CHUNK_LIMIT
+def returned_line_count(tool_input, total_lines):
+    """Lines a Read returns: min(limit or 2000, total - offset + 1).
+
+    The Read tool's offset is the 1-based line it starts from and its limit
+    defaults to READ_DEFAULT_LIMIT lines. A missing or malformed offset (0,
+    negative, bool, string, float, anything not a positive int) counts as
+    line 1, and a missing or malformed limit as the default, so a malformed
+    value can only raise the count, never shrink it into an allow.
+    """
+    limit = tool_input.get("limit")
+    if not (isinstance(limit, int) and limit > 0):
+        limit = READ_DEFAULT_LIMIT
+    offset = tool_input.get("offset")
+    if isinstance(offset, bool) or not (isinstance(offset, int) and offset > 1):
+        offset = 1
+    return max(0, min(limit, total_lines - offset + 1))
+
+
+def is_bounded_chunk(tool_input, total_lines):
+    """Allow a Read whose returned chunk is at most CHUNK_LIMIT lines."""
+    return returned_line_count(tool_input, total_lines) <= CHUNK_LIMIT
 
 
 def main():
@@ -77,13 +96,14 @@ def main():
     line_count = count_lines(file_path)
     if line_count < 0 or line_count <= LINE_LIMIT:
         sys.exit(0)
-    if is_bounded_chunk(tool_input):
+    if is_bounded_chunk(tool_input, line_count):
         sys.exit(0)
 
     sys.stderr.write(
         f"[Read Size Guard] File too large: {file_path} "
         f"({line_count} lines, limit {LINE_LIMIT}).\n"
-        f"To slice it, retry with offset+limit where limit <= {CHUNK_LIMIT}. Otherwise:\n"
+        f"To slice it, retry with offset+limit so the Read returns at most {CHUNK_LIMIT} lines "
+        f"(limit <= {CHUNK_LIMIT}, or an offset within the last {CHUNK_LIMIT} lines). Otherwise:\n"
         f"  1. Use Grep to locate the specific section you need, then Read that narrow range.\n"
         f"  2. Delegate to an Agent subagent asking it to SUMMARIZE the file (not return raw content).\n"
     )
