@@ -378,27 +378,38 @@ no per-rule budget exists.
   examples and BA's instructions are what keep such a question out, not this check.
 - **S-018** — OB-L16 (owner decision): the one deny `Bash(*session_dirs.txt*)` matched any command
   text naming the file, so a search for the name (`grep -rn session_dirs.txt docs/`, `rg`, `git grep`,
-  `git log -S`) and a commit message naming it were refused with the reads. An allow entry cannot carve
-  an exception out of a deny ("Rules are evaluated in order: deny, then ask, then allow ... An allow rule
-  can't carve an exception out of a deny rule", code.claude.com/docs/en/permissions.md), so it is
-  replaced by 61 deny entries keyed on the command word, `Bash(<word> *session_dirs*)` (and
-  `Bash(python*session_dirs*)`): the shells and evaluators (`bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`,
-  `eval`, `exec`, `source`, `.`, `env`, `xargs`, `for`), the interpreters (`python*`, `node`, `bun`,
-  `deno`, `perl`, `ruby`, `php`, `awk`, `npm`, `npx`, `docker`), the file commands (`cat`, `head`,
-  `tail`, `sed`, `sort`, `uniq`, `tee`, `cp`, `mv`, `ln`, `rm`, `chmod`, `touch`, `truncate`, `md5sum`,
-  `find`, `curl`, `wget`, `echo`, `printf`) and the git forms that read, write or stage a path (`add`,
+  `git log -S`/`-G`) and a commit message naming it were refused with the reads. An allow entry cannot
+  carve an exception out of a deny ("Rules are evaluated in order: deny, then ask, then allow ... An allow
+  rule can't carve an exception out of a deny rule", code.claude.com/docs/en/permissions.md), so it is
+  replaced by 170 deny entries: 85 stems keyed on the command word, each with two tails,
+  `Bash(<stem>session_dirs.t*)` (the name, `.tx?`, `.t*`, a `'session_dirs.t'+'xt'` split) and
+  `Bash(<stem>session_dirs?*)` (`?` in a rule is literal: a `?` glob in place of the dot). Neither tail
+  matches a name that merely contains `session_dirs` (`hooks/lib/session_dirs.py`,
+  `tests/test_session_dirs_permission.py`, `/tmp/session_dirs_backup`), which keep their base decision.
+  Stems: the shells and evaluators (`bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `eval`, `exec`, `source`,
+  `.`, `env`, `xargs`, `for`), the interpreters (`python*`, `node`, `bun`, `deno`, `perl`, `ruby`, `php`,
+  `awk`, `npm`, `npx`, `docker`), the pagers and editors (`less`, `more`, `xxd`, `vi`, `vim`, `view`,
+  `nano`, `emacs`), the file commands (`cat`, `head`, `tail`, `sed`, `sort`, `uniq`, `tee`, `cp`, `mv`,
+  `ln`, `rm`, `chmod`, `touch`, `truncate`, `md5sum`, `find`, `curl`, `wget`, `scp`, `rsync`, `install`,
+  `tar`, `zip`, `gzip`, `echo`, `printf`) and the git forms that read, write or stage a path (`add`,
   `apply`, `blame`, `cat-file`, `checkout`, `diff`, `hash-object`, `mv`, `restore`, `rm`, `show`,
-  `stash`, `update-index`, `-c`, any `--output`, and `commit -F`/`--file`). grep, rg, `git grep`,
-  `git log` and `git commit -m` naming the file pass; their file operands, `-f FILE` and every
-  redirect target stay refused by `Read(**/session_dirs.txt)` and `Edit(**/session_dirs.txt)`, which
-  "apply to ... file commands Claude Code recognizes in Bash ... and to the targets of Bash
-  redirections" (same page). Measured on Claude Code 2.1.326 headless with a throwaway HOME against a
-  stand-in Messages API (the test's opt-in `HARNESS_LIVE_CLI=1` case re-runs it): `?` in a rule is
-  literal, rules are case-sensitive, quotes are not part of the matched text, a path-qualified command
-  word matches by its name, and a heredoc body is not matched at all, so `bash <<EOF` / `python3 - <<EOF`
-  bodies naming the file pass this layer (as they did under the old deny) and only
-  `hooks/pretool-bash-safety.sh` refuses them; a glob operand to grep (`grep pat session_dirs.tx?`)
-  passes every layer, before and after. A text rule cannot see a read that never spells the name.
+  `stash`, `update-index`, `-c`, every `-C` form, any `--output`, `log` with `-p`/`-u`/`--patch` or a
+  `--` pathspec, `commit` with `-F`/`--file`, `-i`/`--include`, `-o`/`--only` or a `--` pathspec). grep,
+  rg, `git grep`, `git log -S`/`-G` and `git commit -m` naming the file pass; their file operands,
+  `-f FILE` and every redirect target stay refused by `Read(**/session_dirs.txt)` and
+  `Edit(**/session_dirs.txt)`, which "apply to ... file commands Claude Code recognizes in Bash ... and
+  to the targets of Bash redirections" (same page); `od`, `strings`, `cut`, `nl`, `wc`, `diff`, `base64`,
+  `tac`, `jq`, `paste` on the file are refused that way. Measured on Claude Code 2.1.326 headless with a
+  throwaway HOME against a stand-in Messages API (the test's opt-in `HARNESS_LIVE_CLI=1` case re-runs
+  it): `?` in a rule is literal; rules are case-sensitive; quotes are not part of the matched text; a
+  path-qualified command word matches by its name; a heredoc body is not matched at all. Refused on the
+  base and not denied now: `git commit -m x session_dirs.txt` (a bare pathspec cannot be told from the
+  message text; it commits only a file already tracked, and `git add` of it is denied) and
+  `CAT session_dirs.txt` (an upper-case command word; it asks); `while read l; do ...; done <
+  session_dirs.txt` asks, as on the base. Passing this layer before and after: `bash <<EOF` /
+  `python3 - <<EOF` bodies naming the file (only `hooks/pretool-bash-safety.sh` refuses them), and a
+  glob operand to grep (`grep pat session_dirs.tx?`: grep has no stem, so the search forms pass), a glob
+  no tail spells (`cat session_dirs*`, `cat session_dir?.txt`) or a name built at run time. A text rule cannot see a read that never spells the name.
 - **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
   in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
   `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,

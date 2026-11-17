@@ -8,27 +8,29 @@ refused with the reads. The owner decided (L16) to allow the name as a grep / rg
 
 An allow entry cannot do that: "Rules are evaluated in order: deny, then ask, then allow ... An allow
 rule can't carve an exception out of a deny rule" (code.claude.com/docs/en/permissions.md, "Manage
-permissions"). So the blanket is replaced by deny entries keyed on the command word (ENTRIES): each
-interpreter, shell, evaluator and file-touching command, and each git subcommand that reads, writes or
-stages a path, refuses any text naming `session_dirs`. grep, rg, `git grep`, `git log` (but `--output`)
-and `git commit` (but `-F`/`--file`) are left to `Read(**/session_dirs.txt)` and
-`Edit(**/session_dirs.txt)`, which "apply to ... file commands Claude Code recognizes in Bash ... and to
-the targets of Bash redirections" (same page, "What Read and Edit rules cover"): a file operand or
-`-f FILE` stays refused, a pattern does not.
+permissions"). So the blanket is replaced by deny entries keyed on the command word (STEMS): each
+interpreter, shell, evaluator, pager, editor and file-touching command, and each git form that reads,
+writes or stages a path, refuses a text that spells the file's name or a glob of it. Two tails per stem
+(TAILS): `session_dirs.t*` (the name, `.tx?`, `.t*`, a `'session_dirs.t'+'xt'` split) and
+`session_dirs?*` (a `?` glob in place of the dot); neither matches a mere `session_dirs` substring
+(`hooks/lib/session_dirs.py`, `tests/test_session_dirs_permission.py`, `/tmp/session_dirs_backup`), so
+those keep their base decision (BASE_KEPT). grep, rg, `git grep`, `git log -S`/`-G` and `git commit -m`
+are left to `Read(**/session_dirs.txt)` and `Edit(**/session_dirs.txt)`, which "apply to ... file
+commands Claude Code recognizes in Bash ... and to the targets of Bash redirections" (same page, "What
+Read and Edit rules cover"): a file operand or `-f FILE` stays refused, a pattern does not.
 
 Bash rule matching is modelled after the docs ("Bash rules match the whole command text, with `*`
 standing in for any text"; "Deny and ask rules apply when any subcommand matches them, including a
 command nested inside a subshell, a command substitution, or a control-flow body"; a deny rule "matches
 past any leading assignment"; wrappers such as timeout are stripped). Where the docs are silent the point
 was measured on Claude Code 2.1.326, run headless (`claude -p`, default permission mode, a throwaway HOME
-whose settings.json holds only this repo's `permissions`) against a local stand-in Messages API that
-makes the model emit one Bash call; the tool result says "has been denied" (deny), names a reason it
-needs approval (ask), or is the command's output (allow). Measured: `?` in a rule is a literal character;
-rules are case-sensitive (`CAT x` is not matched by `cat *`); quotes are not part of the matched text (a
-rule ending `session_dirs.txt)` matched `git commit -m "... session_dirs.txt"`); a path-qualified command
-word matches by its name (`/usr/bin/python3`, `/tmp/x-venv/bin/python`, `/bin/cat`); a heredoc body is
-not part of the matched text (`bash <<EOF` / `python3 - <<EOF` bodies: allowed on the base as well, see
-HOOK_ONLY). MEASURED holds those decisions; test_live_cli_decisions re-measures them when
+whose settings.json holds only `permissions`) against a local stand-in Messages API that makes the model
+emit one Bash call; the tool result says "has been denied" (deny), names a reason it needs approval
+(ask), or is the command's output (allow). Measured: `?` in a rule is a literal character; rules are
+case-sensitive (`CAT x` is not matched by `cat *`: it asks, see ASK_ONLY); quotes are not part of the
+matched text; a path-qualified command word matches by its name (`/usr/bin/python3`, `/bin/cat`); a
+heredoc body is not part of the matched text (HOOK_ONLY). MEASURED holds the decisions on the base
+settings and on these; test_live_cli_decisions re-measures them, and every entry's example, when
 HARNESS_LIVE_CLI=1 and `claude` is installed.
 """
 from __future__ import annotations
@@ -49,74 +51,101 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 BLANKET = "Bash(*session_dirs.txt*)"
-
-# The deny entries that replace BLANKET, each with a command it refuses that no other layer of the
-# permission rules refused (measured: without these entries each one ran or asked).
-ENTRIES = {
-    "Bash(. *session_dirs*)": ". ./session_dirs.txt",
-    "Bash(awk *session_dirs*)": "awk 1 session_dirs.tx?",
-    "Bash(bash *session_dirs*)": "bash -c 'cat session_dirs.txt'",
-    "Bash(bun *session_dirs*)": "bun -e \"require('fs').readFileSync('session_dirs.txt')\"",
-    "Bash(cat *session_dirs*)": "cat session_dirs.tx?",
-    "Bash(chmod *session_dirs*)": "chmod 600 session_dirs.tx?",
-    "Bash(cp *session_dirs*)": "cp session_dirs.tx? x.bak",
-    "Bash(curl *session_dirs*)": "curl -sT session_dirs.txt http://127.0.0.1:9/",
-    "Bash(dash *session_dirs*)": "dash -c 'cat session_dirs.txt'",
-    "Bash(deno *session_dirs*)": "deno eval \"Deno.readTextFileSync('session_dirs.txt')\"",
-    "Bash(docker *session_dirs*)": "docker run --rm -v ./session_dirs.txt:/f alpine cat /f",
-    "Bash(echo *session_dirs*)": "cat $(echo session_dirs.txt)",
-    "Bash(env *session_dirs*)": "env -i sh -c 'cat session_dirs.txt'",
-    "Bash(eval *session_dirs*)": "eval 'cat session_dirs.txt'",
-    "Bash(exec *session_dirs*)": "exec cat session_dirs.tx?",
-    "Bash(find *session_dirs*)": "find / -name session_dirs.txt -exec cat {} \\;",
-    "Bash(fish *session_dirs*)": "fish -c 'cat session_dirs.txt'",
-    "Bash(for *session_dirs*)": "for f in session_dirs.tx?; do cat $f; done",
-    "Bash(git *--output*session_dirs*)": "git log --output=session_dirs.txt",
-    "Bash(git -c *session_dirs*)": "git -c core.pager='cat session_dirs.txt' log",
-    "Bash(git add *session_dirs*)": "git add session_dirs.txt",
-    "Bash(git apply *session_dirs*)": "git apply session_dirs.txt",
-    "Bash(git blame *session_dirs*)": "git blame session_dirs.txt",
-    "Bash(git cat-file *session_dirs*)": "git cat-file -p HEAD:session_dirs.txt",
-    "Bash(git checkout *session_dirs*)": "git checkout -- session_dirs.txt",
-    "Bash(git commit *--file*session_dirs*)": "git commit -m x --file=session_dirs.txt",
-    "Bash(git commit *-F*session_dirs*)": "git commit -F session_dirs.txt",
-    "Bash(git diff *session_dirs*)": "git diff --no-index session_dirs.tx? /dev/null",
-    "Bash(git hash-object *session_dirs*)": "git hash-object -w session_dirs.txt",
-    "Bash(git mv *session_dirs*)": "git mv session_dirs.txt x",
-    "Bash(git restore *session_dirs*)": "git restore session_dirs.txt",
-    "Bash(git rm *session_dirs*)": "git rm session_dirs.txt",
-    "Bash(git show *session_dirs*)": "git show HEAD:session_dirs.txt",
-    "Bash(git stash *session_dirs*)": "git stash push session_dirs.txt",
-    "Bash(git update-index *session_dirs*)": "git update-index --add session_dirs.txt",
-    "Bash(head *session_dirs*)": "head session_dirs.tx?",
-    "Bash(ksh *session_dirs*)": "ksh -c 'cat session_dirs.txt'",
-    "Bash(ln *session_dirs*)": "ln -s session_dirs.txt x",
-    "Bash(md5sum *session_dirs*)": "md5sum session_dirs.tx?",
-    "Bash(mv *session_dirs*)": "mv session_dirs.tx? x",
-    "Bash(node *session_dirs*)": "node -e \"require('fs').writeFileSync('session_dirs.txt','x')\"",
-    "Bash(npm *session_dirs*)": "npm exec -- cat session_dirs.txt",
-    "Bash(npx *session_dirs*)": "npx -y cowsay -f session_dirs.txt",
-    "Bash(perl *session_dirs*)": "perl -pe1 session_dirs.tx?",
-    "Bash(php *session_dirs*)": "php -r \"readfile('session_dirs.txt');\"",
-    "Bash(printf *session_dirs*)": "cat $(printf session_dirs.txt)",
-    "Bash(python*session_dirs*)": "python3 -c \"open('session_dirs.txt','w')\"",
-    "Bash(rm *session_dirs*)": "rm -f session_dirs.tx?",
-    "Bash(ruby *session_dirs*)": "ruby -e \"File.read('session_dirs.txt')\"",
-    "Bash(sed *session_dirs*)": "sed -n p session_dirs.tx?",
-    "Bash(sh *session_dirs*)": "sh -c 'cat session_dirs.txt'",
-    "Bash(sort *session_dirs*)": "sort session_dirs.tx?",
-    "Bash(source *session_dirs*)": "source ./session_dirs.txt",
-    "Bash(tail *session_dirs*)": "tail session_dirs.tx?",
-    "Bash(tee *session_dirs*)": "tee session_dirs.tx? < /dev/null",
-    "Bash(touch *session_dirs*)": "touch session_dirs.tx?",
-    "Bash(truncate *session_dirs*)": "truncate -s0 session_dirs.tx?",
-    "Bash(uniq *session_dirs*)": "uniq session_dirs.tx?",
-    "Bash(wget *session_dirs*)": "wget -q --post-file=session_dirs.txt http://127.0.0.1:9/",
-    "Bash(xargs *session_dirs*)": "xargs -a session_dirs.txt echo",
-    "Bash(zsh *session_dirs*)": "zsh -c 'cat session_dirs.txt'",
-}
-
 READ_RULE, EDIT_RULE = "Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"
+
+# The text before the file name in each deny entry, and a command each refuses ({f}: the name's spelling).
+STEMS = {
+    '. *': '. ./{f}',
+    'awk *': 'awk 1 {f}',
+    'bash *': "bash -c 'cat {f}'",
+    'bun *': 'bun -e "require(\'fs\').readFileSync(\'{f}\')"',
+    'cat *': 'cat {f}',
+    'chmod *': 'chmod 600 {f}',
+    'cp *': 'cp {f} x.bak',
+    'curl *': 'curl -sT {f} http://127.0.0.1:9/',
+    'dash *': "dash -c 'cat {f}'",
+    'deno *': 'deno eval "Deno.readTextFileSync(\'{f}\')"',
+    'docker *': 'docker run --rm -v ./{f}:/f alpine cat /f',
+    'echo *': 'cat $(echo {f})',
+    'emacs *': 'emacs {f}',
+    'env *': "env -i sh -c 'cat {f}'",
+    'eval *': "eval 'cat {f}'",
+    'exec *': 'exec cat {f}',
+    'find *': 'find / -name {f} -exec cat {{}} \\;',
+    'fish *': "fish -c 'cat {f}'",
+    'for *': 'for f in {f}; do cat $f; done',
+    'git *--output*': 'git log --output={f}',
+    'git -C *': 'git -C . show HEAD:{f}',
+    'git -c *': "git -c core.pager='cat {f}' log",
+    'git add *': 'git add {f}',
+    'git apply *': 'git apply {f}',
+    'git blame *': 'git blame {f}',
+    'git cat-file *': 'git cat-file -p HEAD:{f}',
+    'git checkout *': 'git checkout -- {f}',
+    'git commit *--file*': 'git commit -m x --file={f}',
+    'git commit *--include*': 'git commit -m x --include {f}',
+    'git commit *--only*': 'git commit -m x --only {f}',
+    'git commit *-- *': 'git commit -m x -- {f}',
+    'git commit *-F*': 'git commit -F {f}',
+    'git commit *-i *': 'git commit -m x -i {f}',
+    'git commit *-o *': 'git commit -m x -o {f}',
+    'git diff *': 'git diff --no-index {f} /dev/null',
+    'git hash-object *': 'git hash-object -w {f}',
+    'git log *--patch*': 'git log --patch {f}',
+    'git log *-- *': 'git log --oneline -- {f}',
+    'git log *-p *': 'git log -p {f}',
+    'git log *-u *': 'git log -u {f}',
+    'git mv *': 'git mv {f} x',
+    'git restore *': 'git restore {f}',
+    'git rm *': 'git rm {f}',
+    'git show *': 'git show HEAD:{f}',
+    'git stash *': 'git stash push {f}',
+    'git update-index *': 'git update-index --add {f}',
+    'gzip *': 'gzip -k {f}',
+    'head *': 'head {f}',
+    'install *': 'install {f} /tmp/',
+    'ksh *': "ksh -c 'cat {f}'",
+    'less *': 'less {f}',
+    'ln *': 'ln -s {f} x',
+    'md5sum *': 'md5sum {f}',
+    'more *': 'more {f}',
+    'mv *': 'mv {f} x',
+    'nano *': 'nano {f}',
+    'node *': 'node -e "require(\'fs\').writeFileSync(\'{f}\',\'x\')"',
+    'npm *': 'npm exec -- cat {f}',
+    'npx *': 'npx -y cowsay -f {f}',
+    'perl *': 'perl -pe1 {f}',
+    'php *': 'php -r "readfile(\'{f}\');"',
+    'printf *': 'cat $(printf {f})',
+    'python*': 'python3 -c "open(\'{f}\',\'w\')"',
+    'rm *': 'rm -f {f}',
+    'rsync *': 'rsync {f} /tmp/',
+    'ruby *': 'ruby -e "File.read(\'{f}\')"',
+    'scp *': 'scp {f} host:/tmp/',
+    'sed *': 'sed -n p {f}',
+    'sh *': "sh -c 'cat {f}'",
+    'sort *': 'sort {f}',
+    'source *': 'source ./{f}',
+    'tail *': 'tail {f}',
+    'tar *': 'tar cf /tmp/a.tar {f}',
+    'tee *': 'tee {f} < /dev/null',
+    'touch *': 'touch {f}',
+    'truncate *': 'truncate -s0 {f}',
+    'uniq *': 'uniq {f}',
+    'vi *': 'vi {f}',
+    'view *': 'view {f}',
+    'vim *': 'vim {f}',
+    'wget *': 'wget -q --post-file={f} http://127.0.0.1:9/',
+    'xargs *': 'xargs -a {f} echo',
+    'xxd *': 'xxd {f}',
+    'zip *': 'zip /tmp/a.zip {f}',
+    'zsh *': "zsh -c 'cat {f}'",
+}
+TAILS = {"session_dirs.t*": "session_dirs.tx?", "session_dirs?*": "session_dirs?txt"}
+# Each entry and an example only it refuses: the example spells the name as a glob the other tail and
+# the Read/Edit rules do not see (measured: each example asked or ran without these entries).
+ENTRIES = {f"Bash({stem}{tail})": tpl.format(f=spelled)
+           for stem, tpl in STEMS.items() for tail, spelled in TAILS.items()}
 
 # The owner's must-pass forms (L16), and more of the same kind.
 MUST_PASS = [
@@ -127,78 +156,178 @@ MUST_PASS = [
     'git commit -m "docs: mention session_dirs.txt"',
     "git log --oneline -G 'session_dirs\\.txt'",
     "git log -S session_dirs.txt --oneline -- hooks/",
+    "git log --pretty=oneline -S session_dirs.txt",
+    "git log -S session_dirs.txt -p",
     'grep -rn "session_dirs.txt" docs/ hooks/ | head -5',
     "git commit -m 'docs: session_dirs.txt mention'",
+    'git commit -a -m "docs: mention session_dirs.txt"',
+]
+
+# Ordinary work on names that merely contain `session_dirs`: each keeps its base decision.
+BASE_KEPT = [
+    "cat hooks/lib/session_dirs.py",
+    "sed -n 1,20p scripts/session_dirs_util.sh",
+    "python3 -m pytest tests/test_session_dirs_permission.py",
+    "python3 -m pytest hooks/tests/test_env_configured_defaults.py -k session_dirs_ban_stays",
+    "git add tests/test_session_dirs_permission.py",
+    "git diff -- tests/test_session_dirs_permission.py",
+    "git show HEAD:tests/test_session_dirs_permission.py",
+    "head -40 tests/test_session_dirs_permission.py",
+    "echo session_dirs",
+    "rm -f /tmp/session_dirs_backup",
+    "cp tests/test_session_dirs_permission.py /tmp/x.py",
 ]
 
 # The audit's must-still-refuse examples (L16) and the layer that refuses each after the change: a Bash
-# entry (matched on the text form given), or the Read/Edit rule on a file operand, `-f FILE` or a
-# redirect target (measured: the CLI refuses these with the blanket removed and no Bash entry added).
+# entry, or the Read/Edit rule on a file operand, `-f FILE` or a redirect target.
 MUST_REFUSE = {
-    "cat session_dirs.txt": [READ_RULE, "Bash(cat *session_dirs*)"],
+    "cat session_dirs.txt": [READ_RULE, "Bash(cat *session_dirs.t*)"],
     "grep -f session_dirs.txt x": [READ_RULE],
-    "python3 -c \"open('session_dirs.txt','w')\"": ["Bash(python*session_dirs*)"],
-    "bash -c 'cat session_dirs.txt'": ["Bash(bash *session_dirs*)"],
-    "find / -name session_dirs.txt -exec cat {} \\;": ["Bash(find *session_dirs*)"],
-    "cat $(echo session_dirs.txt)": ["Bash(cat *session_dirs*)", "Bash(echo *session_dirs*)"],
-    "cat session_dirs.tx?": ["Bash(cat *session_dirs*)"],
-    "echo x > session_dirs.txt": [EDIT_RULE, "Bash(echo *session_dirs*)"],
+    "python3 -c \"open('session_dirs.txt','w')\"": ["Bash(python*session_dirs.t*)"],
+    "bash -c 'cat session_dirs.txt'": ["Bash(bash *session_dirs.t*)"],
+    "find / -name session_dirs.txt -exec cat {} \\;": ["Bash(find *session_dirs.t*)"],
+    "cat $(echo session_dirs.txt)": ["Bash(cat *session_dirs.t*)", "Bash(echo *session_dirs.t*)"],
+    "cat session_dirs.tx?": ["Bash(cat *session_dirs.t*)"],
+    "echo x > session_dirs.txt": [EDIT_RULE, "Bash(echo *session_dirs.t*)"],
     "rg -f session_dirs.txt x": [READ_RULE],
     "grep pat session_dirs.txt": [READ_RULE],
 }
 
-# Forms the permission layer lets through on the base and after the change alike; only
-# hooks/pretool-bash-safety.sh refuses them (its session_dirs\.txt rule; it is not this lane's file).
-# The glob operand to grep is not refused by any layer, before or after.
+# Denied on the base, allowed or only prompted by the first cut of this change; each denied again.
+REGAINED = [
+    "git log -p -- session_dirs.txt", "git log --patch -- session_dirs.txt", "git log -p session_dirs.txt",
+    "git commit -m \"x\" -- session_dirs.txt", "git commit -m x -i session_dirs.txt",
+    "git commit -m x -o session_dirs.txt", "git commit -a -m x -- session_dirs.txt",
+    "less session_dirs.txt", "more session_dirs.txt", "xxd session_dirs.txt", "vi session_dirs.txt",
+    "vim session_dirs.txt", "nano session_dirs.txt", "tar cf /tmp/a.tar session_dirs.txt",
+    "rsync session_dirs.txt /tmp/", "install session_dirs.txt /tmp/",
+    "git -C . show HEAD:session_dirs.txt", "git -C . diff -- session_dirs.txt",
+    "git -C . add session_dirs.txt", "git -C . log -p -- session_dirs.txt",
+]
+
+# Refused on the base, not denied now, by choice (ledger S-018):
+# - a bare pathspec after the message cannot be told from the message, since quotes are not part of the
+#   matched text; it commits only a file already tracked, and `git add` of it is denied;
+# - an upper-case command word (rules are case-sensitive): it asks.
+NOT_DENIED_NOW = {"git commit -m x session_dirs.txt": "allow", "CAT session_dirs.txt": "ask"}
+
+# The permission layer lets these through on the base and after alike: a heredoc body is not in the matched
+# text; only hooks/pretool-bash-safety.sh refuses them. The rest name the file through a glob no rule
+# here spells (grep's file operand, `session_dirs*`, `session_dir?.txt`, ...) or build the name at run time.
 HOOK_ONLY = [
     "bash <<'EOF'\ncat session_dirs.txt\nEOF",
     "python3 - <<'EOF'\nopen('session_dirs.txt','w')\nEOF",
 ]
-NO_LAYER = ["grep pat session_dirs.tx?"]
+NO_LAYER = ["grep pat session_dirs.tx?", "cat session_dirs*", "cat session_dir?.txt", "cat session_*.txt",
+            "python3 -c \"open('session_dirs'+'.txt').read()\""]
 
 # Claude Code 2.1.326's decisions (method in the module docstring): base = origin/claude/train-c's
 # settings.json, after = this one.
 MEASURED = {  # command: (base, after)
-    "grep -rn session_dirs.txt docs/": ("deny", "allow"),
-    "rg -n 'session_dirs.txt' hooks/": ("deny", "allow"),
-    "git grep -n session_dirs.txt": ("deny", "allow"),
-    "git log --oneline -S session_dirs.txt": ("deny", "allow"),
-    'git commit -m "docs: mention session_dirs.txt"': ("deny", "allow"),
-    "git log --oneline -G 'session_dirs\\.txt'": ("allow", "allow"),
-    "git log -S session_dirs.txt --oneline -- hooks/": ("deny", "allow"),
-    'grep -rn "session_dirs.txt" docs/ hooks/ | head -5': ("deny", "allow"),
-    "git commit -m 'docs: session_dirs.txt mention'": ("deny", "allow"),
-    "cat session_dirs.txt": ("deny", "deny"),
-    "grep -f session_dirs.txt x": ("deny", "deny"),
-    "python3 -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "bash -c 'cat session_dirs.txt'": ("deny", "deny"),
-    "find / -name session_dirs.txt -exec cat {} \\;": ("deny", "deny"),
-    "cat $(echo session_dirs.txt)": ("deny", "deny"),
-    "cat session_dirs.tx?": ("allow", "deny"),
-    "echo x > session_dirs.txt": ("deny", "deny"),
-    "rg -f session_dirs.txt x": ("deny", "deny"),
-    "grep pat session_dirs.txt": ("deny", "deny"),
-    "cat session_dirs.t*": ("allow", "deny"),
-    "/usr/bin/python3 -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "/tmp/x-venv/bin/python -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "env python3 -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "timeout 5 python3 -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "FOO=1 python3 -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "cd docs && python3 -c \"open('session_dirs.txt','w')\"": ("deny", "deny"),
-    "sh -c 'cat session_dirs.txt'": ("deny", "deny"),
-    "awk '{print}' session_dirs.txt": ("deny", "deny"),
-    "xargs -a session_dirs.txt echo": ("deny", "deny"),
-    "git add session_dirs.txt": ("deny", "deny"),
-    "git show HEAD:session_dirs.txt": ("deny", "deny"),
-    "git log --output=session_dirs.txt": ("deny", "deny"),
-    "git commit -F session_dirs.txt": ("deny", "deny"),
-    "git commit -m x --file=session_dirs.txt": ("deny", "deny"),
-    "cp session_dirs.txt /tmp/x": ("deny", "deny"),
-    "md5sum session_dirs.txt": ("deny", "deny"),
-    "for f in session_dirs.tx?; do cat $f; done": ("ask", "deny"),
-    HOOK_ONLY[0]: ("allow", "allow"),
-    HOOK_ONLY[1]: ("allow", "allow"),
-    NO_LAYER[0]: ("allow", "allow"),
+    'grep -rn session_dirs.txt docs/': ('deny', 'allow'),
+    'git log --oneline -S session_dirs.txt': ('deny', 'allow'),
+    "rg -n 'session_dirs.txt' hooks/": ('deny', 'allow'),
+    'git grep -n session_dirs.txt': ('deny', 'allow'),
+    'git commit -m "docs: mention session_dirs.txt"': ('deny', 'allow'),
+    'cat session_dirs.txt': ('deny', 'deny'),
+    'grep -f session_dirs.txt x': ('deny', 'deny'),
+    'python3 -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    "bash -c 'cat session_dirs.txt'": ('deny', 'deny'),
+    'find / -name session_dirs.txt -exec cat {} \\;': ('deny', 'deny'),
+    'cat $(echo session_dirs.txt)': ('deny', 'deny'),
+    'cat session_dirs.tx?': ('allow', 'deny'),
+    'cat hooks/lib/session_dirs.py': ('allow', 'allow'),
+    'sed -n 1,20p scripts/session_dirs_util.sh': ('allow', 'allow'),
+    'python3 -m pytest tests/test_session_dirs_permission.py': ('allow', 'allow'),
+    'python3 -m pytest hooks/tests/test_env_configured_defaults.py -k session_dirs_ban_stays': ('allow', 'allow'),
+    'git add tests/test_session_dirs_permission.py': ('allow', 'allow'),
+    'git diff -- tests/test_session_dirs_permission.py': ('allow', 'allow'),
+    'git show HEAD:tests/test_session_dirs_permission.py': ('allow', 'allow'),
+    'head -40 tests/test_session_dirs_permission.py': ('allow', 'allow'),
+    'echo session_dirs': ('allow', 'allow'),
+    'rm -f /tmp/session_dirs_backup': ('ask', 'ask'),
+    'git diff HEAD~1 -- hooks/tests/test_obligation.py': ('allow', 'allow'),
+    'cp tests/test_session_dirs_permission.py /tmp/x.py': ('ask', 'ask'),
+    'less session_dirs.txt': ('deny', 'deny'),
+    'od -c session_dirs.txt': ('deny', 'deny'),
+    'xxd session_dirs.txt': ('deny', 'deny'),
+    'strings session_dirs.txt': ('deny', 'deny'),
+    'cut -c1-80 session_dirs.txt': ('deny', 'deny'),
+    'nl session_dirs.txt': ('deny', 'deny'),
+    'wc -l session_dirs.txt': ('deny', 'deny'),
+    'diff session_dirs.txt /dev/null': ('deny', 'deny'),
+    'base64 session_dirs.txt': ('deny', 'deny'),
+    'tac session_dirs.txt': ('deny', 'deny'),
+    'jq . session_dirs.txt': ('deny', 'deny'),
+    'grep -c "" session_dirs.txt': ('deny', 'deny'),
+    'rg -f session_dirs.txt x': ('deny', 'deny'),
+    'git grep -f session_dirs.txt': ('deny', 'deny'),
+    'git log -p -- session_dirs.txt': ('deny', 'deny'),
+    'git -C . show HEAD:session_dirs.txt': ('deny', 'deny'),
+    '/bin/cat session_dirs.txt': ('deny', 'deny'),
+    'command cat session_dirs.txt': ('deny', 'deny'),
+    'timeout 5 cat session_dirs.txt': ('deny', 'deny'),
+    'CAT session_dirs.txt': ('deny', 'ask'),
+    'python session_dirs.txt': ('deny', 'deny'),
+    'vi session_dirs.txt': ('deny', 'deny'),
+    'tar cf /tmp/a.tar session_dirs.txt': ('deny', 'deny'),
+    'rsync session_dirs.txt /tmp/': ('deny', 'deny'),
+    'install session_dirs.txt /tmp/': ('deny', 'deny'),
+    'paste session_dirs.txt': ('deny', 'deny'),
+    'while read l; do echo $l; done < session_dirs.txt': ('ask', 'ask'),
+    'git commit -m "x" -- session_dirs.txt': ('deny', 'deny'),
+    'cat session_dirs.t*': ('allow', 'deny'),
+    'cat session_dirs*': ('allow', 'allow'),
+    'cat session_dir?.txt': ('allow', 'allow'),
+    'cat session_*.txt': ('allow', 'allow'),
+    'python3 -c "open(\'session_dirs.t\'+\'xt\').read()"': ('allow', 'deny'),
+    'cat session_dirs.txt.bak': ('deny', 'deny'),
+    'echo x > session_dirs.txt': ('deny', 'deny'),
+    'grep pat session_dirs.txt': ('deny', 'deny'),
+    "git log --oneline -G 'session_dirs\\.txt'": ('allow', 'allow'),
+    'git log -S session_dirs.txt --oneline -- hooks/': ('deny', 'allow'),
+    'grep -rn "session_dirs.txt" docs/ hooks/ | head -5': ('deny', 'allow'),
+    "git commit -m 'docs: session_dirs.txt mention'": ('deny', 'allow'),
+    '/usr/bin/python3 -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    '/tmp/x-venv/bin/python -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    'env python3 -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    'timeout 5 python3 -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    'FOO=1 python3 -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    "sh -c 'cat session_dirs.txt'": ('deny', 'deny'),
+    "bash <<'EOF'\ncat session_dirs.txt\nEOF": ('allow', 'allow'),
+    "python3 - <<'EOF'\nopen('session_dirs.txt','w')\nEOF": ('allow', 'allow'),
+    'cd docs && python3 -c "open(\'session_dirs.txt\',\'w\')"': ('deny', 'deny'),
+    "awk '{print}' session_dirs.txt": ('deny', 'deny'),
+    'node -e "require(\'fs\').writeFileSync(\'session_dirs.txt\',\'x\')"': ('deny', 'deny'),
+    'xargs -a session_dirs.txt echo': ('deny', 'deny'),
+    'git add session_dirs.txt': ('deny', 'deny'),
+    'git show HEAD:session_dirs.txt': ('deny', 'deny'),
+    'git log --output=session_dirs.txt': ('deny', 'deny'),
+    'git commit -F session_dirs.txt': ('deny', 'deny'),
+    'git commit -m x --file=session_dirs.txt': ('deny', 'deny'),
+    'cp session_dirs.txt /tmp/x': ('deny', 'deny'),
+    'md5sum session_dirs.txt': ('deny', 'deny'),
+    'grep pat session_dirs.tx?': ('allow', 'allow'),
+    'for f in session_dirs.tx?; do cat $f; done': ('ask', 'deny'),
+    'git log --patch -- session_dirs.txt': ('deny', 'deny'),
+    'git log -p session_dirs.txt': ('deny', 'deny'),
+    'git log -- session_dirs.txt': ('deny', 'deny'),
+    'git commit -m x -- session_dirs.txt': ('deny', 'deny'),
+    'git commit -m x -i session_dirs.txt': ('deny', 'deny'),
+    'git commit -m x -o session_dirs.txt': ('deny', 'deny'),
+    'git commit -a -m x -- session_dirs.txt': ('deny', 'deny'),
+    'git commit -a -m "docs: mention session_dirs.txt"': ('deny', 'allow'),
+    'git commit -m x session_dirs.txt': ('deny', 'allow'),
+    'git -C . diff -- session_dirs.txt': ('deny', 'deny'),
+    'git -C . add session_dirs.txt': ('deny', 'deny'),
+    'git -C . log -p -- session_dirs.txt': ('deny', 'deny'),
+    'more session_dirs.txt': ('deny', 'deny'),
+    'vim session_dirs.txt': ('deny', 'deny'),
+    'nano session_dirs.txt': ('deny', 'deny'),
+    'git log --pretty=oneline -S session_dirs.txt': ('deny', 'allow'),
+    'git log -S session_dirs.txt -p': ('deny', 'allow'),
+    'cat session_dirs?txt': ('allow', 'deny'),
+    'python3 -c "open(\'session_dirs\'+\'.txt\').read()"': ('allow', 'allow'),
 }
 
 WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", "noglob"}
@@ -220,7 +349,9 @@ def texts(cmd: str) -> list[str]:
     """The texts a deny rule is checked against, as modelled: the whole command, each subcommand at the
     documented separators, each `$(...)` body, leading assignments and wrappers stripped, a path-qualified
     command word reduced to its name; each with and without quotes. A superset of what the CLI matches,
-    so a must-pass command that no entry matches here is matched by none there."""
+    so a must-pass command that no entry matches here is matched by none there. A heredoc body is dropped
+    first: the CLI does not match it (measured)."""
+    cmd = re.sub(r"(<<-?\s*['\"]?(\w+)['\"]?[^\n]*)\n.*?\n\2(?=\n|$)", r"\1", cmd, flags=re.S)
     out, todo = [], [cmd] + re.findall(r"\$\(([^()]*)\)", cmd)
     for t in todo:
         for part in re.split(r"\|\||&&|\|&|[;|&\n]", t):
@@ -238,7 +369,6 @@ def texts(cmd: str) -> list[str]:
 def bash_denies(deny: list[str], cmd: str) -> list[str]:
     return [e for e in deny if e.startswith("Bash(") and any(bash_rule_matches(e, t) for t in texts(cmd))]
 
-
 # ------------------------------------------------------------------ the entries
 def test_the_blanket_mention_deny_is_gone_and_the_file_rules_stay():
     deny = _deny()
@@ -251,11 +381,14 @@ def test_the_session_dirs_bash_entries_are_exactly_these():
 
 
 @pytest.mark.parametrize("entry", sorted(ENTRIES))
-def test_each_entry_refuses_its_example_and_no_search_or_commit_form(entry):
+def test_each_entry_refuses_its_example_and_no_search_commit_or_lookalike_form(entry):
     assert entry in _deny()
     assert any(bash_rule_matches(entry, t) for t in texts(ENTRIES[entry])), ENTRIES[entry]
-    hit = [c for c in MUST_PASS if any(bash_rule_matches(entry, t) for t in texts(c))]
-    assert not hit, f"{entry} matches allowed forms {hit}"
+    others = [e for e in ENTRIES if e != entry]
+    assert not any(bash_rule_matches(e, t) for e in others for t in texts(ENTRIES[entry])
+                   if e.split("session_dirs")[0] == entry.split("session_dirs")[0]), "the two tails overlap"
+    hit = [c for c in MUST_PASS + BASE_KEPT if any(bash_rule_matches(entry, t) for t in texts(c))]
+    assert not hit, f"{entry} matches {hit}"
 
 
 # ------------------------------------------------------------------ must pass / must refuse
@@ -271,6 +404,12 @@ def test_the_blanket_is_what_refused_the_mentions():
         assert bash_rule_matches(BLANKET, cmd) == (MEASURED[cmd][0] == "deny"), cmd
 
 
+@pytest.mark.parametrize("cmd", BASE_KEPT)
+def test_a_name_that_merely_contains_session_dirs_keeps_its_base_decision(cmd):
+    assert not bash_denies(_deny(), cmd)
+    assert MEASURED[cmd][1] == MEASURED[cmd][0] != "deny"
+
+
 @pytest.mark.parametrize("cmd", sorted(MUST_REFUSE))
 def test_reading_writing_or_executing_stays_refused(cmd):
     deny = _deny()
@@ -281,23 +420,35 @@ def test_reading_writing_or_executing_stays_refused(cmd):
     assert MEASURED[cmd][1] == "deny"
 
 
+@pytest.mark.parametrize("cmd", REGAINED)
+def test_a_form_the_base_denied_is_denied_again(cmd):
+    assert bash_denies(_deny(), cmd), cmd
+    assert MEASURED[cmd] == ("deny", "deny")
+
+
+def test_every_base_deny_stays_denied_but_the_recorded_exceptions():
+    lost = {c: a for c, (b, a) in MEASURED.items() if b == "deny" and a != "deny" and c not in MUST_PASS}
+    assert lost == NOT_DENIED_NOW
+
+
 def test_measured_after_decisions_agree_with_the_model():
     deny = _deny()
     for cmd, (_, after) in MEASURED.items():
-        if cmd in HOOK_ONLY or cmd in NO_LAYER:
-            continue
-        file_rule = {READ_RULE, EDIT_RULE} & set(MUST_REFUSE.get(cmd, []))
         if after == "allow":
             assert not bash_denies(deny, cmd), cmd
-        else:  # refused by a Bash entry, or by the Read/Edit rule on a file operand (measured)
-            assert after == "deny" and (bash_denies(deny, cmd) or file_rule), cmd
+        elif after == "deny" and not bash_denies(deny, cmd):
+            # a file operand, `-f FILE` or redirect target the CLI recognizes: the Read/Edit rule
+            assert READ_RULE in deny and EDIT_RULE in deny, cmd
+        elif after == "ask":
+            assert not bash_denies(deny, cmd), cmd
 
 
-def test_hook_only_forms_are_not_matched_by_any_entry():
+def test_hook_only_and_no_layer_forms_are_recorded_as_such():
     """A heredoc body is not in the text the CLI matches (measured), so these stay with the bash-safety
-    hook; they were allowed at the permission layer on the base too."""
+    hook; they were allowed at the permission layer on the base too, as were the globs in NO_LAYER."""
     for cmd in HOOK_ONLY + NO_LAYER:
         assert MEASURED[cmd] == ("allow", "allow"), cmd
+        assert not bash_denies(_deny(), cmd), cmd
 
 
 # ------------------------------------------------------------------ live re-measurement (opt-in)
