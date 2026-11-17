@@ -921,51 +921,204 @@ def service_rules(command, stripped, env):
 
 # ── Removal policy (BS-32, BS-33) ────────────────────────────────────────────
 
-# Degraded question 3: a line that ends on an option is plain only when none of its commands names a program
-# whose missing operand could be code or a command (a shell's -c, env -S, an interpreter's -e, a wrapper's
-# command), or a removal program. Any word in any command of the line counts, so `nice bash -c`,
-# `docker run img sh -c` and `bash -c; ls -la` stay refused; a word the tokenizer cannot read refuses.
+# Degraded question 3: a line that ends on an option is plain only when every command on it is one the analyzer's
+# own tables (lib/bash_execution_boundary.py: SHELLS, INTERPRETERS, AWKS, WRAPPERS, REMOVAL_EXES, its `_h_*`
+# handlers, INERT_ARGV_CONSUMERS and SELECTOR_DATA_OPTIONS) prove cannot be missing an operand that is code, a
+# command or a value, and no word on it names a program from those tables or the degraded-only extras below. The
+# tables are read by importing the module, which runs no analysis; if the import fails or hangs, every such line
+# refuses. The degraded path may be stricter than the analyzer, never laxer.
 DEGRADED_TRAILING_OPTION = re.compile(r"(^|[ \t])[-+][A-Za-z0-9=_-]*[ \t]*$")
-_DG_SHELL = re.compile(r"(ba|da|z|k|mk|pdk|ya|tc|c|a|rba|lk|po|fi)?sh[0-9.]*|fish")
-_DG_INTERP = re.compile(r"(python|pypy|ipython|perl|ruby|irb|node|nodejs|deno|bun|php|lua|luajit|tclsh|wish|Rscript|"
-                        r"julia|osascript|expect|jshell|g?awk|mawk|nawk|g?sed)[0-9.]*")
-_DG_PROGRAMS = frozenset(
-    "sudo doas su runuser env exec command builtin eval source nohup nice ionice time timeout setsid xargs parallel "
-    "chroot unshare nsenter taskset chrt stdbuf flock watch script systemd-run at batch busybox toybox strace ltrace "
-    "gdb fakeroot firejail bwrap proot npx bunx pnpx uvx pipx trap coproc "
-    "rm rmdir unlink shred srm wipe wipefs truncate rsync dd".split())
-_DG_FIND_ACTIONS = frozenset("-exec -execdir -ok -okdir -delete -fprint -fprint0 -fprintf -fls".split())
+# Degraded-only extras the analyzer does not model: shells, interpreters and editors with a code option, exec
+# wrappers, and GNU g-prefixed removal programs.
+_DG_SHELL_RE = re.compile(r"(ba|da|z|k|mk|pdk|ya|tc|c|a|rba|lk|po|fi|ok|o|y|xon)?sh[0-9.]*|fish|pwsh|powershell|"
+                          r"xonsh|elvish|nu|rc")
+_DG_INTERP_RE = re.compile(r"(python|pypy|ipython|perl|ruby|irb|node|nodejs|deno|bun|php|lua|luajit|tclsh|wish|"
+                           r"Rscript|R|julia|osascript|expect|jshell|g?awk|mawk|nawk|g?sed|vim?|nvim|g?vim|ex|emacs|"
+                           r"guile|racket|sbcl|clisp|elixir|iex|erl|escript|qjs|octave|gnuplot|cmake|groovy|scala|"
+                           r"clojure|clj|lldb|gdb|kotlin|jrunscript|jshell|ghci|runghc|tcc)[0-9.]*")
+_DG_EXTRA_PROGRAMS = frozenset(
+    "sudo doas su runuser pkexec env exec command builtin eval source nohup nice ionice time timeout setsid xargs "
+    "parallel chroot unshare nsenter taskset chrt stdbuf unbuffer flock watch script systemd-run at batch busybox "
+    "toybox strace ltrace fakeroot firejail bwrap proot sg chpst npx bunx pnpx uvx pipx trap coproc xterm "
+    "entr nix nix-shell direnv rm rmdir unlink shred srm wipe wipefs truncate rsync dd grm grmdir gunlink gshred "
+    "gtruncate".split())
+_DG_FIND_EXTRA = frozenset("-fprint -fprint0 -fprintf -fls".split())
+_DG_FD_EXEC = frozenset("-x -X --exec --exec-batch".split())
 _DG_INFO = frozenset(("--version", "--help"))
 _DG_CODE_MODULES = frozenset("code runpy pdb timeit cProfile profile trace idlelib doctest IPython".split())
+# Handler-owned heads given a narrower reading below instead of a blanket refusal; any other handler refuses.
+_DG_READ_HANDLERS = frozenset(("git", "docker", "kubectl", "find", "hash", "ssh"))
+_DG_DOCKER_EXEC = frozenset("run exec create start attach debug cp commit".split())
+_DG_KUBECTL_EXEC = frozenset("exec run debug attach cp port-forward proxy apply replace patch".split())
+_DG_GIT_EXEC = frozenset("clean rm rebase difftool mergetool filter-branch filter-repo daemon instaweb "
+                         "send-email".split())
+_DG_TABLES = None
 
 
-def _degraded_command_is_plain(words):
-    """One simple command (assignments stripped): no shell, interpreter, wrapper or removal program in any word.
+def _degraded_tables():
+    """The analyzer's static tables, or None: a failed or slow import refuses every trailing-option line."""
+    global _DG_TABLES
+    if _DG_TABLES is None:
+        def load():
+            import bash_execution_boundary as eb
+            handlers = frozenset(n[3:] for n in dir(eb.Analyzer) if n.startswith("_h_"))
+            return {
+                "eb": eb, "handlers": handlers, "shells": frozenset(eb.SHELLS),
+                "interps": frozenset(eb.INTERPRETERS), "awks": frozenset(eb.AWKS),
+                "wrappers": frozenset(eb.WRAPPERS), "removal": frozenset(eb.REMOVAL_EXES),
+                "consumers": eb.INERT_ARGV_CONSUMERS, "selectors": eb.SELECTOR_DATA_OPTIONS,
+                "git_global": eb.GIT_GLOBAL, "git_subs": frozenset(eb.GIT_SUBCOMMANDS),
+                "git_forward": frozenset(eb.GIT_PAYLOAD_FORWARDING_SUBCOMMANDS),
+                "docker_global": eb.DOCKER_GLOBAL, "docker_rm": frozenset(eb.DOCKER_RESOURCE_RM),
+                "find_ops": frozenset(eb.FIND_EXEC_OPS) | frozenset(eb.FIND_DELETE_OPS) | _DG_FIND_EXTRA,
+                "drop": frozenset(eb.Analyzer.DROP), "header": frozenset(eb.Analyzer.HEADER),
+            }
+        try:
+            _DG_TABLES = with_alarm(2, load)
+        except BaseException:  # noqa: BLE001 - an analyzer module that will not even import: refuse
+            _DG_TABLES = False
+    return _DG_TABLES or None
 
-    `<program> --version|--help` alone is plain for any program, `<interpreter> -V` alone for an interpreter, and
-    `python… -m <module> …` is plain when the words after the module are and the module does not run code it is
-    handed (code, runpy, pdb, timeit, ...)."""
+
+def _dg_handler(t, base):
+    return base.replace("-", "_").replace(".", "_") in t["handlers"]
+
+
+def _dg_sensitive(t, base):
+    """A program whose argv or missing operand can be code, a command, or a removal."""
+    return bool(base in t["shells"] or base in t["interps"] or base in t["awks"] or base in t["wrappers"]
+                or base in t["removal"] or (_dg_handler(t, base) and base not in _DG_READ_HANDLERS)
+                or _DG_SHELL_RE.fullmatch(base) or _DG_INTERP_RE.fullmatch(base) or base in _DG_EXTRA_PROGRAMS)
+
+
+def _dg_missing_value(model, word):
+    """`word`, last in its command, is a declared exec or data option of an inert consumer, so its value is missing."""
+    eb = _DG_TABLES["eb"]
+    takes = model["exec"] | model["val"]
+    if word.startswith("--"):
+        return "=" not in word and eb._resolve_ic_long(word, model) in takes
+    if len(word) > 1 and word[0] in "-+":
+        for j in range(1, len(word)):
+            ch = word[0] + word[j]
+            if ch not in model["bool"]:
+                return ch in takes and j == len(word) - 1
+    return False
+
+
+def _dg_names_exec_option(model, word):
+    """Any use of a declared exec option (`man -P`, `sort --compress-program=`): degraded mode refuses it."""
+    eb = _DG_TABLES["eb"]
+    if word.startswith("--"):
+        return eb._resolve_ic_long(word.split("=", 1)[0], model) in model["exec"]
+    if len(word) > 1 and word[0] in "-+":
+        for j in range(1, len(word)):
+            ch = word[0] + word[j]
+            if ch not in model["bool"]:
+                return ch in model["exec"]
+    return False
+
+
+def _dg_spec_reads(spec, words):
+    """Walk `words` as options of a _spec: the index of the first operand, or None on a missing or unknown option."""
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w == "--":
+            return i + 1
+        if not w.startswith("-") or w == "-":
+            return i
+        name = w.split("=", 1)[0]
+        if w.startswith("--"):
+            if name in spec["val"] and "=" not in w:
+                if i + 1 >= len(words):
+                    return None
+                i += 2
+                continue
+            if name not in spec["bool"] and name not in spec["val"]:
+                return None
+            i += 1
+            continue
+        if w[:2] in spec["val"]:
+            if len(w) == 2:
+                if i + 1 >= len(words):
+                    return None
+                i += 1
+        elif w not in spec["bool"]:
+            return None
+        i += 1
+    return i
+
+
+def _dg_read_handler(t, base, words):
+    """git, docker, kubectl, find, hash and ssh: the forms degraded mode can read as plain."""
+    if base == "git":
+        i = _dg_spec_reads(t["git_global"], words[1:])
+        if i is None or i + 1 >= len(words):
+            return i is not None  # `git --version`: global options only
+        sub = words[1 + i]
+        return sub in t["git_subs"] and sub not in t["git_forward"] and sub not in _DG_GIT_EXEC
+    if base == "docker":
+        i = _dg_spec_reads(t["docker_global"], words[1:])
+        return i is not None and not (
+            set(words[1 + i:]) & (_DG_DOCKER_EXEC | t["docker_rm"]))
+    if base == "kubectl":
+        return not set(words[1:]) & _DG_KUBECTL_EXEC
+    if base == "find":
+        return not set(words[1:]) & t["find_ops"]
+    if base == "hash":
+        return all(w in ("-r", "-l", "-t", "-d") for w in words[1:])
+    return len(words) == 2 and words[1] == "-V"  # ssh: only its version query
+
+
+def _degraded_command_is_plain(t, words):
+    """One simple command, assignments and reserved words stripped."""
+    while words and words[0] in t["drop"]:
+        words = words[1:]
     if not words:
+        return True
+    if words[0] in t["header"] or words[0] == ".":
         return False
     base = [w.rsplit("/", 1)[-1] for w in words]
-    if len(words) == 2 and (words[1] in _DG_INFO or (words[1] == "-V" and _DG_INTERP.fullmatch(base[0]))):
+    head = base[0]
+    if len(words) == 2 and words[1] in _DG_INFO and not (head in t["wrappers"] or _dg_handler(t, head)
+                                                          or head in t["removal"]):
         return True
-    if words[0] in (".", "source"):
-        return False
-    rest = base
-    if re.fullmatch(r"(python|pypy)[0-9.]*", base[0]) and len(words) > 2 and words[1] == "-m" \
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", words[2]) and words[2] not in _DG_CODE_MODULES:
+    if len(words) == 2 and words[1] == "-V" and (head in t["interps"] or re.fullmatch(r"python[0-9.]*", head)):
+        return True
+    rest = base[1:]
+    if re.fullmatch(r"(python|pypy)[0-9.]*", head) and len(words) > 2 and words[1] == "-m" \
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", words[2]) \
+            and words[2].split(".", 1)[0] not in _DG_CODE_MODULES:
         rest = base[3:]
-    if any(_DG_SHELL.fullmatch(b) or _DG_INTERP.fullmatch(b) or b in _DG_PROGRAMS for b in rest):
+    elif head in _DG_READ_HANDLERS:
+        if not _dg_read_handler(t, head, words):
+            return False
+    elif _dg_sensitive(t, head):
         return False
-    if "find" in base and _DG_FIND_ACTIONS.intersection(words):
+    elif head == "fd" and _DG_FD_EXEC.intersection(words):
         return False
-    return not ("git" in base and "clean" in base)
+    elif head in t["consumers"]:
+        model = t["consumers"][head]
+        if _dg_missing_value(model, words[-1]) or any(_dg_names_exec_option(model, w) for w in words[1:]):
+            return False
+    if words[-1] in t["selectors"].get(head, ()):
+        return False
+    for w in rest:
+        if _dg_sensitive(t, w) and w not in _DG_READ_HANDLERS:
+            return False
+        if "=" in w:  # `-c core.pager=sh`, `--to-command=sh`: a value naming a program
+            value = w.split("=", 1)[1].split()
+            if value and _dg_sensitive(t, value[0].rsplit("/", 1)[-1]):
+                return False
+    return True
 
 
 def degraded_trailing_option_is_plain(line):
     """True when a line that ends on an option is provably plain (see _degraded_command_is_plain)."""
     import shlex
+    t = _degraded_tables()
+    if t is None:
+        return False
     try:
         lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -975,20 +1128,33 @@ def degraded_trailing_option_is_plain(line):
         return False
     if not tokens or not DEGRADED_TRAILING_OPTION.search(" " + tokens[-1]):
         return False
-    commands, words = [], []
+    commands, words, skip = [], [], False
     for tok in tokens:
         if tok and set(tok) <= set(";&|()"):
             commands.append(words)
-            words = []
-        elif not (tok and set(tok) <= set("<>&")):
+            words, skip = [], False
+        elif tok and set(tok) <= set("<>&"):
+            if words and words[-1].isdigit():
+                words.pop()  # an io-number: `2>&1` is not an argument
+            skip = True
+        elif skip:
+            skip = False  # the redirection's target is not an argument either
+        else:
             words.append(tok)
     commands.append(words)
     for words in commands:
         while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0]):
             words = words[1:]
-        if words and not _degraded_command_is_plain(words):
+        if words and not _degraded_command_is_plain(t, words):
             return False
     return True
+
+
+def degraded_refuses(command, rmref):
+    """The degraded fallback's verdict: True unless the command is provably plain (see removal_policy)."""
+    return bool(grep(rmref, command) or grep(r"[\]$`\[?*{}!]|<<", command) or grep(r"\\$", command)
+                or any(DEGRADED_TRAILING_OPTION.search(ln) and not degraded_trailing_option_is_plain(ln)
+                       for ln in lines_of(command)) or grep(r"[<>|&;][ \t]*$", command))
 
 
 def removal_policy(payload_text, command):
@@ -998,7 +1164,7 @@ def removal_policy(payload_text, command):
     command passes only if it is provably plain: no removal reference (lib/pol_degraded_removal_reference.ere), no
     assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), no line ending on a
     dangling operator or redirect, and no line ending on an option unless degraded_trailing_option_is_plain()
-    proves that line's commands name no shell, interpreter, exec wrapper or removal program.
+    proves it plain from the analyzer's own tables.
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
     decision = ""
@@ -1045,9 +1211,7 @@ def removal_policy(payload_text, command):
     if not rmref:
         refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                    f"missing or empty. Denied conservatively.", f"Command: {command}")
-    if grep(rmref, command) or grep(r"[\]$`\[?*{}!]|<<", command) or grep(r"\\$", command) \
-            or any(DEGRADED_TRAILING_OPTION.search(ln) and not degraded_trailing_option_is_plain(ln)
-                   for ln in lines_of(command)) or grep(r"[<>|&;][ \t]*$", command):
+    if degraded_refuses(command, rmref):
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
                    "usable verdict, and this command is not provably plain. Denied conservatively.",
                    f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; never widen this "

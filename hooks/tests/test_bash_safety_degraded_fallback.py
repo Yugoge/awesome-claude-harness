@@ -4,10 +4,13 @@ When the execution-boundary analyzer gives no verdict (timeout, memory ceiling, 
 line ending on an option, which refused 143 of the everyday commands below (`git status --short`, `date -u`,
 `python3 --version`). A trailing option is now plain unless a command of that line names a shell, an interpreter, an
 exec wrapper or a removal program (degraded_trailing_option_is_plain). Every form whose missing operand is the danger,
-every removal and every assembly channel stays refused. All hook runs use a throwaway HOME and global git config.
+every removal and every assembly channel stays refused. The refusal set is read from the analyzer's own tables, and
+a generated differential pins that the fallback is never laxer than the live analyzer. All hook runs use a throwaway
+HOME and global git config.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +23,9 @@ HOOKS_DIR = os.path.abspath(os.path.join(HERE, ".."))
 HOOK = os.path.join(HOOKS_DIR, "pretool-bash-safety.sh")
 sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
 
+import bash_execution_boundary as eb  # noqa: E402
 import bash_safety_rules as R  # noqa: E402
+from shell_parse import WRAPPERS  # noqa: E402
 
 DEGRADED = "removal-policy FAIL-CLOSED"
 MODES = {"timeout": {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "0.001s"}, "memory": {"CLAUDE_HOOK_BOUNDARY_MEM_KB": "4096"}}
@@ -72,14 +77,120 @@ STILL_REFUSED = [
 ]
 
 
-def run_hook(command, **env_extra):
+# Refused by the live analyzer (missing_option_value) and, before the table-derived rule, allowed by the fallback.
+ANALYZER_REFUSED_EXEC_OPTIONS = [
+    "sg wheel -c", "chpst -u", "man -P", "man --pager", "man -B", "man -H", "man --browser", "man --html",
+    "rg --pre", "rg --hostname-bin", "ack --pager", "ag --pager", "apropos -P", "apropos --pager", "whatis -P",
+    "whatis --pager", "compgen -C", "compgen -F", "diff3 --diff-program", "sdiff --diff-program",
+    "sort --compress-program", "split --filter", "ugrep --filter", "ugrep --pager", "grep -e", "rg -e",
+    "git -c", "git -C", "docker run -v", "watch -n", "flock -w", "nice -n", "timeout -s", "sudo -u", "env -u",
+]
+
+# Degraded-only refusals the live analyzer does not make: unmodelled shells, interpreters and wrappers, a `-c
+# key=value` or `--to-command=` naming a shell, g-prefixed removal programs, and python -m on a code-running package.
+DEGRADED_ONLY_REFUSED = [
+    "pwsh -c", "oksh -c", "osh -c", "ysh -c", "xonsh -c", "elvish -c", "nu -c", "rc -c", "R -e", "vim -c",
+    "nvim -c", "ex -c", "emacs --eval", "guile -c", "racket -e", "sbcl --eval", "elixir -e", "erl -eval", "qjs -e",
+    "octave --eval", "gnuplot -e", "cmake -P", "groovy -e", "scala -e", "clojure -e", "lldb -o", "pkexec -u",
+    "unbuffer -p", "fd foo -x", "fd foo --exec", "nix develop -c", "xterm -e", "entr -s",
+    "git -c core.pager=sh log -1", "git -c core.pager=/bin/bash log --oneline", "tar --to-command=sh -x",
+    "grm x -f", "gunlink x -v", "gshred x -u", "gtruncate x -s", "grmdir d -p", "cmake -E remove_directory d -v",
+    "cmake -E remove x -v", "python3 -m code.interact -i", "python3 -m pdb.x -c", "python3 -m runpy.foo -x",
+]
+
+
+def analyzer_corpus():
+    """Every analyzer-known program with each declared and each common option ending the line, in several shapes."""
+    common = ("-c -e -E -p -x -X -s -S -u -n -o -f -i -C -P -B -H -F -a -t -w -k -m -r -v -V -l -d -h -I -T -0 - -- "
+              "--help --version --exec --eval --pager --filter --command --to-command --pre --browser --html").split()
+    progs = {}
+    for p, m in eb.INERT_ARGV_CONSUMERS.items():
+        progs.setdefault(p, set()).update(m["bool"] | m["exec"] | m["val"])
+    for p, v in WRAPPERS.items():
+        progs.setdefault(p, set()).update((v[0]["bool"] | v[0]["val"]) if v else ())
+    for p in eb.SHELLS:
+        progs.setdefault(p, set()).update({"-" + c for c in eb.SHELL_SHORT_BOOL} | eb.SHELL_LONG_BOOL
+                                          | eb.SHELL_LONG_VAL)
+    for p, flags in eb.INTERPRETERS.items():
+        progs.setdefault(p, set()).update(flags)
+    for p in eb.AWKS:
+        progs.setdefault(p, set()).update(("-f", "--file", "-v", "--assign", "-F"))
+    for n in dir(eb.Analyzer):
+        if n.startswith("_h_"):
+            progs.setdefault(n[3:].replace("_", "-"), set())
+    for p, opts in eb.SELECTOR_DATA_OPTIONS.items():
+        progs.setdefault(p, set()).update(opts)
+    for p in eb.REMOVAL_EXES:
+        progs.setdefault(p, set())
+    progs.setdefault("git", set()).update(eb.GIT_GLOBAL["bool"] | eb.GIT_GLOBAL["val"])
+    progs.setdefault("docker", set()).update(eb.DOCKER_GLOBAL["bool"] | eb.DOCKER_GLOBAL["val"])
+    cmds = set(ANALYZER_REFUSED_EXEC_OPTIONS)
+    for p, opts in progs.items():
+        for o in opts | set(common):
+            cmds.update((f"{p} {o}", f"{p} x {o}", f"/usr/bin/{p} {o}", f"ls -la; {p} {o}", f"FOO=1 {p} x {o}"))
+    for sub in eb.GIT_SUBCOMMANDS:
+        for o in set(common) | set(eb.GIT_DATA_OPTIONS):
+            cmds.update((f"git {sub} {o}", f"git -C . {sub} x {o}"))
+    for sub in "run exec create ps images logs build compose container image volume network system inspect".split():
+        for o in set(common) | eb.DOCKER_RUN["bool"] | eb.DOCKER_RUN["val"] | eb.DOCKER_EXEC["val"]:
+            cmds.update((f"docker {sub} {o}", f"docker {sub} img {o}"))
+    for sub in "get exec logs describe run apply delete debug attach cp".split():
+        for o in common:
+            cmds.update((f"kubectl {sub} {o}", f"kubectl {sub} pod {o}"))
+    return sorted(cmds)
+
+
+def _rmref():
+    with open(os.path.join(HOOKS_DIR, "lib", "pol_degraded_removal_reference.ere"), encoding="utf-8") as fh:
+        return next(ln.strip() for ln in fh if ln.strip() and not ln.startswith("#"))
+
+
+def test_degraded_fallback_is_never_laxer_than_the_live_analyzer():
+    rmref = _rmref()
+    corpus = analyzer_corpus()
+    refused = [c for c in corpus if not eb.analyze(c)["allowed"]]
+    assert len(corpus) > 20000 and len(refused) > 1000, (len(corpus), len(refused))
+    laxer = [c for c in refused if not R.degraded_refuses(c, rmref)]
+    assert not laxer, "%d analyzer-refused forms pass the degraded fallback: %r" % (len(laxer), laxer[:20])
+
+
+@pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED)
+def test_exec_option_and_unmodelled_program_forms_refuse_in_degraded_mode(command):
+    assert R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_analyzer_refused_exec_options_refuse_end_to_end(mode):
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])), ANALYZER_REFUSED_EXEC_OPTIONS))
+    allowed = [c for c, code, _err in results if code != 2]
+    assert not allowed, (mode, allowed)
+
+
+@pytest.mark.parametrize("body", [None, "import sys\nsys.exit(0)\n", "raise RuntimeError('x')\n",
+                                  "import time\ntime.sleep(30)\n"])
+def test_unimportable_analyzer_tables_refuse_every_trailing_option(tmp_path, body):
+    """No tables, no proof: an analyzer module that is absent, exits, raises or hangs on import refuses the line."""
+    dst = tmp_path / "hooks"
+    shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    target = dst / "lib" / "bash_execution_boundary.py"
+    if body is None:
+        target.unlink()
+    else:
+        target.write_text(body, encoding="utf-8")
+    code, err = run_hook("git status --short", hook=str(dst / "pretool-bash-safety.sh"),
+                         CLAUDE_HOOK_BOUNDARY_TIMEOUT="1s")
+    assert code == 2 and DEGRADED in err, err
+
+
+def run_hook(command, hook=None, **env_extra):
     home = tempfile.mkdtemp(prefix="degraded-home-")
     gitconfig = os.path.join(home, "gitconfig")
     open(gitconfig, "w").close()
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
     env.update(HOME=home, GIT_CONFIG_GLOBAL=gitconfig, **env_extra)
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    p = subprocess.run(["bash", HOOK], input=payload, capture_output=True, text=True, cwd=home, env=env)
+    p = subprocess.run(["bash", hook or HOOK], input=payload, capture_output=True, text=True, cwd=home, env=env)
     return p.returncode, p.stderr
 
 
