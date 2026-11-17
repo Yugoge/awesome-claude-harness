@@ -254,8 +254,8 @@ def test_a_running_git_working_tree_change_is_refused(sandbox, command, marker):
     assert marker in r.stderr, (command, r.stderr)
 
 
-# The quote-neutralised pass scans git global options only from a `git` in command position, over a bounded number
-# of options: a long run of option words holding `git` (-Pgit, a=bgit) costs linear time, not quadratic.
+# The quote-neutralised pass scans git global options only from a `git` that starts a word, never again from a `git`
+# inside an option run it already walked: a long run of option words holding `git` (-Pgit, a=bgit) costs linear time.
 @pytest.mark.parametrize("command", ["git" + " -Pgit" * 10000 + " !", "git" + " -c a=bgit" * 5000])
 def test_quote_neutralised_option_scan_is_linear(command):
     from lib.bash_safety_rules import _worktree_raw_fallback
@@ -270,4 +270,59 @@ def test_shell_payload_with_long_option_run_is_fast(sandbox):
     r = run(sandbox, command)
     elapsed = time.monotonic() - start
     assert r.returncode in (0, 2), r.stderr
+    assert elapsed < 2.0, elapsed
+
+
+# The option run between git and the subcommand has no length cap: a stash behind any number of global options in a
+# shell payload is refused, as the classifier view of the lane head refused it (each case through the real hook).
+LONG_OPTION_RUNS = [
+    ("P-x33", "fish -c 'git" + " -P" * 33 + " stash'", STASH),
+    ("C-a-x33", "fish -c 'git" + " -C a" * 33 + " stash'", STASH),
+    ("c-ab-x40-push", "fish -c 'git" + " -c a=b" * 40 + " stash push'", STASH),
+    ("c-ab-50KB", "fish -c 'git" + " -c a=b" * 7200 + " stash'", STASH),
+    ("Pgit-x3000", "fish -c 'git" + " -Pgit" * 3000 + " stash'", STASH),
+    ("c-abgit-x3000", "fish -c 'git" + " -c a=bgit" * 3000 + " stash'", STASH),
+    ("C-git-x2000", "fish -c 'git" + " -C git" * 2000 + " stash'", STASH),
+    ("checkout-x40", "fish -c 'git" + " -C a" * 40 + " checkout HEAD -- .'", CHECKOUT),
+    ("restore-x40", "fish -c 'git" + " -P" * 40 + " restore --source=HEAD -- src/'", RESTORE),
+]
+
+
+@pytest.mark.parametrize("command,marker", [(c, m) for _i, c, m in LONG_OPTION_RUNS],
+                         ids=[i for i, _c, _m in LONG_OPTION_RUNS])
+def test_long_global_option_run_before_the_subcommand_is_refused(sandbox, command, marker):
+    r = run(sandbox, command)
+    assert r.returncode == 2, r.stderr[-300:]
+    assert marker in r.stderr, r.stderr[-300:]
+
+
+@pytest.mark.parametrize("command", ["fish -c 'git" + " -P" * 33 + " stash list'",
+                                     "fish -c 'git" + " -c a=b" * 40 + " stash show'",
+                                     "fish -c 'git" + " -Pgit" * 3000 + "'",
+                                     "fish -c 'git" + " -c a=bgit" * 3000 + "'"],
+                         ids=["P-x33-list", "c-ab-x40-show", "Pgit-x3000-no-sub", "c-abgit-x3000-no-sub"])
+def test_long_global_option_run_before_a_safe_or_no_subcommand_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, r.stderr[-300:]
+
+
+@pytest.mark.parametrize("command,hit", [("git" + " -C git" * 10000, None),
+                                         ("fish -c 'git" + " -C git" * 10000 + "'", None),
+                                         ("git" + " -P" * 20000 + " stash", "bare"),
+                                         ("fish -c 'git" + " -P" * 20000 + " stash'", "bare")],
+                         ids=["C-git-x10000", "fish-C-git-x10000", "P-x20000-stash", "fish-P-x20000-stash"])
+def test_uncapped_option_scan_is_linear(command, hit):
+    from lib.bash_safety_rules import _worktree_raw_fallback
+    start = time.monotonic()
+    got = _worktree_raw_fallback(command.replace("'", " "), globals_=True)
+    assert time.monotonic() - start < 1.0
+    assert [k for k, v in got.items() if v] == ([hit] if hit else [])
+
+
+def test_shell_payload_with_a_very_long_option_run_is_refused_fast(sandbox):
+    command = "fish -c 'git" + " -P" * 20000 + " stash'"
+    start = time.monotonic()
+    r = run(sandbox, command)
+    elapsed = time.monotonic() - start
+    assert r.returncode == 2 and STASH in r.stderr, r.stderr[-300:]
     assert elapsed < 2.0, elapsed

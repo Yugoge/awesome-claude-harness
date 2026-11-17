@@ -1393,22 +1393,71 @@ def _restore_wide_from_ref(args):
     return source and (worktree or not staged)
 
 
-# Git global options the quote-neutralised worktree pass reads between git and the subcommand.
-_WORKTREE_GOPT_MAX = 32
+def _worktree_global_scan(command):
+    """The GC_GOPT reading of `git <global options> <subcommand>`, as a single left-to-right token scan with no cap.
+
+    From each git word the scan walks the option run: an option word (-P, --no-pager, --git-dir=x ...), a value-shaped
+    word (k=v, a path, anything holding a GC_VMARK character), or the plain word after a value-taking option
+    (-C x, -c k=v, --git-dir x ...). Every word reached is a possible subcommand, as each is for the GC_GOPT regex
+    (`-C stash` reads both as an option alone before `stash` and as -C with its value); a stash/checkout/restore word
+    reached is judged by the per-form patterns on the rest of its own command (up to and including the first
+    separator). A git word inside a run already walked is not walked again, so each word is visited once: a long run
+    of options holding `git` (-Pgit, a=bgit, -C git) costs linear time, and a long option run before the subcommand
+    is read to its end, however long."""
+    hit = {"push": False, "bare": False, "checkout": False, "restore": False}
+    for line in lines_of(command):
+        toks = [(m.start(), m.group()) for m in _WT_TOKEN_RE.finditer(line)]
+        sep = [len(w) == 1 and w in _WT_SEPS for _o, w in toks]
+        n = len(toks)
+        seg_start, seg_end = [0] * n, [len(line)] * n  # token i's command: its first offset, and just past its separator
+        for t in range(1, n):
+            seg_start[t] = toks[t][0] if sep[t - 1] else seg_start[t - 1]
+        for t in range(n - 1, -1, -1):
+            seg_end[t] = toks[t][0] + 1 if sep[t] else seg_end[t + 1] if t + 1 < n else len(line)
+        restore_marks = {}  # per command: the last --source/-s and the last wide `-- path` start offsets
+        i = 0
+        while i < n:
+            if sep[i] or not _WT_GIT_WORD_RE.fullmatch(toks[i][1]):
+                i += 1
+                continue
+            j, after_valopt = i + 1, False
+            while j < n and not sep[j]:
+                off, word = toks[j]
+                m = _WT_SUB_RE.match(word)
+                if m:
+                    end = seg_end[j]
+                    rest = line[off:end]
+                    if m.group(1) == "stash":
+                        hit["push"] = hit["push"] or bool(_WT_PUSH_RE.match(rest) or _WT_PUSH_FLAGS_RE.match(rest))
+                        hit["bare"] = hit["bare"] or bool(_WT_BARE_RE.match(rest))
+                    elif m.group(1) == "checkout":
+                        hit["checkout"] = hit["checkout"] or bool(_WT_CHECKOUT_RE.match(rest))
+                    else:
+                        if end not in restore_marks:
+                            text = line[seg_start[j]:end]
+                            restore_marks[end] = tuple(
+                                max((seg_start[j] + x.start() for x in rx.finditer(text)), default=-1)
+                                for rx in (_WT_SOURCE_RE, _WT_WIDE_RE))
+                        hit["restore"] = hit["restore"] or min(restore_marks[end]) >= off
+                if word.startswith("-"):
+                    after_valopt = word in _WT_VALOPTS
+                elif after_valopt or _WT_VALUE_SHAPED_RE.search(word):
+                    after_valopt = False
+                else:
+                    break
+                j += 1
+            i = j  # the next walk starts at the word this one stopped on, never inside the run it walked
+    return hit
 
 
 def _worktree_raw_fallback(command, globals_=False):
     """The pre-parser patterns, for a command lib/shell_parse.py cannot read (fail closed). With globals_ (the
     quote-neutralised pass over a payload the parser may not read), git global options and their values
-    (-C x, -c k=v, --git-dir=..., --no-pager ...) may stand between git and the subcommand, per the GC_GOPT grammar.
-    There `git` must start a word (command position, as in GIT_CLEAN_OCCURRENCE_RE) and the option run is bounded,
-    so a long run of option words holding `git` (-Pgit, a=bgit, -C git) is scanned in linear time, not quadratic."""
+    (-C x, -c k=v, --git-dir=..., --no-pager ...) may stand between git and the subcommand, per the GC_GOPT grammar,
+    read by _worktree_global_scan in linear time with no cap on the option run."""
     if globals_:
-        g = rf"(^|{GC_SEP}){GC_GIT}{GC_GOPT.removesuffix('*')}{{0,{_WORKTREE_GOPT_MAX}}}\s+"
-        if not grep(g + r"(stash|checkout|restore)\b", command):  # one bounded scan before the per-form ones
-            return {"push": False, "bare": False, "checkout": False, "restore": False}
-    else:
-        g = r"git\s+"
+        return _worktree_global_scan(command)
+    g = r"git\s+"
     return {
         "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
         or grep(g + r"stash\s+-[ua]+\b", command),
@@ -1506,6 +1555,22 @@ GC_ANYTOK = r"(\s+[^\s;&|()`]+)*"
 GC_EXECCTX_RE = (rf"(^|{GC_SEP}){GC_GIT}{GC_GOPT}\s+(rebase{GC_ANYTOK}\s+(-x|--exec)|submodule{GC_ANYTOK}\s+foreach"
                  rf"|filter-branch{GC_ANYTOK}\s+(--[a-z]+-filter|--setup)|bisect{GC_ANYTOK}\s+run"
                  rf"|difftool{GC_ANYTOK}\s+(--extcmd|-x)|grep{GC_ANYTOK}\s+--open-files-in-pager)\b")
+
+
+# The quote-neutralised worktree pass: a line splits into commands at the GC_SEP separators and into words at
+# whitespace. A git word is `git` or a path ending in `/git` (GC_GIT once the quotes are neutralised).
+_WT_TOKEN_RE = re.compile(r"[;&|()`]|[^\s;&|()`]+")
+_WT_GIT_WORD_RE = re.compile(r"""([^\s;&|()`'"]*/)?git""")
+_WT_VALOPTS = frozenset(["-C", "-c"] + ["--" + n for n in GC_VALOPT_NAMES.split("|")])
+_WT_VALUE_SHAPED_RE = re.compile(rf"[{GC_VMARK}]")
+_WT_SEPS = frozenset(";&|()`")
+_WT_SUB_RE = re.compile(r"(stash|checkout|restore)\b")
+_WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b")
+_WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
+_WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
+_WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
+_WT_SOURCE_RE = re.compile(r"(?=(--source\b|-s\b))")
+_WT_WIDE_RE = re.compile(r"(?=(--\s+(\.|\*|[^ /]+/)\s*($|[;&|])))")
 
 
 _DATA_COMMANDS = frozenset({"echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack"})
