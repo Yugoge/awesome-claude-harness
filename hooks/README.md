@@ -59,7 +59,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 - `pretool-commit-dispatch-attest.py` - Writes `<state-dir>/claude-commit-dispatch-<sid>-<nonce>.json` when, and only
 - `pretool-cp-checkin.py` - cp-state file read (the write is scripts/spec-check.py's `register`)
-- `pretool-cp-state-write-guard.py` - Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2;
+- `pretool-cp-state-write-guard.py` - Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2: a
 - `pretool-dispatch-gate.py` - The rules run in this order, each as its own hook would run alone (its switch, its
 - `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard

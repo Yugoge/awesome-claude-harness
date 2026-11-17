@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 188
+- **Total files**: 200
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -39,7 +39,11 @@
 - `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 - `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 - `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
+- `test_claude_config_guard_chain.py` - The proof (_proven_harmless) lets a Bash command the base reading refuses through when every writ...
 - `test_claude_config_guard_home_spellings.py` - The guard reads the raw command text for a write into `.claude/hooks/` or `.claude/commands/`. A ...
+- `test_claude_config_guard_proof.py` - The base refuses a Bash command when a cp, mv, tee or redirect word comes anywhere before a
+- `test_claude_config_guard_unsettled.py` - The first OB-L31 change read each Bash command through the shared shell parser and let it through
+- `test_claude_config_guard_write_targets.py` - On the base the guard refused any command where a cp, mv or tee word came anywhere before a
 - `test_clean_approved_writes.py` - hooks/pretool-tool-policy.py derives it while a human-typed /clean's span is the active one: the
 - `test_cli_role_own_cycle.py` - their cycle from the agent's own dispatch obligation
 - `test_close_rating.py` - hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (thro...
@@ -157,6 +161,8 @@
 - `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
 - `test_spec_path.py` - and prompt-workflow.py's one decision of a run's spec built on it, replayed at
 - `test_spec_path_one_reader.py` - transcript reader the Stop gate decides on, and finds the spec the old parser of its own
+- `test_spec_root_anchoring.py` - hooks/pretool-bash-views-guard.py refused a Bash redirect into any `*.lock.json` anywhere
+- `test_spec_root_symlink_dotdot.py` - directory destination and `touch` (OB-L37 rework)
 - `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 - `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 - `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
@@ -189,6 +195,12 @@
 - `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
 - `test_workflow_bookmark_writer.py` - <project>/.claude/workflow-<sid>.json is written by prompt-workflow.py alone (a
 - `test_worktree_guard.py` - agent worktrees
+- `test_wrapper_userintent_computed_parts.py` - hooks/pretool-wrapper-userintent.py:
+- `test_wrapper_userintent_execution.py` - hooks/pretool-wrapper-userintent.py refuses a Bash call that runs the harness home's
+- `test_wrapper_userintent_hidden_runs.py` - hooks/pretool-wrapper-userintent.py identifies the harness home's wrapper by path, by
+- `test_wrapper_userintent_operand_proofs.py` - hooks/pretool-wrapper-userintent.py:
+- `test_wrapper_userintent_proof.py` - hooks/pretool-wrapper-userintent.py keeps the previous text rule as its fallback: a
+- `test_wrapper_userintent_runtime_targets.py` - hooks/pretool-wrapper-userintent.py treats as a run of the harness home's wrapper:
 - `test_write_gate.py` - - The gate sees what the guards saw: each rule's tool set is its guard's registered matcher
 - `test_write_gate_overwrite_parity.py` - The write gate runs the Python form. The shell hook is an exit-0 stub since the gate's registration
 - `test_write_guard_consent_process.py` - The file is an exit-0 stub since the write gate's registration landed (D15); its checks are the g...
