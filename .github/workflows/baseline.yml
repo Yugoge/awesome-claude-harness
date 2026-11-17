@@ -609,3 +609,123 @@ jobs:
           path: ${{ runner.temp }}/replay/runs/
           if-no-files-found: warn
           retention-days: 7
+
+  red-green:
+    # P15 decision (a), lane L13: red then green (scripts/ci/red-green.py). A pull request that
+    # changes code (anything but tests and docs) must name a test id that fails or errors on its
+    # merge base, with only its changed test_*.py and conftest.py laid over it, and passes on its
+    # head; or carry `Red-test: <nodeid>` for an existing guard, or `Red-test: none: <reason>`
+    # (commit trailer or PR body), whose reason heads the summary. Blocking. The range is
+    # merge-base(base, head)..head, so a train (a merge commit with several parents) is judged on
+    # everything it adds over its base, whatever was merged into it. Pull requests only: a push to
+    # master has no base to be red on. Parallel to every other job, off the replays' critical path.
+    name: red then green
+    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing.
+    if: ${{ github.event_name == 'pull_request' && toJSON(github.event.repository.private) == 'false' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    # Train A (4d1b5458..87731833, 13 merges, 447 ids red then green) took 25 min on 4 CPUs; still
+    # inside the replay shards' critical path (about 58 min), so it adds nothing to the run.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The pull request's own head, not the synthetic merge ref: the script judges base..head.
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history: the script replays commits (the merge base, its red checkout) and tests
+          # that read history need a real checkout, as the baseline job's fetch-depth 0 gives.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Red then green over merge-base..head
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Through the environment, never spliced into the script: the body is untrusted text.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          echo "merge base: $(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          python3 scripts/ci/red-green.py --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY"
+
+  diff-mutate:
+    # P15 decision (b), lane L13: diff-scoped mutation (scripts/ci/diff-mutate.py). Mutates only the
+    # lines this pull request changed in hooks/**/*.py and scripts/**/*.py (at most 40 mutants,
+    # pytest -x, a timeout of 4x the unmutated run) and runs the unit tests that name each file.
+    # Report-only: the script exits 0 with survivors and lists them in the job summary; it fails
+    # (exit 2) only when it cannot judge (a git error, or the unmutated tests red). The change is
+    # the working tree (the head) against merge-base(base, head), so a train is judged on what it
+    # adds over its base. After 10 pull requests, if under 1 survivor in 10 is equivalent, survivors
+    # on changed lines become blocking (plan P15 (b)); until then nothing here blocks on them.
+    name: diff mutation (report-only)
+    # D30 visibility gate (see the baseline job), and a draft pull request runs nothing.
+    if: ${{ github.event_name == 'pull_request' && toJSON(github.event.repository.private) == 'false' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    # The mutation run is bounded below (MUTATE_BUDGET) so the job ends inside the replay shards'
+    # critical path and still posts what it found; this is the backstop.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history, so the merge base of a train with any number of parents is present.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Mutate the changed lines
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MUTATE_BUDGET: 45m
+        run: |
+          set -euo pipefail
+          mb="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          echo "merge base: $mb"
+          # A time bound, not a filter: on Train A each mutated file's unmutated run took 22-26 min (its
+          # changed tests include tests/test_ci_red_green.py, which replays history), so a whole train
+          # would take hours. The run stops at the bound and the summary says so, with every verdict
+          # reached before it. Unbuffered, so those verdicts are in the file when it stops.
+          set +e
+          PYTHONUNBUFFERED=1 timeout --kill-after=60s "$MUTATE_BUDGET" \
+            python3 scripts/ci/diff-mutate.py --base "$mb" > "$RUNNER_TEMP/mutate.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/mutate.txt"
+          {
+            echo "## Diff mutation (report-only), merge base \`${mb:0:12}\`"
+            echo
+            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+              echo "**Stopped at the time bound ($MUTATE_BUDGET)**: the verdicts below are those reached before it;"
+              echo "the remaining selected mutants were not run."
+              echo
+            fi
+            echo "Survivors: $(grep -c '^SURVIVED ' "$RUNNER_TEMP/mutate.txt" || true)," \
+              "killed: $(grep -c '^KILLED ' "$RUNNER_TEMP/mutate.txt" || true)"
+            echo
+            echo '```'
+            grep -v '^MUTANT ' "$RUNNER_TEMP/mutate.txt" | grep -E '^(diff-mutate:|SURVIVED|KILLED|TIMEOUT|UNTESTED)' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Report-only: a stop at the time bound is reported above, not failed. Exit 2 (the script
+          # cannot judge: a git error, or the unmutated tests red) still fails the job.
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then exit 0; fi
+          exit "$rc"
