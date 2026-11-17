@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T05:48:09Z*
-**Total entries**: 191
+*Last updated: 2026-11-17T17:33:53Z*
+**Total entries**: 192
 **Convention**: kebab
 
 ## Tree
@@ -182,6 +182,7 @@ tests/
 ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 ├── `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
 ├── `test_tool_policy_protected_paths.py` - hooks/pretool-tool-policy.py refuses, before every other rule and for the main agent and every
+├── `test_tool_policy_temp_writes.py` - hooks/pretool-tool-policy.py (run by the write gate, hooks/pretool-write-gate.py) used to refuse ...
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
