@@ -1,14 +1,11 @@
-"""Tests for git-global-option normalization in the sentinel grant matcher.
+"""Git global options in the sentinel grant matcher.
 
-Regression cover for task 20260928-133915: `/allow git commit` could never match
-the canonical `git -C <dir> commit -F <msgfile>` shape this repo emits, because
-args_contain is a POSITIONAL PREFIX anchored immediately after the head token and
-the real command's first argument is `-C`, not the subcommand.
-
-The fix adds a second match view with repo-retargeting global options removed.
-The security boundary under test: options carrying a code-execution vector
-(-c, --config-env, --exec-path) are NEVER skipped, so a command bearing one
-fails closed against a shorter grant.
+args_contain is a positional prefix anchored right after the head token, so
+`/allow git commit` reaches the canonical `git -C <dir> commit -F <msgfile>`
+shape only because the matcher also reads the command with repo-retargeting
+global options removed. Options carrying a code-execution vector (-c,
+--config-env, --exec-path) are never skipped, so a command bearing one fails
+closed against a shorter grant.
 """
 
 import sys
@@ -19,10 +16,7 @@ from unittest.mock import patch
 HOOKS_DIR = str(Path(__file__).parent.parent)
 sys.path.insert(0, HOOKS_DIR)
 
-from lib.allowlist import (  # noqa: E402
-    _strip_git_global_opts,
-    match_sentinel_grant_for_bash_command,
-)
+from lib.allowlist import match_sentinel_grant_for_bash_command  # noqa: E402
 
 GIT = "git"
 VERB = "commit"
@@ -30,7 +24,7 @@ TASK = "t-selftest"
 
 
 def derive(pattern):
-    """Mirror of the literal branch in userprompt-consent-allowlist.sh:726-737."""
+    """Mirror of the literal branch in hooks/userprompt-consent-allowlist.sh."""
     parts = pattern.split(None, 1)
     op = parts[0] if parts else pattern
     rest = parts[1] if len(parts) >= 2 else ""
@@ -49,59 +43,55 @@ def match(grant_pattern, command):
         return match_sentinel_grant_for_bash_command(TASK, command)
 
 
-class TestStripGitGlobalOpts(unittest.TestCase):
+class TestGlobalOptionsAShortGrantSkips(unittest.TestCase):
+    """Which git global options a short `git commit` grant reads past."""
+
+    def short(self, command):
+        return match(f"{GIT} {VERB}", command)
+
     def test_separated_value_option_skipped(self):
-        self.assertEqual(_strip_git_global_opts(["-C", "/p", VERB]), [VERB])
+        self.assertIsNotNone(self.short(f"{GIT} -C /p {VERB}"))
 
     def test_attached_value_option_skipped(self):
-        self.assertEqual(_strip_git_global_opts(["--git-dir=/p", VERB]), [VERB])
+        self.assertIsNotNone(self.short(f"{GIT} --git-dir=/p {VERB}"))
 
     def test_attached_dash_C_form_is_not_skipped(self):
-        # `-C/p` (attached, no `=`) is not real git syntax for `-C` (git
-        # itself rejects it: "unknown option: -C/p"), so it must NOT be
-        # treated as a skippable global option. Only the separated `-C <dir>`
-        # form (see test_separated_value_option_skipped) is valid.
-        self.assertEqual(_strip_git_global_opts(["-C/p", VERB]), ["-C/p", VERB])
+        # `-C/p` is not git syntax for `-C` (git rejects "unknown option: -C/p");
+        # only the separated `-C <dir>` form is.
+        self.assertIsNone(self.short(f"{GIT} -C/p {VERB}"))
 
     def test_valueless_flag_skipped(self):
-        self.assertEqual(_strip_git_global_opts(["--no-pager", VERB]), [VERB])
+        self.assertIsNotNone(self.short(f"{GIT} --no-pager {VERB}"))
 
     def test_stacked_options_skipped(self):
-        self.assertEqual(
-            _strip_git_global_opts(["-C", "/p", "--no-pager", "--work-tree=/w", VERB]),
-            [VERB],
-        )
+        self.assertIsNotNone(self.short(f"{GIT} -C /p --no-pager --work-tree=/w {VERB}"))
 
     def test_dangling_option_does_not_run_off_end(self):
-        self.assertEqual(_strip_git_global_opts(["-C"]), ["-C"])
+        self.assertIsNone(self.short(f"{GIT} -C"))
+        self.assertIsNone(self.short(f"{GIT} -C {VERB}"))
 
-    def test_bare_dash_C_not_treated_as_attached(self):
-        # `-C` with no value is malformed, not an attached `-C<dir>`.
-        self.assertEqual(_strip_git_global_opts(["-C"]), ["-C"])
+    def test_empty_attached_value_is_not_skipped(self):
+        self.assertIsNone(self.short(f"{GIT} --git-dir= {VERB}"))
 
     def test_exec_vector_options_are_not_skipped(self):
-        for opt in (["-c", "core.pager=x"], ["--config-env=core.pager=X"],
-                    ["--exec-path=/tmp/evil"], ["--super-prefix", "s"]):
+        for opt in ("-c core.pager=x", "--config-env=core.pager=X",
+                    "--exec-path=/tmp/evil", "--super-prefix s"):
             with self.subTest(opt=opt):
-                self.assertEqual(_strip_git_global_opts(opt + [VERB]), opt + [VERB])
+                self.assertIsNone(self.short(f"{GIT} {opt} {VERB}"))
 
     def test_skippable_options_are_a_subset_of_the_option_table(self):
         from lib import allowlist
-        from lib.git_command_classifier import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS
+        from lib.shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS
         self.assertLessEqual(allowlist._GRANT_SKIPPABLE_GIT_VALUE_OPTS, GIT_GLOBAL_VALUE_OPTS)
         self.assertLessEqual(allowlist._GRANT_SKIPPABLE_GIT_FLAGS, GIT_GLOBAL_FLAGS)
         self.assertEqual(sorted(allowlist._GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES),
                          ["--git-dir=", "--namespace=", "--work-tree="])
 
     def test_unknown_option_stops_the_skip(self):
-        self.assertEqual(
-            _strip_git_global_opts(["--totally-unknown", VERB]),
-            ["--totally-unknown", VERB],
-        )
+        self.assertIsNone(self.short(f"{GIT} --totally-unknown {VERB}"))
 
 
 class TestShortGrantReachesCanonicalShape(unittest.TestCase):
-    """The bug this task fixes."""
 
     def test_short_grant_matches_dash_C_form(self):
         self.assertIsNotNone(
