@@ -27,12 +27,15 @@ others name their own command. P5 (R18, R20) took every Claude-path reader off t
 previous list is the transcript's (command_span.last_todos), the lock is the transcript's
 (todo_canonical.checklist). So A21's outcome must not move with the bookmark: for each shape, every
 event of A21's pipeline (each Stop under the pre-update hook list and under this tree's; a
-PreToolUse TodoWrite, compliant and a 2-step skip, in the /dev cycle; a PreToolUse Read in each
-session) gives every hook the verdict, exit code and output it gives with no bookmark; no hook
-errs or prints a traceback; pretool-tool-policy.py and pretool-todo-validate.py accept the
-compliant TodoWrite (each read from the hook that reports it under the list that runs the event: under
-this tree's, tool-policy is a rule of the write gate since P12, sites.reporter) and the skip stays refused by pretool-todo-validate.py (a stale last_todos
-neither blocks the compliant list nor admits the skip); A21's Stop outcomes hold as stated.
+PreToolUse TodoWrite, compliant and a 2-step skip, in the /dev cycle; a PreToolUse Read, Grep,
+Glob, Bash and Edit in each session) gives every hook the verdict, exit code and output it gives
+with no bookmark; no hook errs or prints a traceback; pretool-tool-policy.py and
+pretool-todo-validate.py accept the compliant TodoWrite (each read from the hook that reports it
+under the list that runs the event: under this tree's, tool-policy is a rule of the write gate since
+P12, sites.reporter) and the skip stays refused by pretool-todo-validate.py (a stale last_todos
+neither blocks the compliant list nor admits the skip); A21's Stop outcomes hold as stated. Read,
+Grep and Glob pass the checklist-not-started lock in every session (OB-L39); Bash and Edit are held
+by it only where a span's checklist is unwritten, never by an old lock.
 """
 from __future__ import annotations
 
@@ -52,6 +55,11 @@ ARGS = {"dev": "fix the flaky test", "do": "rename the heading", "merge": "featu
         "window": "1h harden the toy package", "ungated": "an earlier request"}
 TASK = {"dev": "20261101-090000", "do": DO_ID}
 NAMED = ("hooks/pretool-tool-policy.py", "hooks/pretool-todo-validate.py")
+WORKFLOW_GATE = "hooks/pretool-workflow-gate.py"
+# The tools the checklist-not-started lock lets through in every session (OB-L39), and those A21
+# probes that it still holds while a span's checklist is unwritten.
+READ_ONLY = ("Read", "Grep", "Glob")
+STILL_HELD = ("Bash", "Edit")
 
 
 def _list(steps, done):
@@ -113,11 +121,23 @@ class SeededWorld(World):
                 todos.write_text(copy, encoding="utf-8")
 
 
+def _probes(world: SeededWorld) -> dict:
+    """The tool calls A21 makes in each session: the read-only ones, then a Bash and an Edit."""
+    readme = str(world.project / "README.md")
+    calls = {"Read": {"file_path": readme},
+             "Grep": {"pattern": "toy", "path": str(world.project)},
+             "Glob": {"pattern": "*.md", "path": str(world.project)},
+             "Bash": {"command": "ls", "description": "List the project's files"},
+             "Edit": {"file_path": readme, "old_string": "toy", "new_string": "a toy"}}
+    return {tool: calls[tool] for tool in READ_ONLY + STILL_HELD}
+
+
 def _events(world: SeededWorld) -> dict:
     """A21's pipeline on ``world``, each event run with the old files freshly seeded: label -> event."""
     out = {}
     old, new = pre_update_settings(), current_settings()
     steps = world.canonical("dev")
+    probes = _probes(world)
     for which, settings in (("pre-update", old), ("this tree", new)):
         for name in SID:
             world.seed()
@@ -129,11 +149,12 @@ def _events(world: SeededWorld) -> dict:
             out[f"TodoWrite dev {label} ({which})"] = hookrun.run_event(
                 settings, "PreToolUse", payload, world.env(settings), str(world.project))
         for name in SID:
-            world.seed()
-            payload = dict(world.payload(name), tool_name="Read",
-                           tool_input={"file_path": str(world.project / "README.md")}, tool_use_id="toolu_a21_bm_r")
-            out[f"Read {name} ({which})"] = hookrun.run_event(
-                settings, "PreToolUse", payload, world.env(settings), str(world.project))
+            for tool, tool_input in probes.items():
+                world.seed()
+                payload = dict(world.payload(name), tool_name=tool, tool_input=tool_input,
+                               tool_use_id=f"toolu_a21_bm_{tool.lower()}")
+                out[f"{tool} {name} ({which})"] = hookrun.run_event(
+                    settings, "PreToolUse", payload, world.env(settings), str(world.project))
     return out
 
 
@@ -222,7 +243,9 @@ def test_a21_with_old_bookmarks_the_outcome_is_a21s(runs, shape):
     holds no span (`would block` on the coordinator's stderr), this tree's list enforces each gated
     span, the open window blocks under both, the ungated session stops; pretool-tool-policy.py and
     pretool-todo-validate.py accept the compliant TodoWrite, the 2-step skip stays refused by
-    pretool-todo-validate.py; a Read is held only by an unwritten checklist, never by an old lock."""
+    pretool-todo-validate.py; Read, Grep and Glob pass in every session (the checklist-not-started
+    lock lets them through, OB-L39); a Bash or an Edit is held by the workflow gate only by an
+    unwritten checklist, never by an old lock."""
     _world, events = runs[shape]
     sick = {label: _healthy(e) for label, e in events.items() if _healthy(e)}
     assert not sick, sick
@@ -240,12 +263,26 @@ def test_a21_with_old_bookmarks_the_outcome_is_a21s(runs, shape):
                     launcher
             else:
                 assert not _blocked(event), event["hooks"]
-            # A Read is held only where the span's checklist has no ok TodoWrite yet (/do, the window):
-            # never by an old lock, in the /dev cycle (its list written) or the ungated session.
-            read = events[f"Read {name} ({which})"]
-            held = [h["hook"] for h in read["hooks"] if h["verdict"] == "block"]
-            assert held == (["hooks/pretool-workflow-gate.py"] if name in ("do", "window") else []), \
-                (name, which, held, [h["stderr"][-300:] for h in read["hooks"] if h["verdict"] == "block"])
+            # Read, Grep and Glob pass in every session, an unwritten checklist's included (OB-L39).
+            # Bash and Edit are held by the workflow gate only where the span's checklist has no ok
+            # TodoWrite yet (/do, the window), and there by that lock: never by an old lock, in the
+            # /dev cycle (its list written), the /merge span or the ungated session. (Whether another
+            # hook holds an Edit, e.g. the orchestrator gate's one Edit a turn, is compared against
+            # `none` by test_a21_old_bookmarks_change_no_hook_outcome.)
+            for tool in READ_ONLY + STILL_HELD:
+                call = events[f"{tool} {name} ({which})"]
+                held = [h["hook"] for h in call["hooks"] if h["verdict"] == "block"]
+                why = (tool, name, which, held, [h["stderr"][-300:] for h in call["hooks"] if h["verdict"] == "block"])
+                if tool in READ_ONLY:
+                    assert held == [], why
+                    continue
+                gate = [h for h in call["hooks"] if h["hook"] == WORKFLOW_GATE]
+                assert len(gate) == 1, why
+                if name in ("do", "window"):
+                    assert gate[0]["verdict"] == "block" and gate[0]["rc"] == 2, why
+                    assert f"CHECKLIST NOT STARTED: /{COMMAND[name]} workflow is active." in gate[0]["stderr"], why
+                else:
+                    assert gate[0]["verdict"] == "ok", why
         # the hooks that report NAMED's verdicts under the list `which` runs
         named = [sites.reporter(str(REPO), h, pre_update_settings() if which == "pre-update" else current_settings())
                  for h in NAMED]
