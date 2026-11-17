@@ -528,3 +528,94 @@ def test_project_nested_in_a_parent_work_tree_keeps_its_exemptions(lab):
     assert _refused(_write(lab, proj / "src" / "app.py"))
     assert _refused(_write(lab, proj / "notes.md"))  # tracked by the parent work tree only
     assert _refused(_write(lab, home / ".bashrc"))
+
+
+# --- round 4: the rule never executes anything a repository's config names --------------------
+
+def _hand_written_git_dir(top: Path, config: str) -> None:
+    """A git dir written with plain file Writes (no git init), as a Write-only role could."""
+    g = top / ".git"
+    for d in ("objects", "refs/heads"):
+        (g / d).mkdir(parents=True, exist_ok=True)
+    (g / "HEAD").write_text("ref: refs/heads/main\n")
+    (g / "config").write_text(config)
+
+
+def _fsmonitor_config(marker: Path) -> str:
+    return f"[core]\n\trepositoryformatversion = 0\n\tfsmonitor = touch {marker}; echo\n"
+
+
+@pytest.mark.parametrize("actor,where", [("architect", "docs/codex/evil"), ("dev", "src/x")])
+def test_planted_fsmonitor_never_runs(lab, actor, where):
+    marker = lab["tmp"] / "PWNED"
+    top = lab["proj"] / where
+    _hand_written_git_dir(top, _fsmonitor_config(marker))
+    n = _existing(top / "n.md")
+    rc, _out = _write(lab, n, agent=actor)
+    assert not marker.exists(), "the overwrite rule ran a repository-configured command"
+    assert rc in (0, 2)  # an untracked draft may pass; doubt refuses
+
+
+@pytest.mark.parametrize("form", ["include", "includeIf"])
+def test_included_fsmonitor_never_runs(lab, form):
+    marker = lab["tmp"] / "PWNED-inc"
+    top = lab["proj"] / "docs" / "codex" / "evil2"
+    inc = top / "evil.inc"
+    head = "[include]" if form == "include" else '[includeIf "gitdir:/"]'
+    _hand_written_git_dir(top, f"[core]\n\trepositoryformatversion = 0\n{head}\n\tpath = {inc}\n")
+    inc.write_text(f"[core]\n\tfsmonitor = touch {marker}; echo\n")
+    _write(lab, _existing(top / "n.md"))
+    assert not marker.exists()
+
+
+def test_partial_clone_lazy_fetch_never_runs(lab):
+    """A promisor remote whose uploadpack is a command: HEAD's commit is missing locally, so
+    a lazy fetch would run it. The rule refuses on doubt and runs nothing."""
+    marker = lab["tmp"] / "PWNED-fetch"
+    remote = lab["tmp"] / "remote"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    proj = _committed_project(lab["tmp"] / "pc")
+    head = subprocess.run(["git", "-C", str(proj), "rev-parse", "HEAD"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+    _gc("-C", str(proj), "rm", "-q", "--cached", "src/app.py")  # before git could fetch
+    (proj / ".git" / "objects" / head[:2] / head[2:]).unlink()
+    _gc("-C", str(proj), "config", "extensions.partialclone", "origin")
+    _gc("-C", str(proj), "config", "remote.origin.url", str(remote))
+    _gc("-C", str(proj), "config", "remote.origin.promisor", "true")
+    _gc("-C", str(proj), "config", "remote.origin.uploadpack", f"touch {marker}; git-upload-pack")
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+    assert _refused(_write(lab, proj / "build" / "out.txt"))
+    assert not marker.exists()
+
+
+def test_forged_back_link_at_the_project_top_refused(lab):
+    """H6: the project's .git moved away and replaced by a gitdir file with a forged back-link:
+    the git dir it names is no linked worktree's (<common>/worktrees/<name>/ with commondir)."""
+    proj = lab["proj"]
+    other = lab["tmp"] / "other6"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    (proj / ".git").rename(lab["tmp"] / "moved-git")
+    (proj / ".git").write_text(f"gitdir: {other / '.git'}\n")
+    (other / ".git" / "gitdir").write_text(f"{proj / '.git'}\n")
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+def test_unborn_head_in_a_repository_with_commits_refused(lab):
+    """H8c: HEAD moved to a branch that does not exist, plus rm --cached."""
+    proj = _committed_project(lab["tmp"] / "h8")
+    _gc("-C", str(proj), "symbolic-ref", "HEAD", "refs/heads/nope")
+    _gc("-C", str(proj), "rm", "-q", "--cached", "src/app.py")
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+def test_replace_refs_do_not_hide_head(lab):
+    """H15: HEAD's commit replaced by one without the file, plus rm --cached."""
+    proj = _committed_project(lab["tmp"] / "h15")
+    empty_tree = subprocess.run(["git", "-C", str(proj), "mktree"], input="", capture_output=True,
+                                text=True, check=True).stdout.strip()
+    fake = subprocess.run(["git", "-C", str(proj), "-c", "user.name=t", "-c",
+                           "user.email=t@example.invalid", "commit-tree", empty_tree, "-m", "x"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    _gc("-C", str(proj), "replace", "HEAD", fake)
+    _gc("-C", str(proj), "rm", "-q", "--cached", "src/app.py")
+    assert _refused(_write(lab, proj / "src" / "app.py"))

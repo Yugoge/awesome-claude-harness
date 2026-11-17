@@ -29,11 +29,14 @@ without following links; the parent's realpath plus the entry; and the full real
     pass as a temp file);
   * a file ANY enclosing work tree tracks, in its index or its HEAD (literal pathspec), and
     any file git cannot answer for. The work trees are found by walking up from the file to
-    every directory holding a .git entry (never by asking git, whose core.worktree, core.bare
-    or GIT_* settings could point elsewhere), and git runs on each with an explicit git dir
-    and work tree, no system or global config. A .git file counts only as a linked
-    worktree whose git dir links back to it; a symlinked .git, a submodule's .git file or
-    one swapped to point at another repository is doubt.
+    every directory holding a .git entry (never by asking git). Git never sees a
+    repository's own git dir or config: each question goes to a fresh shadow git dir the
+    rule writes (HEAD = the commit id the rule resolved itself from HEAD and refs, an empty
+    refs/, a config holding only repositoryformatversion), with the real index and object
+    store passed as data (GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY); see _GIT_HARDENING. A .git
+    file counts only as a linked worktree with the shape git gives one; a symlinked .git,
+    a submodule's .git file, an unborn HEAD in a repository that has refs, or an unknown
+    repository extension is doubt.
 
 Exempt, once nothing above holds, when the realpath is:
 
@@ -53,15 +56,19 @@ build/out.txt, or docs/dev/arch-probe.md for an actor tool-policy lets write doc
 replaced; a report, context, ticket, manifest, grant or spec that a later gate trusts keeps the
 Edit-only rule even when untracked, so a Write-only role writes it once, complete.
 
-Known limits: an artifact a dispatch's obligation declares at a path no command template uses
-(the producer-stop gate reads any declared path) is protected only if it lies under an
-artifact root or is tracked; a file below a submodule's .git file is never exempt; a
-project's moved-away .git dir leaves no index to ask.
+Known limits (each needs shell git surgery, not file Writes alone): an artifact a dispatch's
+obligation declares at a path no command template uses is protected only under an artifact
+root or when tracked; a file below a submodule's .git file is never exempt; a project whose
+.git dir was moved away (or replaced by a fully forged linked-worktree layout) has no index
+to ask; a work tree joined to its git dir only by core.worktree, with no .git entry, reads
+as no repository (so as plain temp when in temp); untracked output in a harness worktree
+under <project>/.claude/worktrees/ stays refused by the .claude rule.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -89,13 +96,16 @@ GATE_READ_PREFIXES = (
 _PROTECTED_COMPONENTS = (".claude", ".git")
 # harness_temp_state scratch locations agents write their own output into.
 AGENT_SCRATCH = ("claude-scratch", "codex-outputs", "graphify-cache")
-# Git runs once per enclosing work tree (twice when one has no commit yet), each call capped
-# by what remains of a 2.5 s budget, so the rule stays well inside its 5 s budget
-# (lib/write_gate/__init__.py): an overrun of this fail-open rule would let the Write through,
-# while a timeout here refuses. At most _MAX_TREES enclosing work trees are consulted.
+# Git runs once per enclosing work tree, each call capped by what remains of a 2.5 s budget,
+# so the rule stays well inside its 5 s budget (lib/write_gate/__init__.py): an overrun of
+# this fail-open rule would let the Write through, while a timeout here refuses. At most
+# _MAX_TREES enclosing work trees are consulted.
 _GIT_BUDGET = 2.5
 _GIT_CALL_CAP = 1.2
 _MAX_TREES = 4
+# Repository extensions the shadow git dir can stand in for; any other (objectformat,
+# refstorage, ...) is doubt.
+_SAFE_EXTENSIONS = frozenset({"worktreeconfig", "preciousobjects", "partialclone", "noop"})
 _NO_REPO = "no-repo"
 
 
@@ -208,20 +218,38 @@ class _Doubt(Exception):
     """Git cannot answer for certain: the caller refuses."""
 
 
-def _git(deadline: float, git_dir: str, work_tree: str, *args: str):
-    """(returncode, stdout, stderr) of git on an explicit git dir and work tree, so no
-    discovery, core.worktree, core.bare or GIT_* variable redirects it; system and global
-    config are not read. Raises _Doubt when git cannot run or the budget runs out."""
+# How git is run, robust by construction: git never sees the repository's own git dir.
+# Every call goes to a fresh shadow git dir the rule writes itself (HEAD = the commit id the
+# rule resolved, an empty refs/, and a config holding only repositoryformatversion), with
+# the real index (GIT_INDEX_FILE) and the real object store (GIT_OBJECT_DIRECTORY), both
+# data git parses, never configuration. Nothing an agent can write is read as git config:
+# the repository's config, config.worktree, includes, hooks, info/ and refs/ (replace refs
+# included) are not in the shadow dir; system and global config are off
+# (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL=/dev/null); every GIT_* variable from the caller is
+# dropped. The -c and environment switches below are a second layer: they turn off each
+# execution-capable feature a config could have named anyway (fsmonitor, hooks, any
+# transport and lazy fetch, replace objects, pagers, askpass, ssh).
+_GIT_HARDENING = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull,
+                  "-c", "protocol.allow=never", "-c", "core.useReplaceRefs=false",
+                  "-c", "core.bare=false", "-c", "core.sshCommand=false",
+                  "-c", "core.askPass=false", "-c", "credential.helper=",
+                  "-c", "core.pager=cat", "-c", "core.untrackedCache=false",
+                  "-c", "index.skipHash=false")
+
+
+def _git(deadline: float, shadow: str, index: str, objects: str, work_tree: str, *args: str):
     import time
     left = deadline - time.monotonic()
     if left <= 0.05:
         raise _Doubt("git budget spent")
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(GIT_LITERAL_PATHSPECS="1", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-               GIT_OPTIONAL_LOCKS="0")
+               GIT_OPTIONAL_LOCKS="0", GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1",
+               GIT_TERMINAL_PROMPT="0", GIT_INDEX_FILE=index, GIT_OBJECT_DIRECTORY=objects,
+               GIT_CONFIG_PARAMETERS="", GIT_PROTOCOL_FROM_USER="0", GIT_ALLOW_PROTOCOL="")
     try:
-        p = subprocess.run(["git", "--git-dir=" + git_dir, "--work-tree=" + work_tree,
-                            "-c", "core.bare=false", "-C", work_tree, *args],
+        p = subprocess.run(["git", "--git-dir=" + shadow, "--work-tree=" + work_tree,
+                            *_GIT_HARDENING, "-C", work_tree, *args],
                            capture_output=True, text=True, timeout=min(_GIT_CALL_CAP, left),
                            env=env, stdin=subprocess.DEVNULL)
     except BaseException as exc:
@@ -229,31 +257,40 @@ def _git(deadline: float, git_dir: str, work_tree: str, *args: str):
     return p.returncode, p.stdout, p.stderr
 
 
-def _git_dir_of(top: str):
-    """The git dir behind `top`/.git: the directory itself, or a linked worktree's git dir
-    named by a `gitdir:` file whose back-link (<gitdir>/gitdir) names this .git. Raises
-    _Doubt for anything else (a symlinked .git, a gitdir file without that back-link, such as
-    a submodule's or one swapped to point at another repository)."""
+def _read_line(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.readline(4096).strip()
+    except (OSError, UnicodeError) as exc:
+        raise _Doubt(f"unreadable {path}: {exc}")
+
+
+def _git_dir_of(top: str, project: str = ""):
+    """The git dir behind `top`/.git: the directory itself, or the git dir of a linked
+    worktree (`git worktree add`) named by a `gitdir:` file. A linked worktree's git dir must
+    have the shape git gives it: <common>/worktrees/<name>/ with a commondir file naming
+    <common>, a real git dir holding HEAD and objects/, and a gitdir back-link naming this
+    .git. Anything else raises _Doubt: a symlinked .git, a submodule's .git file, one
+    pointing at another repository, a back-link alone."""
     entry = os.path.join(top, ".git")
     if os.path.islink(entry):
         raise _Doubt("symlinked .git")
     if os.path.isdir(entry):
         return entry
-    try:
-        with open(entry, encoding="utf-8") as fh:
-            line = fh.readline(4096).strip()
-    except OSError as exc:
-        raise _Doubt(str(exc))
+    line = _read_line(entry)
     if not line.startswith("gitdir:"):
         raise _Doubt("unreadable .git file")
     git_dir = os.path.realpath(os.path.join(top, line[len("gitdir:"):].strip()))
-    try:
-        with open(os.path.join(git_dir, "gitdir"), encoding="utf-8") as fh:
-            back = fh.readline(4096).strip()
-    except OSError as exc:
-        raise _Doubt("gitdir file without a back-link")
+    back = _read_line(os.path.join(git_dir, "gitdir"))
     if os.path.realpath(os.path.join(git_dir, back)) != os.path.realpath(entry):
         raise _Doubt("gitdir back-link names another work tree")
+    worktrees = os.path.dirname(git_dir)
+    common = os.path.dirname(worktrees)
+    if os.path.basename(worktrees) != "worktrees" or _common_dir(git_dir) != common:
+        raise _Doubt("not a linked worktree's git dir")
+    if not (os.path.isfile(os.path.join(common, "HEAD"))
+            and os.path.isdir(os.path.join(common, "objects"))):
+        raise _Doubt("linked worktree without a common git dir")
     return git_dir
 
 
@@ -273,12 +310,118 @@ def _enclosing_trees(real: str):
         d = parent
 
 
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _common_dir(git_dir: str) -> str:
+    cd = os.path.join(git_dir, "commondir")
+    if os.path.lexists(cd):
+        return os.path.realpath(os.path.join(git_dir, _read_line(cd)))
+    return git_dir
+
+
+def _check_extensions(common: str) -> None:
+    """Read (never execute) the repository's config for extensions the shadow cannot
+    stand in for."""
+    try:
+        with open(os.path.join(common, "config"), encoding="utf-8", errors="replace") as fh:
+            text = fh.read(65536)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _Doubt(str(exc))
+    section = ""
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].split(";", 1)[0].strip()
+        if line.startswith("["):
+            section = line.strip("[]").split()[0].strip('"').casefold() if line.strip("[]").split() else ""
+            continue
+        if section == "extensions" and line:
+            key = line.split("=", 1)[0].strip().casefold()
+            if key not in _SAFE_EXTENSIONS:
+                raise _Doubt(f"repository extension {key}")
+
+
+def _ref(common: str, git_dir: str, name: str):
+    """The commit id `name` (refs/...) points at, None when the ref does not exist."""
+    for base in (git_dir, common):
+        path = os.path.join(base, name)
+        if os.path.isfile(path):
+            value = _read_line(path)
+            if value.startswith("ref:"):
+                raise _Doubt("nested symbolic ref")
+            if not _SHA.match(value):
+                raise _Doubt(f"unreadable ref {name}")
+            return value
+    packed = os.path.join(common, "packed-refs")
+    try:
+        with open(packed, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) == 2 and parts[1] == name and _SHA.match(parts[0]):
+                    return parts[0]
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise _Doubt(str(exc))
+    return None
+
+
+def _has_any_ref(common: str) -> bool:
+    heads = os.path.join(common, "refs")
+    for _root, _dirs, files in os.walk(heads):
+        if files:
+            return True
+    try:
+        with open(os.path.join(common, "packed-refs"), encoding="utf-8", errors="replace") as fh:
+            return any(line.strip() and not line.startswith(("#", "^")) for line in fh)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise _Doubt(str(exc))
+
+
+def _head_commit(git_dir: str, common: str):
+    """HEAD's commit id; None only for a repository with no ref at all (a fresh `git init`).
+    An unborn HEAD in a repository that has refs is doubt."""
+    head = _read_line(os.path.join(git_dir, "HEAD"))
+    if _SHA.match(head):
+        return head
+    if not head.startswith("ref:"):
+        raise _Doubt("unreadable HEAD")
+    name = head[len("ref:"):].strip()
+    if not name.startswith("refs/") or ".." in name.split("/"):
+        raise _Doubt("odd HEAD ref")
+    commit = _ref(common, git_dir, name)
+    if commit is None and _has_any_ref(common):
+        raise _Doubt("unborn HEAD in a repository with refs")
+    return commit
+
+
 def _tracks(deadline: float, top: str, git_dir: str, rel: str) -> bool:
     """Whether the work tree at `top` has `rel` in its index or in HEAD (a `git rm --cached`
-    leaves it in HEAD)."""
-    rc, out, err = _git(deadline, git_dir, top, "ls-files", "-z", "--with-tree=HEAD", "--", rel)
-    if rc != 0 and "HEAD" in err:  # no commit yet: the index alone
-        rc, out, err = _git(deadline, git_dir, top, "ls-files", "-z", "--", rel)
+    leaves it in HEAD), asked through a shadow git dir (see _GIT_HARDENING)."""
+    import shutil
+    import tempfile
+    common = _common_dir(git_dir)
+    _check_extensions(common)
+    commit = _head_commit(git_dir, common)
+    objects = os.path.join(common, "objects")
+    if not os.path.isdir(objects):
+        raise _Doubt("no object store")
+    shadow = tempfile.mkdtemp(prefix="overwrite-shadow-")
+    try:
+        os.mkdir(os.path.join(shadow, "refs"))
+        os.mkdir(os.path.join(shadow, "objects"))
+        with open(os.path.join(shadow, "HEAD"), "w") as fh:
+            fh.write((commit or "ref: refs/heads/unborn") + "\n")
+        with open(os.path.join(shadow, "config"), "w") as fh:
+            fh.write("[core]\n\trepositoryformatversion = 0\n")
+        index = os.path.join(git_dir, "index")
+        args = ["ls-files", "-z"] + (["--with-tree=" + commit] if commit else []) + ["--", rel]
+        rc, out, err = _git(deadline, shadow, index, objects, top, *args)
+    finally:
+        shutil.rmtree(shadow, ignore_errors=True)
     if rc != 0:
         raise _Doubt(err.strip()[:200] or f"git exit {rc}")
     return bool(out.strip("\0"))
