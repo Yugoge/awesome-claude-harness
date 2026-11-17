@@ -3,6 +3,8 @@
 PostToolUse:TodoWrite Hook: Overnight Loop Detection
 
 Fires after every TodoWrite call. Checks if:
+0. The payload is the orchestrator's own (lib.subagent.is_subagent_context: a
+   subagent's list is a no-op)
 1. This session owns an overnight state record (lib.overnight.locate)
 2. ALL todos have status "completed"
 3. The time-lock's window is open (lib.overnight.window_open)
@@ -35,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import overnight  # noqa: E402
+from lib.subagent import is_subagent_context  # noqa: E402
 
 
 def _all_completed(data: dict) -> bool:
@@ -85,7 +88,10 @@ def main() -> None:
     except Exception:
         sys.exit(0)
 
-    if not _all_completed(data):
+    # Only the orchestrator's own list: a subagent's payload carries the
+    # parent's session_id (lib/overnight.py), so locate() would find the
+    # orchestrator's record from it.
+    if is_subagent_context(data) or not _all_completed(data):
         sys.exit(0)
 
     # Only the overnight session's own record: its file name and its own
