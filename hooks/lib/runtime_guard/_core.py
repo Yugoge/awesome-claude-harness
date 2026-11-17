@@ -2750,6 +2750,45 @@ def _pm_exec_family(args: list, pm: Optional[str] = None) -> bool:
     return any(t in _PM_EXEC_SUBCMDS for t in head if t and not t.startswith("-"))
 
 
+_PM_DASHDASH_SUBCMDS = {
+    "npm": frozenset({
+        "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
+        "ci", "clean-install", "ic", "install-clean", "isntall-clean", "uninstall", "unlink", "un", "remove", "rm",
+        "r", "update", "up", "upgrade", "udpate", "link", "ln"}),
+    "pnpm": frozenset({
+        "install", "i", "add", "update", "up", "upgrade", "remove", "rm", "uninstall", "un", "link", "ln",
+        "unlink"}),
+}
+"""The install-family subcommands after which the package manager itself stops reading its flags at `--`. Only
+npm and pnpm are listed; yarn and bun read every argument."""
+
+
+def _pm_dashdash_ends_flags(args: list, pm: Optional[str]) -> bool:
+    """True only if the package manager's first non-option word before `--` is positively an install-family
+    subcommand of that package manager (_PM_DASHDASH_SUBCMDS), every option before it known to the package
+    manager's tables (a value option's next word skipped). Then the package manager itself parses `--` and the
+    words after it are not its flags. Anything else (an unknown option or first word, a script runner, `run`,
+    `test`, `exec`, pnpm's implicit exec of a binary, yarn, bun) is False: its argv after `--` is forwarded to
+    something that may read it, so every argument is read."""
+    if pm not in _PM_DASHDASH_SUBCMDS or "--" not in args:
+        return False
+    head = args[:args.index("--")]
+    value_opts, flag_opts = _PM_VALUE_OPTS[pm], _PM_FLAG_OPTS[pm]
+    i = 0
+    while i < len(head):
+        t = head[i]
+        if t.startswith("-") and len(t) > 1:
+            if t in value_opts:
+                i += 2
+            elif t in flag_opts or ("=" in t and t.split("=", 1)[0] in value_opts | flag_opts):
+                i += 1
+            else:
+                return False
+            continue
+        return t in _PM_DASHDASH_SUBCMDS[pm]
+    return False
+
+
 _PM_SCRIPTS = {"npm-cli.js": "npm", "npm-cli.cjs": "npm", "npm-cli.mjs": "npm", "pnpm.cjs": "pnpm",
                "pnpm.js": "pnpm", "pnpm.mjs": "pnpm", "yarn.js": "yarn", "yarn.cjs": "yarn", "npm.cmd": "npm",
                "npm.exe": "npm", "pnpm.cmd": "pnpm", "pnpm.exe": "pnpm", "yarn.cmd": "yarn", "yarn.exe": "yarn",
@@ -2814,9 +2853,12 @@ def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> boo
     `--global`, `--global=<true>`, a short cluster holding `g` (`-gD`),
     `--location=global` / `--location global` (or npm's unique abbreviations
     `--locat` .. `--locatio`), a `global` subcommand (yarn), or a persistent
-    `config set global <true>` / `set location=global`. npm stops reading its own
-    flags at `--` (`npm -- i -g x`, `npm i x -- -g`, `npm test -- -g` are not
-    global), so arguments after `--` are not its flags; but for an exec-family
+    `config set global <true>` / `set location=global`. Arguments after `--` are
+    read too, except after an install-family subcommand of npm / pnpm that the
+    scan positively identifies (_pm_dashdash_ends_flags: `npm i x -- -g` is not
+    global); a script runner, `run`, `test`, an unknown first word (pnpm's
+    implicit exec, yarn / bun local binaries) forwards them to a command that may
+    run a package manager. For an exec-family
     subcommand (`npm exec` / `x`, `pnpm exec` / `dlx`, `yarn exec` / `dlx`) they
     are the nested command it runs, read as a nested invocation, as is npm's
     `-c` / `--call` string, and so is bun's `run` argv. `pm` names the package
@@ -2835,7 +2877,7 @@ def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> boo
         calls += [t.split("=", 1)[1] for t in args if t.startswith(("--call=", "-c="))]
         if _pm_nested_global(nested, depth) or any(_pm_nested_global(_safe_shlex(c), depth + 1) for c in calls):
             return True
-    if "--" in args:
+    if _pm_dashdash_ends_flags(args, pm):
         args = args[:args.index("--")]
     for i, t in enumerate(args):
         if t in ("-g", "--global"):

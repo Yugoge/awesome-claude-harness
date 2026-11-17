@@ -182,8 +182,6 @@ NPM_ALLOWED_R2 = [
     "npm set preid global",
     "npm config set global false",
     "npm config set location project",
-    "npm run deploy -- --location=global",
-    "npm run deploy -- -g",
     "export NPM_CONFIG_GLOBAL=true; unset NPM_CONFIG_GLOBAL; npm i x",
 ]
 NPM_REFUSED_R2 = [
@@ -237,10 +235,7 @@ NPM_REFUSED_R3 = [
     "npm exec -- bash -c 'npm i -g evil'",
 ]
 NPM_ALLOWED_R3 = [
-    "npm test -- -g foo",
     "npm i x -- -g",
-    "npm -- i -g x",
-    "npm run deploy -- --location=global",
     "npm exec -- eslint .",
     "pnpm dlx create-vite app",
 ]
@@ -271,8 +266,6 @@ HTTP_STOP_REFUSED_R3 = [
 ]
 HTTP_STOP_ALLOWED_R3 = [
     "curl -s 'http://127.0.0.1:5000/stopwords?lang=en'",
-    "curl -sSf -X POST -H 'Content-Type: application/json' -d '{\"a\":1}' http://localhost:8000/stops",
-    "curl -H \"Authorization: Bearer $TOKEN\" localhost:8000/stops",
     "wget -qO- http://localhost:8000/stopwords",
     "git grep -n 'curl localhost:8080/stop'",
     "grep -n 'curl localhost:8080/stop' f | uniq -c",
@@ -332,10 +325,7 @@ NPM_REFUSED_R4 = [
 ]
 NPM_ALLOWED_R4 = [
     "npm --cache /tmp/c install x",
-    "npm -w pkg test -- -g foo",
     "npm exec -- npm-check-updates",
-    "npm exec -- node ./scripts/build.js -g",
-    "bun run test -- -g foo",
     "pnpm --filter web exec -- eslint .",
     "npx eslint .",
     "node scripts/build.js -g",
@@ -366,5 +356,105 @@ def test_http_stop_refused_round4(sandbox, command):
 
 @pytest.mark.parametrize("command", NPM_REFUSED_R4)
 def test_global_package_op_refused_round4(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)
+
+
+# Verifier round 5 (final). Only an install-family subcommand of npm / pnpm that the scan positively identifies
+# ends the package manager's flags at `--`; every other argv (an unknown first word: pnpm's implicit exec, yarn /
+# bun local binaries; `run`, `test`, `exec`; yarn and bun; `npm -- ...`) is read whole, so a global flag after `--`
+# refuses, as on the base. The client shape lifts only a minimal option set (no header, data, -L, proxy, config or
+# @file option) with one plain localhost URL free of `#`, `%` and control characters. The first seven entries of
+# NPM_REFUSED_R5 and the first two of HTTP_STOP_REFUSED_R5 were allow expectations of earlier rounds (lifts of
+# base refusals this round withdraws).
+NPM_REFUSED_R5 = [
+    "npm run deploy -- --location=global",
+    "npm run deploy -- -g",
+    "npm test -- -g foo",
+    "npm -- i -g x",
+    "npm -w pkg test -- -g foo",
+    "npm exec -- node ./scripts/build.js -g",
+    "bun run test -- -g foo",
+    "npm test -- -g",
+    "pnpm nice -- npm i -g ../p",
+    "pnpm timeout -- 60 npm i -g ../p",
+    "pnpm node -- /opt/node22/lib/node_modules/npm/bin/npm-cli.js i -g ../p",
+    "yarn envrun -- npm i -g ../p",
+    "bun envrun -- npm i -g ../p",
+    "pnpm envrun -- npm i -g ../p",
+    "yarn run envrun -- npm i -g ../p",
+    "npm run inst -- -g ../p",
+    "pnpm env -- npm i -g ../p",
+    "pnpm nohup -- npm i -g ../p",
+    "pnpm inst -- -g ../p",
+    "yarn cross-env -- npm i -g ../p",
+    "pnpm npm -- i -g ../p",
+    "pnpm npx -- npm i -g ../p",
+    "pnpm run npm -- i -g ../p",
+    "pnpm -- add -g ../p",
+    "yarn npm -- i -g ../p",
+    "yarn add ../p -- -g",
+    "bun npm -- i -g ../p",
+    "bun -- add -g ../p",
+    "bun add -- -g ../p",
+    "bun add -- ../p -g",
+    "bun add ../p -- -g",
+    "bun i -- -g ../p",
+    "npm -- i -g ../p",
+    "npm exec -- eslint -g",
+    "npm exec -- npm -v -- x \\; npm i -g ./p",
+    "npm run build -- --global",
+    "npm run npm -- i -g ../p",
+    "npm --unknown-opt i -- -g ../p",
+    "pnpm --unknown-opt add -- -g ../p",
+]
+NPM_ALLOWED_R5 = [
+    "npm i x -- -g",
+    "npm i ../p -- --location=global",
+    "pnpm add ../p -- -g",
+    "npm --prefix ./frontend install",
+    "npm --prefix ./frontend run build",
+    "npx tsc --noEmit",
+]
+HTTP_STOP_REFUSED_R5 = [
+    "curl -sSf -X POST -H 'Content-Type: application/json' -d '{\"a\":1}' http://localhost:8000/stops",
+    "curl -H \"Authorization: Bearer $TOKEN\" localhost:8000/stops",
+    "curl -s -H $'X: a\\r\\n\\r\\nGET /stop HTTP/1.1\\r\\nHost: a\\r\\n' localhost:18080/stopx",
+    "curl -s -H $'X: a\\r\\n\\r\\nGET /stop HTTP/1.1\\r\\nHost: a\\r\\n' http://localhost:18080/stopx",
+    "curl -s -H 'Content-Length: 0' --data-binary $'GET /stop HTTP/1.1\\r\\nHost: a\\r\\n\\r\\n' localhost:18080/stopx",
+    "curl -s -H 'Transfer-Encoding: chunked' --data-binary $'0\\r\\n\\r\\nGET /stop HTTP/1.1\\r\\nHost: a\\r\\n\\r\\n'"
+    " localhost:18080/stopx",
+    "curl -s -H 'Content-Length: 0' --data-binary @req.txt localhost:18080/stopx",
+    "wget -qO- --header 'Content-Length: 0' --post-data $'GET /stop HTTP/1.1\\r\\nHost: a\\r\\n\\r\\n'"
+    " localhost:18080/stopx",
+    "wget -qO- --header $'X: a\\r\\n\\r\\nGET /stop HTTP/1.1\\r\\nHost: a\\r\\n' localhost:18080/stopx",
+    "curl -sL http://127.0.0.1:18080/redir#localhost:18080/stopy",
+    "curl -sL localhost:18080/redir -o /dev/null -w '%{url_effective}' --url localhost:18080/stopx",
+    "curl -s localhost:18080/stopx -x 127.0.0.1:18080 http://a/stopz",
+    "curl -s localhost:18080/stopx < req.txt",
+    "curl -s 'localhost:18080/stopx#/stop'",
+]
+HTTP_STOP_ALLOWED_R5 = [
+    "wget -qO- http://127.0.0.1:5000/stops/42",
+    "curl -s http://localhost:8000/stopwatch/1 | jq .",
+    "curl -sS -o out.json -w '%{http_code}' --max-time 5 -X GET http://localhost:8000/stops/42",
+    "http GET localhost:8000/stops/42",
+]
+
+
+@pytest.mark.parametrize("command", NPM_ALLOWED_R5 + HTTP_STOP_ALLOWED_R5)
+def test_allowed_round5(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", HTTP_STOP_REFUSED_R5)
+def test_http_stop_refused_round5(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and "daemon-restart-http-stop" in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", NPM_REFUSED_R5)
+def test_global_package_op_refused_round5(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 2 and "protected-runtime-guard" in r.stderr, (command, r.stderr)

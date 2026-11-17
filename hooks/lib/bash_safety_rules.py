@@ -666,52 +666,6 @@ HTTP_LIFT_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", 
 """The clients whose request URL is their literal argument; a raw socket client (nc, socat, telnet) is not one."""
 HTTP_LIFT_PIPE = HTTP_STOP_FILTERS | {"grep", "egrep", "fgrep"}
 HTTP_STOP_PATH = re.compile(r"/stop(?![A-Za-z0-9])", re.I)
-# Per client: (flag-only short letters, value-taking short letters, flag-only long options, value-taking long
-# options, whether `--opt=value` is accepted). Any other option (curl's -K/--config, -:/--next, -T, --variable,
-# --expand-*, --request-target; wget's -i, -e, -B, --config, -r; ...) keeps the refusal.
-HTTP_LIFT_OPTIONS = {
-    "curl": ("sSfLiIvkGOJNgj46#q", "XHdouAebcmwFrxECzyY",
-             {"--silent", "--show-error", "--fail", "--fail-with-body", "--location", "--include", "--head",
-              "--verbose", "--insecure", "--compressed", "--globoff", "--http1.0", "--http1.1", "--http2", "--no-buffer",
-              "--get", "--remote-name", "--ipv4", "--ipv6", "--path-as-is", "--no-progress-meter", "--raw",
-              "--tcp-nodelay", "--remote-header-name", "--no-keepalive", "--location-trusted", "--progress-bar",
-              "--fail-early", "--create-dirs", "--show-headers"},
-             {"--request", "--header", "--data", "--data-raw", "--data-binary", "--data-ascii", "--data-urlencode",
-              "--json", "--output", "--user", "--user-agent", "--referer", "--cookie", "--cookie-jar", "--max-time",
-              "--connect-timeout", "--write-out", "--form", "--form-string", "--retry", "--retry-delay",
-              "--retry-max-time", "--range", "--proxy", "--cacert", "--cert", "--key", "--url", "--url-query",
-              "--oauth2-bearer", "--limit-rate", "--max-redirs", "--dump-header",
-              "--output-dir", "--unix-socket", "--max-filesize", "--noproxy", "--proxy-user"}, False),
-    "wget": ("qvSckN", "OoaTtUP",
-             {"--quiet", "--verbose", "--no-verbose", "--spider", "--server-response", "--no-check-certificate",
-              "--continue", "--timestamping", "--content-disposition", "--no-clobber", "--show-progress",
-              "--save-headers"},
-             {"--output-document", "--output-file", "--append-output", "--timeout", "--tries", "--user-agent",
-              "--header", "--post-data", "--method", "--body-data", "--user", "--password", "--directory-prefix",
-              "--max-redirect", "--wait", "--referer", "--load-cookies", "--save-cookies"}, True),
-    "http": ("vhbjfIFqdSA", "pao",
-             {"--verbose", "--headers", "--body", "--json", "--form", "--check-status", "--ignore-stdin", "--follow",
-              "--offline", "--quiet", "--download", "--stream", "--all", "--path-as-is"},
-             {"--print", "--auth", "--auth-type", "--timeout", "--verify", "--pretty", "--style", "--output"}, True),
-}
-for _alias in ("https", "httpie", "xh", "xhs"):
-    HTTP_LIFT_OPTIONS[_alias] = HTTP_LIFT_OPTIONS["http"]
-HTTP_LIFT_METHOD_OPTS = frozenset({"-X", "--request", "--method"})
-HTTP_LIFT_LITERAL_OPTS = HTTP_LIFT_METHOD_OPTS | {"--url"}
-
-
-def _http_literal(w):
-    """The static text of a word written as one plain literal (bare, or wholly inside one pair of quotes with no
-    escape), with no curl URL glob; else None. `st''op`, `sto\\p`, `"st"op`, `$'..'`, `{a,b}`, `[o]` are not. A bare
-    `?` or `*` (a query string's `?`) is kept as written: a shell glob cannot put a `/` or a leading `.` there."""
-    if not all(p.kind == "lit" or (p.kind == "glob" and set(p.text) <= set("?*")) for p in w.parts):
-        return None
-    v = "".join(p.text for p in w.parts)
-    if w.text not in (v, "'" + v + "'", '"' + v + '"') or (w.text == v and "\\" in v):
-        return None
-    if re.search(r"[{}\[\]]", v):
-        return None
-    return v
 
 
 def _http_path_stops(text):
@@ -742,80 +696,110 @@ def _http_path_stops(text):
     return False
 
 
-def _http_value_ok(opt, value):
-    """A URL option's value is no file of URLs and reaches no stop endpoint; a method is one plain token."""
-    if opt in HTTP_LIFT_METHOD_OPTS:
-        return bool(re.fullmatch(r"[A-Za-z]+", value))
-    return not value.startswith("@") and not _http_path_stops(value)
+# Per client, the minimal option set shape (b) accepts: (flag-only short letters, flag-only long options,
+# value-taking options -> kind of value). Any other option (headers, data, -L/--location, proxies, config files,
+# --next, uploads, @file arguments, ...) keeps the refusal. A value option takes its value as the next word (wget's
+# `-O` also attached, `-O-` / `-qO-`, and `--output-document=<file>`).
+HTTP_LIFT_OPTIONS = {
+    "curl": ("sSfiv", {"--silent", "--show-error", "--fail", "--include", "--verbose", "--compressed"},
+             {"-o": "file", "--output": "file", "-w": "format", "--write-out": "format", "--max-time": "number",
+              "-X": "method", "--request": "method"}),
+    "wget": ("q", {"--quiet", "--no-verbose", "-nv"}, {"-O": "file", "--output-document": "file"}),
+    "http": ("bhv", {"--body", "--headers", "--verbose", "--check-status", "--ignore-stdin"}, {}),
+}
+for _alias in ("https", "httpie", "xh", "xhs"):
+    HTTP_LIFT_OPTIONS[_alias] = HTTP_LIFT_OPTIONS["http"]
+HTTP_LIFT_URL = re.compile(r"(?:https?://)?(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]{1,5}"
+                           r"(?:/[A-Za-z0-9._~/-]*)?(?:\?[A-Za-z0-9._~=&+,-]*)?")
+"""The only URL shape (b) lifts: an http(s) URL on a localhost host with a port, a path and an optional query of
+plain characters; no userinfo, fragment (`#`), percent-escape, backslash, glob or whitespace."""
+
+
+def _http_plain_word(w):
+    """The static text of a word written as one plain literal (bare, or wholly inside one pair of quotes with no
+    escape) holding no control character and no `#`; else None. A bare `?` (a query string's) is kept as written:
+    a shell glob cannot put a `/` there, and the URL check reads the result."""
+    if not w.parts or not all(p.kind == "lit" or (p.kind == "glob" and set(p.text) <= {"?"}) for p in w.parts):
+        return None
+    v = "".join(p.text for p in w.parts)
+    if w.text not in (v, "'" + v + "'", '"' + v + '"') or (w.text == v and "\\" in v):
+        return None
+    if "#" in v or any(ord(c) < 0x20 or ord(c) == 0x7f for c in v):
+        return None
+    return v
+
+
+def _http_lift_value_ok(kind, v):
+    """A value of one of shape (b)'s value options: a plain output file (or `-`), a write-out format that reads no
+    file, a number of seconds, or the method GET / HEAD."""
+    if kind == "file":
+        return v == "-" or bool(re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v))
+    if kind == "format":
+        return bool(v) and not v.startswith("@")
+    if kind == "number":
+        return bool(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", v))
+    if kind == "method":
+        return v in ("GET", "HEAD")
+    return False
+
+
+def _http_lift_url_ok(v):
+    """A URL word shape (b) lifts: HTTP_LIFT_URL in full, no `.` / `..` path segment, no stop endpoint."""
+    if not HTTP_LIFT_URL.fullmatch(v) or _http_path_stops(v):
+        return False
+    path = re.sub(r"^(?:https?://)?[^/?]*", "", v).split("?", 1)[0]
+    return not any(seg in (".", "..") for seg in path.split("/"))
 
 
 def _http_client_args_ok(name, words):
-    """True if every argument of a lift client is an option it knows to take no URL or request from elsewhere, and
-    every URL-bearing word (positional, --url, a method) is a plain literal whose path is no stop endpoint."""
-    short_flags, short_vals, long_flags, long_vals, eq_ok = HTTP_LIFT_OPTIONS[name]
-    i, positional, literal_next = 0, [], None
-    while i < len(words):
-        w = words[i]
-        if any(p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") for p in w.parts):
+    """True if a lift client's arguments are only options of its minimal set (HTTP_LIFT_OPTIONS) and exactly one
+    URL word that passes _http_lift_url_ok (httpie / xh: optionally preceded by the method GET, and no request
+    item: no header, data, query or file item); every word a plain literal free of control characters and `#`."""
+    short_flags, long_flags, value_opts = HTTP_LIFT_OPTIONS[name]
+    vals = []
+    for w in words:
+        v = _http_plain_word(w)
+        if v is None:
             return False
-        a = w.value() if w.value() is not None else w.text
+        vals.append(v)
+    i, positional = 0, []
+    while i < len(vals):
+        a = vals[i]
         i += 1
-        if literal_next is not None:
-            v = _http_literal(w)
-            if v is None or not _http_value_ok(literal_next, v):
-                return False
-            literal_next = None
+        if a in long_flags:
             continue
-        if a == "--":
-            positional.extend(words[i:])
-            break
-        if a.startswith("--"):
-            opt, eq, val = a.partition("=")
-            if eq and not eq_ok:
+        if a in value_opts:
+            if i >= len(vals) or not _http_lift_value_ok(value_opts[a], vals[i]):
                 return False
-            if opt in long_flags and not eq:
-                continue
-            if opt not in long_vals:
-                return False
-            if eq:
-                if opt in HTTP_LIFT_LITERAL_OPTS and (_http_literal(w) is None or not _http_value_ok(opt, val)):
-                    return False
-            elif i >= len(words):
-                return False
-            elif opt in HTTP_LIFT_LITERAL_OPTS:
-                literal_next = opt
-            else:
-                i += 1
+            i += 1
             continue
-        if a.startswith("-") and len(a) > 1:
-            for j, ch in enumerate(a[1:], 1):
-                if ch in short_flags:
-                    continue
-                if ch not in short_vals:
+        if name == "wget" and a.startswith("--output-document="):
+            if not _http_lift_value_ok("file", a.split("=", 1)[1]):
+                return False
+            continue
+        if a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+            body = a[1:]
+            if name == "wget" and "O" in body:
+                pre, _o, rest = body.partition("O")
+                if set(pre) - set(short_flags):
                     return False
-                opt, rest = "-" + ch, a[j + 1:]
                 if rest:
-                    if opt in HTTP_LIFT_LITERAL_OPTS and (_http_literal(w) is None or not _http_value_ok(opt, rest)):
+                    if not _http_lift_value_ok("file", rest):
                         return False
-                elif i >= len(words):
+                elif i >= len(vals) or not _http_lift_value_ok("file", vals[i]):
                     return False
-                elif opt in HTTP_LIFT_LITERAL_OPTS:
-                    literal_next = opt
                 else:
                     i += 1
-                break
+                continue
+            if set(body) - set(short_flags):
+                return False
             continue
-        positional.append(w)
-    if literal_next is not None:
-        return False
-    for k, w in enumerate(positional):
-        v = _http_literal(w)
-        if v is None or _http_path_stops(v):
-            return False
-        if name not in ("curl", "wget") and k == 0 and not re.search(r"[:/.]", v) and \
-                not re.fullmatch(r"[A-Za-z]+", v):
-            return False  # httpie's METHOD word is one plain token
-    return True
+        if a.startswith("-"):
+            return False  # any other option, `--` included
+        positional.append(a)
+    if name not in ("curl", "wget") and len(positional) == 2 and positional[0] == "GET":
+        positional = positional[1:]
+    return len(positional) == 1 and _http_lift_url_ok(positional[0])
 
 
 def _http_single_client(command, sites):
@@ -839,6 +823,8 @@ def _http_single_client(command, sites):
         return False
     if any(rd.target is not None and rd.target.value() is None for rd in site.cmd.redirects):
         return False
+    if any(rd.op.startswith("<") for rd in site.cmd.redirects):
+        return False  # stdin fed to the client can become a request body
     return all(_http_plain(s, rr) in HTTP_LIFT_PIPE and _http_reader_ok(s, rr) for s, rr in sites[1:])
 
 
@@ -847,12 +833,13 @@ def _http_stop_allowed(command, sites):
     (a) every parsed command only prints or filters text (grep, rg, echo, cat, sed -n, git log, ... | head), so
         the URL is a mention; or
     (b) the command is a single HTTP client invocation (curl, wget, httpie, xh), alone or piped only into pure
-        filters, with no option that takes URLs or requests from elsewhere (`-K`, `--config`, `-:`, `--next`,
-        `-T`, `--variable`, `--connect-to`, `--resolve`, wget's `-i` / `-e`, ...), every URL word a plain literal
-        (no quote splitting, escape, expansion or URL glob) holding no whitespace or control character, and no URL
-        path (with or without a port) reaching `/stop` (not followed by a letter or digit) once percent-decoded
-        and its dot segments removed; so `/stops/42` and `/stopwords` pass and `/stops/../stop`,
-        `'/stops /../stop'` and `localhost/stop` do not."""
+        filters, with no input redirection, whose options are only those of a minimal set (curl: -s -S -f -i -v,
+        --compressed, -o FILE, -w FORMAT, --max-time N, -X GET|HEAD; wget: -q, -nv, -O FILE|-; httpie / xh: -b,
+        -h, -v, --check-status, --ignore-stdin, and the method GET only) and whose one URL word is a plain
+        literal `[http(s)://]<localhost host>:<port>[/path][?query]` of plain characters (no header, data,
+        redirect following, proxy, config or @file option, no `#`, `%`, whitespace or control character, no `.` /
+        `..` segment) whose path is no stop endpoint; so `/stops/42` and `/stopwords?lang=en` pass and a request
+        that could smuggle or redirect a second request to `/stop` does not."""
     if all(_http_reader_ok(site, r) for site, r in sites):
         return True
     if re.search(HTTP_STOP_ANY + r"(?![A-Za-z0-9])", command):
