@@ -230,7 +230,7 @@ def test_the_text_reaches_the_agent_as_posttool_additional_context(tmp_path, hou
     lines = text.split("\n")
     if hours > 0:
         assert lines[0] == "OVERNIGHT LOOP: Cycle 1 complete (PM retro filed). Starting cycle 2."
-        assert "INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again." in lines
+        assert "INSTRUCTIONS: Reset your todo list to all-pending, then mark Step 0 and Step 1 completed." in lines
         assert lines[-1] == ("Resume from Step 2 (exploration) -- Step 1 setup is already done, and the wake"
                              " Step 0 scheduled still runs (no second CronCreate).")
     else:
@@ -284,3 +284,31 @@ def test_a_subagents_all_completed_list_is_not_the_orchestrators(tmp_path, hours
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert result.stderr == ""
+
+
+def test_continuation_names_one_resume_step_step_2(tmp_path):
+    """The continuation names one resume point. commands/dev-overnight.md Step 21:
+    "reset all todos to pending ..., mark Step 0 (the wake still runs) and Step 1
+    completed, and resume from Step 2 (the working root exists)"; the hook's
+    docstring: "reset its own todos and resume from Step 2". No line may tell the
+    agent to begin Step 1 again (re-running setup in a live session), and the
+    hook still writes no state."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    session_id = "overnight-sess-resume-step"
+    state_path = _state_path(project_dir, session_id)
+    fx.write_overnight_state(state_path, session_id, cycle_count=2)
+    _retro_reports(project_dir, session_id, 2)
+    before = state_path.read_bytes()
+
+    result = _run_loop(fx.all_completed_todo_payload(session_id, transcript_path=""), project_dir, home)
+
+    assert result.returncode == 0 and result.stderr == ""
+    text = _said(result)
+    assert "begin Step 1" not in text
+    assert ("INSTRUCTIONS: Reset your todo list to all-pending, then mark Step 0 and Step 1"
+            " completed.") in text.split("\n")
+    assert "Resume from Step 2 (exploration)" in text
+    assert state_path.read_bytes() == before
