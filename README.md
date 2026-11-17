@@ -2,13 +2,15 @@
 
 **A self-governing agent operating system for Claude Code.**
 
-> **The main session routes. Agents write. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.**
+> **The main session routes. It hires specialists. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.**
 
-Not a prompt pack. An operating system for agents: a scheduler, a permission model, a filesystem layout and a git protection kernel.
+Not a prompt pack. An operating system for agents. The orchestrator schedules one-issue agents. Grants and role write paths are the permission model. `docs/dev/` is the filesystem layout. A git protection kernel guards history.
 
-Long chats lose context. Agents run destructive git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs.
+You give it a requirement. It finds the root cause. It asks you only the decisions that are yours. Then it builds the change and checks it.
 
-Battle-tested. The git kernel was paid for in lost work, and the code names each incident. Every mechanism traces to a file. [How it works](docs/how-it-works.md) names the files.
+Long chats lose context. Agents run destructive shell and git commands. They drift from what you asked. This harness gives each piece of work its own one-issue agent with a clean context. Hooks intercept the tool calls. Structure, not vibes. "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. QA reviews every `/commit` first. `/push` needs a commit from `/commit`.
+
+Built from real failures. Two git incidents shaped the kernel. The code names both. Every hook has a row in the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md) that names its file.
 
 <p>
 <img alt="license" src="https://img.shields.io/badge/license-MIT-000000">
@@ -18,51 +20,47 @@ Battle-tested. The git kernel was paid for in lost work, and the code names each
 
 Hooks refuse what a prompt can only ask for.
 
-- **What it is.** A configuration for Claude Code. Clone it into `~/.claude`. Hooks, slash commands and agent prompts. Nothing to import into your project.
-- **How to try it.** Run the init. Watch a guard refuse a push in a sandbox. Then type `/dev <requirement>` in Claude Code. See [Install](#install).
-- **What is proven.** The [status page](docs/status.md): the measured proof and the known limits.
-
 ## Feature highlights
 
 | Capability | What it does |
 |---|---|
-| **Orchestrator-only main session** | The main session routes. A fresh one-issue agent does each piece of work in a clean context. Quality does not decay as the chat grows. A hook caps what the main session does itself. |
-| **Git protection kernel** | Always on, for the main agent and every subagent. An agent's `commit`, `push`, `merge` and `reset --hard` are refused. Only something you typed lets one through. |
+| **Orchestrator-only main session** | The main session routes. A fresh one-issue agent does each piece of work in a clean context. Quality does not decay as the chat grows. A hook caps what the main session does itself. Enforced, not asked nicely. |
+| **Git protection kernel** | On in every session, interactive or overnight, for the main agent and every subagent. An agent's `commit`, `push`, `merge` and `reset --hard` are refused. Only something you typed lets one through. |
 | **Autonomous overnight pipeline** | `/dev-overnight 6:00` explores, triages, fixes and verifies until a clock time. Nobody is asked. It commits nothing. You land the work in the morning. |
-| **Verbatim contract** | A hook writes your words to disk before any agent runs. Every agent reads them. No agent works from a retelling. |
-| **Ask-first round** | `/spec`, `/dev`, `/redev` and `/dev-command` ask you first. Intent, scope, edge cases, acceptance. In Claude Code's question dialog. A skipped question settles to its stated default. |
-| **BA, QA, dev, QA** | BA cites evidence for the root cause. QA checks the analysis before any code exists. QA checks the build after. Each loop ends on its own only on a QA pass. |
+| **QA before code** | BA cites evidence for the root cause. QA checks the analysis before any code exists. Fixing an analysis is cheaper than build loops on the wrong layer. QA checks the build after. A loop ends only on a QA pass, or when you stop it. |
+| **Verbatim contract** | A hook writes your words to disk before any agent runs. BA, QA, dev and the specialists get the file. Paraphrase is drift. |
 | **Durable specs** | `/spec` asks you first and writes a durable spec. It splits it into per-agent briefs with Gawande-style checkpoints. `/dev` and `/dev-overnight` build from it. |
-| **Release-readiness gate** | `/close` checks that the system can ship it, not only that the code works. Inspectors and QA judge the diff. Four workflow-integrity checks. It ends on `CLOSE: YES` or the findings. |
-| **Adversarial second opinion** | `--codex` sends each agent's draft to OpenAI Codex through a fail-closed isolation wrapper. It never falls back to a bare `codex`. Claude classifies every finding. Codex never sets the verdict. |
-| **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. `/stop` is your exit. |
-| **Single-use grants** | Only a command you type mints one: `/commit`, `/push` or `/allow`. Each works once and expires. A commit grant names the repository, branch and HEAD. `/allow` matches the command's structure, never a substring. |
-| **Branch, PR and worktree firewall** | Agents create no branch, pull request or worktree. Three exceptions: a live `/dev-overnight`, `/do` for the main agent, an `/allow` grant for that command. |
+| **Release-readiness gate** | `/close` checks that the system can ship it, not only that the code works. Inspectors and QA judge the diff. Plus workflow-integrity checks. It ends on `CLOSE: YES` or the findings. |
+| **Adversarial second opinion** | `--codex` sends each agent's draft to OpenAI Codex through an isolation wrapper you supply (`CODEX_ISO_BIN`). No wrapper, no call. Never a bare `codex`. It hunts real defects and missed edge cases before QA inherits them. Claude classifies every finding. Codex never sets the verdict. |
+| **Branch, PR and worktree firewall** | Agents create no branch, pull request or worktree. The exceptions: a live `/dev-overnight`, `/do` for the main agent, an `/allow` grant for that command. |
+| **Short-lived grants** | Only a command you type starts one: `/commit`, `/push`, `/merge` or `/allow`. Each expires. A commit, push or `/allow` grant works once. A `/commit --bulk` run covers its whole batch. A commit grant names the repository, branch and HEAD. `/allow` matches the command's structure, never a substring. |
 | **Crash-proof checkpoints** | Snapshots go to `refs/checkpoints/<branch>` through git plumbing. HEAD never moves. `git blame` points at real commits. |
-| **Self-updating docs** | Edit a command, agent or hook. A hook regenerates the marked sections of the folder's `INDEX.md` and `README.md` and of `CLAUDE.md`. Your prose outside the markers stays. |
+| **Self-updating docs** | A session edits a command, agent or hook. A hook regenerates the marked sections of the folder's `INDEX.md` and `README.md` and of `CLAUDE.md`. Your prose outside the markers stays. CI fails when a folder's generated sections drift. |
 | **Generated acceptance tests** | For standard or risky tasks, `test-writer` writes failing skeletons from the acceptance criteria. A `TEST_INCOMPLETE` stop left in a test is a critical QA finding. |
+| **Shell and secrets deny list** | `settings.json` denies `sudo`, `rm -rf`, `dd`, `mkfs`, force-push, `systemctl restart`, `kubectl delete` and package publish. It denies `Read` on `.env` files, keys, credentials and secret files. `Edit` and a shell redirect are refused on all of them but keys. A shell read is not refused. |
+| **UI-audit skills** | Playwright review: axe-core injection, APCA contrast, an anti-pattern catalog, a state matrix, token conformance, a weighted beauty score. |
+| **Ask-first round** | `/spec`, `/dev`, `/redev` and `/dev-command` ask you first. Intent, scope, edge cases, acceptance. In Claude Code's question dialog. A skipped question settles to its stated default. |
+| **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. `/stop` is your exit. `CLAUDE_COMMAND_GATE=off` switches it off. The shipped settings never set it. |
 | **Parallel lanes, no phases** | Several outcomes run as parallel lanes in one cycle. QA fails a plan that phases or defers one. |
 | **Declared obligations** | Each dispatch declares the artifacts its agent owes. A hook checks them when the agent stops, while its context still exists. |
 | **Usage-limit resume** | `/restart` resumes each interrupted agent by its original id. Never a replacement. |
-| **Secrets off-limits** | `settings.json` denies reading `.env` files, keys, credentials and secret files. |
-| **UI-audit skills** | Browser review: accessibility injection, contrast, an anti-pattern catalog, a state matrix, token conformance, a weighted beauty score. |
 | **Fact-based scores** | A hook scores each agent from what its dispatch did. No agent reports its own score. Your `/close` rating counts too. The two lowest ranks add a QA round or a Codex debate. |
 | **Generated claims** | The repository computes every figure about itself. CI fails when one drifts or is typed by hand. |
 
 ## The git protection kernel
 
-Paid for in lost work. Two incidents shaped it. The code still names both.
+Scars, not hypotheticals. Two incidents shaped it. The code names both, with dates.
 
-- A dev agent used `git stash` as a scratch buffer. Then it ran a wide-path checkout. It erased seventeen days of UI work.
+- A dev agent used `git stash` as a scratch buffer. Then it ran a wide-path checkout. It erased seventeen days of UI work. It reported that as an accident.
 - An orchestrator answered "commit and push everything" with a ninety-three-file commit and push. Nobody signed off. It happened in an interactive session. So the guard is not limited to overnight runs.
 
-The guard is always on. It covers the main agent and every subagent, interactive or overnight. Every agent `git` command passes through the Bash hooks below, in the order `settings.json` registers them.
+The guard covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Every agent `git` command passes through the Bash hooks below. They run in parallel. The diagram shows what each one does, not an order.
 
 ```mermaid
 flowchart TD
     B["an agent's Bash call runs git"] --> S["bash safety<br/>refuses stash-as-buffer, a wide-path checkout or restore from a ref, reset --hard<br/>unless /do (main agent) or a matching /allow"]
-    S --> W["bulk-commit detector<br/>warns on the sync-everything commit shape. Never refuses."]
-    W --> G["git privilege guard"]
+    B --> W["bulk-commit detector<br/>warns on the sync-everything commit shape. Never refuses."]
+    B --> G["git privilege guard"]
     G --> L{"can it read which git<br/>subcommand runs?"}
     L -->|"no: an expansion or a quoted binary,<br/>unless you issued a residual override"| NO
     L -->|yes| V{which verb?}
@@ -82,7 +80,7 @@ flowchart TD
 
 Something you typed must allow each agent commit, push, merge or hard reset. `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. `/do` never covers a commit or a push. It covers the main agent for one turn, and only when the change cannot move the protected branch.
 
-`/push` and `/merge` run their git inside their own wrappers, `hooks/push.sh` and `hooks/merge.sh`. Each wrapper runs in a subprocess that no hook sees. Each decides by its own grant or token. `push.sh` exits with code `3` without a token from `/commit`. These stay free:
+`/push` and `/merge` run git inside their own wrappers. No hook sees inside. `/push` spends the push analyst's grant first. `/merge` runs only after the merge analyst's grant passes its check. These stay free:
 
 - read-only git: `status`, `log`, `diff`, `show`, `blame`
 - `add`
@@ -93,7 +91,7 @@ Something you typed must allow each agent commit, push, merge or hard reset. `/c
 
 ## The overnight pipeline
 
-Works while you sleep. You land it in the morning.
+Hand it a vague bug report at midnight. It works while you sleep. The git kernel stays on all night. You land the work in the morning.
 
 ```mermaid
 flowchart LR
@@ -118,7 +116,7 @@ It runs in your checkout by default, with no worktree boundary. A `--worktree` r
 
 ## Install
 
-You need `python3`, `git` and `jq`. You need Claude Code to use the harness. Codex is optional. Only `--codex` and `/codex` use it. They need the OpenAI Codex CLI.
+You need `python3`, `git` and `jq`. You need Claude Code to use the harness. Codex is optional. Only `--codex` and `/codex` use it. They need the OpenAI Codex CLI and an isolation wrapper you supply (`CODEX_ISO_BIN`).
 
 ### Full install: clone + init
 
@@ -128,7 +126,9 @@ git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude   # nee
 python3 ~/.claude/scripts/capture-hero-run.py --check-only # sandboxed demo: a push refused, allowed once by a grant, refused again
 ```
 
-The demo writes nothing into the checkout. It prints where it saved its log. Then, in Claude Code, type `/dev <your requirement>`.
+The demo needs no Claude Code. It runs the real hooks in a sandbox. It writes nothing into the checkout. It prints where it saved its log. Then, in Claude Code, type `/dev <your requirement>`.
+
+After init, `git status` stays clean. Overlay values never show up as a diff and never reach a commit.
 
 ### Guardrails only: the installer core profile
 
@@ -160,11 +160,11 @@ scripts/install/install --profile core   # guardrails in an isolated directory, 
    /merge · /push                 a real merge into the default branch · the push wrapper, after the push analyst
 ```
 
-Each stage hands a checked artifact to the next. You start each stage with one command. Agents do the work inside it. Nobody reviews the code by hand. Only `/dev-overnight` needs no command from you until its end time.
+Each stage hands a checked artifact to the next. You start each stage with one command. Agents do the work inside it. Only `/dev-overnight` needs no command from you until its end time.
 
 - **One cycle, parallel lanes.** `/dev` splits your requirement into outcomes that each verify alone. One lane per outcome. BA, QA, dev and QA run once per lane, in parallel. A failing lane retries alone. The cycle passes only when every lane's QA passes.
 - **A loop ends on a pass, or when you stop it.** No round cap. Your `/stop` or Esc interrupts either loop at any time. So a stubborn failure loops until you stop it.
-- **One Codex loop. Codex has no veto.** Add `--codex` to `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`. An agent asks Codex once for a complete review. After that, only a capped number of fix checks. Claude classifies each finding as a real bug, a minor point, out of scope or a nitpick. Claude may reject one with a reason.
+- **Adversarial second opinion, one loop.** Add `--codex` to `/dev` and its variants, `/spec`, `/clean`, `/close` or `/commit`. An agent asks Codex once for a complete review. After that, only a capped number of fix checks. Claude classifies each finding as a real bug, a minor point, out of scope or a nitpick.
 - **Asked first, then only when it matters.** Without a spec, a panel of independent BAs analyses the requirement from separate angles. Panel QA checks the evidence each one cites. Only a verified root cause becomes an option. With a spec, one BA asks what the spec left open. A hook writes your answers to disk. No agent is dispatched until the round is asked. Later, an agent that needs a decision writes one question with options and a default. The Stop gate refuses to end a turn on a question asked in plain text.
 - **Grants start from a command you type.** The [trust model](#trust-model-in-practice) below says who may use which.
 
@@ -193,7 +193,7 @@ graph TD
     class PRE,SS,SG gate
 ```
 
-## Failure modes this exists to prevent
+## Failure modes
 
 | Failure mode | Rule |
 |---|---|
@@ -204,7 +204,7 @@ graph TD
 | A missing artifact shows up only at `/close` | Each dispatch declares what its agent owes. A hook checks it when that agent stops. |
 | QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA until the aggregate report names every declared lane and each lane has a report. |
 | A false pass ships a broken feature | QA starts from doubt and fails when in doubt. Its report must record the end-to-end status. |
-| A second model's opinion becomes the verdict | Claude classifies every Codex finding. Codex never sets the verdict. |
+| QA inherits a draft's mistakes | `--codex` puts each draft through an adversarial Codex review first. Claude keeps the verdict. |
 | Unfinished work is handed off as done | The Stop gate refuses the stop until every todo is done and the artifact chain passes. |
 | An agent writes outside its job | Each subagent writes only to its role's paths. |
 | An irreversible git operation | Agent commit, push, merge and `reset --hard` are refused by default. Stash-as-buffer and wide-path checkout are refused by shape. |
@@ -216,7 +216,7 @@ The main session's context stays small. The real work happens in the agents' cle
 | Guardrail | What it refuses | Why |
 |---|---|---|
 | Bash streak cap | The main agent's next `Bash` call after a short run. It lifts on an agent dispatch or your next prompt. | Delegate before shell output floods the context. |
-| Once per turn | A second call in one turn of the same tool outside the always-allowed list (`Edit`, `Write`, `WebFetch`, ...) | Real edits belong in an agent's clean context. |
+| Once per turn | A second call in one turn of a capped tool such as `Edit`, `Write` or `WebFetch` | Real edits belong in an agent's clean context. |
 | Read-size cap | The main agent reading a large file whole | Delegate and ask for a summary. |
 | Write over existing | `Write` onto an existing file. Use `Edit`. | A rewrite from memory loses content. No diff catches it. |
 | No background dispatch | An agent dispatch without `run_in_background: false`, and every ordinary `SendMessage` | A background agent escapes the pipeline's checks. |
@@ -265,9 +265,9 @@ The git privilege guard runs before the tool executes. It finds the wrapper's va
 |---|---|
 | `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push` | Refused, exit `2`. Inline environment injection. Decided before any grant is read. |
 | `git push` | Refused, exit `2`. Agents may not push. The message points to `/push`. |
-| `/push`, typed by you | The push analyst reviews what would go out and writes a grant. `scripts/execute-push.py` validates and spends it, then hands over to `hooks/push.sh`. `push.sh` refuses with exit `3` unless a token from `/commit` names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
+| `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
 
-Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
+The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
 
 ### Usage examples
 
@@ -366,14 +366,15 @@ Did you hit a usage limit? `/restart` resumes every recoverable interrupted chil
 
 The taste behind the project.
 
-- **Hooks decide, prompts guide.** "Please don't force-push" is a wish. A hook that exits `2` is a refusal. A hook carries each rule that must hold. Prompts carry judgment and point at the hook.
+- **Enforce in code, not in prose.** A hook carries each rule that must hold. Prompts carry judgment and point at the hook.
 - **Rules, not stories.** Every prompt that touches infrastructure says what is forbidden, not only what is allowed.
 - **WHAT, not HOW.** The orchestrator describes the problem. The agent picks its tools. A hook warns on a leak. It never blocks.
 - **One agent, one issue.** Never bundle. N outcomes become N parallel lanes in one cycle. Nothing is split into phases.
-- **Your words are the contract.** The literal requirement is on disk before any agent runs. Every agent reads it. Paraphrase is drift. Drift ships the wrong thing with confidence.
+- **Your words are the contract.** The literal requirement is on disk before any agent runs. BA, QA, dev and the specialists get it. Paraphrase is drift. Drift ships the wrong thing with confidence.
 - **No flow may strand you.** CI fails a replay that reaches a block no action clears. No hook gates `/stop` or Esc.
 - **One producer per fact.** Every artifact has one producer and a reader that decides on it. The repository generates every figure about itself.
 - **Fail closed, leave forensics.** Ambiguous grant? Refuse. Unparseable verdict? Fail. The evidence stays on disk.
+- **Degrade, never fall back unsafely.** A missing extra loses its own feature. Codex never falls back to a bare `codex`. No bubblewrap, no in-place overnight run.
 
 ## Proof and limits
 
@@ -399,33 +400,31 @@ What still needs you:
 
 - An agent cannot start an owner-only command.
 - The git guard refuses every agent by default.
-- Each grant works once.
+- Each grant expires. A commit, push or `/allow` grant works once.
 - A hook refuses agent writes to a project's `.claude/hooks/` and `.claude/commands/`. The owner allows them with a sentinel file.
 
 The [status page](docs/status.md) lists what is not covered.
 
-**Is everything in this README real?** Every mechanism here traces to a file. [How it works](docs/how-it-works.md) names the files. The [ledger](docs/ENFORCEMENT-LEDGER.md) says how far each hook is proven.
+**Is everything in this README real?** Every hook here has a row in the [ledger](docs/ENFORCEMENT-LEDGER.md): its file, what it does and how far that is proven.
 
-**Can I use it with a team or in CI?** Built for one developer per `~/.claude`. Grants belong to one session. Hooks fire only when Claude Code runs. The test suite runs without Claude Code (`scripts/test`). CI runs it on every pull request.
-
-**Where are the numbers?** On the [status page](docs/status.md). The replayed pipelines, the injected faults, the blocking sites and the tests. What each one proves and what it does not.
+**Can I use it with a team or in CI?** Built for one developer per `~/.claude`. Grants live in one machine's state directory. Hooks fire only when Claude Code runs. The test suite runs without Claude Code (`scripts/test`). CI runs it on every pull request.
 
 ## Extending it
 
-Plain Markdown and small scripts. Adding a piece is low-ceremony. A prompt states what is required and what is forbidden. A hook that guards anything dangerous fails closed and says why. [Extending the harness](docs/extending.md) has details and examples.
+Plain Markdown and scripts. Each piece has a checked contract. A prompt states what is required and what is forbidden. A hook that guards anything dangerous fails closed and says why. [Extending the harness](docs/extending.md) has details and examples.
 
-| Extension | File | Required | Checked by |
-|---|---|---|---|
-| Slash command | `commands/<name>.md` | `description:`, plus `summary:` and `group:` for the command table | Generation fails on a missing or over-long summary, or an unknown group. |
-| Agent | `agents/<name>.md` | `name:` and `description:`, plus `summary:` for the cast table | The same generation, for the cast |
-| Hook | `hooks/<name>.py` or `.sh`, registered in `settings.json` | Exit `2` to refuse, `0` to allow. Register it through the harness-home path. | `scripts/doctor` fails when a registered hook path does not resolve. |
-| Owner-only command | As above, with `disable-model-invocation: true` | A `Skill(<name>:*)` entry in the deny list of `settings.json` | A coverage test fails without it. |
+| Extension | Required | Checked by |
+|---|---|---|
+| Slash command, `commands/<name>.md` | `description:`, plus `summary:` and `group:` for the command table | Generation fails on a missing or over-long summary, or an unknown group. |
+| Agent, `agents/<name>.md` | `name:` and `description:`, plus `summary:` for the cast table | The same generation, for the cast |
+| Hook, `hooks/<name>.py` or `.sh`, registered in `settings.json` | Exit `2` to refuse, `0` to allow. Register it through the harness-home path. A row in the enforcement ledger. | `scripts/doctor` fails when a registered hook path does not resolve. `scripts/check-enforcement-evidence.py` fails without its ledger row. |
+| Owner-only command, as above with `disable-model-invocation: true` | A `Skill(<name>:*)` entry in the deny list of `settings.json` | A coverage test fails without it. |
 
 ## Documentation
 
 - [Status](docs/status.md): the measured proof, the demo recording, the claim rows and the known limits.
 - [Installation](docs/installation.md): clone and init, the settings overlay, optional modules, the guardrails-only profile, dependencies and troubleshooting.
-- [How it works](docs/how-it-works.md): the architecture, the agents, the guardrails and the project structure, with the file behind each mechanism.
+- [How it works](docs/how-it-works.md): the architecture, the agents, the guardrails and the project structure.
 - [The git protection kernel](docs/git-protection-kernel.md): what git operations are refused, how grants work, and what each guard does not see.
 - [The overnight pipeline](docs/overnight-pipeline.md): `/dev-overnight` until a clock time.
 - [Extending the harness](docs/extending.md) and the longer [FAQ](docs/faq.md).

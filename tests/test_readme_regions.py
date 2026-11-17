@@ -1071,10 +1071,10 @@ def cited_readme(readme_text, monkeypatch):
 
 
 def test_the_readme_declares_no_cited_figure(readme_text, status_text):
-    """The owner removed the README's "Why this exists" section and every outside source it cited, so nothing is
-    declared; the rule stays and is exercised below with the test's own sample."""
+    """The README cites no outside figure, so nothing is declared, and the real README's prose holds no numeral
+    the rule would have to excuse; the rule stays and is exercised below with the test's own sample."""
     assert gen.CITED_FIGURES == ()
-    assert "arxiv.org" not in REAL.readme.read_text(encoding="utf-8")
+    assert numbers(REAL.readme.read_text(encoding="utf-8")) == []  # the real README, with nothing declared
     assert numbers(readme_text) == []  # the regions' own numbers are not read
     assert numbers(status_text, "status") == []  # the status page cites nothing, so it is not asked to
 
