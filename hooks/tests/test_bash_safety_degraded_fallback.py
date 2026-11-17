@@ -26,6 +26,11 @@ sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
 
 import bash_execution_boundary as eb  # noqa: E402
 import bash_safety_rules as R  # noqa: E402
+
+# bash_safety_rules takes its hooks directory from sys.argv[1], which under plain pytest is a test path: point it at
+# this checkout's hooks explicitly, and drop tables another module may have loaded from the wrong place.
+R.HOOKS, R.LIB = HOOKS_DIR, os.path.join(HOOKS_DIR, "lib")
+R._DG_TABLES = None
 from shell_parse import WRAPPERS  # noqa: E402
 
 DEGRADED = "removal-policy FAIL-CLOSED"
@@ -56,12 +61,13 @@ EVERYDAY_TRAILING_OPTION = [
     "mysql --version", "ssh -V", "ssh-add -l", "gpg --list-keys", "base64 -d",
     "git status --short && git diff --stat", "git log --oneline | head -5", "cd src && ls -la",
     "git diff | head -50", "history | tail -20", "git log -p -1", "sort file.txt | uniq -c | sort -rn",
+    "bc -l",
 ]
 
 # Everyday commands the allowlist refuses in degraded mode on purpose: they run code the repository holds (a test
-# suite, a Makefile, build scripts, a compose file's containers) or read a program from stdin (bc).
+# suite, a Makefile, build scripts, a compose file's containers, a cargo alias in the repository's config).
 ALLOWLIST_REFUSED_EVERYDAY = [
-    "bc -l", "cargo build --release", "cargo fmt --check", "docker compose up -d", "make -j4", "make -n",
+    "cargo build --release", "cargo fmt --check", "docker compose up -d", "make -j4", "make -n",
     "pytest --co -q", "pytest -q", "pytest -v", "pytest -x", "python3 -m pytest -q", "python3 -m pytest -x",
     "python3 -m pytest tests -v",
 ]
@@ -367,7 +373,7 @@ STDIN_CODE_AND_NESTED_VALUES = [
 # Heads that run code they read (an interpreter, a REPL, a database shell, a macro processor) are not on the
 # allowlist; any of them ending a command on an option refuses, stdin-fed or not.
 REPL_HEADS = ["python3 -m asyncio", "m4", "sqlite3", "duckdb", "psql", "mysql", "dc", "ed", "awk", "perl", "ruby",
-              "lua", "tclsh", "jshell", "ghci", "bc", "node", "make -f -", "gawk", "php", "Rscript", "osascript"]
+              "lua", "tclsh", "jshell", "ghci", "node", "make -f -", "gawk", "php", "Rscript", "osascript"]
 
 
 @pytest.mark.parametrize("head", REPL_HEADS)
@@ -466,3 +472,109 @@ def test_analyzer_timeout_default_leaves_headroom_under_load():
     assert R.duration("", "15s") == 15.0
     src = open(os.path.join(HOOKS_DIR, "lib", "bash_safety_rules.py"), encoding="utf-8").read()
     assert 'duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")' in src
+
+
+# ── Round 7: every spelling of every refused option ─────────────────────────
+
+# Where each allowlisted head's refused options are tried, and the same command without them (which must pass).
+SPELLING_CONTEXT = {
+    "kubectl": "kubectl get pods {} -A", "helm": "helm list {} -A", "pip": "pip list {} -v", "pip3": "pip3 list {} -v",
+    "npm": "npm ls {} -a", "pnpm": "pnpm ls {} -r", "apt": "apt show x {} -a", "apt-cache": "apt-cache show x {} -a",
+    "ruff": "ruff check {} -q", "less": "less {} f -n", "more": "more {} f -n", "hostname": "hostname {} -v",
+    "man": "man ls {} -a", "info": "info ls {} -a",
+}
+
+
+def _spellings(option, values, refused):
+    """Exact, `=value`, every abbreviation, in a cluster and with an attached value."""
+    if option.startswith("--"):
+        return [option, option + "=v"] + ["--" + option[2:k] for k in range(3, len(option))]
+    if len(option) == 2 and option[0] == "-":
+        filler = next(c for c in "uqvayzw" if c not in values and "-" + c not in refused)
+        return [option, option + "val", "-" + filler + option[1], "-" + filler + option[1] + "val"]
+    return [option]
+
+
+def refused_spellings():
+    cases = []
+    for head, (refused, values) in sorted(R._DG_REFUSED_OPTS.items()):
+        context = SPELLING_CONTEXT.get(head, head + " {} x -q")
+        for option in refused:
+            cases += [(context, context.format(sp)) for sp in _spellings(option, values, refused)]
+    for sub, (options, words) in sorted(R._DG_GIT_SUB.items()):
+        refused = R._DG_GIT_ALL + options
+        for option in refused:
+            cases += [(None, "git %s %s -q" % (sub, sp)) for sp in _spellings(option, "", refused)]
+        cases += [(None, "git %s %s -q" % (sub, w)) for w in words]
+    return cases
+
+
+def test_every_spelling_of_every_refused_option_refuses():
+    rmref, failures, contexts = _rmref(), [], set()
+    cases = refused_spellings()
+    assert len(cases) > 500, len(cases)
+    for context, command in cases:
+        if not R.degraded_refuses(command, rmref):
+            failures.append(command)
+        if context:
+            contexts.add(context.format("").replace("  ", " "))
+    assert not failures, failures[:20]
+    # The refusal comes from the option: each context without it passes.
+    assert not [c for c in contexts if R.degraded_refuses(c, rmref)], sorted(
+        c for c in contexts if R.degraded_refuses(c, rmref))
+
+
+# The verifier's round-7 inputs: abbreviations, clusters and attached values of options that run a program.
+R7_OPTION_SPELLINGS = [
+    "git grep -iOsh PWNED\nls -l", "git grep -iOsh -e PWNED --", "git grep -lOsh zzz -n",
+    "git grep --open=/dev/shm/v7/x PWNED\nls -l", "git ls-remote --upload=/dev/shm/v7/x /dev/shm/v7/repo -q",
+    "git fetch --upload=/dev/shm/v7/x -q", "git pull --upload=/dev/shm/v7/x -q", "fd -e py -xpython3 -H",
+    "fd . -x./x -H", "fd . -X./x -H", "fd . --exec=./x -q", "fd . --exec-batch=./x -H",
+    "kubectl get pods --kubeconfig=/dev/shm/v7/kc -A", "helm list --kubeconfig=/dev/shm/v7/kc -A",
+    "git pull -s ours -q", "printf -v PATH %s /dev/shm/v/bin\nls -l", "apt list -o Dir::Bin::dpkg=/x -a",
+    "pnpm ls --pnpmfile=/dev/shm/v/p.cjs -r", "ss -K dst 1.2.3.4 -n",
+]
+
+# Writes outside the operands, or code from a file, through an allowlisted head.
+R7_WRITES = [
+    "sort -o out f -n", "sort --output=out -n", "uniq a b -c", "xxd -r a b -g", "info -o out ls -a",
+    "info --dribble=x ls -a", "git log --output=x -1", "git diff --out=x --stat", "git show --output x -q",
+    "ruff check --output-file=x -q", "ruff check -o x -q", "tree -H . -a", "tree -R -H . -a", "file -C -m x -b",
+    "man -C x ls -a", "man -X ls -a", "git branch --del x -q", "git branch -D x -q", "git tag -d x -q",
+    "git add -p -q", "git add --pa -q", "git config edit -q", "git config --edit -q", "git config -e -q",
+    "date --se=now -u", "date -s now -u", "hostname --file=x -v", "hostname --fi=x -v", "less +!id f -n",
+    "less -k x f -n", "less --lesskey-src=x f -n", "tsc -b --noEmit", "git merge -s evil x -q",
+]
+
+# Local forms restored after round 7 (they run nothing beyond what commit and pull already do).
+R7_ALLOWED = [
+    "ls -la | less", "git log -5 | less", "git switch main -q", "git checkout -b x -q", "git restore --staged x -q",
+    "git merge --ff-only -q", "git stash pop -q", "bc -l", "tsc --noEmit", "date -Iseconds", "rg --pretty foo -i",
+    "fd -e py -H", "fd -tf -H", "git commit --no-verify -m x -q", "git stash list -q", "git notes list -q",
+    "git worktree list -v",
+]
+
+
+@pytest.mark.parametrize("command", R7_OPTION_SPELLINGS + R7_WRITES)
+def test_round7_forms_refuse(command):
+    assert R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("command", R7_ALLOWED)
+def test_round7_local_forms_stay_allowed(command):
+    assert not R.degraded_refuses(command, _rmref()), command
+
+
+@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
+def test_round7_option_spellings_refuse_end_to_end(mode, tmp_path):
+    hook = None
+    if mode == "crash":
+        dst = tmp_path / "hooks"
+        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        analyzer = dst / "lib" / "bash_execution_boundary.py"
+        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
+            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
+        hook = str(dst / "pretool-bash-safety.sh")
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), R7_OPTION_SPELLINGS))
+    assert not [c for c, code, _err in results if code != 2], (mode, results)

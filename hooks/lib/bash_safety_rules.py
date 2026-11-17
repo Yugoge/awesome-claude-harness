@@ -946,7 +946,6 @@ _DG_EXTRA_PROGRAMS = frozenset(
     "entr nix nix-shell direnv rm rmdir unlink shred srm wipe wipefs truncate rsync dd grm grmdir gunlink gshred "
     "gtruncate".split())
 _DG_FIND_EXTRA = frozenset("-fprint -fprint0 -fprintf -fls".split())
-_DG_FD_EXEC = frozenset("-x -X --exec --exec-batch".split())
 _DG_INFO = frozenset(("--version", "--help"))
 _DG_CODE_MODULES = frozenset("code runpy pdb timeit cProfile profile trace idlelib doctest IPython asyncio "
                              "unittest pytest".split())
@@ -956,9 +955,9 @@ _DG_DOCKER_EXEC = frozenset("run exec create start attach debug cp commit".split
 _DG_KUBECTL_EXEC = frozenset("exec run debug attach cp port-forward proxy apply replace patch".split())
 _DG_GIT_EXEC = frozenset("clean rm rebase difftool mergetool filter-branch filter-repo daemon instaweb "
                          "send-email".split())
-# git text that runs a command: an ext:: remote and the settings that enable or alias it, and the options whose
-# value is a program (`--upload-pack`, `--receive-pack`, `--exec`; `-O` of `git grep` and `-u` of the fetchers below).
-_DG_GIT_RUNS = re.compile(r"ext::|protocol\.(ext\.)?allow|insteadof|^--(upload-pack|receive-pack|exec)", re.I)
+# git text that runs a command: an ext:: remote and the settings that enable or alias it. The options whose value is a
+# program or a written file are in _DG_GIT_ALL / _DG_GIT_SUB and go through the option matcher.
+_DG_GIT_RUNS = re.compile(r"ext::|protocol\.(ext\.)?allow|insteadof", re.I)
 _DG_TABLES = None
 
 
@@ -992,7 +991,7 @@ def _degraded_tables():
                 "rmref": _dg_removal_reference(),
             }
         try:
-            _DG_TABLES = with_alarm(2, load)
+            _DG_TABLES = with_alarm(5, load)  # 2 s flaked once under heavy load; a slow import still refuses
         except BaseException:  # noqa: BLE001 - an analyzer module that will not even import: refuse
             _DG_TABLES = False
     return _DG_TABLES or None
@@ -1074,10 +1073,7 @@ def _dg_read_handler(t, base, words, depth=0):
         if i is None or i + 1 >= len(words):
             return i is not None  # `git --version`: global options only
         sub = words[1 + i]
-        if any(_DG_GIT_RUNS.search(w) for w in words[1:]) or (sub == "grep" and any(
-                w.startswith(("-O", "--open-files-in-pager")) for w in words[2 + i:])) or (
-                sub in ("clone", "fetch", "ls-remote", "archive") and any(
-                    re.match(r"-[A-Za-z]*u", w) for w in words[2 + i:])):
+        if _dg_git_runs(words) or (sub in ("clone", "archive") and _dg_opts_hit(words[2 + i:], ("-u",))):
             return False
         return sub in t["git_subs"] and sub not in t["git_forward"] and sub not in _DG_GIT_EXEC
     if base == "docker":
@@ -1160,7 +1156,7 @@ def _degraded_command_is_plain(t, words, depth=0):
             return False
     elif _dg_sensitive(t, head):
         return False
-    elif head == "fd" and _DG_FD_EXEC.intersection(words):
+    elif head == "fd" and _dg_opts_hit(words[1:], *_DG_REFUSED_OPTS["fd"]):
         return False
     elif head in t["consumers"]:
         model = t["consumers"][head]
@@ -1234,6 +1230,30 @@ def _dg_quoted_head(line):
 # git command text, shell strings inside words) still apply to every allowed command.
 
 
+def _dg_opt_hit(word, refused, values=""):
+    """True when `word` spells one of the `refused` options, as getopt_long, clap and git would read it.
+
+    A long option matches exactly, as `--name=value`, or abbreviated to any prefix of a refused name (ambiguous
+    prefixes included: strict). A short option matches anywhere in a cluster (`-iOsh`) or with an attached value
+    (`-xpython3`); the scan of a cluster stops only at a letter in `values`, an option whose attached remainder is
+    its value (`date -Iseconds`). A `+`-word matches only exactly."""
+    if word.startswith("--") and len(word) > 2:
+        name = word[2:].split("=", 1)[0]
+        return any(r.startswith("--") and r[2:].startswith(name) for r in refused)
+    if len(word) > 1 and word[0] == "-":
+        for c in word[1:]:
+            if "-" + c in refused:
+                return True
+            if c in values:
+                return False
+        return False
+    return word in refused
+
+
+def _dg_opts_hit(words, refused, values=""):
+    return any(_dg_opt_hit(w, refused, values) for w in words)
+
+
 def _dg_any(t, words):
     return True
 
@@ -1244,51 +1264,103 @@ def _dg_options_only(*allowed):
     return lambda t, words: len(words) > 1 and all(w in allowed for w in words[1:])
 
 
-def _dg_no(*refused):
-    """Any form but the listed options (exact, `--opt=value`, or a short cluster holding the letter)."""
-    longs = tuple(r for r in refused if r.startswith("--"))
-    shorts = "".join(r[1] for r in refused if len(r) == 2 and r[0] == "-")
-
-    def check(t, words):
-        for w in words[1:]:
-            if w.split("=", 1)[0] in longs or w in refused:
-                return False
-            if shorts and len(w) > 1 and w[0] == "-" and w[1] != "-" and any(c in shorts for c in w[1:]):
-                return False
-        return True
-    return check
+def _dg_operands(words, valued):
+    """The operands of a command whose options in `valued` take a separate value."""
+    out, skip = [], False
+    for w in words[1:]:
+        if skip:
+            skip = False
+        elif w.startswith("-") and len(w) > 1:
+            skip = w in valued
+        else:
+            out.append(w)
+    return out
 
 
-def _dg_subcommands(*allowed, refused=()):
-    """A program whose first word after it is one of `allowed` (or a sole --version/--help), without `--` and
-    without any word in `refused`."""
+# Options each entry refuses, as (options, short options whose attached remainder is their value). One registry,
+# so tests enumerate every spelling of every refused option. The reason sits beside each.
+_DG_REFUSED_OPTS = {
+    "sort": (("-o", "--output", "--compress-program"), "kStT"),     # writes a file it names; runs a compressor
+    "tree": (("-o", "-H", "-R"), "LPIT"),                           # writes a file; HTML output (-R rewrites dirs)
+    "file": (("-C", "--compile"), "mfFeP"),                         # compiles a magic file beside the operand
+    "rg": (("--pre", "--pre-glob", "--hostname-bin", "-z", "--search-zip"), "efgtTABCmMjrE"),  # run programs
+    "fd": (("-x", "-X", "--exec", "--exec-batch"), "etE"),          # run a command per match
+    "date": (("-s", "--set", "-f", "--file"), "Idr"),               # set the clock; read dates from a file
+    "hostname": (("-F", "--file", "-b", "--boot"), ""),             # set the host name
+    "man": (("-P", "--pager", "-H", "--html", "-B", "--browser", "-C", "--config-file", "-X", "--gxditview",
+             "-l", "--local-file"), "MLmSsepErRT"),                 # name a program or format a file it is given
+    "info": (("-o", "--output", "--dribble", "--restore", "--init-file"), "dfn"),  # write or replay keystrokes
+    "less": (("-k", "--lesskey", "--lesskey-src", "--lesskey-content", "-o", "-O", "--log-file", "--LOG-FILE"),
+             ""),                                                   # key bindings (commands) and log files
+    "ruff": (("-o", "--output-file"), ""),                          # writes a file it names
+    "kubectl": (("--kubeconfig",), ""),                             # a kubeconfig's exec plugin is code
+    "helm": (("--kubeconfig", "--post-renderer"), ""),              # same, and a renderer program
+    "pip": (("--python", "--log", "--log-file"), ""),               # re-runs under a named interpreter; writes
+    "npm": (("--userconfig", "--globalconfig", "--node-options", "--script-shell"), ""),  # config naming programs
+    "pnpm": (("--pnpmfile", "--global-pnpmfile"), ""),               # a pnpmfile is JavaScript it runs
+    "apt": (("-o", "--option", "-c", "--config-file"), ""),          # APT config can name hooks (Pre-Invoke …)
+    "printf": (("-v",), ""),                                         # assigns a shell variable (PATH …)
+    "ss": (("-K", "--kill"), ""),                                    # closes the sockets it lists
+}
+_DG_REFUSED_OPTS["more"] = _DG_REFUSED_OPTS["less"]
+_DG_REFUSED_OPTS["pip3"] = _DG_REFUSED_OPTS["pip"]
+_DG_REFUSED_OPTS["apt-cache"] = _DG_REFUSED_OPTS["apt"]
+
+
+def _dg_refusing(head, then=_dg_any):
+    refused, values = _DG_REFUSED_OPTS[head]
+    return lambda t, words: not _dg_opts_hit(words[1:], refused, values) and then(t, words)
+
+
+def _dg_subcommands(*allowed):
+    """A program whose first word after it is one of `allowed` (or a sole --version/--help), without `--`."""
     def check(t, words):
         if len(words) == 2 and words[1] in _DG_INFO:
             return True
-        return len(words) > 1 and words[1] in allowed and "--" not in words and not set(words) & set(refused)
+        return len(words) > 1 and words[1] in allowed and "--" not in words
     return check
 
 
 # git: read and local-history subcommands. No global option but --no-pager/-P/--version/--help (so no -c,
 # --config-env, -C, --exec-path, --git-dir: config and paths that can name a program from argv). Writes stay inside
-# the repository the command is run in (add, commit, fetch, pull); a pager, diff driver or filter the repository's
-# own config names runs for every git command, trailing option or not, and is not argv. The git-command-text layer
-# still refuses ext::, upload-pack and `git grep -O`.
+# the repository the command is run in (add, commit, fetch, pull, switch, merge, stash); a pager, diff driver, hook or
+# filter the repository's own config names runs for every git command, trailing option or not, and is not argv.
 _DG_GIT_GLOBAL_OK = frozenset(("--no-pager", "-P", "--version", "--help"))
-_DG_GIT_READ = {
-    "status": None, "log": None, "diff": None, "show": None, "rev-parse": None, "describe": None, "shortlog": None,
-    "ls-files": None, "ls-tree": None, "ls-remote": None, "cherry": None, "count-objects": None, "blame": None,
-    "grep": None, "fetch": None, "add": ("-i", "--interactive", "-p", "--patch", "-e", "--edit"),
-    "commit": None, "pull": None, "version": None, "help": None, "range-diff": None, "merge-base": None,
-    "show-ref": None, "rev-list": None, "cat-file": None, "whatchanged": None, "worktree": ("add", "remove",
-    "move", "prune", "repair", "lock", "unlock"), "notes": ("add", "copy", "append", "edit", "merge", "remove",
-    "prune"), "reflog": ("expire", "delete", "drop"), "fsck": ("--lost-found",),
-    "branch": ("-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "--delete", "--move", "--copy", "--force",
-               "--set-upstream-to", "--unset-upstream", "--edit-description"),
-    "tag": ("-d", "-a", "-s", "-u", "-f", "-m", "-F", "-e", "--delete", "--annotate", "--sign", "--force",
-            "--message", "--file", "--edit"),
-    "remote": None, "config": None, "stash": None,
+# Options no subcommand may carry: a file written (--output), a program named (upload/receive pack, archive --exec,
+# grep's pager). Per subcommand: (refused options, refused words); interactive patch modes and history rewriting.
+_DG_GIT_ALL = ("--output", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager")
+_DG_GIT_SUB = {
+    **dict.fromkeys(("status", "log", "diff", "show", "rev-parse", "describe", "shortlog", "ls-files", "ls-tree",
+                     "cherry", "count-objects", "blame", "commit", "version", "help", "range-diff", "merge-base",
+                     "show-ref", "rev-list", "cat-file", "whatchanged", "switch", "remote", "config", "fetch"),
+                    ((), ())),
+    "pull": (("-s", "--strategy"), ()),                                      # as merge
+    "grep": (("-O",), ()),                                                   # -O<pager> runs it
+    "ls-remote": (("-u",), ()),                                              # -u <upload-pack>
+    "add": (("-i", "--interactive", "-p", "--patch", "-e", "--edit"), ()),
+    "checkout": (("-p", "--patch"), ()), "restore": (("-p", "--patch"), ()),
+    "merge": (("-s", "--strategy"), ()),                                     # -s names git-merge-<x> on PATH
+    "stash": (("-p", "--patch"), ("clear", "drop", "create", "store")),
+    "worktree": ((), ("add", "remove", "move", "prune", "repair", "lock", "unlock")),
+    "notes": ((), ("add", "copy", "append", "edit", "merge", "remove", "prune")),
+    "reflog": ((), ("expire", "delete", "drop")),
+    "fsck": (("--lost-found",), ()),
+    "branch": (("-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "--delete", "--move", "--copy", "--force",
+                "--set-upstream-to", "--unset-upstream", "--edit-description"), ()),
+    "tag": (("-d", "-a", "-s", "-u", "-f", "-m", "-F", "-e", "--delete", "--annotate", "--sign", "--force",
+             "--message", "--file", "--edit", "--local-user"), ()),
 }
+
+
+def _dg_git_runs(words):
+    """git words that name a program or a written file (shared with the denylist layer)."""
+    i = 1
+    while i < len(words) and words[i].startswith("-"):
+        i += 1 + (words[i] in ("-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace",
+                               "--exec-path", "--super-prefix", "--attr-source"))
+    sub = words[i] if i < len(words) else ""
+    refused = _DG_GIT_ALL + _DG_GIT_SUB.get(sub, ((), ()))[0]
+    return any(_DG_GIT_RUNS.search(w) for w in words[1:]) or _dg_opts_hit(words[i + 1:], refused)
 
 
 def _dg_git(t, words):
@@ -1298,21 +1370,19 @@ def _dg_git(t, words):
     if i >= len(words):
         return True  # `git --version`
     sub, rest = words[i], words[i + 1:]
-    if sub not in _DG_GIT_READ:
+    if sub not in _DG_GIT_SUB or _dg_git_runs(words):
         return False
     if sub == "remote":  # listing only: `git remote`, `git remote -v`, `git remote show|get-url x`
         return not rest or rest[0] in ("-v", "--verbose", "show", "get-url")
-    if sub == "config":  # reading only: --list/--get*, or one key
+    if sub == "config":  # reading only: --list/--get*, or one key; never edit
         reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
                  "--local", "--system", "--name-only", "-z", "--null")
+        if "edit" in rest or _dg_opts_hit(rest, ("-e", "--edit")):
+            return False
         return all(w in reads or w.startswith("--get") for w in rest if w.startswith("-")) and \
             (any(w in ("-l", "--list") or w.startswith("--get") for w in rest) or
              len([w for w in rest if not w.startswith("-")]) <= 1)
-    if sub == "stash":  # listing only
-        return bool(rest) and rest[0] in ("list", "show")
-    refused = _DG_GIT_READ[sub] or ()
-    return _dg_no(*[r for r in refused if r.startswith("-")])(t, [sub] + rest) and not set(rest) & {
-        r for r in refused if not r.startswith("-")}
+    return not set(rest) & set(_DG_GIT_SUB[sub][1])
 
 
 # docker / kubectl: read subcommands only, never `--` (kubectl runs what follows it).
@@ -1339,6 +1409,9 @@ def _dg_kubectl(t, words):
     return len(words) > 1 and words[1] in _DG_KUBECTL_READ
 
 
+_DG_PIP = _dg_refusing("pip", _dg_subcommands("list", "show", "freeze", "--version", "-V", "check"))
+
+
 def _dg_python(t, words):
     """An interpreter only reports its version; `python -m pip` only its read forms."""
     if len(words) == 2 and words[1] in ("--version", "-V", "-VV"):
@@ -1346,65 +1419,83 @@ def _dg_python(t, words):
     return len(words) > 3 and words[1:3] == ["-m", "pip"] and _DG_PIP(t, words[2:])
 
 
-_DG_PIP = _dg_subcommands("list", "show", "freeze", "--version", "-V", "check")
+def _dg_tsc(t, words):
+    """tsc type-checks and, with --noEmit, writes nothing; it never runs the code it reads."""
+    return (len(words) == 2 and words[1] in _DG_INFO) or (
+        "--noEmit" in words and not _dg_opts_hit(words[1:], ("-b", "--build", "-w", "--watch", "--generateTrace")))
+
 
 _DG_ALLOW = {
-    # Text and file readers: options select, format or count; operands are files read (sort -o writes its operand).
-    **dict.fromkeys(("cat", "head", "tail", "wc", "nl", "od", "xxd", "hexdump", "base64", "md5sum", "sha1sum",
+    # Text and file readers: options select, format or count; operands are files read.
+    **dict.fromkeys(("cat", "head", "tail", "wc", "nl", "od", "hexdump", "base64", "md5sum", "sha1sum",
                      "sha256sum", "sha512sum", "cksum", "b2sum", "cmp", "comm", "paste", "column", "cut", "tr",
-                     "uniq", "diff", "file", "stat", "fold", "fmt", "expand", "unexpand", "tac",
-                     "rev", "strings", "basename", "dirname", "realpath", "readlink", "seq", "true", "false",
-                     "sleep", "yes", "echo", "printf", "jq", "yq", "pwd", "cd", "pushd", "popd", "type"), _dg_any),
-    "sort": _dg_no("--compress-program"),  # its one program-valued option
-    "ls": _dg_any, "tree": _dg_no("-o"),  # tree -o writes a file it names
+                     "diff", "stat", "fold", "fmt", "expand", "unexpand", "tac", "rev", "strings", "basename",
+                     "dirname", "realpath", "readlink", "seq", "true", "false", "sleep", "yes", "echo", "jq", "yq",
+                     "pwd", "cd", "pushd", "popd", "type"), _dg_any),
+    "printf": _dg_refusing("printf"),
+    # One input operand: a second operand is the file they write.
+    "uniq": lambda t, w: len(_dg_operands(w, ("-f", "-s", "-w"))) <= 1,
+    "xxd": lambda t, w: len(_dg_operands(w, ("-c", "-g", "-l", "-s", "-o", "-n", "-C"))) <= 1,
+    "sort": _dg_refusing("sort"), "tree": _dg_refusing("tree"), "file": _dg_refusing("file"), "ls": _dg_any,
+    # Pagers: no `+command` start-up word, no key-binding file (bindings run commands), no log file. Reading keys
+    # needs a terminal, which a tool call does not have.
+    "less": _dg_refusing("less", lambda t, w: not any(x.startswith("+") for x in w[1:])),
+    "more": _dg_refusing("more", lambda t, w: not any(x.startswith("+") for x in w[1:])),
     # Relocators: copy, move or create their operands; the analyzer's relocator class (no option runs a program).
     **dict.fromkeys(("cp", "mv", "mkdir", "touch", "ln"), _dg_any),
     "du": _dg_any, "df": _dg_any, "find": lambda t, w: not set(w[1:]) & t["find_ops"],  # actions refuse
-    "fd": lambda t, w: not _DG_FD_EXEC.intersection(w),
+    "fd": _dg_refusing("fd"),
     # Search tools: patterns and paths are data; rg's preprocessor and decompressor options run programs.
     **dict.fromkeys(("grep", "egrep", "fgrep", "rgrep"), _dg_any),
-    "rg": _dg_no("--pre", "--pre-glob", "--hostname-bin", "-z", "--search-zip"),
-    # System inspection: read-only reports. A bare name or option only (hostname/date/stty/ulimit can set).
+    "rg": _dg_refusing("rg"),
+    # System inspection: read-only reports. hostname, date, stty and ulimit can also set; only reading forms.
     **dict.fromkeys(("uname", "whoami", "id", "groups", "nproc", "uptime", "free", "ps", "top", "lscpu", "lsblk",
-                     "ss", "netstat", "lsof", "locale", "tty", "printenv", "which", "whereis", "cal"),
+                     "netstat", "lsof", "locale", "tty", "printenv", "which", "whereis", "cal"),
                     _dg_any),
-    "date": _dg_no("-s", "--set", "-f", "--file"),
-    "hostname": lambda t, w: all(x.startswith("-") for x in w[1:]),
+    "ss": _dg_refusing("ss"),
+    "date": _dg_refusing("date"),
+    "hostname": _dg_refusing("hostname", lambda t, w: all(x.startswith("-") for x in w[1:])),
     "stty": _dg_options_only("-a", "--all", "-g", "--save"),
     "ulimit": _dg_options_only("-a"),
     "set": lambda t, w: all(x[:1] in "-+" for x in w[1:]),  # shell options only, no positional reset
     "hash": _dg_options_only("-r", "-l", "-t", "-d"),
     "history": lambda t, w: all(x.isdigit() for x in w[1:]),
-    # Documentation: the analyzer's exec options (-P, --pager, -H, -B) refuse in the consumer layer.
-    **dict.fromkeys(("man", "info", "apropos", "whatis"), _dg_any),
-    "apt": _dg_subcommands("show", "list", "search", "policy", "depends", "rdepends", "showsrc"),
-    "apt-cache": _dg_subcommands("show", "search", "policy", "depends", "rdepends", "showpkg"),
+    # Arithmetic: bc's language has no command or file-writing statement (unlike dc's `!`).
+    "bc": _dg_any,
+    # Documentation: refused options name a pager, browser or config, or format a file given on the command line.
+    "man": _dg_refusing("man"), "info": _dg_refusing("info"), "apropos": _dg_any, "whatis": _dg_any,
+    "apt": _dg_refusing("apt", _dg_subcommands("show", "list", "search", "policy", "depends", "rdepends",
+                                                "showsrc")),
+    "apt-cache": _dg_refusing("apt-cache", _dg_subcommands("show", "search", "policy", "depends", "rdepends",
+                                                            "showpkg")),
     # Version control and orchestration CLIs, read forms (see above).
-    "git": _dg_git, "docker": _dg_docker, "kubectl": _dg_kubectl,
-    "helm": _dg_subcommands("list", "ls", "version", "status", "history"),
+    "git": _dg_git, "docker": _dg_docker, "kubectl": _dg_refusing("kubectl", _dg_kubectl),
+    "helm": _dg_refusing("helm", _dg_subcommands("list", "ls", "version", "status", "history")),
     "terraform": _dg_subcommands("version", "fmt"),  # fmt rewrites its operand files, loads no provider
     "gh": _dg_subcommands("--version"), "aws": _dg_subcommands("--version"),
     "gcloud": _dg_subcommands("--version"),
-    # Interpreters and package tools: version reports and read forms only.
+    # Interpreters and package tools: version reports and read forms only. Not `cargo fmt`: fmt is an external
+    # subcommand, so a `[alias] fmt = "run …"` in the repository's .cargo/config.toml runs repository code.
     **dict.fromkeys(("python", "python3", "python2"), _dg_python),
     "pip": _DG_PIP, "pip3": _DG_PIP,
-    "npm": _dg_subcommands("ls", "list", "--version", "-v", "view", "outdated"),
-    "pnpm": _dg_subcommands("--version", "-v", "ls", "list"), "yarn": _dg_subcommands("--version", "-v"),
+    "npm": _dg_refusing("npm", _dg_subcommands("ls", "list", "--version", "-v", "view", "outdated")),
+    "pnpm": _dg_refusing("pnpm", _dg_subcommands("--version", "-v", "ls", "list")),
+    "yarn": _dg_subcommands("--version", "-v"),
     "node": _dg_subcommands("--version", "-v"), "deno": _dg_subcommands("--version"),
     "bun": _dg_subcommands("--version"), "cargo": _dg_subcommands("--version", "-V"),
     "rustc": _dg_subcommands("--version", "-V"), "go": _dg_subcommands("version", "env"),
     "java": _dg_subcommands("-version", "--version"), "javac": _dg_subcommands("-version", "--version"),
-    "mvn": _dg_subcommands("-v", "--version"),
+    "mvn": _dg_subcommands("-v", "--version"), "tsc": _dg_tsc,
     # Linters and formatters that parse files and load no code from their configuration (eslint, prettier, mypy,
     # pylint and flake8 can: JS configs and plugins), so not those.
-    "ruff": _dg_subcommands("check", "format", "--version"), "black": _dg_any, "isort": _dg_any,
-    "shellcheck": _dg_any,
+    "ruff": _dg_refusing("ruff", _dg_subcommands("check", "format", "--version")), "black": _dg_any,
+    "isort": _dg_any, "shellcheck": _dg_any,
     # Keys and agents: listing only.
     "ssh-add": _dg_options_only("-l", "-L"),
     "gpg": _dg_options_only("--list-keys", "-k", "--list-secret-keys", "-K", "--fingerprint", "--version"),
     "ssh": _dg_options_only("-V"),
-    # Database clients: listing databases or the version only, alone (no stdin, no -c/-f/-e)
-    # (bare, they read SQL, and its shell escapes, from stdin).
+    # Database clients: listing databases or the version only, alone (bare, they read SQL and its shell escapes
+    # from stdin; -c/-f/-e run statements).
     "psql": lambda t, w: len(w) == 2 and w[1] in ("-l", "--list", "--version", "-V"),
     "mysql": lambda t, w: len(w) == 2 and w[1] in ("--version", "-V"),
     "openssl": _dg_subcommands("version"),
