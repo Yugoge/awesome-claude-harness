@@ -499,3 +499,70 @@ def test_doctor_fails_clearly_without_render_settings(home):
     result = _run(["bash", str(home.clone / "scripts" / "doctor")], home.env, check=False)
     assert result.returncode == 1
     assert "scripts/install/render-settings is missing" in result.stderr
+
+
+# ── Step 4 on a drifted protected-runtime file (A2) ──────────────────────────
+# A schema-1 file that lacks some keys is repaired in place (keys added as empty lists,
+# every entry kept, the original kept as <file>.bak-<timestamp>); any other unusable file is
+# left byte-for-byte untouched and step 4 fails naming the defect and the repair.
+
+def _hook(home, command):
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command, "cwd": str(home.tmp)}})
+    env = dict(home.env, CLAUDE_STATE_DIR=str(home.tmp / "state"))
+    return subprocess.run(["bash", str(home.clone / "hooks" / "pretool-bash-safety.sh")], input=payload,
+                          text=True, capture_output=True, cwd=str(home.tmp), env=env, timeout=120)
+
+
+def _backups(home):
+    return sorted(home.protected_runtime.parent.glob(home.protected_runtime.name + ".bak-*"))
+
+
+def test_step4_repairs_a_schema1_file_missing_keys_and_keeps_every_entry(home):
+    home.protected_runtime.parent.mkdir(parents=True)
+    drifted = {"schema_version": 1, "protected_services": ["demo-daemon"], "note": "kept"}
+    original = (json.dumps(drifted) + "\n").encode()
+    home.protected_runtime.write_bytes(original)
+    home.protected_runtime.chmod(0o640)
+
+    first = home.bootstrap("--steps", "4")
+    keys = home.required_keys()
+    repaired = json.loads(home.protected_runtime.read_text(encoding="utf-8"))
+    assert repaired == dict(drifted, **{k: [] for k in keys if k != "protected_services"})
+    assert _mode(home.protected_runtime) == 0o640
+    [backup] = _backups(home)
+    assert backup.read_bytes() == original and _mode(backup) == 0o600
+    [line] = [ln for ln in (first.stdout + first.stderr).splitlines() if "protected-runtime" in ln]
+    assert line.startswith("bootstrap: repaired protected-runtime file (~/.config/claude/protected-runtime.json): added ")
+    assert line.endswith(backup.name) and str(home.tmp) not in line
+
+    # Idempotent: a second run finds a complete file and writes nothing.
+    pinned = home.protected_runtime.read_bytes()
+    second = home.bootstrap("--steps", "4")
+    assert "bootstrap: protected-runtime file exists" in second.stdout
+    assert home.protected_runtime.read_bytes() == pinned and _backups(home) == [backup]
+
+    # The repaired file is a usable policy: node runs, the declared unit stays protected.
+    assert _hook(home, "node --version").returncode == 0
+    refused = _hook(home, "systemctl restart demo-daemon")
+    assert refused.returncode == 2 and "protected-runtime-guard" in refused.stderr
+    assert "STEP1" not in refused.stderr
+
+
+@pytest.mark.parametrize("content,cause", [
+    ('{"schema_version": 2, "protected_services": ["demo-daemon"]}\n', "the file has schema_version 2"),
+    ('{ "schema_version": 1, not json\n', "the file is not valid JSON"),
+    ('{"schema_version": 1, "protected_services": "demo-daemon"}\n', "key(s) protected_services are not JSON lists"),
+    ('[1, 2]\n', "the file's top level is not a JSON object"),
+])
+def test_step4_leaves_an_unrepairable_file_untouched_and_names_the_recovery(home, content, cause):
+    home.protected_runtime.parent.mkdir(parents=True)
+    home.protected_runtime.write_text(content, encoding="utf-8")
+    result = home.bootstrap("--steps", "4", check=False)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert home.protected_runtime.read_text(encoding="utf-8") == content and not _backups(home)
+    assert "left untouched, the guard cannot use it: " + cause in result.stderr
+    assert "re-run scripts/bootstrap --steps 4" in result.stderr and str(home.tmp) not in result.stderr
+    # The guard stays fail-closed on it, and its refusal names the same cause and repair.
+    refused = _hook(home, "node --version")
+    assert refused.returncode == 2 and "BLOCK STEP1" in refused.stderr and cause in refused.stderr
+    assert "scripts/bootstrap --steps 4" in refused.stderr and str(home.tmp) not in refused.stderr

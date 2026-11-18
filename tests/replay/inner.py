@@ -62,6 +62,9 @@ def main(argv=None) -> int:
     if rp.args.get("land") or rp.args.get("blocks"):  # P1c A11: the live landing (tests/replay/landing.py)
         from . import landing
         landing.install(rp)
+    if rp.args.get("removal"):  # P10 A25: a recoverable and a refused git rm (tests/replay/removal.py)
+        from . import removal
+        removal.install(rp, rp.args["removal"])
     if rp.args.get("score"):  # P13-3: the score log the replay starts with (scorelog.py)
         from . import scorelog
         scorelog.seed(rp, rp.args["score"])
@@ -72,6 +75,9 @@ def main(argv=None) -> int:
     except Exception:
         err = traceback.format_exc()
     rp.mark("run", "end")
+    if not cfg.get("traced"):  # untraced: the trace and its artifact map see no extra git call
+        from . import endstate
+        endstate.record(rp)
     if rp.args.get("resweep") and not err:  # P13-2 B2: the score observer once more on the final transcript
         from . import scorelog
         scorelog.resweep(rp)

@@ -254,7 +254,7 @@ def test_plain_prompt_after_a_blocked_stop_removes_the_streak(sess):
     assert sess.prompt("go on, list the files first").returncode == 0
     assert not sess.flag().exists()
     for _ in range(2):
-        bash = {"command": "ls", "description": "List files"}
+        bash = {"command": "python3 -V", "description": "Show the interpreter version"}
         tool_use_id = "toolu_" + uuid.uuid4().hex[:24]
         sess.append({"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": bash}]}})

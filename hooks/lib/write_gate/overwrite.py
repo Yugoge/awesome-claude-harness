@@ -18,7 +18,14 @@ run alone. Exit 0 allows, exit 2 refuses with the reason on stderr.
    a valid same-session grant that names another target refuses an overwrite of an
    existing file (CF-1) and leaves a new file's creation to step 6.
 5. No target: allow (a parse problem never blocks).
-6. The target is an existing file: refused, Edit it in place instead.
+6. The target is an existing file: refused, Edit it in place instead, unless
+   overwrite_exempt() says the file is a scratch, temp or untracked generated output
+   (OB-L46, owner decision). The exemption also answers step 4's CF-1 refusal, so a
+   grant for another path never makes the rule stricter than no grant at all.
+
+The OB-L46 exemption, its protected set (harness state, another session's scratch,
+gate-read artifacts, configuration, hard-linked and tracked files) and the line between
+an untracked own output and a gate-read artifact are in lib/write_gate/overwrite_scope.py.
 """
 from __future__ import annotations
 
@@ -89,6 +96,16 @@ def _sentinel(session_id: str, data_task_id: str, env_task_id: str, target: str)
         return "none"
 
 
+def overwrite_exempt(file_path: str, session_id: str) -> bool:
+    """OB-L46: lib/write_gate/overwrite_scope.py decides; any failure to load it refuses."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import overwrite_scope
+        return overwrite_scope.overwrite_exempt(file_path, session_id)
+    except BaseException:
+        return False
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -121,7 +138,8 @@ def main() -> int:
         result = _sentinel(sid, task_id, env_task_id, file_path)
         if result == "match":
             return 0
-        if result == "valid_no_match" and os.path.isfile(file_path):
+        if (result == "valid_no_match" and os.path.isfile(file_path)
+                and not overwrite_exempt(file_path, sid)):
             _err("[Write Guard] BLOCKED: sentinel grant does not cover this target.",
                  f"Target: {file_path}",
                  "A valid sentinel grant exists for this task, but it does NOT name this file,",
@@ -134,7 +152,8 @@ def main() -> int:
 
     if not file_path:
         return 0
-    if os.path.isfile(file_path):
+    session_id = _shell_str(data.get("session_id", "") or os.environ.get("CLAUDE_SESSION_ID", ""))
+    if os.path.isfile(file_path) and not overwrite_exempt(file_path, session_id):
         _err(f"[Write Guard] BLOCKED: File already exists: {file_path}",
              "Write would replace this file wholesale, so every byte of the new content has to be",
              "reproduced from memory. Any field you forgot to carry over, or mis-remembered, would be",

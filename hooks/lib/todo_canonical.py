@@ -255,6 +255,54 @@ def _ok_lists(calls):
             yield call, new
 
 
+def step_texts(*lists):
+    """The contents and activeForms of the steps of ``lists``."""
+    return {t.get(k) for steps in lists for t in steps or () if isinstance(t, dict)
+            for k in ('content', 'activeForm') if t.get(k)}
+
+
+def shares_text(todos, texts):
+    """True when a step of ``todos`` has a content or an activeForm among ``texts``."""
+    return any(isinstance(t, dict) and (t.get('content') in texts or t.get('activeForm') in texts)
+               for t in todos or ())
+
+
+def checklist_lists(span, canonical, newest_first=False):
+    """(call, todos) of each ok TodoWrite of ``span`` whose list is the
+    command's checklist (OB-L40): the span's first ok list, which
+    pretool-todo-validate admitted only as the canonical list of its time, and
+    every later one that shares a step's text with that list or with
+    ``canonical``. A list that shares none is foreign: the validator lets one
+    run only once the checklist is all completed, and no reader of the span
+    takes it for the checklist (the lock, Gate 4, the Stop gate, the step
+    label), so it can neither reopen the checklist nor stand in for it."""
+    texts, first, base = step_texts(canonical), None, None
+    for call, todos in _ok_lists(span.uses('TodoWrite', newest_first=newest_first)):
+        if shares_text(todos, texts):
+            yield call, todos
+            continue
+        if base is None:
+            first, base = next(_ok_lists(span.uses('TodoWrite')), (None, None))
+            base = step_texts(base)
+        if (first is not None and (call.id, call.result_at) == (first.id, first.result_at)) or shares_text(todos, base):
+            yield call, todos
+
+
+def is_foreign(todos, *lists):
+    """True when no step of ``todos`` (a non-empty list) has the text of a step of ``lists``."""
+    return bool(todos) and not shares_text(todos, step_texts(*lists))
+
+
+def last_checklist(span):
+    """The span's checklist as its last ok TodoWrite records it (checklist_lists, newest
+    first) for a command with a canonical list; for any other command, its last ok list
+    (command_span's last_todos): no list is foreign to a command the validator does not hold."""
+    canonical = run_todo_script(span.command, span.args) if span is not None else None
+    if not canonical:
+        return span.last_todos() if span is not None else None
+    return next((todos for _call, todos in checklist_lists(span, canonical, newest_first=True)), None)
+
+
 _UNREAD = object()
 
 
@@ -271,15 +319,19 @@ class Checklist:
 
     @property
     def todos(self):
-        """The last ok TodoWrite's list (command_span's last_todos, read from
-        the end of the span): the checklist the CLI holds, and the list the
-        next TodoWrite is checked against; None before the first. Read when
-        first asked: the readers that need only the command and its canonical
-        steps leave it unread."""
+        """The last ok TodoWrite's list that is the checklist (checklist_lists,
+        read from the end of the span; a foreign list after completion is
+        not): the checklist the CLI holds, and the list the next TodoWrite is
+        checked against; None before the first. Read when first asked: the
+        readers that need only the command and its canonical steps leave it
+        unread."""
         if self._todos is _UNREAD:
-            self._todos = next((new for _call, new in _ok_lists(
-                self.span.uses('TodoWrite', newest_first=True))), None)
+            self._todos = next((new for _call, new in self.lists(newest_first=True)), None)
         return self._todos
+
+    def lists(self, newest_first=False):
+        """(call, todos) of each ok TodoWrite of the span that is the checklist (checklist_lists)."""
+        return checklist_lists(self.span, self.canonical, newest_first=newest_first)
 
     @property
     def command(self):
@@ -316,6 +368,85 @@ def checklist(transcript_path):
     if not canonical:
         return None
     return Checklist(span, canonical)
+
+
+def _spec_opening_steps():
+    """How many leading /spec steps belong to the turn that opened it:
+    scripts/todo/spec.py's get_blocking_count() (Steps 1-3a run in the opening
+    turn; Steps 4-7 are the multi-turn loop that later prompts continue)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_spec_todo', _HARNESS_TODO_DIR / 'spec.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return int(module.get_blocking_count())
+
+
+def _first_prompt_after(span):
+    """Line of the first human-typed prompt after the span's opener (a
+    task-notification is not one), or None while the opening turn runs."""
+    try:  # imported as checklist() imports it
+        from . import command_span
+    except ImportError:
+        try:
+            from lib import command_span
+        except ImportError:
+            import command_span
+    floor = span.start_line
+    with open(span.transcript_path, encoding='utf-8', errors='replace') as handle:
+        for number, line in enumerate(handle, 1):
+            if number <= floor or '"user"' not in line:
+                continue
+            try:
+                text = command_span.prompt_text(json.loads(line))
+            except ValueError:
+                continue
+            if text is not None and not text.lstrip().startswith('<task-notification>'):
+                return number
+    return None
+
+
+def spec_abandoned(state):
+    """True when the /spec span of ``state`` was abandoned: a human prompt
+    followed the opener while the checklist, as the last ok TodoWrite before
+    that prompt left it (the canonical list before the first), still had an
+    open step among the opening turn's steps (Steps 1-3a). /spec runs those
+    steps inside the turn that opened it (its questions are AskUserQuestion
+    answers, tool results, not prompts); only the Step 4 loop waits for the
+    next prompt. The state is read as of that first later prompt, so no
+    TodoWrite after it (a step set back to pending) turns a live interview
+    stale, and only a human prompt (never a scheduled one, a Skill expansion
+    or a task-notification) can end the opening turn. Any failure: False (the
+    span counts as live, as before)."""
+    try:
+        prompt = _first_prompt_after(state.span)
+        if prompt is None:
+            return False
+        then = None
+        for call, new in _ok_lists(state.span.calls('TodoWrite')):
+            if call.line >= prompt:
+                break
+            then = new
+        then = then if then is not None else state.canonical
+        opening = {s.get('content') for s in state.canonical[:_spec_opening_steps()]}
+        return any(t.get('status') != 'completed' for t in then if t.get('content') in opening)
+    except Exception:  # noqa: BLE001 -- unreadable: keep the interview's hold
+        return False
+
+
+def live_spec_checklist(transcript_path):
+    """The /spec interview's Checklist while it is live, else None: the
+    active span is /spec, its checklist (the last ok TodoWrite, or the
+    canonical list before the first) has a step not completed, and the span
+    was not abandoned (spec_abandoned). The one reading of the /spec window
+    for pretool-spec-block-foreground-agent.py and the Explore exemption of
+    pretool-block-background-tasks.py."""
+    state = checklist(transcript_path)
+    if state is None or state.command != 'spec':
+        return None
+    todos = state.todos if state.todos is not None else state.canonical
+    if all(t.get('status') == 'completed' for t in todos):
+        return None
+    return None if spec_abandoned(state) else state
 
 
 def _bookmark_text(path, encoding):

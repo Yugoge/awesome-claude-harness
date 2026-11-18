@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.cli_shapes import synthesize
+
 REPO = Path(__file__).resolve().parents[1]
 RESOLVER = REPO / "scripts" / "resolve-dev-artifact-chain.py"
 TASK = "20261109-120000"
@@ -131,24 +133,27 @@ def test_dev_s_report_short_of_completed_still_holds_the_task(project):
 # ---------------------------------------------------------------- the /do Stop's route (a transcript), unchanged
 def transcript(path: Path, project: Path, writes) -> str:
     clock = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
-    records = [
-        {"type": "queue-operation", "operation": "enqueue", "content": "/do make a change"},
-        {"type": "user", "message": {"role": "user", "content": "<command-message>do is running…</command-message>\n"
-                                     "<command-name>/do</command-name>\n<command-args>make a change</command-args>"}},
-        {"type": "user", "isMeta": True, "message": {"role": "user", "content": [{"type": "text", "text": "body"}]}},
-        {"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit",
-                                              "content": f"[/do] task-id minted: {TASK} — resolve via ..."}},
+    minted = f"[/do] task-id minted: {TASK} — resolve via ...\n"  # prompt-workflow.py's plain stdout
+    records = [  # the recorded CLI fixture's records (tests/fixtures/cli), values filled in
+        synthesize("queue-operation", "enqueue", content="/do make a change"),
+        synthesize("user", "command", turnOrigin="human", message__content=(
+            "<command-message>do is running…</command-message>\n"
+            "<command-name>/do</command-name>\n<command-args>make a change</command-args>")),
+        synthesize("user", "meta", message__content=[{"type": "text", "text": "body"}]),
+        synthesize("attachment/hook_success", attachment__content=minted.rstrip("\n"), attachment__stdout=minted),
     ]
     for n, rel in enumerate(writes, 1):
-        records.append({"type": "assistant", "message": {"role": "assistant", "content": [
+        records.append(synthesize("assistant", "tool_use", message__content=[
             {"type": "tool_use", "id": f"toolu_{n:04d}", "name": "Write",
-             "input": {"file_path": str(project / rel), "content": "x"}}]}})
-        records.append({"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": f"toolu_{n:04d}", "content": "ok"}]}})
+             "input": {"file_path": str(project / rel), "content": "x"}}]))
+        records.append(synthesize("user", "tool_result", message__content=[
+            {"type": "tool_result", "tool_use_id": f"toolu_{n:04d}", "content": "ok", "is_error": False}]))
     with path.open("w", encoding="utf-8") as handle:
         for k, record in enumerate(records):
             record.update(timestamp=(clock + timedelta(seconds=k)).isoformat().replace("+00:00", "Z"),
                           sessionId="11111111-2222-3333-4444-555555555555")
+            if "cwd" in record:
+                record["cwd"] = str(project)
             handle.write(json.dumps(record) + "\n")
     return str(path)
 
@@ -166,3 +171,15 @@ def test_the_do_stop_still_refuses_lists_short_of_the_write_set(project, tmp_pat
     [(code, artifact, detail)] = resolver.do_report_gaps(project, TASK, path, tx)
     assert (code, artifact) == ("FILES_NOT_WRITE_SET", DO_REL)
     assert detail.endswith(json.dumps(["src/a.py", "src/b.py"]))
+
+
+def test_the_do_stop_on_a_non_utf8_do_report_is_as_on_malformed_json(project, tmp_path):
+    """The /do Stop's route reads the do-report through contract_runtime's schema gate: a do-report
+    that is not UTF-8 (a real replay do-report with one bad byte) yields what malformed JSON yields,
+    not a UnicodeDecodeError (which made resolve-dev-artifact-chain.py report an instrument failure)."""
+    fixture = (REPO / "hooks" / "tests" / "fixtures" / "do-report-replay-completed.json").read_bytes()
+    tx = transcript(tmp_path / "s.jsonl", project, ["toy/__init__.py"])
+    path = write(project, DO_REL, fixture.decode("utf-8")[:-20])
+    malformed = resolver.do_report_gaps(project, TASK, path, tx)
+    path.write_bytes(fixture.replace(b"naming the argument", b"naming \xff the argument"))
+    assert resolver.do_report_gaps(project, TASK, path, tx) == malformed

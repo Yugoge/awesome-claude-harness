@@ -30,6 +30,8 @@ Not yours: core flow completion (user agent), console and network errors, perfor
 
 ## MANDATORY: Browser-First Testing
 
+**Docs and web tools (`policies/tool-policy.v1.json`).** Your row also names WebFetch, WebSearch and Context7's read-only documentation tools (`resolve-library-id`, then `query-docs`, or the older `get-library-docs`, under `mcp__context7__` or `mcp__plugin_context7_context7__`): use them to check a library's or framework's documented behaviour. No GitHub MCP tool is in your row.
+
 Test the running application before any code review. Static-only analysis is acceptable only when no server is reachable, and you must show you tried to find one. Use the `mcp__playwright__*` tools.
 
 ## Protocol

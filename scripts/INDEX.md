@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T09:03:12Z*
-**Total entries**: 167
+*Last updated: 2026-11-17T12:10:48Z*
+**Total entries**: 169
 **Convention**: kebab
 
 ## Tree
@@ -10,6 +10,7 @@
 scripts/
 ├── ci/
 │   ├── `diff-mutate.py` - Mutates only the changed lines (``git diff -U0 <base>`` against the working tree) of
+│   ├── `pair-check.sh` - Description: Pair check between two open PRs (P15 lane L12, plan section 2(f)). Builds the
 │   └── `red-green.py` - Given a base and a head, the script finds their merge base and judges the diff merge-base..head:
 ├── install/
 │   ├── profiles/
@@ -93,6 +94,7 @@ scripts/
 ├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
+├── `cli-fixture-record.sh` - Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 ├── `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).

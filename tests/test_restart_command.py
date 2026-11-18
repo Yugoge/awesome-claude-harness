@@ -720,12 +720,61 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert "## Why this preserves content" not in command
     config = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
     assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
-    assert "Skill(restart:*)" in config["permissions"]["deny"]
+    assert "Skill(restart)" in config["permissions"]["deny"]
     hooks = _expanded(config)["hooks"]  # each launcher read as the hooks it runs
     pretool_commands = json.dumps(hooks["PreToolUse"])
     posttool_commands = json.dumps(hooks["PostToolUse"])
     assert "posttool-restart-sendmessage.py" not in pretool_commands
     assert "posttool-restart-sendmessage.py" in posttool_commands
+
+
+def test_bare_restart_with_nothing_to_resume_carries_on_with_the_gated_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner's report: a /dev cut by the weekly usage limit at Step 8 (no subagent in flight),
+    then a bare /restart, and the main agent stopped ("say if you want me to continue"). prepare
+    finds 0 candidates and no guidance there: step 7's "No guidance" branch, which carries on with
+    the gated command from its checklist step in progress (the rule of step 5 and of the overnight
+    wake), never stops there, and pauses only with AskUserQuestion."""
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    _write_jsonl(transcript, [
+        {"type": "user", "message": {"role": "user", "content": "/dev fix the widget"}},
+        _record("assistant", [{"type": "tool_use", "id": "toolu_todo", "name": "TodoWrite", "input": {"todos": [
+            {"content": "Step 8: BA-QA iteration loop (if QA rejects BA)", "activeForm": "Iterating BA-QA",
+             "status": "in_progress"}]}}]),
+        _record("user", [_tool_result("toolu_todo", "ok")]),
+        {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit", "apiErrorStatus": 429,
+         "message": {"role": "assistant", "model": "<synthetic>", "content": [
+             {"type": "text", "text": "You've hit your weekly limit · resets 2pm (UTC)"}]}},
+    ])
+    restart.mint_grant(sid, str(transcript), ttl_seconds=600)  # a bare /restart: no guidance file
+    prepared = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "restart-subagents.py"), "prepare"],
+        text=True, capture_output=True, env={**os.environ, "CLAUDE_CODE_SESSION_ID": sid},
+        cwd=str(ROOT), check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    view = json.loads(prepared.stdout)
+    assert view["candidate_count"] == 0 and view["candidates"] == [] and not view["operator_guidance"]
+    command = (ROOT / "commands" / "restart.md").read_text(encoding="utf-8")
+    zero = command.split("## Zero-candidate continuation", 1)[1].split("## Prohibitions", 1)[0]
+    bare = re.search(r"- \*\*No guidance\*\*(.*?)\n   - \*\*Guidance present\*\*", zero, re.S)
+    assert bare, "step 7 still branches on the guidance text"
+    rule = " ".join(bare.group(1).split())
+    assert "and stop" not in rule and "Start no work" not in rule and "dispatch nothing" not in rule
+    assert "carry on with the active gated command from its checklist step in progress" in rule
+    assert "the rule of step 5 and of the overnight wake" in rule
+    assert "The turn ends only when no gated command's checklist is open" in rule
+    assert 'Never end it with an offer to continue ("say if you want me to continue")' in rule
+    assert "`AskUserQuestion` only" in rule and "`/stop` is the exit" in rule
+    # lesson 16 is untouched: the same agent_id is resumed and never replaced
+    assert "Use its exact\n   `agent_id` as `to`" in command and "never dispatch a replacement" in command
+    architecture = " ".join((ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8").split())
+    assert "keeps the historical behaviour exactly" not in architecture
+    assert "carries on with the open gated command from its checklist step in progress" in architecture
 
 
 def _unstarted_dev_transcript(tmp_path: Path) -> str:

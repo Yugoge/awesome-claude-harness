@@ -72,7 +72,7 @@ Only when Section 5 cannot be sketched at all: no topic, feature or issue, no ac
      prompt="Find and summarize <what the user mentioned>. Report: file paths, current behavior, relevant code snippets. Thoroughness: medium."
    )
    ```
-   Findings integrate when they arrive (Step 4); a discrepancy may surface as one targeted question but never gates the loop. While this interview's checklist has an open step, `hooks/pretool-spec-block-foreground-agent.py` exits 2 on a foreground Agent call other than the `spec`, `qa` and `ba` subagents; the ledger lists it as advisory (H-026), since no host run has observed it prevent a call.
+   Findings integrate when they arrive (Step 4); a discrepancy may surface as one targeted question but never gates the loop. While this interview's checklist has an open step, `hooks/pretool-spec-block-foreground-agent.py` exits 2 on a foreground Agent call other than the `spec`, `qa` and `ba` subagents, and the background Explore dispatch above is the one background call allowed. Both holds end when the interview is abandoned: the human's next prompt arrives while Steps 1-3a, which this command runs inside its opening turn, are still open, so finish them before that turn ends; the ledger lists it as advisory (H-026), since no host run has observed it prevent a call.
 
 6. Acknowledge that the spec was written, with the full `<spec_path>`, and that more requirements can be added whenever the user is ready. Brief, natural, first-person, in the user's language.
 

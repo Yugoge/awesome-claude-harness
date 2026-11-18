@@ -400,13 +400,20 @@ def _parse_time(raw: Any) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+GRANT_ORIGINS = ("restart", "overnight-wake")
+
+
 def mint_grant(
     session_id: str,
     transcript_path: str,
     *,
     ttl_seconds: int | None = None,
+    origin: str = "restart",
 ) -> dict[str, Any]:
-    """Issue the intended session-bound recovery capability."""
+    """Issue the intended session-bound recovery capability. ``origin`` records which prompt
+    minted it: the owner's ``/restart`` or the /dev-overnight wake (revoke_wake_grant)."""
+    if origin not in GRANT_ORIGINS:
+        raise RestartError("unknown restart grant origin")
     sid = _safe_session_id(session_id)
     transcript = Path(transcript_path).expanduser().resolve()
     if transcript.name != f"{sid}.jsonl" or not transcript.is_file():
@@ -425,9 +432,30 @@ def mint_grant(
         "transcript_path": str(transcript),
         "issued_at": _iso(now),
         "expires_at": _iso(now + timedelta(seconds=ttl)),
+        "origin": origin,
     }
     _atomic_write_json(grant_path(sid), grant)
     return grant
+
+
+def revoke_wake_grant(session_id: str) -> bool:
+    """The owner's /stop: unlink this session's grant unless the owner's own /restart minted it
+    (origin "restart"); a grant the wake minted, or one with no recorded origin, dies with the
+    overnight run. True when a grant was removed."""
+    sid = _safe_session_id(session_id)
+    path = grant_path(sid)
+    grant = _load_json(path)
+    if grant is None and not path.exists():
+        return False
+    if isinstance(grant, dict) and grant.get("origin") == "restart":
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise RestartError(f"cannot revoke the wake's restart grant: {exc}") from exc
+    return True
 
 
 def load_valid_grant(session_id: str) -> dict[str, Any]:
@@ -1035,6 +1063,35 @@ def build_resume_message(
     ])
 
 
+NO_GRANT_NOTICE = (
+    "no valid restart grant: every resume send will be refused until /restart mints one"
+)
+
+
+def _grant_data(sid: str) -> dict[str, Any] | None:
+    """The live /restart grant as prepare's data, or None: never a refusal.
+
+    load_valid_grant stays the one rule deciding on the grant, and it decides
+    at SendMessage time (authorize_send_message); prepare only reads what the
+    grant carries (its transcript, issue time and guidance binding)."""
+    try:
+        return load_valid_grant(sid)
+    except RestartError:
+        return None
+
+
+def own_transcript_path(
+    sid: str, grant: dict[str, Any] | None, project_dir: str | Path | None = None,
+) -> Path:
+    """The invoking session's own transcript: the one its grant was minted on,
+    else the CLI's own file for this session in this project
+    (<config dir>/projects/<project slug>/<session id>.jsonl)."""
+    if grant is not None:
+        return Path(grant["transcript_path"])
+    project = project_dir if project_dir is not None else os.getcwd()
+    return (config_dir() / "projects" / project_slug(project) / f"{sid}.jsonl").expanduser().resolve()
+
+
 def prepare_state(
     session_id: str,
     project_dir: str | Path | None = None,
@@ -1051,17 +1108,24 @@ def prepare_state(
     operator's explicit ``cross_account=True`` opt-in, and that opt-in is
     recorded in the state file because authorize_send_message refuses
     foreign-origin dispatches from a state that was not prepared with it.
+
+    The grant is read here as data only: prepare never refuses for want of
+    one. The one decision on it is authorize_send_message's, at SendMessage
+    time (lesson 16). Without a valid grant the own transcript is the CLI's
+    own file for this session (``own_transcript_path``), no guidance applies,
+    no grant epoch is recorded, and the view says that every resume send will
+    be refused until /restart mints one.
     """
     sid = _safe_session_id(session_id)
-    grant = load_valid_grant(sid)
-    own_transcript = Path(grant["transcript_path"])
+    grant = _grant_data(sid)
+    own_transcript = own_transcript_path(sid, grant, project_dir)
     # Guidance belongs to THIS operator session's THIS /restart invocation: it
     # is read fresh here and never inherited from the previous state below, and
-    # it is read through the very grant validated above, so the guidance and the
+    # it is read through the very grant read above, so the guidance and the
     # grant_issued_at recorded in the state are the same capability's. An
     # earlier invocation's text is unreachable from here regardless of removal
     # (see guidance_path).
-    guidance = load_guidance(sid, grant)
+    guidance = load_guidance(sid, grant) if grant is not None else None
     discovered = discover_candidates(own_transcript)
     if cross_account and project_dir is not None:
         for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
@@ -1101,8 +1165,8 @@ def prepare_state(
         state = {
             "schema_version": SCHEMA_VERSION,
             "parent_session_id": sid,
-            "transcript_path": grant["transcript_path"],
-            "grant_issued_at": grant.get("issued_at"),
+            "transcript_path": str(own_transcript),
+            "grant_issued_at": grant.get("issued_at") if grant is not None else None,
             "cross_account": bool(cross_account),
             "operator_guidance": guidance,
             "created_at": old.get("created_at") or _iso(),
@@ -1110,7 +1174,12 @@ def prepare_state(
             "candidates": items,
         }
         _atomic_write_json(state_path(sid), state)
-    return status_view(state)
+        # The view is the state as persisted, read back as `status` reads it:
+        # what the SendMessage gate will validate against.
+        view = status_view(_load_state(sid))
+    if grant is None:
+        view["restart_grant"] = NO_GRANT_NOTICE
+    return view
 
 
 def _read_state(sid: str) -> dict[str, Any] | None:

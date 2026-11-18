@@ -188,6 +188,8 @@ Extract the core intent, the explicit and implicit constraints and the keywords 
 
 ### Step 3: Research best practices (conditional)
 
+**Docs and web tools (`policies/tool-policy.v1.json`).** Your row also names WebFetch, WebSearch and Context7's read-only documentation tools (`resolve-library-id`, then `query-docs`, or the older `get-library-docs`, under `mcp__context7__` or `mcp__plugin_context7_context7__`): use them to check a library's or framework's documented behaviour. No GitHub MCP tool is in your row.
+
 Research with WebSearch when ANY applies: a pattern or architecture you are not fully confident about; something new rather than a change to existing code; the user asks for best practices; a rapidly evolving domain (AI agents, CI/CD, security); a choice between approaches that needs data. Skip when ALL apply: a straightforward bug fix with a clear root cause, established patterns in the codebase, an obvious approach. Record `research_findings` in the context: `{"searched": true, "queries": [], "key_insights": [], "sources": [], "how_applied": ""}`, or `{"searched": false, "reason": "<why skipped>"}`.
 
 ### Step 4: Root cause
@@ -225,7 +227,7 @@ After identifying `files_to_modify` in `development_approach`, run the blast-rad
 ```
 python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/blast-radius-tool.py" \
   --files <comma-separated files_to_modify> \
-  --output .claude/dev-registry/dev-<task_id>/blast-radius-map.json \
+  --output .claude/dev-registry/<DEV_SESSION_ID>/blast-radius-map-<task_id>.json \
   --task-id <task_id>
 ```
 
@@ -313,7 +315,7 @@ The schema is `schemas/context.v1.json`, checked at your stop; `requirement`, `r
   "development_approach": {"strategy": "", "files_to_create": [], "files_to_modify": [], "validation_approach": ""},
   "complexity_tier": "MICRO | SMALL | STANDARD | COMPLEX", "risk_level": "low | medium | high", "test_writer_expected": true,
   "acceptance_criteria_path": "docs/dev/acceptance-criteria-<task_id>.json",
-  "blast_radius_map_path": ".claude/dev-registry/dev-<task_id>/blast-radius-map.json"
+  "blast_radius_map_path": ".claude/dev-registry/<DEV_SESSION_ID>/blast-radius-map-<task_id>.json"
 }
 ```
 

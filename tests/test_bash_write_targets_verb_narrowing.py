@@ -9,9 +9,9 @@ reported, including one whose verb is a quoted expansion (`"$CP"`) inside a `cas
 
 Every test goes through the ENTRY POINT of one consumer, never through the library alone:
   * tool_policy - hooks/pretool-tool-policy.py, run as the real hook process
-  * overnight   - hooks/pretool-overnight-hook-guard.py, the six decision functions that consume it
-  * noncaller   - hooks/pretool-cp-state-write-guard.py and hooks/pretool-wrapper-userintent.py, which
-                  import the library but never call the extractor and must stay unaffected
+  * overnight   - hooks/pretool-overnight-hook-guard.py, the decision functions that consume it
+  * noncaller   - hooks/pretool-cp-state-write-guard.py, which reads no Bash command, and
+                  hooks/pretool-wrapper-userintent.py, which only strips heredoc bodies: both unaffected
 Kinds: `no_phantom` (a command that writes nothing yields no target: red on the unmodified library),
 `still_detected` (a real copy or move is still refused, destination named: green on the unmodified
 library and red on a library that drops detection) and `unchanged`.
@@ -111,11 +111,8 @@ CASE_ARM_ROWS = [
     # `;;`, `;&`, `in` and `case` that do not belong to an arm must not hide a real quoted-expansion verb
     ('# note;;\n"$CP" cp-01 @@', "cp-dest"), ('echo a\\;; "$CP" cp-01 @@', "cp-dest"),
     ('find . -exec ls {} \\;; "$CP" cp-01 @@', "cp-dest"), ('echo in\n"$CP" cp-01 @@', "cp-dest"),
-    # backlog #100 (fixed dev-20260926-072017): a case arm's pattern-leading `(` used to be blanked as
-    # a grouping subshell, destroying the `)` that _quoted_expansion_verb's endswith(")") tolerance
-    # needs once a `|`/newline inside the pattern has cut the segment short. See the KNOWN-LOSS-turned-
-    # FIXED tests below for the full history; these three rows give the fix the same two-consumer
-    # coverage (tool_policy/overnight) every other row in this table already gets.
+    # a case arm's optional pattern-leading `(` is no grouping subshell, whether a `|` alternative or a
+    # newline follows it
     ('case x in (y|x) "$CP" cp-01 @@ ;; esac', "cp-dest"),
     ('case x in\n(x) "$CP" cp-01 @@\n;; esac', "cp-dest"),
     ('case b in (a|b|c) "$CP" cp-01 @@ ;; esac', "cp-dest"),
@@ -226,63 +223,39 @@ def test_tool_policy_still_detected_case_arm_verb(role, command):
     assert (rc, _policy_target(err)) == (2, DEST), "real copy in a case arm not refused for %s: %r" % (role, command)
 
 
-# ---- FIXED (backlog #100, condition 3): case-arm paren residual --------------------------------
-# HISTORY: hooks/lib/bash_write_targets.py's _neutralize_command_word_prefixes blanked a case arm's
-# OPTIONAL leading `(` before its pattern as if it were a grouping subshell, which also blanked the
-# arm's own matching `)` -- destroying the very `)` that _quoted_expansion_verb's endswith(")")
-# tolerance relies on to recognize a pattern-list continuation once a `|`/newline inside the pattern
-# cuts the command segment short. This made both library outputs (extract_bash_write_paths,
-# extract_bash_write_targets_with_modes) silently return empty for three shapes: `(y|x)` (a `|`
-# alternative on the same line as the paren), a paren on the line after `case X in`, and `(a|b|c)`
-# (multi-alternation). All three execute a real `cp`/`mv` under real bash (BA independently confirmed
-# with a PATH-shimmed $CP, 2026-09-23). Accepted 2026-09-22 as a deferred fix (controller ruling,
-# backlog #100 condition 3) because reachability was 0/145064 in this project's own real command
-# history (a 74592-command synthetic grid found 308/74592 missed of this exact class) -- NOT because
-# the loss was benign. Fixed 2026-09-26 (task dev-20260926-072017) by excluding a case arm's
-# pattern-leading `(` from the grouping-paren detection (`_is_case_arm_pattern_lead_paren`); see
-# hooks/lib/bash_write_targets.py for the fix itself. These three tests, unchanged in their commands,
-# now assert CORRECT detection instead of pinning the loss -- the flip from `rc == 0` to
-# `(rc, target) == (2, DEST)` IS the proof the fix works: before the fix, every one of these three
-# assertions failed with an AssertionError showing rc == 2 (the exact "stale pin" signal the prior
-# KNOWN LOSS assertions were designed to raise).
+# ---- a case arm whose pattern opens with its optional `(` -----------------------------------------
+# Bash runs the copy in each of these arms: the pattern's leading `(` is the arm's, not a subshell's,
+# whether a `|` alternative follows on the same line, the pattern sits on the line after `case X in`,
+# or the pattern has three alternatives.
 SHAPE_1_SAME_LINE_ALTERNATION = 'case x in (y|x) "$CP" cp-01 ' + DEST + ' ;; esac'
 SHAPE_2_NEXT_LINE = 'case x in\n(x) "$CP" cp-01 ' + DEST + '\n;; esac'
-# subject `b` genuinely matches one alternative of (a|b|c) under real bash; the qa-report's own
-# `case x in (a|b|c) ...` transcription does NOT (subject x matches none of a/b/c) and must not be
-# copied here -- BA reproduced this live, 2026-09-23.
+# subject `b` matches one alternative of (a|b|c), so bash runs the copy
 SHAPE_3_MULTI_ALTERNATION = 'case b in (a|b|c) "$CP" cp-01 ' + DEST + ' ;; esac'
-# CONTROL, not a loss: `(x)` with no `|` alternative on the same line as `case ... in` is still
-# correctly detected today (this exact row already lives inside CASE_ARM_ROWS at module scope, line
-# 106 above, via the undifferentiated REAL_CASE_ARM sweep). Asserted again here on its own, distinctly
-# labeled, so a regression in this one shape is never masked by the other rows.
+# CONTROL: `(x)` with no `|` alternative, on the same line as `case ... in` (also a row of
+# CASE_ARM_ROWS), asserted on its own so a regression in this one shape is never masked by the others.
 CONTROL_PAREN_NO_ALTERNATIVE = 'case x in (x) "$CP" cp-01 ' + DEST + ' ;; esac'
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_tool_policy_fixed_backlog_100_shape1_same_line_alternation(role):
-    """FIXED (backlog #100, formerly KNOWN LOSS). Real bash executes this copy (BA-confirmed with a
-    PATH-shimmed $CP); tool_policy now refuses it and names the real destination, same as every other
-    row in CASE_ARM_ROWS. Before the 2026-09-26 fix this assertion's rc == 2 check failed with rc == 0."""
+def test_tool_policy_case_arm_shape1_same_line_alternation(role):
+    """Bash runs this copy; tool_policy refuses it and names the real destination, as for every row
+    in CASE_ARM_ROWS."""
     rc, err = _run_policy(role, SHAPE_1_SAME_LINE_ALTERNATION)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "real copy in case-arm shape 1 (y|x) not refused for %s: %r" % (role, SHAPE_1_SAME_LINE_ALTERNATION))
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_tool_policy_fixed_backlog_100_shape2_next_line(role):
-    """FIXED (backlog #100, formerly KNOWN LOSS). Same mechanism as shape 1, triggered by the
-    parenthesized pattern sitting on the line after `case X in` instead of a `|` alternative."""
+def test_tool_policy_case_arm_shape2_next_line(role):
+    """As shape 1, with the parenthesized pattern on the line after `case X in`."""
     rc, err = _run_policy(role, SHAPE_2_NEXT_LINE)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "real copy in case-arm shape 2 (next-line) not refused for %s: %r" % (role, SHAPE_2_NEXT_LINE))
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_tool_policy_fixed_backlog_100_shape3_multi_alternation(role):
-    """FIXED (backlog #100, formerly KNOWN LOSS). QA's own generalization of shapes 1-2 to a 3-way
-    `(a|b|c)` alternation. Subject `b` genuinely matches one alternative under real bash (unlike the
-    qa-report's own non-matching `case x in (a|b|c) ...` prose transcription -- BA corrected this
-    live, 2026-09-23)."""
+def test_tool_policy_case_arm_shape3_multi_alternation(role):
+    """Shapes 1-2 with a three-way `(a|b|c)` alternation; subject `b` matches one alternative."""
     rc, err = _run_policy(role, SHAPE_3_MULTI_ALTERNATION)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "real copy in case-arm shape 3 (a|b|c) not refused for %s: %r" % (role, SHAPE_3_MULTI_ALTERNATION))
@@ -290,22 +263,16 @@ def test_tool_policy_fixed_backlog_100_shape3_multi_alternation(role):
 
 @pytest.mark.parametrize("role", ROLES)
 def test_tool_policy_control_case_arm_paren_no_alternative_still_detected(role):
-    """CONTROL, not a loss pin. `(x)` with no `|` alternative, same line as `case ... in`, is outside
-    the backlog #100 residual class and remains correctly detected today. Distinct from the three
-    KNOWN LOSS tests above: this assertion is expected to stay green both before and after any future
-    fix to the shared segment-cutting mechanism (AC4)."""
+    """CONTROL. `(x)` with no `|` alternative, on the same line as `case ... in`, is refused."""
     rc, err = _run_policy(role, CONTROL_PAREN_NO_ALTERNATIVE)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "CONTROL regressed: (x) with no alternative must still be detected and refused: %r"
         % CONTROL_PAREN_NO_ALTERNATIVE)
 
 
-# ---- regression guards for the backlog #100 fix's own heuristic (codex adversarial review, ------
-# 2026-09-26/27, task dev-20260926-072017). _is_case_arm_pattern_lead_paren must not mistake a bare
-# `in` (an ordinary word with no antecedent `case`) or an ESCAPED `\;;` (literal text, not a real
-# case-arm terminator) for a case-arm pattern lead -- either misfire would leave a genuine subshell's
-# OWN closing `)` unblanked, defeating command-word detection for a real verb inside it. Both
-# scenarios below execute a real `cp` under real bash and must stay refused.
+# ---- a bare `in` or an escaped `\;;` is no case arm --------------------------------------------------
+# Neither an ordinary word `in` with no `case` before it nor an escaped, literal `\;;` opens a case
+# arm, so the subshell after it is a real one. Bash runs the `cp` in both commands below.
 @pytest.mark.parametrize("role", ROLES)
 def test_tool_policy_case_lead_heuristic_ignores_bare_in_before_real_subshell(role):
     """REGRESSION GUARD. `echo in` is an ordinary command with no case statement anywhere; the
@@ -327,13 +294,9 @@ def test_tool_policy_case_lead_heuristic_ignores_escaped_terminator_before_real_
         "escaped ;; before a real subshell not refused: %r" % command)
 
 
-# ---- SECURITY REGRESSION GUARDS (close-debate finding, task dev-20260926-072017, fixed in ---------
-# task 20260928-021841). A `#`-comment merely MENTIONING `case`/`esac`/`;;`/`;&`/`;;&` (e.g.
-# explaining case-statement-like logic in prose) previously fooled `_inside_open_case_block` /
-# `_CASE_HEADER_IN_TAIL_RE` into treating a following REAL, unrelated subshell's own paren as a
-# case-arm pattern lead -- silently dropping tool_policy's detection of a real
-# write inside it. Comment text is dead to bash; it can never be genuine case-arm syntax. All four
-# commands below execute a real `cp` under real bash and must stay refused.
+# ---- a comment that mentions case syntax ---------------------------------------------------------------
+# A `#`-comment mentioning `case`/`esac`/`;;`/`;&`/`;;&` is dead to bash, so a real subshell after it
+# is read as one. Bash runs the `cp` in all four commands below.
 CASE_LEAD_COMMENT_ROWS = [
     "# case fake ;;\n(cp x " + DEST + ") | cat",
     "# case fake ;&\n(cp x " + DEST + ") | cat",
@@ -345,9 +308,8 @@ CASE_LEAD_COMMENT_ROWS = [
 @pytest.mark.parametrize("role", ROLES)
 @pytest.mark.parametrize("command", CASE_LEAD_COMMENT_ROWS)
 def test_tool_policy_case_lead_heuristic_ignores_comment_mentioning_case_syntax(role, command):
-    """SECURITY REGRESSION GUARD. A `#`-comment mentioning case/esac/terminator-like text has no
-    bearing on bash's real parse; a real subshell right after it must still be refused. Before this
-    fix, all four of these rows silently evaded detection (rc == 0) through the live tool_policy hook."""
+    """A `#`-comment mentioning case/esac/terminator-like text has no bearing on bash's parse; a
+    real subshell right after it is refused."""
     rc, err = _run_policy(role, command)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "comment-mentioned case/terminator text wrongly suppressed real-subshell detection: %r" % command)
@@ -362,26 +324,15 @@ CASE_LEAD_COMMAND_WORD_CONTROL_ROWS = [
 @pytest.mark.parametrize("role", ROLES)
 @pytest.mark.parametrize("command", CASE_LEAD_COMMAND_WORD_CONTROL_ROWS)
 def test_tool_policy_case_lead_heuristic_ignores_case_in_as_plain_arguments(role, command):
-    """CONTROL (codex adversarial review, 2026-09-26/27). `case`/`in` appearing as ordinary
-    command ARGUMENTS (not a real case statement -- no antecedent `case` keyword at a command-word
-    position) must not fool the heuristic either. Already correctly handled by the unbroken
-    `case ... in` anchor requirement; pinned here as a permanent positive control."""
+    """CONTROL. `case`/`in` as ordinary command arguments open no case statement."""
     rc, err = _run_policy(role, command)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "case/in as plain arguments wrongly suppressed real-subshell detection: %r" % command)
 
 
-# ---- SECURITY REGRESSION GUARDS (close-debate finding on this same task-id, round 1/2; fixed in a
-# later round of task 20260928-021841). `_strip_quoted_regions` (previously frozen) had no concept of
-# `#`-comments: it scanned the raw command text character-by-character and treated ANY unmatched `'`
-# or `"` inside a `#`-comment -- most naturally an apostrophe in ordinary English prose ("don't",
-# "isn't", "it's") or an unterminated double quote -- as opening a real quoted region that then ran
-# to the END of the command string, silently erasing every real write target (redirect, tee, cp/mv)
-# that followed anywhere later in the same multi-line command, from BOTH extract_bash_write_paths and
-# extract_bash_write_targets_with_modes. Comment text is dead to bash; a quote character inside one
-# is never a real quote-opener. Fixed by making `_strip_quoted_regions` itself comment-aware in the
-# same single left-to-right pass (see hooks/lib/bash_write_targets.py). All rows below execute a real
-# write under real bash and must stay refused.
+# ---- an unmatched quote inside a comment -------------------------------------------------------------
+# A quote character inside a `#`-comment (an apostrophe in "don't", an unterminated double quote) opens
+# no quoted region: comment text is dead to bash. Bash runs the write in every row below.
 UNMATCHED_QUOTE_COMMENT_ROWS = [
     "# don't do that\necho x > " + DEST,
     '# he said "watch out\necho x | tee ' + DEST,
@@ -393,10 +344,8 @@ UNMATCHED_QUOTE_COMMENT_ROWS = [
 @pytest.mark.parametrize("role", ROLES)
 @pytest.mark.parametrize("command", UNMATCHED_QUOTE_COMMENT_ROWS)
 def test_tool_policy_unmatched_quote_in_comment_does_not_suppress_write_detection(role, command):
-    """SECURITY REGRESSION GUARD. An unmatched quote character inside a `#`-comment (an apostrophe in
-    ordinary prose, or an unterminated double quote) has no bearing on bash's real parse; a real write
-    that follows it anywhere later in the command must still be refused. Before this fix, all four of
-    these rows silently evaded detection (rc == 0) through the live tool_policy hook."""
+    """An unmatched quote character inside a `#`-comment (an apostrophe in prose, or an unterminated
+    double quote) has no bearing on bash's parse; a real write later in the command is refused."""
     rc, err = _run_policy(role, command)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "unmatched quote in comment wrongly suppressed real write detection: %r" % command)
@@ -404,16 +353,14 @@ def test_tool_policy_unmatched_quote_in_comment_does_not_suppress_write_detectio
 
 @pytest.mark.parametrize("role", ROLES)
 def test_tool_policy_matched_quote_pair_in_comment_still_detected(role):
-    """CONTROL, not a loss. A comment containing a MATCHED quote pair (a complete quoted phrase, e.g.
-    `"watch out"`) is not the failure mode -- the comment span is blanked correctly either way. Pinned
-    to prove the fix targets the unmatched-quote case specifically, not comments in general."""
+    """CONTROL. A comment holding a matched quote pair (`"watch out"`) hides no write either."""
     command = '# he said "watch out"\ncp src ' + DEST
     rc, err = _run_policy(role, command)
     assert (rc, _policy_target(err)) == (2, DEST), (
         "CONTROL regressed: a matched quote pair inside a comment must still be detected: %r" % command)
 
 
-# ---- consumer 2: the overnight guard, six decision functions ------------------------------------
+# ---- consumer 2: the overnight guard, its decision functions -------------------------------------
 @pytest.fixture(scope="module")
 def overnight():
     sys.path.insert(0, str(HOOKS))
@@ -448,7 +395,6 @@ def _assert_hook(module, hook_name):
 def _bash_sites(module):
     return [
         (module._enforce_bash_all_sessions, lambda c: ("Bash", {"command": c}, [WORKTREE])),
-        (module._enforce_bash_worktree, lambda c: (c, WORKTREE)),
         (module._check_bash_string, lambda c: ({"command": c}, WORKTREE)),
     ]
 
@@ -473,7 +419,7 @@ def test_overnight_no_phantom_beside_real_copy(overnight, command):
 def test_overnight_no_phantom_grant_and_worktree_local(overnight, command):
     _assert_hook(overnight, OVERNIGHT_HOOK)
     granted = overnight.GRANTED_FOR_TEST
-    assert _call(overnight._all_bash_targets_granted, command + " > " + granted)[1] is True
+    assert overnight._bash_write_paths(command + " > " + granted) == [granted]
     assert _call(overnight._command_is_worktree_local, command + " > " + granted, MAIN, WORKTREE, GIT)[1] is True
     assert _call(overnight._raw_git_metadata_write_into_main, command, MAIN, WORKTREE, GIT)[1] is False
 
@@ -501,12 +447,12 @@ def _extractor_calls(tree):
         or (isinstance(n.func, ast.Attribute) and n.func.attr == "extract_bash_write_paths"))]
 
 
-def test_noncaller_unchanged_cp_state_write_guard_imports_but_never_calls():
+def test_noncaller_unchanged_cp_state_write_guard_imports_no_bash_reader():
     source = (HOOKS / CP_STATE_GUARD_HOOK).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "lib.bash_write_targets"
-               and any(a.name == "extract_bash_write_paths" for a in n.names)]
-    assert len(imports) == 1 and _extractor_calls(tree) == [], "the guard must stay import-only"
+    imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module
+               and ("bash_write_targets" in n.module or "shell_parse" in n.module)]
+    assert imports == [] and _extractor_calls(tree) == [], "the guard reads no Bash command"
     for command in REDIRECT_MARKING + [DOCUMENTED_MARKING, "cp src dest", "mv src " + DEST]:
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "agent_type": "ba",
                    "agent_id": "abaverbnarrow", "session_id": "verbnarrow-sess"}
@@ -524,9 +470,9 @@ def test_noncaller_unchanged_cp_state_write_guard_imports_but_never_calls():
 def test_noncaller_unchanged_wrapper_userintent_imports_only_the_heredoc_stripper():
     text = (HOOKS / USERINTENT_HOOK).read_text(encoding="utf-8")
     assert "extract_bash_write" not in text
-    assert "from lib.bash_write_targets import command_without_heredoc_bodies" in text
-    spec = importlib.util.spec_from_file_location("bwt_for_noncaller", HOOKS / "lib" / "bash_write_targets.py")
+    assert "from lib.shell_parse import without_heredoc_bodies" in text
+    spec = importlib.util.spec_from_file_location("shell_parse_for_noncaller", HOOKS / "lib" / "shell_parse.py")
     lib = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lib)
-    assert lib.command_without_heredoc_bodies("cat > /x <<EOF\nbody > /y\nEOF") == "cat > /x <<EOF"
-    assert lib.command_without_heredoc_bodies("echo hi") == "echo hi"
+    assert lib.without_heredoc_bodies("cat > /x <<EOF\nbody > /y\nEOF") == "cat > /x <<EOF"
+    assert lib.without_heredoc_bodies("echo hi") == "echo hi"

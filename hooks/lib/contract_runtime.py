@@ -846,7 +846,7 @@ def validate_report_artifact(path) -> dict:
     schema_name = _INTERACTIVE_REPORT_SCHEMAS[kind]
     try:
         record = json.loads(p.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):  # ValueError: malformed JSON, or bytes that are not UTF-8
         return _gate_result('skip', schema_name, [], 'unparseable JSON (parse errors handled by /close preflight)')
     if not isinstance(record, dict) or 'report_version' not in record:
         return _gate_result(

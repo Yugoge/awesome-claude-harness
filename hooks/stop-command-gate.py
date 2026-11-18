@@ -17,8 +17,9 @@ payload on stdin and decides, in order:
       (overnight.open_wakes), naming its id; a time-lock it cannot read
       blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
-  (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question; /spec has no
-      other gap); in a gated span the todo half and the command's predicate, each held to the
+  (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
+      ending in "?" with a question the span neither asked with an AskUserQuestion the owner answered
+      nor recorded in a spec it wrote through spec-write.py; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
       command's text as the span loaded it (_loaded_lacks: a step or the
       close-rating question an update added or reworded after the session
       loaded its text is not asked of it; a cycle whose loaded text names or
@@ -27,7 +28,10 @@ payload on stdin and decides, in order:
       `gate instrument failure: <type>: <message>`, never an allow but one:
       a /close that stalled at Step 0 as close.md says (close_stalled) while
       the predicate's own reading fails too ends its turn (D25: no agent
-      action in the span clears an instrument both read);
+      action in the span clears an instrument both read); likewise /push and
+      /merge end on Step 5's refusal met again after the owner's answer
+      (refusal_met_again), while git still meets it: no remote the push is
+      judged on reads, or the source's merge stands in conflict;
   (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
       else the block text on stderr, exit 2.
 
@@ -276,17 +280,29 @@ def _unwritten(line: str, name: str, templates: tuple | None) -> bool:
 
 
 # ---------------------------------------------------------------- the todo half
+TASKS_OFF = ("0", "false", "no", "off")  # the CLI's false spellings for an env switch
+
+
 def todo_gaps(span) -> list[str]:
     """A command with a canonical list (scripts/todo/<command>.py): the span's
-    last ok TodoWrite has its contents and every step completed. Any other
+    last ok TodoWrite that is its checklist (todo_canonical.checklist_lists: a
+    list foreign to the command, which the validator admits only after the
+    checklist is all completed, is never read in its place, OB-L40) has its
+    contents and every step completed. Any other
     gated command: its last ok TodoWrite, if any, is all completed. A step
     whose section heading, as the command's text on disk words it, the span's
     loaded text does not hold (_loaded_lacks: added or rewritten since) is not
     that text's step and is not asked. Steps complete in order
     (pretool-todo-validate.py), so a later step the text has, completed,
     still holds every step before it."""
+    switches = []
     if os.environ.get("CLAUDE_CODE_ENABLE_TODO_TOOLS") != "1":
-        return ["todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)"]
+        switches.append("todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)")
+    # The CLI offers TodoWrite only while this switch reads false; unset or any other value gives the Task tools.
+    if os.environ.get("CLAUDE_CODE_ENABLE_TASKS", "").strip().lower() not in TASKS_OFF:
+        switches.append("task tools enabled (CLAUDE_CODE_ENABLE_TASKS is not false)")
+    if switches:
+        return switches
     todo_canonical = importlib.import_module("lib.todo_canonical")
     script, _project = todo_canonical._find_todo_script(span.command)
     current = span.last_todos()
@@ -294,6 +310,8 @@ def todo_gaps(span) -> list[str]:
         canonical = todo_canonical.run_todo_script(span.command, span.args)
         if not canonical:
             raise RuntimeError(f"{script} gave no canonical list")
+        current = next((todos for _call, todos in todo_canonical.checklist_lists(span, canonical, newest_first=True)),
+                       None)
         if current is None:
             return [f"todo: checklist never written ({len(canonical)} canonical steps)"]
         # The list the span is held to: the canonical one, or the span's first list, which
@@ -492,16 +510,84 @@ def _json(raw: bytes) -> dict:
     return record if isinstance(record, dict) else {}
 
 
+# push.md's dispatch protocol and merge.md's Refusals: a refusal is asked ONE AskUserQuestion; "a refusal met again
+# after it is reported in the reply, not asked again". Step 5's call, by the script it runs.
+PUSH_CALL, MERGE_CALL = "execute-push.py", "merge.sh"
+_INTERPRETERS = {"python", "python3", "bash", "sh"}
+_PUSH_FLAGS = ("--repo-hash", "--branch", "--remote", "--request-id", "--repo-root")  # push.md Step 5's call
+_STEP5_PATHS = {PUSH_CALL: HARNESS / "scripts" / PUSH_CALL, MERGE_CALL: HOOKS / MERGE_CALL}  # <HARNESS_ROOT>/...
+
+
+def step5_call(command: str, call: str, ref: str | None = None) -> bool:
+    """``command`` runs Step 5's script ``call`` as push.md / merge.md write it, alone: one simple command (no
+    list, pipe, subshell, second line or VAR=value prefix) whose command word, after an interpreter, is this
+    harness's own script (<HARNESS_ROOT>/scripts/execute-push.py, <HARNESS_ROOT>/hooks/merge.sh, by an absolute
+    path); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
+    --no-commit), ``ref`` where given. Arguments end at a redirect (`2>&1`). A command that only mentions the
+    script (`echo merge.sh; false`), another file of its name, or another ref is none."""
+    if "\n" in command.strip():
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:
+        return False
+    operator = lambda word: bool(word) and not word.strip("();<>|&")  # noqa: E731
+    if any(operator(w) and any(c in w for c in ";|()") or w in ("&", "&&") for w in words):
+        return False
+    if words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        return False  # GIT_DIR=... and the like run it elsewhere
+    if words and os.path.basename(words[0]) in _INTERPRETERS:
+        words = words[1:]
+        while words and words[0].startswith("-"):
+            words = words[1:]
+    path = os.path.expanduser(words[0]) if words else ""
+    if not os.path.isabs(path) or os.path.realpath(path) != os.path.realpath(_STEP5_PATHS[call]):
+        return False
+    args = next((words[1:k] for k in range(1, len(words)) if operator(words[k])), words[1:])  # up to a redirect
+    if len(args) < len(words) - 1 and args and args[-1].isdigit():
+        args = args[:-1]  # the descriptor of `2>&1`
+    if "--help" in args or "-h" in args:
+        return False
+    if call == PUSH_CALL:
+        return all(flag in args for flag in _PUSH_FLAGS)
+    rest = [a for a in args if a != "--no-commit"]
+    return len(rest) == 1 and not rest[0].startswith("-") and (ref is None or rest[0] == ref)
+
+
+def refusal_met_again(span, call: str, ref: str | None = None) -> bool:
+    """Step 5's call (a Bash naming the script ``call``) came back as an error, an AskUserQuestion after it came
+    back answered (ok: a rejected question is no answer, and the CLI stops the turn for the owner), and the call,
+    run after that answer, came back as an error again; no later run of it came back ok. The transcript's record
+    only: a predicate ends its turn on it only where its own reading of git meets the same refusal now (a remote
+    git ls-remote cannot read; the source's merge in conflict), as close_stalled does (D25: no agent action in the
+    span clears it)."""
+    state = 0  # 1: refused; 2: refused, then answered; 3: refused again after the answer
+    for use in span.uses("Bash", "AskUserQuestion"):
+        if use.result_at is None:
+            continue
+        if use.name == "AskUserQuestion":
+            state = 2 if state == 1 and use.ok else state
+        elif step5_call(str(use.input.get("command") or ""), call, ref):
+            state = 0 if use.ok else (3 if state >= 2 else 1)
+    return state == 3
+
+
 def _bulk_block(span):
-    """The status block of the span's last ok commit-bulk dispatch (its
-    obligation's response_block, changelog-status.v1, checked at the
-    analyst's own stop), or None."""
-    found = None
-    for call, doc in span.obligations():
-        if doc.get("profile") != "commit-bulk":
+    """The status block the analyst of the span's last commit-bulk dispatch
+    reported when it stopped (its obligation's response_block,
+    changelog-status.v1, checked at the analyst's own stop), or None: no such
+    dispatch ran, or its analyst has not stopped. Its stop and reply are read
+    as G1 reads them (lib/agent_returns.py): its Agent call's result, the
+    task-notification of a background or resumed analyst, or a cut analyst's
+    own recorded stop. A dispatch refused before it ran started no analyst."""
+    returns, found = importlib.import_module("lib.agent_returns").Returns(span), None
+    for call, doc in span.dispatches():
+        if doc.get("profile") != "commit-bulk" or not (call.ok or returns.agent(call)):
             continue
         block = next((a for a in doc.get("artifacts") or () if a.get("kind") == "response_block"), {})
-        begin, end, text = block.get("begin") or "", block.get("end") or "", span.result_text(call.id)
+        begin, end, text = block.get("begin") or "", block.get("end") or "", returns.reply(call)
         try:
             found = json.loads(text.split(begin, 1)[1].split(end, 1)[0]) if begin and end and begin in text else None
         except ValueError:
@@ -611,7 +697,11 @@ def p_merge(span, root, payload) -> list[str]:
     DEFAULT_BRANCH ("Already up to date"), or this session's newest merge-analyst grant since the opener is
     `blocked` for the source at its tip now (Step 3 refuses; R14 leaves the risks to the owner, and a
     grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
-    session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup."""
+    session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup. Step 5's
+    conflicts met again after the owner's answer (refusal_met_again) end it while MERGE_HEAD is at a value
+    of the source, paths are unmerged and git's merge-tree of the two commits conflicts (_conflicts), the
+    record being merge.sh on this source: the merge stands in conflict for the owner (aborted, it is owed
+    again)."""
     _repository(root)
     root = _session_worktree(root, payload)
     args = span.args.split()
@@ -644,7 +734,24 @@ def p_merge(span, root, payload) -> list[str]:
                 "session since the opener names its source"]
     if _git(root, "ls-files", "-u"):
         gaps.append("merge: unmerged paths remain in the index")
+    merging = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+    if gaps and tips and merging in tips and _git(root, "ls-files", "-u") and _conflicts(
+            root, f"refs/heads/{default}", merging) and refusal_met_again(span, MERGE_CALL, ref):
+        return []  # Step 5: the source's merge stands in conflict; merge.sh refused again after the owner's answer
     return gaps
+
+
+def _conflicts(root, default: str, source: str) -> bool:
+    """HEAD is on ``default`` and git's own three-way merge of it with ``source`` conflicts (git merge-tree
+    --write-tree exits 1): from the commits alone, so no index entry or MERGE_HEAD an agent writes makes one."""
+    if _git(root, "symbolic-ref", "-q", "HEAD") != default:
+        return False
+    try:
+        done = subprocess.run(["git", "-C", str(root), "merge-tree", "--write-tree", "--no-messages", default, source],
+                              capture_output=True, timeout=60, env={**os.environ, **_GIT_ENV})
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 1
 
 
 def _opener_branch(root, since: float) -> str | None:
@@ -687,35 +794,62 @@ def p_push(span, root, payload) -> list[str]:
     is published where that branch holds it or a remote took it. The token and
     the grant are protected
     for every caller but their producers (pretool-tool-policy.py), and a detach,
-    reset or rewrite after the opener is no refusal: no agent's act makes one true."""
+    reset or rewrite after the opener is no refusal: no agent's act makes one true. Step 5 met again
+    after the owner's answer (refusal_met_again: push.sh's exit 1) ends it too while git ls-remote reads
+    none of the remotes judged at the URLs the opener's remote lines recorded, also with no system or global
+    configuration (_unreachable); one that lists, a URL changed since, or an opener without remote lines
+    holds it."""
     _repository(root)
     typed = next((a for a in span.args.split() if not a.startswith("-")), None)
     since, now = _since(span), _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     heads = span.opener_heads()
     opened = [(b, c) for b, c in heads if b] or [((None if heads else _opener_branch(root, since)) or now, None)]
+    again = refusal_met_again(span, PUSH_CALL)
     return [gap for branch, commit in dict.fromkeys(opened) if branch  # none: Step 2, "HEAD is detached"
-            for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes())]
+            for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes(), again)]
 
 
-def _remote_tip(top: str, url: str, ref: str) -> tuple:
+# The environment of the reading that confirms an unreachable remote (_unreachable): no git variable of the
+# process and no system or global configuration, which an agent can write (protocol.allow=never, an http.proxy,
+# core.sshCommand=false), and no prompt.
+_ISOLATED = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+             "GIT_ASKPASS": "", "SSH_ASKPASS": "", **_GIT_ENV}
+# Its failures that say nothing of the remote's reachability: credentials it cannot give, a prompt it disables.
+_NOT_REACH = re.compile(r"terminal prompts disabled|could not read (?:username|password)|authentication failed|"
+                        r"permission denied|host key verification failed|access denied|returned error: 40[13]", re.I)
+
+
+def _remote_tip(top: str, url: str, ref: str, isolated: bool = False) -> tuple:
     """(the commit the remote at ``url`` names ``ref`` by now, None: none; why it could not be read, '')
     as the remote lists it: git ls-remote run outside the repository, so no setting of it (a URL
-    rewrite, an upload-pack or ssh command) answers; a local path is taken from the repository's top."""
+    rewrite, an upload-pack or ssh command) answers; a local path is taken from the repository's top.
+    ``isolated``: with no GIT_* variable of the process and no system or global configuration (_ISOLATED)."""
     if "://" not in url and not re.match(r"[^/]+:", url):
         url = os.path.join(top, url)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} if isolated else dict(os.environ)
     try:
         done = subprocess.run(["git", "ls-remote", "--", url, ref], cwd="/", capture_output=True, text=True,
-                              timeout=20, env={**os.environ, **_GIT_ENV})
+                              timeout=20, env={**env, **(_ISOLATED if isolated else _GIT_ENV)})
     except subprocess.TimeoutExpired:
         return None, "git ls-remote timed out"
     if done.returncode:
-        return None, "git ls-remote: " + ((done.stderr.strip().splitlines() or ["failed"])[-1])
+        said = [line.strip() for line in done.stderr.splitlines() if line.strip()]
+        return None, "git ls-remote: " + next((line for line in said if line.startswith(("fatal:", "error:"))),
+                                              said[0] if said else "failed")
     return next((line.split("\t")[0] for line in done.stdout.splitlines() if line.endswith("\t" + ref)), None), ""
 
 
-def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list[str]:
+def _unreachable(top: str, url: str, ref: str) -> bool:
+    """git ls-remote, isolated from every configuration an agent writes (_ISOLATED), cannot read the remote at
+    ``url`` either, and not for want of credentials or a prompt (_NOT_REACH): Step 5's push.sh exit 1 is the
+    remote's, not a setting's."""
+    held, why = _remote_tip(top, url, ref, isolated=True)
+    return held is None and bool(why) and not _NOT_REACH.search(why)
+
+
+def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=False) -> list[str]:
     """p_push's gaps for BRANCH at its tip and at the opener's commit (``opened``, None: none recorded);
-    ``pinned``: the opener's remote lines (None: none printed)."""
+    ``pinned``: the opener's remote lines (None: none printed); ``again``: refusal_met_again for Step 5."""
     head = _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}^{{commit}}")
     if not head:
         return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
@@ -731,6 +865,7 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
                          f"refs/heads/{branch}") or "").split())
     up = up if up and len(up) == 2 and up[0] in remotes and (pinned is None or up[0] in pinned) else None
     top, gaps, tips, errors = _git(root, "rev-parse", "--show-toplevel") or str(root), [], {}, {}
+    unread, urls = set(), {}  # remotes git ls-remote could not read at the URL the opener recorded, and that URL
 
     def tip(remote, ref):
         if (remote, ref) not in tips:
@@ -739,6 +874,9 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
                 tips[(remote, ref)], errors[remote] = None, "its URL is not the one it had at the /push opener"
             else:
                 tips[(remote, ref)], why = _remote_tip(top, url, ref)
+                if why and tips[(remote, ref)] is None:
+                    unread.add(remote)
+                    urls[remote] = url
                 if tips[(remote, ref)] and _git(root, "cat-file", "-e", f"{tips[(remote, ref)]}^{{commit}}") is None:
                     why = f"its {ref} is at {tips[(remote, ref)]}, which this repository lacks: fetch {remote}"
                 errors.update({remote: why} if why else {})
@@ -769,6 +907,10 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
         grant = importlib.import_module("lib.merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
         if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, commit):
             continue  # Step 5: "push BLOCKED by push-analyst"
+        if again and pinned is not None and considered and all(
+                tip(r, f"refs/heads/{branch}") is None and r in unread
+                and _unreachable(top, urls[r], f"refs/heads/{branch}") for r in considered):
+            continue  # Step 5: push.sh's exit 1 met again after the owner's answer; no remote it judges reads now
         ref = up and f"refs/remotes/{up[0]}/{up[1].removeprefix('refs/heads/')}"
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
             "" if commit == head else f"; {branch} is at {head}, which does not hold it: put {branch} back at it")
@@ -781,11 +923,138 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned) -> list
 
 def p_text_question(span, payload) -> list[str]:
     """R7 (D28): in a /spec or /dev-family span, a turn whose last main-agent text ends with a question asks it in
-    text; the one agent action that clears it is asking with AskUserQuestion, or ending without the question."""
+    text, unless every question of that line was already asked or recorded in the span (_settled). The agent
+    actions that clear it: asking with AskUserQuestion and getting the owner's answer, recording the question in
+    the spec through spec-write.py, or ending without the question."""
     text = payload.get("last_assistant_message")
-    if not _lib_round().ends_with_question(span.last_text() if text is None else text):
+    text = span.last_text() if text is None else text
+    if not _lib_round().ends_with_question(text) or _settled(span, payload, text):
         return []
     return [f"{span.command}: the turn ends with a question in text; ask it with AskUserQuestion, or end without it."]
+
+
+SPEC_WRITER = HARNESS / "scripts" / "spec-write.py"
+SPECS_DIR = "docs/dev/specs"
+_RECORD_LIMIT = 4 << 20  # a spec larger than this is not read for a recorded question
+_SHELL_OPS = frozenset(("&&", "||", ";", "|", "&"))
+_INTERPRETER = re.compile(r"(?:\S*/)?python3?(?:\.[0-9]+)?")
+_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S.*)$", re.M)
+_ITEM = re.compile(r"^(?:(?:[-*+]|[0-9]+[.)])\s+)?(?:\[[ xX]\]\s+)?")
+_EDIT_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path"}
+_UNANSWERED = re.compile(r"rejected|doesn't want to proceed|did not answer|skipped", re.I)
+
+
+def _settled(span, payload, text) -> bool:
+    """Every question the text's last line asks (requirement_round.line_questions: each "?" sentence, or the text
+    after its last ": " when the label before it asks nothing) is one the span already asked or recorded, so the
+    line reports it rather than asks it:
+      asked     a form equals a questions[].question of a main-agent AskUserQuestion of this span that the owner
+                answered (_answered);
+      recorded  a form equals a whole line, or a list item's text, of a spec this span wrote (_span_specs).
+    A previous span's AskUserQuestion or write never counts; a line with a bare "?" is never settled."""
+    questions = _lib_round().line_questions(text)
+    if not questions:
+        return False
+    asked = _answered(span)
+    pending = [forms for forms in questions if not asked.intersection(forms)]
+    if not pending:
+        return True
+    root = os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
+    recorded = set()
+    for spec in _span_specs(span, root):
+        try:
+            if os.path.getsize(spec) <= _RECORD_LIMIT:
+                recorded |= {_ITEM.sub("", line.strip(), count=1).strip()
+                             for line in Path(spec).read_text(encoding="utf-8", errors="replace").splitlines()}
+        except OSError:
+            continue
+    return all(recorded.intersection(forms) for forms in pending)
+
+
+def _answered(span) -> set:
+    """The questions the owner answered in the span: each questions[].question of a main-agent AskUserQuestion with
+    an ok tool_result whose recorded response (the CLI's toolUseResult) holds a non-empty answer to it, no
+    afkTimeoutMs or followUp, no annotation marking it unanswered, and no rejection in the result text, as
+    requirement_round.handle and close_rating.handle read a response; a rejection, Skip, AFK or error answers none."""
+    found = set()
+    for use in span.uses("AskUserQuestion"):
+        if not use.ok or use.result_at is None:
+            continue
+        response = command_span.recorded_result(span.transcript_path, use)
+        answers, notes = response.get("answers"), response.get("annotations")
+        if not isinstance(answers, dict) or response.get("afkTimeoutMs") or response.get("followUp") \
+                or _UNANSWERED.search(span.result_text(use.id)):
+            continue
+        for question in use.input.get("questions") or ():
+            asked = question.get("question") if isinstance(question, dict) else None
+            note = notes.get(asked) if isinstance(notes, dict) and isinstance(asked, str) else None
+            if isinstance(asked, str) and isinstance(answers.get(asked), str) and answers[asked].strip() \
+                    and not (isinstance(note, dict) and note.get("unanswered")):
+                found.add(asked.strip())
+    return found
+
+
+def _in_specs(path: str, root: str) -> str | None:
+    """The real path of a spec monolith (a .md file directly in the project's docs/dev/specs/), else None."""
+    real = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
+    specs = os.path.join(root, SPECS_DIR)
+    return real if os.path.dirname(real) == specs and real.endswith(".md") and os.path.isfile(real) else None
+
+
+def _span_specs(span, root: str) -> set:
+    """The specs the span wrote: the --spec of each Bash call of the span with an ok result that runs the harness's
+    scripts/spec-write.py (an interpreter at a command's start, then the writer by its real path), named again by
+    the writer's own `spec-write: <create|append> <path>` line in that result; and each ok Write, Edit or MultiEdit
+    target. Each must resolve, symlinks followed, to a spec in the project's docs/dev/specs/ (_in_specs). A path
+    a command merely names is no write."""
+    found = set()
+    writer = os.path.realpath(SPEC_WRITER)
+    for call in span.calls("Bash"):
+        command = call.input.get("command")
+        if not call.ok or not isinstance(command, str):
+            continue
+        printed = {os.path.realpath(p.strip()) for p in _WRITER_LINE.findall(span.result_text(call.id))}
+        for arg in _spec_args(command, writer):
+            real = _in_specs(arg, root)
+            if real is not None and real in printed:
+                found.add(real)
+    for call in span.calls(*_EDIT_TOOLS):
+        target = call.input.get(_EDIT_TOOLS[call.name])
+        real = _in_specs(target, root) if call.ok and isinstance(target, str) and target else None
+        if real is not None:
+            found.add(real)
+    return found
+
+
+def _spec_args(command: str, writer: str) -> list[str]:
+    """The --spec values of the spec-write.py runs in a shell command's lines up to its first heredoc."""
+    found = []
+    for line in command.splitlines():
+        try:
+            tokens = shlex.split(line.split("<<", 1)[0])
+        except ValueError:
+            tokens = []
+        start = True
+        for k, token in enumerate(tokens):
+            if token in _SHELL_OPS:
+                start = True
+                continue
+            if start and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+                continue
+            if start and _INTERPRETER.fullmatch(token) and k + 1 < len(tokens) \
+                    and os.path.realpath(os.path.expanduser(tokens[k + 1])) == writer:
+                rest = tokens[k + 2:]
+                for j, arg in enumerate(rest):
+                    if arg in _SHELL_OPS:
+                        break
+                    if arg == "--spec" and j + 1 < len(rest):
+                        found.append(rest[j + 1])
+                    elif arg.startswith("--spec="):
+                        found.append(arg[len("--spec="):])
+            start = False
+        if "<<" in line:
+            break
+    return found
 
 
 def _lib_round():

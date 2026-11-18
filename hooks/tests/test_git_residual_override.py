@@ -67,10 +67,9 @@ _GUARD_PATH = Path(os.environ.get("GITGUARD_UNDER_TEST")
 guard = _load_module(_GUARD_PATH, "pretool_git_privilege_guard_route")
 
 # Four residual shapes, confirmed against hooks/lib/git_command_classifier.py.
-# The `&` forms are the ones that matter for D5: `_bash_subcommands` (the grant
-# matcher's splitter) does NOT split on `&`, while `_segments` (the residual
-# detector's splitter) does - so a single grant-matchable "subcommand" can carry
-# an unresolvable git segment.
+# The `&` forms are the ones that matter for D5: a command that carries an
+# unresolvable git segment after a benign head must never reach the grant
+# matcher first.
 CMD_DYNAMIC = "$GIT push --force origin master"
 CMD_OBFUSCATED = "g\\it push --force origin master"
 CMD_SUBSTITUTED = "git status &  $(which git) push --force"
@@ -231,13 +230,11 @@ class D4_DigestBindingIsExact(_RouteCase):
 class D5_OrderingRegression(_RouteCase):
     """The residual check must stay AHEAD of the allowlist.
 
-    `_bash_subcommands` (grant matcher) splits on && || ; | but NOT on `&`;
-    `_segments` (residual detector) does split on `&`.  So the single
-    grant-matchable subcommand `git status & $GIT push --force origin master`
-    has head token `git status` - which a structural sentinel grant matches -
-    while carrying an unresolvable `$GIT push --force`.  If the allowlist ran
-    first, authority earned for `git status` would be spent on a force-push
-    through an unknown binary.
+    `git status & $GIT push --force origin master` has head token `git
+    status`, which a structural sentinel grant names, while carrying an
+    unresolvable `$GIT push --force`.  If the allowlist ran first, authority
+    earned for `git status` could be spent on a force-push through an unknown
+    binary.
     """
 
     def test_grant_for_a_benign_head_cannot_launder_a_residual(self):
@@ -337,14 +334,15 @@ class D11_KindBinding(_RouteCase):
 
 class D12_RefusalIsJournaled(_RouteCase):
     def test_every_refusal_is_recorded(self):
-        blocked, _ = _evaluate(CMD_OBFUSCATED)
+        # OB-L26: CMD_OBFUSCATED is read as the force push it runs, no residual.
+        blocked, _ = _evaluate(CMD_DYNAMIC)
         self.assertTrue(blocked)
         recs = self.journal()
         self.assertEqual(len(recs), 1)
         rec = recs[0]
         self.assertEqual(rec["event"], "residual_refusal")
-        self.assertEqual(rec["command_sha256"], _digest(CMD_OBFUSCATED))
-        self.assertEqual(rec["residual_kinds"], ["obfuscated_git_token"])
+        self.assertEqual(rec["command_sha256"], _digest(CMD_DYNAMIC))
+        self.assertEqual(rec["residual_kinds"], ["dynamic_git_token"])
         self.assertEqual(rec["session_id"], "sid-route-test")
         self.assertEqual(rec["agent_id"], "agent-sub-1")
         self.assertTrue(rec["residual_segments"])

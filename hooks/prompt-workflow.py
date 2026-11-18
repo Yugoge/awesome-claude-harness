@@ -354,14 +354,97 @@ def format_active_progress(todos: list, ack: bool) -> str:
 
 # --- Overnight helpers ---
 
+_SPEC_FLAG_RE = re.compile(
+    r'(?:--|[–—])spec\s+("[^"\n]*"|\'[^\'\n]*\'|`[^`\n]*`|\S+)')
+# A file name's extension: a dot then 1-10 letters or digits ending the token
+# (`spec.md`, `notes.txt`); a sentence's closing period (`parsing.`) is cut off
+# by _unwrap_spec_token first and so is not one.
+_SPEC_EXTENSION_RE = re.compile(r'[^./\\]\.[A-Za-z0-9]{1,10}$')
+# Quoting and punctuation around a <path> in prose: `"real.md"`, `<x.md>`,
+# `(--spec x.md)`, `x.md,` -- cut before the path is judged or resolved.
+_SPEC_WRAP_LEAD = '"\'`<('
+_SPEC_WRAP_TRAIL = '"\'`>),;:.'
+# A token that may precede a leading flag: an option, or /dev-overnight's end time.
+_SPEC_LEAD_TOKEN_RE = re.compile(
+    r'^(?:-\S*|\+?\d+(?:\.\d+)?[hm]|\d{1,2}:\d{2}(?:AM|PM|am|pm)?|AM|PM|am|pm)$')
+
+
+def _unwrap_spec_token(token: str) -> str:
+    """The <path> inside its quotes, brackets and trailing punctuation."""
+    return token.lstrip(_SPEC_WRAP_LEAD).rstrip(_SPEC_WRAP_TRAIL)
+
+
+def _spec_flag_standalone(args: str, start: int) -> bool:
+    """The dash-spec stands on its own (start of text, after a space or an
+    opening bracket or quote) rather than glued to a word (`API—spec`)."""
+    return start == 0 or args[start - 1].isspace() or args[start - 1] in _SPEC_WRAP_LEAD
+
+
+def _spec_flag_leads(args: str, start: int) -> bool:
+    """Only the command name, other options and an end time come before the
+    dash-spec: the flag position commands/dev.md and commands/dev-overnight.md
+    document (`[--codex] [--spec <path>] <requirement>`)."""
+    tokens = args[:start].split()
+    if tokens and tokens[0].startswith('/'):
+        tokens = tokens[1:]
+    return all(_SPEC_LEAD_TOKEN_RE.match(tok) for tok in tokens)
+
+
+def _is_spec_reference(token: str, leads: bool = False) -> bool:
+    """Whether the (unwrapped) token after a --spec/—spec/–spec is the flag's
+    <path> rather than the next word of prose (A1 over-block: `API—spec section
+    first` and `tests for --spec parsing` were taken as the flag and refused
+    the prompt as an unresolved spec). It is when the flag leads the arguments
+    (_spec_flag_leads), when it is shaped like a path -- a `/` or `\\`, a
+    leading `~` or `.`, a file extension -- or when it names anything that
+    exists under the project, a directory included (decide_spec_path refuses
+    a directory as it refuses a missing file)."""
+    if not token:
+        return False
+    if leads:
+        return True
+    if '/' in token or '\\' in token or token.startswith(('~', '.')):
+        return True
+    if _SPEC_EXTENSION_RE.search(token):
+        return True
+    return os.path.exists(os.path.join(str(PROJECT_DIR), os.path.expanduser(token)))
+
+
+def _find_spec_flag(args: str) -> tuple[re.Match | None, str, str]:
+    """(match, path, dropped): the first dash-spec whose unwrapped token is a
+    spec reference and that token; else no match, '' and the token after the
+    first standalone dash-spec that was read as prose ('' when none was)."""
+    dropped = ''
+    for spec_match in _SPEC_FLAG_RE.finditer(args):
+        token = _unwrap_spec_token(spec_match.group(1))
+        standalone = _spec_flag_standalone(args, spec_match.start())
+        leads = standalone and _spec_flag_leads(args, spec_match.start())
+        if _is_spec_reference(token, leads):
+            return spec_match, token, ''
+        if standalone and not dropped:
+            dropped = token or spec_match.group(1)
+    return None, '', dropped
+
+
 def _strip_spec_arg(args: str) -> tuple[str, str]:
-    """Pull --spec/—spec/–spec from args; return (remaining_args, spec_path)."""
-    spec_match = re.search(r'(?:--|[–—])spec\s+(\S+)', args)
-    if not spec_match:
+    """Pull --spec/—spec/–spec <path> from args; return (remaining_args, spec_path).
+
+    The first dash-spec whose following token is a spec reference
+    (_is_spec_reference) is the flag, its path unwrapped of quotes, brackets
+    and trailing punctuation; a dash-spec followed by a plain word is prose
+    and stays in the text (_spec_word_dropped names it)."""
+    spec_match, spec_path, _ = _find_spec_flag(args)
+    if spec_match is None:
         return args, ''
-    spec_path = spec_match.group(1)
     remaining = args[:spec_match.start()].rstrip() + ' ' + args[spec_match.end():].lstrip()
     return remaining.strip(), spec_path
+
+
+def _spec_word_dropped(args: str) -> str:
+    """The word after a standalone dash-spec that _strip_spec_arg read as prose,
+    or ''. decide_spec_path then uses no spec rather than the session's last
+    one, so a flag read as prose never puts a different spec in its place."""
+    return _find_spec_flag(args)[2]
 
 
 def _match_end_time_token(args: str) -> tuple[str, str]:
@@ -1088,6 +1171,26 @@ def wake_recovery(user_input: str) -> str:
     ])
 
 
+def carry_on_line(state) -> str:
+    """For a human /restart or a plain prompt that lands while a gated command's checklist is open
+    (``state``, _checklist's): one line saying to carry on with that command from its step in
+    progress, as wake_recovery says for the overnight wake; '' with no open gated checklist."""
+    from stop_contract import GATED_COMMANDS  # hooks/lib is on sys.path (see the WS1 block above)
+    if state is None or state.command not in GATED_COMMANDS:
+        return ''
+    todos = state.todos if state.todos is not None else state.canonical
+    step = next((t for t in todos if t.get('status') == 'in_progress'), None) \
+        or next((t for t in todos if t.get('status') != 'completed'), None)
+    if step is None:
+        return ''
+    content = str(step.get('content') or '')
+    label = content.split(':', 1)[0] if content.startswith('Step ') else f'step {todos.index(step) + 1}'
+    pause = ('never stop, ask or wait' if state.command == 'dev-overnight'
+             else 'pause only with AskUserQuestion')
+    return (f'CARRY ON: carry on with /{state.command} {label}; this turn cannot end until its '
+            f'checklist is complete; {pause}; /stop is the exit.')
+
+
 def handle_phase_b(session_id: str) -> None:
     """Phase B: inject overnight continuation and/or workflow progress."""
     overnight_ctx = check_overnight_continuation(session_id)
@@ -1113,6 +1216,9 @@ def handle_phase_b(session_id: str) -> None:
     if all(t.get('status') == 'completed' for t in todos):
         return
     print(format_active_progress(todos, state.todos is not None))
+    line = carry_on_line(state)
+    if line:
+        print(line)
 
 
 def checklist_message(cmd_name: str, todos: list) -> str:
@@ -1519,6 +1625,21 @@ def decide_spec_path(explicit: str, sid: str) -> tuple[str, str]:
     return path, f'Spec: {path or "none"}'
 
 
+def decide_run_spec(spec_arg: str, prompt_text: str, sid: str) -> tuple[str, str]:
+    """decide_spec_path for one prompt, unless a standalone --spec in it was read
+    as prose (_spec_word_dropped): then the run gets `Spec: none` and a note
+    naming the word, never the spec this session last wrote, so a flag that
+    was not recognised cannot put a different spec in its place."""
+    dropped = '' if spec_arg else _spec_word_dropped(prompt_text)
+    if not dropped:
+        return decide_spec_path(spec_arg, sid)
+    return '', ('Spec: none\n'
+                f'NOTE: "--spec {dropped}" was read as text, not as the --spec flag '
+                '(the word after it is not a path, and the flag does not lead the '
+                'arguments), so this run uses no spec, not the spec this session last '
+                'wrote. To use a spec, retype the command with --spec <path> first.')
+
+
 def _start_identity(task_id: str) -> str:
     """The start output's lines that name the cycle: the registry name minted
     here and the task id its artifacts are named with, which
@@ -1553,7 +1674,7 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
             sys.stderr.write(error_output)
             return
 
-        _, spec_line = decide_spec_path(_strip_spec_arg(user_input)[1], sid)
+        _, spec_line = decide_run_spec(_strip_spec_arg(user_input)[1], user_input, sid)
         todos = run_todo_script(cmd_name, user_input)
         if not todos:
             return
@@ -1677,7 +1798,7 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
         if not sid:
             sid = secrets.token_hex(16)
         end_time, focus, spec_path, codex_required, worktree_choice = parse_overnight_args(user_input)
-        spec_path, spec_line = decide_spec_path(spec_path, sid)
+        spec_path, spec_line = decide_run_spec(spec_path, user_input, sid)
         ok = create_overnight_state(
             end_time, focus, spec_path=spec_path, session_id=sid,
             codex_required=codex_required, worktree_choice=worktree_choice)
@@ -1841,6 +1962,10 @@ def main():
                 print(recovery)
         else:
             handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
+            if cmd_name == 'restart':  # a control command: the span it lands in stays open
+                line = carry_on_line(_checklist())
+                if line:
+                    print(line)
             try:  # an ask span opens with the main agent's own record, and the roles on notice (D29, D32): context, never a verdict
                 import score_view  # hooks/lib is on sys.path (see the WS1 block above)
                 line = score_view.main_line(cmd_name, str(PROJECT_DIR))

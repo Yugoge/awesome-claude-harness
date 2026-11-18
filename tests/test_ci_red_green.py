@@ -166,6 +166,20 @@ def test_none_trailer_reason_is_printed_first_and_exits_0(small):
     assert r.stdout.splitlines()[0] == "**Red-test: none:** the fault is a race no test can order"
 
 
+def test_a_none_trailer_runs_nothing(small, tmp_path):
+    # A none reason already passes the job, so running the changed tests only costs time: a train that
+    # changes hundreds of test files ran past the job's 60 minutes and was cancelled.
+    repo, base = small
+    head = commit(repo, {"lib.py": "def f():\n    return 2\n",
+                         "tests/test_f.py": "import helper\nfrom lib import f\n\ndef test_f():\n"
+                                            "    assert f() == 2\n"}, "fix")
+    r = run(repo, base, head, body="Red-test: none: every lane proved red then green on its own branch\n",
+            tmp=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "**PASS**: exempt: Red-test: none." in r.stdout
+    assert "| Test id |" not in r.stdout and "pass on red and on green" not in r.stdout
+
+
 def test_a_red_test_line_inside_a_commit_body_is_not_a_trailer(small):
     # Only the last paragraph's trailers count: a wrapped sentence that starts with "Red-test:" names no id.
     repo, base = small

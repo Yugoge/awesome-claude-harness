@@ -1,12 +1,12 @@
-"""End-to-end should-block / should-not-block tests for the two Item A rules
-converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh.
+"""End-to-end should-block / should-not-block tests for the rules of
+hooks/pretool-bash-safety.sh that read the context-stripped view.
 
 These drive the real hook process via piped JSON (the Claude Code PreToolUse
 protocol) and assert on the hook's exit code:
   - exit 2  => the command is BLOCKED
   - exit 0  => the command is ALLOWED
 
-Converted rules under test (dev-20260529-092512 Item A):
+Rules under test:
   1. dd|mkfs|fdisk|shred destructive-disk rule  (command-word-anchored)
   2. kill <PID> rule                            (kill is in DANGER_COMMANDS, args exposed)
 
@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -91,59 +92,58 @@ class TestKillPidRule:
 # ── Execution-aware destructive-reset classification ────────────────────────
 
 class TestGitResetExecutionClassification:
-    """The structured view distinguishes executed argv from inert data."""
+    """`git reset --hard` is refused by the privilege guard (GP-05); bash-safety leaves it to that one rule.
+
+    Each case the bash-safety copy refused is refused by the survivor, including with the classifier
+    missing or malformed, and each inert mention stays allowed by both hooks.
+    """
+
+    DANGEROUS = ("git reset --hard HEAD~1", "/usr/bin/git reset --hard HEAD~1")
+    INERT = (
+        "rg -n 'git reset --hard' docs",
+        "rg -n '/usr/bin/git reset --hard' docs",
+        "python3 checker.py 'git reset --hard'",
+        "python3 checker.py '/usr/bin/git reset --hard'",
+        'echo "never run git reset --hard in shared repositories"',
+        'echo "never run /usr/bin/git reset --hard in shared repositories"',
+    )
+
+    @staticmethod
+    def _guard(command, hooks_dir=os.path.dirname(HOOK)):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": HOME_DIR})
+        return subprocess.run([sys.executable, os.path.join(hooks_dir, "pretool-git-privilege-guard.py")],
+                              input=payload, text=True, capture_output=True, cwd=HOME_DIR).returncode
+
+    @staticmethod
+    def _hooks_copy(tmp_path, malformed_classifier=False):
+        hook_dir = tmp_path / "hooks"
+        shutil.copytree(os.path.dirname(os.path.abspath(HOOK)), hook_dir,
+                        ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        classifier = hook_dir / "lib" / "git_command_classifier.py"
+        if malformed_classifier:
+            classifier.write_text("print('not-json')\n")
+        else:
+            classifier.unlink()
+        return str(hook_dir)
 
     @staticmethod
     def _fallback_hook(tmp_path, malformed_classifier=False):
-        hook_dir = tmp_path / "hooks"
-        (hook_dir / "lib").mkdir(parents=True)
-        shutil.copy2(HOOK, hook_dir / "pretool-bash-safety.sh")
-        shutil.copy2(
-            os.path.join(os.path.dirname(HOOK), "lib", "bash_context_strip.py"),
-            hook_dir / "lib" / "bash_context_strip.py",
-        )
-        # The execution-boundary analyzer is deliberately NOT staged: this
-        # fixture exercises the CLASSIFIER fallback with the removal policy in
-        # its degraded branch. That branch reads its removal-reference
-        # predicate from a shared file (the single definition the AC-R02-10
-        # differential test also consumes), so the file has to travel with the
-        # hook — an absent predicate is itself a degraded deployment and denies
-        # everything, which is asserted separately in
-        # test_pol_generative_sweeps.py::test_missing_degraded_predicate_file_denies.
-        shutil.copy2(
-            os.path.join(os.path.dirname(HOOK), "lib",
-                         "pol_degraded_removal_reference.ere"),
-            hook_dir / "lib" / "pol_degraded_removal_reference.ere",
-        )
-        if malformed_classifier:
-            classifier = hook_dir / "lib" / "git_command_classifier.py"
-            classifier.write_text("print('not-json')\n")
-        return str(hook_dir / "pretool-bash-safety.sh")
+        """bash-safety in a hooks copy whose analyzer is gone and whose classifier is missing or broken."""
+        hooks_dir = TestGitResetExecutionClassification._hooks_copy(tmp_path / "fallback", malformed_classifier)
+        os.remove(os.path.join(hooks_dir, "lib", "bash_execution_boundary.py"))
+        return os.path.join(hooks_dir, "pretool-bash-safety.sh")
 
-    @staticmethod
-    def _assert_fallback_boundary(hook):
-        dangerous = (
-            "git reset --hard HEAD~1",
-            "/usr/bin/git reset --hard HEAD~1",
-        )
-        inert = (
-            "rg -n 'git reset --hard' docs",
-            "rg -n '/usr/bin/git reset --hard' docs",
-            "python3 checker.py 'git reset --hard'",
-            "python3 checker.py '/usr/bin/git reset --hard'",
-            'echo "never run git reset --hard in shared repositories"',
-            'echo "never run /usr/bin/git reset --hard in shared repositories"',
-        )
-        for command in dangerous:
-            assert run_hook(command, hook) == BLOCK, command
-        for command in inert:
-            assert run_hook(command, hook) == ALLOW, command
+    def _assert_boundary(self, hooks_dir):
+        for command in self.DANGEROUS:
+            assert self._guard(command, hooks_dir) == BLOCK, command
+        for command in self.INERT:
+            assert run_hook(command, os.path.join(hooks_dir, "pretool-bash-safety.sh")) == ALLOW, command
 
     def test_git_reset_hard_is_blocked(self):
-        assert run_hook("git reset --hard HEAD~1") == BLOCK
+        assert self._guard("git reset --hard HEAD~1") == BLOCK
 
     def test_path_qualified_execution_is_blocked(self):
-        assert run_hook("/usr/bin/git reset --hard HEAD~1") == BLOCK
+        assert self._guard("/usr/bin/git reset --hard HEAD~1") == BLOCK
 
     def test_quoted_search_pattern_is_inert(self):
         assert run_hook("rg -n 'git reset --hard' docs") == ALLOW
@@ -155,31 +155,23 @@ class TestGitResetExecutionClassification:
         assert run_hook('echo "never run git reset --hard in shared repositories"') == ALLOW
 
     def test_missing_classifier_falls_back_closed_for_real_execution(self, tmp_path):
-        hook = self._fallback_hook(tmp_path)
-        self._assert_fallback_boundary(hook)
+        self._assert_boundary(self._hooks_copy(tmp_path))
 
     def test_malformed_classifier_falls_back_closed_for_real_execution(self, tmp_path):
-        hook = self._fallback_hook(tmp_path, malformed_classifier=True)
-        self._assert_fallback_boundary(hook)
+        self._assert_boundary(self._hooks_copy(tmp_path, malformed_classifier=True))
 
 
-# ── Removal policy: historical control sets (LANE-POL, spec-20260808-035658) ──
-# Ported verbatim from the iteration-5 worktree's terminal test file
-# (overnight-20260809-685c203b, sha256 ad46f54c009b01be411e7eddc404a13578fdc8264
-# adef1a5d78b03c8affc39ec). Commands and expected results are byte-identical to
-# the source; only the surrounding module differs.
-#
-# These are the three historical control sets the removal-policy rewrite must
-# keep green, in the order they were accumulated:
-#   * the original iteration-3 constructive counterexamples
+# ── Removal policy: control sets ─────────────────────────────────────────────
+# Three control sets the removal policy must keep green:
+#   * constructive counterexamples
 #     (test_structural_command_positions_fail_closed and its inert/safe twin)
-#   * the iteration-4 exact-mismatch set: 41 forms that must block plus the one
-#     safe `git rm --cached>/dev/null tracked.txt` that must be allowed
+#   * an exact-mismatch set: 41 forms that must block plus the one safe
+#     `git rm --cached>/dev/null tracked.txt` that must be allowed
 #     (test_iteration_five_structural_mismatches_are_blocked)
-#   * the iteration-5 representation boundaries
+#   * representation boundaries
 #     (test_iteration_five_representation_boundaries)
-# Every one of them is a form some earlier iteration got wrong. They exist to
-# make a regression loud, so do not "simplify" a case to make it pass.
+# Each case is a form the policy once got wrong; do not "simplify" a case to
+# make it pass.
 
 class TestCachedGitRmClassification:
     """Every rm occurrence must be a proven cached-Git or Docker removal."""
@@ -498,9 +490,8 @@ class TestRecoverableGitRmFromAScratchpad:
 
 
 # ── Layer 1.F false-positive regression: protected name in quoted arg ─────────
-# dev-20260529-210759: Layer 1.F entry gate switched from $COMMAND to
-# $COMMAND_CONTEXT_STRIPPED so that quoted string arguments to unrelated commands
-# do not trigger the sentinel-write block.
+# A protected name that appears only inside a longer argument of an unrelated
+# command is text, not a reference to the sentinel.
 
 class TestBulkSentinelFalsePositive:
     """Commands whose quoted-string argument happens to mention write-bulk-commit-sentinel.py
@@ -508,7 +499,7 @@ class TestBulkSentinelFalsePositive:
 
     AC1: graphify-query.py with --requirement arg containing the protected name → ALLOW
     AC2: codex exec with --prompt arg containing the protected name → ALLOW
-    AC3: bare invocation (BARE_WRITER path removed in Stage-2 lockdown) → BLOCK
+    AC3: bare invocation of the writer → BLOCK
     AC4: compound command containing the invocation → BLOCK
     """
 
@@ -530,9 +521,8 @@ class TestBulkSentinelFalsePositive:
         assert run_hook(cmd) == ALLOW
 
     def test_ac3_bare_invocation_blocked_by_stage2_lockdown(self):
-        # AC3: after Stage-2 lockdown (commit 14f2ea58), the sentinel writer is NO LONGER
-        # Bash-executable. The userprompt-bulk-commit-capability hook mints sentinels
-        # in-process. Direct Bash invocation MUST be BLOCKED.
+        # AC3: the userprompt-bulk-commit-capability hook mints sentinels in-process;
+        # running the writer from Bash is refused.
         cmd = "python3 scripts/write-bulk-commit-sentinel.py"
         assert run_hook(cmd) == BLOCK
 

@@ -171,9 +171,8 @@ RECORDED_WRAPPERS = [
 ]
 RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 
-# Anchor-class literals as they appear in the two guard sources. Extracted live and compared:
-# adding '/' to either class would change the residual class, so the published table must fail.
-RECORDED_ERE_ANCHOR = "(^|[[:space:];&|()`])git"
+# Anchor-class literal as it appears in the privilege guard's source. Extracted live and compared:
+# adding '/' to the class would change the residual class, so the published table must fail.
 RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 
 # Gate-architecture census, counted at RECORDED_AT.
@@ -185,10 +184,10 @@ RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 #       CLASSIFIER_HAS_PATH_QUALIFIED_GIT. These have no regex fallback of their own because
 #       they never carried one: they exist to ADD path-qualified coverage on top of a separate
 #       bare-form regex gate, so there is nothing for an empty parse to suppress.
-# All three are counted. Counting only A and B would be MISLEADINGLY NARROW -- a reader
-# counting classifier-consuming branches in the guard finds 11, not 3, and would reasonably
-# conclude the published census was cherry-picked to fit the finding.
-RECORDED_CENSUS = {"architecture_a": 1, "architecture_b": 2, "architecture_c": 8}
+# All three are counted. The shell entry of bash-safety holds no gate of any of these shapes:
+# its git rules are predicates in lib/bash_safety_rules.py over the classifier's invocations, so
+# a shell gate reappearing in it changes this census.
+RECORDED_CENSUS = {"architecture_a": 0, "architecture_b": 0, "architecture_c": 0}
 
 # Every mandated cell witness, probed INDIVIDUALLY. Probing one representative per cell is not
 # sufficient: teaching the tokenizer to skip an unprobed sibling leaves every representative
@@ -499,27 +498,31 @@ def published_column_set(header_text, label):
 # ---------------------------------------------------------------------------
 # Semantic extraction of the wrapper token set.
 # ---------------------------------------------------------------------------
-def extract_wrappers(classifier_src):
-    """Return sorted _WRAPPERS via ast.parse + literal_eval, or None if not found.
+def extract_wrappers(classifier_path):
+    """Return the sorted wrapper set the classifier reads, or None if it cannot be loaded.
 
-    The previous lexical scrape re.findall(r"'([^']+)'") saw only SINGLE-quoted tokens, so a
-    double-quoted widening of the set left the count unchanged and the gate passed while the
-    residual class named in the published matrix had actually grown.
+    The set is built from the shared parser's wrapper tables, so it is read from the loaded
+    module, not from the source text.
     """
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); "
+            "import git_command_classifier as g; print(json.dumps(sorted(g._WRAPPERS)))")
     try:
-        tree = ast.parse(classifier_src)
-    except SyntaxError:
+        proc = subprocess.run([sys.executable, "-B", "-c", code,
+                               os.path.dirname(os.path.abspath(classifier_path))],
+                              capture_output=True, text=True, timeout=30)
+        return json.loads(proc.stdout) if proc.returncode == 0 else None
+    except Exception:  # noqa: BLE001
         return None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == "_WRAPPERS":
-                try:
-                    return sorted(ast.literal_eval(node.value))
-                except Exception:  # noqa: BLE001
-                    return None
-    return None
+
+
+# The residual classes RISK-3 names: wrapper flags and leading redirections in front of git.
+# Each form must still reach the classifier as a git invocation.
+CLOSED_BOUNDARY_FORMS = (
+    "env -i git status", "env -u FOO git status", "env -P/usr/bin git status",
+    "2>/dev/null git status", "git status 2>/dev/null",
+    "if ! git status; then :; fi", "if true; then git status; fi",
+    "for x in a; do git status; done", "while ! git status; do :; done",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1005,7 +1008,7 @@ def extract_first_quoted(line, quote):
     return None if end < 0 else line[start + 1:end]
 
 
-def probe_witness(form, classifier_path, ere_anchor, py_anchor):
+def probe_witness(form, classifier_path, py_anchor):
     """Return (classifier_outcome, anchor_outcome) for one form.
 
     Only the harmless `status` subcommand is ever used. Both _command_token_index() and the
@@ -1025,14 +1028,6 @@ def probe_witness(form, classifier_path, ere_anchor, py_anchor):
     else:
         classifier = "MISS"
     py_match = re.search(py_anchor, form) is not None
-    try:
-        ere = subprocess.run(["grep", "-qE", ere_anchor + "[[:space:]]+"],
-                             input=form + "\n", capture_output=True, text=True, timeout=30)
-        ere_match = ere.returncode == 0
-    except Exception:  # noqa: BLE001
-        ere_match = py_match
-    if py_match != ere_match:
-        return classifier, "DIVERGENT"
     return classifier, ("MATCH" if py_match else "no-match")
 
 
@@ -1041,44 +1036,43 @@ def check_claims(args, report):
     guard_src = read_text(args.git_guard)
     classifier_src = read_text(args.classifier)
 
-    # 1. Both regex engines still exist. A future consolidation must break the RISK-2 prose
-    #    loudly instead of silently outdating it.
-    for symbol, src, path in (("GIT_CMD_RE", bash_src, args.bash_safety),
-                              ("GIT_COMMAND_RE", guard_src, args.git_guard)):
-        if re.search(rf"^{symbol}\s*=", src, re.M):
-            report.ok(f"symbol {symbol} still defined in {path}")
-        else:
-            report.fail(f"symbol {symbol} no longer defined in {path} -- the published RISK-2 "
-                        f"claim that both engines still exist is now false")
-
-    # 2. The arch-F7 accepted-residual block is intact.
-    if re.search(r"(?s)Known scope boundaries \(arch-F7\).{0,400}env\s+-i.{0,400}redirection",
-                 classifier_src):
-        report.ok("arch-F7 accepted-residual block still names both residual classes")
+    # 1. One git regex engine: the privilege guard's. bash-safety's git rules read the classifier;
+    #    a second hand-written engine there would bring back RISK-2's drift class.
+    rules_src = read_text(os.path.join(os.path.dirname(args.bash_safety), "lib", "bash_safety_rules.py"))
+    if re.search(r"^GIT_COMMAND_RE\s*=", guard_src, re.M):
+        report.ok(f"symbol GIT_COMMAND_RE still defined in {args.git_guard}")
     else:
-        report.fail("arch-F7 accepted-residual block changed -- RISK-3's published residual "
-                    "table can no longer be assumed to describe the current boundary")
+        report.fail(f"symbol GIT_COMMAND_RE no longer defined in {args.git_guard} -- the published "
+                    f"RISK-2 entry names it as the one remaining engine")
+    if re.search(r"^GIT_CMD_RE\s*=", bash_src + "\n" + rules_src, re.M):
+        report.fail("bash-safety defines GIT_CMD_RE again -- a second hand-synced git regex engine "
+                    "is RISK-2's drift class")
+    else:
+        report.ok("bash-safety defines no git regex engine of its own")
 
-    # 3. Anchor-class literals unchanged (adding '/' would change the residual class).
-    ere_line = next((l for l in bash_src.split("\n") if l.startswith("GIT_CMD_RE=")), "")
-    ere_anchor = extract_first_quoted(ere_line, "'") or ""
+    # 2. The residual classes RISK-3 names stay closed: each form still reaches git.
+    missed = [form for form in CLOSED_BOUNDARY_FORMS
+              if probe_witness(form, args.classifier, "git")[0] != "detected"]
+    if not missed:
+        report.ok("wrapper flags and leading redirections before git still classify as git")
+    else:
+        report.fail(f"{missed} no longer classify as git -- RISK-3's published residual table "
+                    "no longer describes the current boundary")
+
+    # 3. Anchor-class literal unchanged (adding '/' would change the residual class).
     py_line = next((l for l in guard_src.split("\n") if l.startswith("GIT_COMMAND_RE")), "")
     py_anchor = extract_first_quoted(py_line, "'") or ""
-    if ere_anchor == RECORDED_ERE_ANCHOR:
-        report.ok("POSIX ERE anchor class unchanged")
-    else:
-        report.fail(f"POSIX ERE anchor class changed: {ere_anchor!r} != {RECORDED_ERE_ANCHOR!r}")
     if py_anchor == RECORDED_PY_ANCHOR:
         report.ok("Python anchor class unchanged")
     else:
         report.fail(f"Python anchor class changed: {py_anchor!r} != {RECORDED_PY_ANCHOR!r}")
-    if not ere_anchor or not py_anchor:
+    if not py_anchor:
         return
 
     # 4. Every witness probed INDIVIDUALLY.
     drift = 0
     for witness in MANDATED_WITNESSES:
-        classifier, anchor = probe_witness(witness["form"], args.classifier, ere_anchor, py_anchor)
+        classifier, anchor = probe_witness(witness["form"], args.classifier, py_anchor)
         if (classifier, anchor) != (witness["classifier"], witness["anchor"]):
             drift += 1
             report.fail(f"matrix_probe {witness['id']} ({witness['form']!r}): recorded "
@@ -1090,16 +1084,21 @@ def check_claims(args, report):
 
     # 5. Token sets. A widened _WRAPPERS changes the SIZE of the residual class even when every
     #    probed representative still behaves exactly as recorded -- the unprobed-sibling case.
-    live_wrappers = extract_wrappers(classifier_src)
+    live_wrappers = extract_wrappers(args.classifier)
     if live_wrappers is None:
-        report.fail("_WRAPPERS changed: the constant could not be resolved from "
-                    f"{args.classifier} by ast.literal_eval -- an unresolvable declaration "
-                    f"cannot be compared against the published set")
-    elif live_wrappers == sorted(RECORDED_WRAPPERS):
-        report.ok(f"_WRAPPERS unchanged ({len(live_wrappers)} tokens, recorded @{RECORDED_AT})")
+        report.fail("_WRAPPERS changed: the wrapper set could not be read from "
+                    f"{args.classifier} -- an unreadable set cannot be compared against the "
+                    f"published one")
     else:
-        report.fail(f"_WRAPPERS changed: {live_wrappers} != {sorted(RECORDED_WRAPPERS)} -- the "
-                    f"residual class named in the published matrix has a different size now")
+        published_wrappers = published_token_set(read_text(args.ledger_file), "wrapper") or []
+        lost = sorted((set(RECORDED_WRAPPERS) | set(published_wrappers)) - set(live_wrappers))
+        if lost:
+            report.fail(f"_WRAPPERS lost {lost} -- the residual class named in the published "
+                        f"matrix has grown")
+        else:
+            report.ok(f"_WRAPPERS holds the {len(RECORDED_WRAPPERS)} recorded and the "
+                      f"{len(published_wrappers)} published tokens ({len(live_wrappers)} in all, "
+                      f"from the parser's table)")
 
     # The token sets are matched ONLY inside their anchored publication regions. Matching
     # anywhere in the document is vacuous: '>' appears on every blockquote line and '<' inside

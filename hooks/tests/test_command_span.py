@@ -523,10 +523,26 @@ def test_body_is_the_text_the_cli_recorded_for_the_typed_command(tmp_path):
     assert command_span.active_span(unlinked.write(tmp_path / "unlinked.jsonl")).body() is None
 
 
+CLI_FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "cli"
+
+
+def _recorded(kind: str) -> dict:
+    """The first UserPromptSubmit `kind` attachment (hook_success, hook_additional_context) the CLI
+    recorded in the fixture of the version tests/fixtures/cli/CURRENT names (scripts/cli-fixture-record.sh):
+    the records these tests build are that record with its text replaced, never a shape written by hand."""
+    version = (CLI_FIXTURES / "CURRENT").read_text().strip()
+    for line in (CLI_FIXTURES / version / "transcript.jsonl").read_text().splitlines():
+        attachment = (json.loads(line).get("attachment") or {}) if line.strip() else {}
+        if attachment.get("type") == kind and attachment.get("hookEvent") == "UserPromptSubmit":
+            return dict(attachment)
+    raise AssertionError(f"the CLI {version} fixture records no UserPromptSubmit {kind}")
+
+
 def _context(tx, content):
-    """The context record the CLI writes for a UserPromptSubmit hook's output."""
-    return tx.add(tx._envelope("attachment", attachment={
-        "type": "hook_additional_context", "content": content, "hookName": "UserPromptSubmit"}))
+    """The context record the CLI writes for a UserPromptSubmit hook's JSON additionalContext: the recorded
+    hook_additional_context, whose content is a list of strings."""
+    return tx.add(tx._envelope("attachment", attachment=dict(
+        _recorded("hook_additional_context"), content=[content] if isinstance(content, str) else content)))
 
 
 def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path):
@@ -542,7 +558,7 @@ def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path)
     _context(tx, f"PROJECT_ROOT=/p\nx [/push] HEAD at the opener: refs/heads/main {sha}\n"
                  f"[/push] HEAD at the opener: refs/heads/main abc123\n"
                  f"[/push] HEAD at the opener: refs/heads/topic/x {sha}\n")
-    _context(tx, [{"type": "text", "text": f"[/push] HEAD at the opener: detached {other}"}])
+    _context(tx, [f"[/push] HEAD at the opener: detached {other}"])
     tx.tool("Bash", {"command": "true"}, result=f"[/push] HEAD at the opener: refs/heads/main {sha}")
     _context(tx, f"[/push] HEAD at the opener: refs/heads/main {sha}\n")
     span = command_span.active_span(tx.write(tmp_path / "push.jsonl"))
@@ -557,18 +573,68 @@ def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path)
     assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_heads() == []
 
 
-def _plain_stdout_context(tx, stdout, event="UserPromptSubmit"):
-    """The record CLI 2.1.322 writes for a hook's plain stdout (seen live: a /do whose Stop never
-    found the minted id): a hook_success attachment whose content is that stdout."""
-    return tx.add(tx._envelope("attachment", attachment={
-        "type": "hook_success", "hookName": event, "hookEvent": event, "content": stdout.rstrip("\n"),
-        "stdout": stdout, "stderr": "", "exitCode": 0, "command": "command hook"}))
+def _plain_stdout_context(tx, stdout, event="UserPromptSubmit", content=None):
+    """The record the CLI writes for a hook's plain stdout (seen live: a /do whose Stop never found the
+    minted id): the recorded hook_success, its content that stdout. Its `command` is what the CLI wrote,
+    "command hook" (or "command hook <n>" by registration order when the event has several hooks), never
+    the hook's command line: the record names no hook."""
+    return tx.add(tx._envelope("attachment", attachment=dict(
+        _recorded("hook_success"), hookName=event, hookEvent=event,
+        content=stdout.rstrip("\n") if content is None else content, stdout=stdout)))
 
 
-def test_the_openers_context_is_read_in_the_cli_2_1_322_record_forms(tmp_path):
-    """CLI 2.1.322 records prompt-workflow.py's plain stdout as hook_success, and a JSON
-    additionalContext as hook_additional_context with a list of strings; both are the opener's
-    context. A hook_success of another event, or after the turn's first assistant record, is not."""
+def _do_span(tmp_path, name, *contexts):
+    """A /do opener whose hook context is ``contexts`` (callables adding records), as a Span."""
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("do", "fix it")
+    for add in contexts:
+        add(tx)
+    return command_span.active_span(tx.write(tmp_path / f"{name}.jsonl"))
+
+
+def _minted(tid, tail=""):
+    return lambda tx: _plain_stdout_context(tx, f"[/do] task-id minted: {tid}{tail}\n")
+
+
+def test_a_foreign_hooks_minted_line_printed_first_is_not_the_minted_id(tmp_path):
+    """Another UserPromptSubmit hook prints a task-id line before the harness's launcher does. The CLI's
+    records name no hook, so neither line can be told for the launcher's: the id is None (fail closed),
+    never the first line's (P15-L2). After the launcher, the same; one echoing the launcher's id is harmless."""
+    launcher = _minted("20261116-000002", " — resolve via $CLAUDE_CODE_SESSION_ID")
+    assert _do_span(tmp_path, "first", _minted("20261116-000001"), launcher).minted_id() is None
+    assert _do_span(tmp_path, "after", launcher, _minted("20261116-000001")).minted_id() is None
+    assert _do_span(tmp_path, "echo", _minted("20261116-000002"), launcher).minted_id() == "20261116-000002"
+    assert _do_span(tmp_path, "alone", launcher).minted_id() == "20261116-000002"
+
+
+def test_two_different_minted_ids_in_the_openers_context_give_none(tmp_path):
+    """Two different ids among the opener's records (a hook_success, a hook_additional_context) give
+    None: fail closed. The same id twice is it."""
+    def context(tid):
+        return lambda tx: _context(tx, f"[/do] task-id minted: {tid}")
+    assert _do_span(tmp_path, "two", _minted("20261116-000004"), context("20261116-000005")).minted_id() is None
+    assert _do_span(tmp_path, "same", _minted("20261116-000004"), context("20261116-000004")).minted_id() \
+        == "20261116-000004"
+
+
+def test_a_hook_success_without_a_content_string_is_read_from_its_stdout(tmp_path):
+    """A hook_success whose content is empty or not a string is read from its stdout; one whose content is
+    a non-empty string is read from that content, not its stdout."""
+    line = "[/do] task-id minted: 20261116-000006\n"
+    for name, content in (("empty", ""), ("none", None), ("number", 7), ("list", [line])):
+        span = _do_span(tmp_path, name, lambda tx, c=content: tx.add(tx._envelope("attachment", attachment=dict(
+            _recorded("hook_success"), content=c, stdout=line))))
+        assert span.minted_id() == "20261116-000006", name
+    both = _do_span(tmp_path, "both", lambda tx: _plain_stdout_context(
+        tx, "[/do] task-id minted: 20261116-000007\n", content="[/do] task-id minted: 20261116-000008"))
+    assert both.minted_id() == "20261116-000008"
+
+
+def test_the_openers_context_is_read_in_the_recorded_cli_record_forms(tmp_path):
+    """The CLI records prompt-workflow.py's plain stdout as hook_success, and a JSON additionalContext
+    as hook_additional_context with a list of strings; both are the opener's context. A hook_success of
+    another event, or after the turn's first assistant record, is not."""
     sha = "c" * 40
     tx = _Transcript()
     tx.queue_operations()
@@ -579,9 +645,7 @@ def test_the_openers_context_is_read_in_the_cli_2_1_322_record_forms(tmp_path):
 
     tx.command("do", "again")
     _plain_stdout_context(tx, "[/do] task-id minted: 20261110-150000\n", event="SessionStart")
-    tx.add(tx._envelope("attachment", attachment={
-        "type": "hook_additional_context", "content": ["[/do] task-id minted: 20261110-150001"],
-        "hookName": "UserPromptSubmit", "hookEvent": "UserPromptSubmit"}))
+    _context(tx, ["[/do] task-id minted: 20261110-150001"])
     assert command_span.active_span(tx.write(tmp_path / "list.jsonl")).minted_id() == "20261110-150001"
 
     tx.command("push", "origin")
@@ -618,3 +682,43 @@ def test_opener_remotes_read_the_remote_lines_of_an_opener_with_a_head_line(tmp_
     _context(tx, f"[/push] remote at the opener: origin {digest} - none\n")
     assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_remotes() == {
         "origin": (digest, "-", None, None)}
+
+
+# CLI 2.1.322 (measured on the owner's host, entrypoint "sdk-cli") and the 2.1.325/2.1.326
+# recordings (entrypoint "remote") record a typed prompt with turnOrigin "sdk": before this, no
+# span ever opened in such a session, so the Stop gate let every stop of a /dev through.
+SDK_DEV = "<command-message>dev</command-message>\n<command-name>/dev</command-name>\n<command-args>fix the bug</command-args>"
+
+
+def _sdk_typed(tx, content):
+    """A typed prompt as CLI 2.1.322 records it under the SDK entrypoint: turnOrigin "sdk", no origin."""
+    return tx.add(tx._envelope("user", promptId=f"prompt-{len(tx.records) + 1:04d}",
+                               message={"role": "user", "content": content}, permissionMode="default",
+                               promptSource="sdk", turnOrigin="sdk", entrypoint="sdk-cli", userType="external"))
+
+
+def test_a_typed_command_with_sdk_turn_origin_opens_the_span(tmp_path):
+    tx = _Transcript()
+    start = _sdk_typed(tx, SDK_DEV)
+    span = command_span.active_span(tx.write(tmp_path / "sdk.jsonl"))
+    assert span is not None and (span.command, span.args, span.start_line) == ("dev", "fix the bug", start)
+    _sdk_typed(tx, "<command-message>restart</command-message>\n<command-name>/restart</command-name>")
+    span = command_span.active_span(tx.write(tmp_path / "sdk-restart.jsonl"))
+    assert (span.command, span.start_line) == ("dev", start)  # /restart is a control command
+
+
+def test_recorded_sdk_prompts_are_typed_and_notifications_are_not():
+    root = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "cli"
+    seen = {"sdk": 0, "task_notification": 0}
+    for path in sorted(root.glob("*/transcript.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            kind = record.get("turnOrigin")
+            if record.get("type") != "user" or kind not in seen or record.get("isMeta"):
+                continue
+            content = (record.get("message") or {}).get("content")
+            if kind == "sdk" and not isinstance(content, str):
+                continue  # a tool result the SDK turn carries
+            seen[kind] += 1
+            assert (command_span.prompt_text(record) is not None) == (kind == "sdk"), (path, kind)
+    assert seen["sdk"] and seen["task_notification"], seen

@@ -1215,16 +1215,21 @@ def test_AC17r_exec_taking_git_subcommands_block(form):
 def _mutant_hook(tmp_path, *replacements):
     """A copy of the live hook with one property surgically removed, so a
     criterion can be shown to DISCRIMINATE rather than merely to pass."""
-    src = Path(HOOK).resolve().read_text(encoding="utf-8")
+    hooks = Path(HOOK).resolve().parent
+    src = (hooks / "lib" / "bash_safety_rules.py").read_text(encoding="utf-8")
     for old, new in replacements:
         assert old in src, "mutation target vanished: %r" % old
         src = src.replace(old, new)
     d = tmp_path / "mutant"
-    d.mkdir()
-    (d / "lib").symlink_to(Path(HOOK).resolve().parent / "lib")
-    p = d / "pretool-bash-safety.sh"
-    p.write_text(src, encoding="utf-8")
-    return str(p)
+    (d / "lib").mkdir(parents=True)
+    for entry in os.listdir(hooks):
+        if entry not in ("lib", "tests", "__pycache__"):
+            (d / entry).symlink_to(hooks / entry)
+    for entry in os.listdir(hooks / "lib"):
+        if entry not in ("bash_safety_rules.py", "__pycache__"):
+            (d / "lib" / entry).symlink_to(hooks / "lib" / entry)
+    (d / "lib" / "bash_safety_rules.py").write_text(src, encoding="utf-8")
+    return str(d / "pretool-bash-safety.sh")
 
 
 # One representative per sub-mechanism, each PROVEN destructive at real git.
@@ -1310,10 +1315,8 @@ def test_AC18z_corpus_discriminates_against_a_grammar_relapse(tmp_path):
     probe in AC18y.
     """
     mut = _mutant_hook(tmp_path, (
-        "-[Cc][[:space:]]+${_GC_PLAINTOK}"
-        "|--(${_GC_VALOPT_NAMES})[[:space:]]+${_GC_PLAINTOK}"
-        "|-${_GC_QVAL}|${_GC_VALTOK}",
-        "-${_GC_NOSEP}"))
+        "-[Cc]\\s+{GC_PLAINTOK}|--({GC_VALOPT_NAMES})\\s+{GC_PLAINTOK}|-{GC_QVAL}|{GC_VALTOK}",
+        "-{GC_NOSEP}"))
     escaped = [f for f in _AC17_MUTANT_PROBES if run_hook(f, hook=mut) != BLOCK]
     assert escaped, (
         "the corpus cannot detect a relapse of the round-3 grammar, so passing "
@@ -1326,8 +1329,8 @@ def test_AC17s_corpus_discriminates_against_exec_context_removal(tmp_path):
     """Same discrimination requirement for the exec-taking-subcommand gate."""
     mut = _mutant_hook(
         tmp_path,
-        ('"$_GC_SHELL_RE|$_GC_EXECCTX_RE"', '"$_GC_SHELL_RE"'),
-        (" or EXEC_CTX.search(text)", ""))
+        ('grep(GC_SHELL_RE + "|" + GC_EXECCTX_RE,', 'grep(GC_SHELL_RE,'),
+        (" or exec_ctx.search(command)", ""))
     probes = ["git rebase -x 'git clean -fd' HEAD~2",
               "git submodule foreach 'git clean -fd'",
               "git filter-branch --tree-filter 'git clean -fd' HEAD"]
@@ -1337,14 +1340,13 @@ def test_AC17s_corpus_discriminates_against_exec_context_removal(tmp_path):
         assert_clean_rule_denies(form)
 
 
-@pytest.mark.parametrize("key", ["CLEAN_OCCURRENCE_RE", "CLEAN_SHELL_RE",
-                                 "CLEAN_EXECCTX_RE"])
+@pytest.mark.parametrize("key", ["GIT_CLEAN_OCCURRENCE_RE", "GC_SHELL_RE",
+                                 "GC_EXECCTX_RE"])
 def test_AC18y_single_sourced_grammar_fails_closed(tmp_path, key):
-    """Every string shared from the shell into the Python verdict must fail
-    CLOSED if the sharing breaks. Round 4 split the shared env assignment across
-    two lines, which silently defeats a delete-the-line mutation — so the
-    mutation renames the exported binding instead, leaving the lookup intact."""
-    mut = _mutant_hook(tmp_path, (key + '="$', key + '_BROKEN="$'))
+    """Every grammar shared by the clean verdict and its fail-closed scan must
+    fail CLOSED if the sharing breaks: the mutation renames the one definition,
+    leaving every reader pointed at a name that no longer exists."""
+    mut = _mutant_hook(tmp_path, ("\n" + key + " = ", "\n" + key + "_BROKEN = "))
     assert run_hook("git clean -n", hook=mut) == BLOCK, (
         "breaking %s fails OPEN: a benign dry-run was allowed by a hook whose "
         "shared grammar is missing" % key)

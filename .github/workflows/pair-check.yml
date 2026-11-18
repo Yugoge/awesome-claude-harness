@@ -1,0 +1,209 @@
+# Pair check between open PRs (P15 lane L12, plan section 2(f)). NOT a gate.
+#
+# Each PR's CI judges its own head. Two PRs can each be green and still break each other: #44
+# required every registered hook to ask the harness switch first and #45 registered two hooks that
+# did not, and only the merge train showed it. This workflow, on a dispatch and when a PR gets the label
+# `pair-check`, takes each pair of open, green, non-draft PRs to master, builds their mechanical
+# merge inside the runner (scripts/ci/pair-check.sh: `git merge-tree`, an object in the runner's
+# own clone; no ref is pushed, no commit published), runs the union of both PRs' changed test
+# files on it, and publishes the result as a check run on both heads. No comment is posted.
+#
+# Never a required check: its check runs are named per pair ("pair-check #A+#B"), so no branch
+# protection rule can name one, and the merge train stays the gate. A textual conflict is reported
+# as conflict (conclusion neutral) and its conflicted test files are not run.
+#
+# Cap: at most MAX_PAIRS pairs per run (10, about 2 to 3 min each), most recently updated PRs
+# first; the pairs over the cap are listed in the plan job's summary and wait for the next run.
+#
+# Trust: the job that runs PR code has a read-only token that is not kept in the clone
+# (persist-credentials: false); only the publish job holds checks: write, and it runs no PR code,
+# it reads the JSON results the run job uploaded.
+#
+# D30 visibility gate, as in baseline.yml and required of every job by
+# tests/test_ci_visibility_gate.py: a job runs on a manual dispatch anywhere, otherwise only where
+# the event payload says the repository is public.
+#
+# No schedule: a schedule payload carries no repository object, so under that gate a scheduled run
+# could never start a job, and a trigger that never fires would mislead. The pair check runs on
+# dispatch and on the `pair-check` label.
+name: pair-check
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  MAX_PAIRS: 10
+
+concurrency:
+  group: pair-check
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan pairs
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || github.event.label.name == 'pair-check') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      pairs: ${{ steps.plan.outputs.pairs }}
+    steps:
+      - name: Plan the pairs of open, green, non-draft PRs (capped at MAX_PAIRS)
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          LABELED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import itertools, json, os, subprocess
+
+          def api(path):
+              out = subprocess.run(["gh", "api", "--paginate", "--slurp", path], check=True,
+                                   capture_output=True, text=True).stdout
+              pages = json.loads(out)
+              return pages if not isinstance(pages[0], list) else [x for p in pages for x in p]
+
+          repo, event = os.environ["REPO"], os.environ["EVENT"]
+          info = api(f"repos/{repo}")[0]
+          pairs, notes = [], []
+          prs = [p for p in api(f"repos/{repo}/pulls?state=open&base={info['default_branch']}&per_page=100")
+                 if not p["draft"]]
+          prs.sort(key=lambda p: p["updated_at"], reverse=True)
+
+          def green(sha):
+              runs = api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100")
+              runs = [r for p in runs for r in p.get("check_runs", [])] if runs and "check_runs" in runs[0] else runs
+              runs = [r for r in runs if not r["name"].startswith("pair-check")]
+              return bool(runs) and all(r["status"] == "completed" and
+                                        r["conclusion"] in ("success", "neutral", "skipped") for r in runs)
+
+          ready = [p for p in prs if green(p["head"]["sha"])]
+          notes += [f"#{p['number']} skipped: not green" for p in prs if p not in ready]
+          candidates = list(itertools.combinations(ready, 2))
+          labeled = os.environ.get("LABELED_PR")
+          if event == "pull_request" and labeled:
+              candidates = [c for c in candidates if int(labeled) in (c[0]["number"], c[1]["number"])]
+          cap = int(os.environ["MAX_PAIRS"])
+          for a, b in candidates[:cap]:
+              pairs.append({"a": a["number"], "b": b["number"], "a_sha": a["head"]["sha"],
+                            "b_sha": b["head"]["sha"], "base": a["base"]["ref"]})
+          notes += [f"#{a['number']}+#{b['number']} over the cap of {cap}: next run" for a, b in candidates[cap:]]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write("pairs=" + json.dumps(pairs) + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(f"{len(pairs)} pair(s) planned, cap {cap}.\n\n" + "".join(f"- {n}\n" for n in notes))
+          PY
+
+  run:
+    name: pair #${{ matrix.pair.a }}+#${{ matrix.pair.b }}
+    needs: plan
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && needs.plan.outputs.pairs != '' && needs.plan.outputs.pairs != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        pair: ${{ fromJSON(needs.plan.outputs.pairs) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Fetch both PR heads into the runner's object store (no ref is written)
+        env:
+          TOKEN: ${{ github.token }}
+          A: ${{ matrix.pair.a }}
+          B: ${{ matrix.pair.b }}
+        run: |
+          set -euo pipefail
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c http.extraheader="$auth" fetch --no-tags --no-write-fetch-head origin \
+            "pull/$A/head" "pull/$B/head"
+
+      - name: Run the union of both PRs' changed tests on their merged tree
+        env:
+          A_SHA: ${{ matrix.pair.a_sha }}
+          B_SHA: ${{ matrix.pair.b_sha }}
+          BASE: ${{ matrix.pair.base }}
+        run: |
+          set -uo pipefail
+          base_sha="$(git rev-parse "origin/$BASE")"
+          bash scripts/ci/pair-check.sh --base "$base_sha" --out pair-result "$A_SHA" "$B_SHA"
+          echo "exit=$?" >> pair-result/exit.txt
+          cat pair-result/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pair-${{ matrix.pair.a }}-${{ matrix.pair.b }}
+          path: |
+            pair-result/result.json
+            pair-result/summary.md
+            pair-result/pytest.log
+          if-no-files-found: warn
+
+  publish:
+    name: publish check runs
+    needs: [plan, run]
+    if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && always() && needs.plan.outputs.pairs != '' && needs.plan.outputs.pairs != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Download the results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: pair-*
+          path: results
+
+      - name: Publish one check run per pair on both heads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PAIRS: ${{ needs.plan.outputs.pairs }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess
+          conclusion = {"green": "success", "failed": "failure", "conflict": "neutral",
+                        "no-tests": "neutral", "error": "neutral"}
+          for p in json.loads(os.environ["PAIRS"]):
+              d = f"results/pair-{p['a']}-{p['b']}"
+              try:
+                  r = json.load(open(f"{d}/result.json"))
+                  summary = open(f"{d}/summary.md").read()
+              except FileNotFoundError:
+                  r, summary = {"status": "error"}, "The pair's run left no result; see the run job's log."
+              name = f"pair-check #{p['a']}+#{p['b']}"
+              for sha in (p["a_sha"], p["b_sha"]):
+                  body = {"name": name, "head_sha": sha, "status": "completed",
+                          "conclusion": conclusion[r["status"]],
+                          "output": {"title": f"{name}: {r['status']}", "summary": summary[:65000]}}
+                  subprocess.run(["gh", "api", "-X", "POST", f"repos/{os.environ['REPO']}/check-runs",
+                                  "--input", "-"], input=json.dumps(body), text=True, check=True,
+                                 capture_output=True)
+          PY

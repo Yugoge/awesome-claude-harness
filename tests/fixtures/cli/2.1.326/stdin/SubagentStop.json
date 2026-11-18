@@ -1,0 +1,19 @@
+{
+  "agent_id": "<AGENT_ID>",
+  "agent_transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>/subagents/agent-<AGENT_ID>.jsonl",
+  "agent_type": "general-purpose",
+  "background_tasks": [],
+  "cwd": "<CWD>",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "last_assistant_message": "<redacted>",
+  "permission_mode": "default",
+  "prompt_id": "<UUID>",
+  "scratchpad_dir": "<TMP>/claude-<UID>/<CWD_SLUG>/<UUID>/scratchpad",
+  "session_crons": [],
+  "session_id": "<UUID>",
+  "stop_hook_active": true,
+  "transcript_path": "<HOME>/.claude/projects/<CWD_SLUG>/<UUID>.jsonl"
+}

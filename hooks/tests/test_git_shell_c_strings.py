@@ -13,10 +13,9 @@ command line of its own; a string it cannot resolve (an expansion the outer
 shell performs, quoting it cannot follow, nesting past its limit) is the
 residual `unresolved_shell_string`, which the privilege guard refuses.
 
-PR #15's second review (finding 1) measured that residual refusing commands
-with no git in them: every `-c` string holding an expansion, text the scan
-could not lex, and every here-document body. Such a string is now a residual
-only when it is git-shaped, and a here-document is shell text only when a
+A string with no git in it (a `-c` string holding an expansion, text the scan
+cannot lex, a here-document body) is no residual: a string is a residual only
+when it is git-shaped, and a here-document is shell text only when a
 shell may read it (REVIEW_ROWS, GIT_SHAPED).
 
 That narrowing let a layer hand its run-time text to a shell, an interpreter
@@ -76,25 +75,23 @@ REFUSED = [
     (PRIVILEGE, "git commit --no-verify -m y"),
     (PRIVILEGE, "git rebase master"),
     (PRIVILEGE, "git revert HEAD~1"),
-    (SAFETY, "git reset --hard HEAD"),
-    (SAFETY, "git update-ref refs/heads/x HEAD"),
-    (SAFETY, "git branch -D feature"),
-    (SAFETY, "git symbolic-ref HEAD refs/heads/x"),
-    (SAFETY, "git push --force origin master"),
     (SAFETY, "git stash"),
     (SAFETY, "git checkout HEAD -- ."),
     (SAFETY, "git restore --source=HEAD -- ."),
+    (BRANCH, "git worktree add ../wt"),
+]
+SUBAGENT = [(PRIVILEGE, "git commit -m y"), (PRIVILEGE, "git push --force origin master"), (SAFETY, "git stash"),
+            (BRANCH, "git worktree add ../wt")]
+# Branch and PR creation: the worktree hook allows them, plain and wrapped.
+ALLOWED = [
     (BRANCH, "git update-ref refs/heads/x HEAD"),
     (BRANCH, "git checkout -b feat"),
     (BRANCH, "git switch -c feat"),
     (BRANCH, "git branch feat"),
-    (BRANCH, "git worktree add ../wt"),
     (BRANCH, "git stash branch feat"),
     (BRANCH, "git fetch origin master:feat"),
     (BRANCH, "gh pr create --fill"),
 ]
-SUBAGENT = [(PRIVILEGE, "git commit -m y"), (SAFETY, "git push --force origin master"),
-            (BRANCH, "git checkout -b feat")]
 
 UNRESOLVED = [
     'X="git commit -m y"; bash -c "$X"',
@@ -103,13 +100,11 @@ UNRESOLVED = [
     'bash -c "`cat cmd.txt`"',
     'bash -c "git $SUB"',
     "bash -c 'bash -c \"$X\"'",
-    "bash -c $'git commit -m y'",
     'bash -c "git status',
 ]
 
-# PR #15 review finding 1: the reviewer's table, (command, exit code of the
-# privilege guard); 103a1b4, before P10's change, gave the same codes. Each row
-# but the last has no git in it and was refused as an unresolved string.
+# (command, exit code of the privilege guard). Each row but the last has no git
+# in it.
 REVIEW_ROWS = [
     ('bash -c "cd $DIR && npm test"', 0),
     ('timeout 30 bash -c "until curl -s localhost:$PORT; do sleep 1; done"', 0),
@@ -296,7 +291,7 @@ def _run(sandbox, hook, command, subagent=False):
 def verdicts(sandbox):
     """Exit code of every (hook, command, subagent) run the hook cases below read."""
     runs = set()
-    for actor, cases in ((False, REFUSED), (True, SUBAGENT)):
+    for actor, cases in ((False, REFUSED), (True, SUBAGENT), (False, ALLOWED), (True, ALLOWED)):
         for hook, plain in cases:
             runs.add((hook, plain, actor))
             runs.update((hook, tmpl.format(plain), actor) for tmpl in WRAPPERS.values())
@@ -343,11 +338,19 @@ def test_wrapped_form_is_refused_like_the_plain_one_for_a_subagent(verdicts, hoo
     assert verdicts[(hook, wrapped, True)] == 2, wrapped
 
 
+@pytest.mark.parametrize("hook,plain,form", _pairs(ALLOWED))
+@pytest.mark.parametrize("subagent", [False, True])
+def test_wrapped_form_is_allowed_like_the_plain_one(verdicts, hook, plain, form, subagent):
+    assert verdicts[(hook, plain, subagent)] == 0, plain
+    wrapped = WRAPPERS[form].format(plain)
+    assert verdicts[(hook, wrapped, subagent)] == 0, wrapped
+
+
 def _calls(command):
     return [(inv.subcommand, tuple(inv.args)) for inv in iter_git_invocations(command)]
 
 
-@pytest.mark.parametrize("plain", sorted({p for h, p in REFUSED if p.startswith("git ")}))
+@pytest.mark.parametrize("plain", sorted({p for h, p in REFUSED + ALLOWED if p.startswith("git ")}))
 @pytest.mark.parametrize("form", list(WRAPPERS))
 def test_the_classifier_yields_the_plain_invocation_inside_every_wrapper(plain, form):
     wrapped = WRAPPERS[form].format(plain)
@@ -362,6 +365,7 @@ def test_the_classifier_yields_the_plain_invocation_inside_every_wrapper(plain, 
     'bash -c "git commit -m y">/dev/null', "xargs -I{} sh -c 'git commit -m y' < list",
     "cat <<'EOF'\nit's a note\nEOF\nbash -c 'git commit -m y'",
     'bash $OPTS -c "git commit -m y"', 'bash $X "git commit -m y"', _nest("git commit -m y", 4),
+    "bash -c $'git commit -m y'",
 ])
 def test_other_spellings_of_a_shell_string_resolve(command):
     assert ("commit", ("-m", "y")) in _calls(command), command
@@ -509,13 +513,15 @@ def test_a_run_time_value_reads_as_a_placeholder_in_its_layer():
 
 def test_a_shell_named_in_a_commit_message_is_data():
     assert _calls("git commit -m 'run bash -c \"git push\" later'") == [
-        ("commit", ("-m", "'run", "bash", "-c", '"git', 'push"', "later'"))]
+        ("commit", ("-m", "'run bash -c \"git push\" later'"))]
 
 
 def test_every_residual_kind_is_one_the_override_route_accepts():
     samples = ['g\\it push', '$GIT push', '$(which git) push', 'bash -c "$X"']
     kinds = {kind for cmd in samples for kind, _seg in classify_git_command(cmd)[1]}
-    assert kinds == set(git_command_classifier.RESIDUAL_KINDS)
+    # OB-L26: `g\\it push` is read as git push, so obfuscated_git_token is no longer
+    # raised; it stays a kind an override may name.
+    assert kinds | {"obfuscated_git_token"} == set(git_command_classifier.RESIDUAL_KINDS)
     spec = importlib.util.spec_from_file_location(
         "override", ROOT / "scripts" / "write-git-residual-override.py")
     module = importlib.util.module_from_spec(spec)

@@ -8,7 +8,7 @@ ref-mutation rules under it and adds none: a command it allows without /do it al
 git commit, git push and a git command it cannot classify are judged as without /do, and what a
 released rule refuses stays refused when it can move the protected branch (the branch
 refs/remotes/origin/HEAD names) or the guard cannot tell its landing branch; its blocks name the
-commands that land them. No hook honours it for a subagent. A valid /allow or /push grant
+commands that land them. No hook honours it for a subagent. A valid /allow grant
 authorizes what it authorized before.
 
 Hooks run as subprocesses with PreToolUse payloads shaped as the CLI sends them, in a product
@@ -110,13 +110,15 @@ def test_gate_and_firewall_honour_do_for_the_main_agent_only(product):
     edit = {"file_path": str(product.repo / "README.md"), "old_string": "toy", "new_string": "t"}
     assert product.hook(GATE, "Edit", edit).returncode == 0
     assert product.hook(GATE, "Edit", edit).returncode == 0  # a second Edit in the turn
-    assert product.bash(FIREWALL, "git checkout -b feature/x").returncode == 0
-    assert product.bash(FIREWALL, "git checkout -b feature/x", subagent=True).returncode == 2
+    assert product.bash(FIREWALL, "git worktree add ../wt").returncode == 0
+    assert product.bash(FIREWALL, "git worktree add ../wt", subagent=True).returncode == 2
+    assert product.bash(FIREWALL, "git checkout -b feature/x", subagent=True).returncode == 0
     product.prompt("next turn")  # D5: /do consent lasts one turn
     assert not product.flag().exists()
     assert product.hook(GATE, "Edit", edit).returncode == 0
     assert product.hook(GATE, "Edit", edit).returncode == 2
-    assert product.bash(FIREWALL, "git checkout -b feature/x").returncode == 2
+    assert product.bash(FIREWALL, "git worktree add ../wt").returncode == 2
+    assert product.bash(FIREWALL, "git checkout -b feature/x").returncode == 0
 
 
 def test_guard_honours_do_for_an_operation_it_still_covers(product):
@@ -269,24 +271,18 @@ def test_a_grant_gives_the_same_exit_with_and_without_do(product):
     now = int(time.time())
     grants = product.state / "claude-grants"
     grants.mkdir()
-    head = product.git("rev-parse", "HEAD")
-    push_grant = product.state / f"claude-push-grant-{SID}-0001.json"
-    push = "git push origin master"
     for prompt in ("/do push the branch", "next turn"):
         product.prompt(prompt)
         assert product.flag().exists() == prompt.startswith("/do")
         for target, command in (("commit", "git commit -m wip"), ("merge", "git merge feat"),
-                                ("reset", "git reset --hard HEAD~1")):
+                                ("reset", "git reset --hard HEAD~1"),
+                                ("push", "git push origin master")):
             (grants / f"{SID}.json").write_text(json.dumps({
                 "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
                 "allowed_operations": [{"op": "git", "target": target}]}))
             assert product.bash(GUARD, command).returncode == 0, (prompt, command)
         (grants / f"{SID}.json").unlink()
-        push_grant.write_text(json.dumps({"branch": "master", "expected_head": head,
-                                          "remote": "origin"}))
-        assert product.bash(GUARD, push, CLAUDE_PUSH_COMMAND_ACTIVE="1").returncode == 0, prompt
-        assert not push_grant.exists()  # spent
-        assert product.bash(GUARD, push, CLAUDE_PUSH_COMMAND_ACTIVE="1").returncode == 2, prompt
+        assert product.bash(GUARD, "git push origin master").returncode == 2, prompt
 
 
 def test_valid_grants_are_unchanged_under_do(product):
@@ -301,14 +297,13 @@ def test_valid_grants_are_unchanged_under_do(product):
         "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
         "allowed_operations": [{"op": "git", "target": "branch"}]}))
     assert product.bash(GUARD, "git branch -f master feat").returncode == 0
-    (grants / f"{SID}.json").unlink()
-    head = product.git("rev-parse", "HEAD")
-    grant = product.state / f"claude-push-grant-{SID}-0001.json"
-    grant.write_text(json.dumps({"branch": "master", "expected_head": head, "remote": "origin"}))
     command = "git push origin master"
-    assert product.bash(GUARD, command, CLAUDE_PUSH_COMMAND_ACTIVE="1").returncode == 0
-    assert not grant.exists()  # spent, as without /do
-    _blocked_naming(product.bash(GUARD, command, CLAUDE_PUSH_COMMAND_ACTIVE="1"), "/push")
+    (grants / f"{SID}.json").write_text(json.dumps({
+        "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
+        "allowed_operations": [{"op": "git", "target": "push"}]}))
+    assert product.bash(GUARD, command).returncode == 0
+    (grants / f"{SID}.json").unlink()
+    _blocked_naming(product.bash(GUARD, command), "/push")
 
 
 def test_only_the_reader_the_writer_and_the_clearer_name_the_flag():

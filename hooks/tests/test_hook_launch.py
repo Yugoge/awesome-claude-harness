@@ -68,7 +68,8 @@ def test_each_event_registers_at_most_one_python_process():
 
 def test_launchers_cover_the_events_and_time_out_after_their_rules():
     found = _launchers()
-    assert {e for e, _, _ in found.values()} == {"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure"}
+    assert {e for e, _, _ in found.values()} == {"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+                                                 "SessionStart", "SubagentStart"}
     for hook, (event, group, h) in found.items():
         assert "matcher" not in group, hook
         rules = launch_settings.rules(str(ROOT), hook)

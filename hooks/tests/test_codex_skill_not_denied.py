@@ -1,4 +1,4 @@
-"""P5-31: `Skill(codex:*)` stays out of settings.json's permissions, and lesson 15 keys on the human-only marker.
+"""P5-31: no `Skill(codex...)` rule is in settings.json's permissions, and lesson 15 keys on the human-only marker.
 
 P5's plan (R5, A15) and P9's A13 asked for a `Skill(codex:*)` deny. P5 decided against it, by evidence that holds on
 d64fa96: /codex is not a human-only command. commands/codex.md carries no `disable-model-invocation: true`; the
@@ -90,7 +90,7 @@ def test_no_permission_rule_names_the_codex_skill():
 def test_every_human_only_command_has_its_skill_deny_and_no_other_command_has_one():
     deny = set(_settings()["permissions"]["deny"])
     marked = {s for s in _stems() if _MARKER.search(_frontmatter(s))}
-    missing = sorted(s for s in marked - CONTROL if f"Skill({s}:*)" not in deny)
+    missing = sorted(s for s in marked - CONTROL if f"Skill({s})" not in deny)
     assert not missing, "human-only commands without a Skill deny (CLAUDE.md lesson 15): " + ", ".join(missing)
-    unmarked_denied = sorted(s for s in _stems() - marked if f"Skill({s}:*)" in deny)
+    unmarked_denied = sorted(s for s in _stems() - marked if f"Skill({s})" in deny)
     assert not unmarked_denied, "model-invocable commands denied to the Skill tool: " + ", ".join(unmarked_denied)

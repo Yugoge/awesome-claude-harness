@@ -570,6 +570,180 @@ class TestInterpreterAndFindActions:
         assert "find_delete_action" in result["reason"]
 
 
+# ── The data reading of a value word ─────────────────────────────────────────
+#
+# A word handed to a program this module does not model is a removal reference
+# only when some shell reading of it could put a removal front end in command
+# position: it names one (after quote and escape normalization), it carries a
+# glob or brace that can expand to one, or it carries an assembly channel that
+# can build one. These read-only commands were refused (`UNRESOLVED
+# unproven_boundary_with_removal_reference`) because the nested reading of a
+# URL or SQL argument met a glob head (`a?x=1`), or the `*` of `count(*)`, and
+# took the unnamed head itself for evidence.
+
+DATA_WORD_ORDINARY_WORK = [
+    "curl -s 'https://example.com/a?x=1&y=2'",
+    "curl -s 'https://stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv'",
+    "date -u '+%F %T'; TZ=America/New_York date '+%F %T'; "
+    "curl -s 'https://stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv'",
+    "gh api 'repos/a/b/pulls?state=open&per_page=5'",
+    "http GET 'https://example.com/search?q=a&page=2'",
+    "wget -qO- 'https://example.com/export?a=1&b=2'",
+    "docker exec -i app-postgres psql -X -U app -d app -c "
+    "\"SELECT source, count(*) FROM jobs GROUP BY 1 ORDER BY 2 DESC;\"",
+    "docker exec app-postgres psql -U app -d app -At -c "
+    "\"select count(*) filter (where posted_at is null) from jobs\"",
+    "sqlite3 data.db 'select count(*) from jobs; select max(ts) from jobs'",
+    "psql -At -c \"select source || ':' || count(*) from jobs"
+    " where posted_at > now() - interval '7 days' group by source\"",
+    "mysql -e 'select count(*) from t'",
+    # The apostrophe makes the comment unparseable; the parse failure alone is
+    # no reference, and `delete` is not a removal front end.
+    "gh issue comment 5 -b \"don't delete the draft yet\"",
+]
+
+# Already allowed before the data reading existed; they must stay allowed.
+DATA_WORD_ORDINARY_CONTROLS = [
+    "curl -s 'https://example.com/a?x=1'",
+    "psql -c \"select a || b, now() - interval '7 days' from t\"",
+]
+
+# The listed must-stay-refused forms, at top level and inside a data word.
+NAMED_REMOVAL_FORMS = [
+    "foo 'rm -rf x'",
+    "script -qc '/bin/r? x'",
+    "${R}${M} x",
+    "$'\\x72m' x",
+    "r''m x",
+    "/bin/{r,}m x",
+    "C=r; C+=m; \"$C\" x",
+    "bun -e 'require(\"fs\").rmSync(p)'",
+    "foo 'x;${R}${M} -rf T'",
+    "foo 'x;$'\"'\"'\\x72m'\"'\"' -rf T'",
+    "foo 'x;r\"\"m -rf T'",
+    "foo 'x;/bin/{r,}m -rf T'",
+    "foo 'x;C=r; C+=m; \"$C\" -rf T'",
+]
+
+# URL- and SQL-shaped words that DO carry a way to run a removal.
+DATA_WORD_REMOVAL_REFERENCES = [
+    "curl -s 'https://example.com/a?x=1;rm -rf x'",
+    "curl -s 'https://example.com/a?x=1&$(printf rm) -rf x'",
+    "curl -s 'https://example.com/a?x=1&`printf rm` -rf x'",
+    "curl -s 'x&/bin/r?'",
+    "curl -s 'https://example.com/a?x=1&/bin/r? -rf x'",
+    "wget -qO- 'https://example.com/?a=1&/bin/{r,}m -rf x'",
+    "gh api 'repos/a/b?x=1&${R}${M} -rf x'",
+    "psql -c 'select 1; rm -rf x'",
+    "sqlite3 db 'select count(*) from t; unlink x'",
+    "mysql -e 'select 1 & shred -u x'",
+    # An excused head is an unmodelled program, and its argv is still read.
+    "curl -s 'https://example.com/a?x=1&b?c rm -rf x'",
+]
+
+# Glob and brace syntax the argv recognition predicate reads leniently or does
+# not model. Each can expand to `rm`, so none may excuse a head.
+UNMODELLED_PATTERN_HEADS = [
+    "foo 'x;[r][m] -rf T'",
+    "foo 'x;?? -rf T'",
+    "foo 'x;@(rm|ls) -rf T'",
+    "foo 'x;!(ls) -rf T'",
+    "foo 'x;r[[:alpha:]] -rf T'",
+    "foo 'x;{r..s}m -rf T'",
+    "foo 'x;R? -rf T'",
+    "foo 'x;/bin/* T'",
+    "foo 'x;{%s,rm} -rf T'" % ",".join("a%d" % i for i in range(60)),
+]
+
+# A parse failure hides nothing above it, and quotes do not hide a name.
+UNPARSED_VALUE_REMOVALS = [
+    "foo $'ok; $X\\nit\\'s'",
+    "foo $'x; find . -delete\\nit\\'s'",
+    "foo \"x; r''m 'tail\"",
+]
+
+
+def _head_word(text):
+    return eb.lex(eb.Src.from_raw(text))[0][1]
+
+
+class TestDataReadingOfValueWords:
+    @pytest.mark.parametrize("command", DATA_WORD_ORDINARY_WORK
+                             + DATA_WORD_ORDINARY_CONTROLS)
+    def test_ordinary_data_word_is_not_a_removal_reference(self, command):
+        result = eb.analyze(command)
+        assert result["allowed"] is True, (
+            "false refusal of %r (verdict %s, reason %s)"
+            % (command, result["verdict"], result["reason"]))
+
+    @pytest.mark.parametrize("command", DATA_WORD_ORDINARY_WORK)
+    def test_the_hook_allows_them_end_to_end(self, command):
+        code, _out, err = run_hook_command(command)
+        assert "removal-policy" not in err, err
+        assert code == ALLOW, (command, err)
+
+    @pytest.mark.parametrize("command", NAMED_REMOVAL_FORMS
+                             + DATA_WORD_REMOVAL_REFERENCES
+                             + UNMODELLED_PATTERN_HEADS
+                             + UNPARSED_VALUE_REMOVALS)
+    def test_a_word_that_can_reach_a_removal_still_denies(self, command):
+        result = eb.analyze(command)
+        assert result["allowed"] is False, (
+            "authorized %r (verdict %s, reason %s)"
+            % (command, result["verdict"], result["reason"]))
+        assert result["verdict"] in (eb.UNRESOLVED, eb.FORBIDDEN_REMOVAL)
+
+    @pytest.mark.parametrize("command", DATA_WORD_REMOVAL_REFERENCES[:6])
+    def test_the_hook_denies_the_url_shaped_ones_end_to_end(self, command):
+        code, _out, err = run_hook_command(command)
+        assert code == BLOCK, command
+        assert "removal-policy" in err, err
+
+    @pytest.mark.parametrize("command", [
+        "a?x=1 y", "* x", "count(*)", "https://example.com/a?x=1&y=2",
+    ])
+    def test_the_command_line_itself_keeps_its_unnamed_heads_unresolved(
+            self, command):
+        # The data reading belongs to the nested reading of a VALUE. A pattern
+        # in the command line's own command position is still unnamed.
+        result = eb.analyze(command)
+        assert result["allowed"] is False, command
+        assert "dynamic_command_head" in result["reason"], result["reason"]
+
+
+class TestPatternHeadProof:
+    @pytest.mark.parametrize("head", [
+        "a?x=1", "https://example.com/a?x=1", "repos/a/b/pulls?state=open",
+        "*", "**", "count[0-9]", "{ls,cat}", "x@y?",
+    ])
+    def test_a_pattern_that_cannot_produce_a_removal_name(self, head):
+        assert eb.pattern_word_could_name_removal(_head_word(head)) is False
+
+    @pytest.mark.parametrize("head", [
+        "/bin/r?", "/bin/{r,}m", "[r][m]", "??", "?*", "@(rm|ls)", "!(ls)",
+        "r[[:alpha:]]", "{r..s}m", "R?", "/bin/*", "x/*", "${R}${M}",
+        "$(printf rm)", "`printf rm`", "$'\\x72m'", "r$X",
+        "{%s,rm}" % ",".join("a%d" % i for i in range(60)),
+    ])
+    def test_a_pattern_that_could(self, head):
+        assert eb.pattern_word_could_name_removal(_head_word(head)) is True
+
+    @pytest.mark.parametrize("text", [
+        "don't delete it", "it's $HOME", "it's count(*) now",
+        "won't remove it", "it's a?x=1&y=2",
+    ])
+    def test_a_parse_failure_alone_is_no_reference(self, text):
+        assert eb.text_names_removal(text) is False, text
+
+    @pytest.mark.parametrize("text", [
+        "don't rm it", "it's r''m", "it's r\\m", "it's /bin/r?",
+        "it's {r,}m", "ok; $X\nit's", "x; find . -delete\nit's",
+        "it's shutil.rmtree(p)",
+    ])
+    def test_an_unparsed_value_that_can_still_reach_a_removal(self, text):
+        assert eb.text_names_removal(text) is True, text
+
+
 class TestNoFailurePathAllows:
     """AC-R02-05: every degraded mode must deny, not just the modelled ones."""
 
@@ -631,6 +805,7 @@ def test_fixture_bytes_are_unchanged():
 
 
 def test_hook_consults_the_analyzer():
-    source = open(HOOK, encoding="utf-8").read()
-    assert "bash_execution_boundary.py" in source
-    assert "bash-execution-boundary.v1" in source
+    """A removal the analyzer alone can see is refused with the analyzer's own verdict."""
+    code, _out, err = run_hook_command("rm qa-consults-analyzer.txt")
+    assert code == BLOCK
+    assert "removal-policy — FORBIDDEN_REMOVAL" in err

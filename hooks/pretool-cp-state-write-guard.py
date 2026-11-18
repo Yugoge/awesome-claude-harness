@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """PreToolUse hook: deny direct subagent writes to cp-state-*.json.
 
-Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
-scanner was over-engineering of cooperative-threat model. Only direct
-Write/Edit/MultiEdit/NotebookEdit on cp-state paths exit 2.
+Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2: a
+`cp-state-*.json` below a spec root (a `.claude/specs/`, `docs/dev/specs/` or
+`dot-claude/specs/` directory). A relative path is read from the call's directory
+(the payload's cwd); the path is matched normalised and by the real path of its unfolded
+spelling (a symlink is resolved before a `..` after it, as the kernel does), so `./`, `../`,
+absolute spellings, a symlink landing in a spec root and `link/../<id>/` are refused alike,
+and a `cp-state-*.json` under any other `specs/` (a test fixture) passes;
+a Bash command is out of scope (the cooperative threat model needs only the
+direct-write check).
 Orchestrator (no agent_id) always exits 0.
 
 Failsafe: any unexpected exception exits 0 (never brick the tool pipeline).
@@ -11,29 +17,20 @@ Failsafe: any unexpected exception exits 0 (never brick the tool pipeline).
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
-import re
 import sys
 from pathlib import Path
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Remediation paths are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
 # actually exists for the invoking user instead of an author-absolute literal.
 SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
 
-from lib.bash_write_targets import extract_bash_write_paths  # noqa: E402
-
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
-_CP_STATE_GLOBS = [
-    "*/.claude/specs/*/cp-state-*.json",
-    "*/docs/dev/specs/*/cp-state-*.json",
-    "*/dot-claude/specs/*/cp-state-*.json",
-]
+# The spec roots, as path components (compared casefolded).
+SPEC_ROOTS = ((".claude", "specs"), ("docs", "dev", "specs"), ("dot-claude", "specs"))
 
 
 def _read_payload() -> dict:
@@ -43,46 +40,49 @@ def _read_payload() -> dict:
         return {}
 
 
-def _path_candidates(path: str) -> list:
-    abs_p = os.path.abspath(path)
+def _call_dir(data: dict) -> str:
+    cwd = data.get("cwd")
+    if isinstance(cwd, str) and os.path.isabs(cwd):
+        return cwd
+    return os.getcwd()
+
+
+def _path_candidates(path: str, call_dir: str) -> list:
+    # `..` is folded textually (the path as written) and also read as the kernel reads it: the
+    # real path of the UNFOLDED spelling, so a symlink is resolved before the `..` that follows
+    # it (`link/../s1/x` with `link -> .claude/specs/s1` is `.claude/specs/s1`, not `s1`).
+    joined = os.path.join(call_dir, os.path.expanduser(path))
+    out = [os.path.normpath(joined)]
     try:
-        real = os.path.realpath(path)
-    except OSError:
-        return [abs_p]
-    if real == abs_p:
-        return [abs_p]
-    return [abs_p, real]
+        out.append(os.path.realpath(joined))
+    except (OSError, ValueError):
+        pass
+    return list(dict.fromkeys(out))
 
 
-def _matches_any_glob(candidate: str) -> bool:
-    return any(fnmatch.fnmatchcase(candidate, p) for p in _CP_STATE_GLOBS)
-
-
-def _is_cp_state_components(candidate: str) -> bool:
-    if not candidate or not isinstance(candidate, str):
+def _is_cp_state_under_root(candidate: str) -> bool:
+    parts = [p.casefold() for p in candidate.replace("\\", "/").split("/") if p]
+    if not parts:
         return False
-    parts = candidate.rstrip("/").split("/")
-    if len(parts) < 3:
+    name = parts[-1]
+    if not (name.startswith("cp-state-") and name.endswith(".json")):
         return False
-    basename = parts[-1]
-    if not basename.startswith("cp-state-") or not basename.endswith(".json"):
-        return False
-    return parts[-3] == "specs"
-
-
-def _is_cp_state_path(path: str) -> bool:
-    if not path:
-        return False
-    for c in _path_candidates(path):
-        if _is_cp_state_components(c) or _matches_any_glob(c):
-            return True
+    for i in range(len(parts)):
+        for root in SPEC_ROOTS:
+            # the root, then at least a spec id, then the file
+            if tuple(parts[i:i + len(root)]) == root and len(parts) >= i + len(root) + 2:
+                return True
     return False
 
 
+def _is_cp_state_path(path: str, call_dir: str) -> bool:
+    if not path or not isinstance(path, str):
+        return False
+    return any(_is_cp_state_under_root(c) for c in _path_candidates(path, call_dir))
+
+
 def _extract_targets(tool_name: str, tool_input: dict) -> list:
-    # Cycle-3 slim form: only direct Write/Edit/MultiEdit/NotebookEdit paths
-    # are scanned. Cycle-2 Bash extractor removed (adversarial-threat-model
-    # over-engineering; cooperative model only needs L1 direct-write check).
+    # Only the direct write tools' paths are scanned.
     if not isinstance(tool_input, dict):
         return []
     if tool_name in WRITE_TOOLS:
@@ -110,16 +110,15 @@ def _emit_block(tool_name: str, target: str) -> None:
     )
 
 
-def _check_targets(tool_name: str, targets: list) -> None:
+def _check_targets(tool_name: str, targets: list, call_dir: str) -> None:
     for target in targets:
-        if _is_cp_state_path(target):
+        if _is_cp_state_path(target, call_dir):
             _emit_block(tool_name, target)
             sys.exit(2)
 
 
 def _is_in_scope(tool_name: str) -> bool:
-    # Cycle-3 slim form: drop Bash from scope; only direct write tools
-    # are checked. See _extract_targets comment for rationale.
+    # Only the direct write tools are checked.
     return tool_name in WRITE_TOOLS
 
 
@@ -142,7 +141,7 @@ def main() -> None:
         sys.exit(0)
     tool_input = data.get("tool_input") or {}
     targets = _extract_targets(tool_name, tool_input)
-    _check_targets(tool_name, targets)
+    _check_targets(tool_name, targets, _call_dir(data))
     sys.exit(0)
 
 

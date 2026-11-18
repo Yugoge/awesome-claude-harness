@@ -6,6 +6,9 @@ processes, on one corpus: the main agent and a subagent,
 /do consent on and off, an /allow grant naming the target, naming another one, or none,
 an existing and a new file, the bulk-commit sentinel's name, NotebookEdit, other tools,
 and payloads that do not parse. Each case must give the same exit status, stderr and stdout.
+The existing files are tracked in a git work tree: OB-L46 exempts an untracked or temp file from
+the overwrite refusal (beyond the shell hook), and pytest's tmp_path is under /tmp, so the corpus
+compares the two where they still share a domain.
 """
 from __future__ import annotations
 
@@ -20,6 +23,11 @@ from pathlib import Path
 import pytest
 
 import retired_hooks
+
+
+def _track(proj: Path, *names: str) -> None:
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+    subprocess.run(["git", "-C", str(proj), "add", *names], check=True)
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = ROOT / "hooks" / "lib" / "write_gate" / "overwrite.py"
@@ -84,6 +92,7 @@ def test_the_port_answers_as_the_shell_hook(tmp_path, consent, grant):
     existing = proj / "existing.txt"
     existing.write_text("old\n")
     (proj / "relative-existing.txt").write_text("old\n")
+    _track(proj, "existing.txt", "relative-existing.txt")
     new = proj / "new.txt"
     sentinel = tmp_path / "state" / "claude-bulk-commit-sentinel-s-n.json"
     _setup(tmp_path, consent, grant, existing, new)
@@ -104,6 +113,7 @@ def test_the_corpus_reaches_every_decision(tmp_path):
     proj.mkdir()
     existing, new = proj / "existing.txt", proj / "new.txt"
     existing.write_text("old\n")
+    _track(proj, "existing.txt")
     sentinel = tmp_path / "state" / "claude-bulk-commit-sentinel-s-n.json"
     seen = set()
     for consent, grant in itertools.product((False, True), (None, "existing", "other")):

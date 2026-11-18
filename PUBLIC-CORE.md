@@ -88,7 +88,6 @@ a machine's own values live in its environment or overlay, never in the tree.
 
 | Knob (env var) | Tracked default | Consumer sets |
 |---|---|---|
-| dev container names (`CLAUDE_DEV_CONTAINERS`) | *(empty)* | export `CLAUDE_DEV_CONTAINERS=…` |
 | dev systemd units (`CLAUDE_DEV_SYSTEMD`) | *(empty)* | export `CLAUDE_DEV_SYSTEMD=…` |
 | daemon-restart grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) | *(empty)* | export `CLAUDE_DAEMON_RESTART_GRANT_HELPER=…` |
 | grant sentinel dir (`CLAUDE_DAEMON_RESTART_GRANT_DIR`) | `$TMPDIR` | export `CLAUDE_DAEMON_RESTART_GRANT_DIR=…` |

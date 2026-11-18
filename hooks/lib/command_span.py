@@ -50,6 +50,11 @@ GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
 _NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
+# The origin kinds of a prompt the owner typed. A session driven through the SDK entrypoint (the
+# desktop app, Remote Control: entrypoint "sdk-cli" or "remote") records its typed prompts with
+# turnOrigin "sdk" (CLI 2.1.322, and the 2.1.325/2.1.326 recordings in tests/fixtures/cli); a
+# scheduled task's prompt ("scheduled") and an agent's task notification stay out.
+_TYPED_ORIGINS = frozenset(("human", "sdk"))
 # The CLI records a typed command as <command-message>..</command-message>
 # <command-name>/x</command-name><command-args>..</command-args> at the start.
 _CMD_TAG_RE = re.compile(
@@ -73,10 +78,10 @@ def prompt_text(record) -> str | None:
         return None
     if any(record.get(key) for key in _NON_HUMAN_KEYS):
         return None
-    for key in ("origin", "turnOrigin"):  # a typed prompt records origin kind "human"
+    for key in ("origin", "turnOrigin"):  # a typed prompt records origin kind "human", or "sdk"
         value = record.get(key)
         kind = value.get("kind") if isinstance(value, dict) else value
-        if kind is not None and kind != "human":
+        if kind is not None and kind not in _TYPED_ORIGINS:
             return None
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -165,6 +170,42 @@ class Use(namedtuple("Use", "id name input ok result_at")):
     span read from the end of a long transcript has not counted the lines
     before it."""
     __slots__ = ()
+
+
+class AgentEnd(namedtuple("AgentEnd", "line agent tool_use_id status result")):
+    """One task-notification the CLI delivered to the main session: its line, the agent it names
+    (<task-id>), the tool use it answers (<tool-use-id>: the Agent call that launched the agent in
+    the background, or the SendMessage that resumed it), its <status> ("completed", "failed",
+    "stopped", ...) and its <result>, the agent's own last text ('' when it carries none)."""
+    __slots__ = ()
+
+
+# How the CLI delivers a task-notification to the main session (CLI 2.1.326, recorded in
+# tests/fixtures/cli): as the turn it opens for it, a user record of origin kind
+# "task-notification" whose content is the notification, or, while a turn runs, inside it as an
+# attachment of type queued_command whose commandMode is "task-notification". Neither can be
+# typed, and a subagent's own record (isSidechain) is not the session's. The header tags are read
+# each the first of its name; the <result> after them is the agent's own text, read whole: from its
+# opening tag to the notification's last closing one, whatever tags that text holds.
+_NOTIFICATION = b"<task-notification>"
+_NOTE_TAG = {name: re.compile(rf"<{name}>([^<]*)</{name}>") for name in ("task-id", "tool-use-id", "status")}
+
+
+def _notification_text(record) -> str | None:
+    if not record or record.get("isSidechain"):
+        return None
+    if record.get("type") == "user":
+        origin, message = record.get("origin"), record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(origin, dict) and origin.get("kind") == "task-notification" and isinstance(content, str):
+            return content
+    elif record.get("type") == "attachment":
+        attachment = record.get("attachment")
+        if (isinstance(attachment, dict) and attachment.get("type") == "queued_command"
+                and attachment.get("commandMode") == "task-notification"
+                and isinstance(attachment.get("prompt"), str)):
+            return attachment["prompt"]
+    return None
 
 
 # A record is decoded only when it can matter, so a long session's transcript
@@ -497,11 +538,54 @@ class Span:
                     return None
         return None
 
+    def use_result(self, ident: str) -> dict:
+        """The toolUseResult the CLI recorded beside call ``ident``'s tool_result in the span ({}
+        while none came back or it holds no object): an Agent call's agentId and status
+        ("async_launched" for a background launch), a SendMessage's resumedAgentId."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return {}
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if any(b.get("type") == "tool_result" and b.get("tool_use_id") == ident for b in _blocks(record)):
+                value = record.get("toolUseResult")
+                return value if isinstance(value, dict) else {}
+        return {}
+
+    def agent_ends(self) -> list:
+        """Each task-notification the CLI delivered to the main session in the span, in order
+        (AgentEnd): how a dispatched agent's end comes back when its Agent call's own result does not
+        carry it (a background launch, a SendMessage resume). agent_returns.Returns reads them."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return []
+        ends, pos, number = [], floor, None
+        for begin, end in lines.offsets((_NOTIFICATION,), floor):
+            number = (self.start_line + 1 + lines.data.count(b"\n", floor, begin) if number is None
+                      else number + lines.data.count(b"\n", pos, begin))
+            pos = begin
+            text = _notification_text(_decode(lines.data[begin:end]))
+            for body in (text or "").split("<task-notification>")[1:]:
+                head = body.split("</task-notification>")[0]
+                fields = {name: (_NOTE_TAG[name].search(head) or [None, ""])[1].strip() for name in _NOTE_TAG}
+                opened, closed = head.find("<result>"), body.rfind("</result>")
+                result = body[opened + len("<result>"):closed] if 0 <= opened < closed else ""
+                if fields["task-id"] or fields["tool-use-id"]:
+                    ends.append(AgentEnd(number, fields["task-id"], fields["tool-use-id"], fields["status"], result))
+        return ends
+
+    def dispatches(self) -> list:
+        """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
+        however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
+        ob = _obligation()
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
-        ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
-        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+        return [(call, doc) for call, doc in self.dispatches() if call.ok]
 
     def session_families(self) -> set:
         """The task families (obligation.task_family) of the span's ok
@@ -528,9 +612,14 @@ class Span:
             return None
 
     def minted_id(self) -> str | None:
-        """The task id the UserPromptSubmit hook printed for the opener
-        (MINTED_LINE_RE): the first in the opener's hook context."""
-        return next((found.group(1) for found in self._opener_context(MINTED_LINE_RE)), None)
+        """The task id the UserPromptSubmit hook printed for the opener (MINTED_LINE_RE), from the
+        opener's hook context: the one id its records carry, None when they carry none or two different
+        ones (fail closed). The CLI records no identity of the hook that printed a line (CLI 2.1.325:
+        a hook_success's `command` is "command hook", or "command hook <n>" by registration order when
+        the event has several, never the hook's command line), so no record can be told for the
+        launcher's; a line another hook prints, first or not, is never taken for the id."""
+        found = {match.group(1) for match in self._opener_context(MINTED_LINE_RE)}
+        return found.pop() if len(found) == 1 else None
 
     def opener_heads(self) -> list:
         """(branch, commit) of each HEAD line the UserPromptSubmit hook printed for a /push opener
@@ -612,8 +701,10 @@ def _prompt_hook_text(attachment) -> str | None:
     """The text of a context record the CLI writes for a UserPromptSubmit hook's output, else None.
     CLI 2.1.322 writes a hook's plain stdout (what prompt-workflow.py prints) as a hook_success
     record whose content is that stdout, and a JSON additionalContext as hook_additional_context
-    whose content is a list of strings; older CLIs wrote the plain stdout as hook_additional_context.
-    A hook_success of any other event is not the prompt's context."""
+    whose content is a list of strings (CLI 2.1.325 likewise: tests/fixtures/cli); older CLIs wrote the
+    plain stdout as hook_additional_context.
+    A hook_success of any other event is not the prompt's context.
+    The one parser of the CLI's hook-output channel (tests/artifact_graph: channel:cli-hook-output)."""
     if not isinstance(attachment, dict):
         return None
     kind = attachment.get("type")
@@ -627,8 +718,7 @@ def _prompt_hook_text(attachment) -> str | None:
     else:
         return None
     if isinstance(content, list):
-        content = "\n".join(b if isinstance(b, str) else b.get("text", "") for b in content
-                            if isinstance(b, (str, dict)))
+        content = "\n".join(b for b in content if isinstance(b, str))
     return content if isinstance(content, str) else None
 
 

@@ -1,0 +1,11 @@
+{
+  "agentType": "general-purpose",
+  "description": "<redacted>",
+  "finished": true,
+  "isBuiltIn": true,
+  "pickedEffortModel": "<redacted>",
+  "requestNonInteractive": true,
+  "requestShape": "foreground",
+  "spawnDepth": 1,
+  "toolUseId": "<ID>"
+}

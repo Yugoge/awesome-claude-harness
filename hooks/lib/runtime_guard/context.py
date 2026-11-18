@@ -20,7 +20,7 @@ NEW Context (a fresh snapshot of the updated working set), never a mutation of a
 existing one — so a Context always faithfully describes one evaluation stage.
 
 Pure data + stdlib only: ZERO project identifiers, zero engine imports (no
-import cycle back into _core). This is a lib module, mirroring the shell_lex /
+import cycle back into _core). This is a lib module, mirroring the
 constants / pathmatch / config / find_cmds / git_cmds / anchor siblings.
 """
 from __future__ import annotations

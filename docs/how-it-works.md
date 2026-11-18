@@ -12,7 +12,7 @@ The parts of the harness, how they fit together, and what each one is for.
 | **Durable specs** | `/spec` captures the requirement verbatim, persists design + evidence, and splits the monolith into per-agent briefing books with Gawande-style checkpoints. Feeds `/dev` as the authoritative source of truth. | `commands/spec.md`, `agents/spec.md` |
 | **Evidence-gated BA → Dev → QA pipeline** | The analysis is QA'd *before* coding; every claim needs proof (git blame, grep, import-chain); the user's verbatim words are the binding spec. Pipeline: `/spec → /dev → /close → /commit → /push`. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
 | **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — Workflow-Integrity checks, optionally a multi-round QA↔Codex debate. | `commands/close.md` |
-| **Git protection kernel** | The privilege guard exits 2 on an agent `commit / push / merge / reset --hard` unless a per-operation authorization grant is present (commit grant is single-use; push grant is wrapper-managed and retryable on failure); bash-safety exits 2 on wide-path checkout, stash-as-buffer, and hard-reset shapes by default. Each guard maps to a specific failure class it targets. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
+| **Git protection kernel** | The privilege guard exits 2 on an agent `commit / push / merge / reset --hard` unless a per-operation authorization grant is present (commit grant is single-use; push grant expires 600 s after the push-analyst writes it and is single-use, unlinked by `scripts/execute-push.py` before it runs `push.sh`; a command that starts with `git reset --hard` meets the `settings.json` deny, which neither `/do` nor `/allow` lifts); bash-safety exits 2 on wide-path checkout, stash-as-buffer, and hard-reset shapes by default. Each guard maps to a specific failure class it targets. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
 | **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify loop until a wall-clock end time, committing nothing; you land the work once, afterwards. The Stop gate exits 2 while the overnight window is open; only a human-typed `/stop` releases it. | `commands/dev-overnight.md`, `hooks/stop-launch.py`, `hooks/stop-command-gate.py` |
 | **Lossless quota recovery** | `/restart` resumes every recoverable interrupted child in the current parent transcript by its original `agent_id`; replacement agents are forbidden, and success requires response evidence from every candidate. | `commands/restart.md`, `hooks/lib/subagent_restart.py` |
 | **Structured break-glass grants** | `/allow` writes a structured grant (`{op, target, args_contain}`) matched by command structure — consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
@@ -38,7 +38,9 @@ graph TD
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     HL -->|PostToolUse doc-sync| IDX[INDEX files]
-    TMP["/tmp/ grants<br/>commit / push / /allow"] -->|grant-keyed validation| HL
+    TMP["/tmp/ grants<br/>commit / /allow"] -->|grant-keyed validation| HL
+    PMG["/push · /merge analyst grants"] -->|"checked before the wrapper runs,<br/>not by the privilege guard"| WRP["push.sh · merge.sh wrappers<br/>git in their own subprocess"]
+    WRP --> GK
 
     classDef restricted fill:#ffebee,stroke:#c62828
     classDef gate fill:#fff3e0,stroke:#e67e22
@@ -72,17 +74,27 @@ Each stage hands a verified artifact to the next; `--codex` adds an opt-in adver
 |---|---|---|
 | Agent does too much in one context — quality silently degrades | Orchestrator-only gate; every real change goes to a single-purpose subagent with a clean context | `hooks/pretool-orchestrator-gate.py` |
 | Irreversible git operation (history-erasing wide checkout; bulk unreviewed commit/push) | Git protection kernel: exit 2 on commit/push/merge/reset--hard without a grant; stash-as-buffer and wide-path checkout exit 2 by shape | `hooks/pretool-bash-safety.sh`, `hooks/pretool-git-privilege-guard.py` |
-| Implementation drifts from the requirement | BA → QA-of-BA → Dev → QA pipeline; user's verbatim words written to disk as the binding spec before any code is written | `agents/ba.md`, `agents/qa.md`, `commands/dev.md` |
+| Implementation drifts from the requirement | BA → QA-of-BA → Dev → QA pipeline; user's verbatim words written to disk as the binding spec before any code is written. BA cites evidence. QA checks the analysis before any code. | `agents/ba.md`, `agents/qa.md`, `commands/dev.md` |
+| Agents build what they guessed you meant | The requirement round asks you first, in the question dialog. A hook writes your answers to disk. The Stop gate refuses to end a turn on a question in plain text. | `hooks/posttool-close-rating.py` (the answers, through `hooks/lib/requirement_round.py`), `hooks/stop-command-gate.py` |
+| A requested outcome quietly becomes "phase two" | One cycle, parallel lanes. QA fails a plan that phases or defers an outcome. | `agents/qa.md`, `tests/test_no_phases_agent_prompts.py` |
+| A missing artifact shows up only at `/close` | Each dispatch declares what its agent owes. A hook checks it when that agent stops. | `hooks/subagentstop-artifact-contract-enforce.py` |
+| QA runs before every lane has returned | Under the shipped settings, the dispatch gate refuses QA until the aggregate report names every declared lane and each lane has a report. | `hooks/pretool-aggregate-check.py` |
+| A false pass ships a broken feature | QA starts from doubt and fails when in doubt. Its report must record the end-to-end status. | `agents/qa.md`, `hooks/subagentstop-e2e-enforce.py` |
+| QA inherits a draft's mistakes | `--codex` puts each draft through an adversarial Codex review first. Claude keeps the verdict. | `commands/codex.md` |
+| Unfinished work is handed off as done | The Stop gate holds a gated command until every todo is done and the artifact chain passes. | `hooks/stop-command-gate.py` |
+| An agent writes outside its job | Each subagent writes only to its role's paths. | `hooks/pretool-tool-policy.py`, `policies/tool-policy.v1.json` |
 
 ## Context-engineering guardrails
 
+The main session's context stays small. The real work happens in the agents' clean contexts.
+
 | Guardrail | What it exits 2 on | Why (context / safety) | Hook |
 |---|---|---|---|
-| Consecutive-Bash cap | 6th `Bash` in the main agent since the last `Agent` dispatch or prompt (limit 5; other tools between the calls do not reset the count) | Forces delegation before shell output floods the orchestrator's context | `pretool-orchestrator-gate.py` |
-| Non-whitelist once-per-turn | 2nd `Edit`/`Write`/`WebFetch`/… of the same tool per turn in the main agent | Keeps real edits in clean subagent contexts, not the orchestrator's | `pretool-orchestrator-gate.py` |
+| Consecutive-Bash cap | 6th `Bash` or `Monitor` in the main agent since the last `Agent` dispatch or prompt (limit 5, one count for both; other tools between the calls do not reset the count; a call another hook refused gives its slot back; a command proven read-only from its parse, `lib/bash_read_only.py`, is not counted) | Forces delegation before shell output floods the orchestrator's context | `pretool-orchestrator-gate.py` |
+| Non-whitelist once-per-turn | 2nd `Edit`/`Write`/`NotebookEdit`/… of the same tool per turn in the main agent (4th for a retrieval tool: `WebSearch`, `WebFetch`, Context7; a write into the session's own scratch directory is not counted) | Keeps real edits in clean subagent contexts, not the orchestrator's | `pretool-orchestrator-gate.py` |
 | Read-size cap | Main-agent `Read` of a file >600 lines (unless sliced with `limit`≤600) | Stops one large file from swamping the lean context — delegate a summary instead | `pretool-read-size-guard.py` |
 | Write-over-existing | `Write` onto a file that already exists (forces `Edit`) | Prevents silent whole-file loss from memory-reproduced content — no diff to catch it | `pretool-write-guard.sh` |
-| No background dispatch | `Agent`/`Task` unless `run_in_background:false`; ordinary `SendMessage` and all `Workflow` calls | Background agents escape harness monitoring; only the supported `/restart` path (human-typed, or inside `/dev-overnight` the session's own wake while its span is open) may send the fixed recovery message to a transcript-discovered, pending interrupted ID | `pretool-block-background-tasks.py` |
+| No background dispatch | `Agent`/`Task` unless `run_in_background:false`; `Workflow` calls but one an owner's `/allow Workflow` grant names; a `SendMessage` to a recovery candidate other than its fixed recovery message, and any other `SendMessage` except to this session's own finished subagent (an id or name an `Agent` result returned; one an earlier journaled send resumed is running until its completion notification) dispatched with no obligation outside a gated command's span | Background agents escape harness monitoring; only the supported `/restart` path (human-typed, or inside `/dev-overnight` the session's own wake while its span is open) may send the fixed recovery message to a transcript-discovered, pending interrupted ID; new work for a lane enters only through `Agent`. `posttool-restart-sendmessage.py` journals every send | `pretool-block-background-tasks.py` |
 | Gitignored-deliverable preflight | `Agent` dispatch when a dev-report names a gitignored file | Blocks a cycle that would pass QA yet never ship via git | `pretool-gitignore-preflight.py` |
 | Todo sequence integrity | Illegal `TodoWrite` transitions (skip, multi-complete, reorder, content edit) | Keeps the plan an auditable one-step-at-a-time ledger | `pretool-todo-validate.py` |
 | Privileged-git default-deny | `commit`/`push`/`merge`/`reset --hard` without a per-op grant | See [git protection kernel](git-protection-kernel.md#the-git-protection-kernel) | `pretool-git-privilege-guard.py` |
@@ -250,6 +262,20 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. Three are still registered in `settings.json` and count in the table above: `notification-idle-overnight.py`, `posttool-push-gate-token-verify.py` and `pretool-push-analyst-grant-guard.py`. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
 
 ## Design philosophy
+
+The taste behind the project, in short:
+
+- **Enforce in code, not in prose.** "Please don't force-push" is a wish. A hook that exits `2` refuses the call before it runs. A hook carries each rule that must hold. Prompts carry judgment and point at the hook.
+- **Rules, not stories.** Every prompt that touches infrastructure says what is forbidden, not only what is allowed.
+- **WHAT, not HOW.** The orchestrator describes the problem. The agent picks its tools. A hook warns on a leak. It never blocks.
+- **One agent, one issue.** Never bundle. N outcomes become N parallel lanes in one cycle. Nothing is split into phases.
+- **Your words are the contract.** The literal requirement is on disk before any agent runs. BA, QA, dev and the specialists get it. Paraphrase is drift. Drift ships the wrong thing with confidence.
+- **No flow may strand you.** CI fails a replay that reaches a block no action clears. No hook gates `/stop` or Esc.
+- **One producer per fact.** Every artifact has one producer and a reader that decides on it. The repository generates every figure about itself.
+- **Fail closed, leave forensics.** Ambiguous grant? Refuse. Unparseable verdict? Fail. The evidence stays on disk.
+- **Degrade, never fall back unsafely.** A missing extra loses its own feature. Codex never falls back to a bare `codex`. No bubblewrap, no in-place overnight run.
+
+The binding rules behind most of them, and the code that enforces each:
 
 | Principle | Binding rule | Enforced by |
 |---|---|---|

@@ -13,17 +13,24 @@ For a /dev-overnight session (the session owns an overnight state record):
      its obligation declares read as not yet written).
   2. Derive the current step from the checklist the transcript records
      (lib.command_span: the in-progress step of the span's last ok
-     TodoWrite, which pretool-todo-validate.py accepted), in every cycle.
+     TodoWrite that is its checklist, which pretool-todo-validate.py accepted;
+     a list foreign to the command is none, OB-L40), in every cycle.
   3. Validate the about-to-fire Agent's role / pipeline_id / mode against
      the entries for that step. On mismatch, exit 2 with a structured stderr
      message. A cycle contract that holds no JSON object allows only the
      exploration steps and names itself in the block (Case M).
 
 A session with no overnight state is not an overnight workflow and is not
-contracted: exit 0 silently.
+contracted: exit 0 silently. Nor is a span other than the human-typed
+/dev-overnight's (lib.command_span.active_span): a /dev the owner types after
+end_time or mid-window, or the span /stop opens, keeps its own checklist,
+whose step labels are not /dev-overnight's. The /dev-overnight span stays
+contracted after end_time (its closeout steps 20-21 run in it); /stop, which
+releases the time-lock, opens its own span, so no separate release check.
 
 Exit codes:
-  0 — Allow (not an overnight session, or call matches an allowed entry).
+  0 — Allow (not an overnight session, the active span is not
+      /dev-overnight's, or call matches an allowed entry).
   2 — Reject (role/pipeline_id/mode mismatch against the allowed calls).
 """
 
@@ -58,14 +65,13 @@ def _content_to_step(content: str) -> str:
 
 
 def _current_step_label(span) -> str | None:
-    """The in-progress step label of the span's last ok TodoWrite (command_span's
-    last_todos, read from the end of the span: no line before it is counted)."""
-    for use in span.uses('TodoWrite', newest_first=True) if span else ():
-        todos = use.input.get('todos')
-        if use.ok and isinstance(todos, list):
-            return next((_content_to_step(t.get('content', '')) for t in todos
-                         if isinstance(t, dict) and t.get('status') == 'in_progress'), None)
-    return None
+    """The in-progress step label of the span's last ok TodoWrite that is its
+    checklist (lib.todo_canonical.last_checklist, read from the end of the span:
+    a list foreign to the command names no step, OB-L40)."""
+    from lib.todo_canonical import last_checklist
+    todos = last_checklist(span) if span else None
+    return next((_content_to_step(t.get('content', '')) for t in todos or ()
+                 if isinstance(t, dict) and t.get('status') == 'in_progress'), None)
 
 
 def _resolve_session(stdin_data: dict) -> tuple[str, dict | None]:
@@ -289,6 +295,13 @@ def _main() -> None:
         # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
     span = command_span.active_span(stdin_data.get('transcript_path') or '')
+    if span is None or span.command != 'dev-overnight':
+        # The contract is /dev-overnight's checklist: a span the human opened
+        # with another command (a /dev typed after end_time or mid-window, the
+        # /stop that releases the time-lock) has its own checklist, whose step
+        # labels are not /dev-overnight's. Only a human-typed command opens a
+        # span (command_span), so no agent record lifts this.
+        sys.exit(0)
     allowed, loaded = _allowed_calls(
         overnight_state, _declared_paths(stdin_data, overnight_state), _loaded_text(span))
     if allowed is None:

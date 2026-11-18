@@ -4,7 +4,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 122
+- **Total files**: 126
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -35,11 +35,12 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `posttool-git-warn.sh` - posttool-git-warn.sh - PostToolUse (Bash): after a git commit, tell the model which files it left untracked.
 - `posttool-lane-completeness-watch.py` - producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
 - `posttool-launch.py` - Every Python hook registered on PostToolUse runs here, each as `python3 <file>` would have run it
+- `posttool-orchestrator-ran.py` - hooks/pretool-orchestrator-gate.py counts a main-agent call at PreToolUse, before the other hooks'
 - `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
 - `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 - `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
 - `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
-- `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
+- `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
 - `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 - `posttool-subagent-track.py` - PostToolUse:Agent Hook: the cycle contract's one writer (/dev-overnight)
 - `posttool-todo-count.py` - It refused, after a TodoWrite had run, a list shorter than the command's
@@ -48,27 +49,28 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 - `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
 - `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
-- `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
+- `pretool-bash-safety.sh` - PreToolUse safety hook for Bash: the rules live in lib/bash_safety_rules.py, run in one interpreter per call.
 - `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 - `pretool-bisect-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-block-background-tasks.py` - PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
-- `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
+- `pretool-block-branch-pr-worktree.py` - Refused: every `git worktree add` the command runs, in command position, inside
 - `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 - `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector (advisory: exit 0 always)
 - `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
 - `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
 - `pretool-commit-dispatch-attest.py` - Writes `<state-dir>/claude-commit-dispatch-<sid>-<nonce>.json` when, and only
 - `pretool-cp-checkin.py` - cp-state file read (the write is scripts/spec-check.py's `register`)
-- `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
+- `pretool-cp-state-write-guard.py` - Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2: a
 - `pretool-dispatch-gate.py` - The rules run in this order, each as its own hook would run alone (its switch, its
 - `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 - `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
-- `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
+- `pretool-grep-backtrack-guard.py` - Why
 - `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
 - `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 - `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+- `pretool-monitor-command.py` - Monitor runs an arbitrary shell command in the background. On CLI 2.1.325 the CLI delivers that
 - `pretool-obligation-gate.py` - WHY THIS HOOK EXISTS:
 - `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 - `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
@@ -84,7 +86,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-tool-policy.py` - tool-policy.v1.json for all subagents
 - `pretool-workflow-gate.py` - PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools
 - `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
-- `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
+- `pretool-wrapper-userintent.py` - The /stop slash command releases overnight isolation by running
 - `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
 - `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 - `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
@@ -98,6 +100,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 - `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 - `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
+- `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
 - `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 - `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 - `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
@@ -111,6 +114,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `stop.sh` - stop.sh - wrapper for /stop slash command
 - `subagent-stop-diff-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `subagent-stop-guard-integrity.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+- `subagentstart-launch.py` - Every Python hook registered on SubagentStart runs here, each as `python3 <file>` would have run it
 - `subagentstart-record.py` - rank's reminder (hooks/lib/score_log.py), as additionalContext of at most 3 lines and 400 bytes; ...
 - `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 - `subagentstop-codex-enforce.py` - Activation logic:

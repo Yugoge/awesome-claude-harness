@@ -33,6 +33,7 @@ except Exception:  # the hooks still run, each as its own process
 
 EVENT = "PostToolUse"
 RULES = (
+    Rule('orchestrator-ran', 'posttool-orchestrator-ran.py', timeout=10),  # the calls that ran (pretool-orchestrator-gate.py)
     Rule('allowlist-consume', 'posttool-allowlist-consume.py', matcher_spelling='*'),
     Rule('todo-tracker', 'posttool-todo-tracker.py', ('TodoWrite',)),
     Rule('overnight-loop', 'posttool-overnight-loop.py', ('TodoWrite',)),

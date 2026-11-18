@@ -35,6 +35,8 @@ production reader this design cites at :51-54), never duplicated.
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import json
 import os
 import re
@@ -350,12 +352,17 @@ class Unresolvable(_Outcome):
     mismatch, role mismatch, invalid embedded obligation) -- fail-closed,
     never a guess, never a fallback to an unrelated transcript. ``prompt`` is
     the dispatch prompt when it was read and correlated but its obligation
-    failed (invalid_obligation, role_mismatch); empty otherwise."""
+    failed (invalid_obligation, role_mismatch); empty otherwise.
+    ``transcript_path`` is the agent transcript that prompt was read from
+    (invalid_obligation), so the stop gate can read the agent's own write set
+    (OB-L41); it is carried, not part of equality or repr."""
 
     _fields = ("reason", "detail", "outcome", "prompt")
 
-    def __init__(self, reason: str, detail: str = "", outcome: str = "unresolvable", prompt: str = "") -> None:
-        self._set(reason=reason, detail=detail, outcome=outcome, prompt=prompt)
+    def __init__(self, reason: str, detail: str = "", outcome: str = "unresolvable", prompt: str = "",
+                 transcript_path: str = "") -> None:
+        self._set(reason=reason, detail=detail, outcome=outcome, prompt=prompt,
+                  transcript_path=transcript_path)
 
 
 # --------------------------------------------------------------------------
@@ -929,7 +936,8 @@ def _finish_resolution(
             cross_check=cross_check,
         )
     if isinstance(parsed, Rejection):
-        return Unresolvable(reason="invalid_obligation", detail=parsed.reason, prompt=prompt)
+        return Unresolvable(reason="invalid_obligation", detail=parsed.reason, prompt=prompt,
+                            transcript_path=str(transcript_path))
     if expected_role is not None and parsed.obligation.get("role") != expected_role:
         return Unresolvable(
             reason="role_mismatch", detail=repr(parsed.obligation.get("role")), prompt=prompt
@@ -1112,16 +1120,131 @@ def _span_openers(transcript: Path, commands: frozenset) -> list[tuple[int, str,
     return _lib_module("command_span").openers(transcript, commands)
 
 
+# --------------------------------------------------------------------------
+# One read of each transcript per scan. A caller that asks about many tasks
+# and artifacts in one run (dev-lifecycle.py's listing asks about every gap of
+# every close-pending task) opens transcript_scan(): inside it each session
+# transcript is read at most once and each answer of the readers below is
+# computed once; the answers are the ones a call outside it gives. Outside an
+# open scan every call reads the store afresh, as before.
+# --------------------------------------------------------------------------
+
+# Every task id this module keys on is made of these characters (TASK_ID_RE)
+# and holds a minted stamp, so a family occurs in a transcript's bytes exactly
+# when it occurs in one of the transcript's runs of these characters that hold
+# a stamp: one read keeps those runs, and every family is then asked of them.
+_ID_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+_ID_RUN_TAIL_RE = re.compile(rb"[A-Za-z0-9._-]*")
+_STAMP_DASH_RE = re.compile(rb"-[0-9]{6}")  # led by a literal, so the search is fast; its 8 digits are checked after
+_INDEXABLE_FAMILY_RE = re.compile(r"[A-Za-z0-9._-]*[0-9]{8}-[0-9]{6}[A-Za-z0-9._-]*")
+
+
+class TranscriptScan:
+    """An open scan: ``memo`` (each answer, by its question), ``transcripts``
+    and ``bytes`` (what it has read of the store so far) and ``on_read``
+    (called with the scan after each transcript read: a caller's progress)."""
+
+    def __init__(self, on_read=None) -> None:
+        self.memo: dict = {}
+        self.transcripts = 0
+        self.bytes = 0
+        self.on_read = on_read
+
+
+_SCAN: TranscriptScan | None = None
+
+
+@contextlib.contextmanager
+def transcript_scan(on_read=None):
+    """Open a scan for the duration of the block (see above) and yield it; a
+    call inside an open scan joins it, ``on_read`` left as it was."""
+    global _SCAN
+    if _SCAN is not None:
+        yield _SCAN
+        return
+    _SCAN = TranscriptScan(on_read)
+    try:
+        yield _SCAN
+    finally:
+        _SCAN = None
+
+
+def _scan_memo(key: tuple, compute):
+    """compute(), or inside an open scan the answer it gave for ``key`` the
+    first time (shared: for this module's own reads, which never change it)."""
+    if _SCAN is None:
+        return compute()
+    if key not in _SCAN.memo:
+        _SCAN.memo[key] = compute()
+    return _SCAN.memo[key]
+
+
+def _id_runs(data: bytes) -> frozenset:
+    """Each maximal run of id characters in ``data`` that holds a stamp
+    (8 digits, a dash, 6 digits). No two matches of a dash and 6 digits
+    overlap, so the search finds every stamp's."""
+    runs: set[bytes] = set()
+    end = 0
+    for match in _STAMP_DASH_RE.finditer(data):
+        start = match.start() - 8
+        if start < 0 or not data[start:match.start()].isdigit():
+            continue
+        if start < end:  # in the run of the stamp before it
+            continue
+        while start > 0 and data[start - 1] in _ID_BYTES:
+            start -= 1
+        end = _ID_RUN_TAIL_RE.match(data, match.end()).end()
+        runs.add(data[start:end])
+    return frozenset(runs)
+
+
+def _mentions(transcript: Path, family: str) -> bool:
+    """Whether the transcript's bytes hold ``family``; OSError when it cannot
+    be read. Inside an open scan the transcript is read once, for every family
+    asked of it (a family with another character set is read for each time)."""
+    if _SCAN is None or not _INDEXABLE_FAMILY_RE.fullmatch(family):
+        return family.encode() in transcript.read_bytes()
+    key = ("id_runs", str(transcript))
+    if key not in _SCAN.memo:
+        try:
+            data = transcript.read_bytes()
+        except OSError:
+            _SCAN.memo[key] = None
+        else:
+            _SCAN.memo[key] = _id_runs(data)
+            _SCAN.transcripts += 1
+            _SCAN.bytes += len(data)
+            if _SCAN.on_read is not None:
+                _SCAN.on_read(_SCAN)
+    runs = _SCAN.memo[key]
+    if runs is None:
+        raise OSError(f"cannot read {transcript}")
+    wanted = family.encode()
+    return any(wanted in run for run in runs)
+
+
 def _task_records(task_id: str, project_dir: str | Path,
                   roots: Iterable[str | Path] | None) -> list[dict]:
     """Every dispatch record of the task in every session of the project:
     dispatch_obligations' records whose obligation's task_id is of the task's
     family (lanes -l1, -l2 and the minted dev- prefix included), each with its
     session transcript and the harness command whose span holds it. The scan
-    reads only the transcripts whose bytes name the family."""
+    reads only the transcripts whose bytes name the family. Inside an open
+    transcript_scan the family's records are read once (each caller gets its
+    own copy)."""
     family = task_family(task_id)
     if not family:
         return []
+    if _SCAN is None:
+        return _family_records(family, project_dir, roots)
+    roots = None if roots is None else tuple(roots)
+    key = ("records", family, project_slug(project_dir), roots)
+    return copy.deepcopy(_scan_memo(key, lambda: _family_records(family, project_dir, roots)))
+
+
+def _family_records(family: str, project_dir: str | Path,
+                    roots: Iterable[str | Path] | None) -> list[dict]:
+    """_task_records of a task of ``family``."""
     commands = _lib_module("stop_contract").harness_commands()
     # A dispatch of the task is appended to its transcript after the task id
     # was minted, so a transcript last written a day or more before the id's
@@ -1137,12 +1260,12 @@ def _task_records(task_id: str, project_dir: str | Path,
         try:
             if cutoff is not None and transcript.stat().st_mtime < cutoff:
                 continue
-            if family.encode() not in transcript.read_bytes():
+            if not _mentions(transcript, family):
                 continue
         except OSError:
             continue
-        openers = _span_openers(transcript, commands)
-        for record in dispatch_obligations(transcript):
+        openers = _scan_memo(("openers", str(transcript), commands), lambda: _span_openers(transcript, commands))
+        for record in _scan_memo(("dispatches", str(transcript)), lambda: dispatch_obligations(transcript)):
             if task_family(record["obligation"].get("task_id")) != family:
                 continue
             key = (transcript.stem, str(record["tool_use_id"]))
@@ -1317,7 +1440,7 @@ def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
     Each step is returned with what its entry names."""
     todo_canonical = _lib_module("todo_canonical")
     for command, args in spans:
-        steps = todo_canonical.run_todo_script(command, args) or []
+        steps = _scan_memo(("todo_steps", command, args), lambda: todo_canonical.run_todo_script(command, args)) or []
         for step in steps:
             for artifact in step.get("artifacts") or []:
                 if isinstance(artifact, Mapping) and _bind_template_path(artifact.get("path"), path, family):
@@ -1381,9 +1504,11 @@ def _writer(records: list[dict], path: str, project_dir: str | Path) -> dict | N
     for record in records:
         transcript = record["transcript"]
         if transcript not in metadata:
-            metadata[transcript] = subagent_restart._metadata_by_tool_use(transcript)
+            metadata[transcript] = _scan_memo(("subagent_meta", str(transcript)),
+                                              lambda: subagent_restart._metadata_by_tool_use(transcript))
         meta = metadata[transcript].get(record.get("tool_use_id"))
-        found = command_span.write_set(meta["agent_transcript_path"], project_dir) if meta else None
+        found = _scan_memo(("write_set", str(meta["agent_transcript_path"]), str(project_dir)),
+                           lambda: command_span.write_set(meta["agent_transcript_path"], project_dir)) if meta else None
         if found is not None and path in found.written:
             written.append(record)
         elif found is not None and path in found.named:
@@ -1419,7 +1544,18 @@ def declaring_dispatch(
       file): the dispatch whose own tool calls wrote it;
     - None: nothing names an owner.
 
-    Read-only; judges nothing on disk."""
+    Read-only; judges nothing on disk. Inside an open transcript_scan each
+    answer is read once (each caller gets its own copy)."""
+    if _SCAN is None or not isinstance(task_id, str):
+        return _declaring_dispatch(task_id, path, project_dir, roots)
+    roots = None if roots is None else tuple(roots)
+    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots)
+    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots)))
+
+
+def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
+                        roots: Iterable[str | Path] | None) -> dict | None:
+    """declaring_dispatch's answer, read from the store."""
     root = Path(project_dir)
     rel = Path(path)
     if rel.is_absolute():

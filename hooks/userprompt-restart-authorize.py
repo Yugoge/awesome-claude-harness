@@ -5,7 +5,8 @@ the /dev-overnight session's own wake (lib.overnight.WAKE_PROMPT) inside its ope
 The hook cannot tell a scheduled prompt from a typed one: its payload names no origin, and the
 prompt's own record is written after it runs (P1c X8). So the wake is recognised by its fixed
 text and only while a /dev-overnight span is the transcript's active one (never after the
-owner's /stop opened its own); every prompt that starts with /restart keeps the capability.
+owner's /stop opened its own); every prompt that starts with /restart keeps the capability. The owner's /stop prompt unlinks a
+capability the wake minted (its recorded origin), so none outlives the overnight run's end.
 The capability's reader in lib/subagent_restart.py stays its one deciding rule."""
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import overnight, subagent_restart as restart  # noqa: E402
+from lib import command_span, overnight, subagent_restart as restart  # noqa: E402
 
 COMMAND = "/restart"
 
@@ -137,6 +138,26 @@ def _persist_guidance(grant: dict, args: str) -> Path | None:
     return path
 
 
+def is_stop(prompt: object) -> bool:
+    """The prompt is the owner's /stop (only a human types it: Skill(stop) is denied)."""
+    found = command_span.slash_command(prompt) if isinstance(prompt, str) else None
+    return bool(found) and found[0] == "stop"
+
+
+def revoke_on_stop(session_id: object) -> int:
+    """Lesson 16: no wake works after /stop, so the grant an earlier wake minted dies with it.
+    A grant the owner's own /restart minted stands. Never blocks the /stop itself."""
+    try:
+        revoked = restart.revoke_wake_grant(str(session_id or ""))
+    except restart.RestartError as exc:
+        print(f"[/restart] warning: /stop could not revoke the wake's capability: {exc}", file=sys.stderr)
+        return 0
+    if revoked:
+        print("[/restart] /stop revoked the capability the overnight wake issued; only the owner's "
+              "own /restart issues a new one.")
+    return 0
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -149,7 +170,10 @@ def main() -> int:
     invoked, args = split_invocation(payload.get("prompt"))
     session_id = payload.get("session_id")
     transcript_path = payload.get("transcript_path")
-    if not invoked and not overnight.wake_fired(payload.get("prompt"), transcript_path):
+    if not invoked and is_stop(payload.get("prompt")):
+        return revoke_on_stop(session_id)
+    wake = not invoked
+    if wake and not overnight.wake_fired(payload.get("prompt"), transcript_path):
         return 0
     # The capability comes FIRST and alone: this hook runs on prompt submission
     # for a human-only emergency command, so nothing about the operator's
@@ -159,7 +183,8 @@ def main() -> int:
     # first because it is what the guidance is bound to: the grant minted here
     # names the single path this invocation's guidance can occupy.
     try:
-        grant = restart.mint_grant(str(session_id or ""), str(transcript_path or ""))
+        grant = restart.mint_grant(str(session_id or ""), str(transcript_path or ""),
+                                   origin="overnight-wake" if wake else "restart")
     except restart.RestartError as exc:
         print(f"[/restart] capability issue failed: {exc}", file=sys.stderr)
         return 2

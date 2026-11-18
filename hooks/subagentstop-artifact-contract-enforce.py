@@ -5,7 +5,8 @@ The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 declares what it owes; each declared artifact is checked while that producer
 still has the context to repair it: json (existence, schema, identity),
 markdown (identity anchor, terminal line), response_line and response_block
-(its own final reply), spec_views (spec-verify.py --strict), a dev report's
+(its own final report: the message of its SubagentHandback call when it reported
+through one, else its last reply; lib/final_report.py), spec_views (spec-verify.py --strict), a dev report's
 downstream wires (attribution journal, /commit's trial plan, a fan-out lane's
 canonical aggregate, and P6 A3.a: its file lists against the files Claude Code
 recorded the dev writing) and P3 R14's dispatch echo (written for this
@@ -62,6 +63,7 @@ from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
 from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
 from lib import contract_runtime
+from lib import final_report
 from lib import dispatch_template
 from lib import obligation
 from lib import requirement_round
@@ -394,17 +396,81 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     return lines
 
 
+def _in_fixtures(path: Path, roots: list) -> bool:
+    """path, compared as given (exact case, no resolution), lies in a `fixtures` directory directly
+    under a `tests` directory below every one of roots that holds it (at least one)."""
+    held = [path.relative_to(r).parts[:-1] for r in roots if path.is_relative_to(r)]  # directories only
+    return bool(held) and all(any(a == "tests" and b == "fixtures" for a, b in zip(d, d[1:])) for d in held)
+
+
+def _live_link_targets(roots: list) -> list:
+    """The realpath of every symlink (file or directory) under roots whose own location is not in a
+    tests/fixtures tree: a live name for whatever it points at. The walk follows no link; any error
+    propagates, so the caller fails closed."""
+    def fail(exc):
+        raise exc
+    targets = []
+    for root in roots:
+        for top, dirs, files in os.walk(root, onerror=fail):
+            for name in dirs + files:
+                link = Path(top, name)
+                if link.is_symlink() and not _in_fixtures(link, roots):
+                    targets.append(link.resolve(strict=False))
+    return targets
+
+
+def _parser_fixture(spellings: set, real: Path, roots: list) -> bool:
+    """A6-RC3: a written file nothing executes, so it may be invalid on purpose: every path the agent
+    wrote it by (absolute, normalised, not resolved) and its realpath both lie in a `fixtures`
+    directory directly under a `tests` directory below hooks/ or scripts/ (hooks/tests/fixtures/**).
+    Not one: a file pytest collects there (test_*.py, *_test.py, conftest.py) or one with another
+    hard link, whose bytes a live file may share. Requiring both paths means neither a live path that
+    is a symlink into fixtures nor a fixtures path that resolves to a live file (`..`, a file or
+    directory symlink) is skipped; names match in exact case, so a case variant is checked too. The
+    caller also refuses the skip when a live symlink names the file or a directory holding it."""
+    try:
+        if real != real.resolve(strict=True) or real.name == "conftest.py" or real.suffix == ".py" and (
+                real.name.startswith("test_") or real.stem.endswith("_test")) or real.stat().st_nlink != 1:
+            return False
+    except (OSError, RuntimeError):
+        return False
+    return bool(spellings) and _in_fixtures(real, roots) and all(_in_fixtures(w, roots) for w in spellings)
+
+
+def _written_spellings(transcript) -> dict:
+    """realpath -> the absolute, normalised but unresolved paths the transcript's own calls wrote it
+    by, over every account root's copy (as _recorded reads them)."""
+    spellings = {}
+    for c in subagent_restart._child_transcript_copies(transcript) if transcript else []:
+        if (found := command_span.write_set(c, "/")) is not None:
+            for r in found[0]:
+                spellings.setdefault(Path("/", r).resolve(), set()).add(Path(os.path.normpath(os.path.join("/", r))))
+    return spellings
+
+
 def _harness_syntax(resolution) -> list:
     """F3.a: each file of the agent's own written set (no inheritance) under the live harness home's
     hooks/ or scripts/ (realpath) that Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
-    shebang) rejects as it stands now. Nothing is written: no py_compile, no __pycache__."""
+    shebang) rejects as it stands now, a parser fixture (_parser_fixture) aside. Nothing is written:
+    no py_compile, no __pycache__."""
     home, findings = claude_home.resolve(), []
     roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
+    spelled_roots = roots + [home / d for d in ("hooks", "scripts")] if home else []
     try:
-        written = sorted(_recorded(getattr(resolution, "transcript_path", None))[0])
+        transcript = getattr(resolution, "transcript_path", None)
+        written = sorted(_recorded(transcript)[0])
+        spellings = _written_spellings(transcript)
     except Exception:  # an unreadable transcript judges nothing
         return []
-    for p in (p for p in written if any(p.is_relative_to(r) for r in roots)):
+    candidates = [p for p in written if any(p.is_relative_to(r) for r in roots)]
+    fixtures = {p for p in candidates if _parser_fixture(spellings.get(p, set()), p, spelled_roots)}
+    if fixtures:  # a fixture another live name reaches through a symlink is live: parsed
+        try:
+            links = _live_link_targets(roots)
+            fixtures = {p for p in fixtures if not any(p == t or p.is_relative_to(t) for t in links)}
+        except Exception:  # an incomplete scan cannot clear a fixture
+            fixtures = set()
+    for p in (p for p in candidates if p not in fixtures):
         try:
             text = p.read_bytes()
             shebang = text.split(b"\n", 1)[0] if text[:2] == b"#!" and not p.suffix else b""
@@ -757,7 +823,6 @@ def main() -> None:
         try:
             session_id = data.get("session_id") or data.get("sessionId")
             transcript_hint = data.get("agent_transcript_path")
-            last_assistant_message = data.get("last_assistant_message")
             resolution = obligation.resolve_own_obligation(
                 session_id=session_id,
                 agent_id=agent_id,
@@ -786,6 +851,10 @@ def main() -> None:
                                  + (f"  you wrote its file(s): {', '.join(wrote)}\n" if wrote else ""))
                 sys.exit(2)
             if isinstance(resolution, obligation.Resolved):
+                # The agent's own final report: its SubagentHandback message when it reported
+                # through one (auto mode; the payload then has no last_assistant_message), else
+                # the payload's last_assistant_message (lib/final_report.py).
+                last_assistant_message = final_report.final_report(data, resolution.transcript_path)
                 artifacts = resolution.obligation.get("artifacts", [])
                 json_artifacts = [a for a in artifacts if a.get("kind") == "json"]
                 markdown_artifacts = [a for a in artifacts if a.get("kind") == "markdown"]
@@ -1034,10 +1103,15 @@ def main() -> None:
     # its own transcript shows it wrote (R8). Each producer is judged on its
     # own reports at its own stop, never on a sibling lane's.
     # validate_report_artifact decides the dev, qa and do report kinds and
-    # skips every other.
+    # skips every other. A prompt whose block fails the grammar and declares no
+    # report (it only mentions the tag, or its body is no JSON object or names no
+    # json artifact) is judged as one without a block: G1 lets such a dispatch
+    # through wherever no block is required (OB-L41), so it owes what it wrote.
     declared = _dispatch_obligation(getattr(resolution, "prompt", None))
     rels = [a.get("path") for a in declared.get("artifacts") or [] if isinstance(a, dict) and a.get("kind") == "json"]
-    if not declared and isinstance(resolution, obligation.NoObligationInPrompt):
+    unparsed = (isinstance(resolution, obligation.Unresolvable) and resolution.reason == "invalid_obligation"
+                and not rels and getattr(resolution, "transcript_path", ""))
+    if (not declared and isinstance(resolution, obligation.NoObligationInPrompt)) or unparsed:
         written = command_span.write_set(resolution.transcript_path, project_dir, excluded=())
         rels = sorted(written.written) if written else []
     report_paths = [Path(project_dir) / r for r in rels if obligation._legal_repo_relative_path(r)]

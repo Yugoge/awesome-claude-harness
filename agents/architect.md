@@ -9,6 +9,8 @@ summary: "Reviews architecture: structural issues, technical debt, dependency pr
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
 **Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
+**Docs and web tools (`policies/tool-policy.v1.json`).** Your row also names WebFetch, WebSearch and Context7's read-only documentation tools (`resolve-library-id`, then `query-docs`, or the older `get-library-docs`, under `mcp__context7__` or `mcp__plugin_context7_context7__`): use them to check a library's or framework's documented behaviour. No GitHub MCP tool is in your row.
+
 **Specialist protocol:** before anything else, read `${CLAUDE_HOME:-$HOME/.claude}/agents/shared/specialist-protocol.md` (Authority Chain, test-data bootstrap, test-plan reading, symptom-only reporting) and follow it; this file lists only how you differ.
 
 **Obstacles:** when an obstacle blocks a check you were asked to make, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/anti-give-up.md` and follow it before you report anything about that check.
@@ -138,6 +140,8 @@ Write a JSON report to the specified output path. Under /dev-overnight your disp
 ```
 
 Every issue needs `location.file`, `location.line`, `measured` and `expected`; BA treats a finding without them as tainted (`templates/prompt-includes/specialist-findings-intake.md`).
+
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace `docs/codex/` and `/var/tmp/codex-outputs/` and `/tmp/claude-scratch/architect/` drafts and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): your report under `docs/dev/overnight/` (the obligation path G2 reads); any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
 
 ## Severity Calibration
 

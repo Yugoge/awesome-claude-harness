@@ -197,7 +197,7 @@ Order of effects for one repository, in one continuously held fd-9 transaction s
 
 ### Phase 4: Pre-staged verification
 
-When `DRYRUN=true`, first save the exact index file bytes (a copy under `/tmp/claude-scratch/changelog-analyst/`) and install an exit trap that restores those bytes on every success or error return: a tree id alone loses index extensions and pre-existing staged state. A dry run never changes HEAD or worktree bytes.
+When `DRYRUN=true`, stage into a temporary copy of the index, never the index itself. In the dry run's one Bash process, before any staging, `cp -p` the index file (the path `git -C "<GIT_ROOT>" rev-parse --path-format=absolute --git-path index` prints) to a fresh path under `/tmp/claude-scratch/changelog-analyst/` (e.g. `dryrun-index-<unique>`), both paths literal (the guards refuse a copy source they cannot resolve), and `export GIT_INDEX_FILE=` that copy: every later dry-run stage, unstage and `--cached` read uses it. The copy keeps the index extensions and pre-existing staged state; the index itself is only read, so its bytes stay identical and nothing is restored (a copy back onto it is a `.git/` write the role's write policy refuses). A dry run never changes HEAD or worktree bytes.
 
 Before staging, list the index with `git -C "${GIT_ROOT}" diff --cached --name-only`. For every cached file outside the classified and filtered set run `git -C "${GIT_ROOT}" restore --staged -- "<file>"` and log `Pre-staged verify: unstaged <file> (not in classified set)`.
 
@@ -264,7 +264,7 @@ A tracked-modified file that is absent from the dev-report, from `ARTIFACT_CHAIN
 
 ### Phase 8: Execute commit (or dry-run)
 
-If `DRYRUN=true`: surface the commit message and the staged file list, restore the pre-run index bytes (Phase 4) and stop. The dry-run message falls under CP-1: report the text in your own output, or Write it to `MSGFILE` and let Bash do only a minimal `cat "${MSGFILE}"`; never an inline `echo`, `printf` or heredoc. Plain paths may be printed normally.
+If `DRYRUN=true`: surface the commit message and the staged file list (read from Phase 4's index copy) and stop; the index itself was never written. The dry-run message falls under CP-1: report the text in your own output, or Write it to `MSGFILE` and let Bash do only a minimal `cat "${MSGFILE}"`; never an inline `echo`, `printf` or heredoc. Plain paths may be printed normally.
 
 In bulk mode each subsystem group's commit uses the skip-and-continue pattern of Error handling.
 
@@ -308,7 +308,7 @@ Bulk mode keeps its two-repository `${CONTROL_ROOT}` / `${NESTED_REPO}` loop.
 After each successful commit (every admitted repository independently), once the fd-9 flock is released, write the token with its one writer, using the repository root, branch and FINAL commit sha from the Phase 3 descriptor:
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "<HARNESS_ROOT>/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 The writer resolves the token path under the hook state directory that `hooks/push.sh` reads (the path rule lives in `scripts/write-push-gate-token.py`), so the command line carries neither token content nor path (CP-3). Exit codes:
@@ -344,7 +344,7 @@ If several close-reports exist for the session (`ls -rt ${CONTROL_ROOT}/docs/dev
 
 ## Dry-run mode
 
-A dry run classifies and stages the candidate set (Phases 1-6 run normally) and stops BEFORE the commit. Staging only materializes the plan: emit `PLAN_GROUPS` entries `{repo, commit_message, files[]}`, then restore the exact pre-run index bytes (Phase 4). `/commit` Step 6 reviews each planned file staging-independently (per path `git diff --text HEAD` plus an on-disk read, never `git diff --cached`, since in multi-group bulk only the last group stays staged).
+A dry run classifies and stages the candidate set (Phases 1-6 run normally) and stops BEFORE the commit. Staging only materializes the plan, in Phase 4's temporary index copy: emit `PLAN_GROUPS` entries `{repo, commit_message, files[]}`; the index itself stays byte-identical, never written. `/commit` Step 6 reviews each planned file staging-independently (per path `git diff --text HEAD` plus an on-disk read, never `git diff --cached`, since in multi-group bulk only the last group stays staged).
 
 **DRYRUN guard (NON-NEGOTIABLE).** Under `DRYRUN=true` there is no `git commit`, no `--allow-empty` recovery commit, no push-gate token, no grant consumed, and never `push_gate_reconciled` (that status asserts a token was written, and `/commit` then announces `/push` unblocked). `/commit` Step 6 runs a real internal `DRYRUN=true` pass over exactly the reconcilable and recoverable states.
 
@@ -369,6 +369,8 @@ Every message is surfaced under CP-1 (Phase 8).
 - After the bulk loop, if `FAILED_GROUPS` is non-empty print `Bulk complete with failures. The following groups were not committed: <FAILED_GROUPS>` and exit with status 2 (partial failure, not catastrophic); otherwise print `Bulk complete. All groups committed successfully.`
 - The push-gate write fails: log a warning. The commit stands, but `/commit` must be re-run to regenerate the token before `/push` succeeds.
 - No files remain after exclusions: print `Nothing to commit after exclusions.` and exit 0.
+
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace drafts in `/tmp/claude-scratch/changelog-analyst/` and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): the artifacts you write under `docs/dev/` (`commit-qa-report-*.md`, `close-report-*.md` annotations, every JSON report; a top-level `docs/dev/` markdown draft outside the artifact name families is rewritable) and the `/tmp/agentic-commit/` locks; any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
 
 ---
 

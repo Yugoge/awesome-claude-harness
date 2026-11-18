@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""PostToolUse: record successful validated restart SendMessage calls."""
+"""PostToolUse: journal every SendMessage call that ran.
+
+A validated /restart send is recorded as dispatched in the restart state, as before; any other
+send gets one line in the session's send journal (lib/send_policy.record).
+"""
 
 from __future__ import annotations
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
@@ -17,6 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import send_policy  # noqa: E402
 from lib import subagent_restart as restart  # noqa: E402
 
 
@@ -25,8 +30,14 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
+    if not isinstance(payload, dict):
+        return 0
     ok, _ = restart.authorize_send_message(payload)
     if not ok:
+        try:
+            send_policy.record(payload)
+        except Exception:  # noqa: BLE001 -- a journal write never fails the tool call
+            pass
         return 0
     params = payload.get("tool_input") or {}
     session_id = payload.get("session_id")

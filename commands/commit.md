@@ -29,7 +29,7 @@ supported without a project-root override.
 | `--codex` | Step 6's QA adds a Codex round on the planned per-file changes (each `PLAN_GROUPS` path vs HEAD). Without it QA reviews once itself. |
 | `--auto` | Walk every `commit_pending` parent task-id, one at a time, through Steps 3-8 (`--auto` mode below). Not `--bulk`. |
 
-`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit:*)` deny in
+`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit)` deny in
 `settings.json`.
 
 ## Step-by-step workflow
@@ -253,12 +253,12 @@ all grants for this task/session, then the plan is rebuilt (this step), the gran
 re-verified. The writer reads `CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`, and exits 2 when
 neither is set (print the `OPERATION_STALLED` line above).
 
-**Dry-run and the grants**: a dry-run leaves HEAD, worktree bytes and index bytes identical, but
-mutates and restores the index, and this step mints real grants before it runs. They are revoked
-at every unstage pause, at the `--dry-run` preview end and when the plan computed OK with nothing
-pending; each is single-use, bound to repo + branch + `expected_head`, never consumed by
-changelog-analyst's `DRYRUN` guard, and the privilege guard blocks agent commits independently.
-Rationale: `docs/reference/commit-dryrun-close-gate-ruling.md`.
+**Dry-run and the grants**: a dry-run leaves HEAD, worktree bytes and index bytes identical (it
+stages into a temporary copy of the index, never the index itself), and this step mints real grants
+before it runs. They are revoked at every unstage pause, at the `--dry-run` preview end and when the
+plan computed OK with nothing pending; each is single-use, bound to repo + branch + `expected_head`,
+never consumed by changelog-analyst's `DRYRUN` guard, and the privilege guard blocks agent commits
+independently. Rationale: `docs/reference/commit-dryrun-close-gate-ruling.md`.
 
 **Transaction boundary**: Git has no cross-repository atomic commit. Normal mode is an ordered,
 non-atomic transaction: all repositories are planned and QA-reviewed before the first commit, each
@@ -276,9 +276,9 @@ dev-report. It always runs, for `BULK=false` and `BULK=true`; `--force` does not
 
 **Planning phase (internal dry-run, plan only).** Dispatch `changelog-analyst` (Agent,
 `subagent_type: changelog-analyst`) with Step 7's prompt but `DRYRUN=true`, whatever the user's
-`--dry-run`. Under `DRYRUN=true` it classifies, stages the candidate set into the index and stops
-before the commit: no commit, no push-gate token, no recovery commit, no use of the Step 5 grant
-(its `DRYRUN` guard, `agents/changelog-analyst.md`). Capture from its output:
+`--dry-run`. Under `DRYRUN=true` it classifies, stages the candidate set into a temporary copy of
+the index and stops before the commit: no commit, no push-gate token, no recovery commit, no use of
+the Step 5 grant (its `DRYRUN` guard, `agents/changelog-analyst.md`). Capture from its output:
 - `PLAN_GROUPS`: the per-proposed-commit groups, each `{repo, commit_message, files[]}` (bulk
   yields several). Keep the group boundaries: QA needs them to detect cross-task mixing.
 - `PLAN_FILES`: the union of the groups' files, per repo.

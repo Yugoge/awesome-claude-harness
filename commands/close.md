@@ -48,7 +48,7 @@ The task-id is the one the source `/dev` or `/do` cycle used, never a fresh `dat
 
 A `/do` task: bind `DO_REPORT` to `docs/dev/do-report-<TASK_ID>.json` when that file exists, or when a GAP line of Step 0 names it (a `/do` that stopped before it wrote the do-report). A dev-report that dev wrote along its route (Routes) leaves `DO_REPORT` bound.
 
-**Which task?** When no task-id can be bound, ask (header `Task`) which task to close. The options are the task candidates, at most four: the first word of each stdout line, then the task-id of each `<task-id>: skipped: <reason>` stderr line, of `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"`. A skipped task has a gap no dispatch owes; `/close <task-id>` takes it, so offer it with its reason. Fewer than two candidates: add `/close --auto` and the tasks `list-actionable --next-action commit` prints (a closed task closing again). The dialog's own answer box takes any other task-id or path. Never default the close-report filename to a fresh timestamp.
+**Which task?** When no task-id can be bound, ask (header `Task`) which task to close. The options are the task candidates, at most four: the first word of each stdout line, then the task-id of each `<task-id>: skipped: <reason>` stderr line, of `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"`. A skipped task has a gap no dispatch owes; `/close <task-id>` takes it, so offer it with its reason. A stderr line that begins with the script's own name is its progress on a long history, not a task. Fewer than two candidates: add `/close --auto` and the tasks `list-actionable --next-action commit` prints (a closed task closing again). The dialog's own answer box takes any other task-id or path. Never default the close-report filename to a fresh timestamp.
 
 ### Late-repair route
 
@@ -249,7 +249,7 @@ The dialog adds its own Skip control and free-text box; no other option is added
    python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"
    ```
 
-   Each stdout line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here. A task with a gap no dispatch record or todo step owes is not listed (`/close <task-id>` takes it): its `<task-id>: skipped: <reason>` line is on stderr.
+   Each stdout line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here. A task with a gap no dispatch record or todo step owes is not listed (`/close <task-id>` takes it): its `<task-id>: skipped: <reason>` line is on stderr, beside the scan's progress lines on a long history (they begin with the script's own name).
 
 2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 binds `TASK_ID` to the parent as Task-id resolution binds a timestamp argument (a `/do` parent's `DO_REPORT` included) and makes its own disposition call; Step 2 runs each parent's close judgment until it lands; Step 4 asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
 

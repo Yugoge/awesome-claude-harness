@@ -51,6 +51,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from . import cmdtext, hookrun, launchdiff, norm
+try:
+    from .. import cli_shapes  # tests.replay, as the test suite imports it
+except ImportError:  # the sandbox's top-level `replay`, which carries the recorded fixture (sandbox.copy_framework)
+    import importlib.util as _importlib_util
+    _spec = _importlib_util.spec_from_file_location(
+        "cli_shapes", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cli", "cli_shapes.py"))
+    cli_shapes = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(cli_shapes)
 
 MODEL = "claude-opus-5-5"
 CLI_VERSION = "2.1.295"
@@ -153,6 +161,43 @@ class Dispatch(Call):
     # back; the recovery resumes the same agent, whose response ends with `final_line`.
     cut: bool = False
     final_line: str = ""
+
+
+def hook_record(event: str, h: dict, context: str, n: int = 0, count: int = 1, agent: bool = False) -> dict:
+    """The transcript record the CLI writes for one hook run whose output reaches the model, built from
+    the recorded CLI fixture (tests/fixtures/cli, tests/cli_shapes.py) with this run's values: plain
+    stdout is a hook_success record (content: the stripped stdout; command: "command hook", with the
+    hook's 1-based number when the event has several, as the CLI names it, never the command text); a
+    JSON additionalContext is a hook_additional_context record whose content is a list of strings and
+    which carries no command. hookName is the event, with ":<matcher>" for a tool event. ``agent``: the
+    record of a subagent's transcript. The envelope (uuid, parentUuid, cwd, ...) is left to
+    Session.append, which writes this session's values."""
+    out = h.get("stdout") or ""
+    source = "subagent:" if agent else ""
+    tool_use = h.get("tool_use_id") or f"hook-{uuid.uuid4()}"
+    name = f"{event}:{h['matcher']}" if h.get("matcher") and event in TOOL_EVENTS else event
+    if out.strip().startswith("{"):
+        rec = cli_shapes.synthesize(f"{source}attachment/hook_additional_context", attachment__content=[context],
+                                    attachment__hookName=name, attachment__toolUseID=tool_use,
+                                    attachment__hookEvent=event)
+    else:
+        rec = cli_shapes.synthesize(
+            f"{source}attachment/hook_success", attachment__hookName=name, attachment__toolUseID=tool_use,
+            attachment__hookEvent=event, attachment__content=context, attachment__stdout=out,
+            attachment__stderr=h.get("stderr") or "",
+            attachment__exitCode=h.get("rc") if isinstance(h.get("rc"), int) else 0,
+            attachment__command="command hook" + (f" {n + 1}" if count > 1 else ""),
+            attachment__durationMs=int(h.get("ms") or 0))
+    for key in ENVELOPE:
+        rec.pop(key, None)
+    return rec
+
+
+# The keys Session.append writes with this session's values.
+ENVELOPE = ("uuid", "parentUuid", "isSidechain", "agentId", "userType", "cwd", "sessionId", "version", "timestamp")
+
+
+TOOL_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"}
 
 
 def now_iso() -> str:
@@ -546,12 +591,16 @@ class Session:
                                          "sessionId": self.sid})
             self._queued = True
 
-    def _context(self, ev: Event) -> None:
-        for h in ev.hooks:
+    def _context(self, ev: Event, agent_id: str | None = None) -> str:
+        """The record the CLI writes for each hook of ``ev`` whose output reaches the model, in the
+        recorded fixture's shape (hook_record); the joined context."""
+        texts = []
+        for n, h in enumerate(ev.hooks):
             out = hookrun.context(ev.event, h)
             if out:
-                self.append({"type": "attachment", "attachment": {"type": "hook_additional_context",
-                                                                  "content": out, "hookName": ev.event}})
+                self.append(hook_record(ev.event, h, out, n, len(ev.hooks), bool(agent_id)), agent_id)
+                texts.append(out)
+        return "\n".join(texts)
 
     def prompt(self, text: str, label: str | None = None, deviation=None) -> Event:
         """A plain human prompt."""
@@ -766,10 +815,7 @@ class Actor:
         # in the agent's context (P13-3, C1); a start text that asks for a Codex debate (D32) is followed by the agent
         d.start = self.s.fire("SubagentStart", f"{label} start", {"agent_id": aid, "agent_type": atype})
         self.rp.settle(d.start, f"{label} start", step["deviation"])
-        d.context = "\n".join(c for h in d.start.hooks if (c := hookrun.context("SubagentStart", h)))
-        if d.context:
-            self.s.append({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": d.context,
-                                                                "hookName": "SubagentStart"}}, aid)
+        d.context = self.s._context(d.start, aid)
         if "Codex debate" in d.context:
             def codex():  # codex=fail: the skill is unavailable here, so the call fails (the CLI fires PostToolUseFailure)
                 if self.rp.args.get("codex") == "fail":
@@ -932,7 +978,9 @@ def _default_perform(actor: Actor, name: str, ti: dict):
         return {"mode": "files_with_matches", "filenames": hits, "numFiles": len(hits)}
 
     def todo():
-        old, actor.todos = actor.todos, ti["todos"]
+        # The CLI stores [] once every item is completed (tests/fixtures/cli-todowrite-oldtodos).
+        done = all(t.get("status") == "completed" for t in ti["todos"])
+        old, actor.todos = actor.todos, [] if done else ti["todos"]
         return {"oldTodos": old, "newTodos": ti["todos"]}
 
     def ask():

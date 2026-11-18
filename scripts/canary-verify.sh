@@ -59,6 +59,9 @@ emit_advisory() {
   advisories+=("canary-verify[ADVISORY]: $*")
 }
 
+# A CLI other than the one the hook-record fixtures were recorded from: re-record them (P15 2(d)); version only, no session.
+cli_v="$(timeout 5 claude --version 2>/dev/null | awk 'NR == 1 { print $1 }')"; fixture_v="$(cat "$CLAUDE_HOME/tests/fixtures/cli/CURRENT" 2>/dev/null)"; [[ -n "$cli_v" && -n "$fixture_v" && "$cli_v" != "$fixture_v" ]] && emit_advisory "claude CLI is ${cli_v} but tests/fixtures/cli/CURRENT is ${fixture_v}: re-record with bash scripts/cli-fixture-record.sh and commit the fixture"
+
 # ---------------------------------------------------------------------------
 # Behavioural test for each guard. Inputs are synthetic minimal JSON envelopes
 # matching Claude's PreToolUse contract. We only check the hook is invocable
@@ -110,15 +113,25 @@ verify_write_guard() {
     emit_failure "pretool-write-gate.py BLOCKED a new-file Write (false-positive guard)"
   fi
   # Deny case (spec-20260518-225715 Cycle 3 Debt 6 / AC-06): the gate MUST
-  # block Write attempts that target an EXISTING file. Synthesize the payload
-  # by creating an existing file via mktemp, then send a Write payload that
-  # targets that path. The gate MUST exit 2.
-  local existing_file
-  existing_file=$(mktemp -t canary-write-existing.XXXXXX)
+  # block Write attempts that target an EXISTING file the overwrite rule guards.
+  # A bare file below a temp root is no longer such a file: the rule's OB-L46
+  # scope (lib/write_gate/overwrite_scope.py) lets a Write replace temp files.
+  # The probe is a file the scope refuses wherever the throwaway directory
+  # lies, temp root or not, for two independent reasons: it is TRACKED (in the
+  # index of a throwaway git work tree the canary creates), and it sits below
+  # tests/reports/, a gate-read artifact root. The gate MUST exit 2.
+  local probe_dir existing_file
+  probe_dir=$(mktemp -d -t canary-write-existing.XXXXXX)
+  existing_file="${probe_dir}/tests/reports/canary-write-existing.txt"
+  mkdir -p "${probe_dir}/tests/reports" && echo "canary" > "${existing_file}"
+  ( cd "${probe_dir}" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE GIT_CONFIG_NOSYSTEM=1 \
+      GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null init -q --template= . \
+      && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE GIT_CONFIG_NOSYSTEM=1 \
+      GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null add -- tests/reports/canary-write-existing.txt ) >/dev/null 2>&1
   local deny="{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${existing_file}\",\"content\":\"overwrite\"}}"
   echo "${deny}" | ( source "$VENV_ACTIVATE" && python3 "${hook}" >/dev/null 2>&1 )
   rc=$?
-  rm -f "${existing_file}"
+  rm -rf "${probe_dir}"
   if [[ "${rc}" -ne 2 ]]; then
     emit_failure "pretool-write-gate.py FAILED to block Write to existing file (rc=${rc}, expected 2; fail-open guard)"
   fi

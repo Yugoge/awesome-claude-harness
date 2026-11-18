@@ -38,7 +38,10 @@ so the steps below are the rule.
    ```
 
    The helper fails closed with `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when the environment holds
-   no session id. Its output is the candidate set of THIS parent session's own transcript (after
+   no session id. It reads the `/restart` grant as data only: with none valid (no `/restart` in this
+   session, or an expired one) it still lists the candidates, adds `restart_grant` to its output and
+   says on stderr that every resume send will be refused until `/restart` mints one; the refusal is
+   the SendMessage gate's. Its output is the candidate set of THIS parent session's own transcript (after
    `claude --resume` it carries the interrupted history forward); other sessions and accounts are
    not scanned by default, and children that finished (a terminal `end_turn` report) are already
    excluded, so do not re-judge the list. Only when the operator asks for the account-rotation case
@@ -90,8 +93,12 @@ never an error to retry.
 7. **Branch on the guidance text.** Read the top-level `operator_guidance` field of step 2's JSON,
    present even at zero candidates and still there after step 6; do not look for the guidance file,
    whose name is derived from the capability step 6 consumes.
-   - **No guidance** (a bare invocation): report that no recoverable interrupted child exists, and
-     stop. Start no work and dispatch nothing.
+   - **No guidance** (a bare invocation): report in one line that no recoverable interrupted
+     child exists, then carry on with the active gated command from its checklist step in
+     progress, by step 8's rules: the rule of step 5 and of the overnight wake. The turn ends only
+     when no gated command's checklist is open. Never end it with an offer to continue ("say if
+     you want me to continue"); a real owner decision is asked with `AskUserQuestion` only, and
+     `/stop` is the exit.
    - **Guidance present**: continue to step 8.
 8. **Continue this session's own main agent.** With no interrupted child, the main agent is what
    continues, and the invocation is a directive addressed to it. All of these bind:
@@ -114,7 +121,7 @@ never an error to retry.
 ## Prohibitions
 
 - **DO NOT self-invoke.** The command is human-only in both forms, the zero-candidate continuation
-  included (frontmatter `disable-model-invocation: true` and the `Skill(restart:*)` deny in
+  included (frontmatter `disable-model-invocation: true` and the `Skill(restart)` deny in
   `settings.json`; CLAUDE.md lesson 15). An agent that wants continuation asks the operator; it
   never issues the directive to itself.
 - **DO NOT call `Agent` or `Task`** to replace an interrupted subagent or to stand in for the main

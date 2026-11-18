@@ -2,7 +2,7 @@
 
 Covers the pure state-derivation/table logic against fixture docs/dev/
 directory trees, entirely without slash-command invocation (QA is globally
-denied Skill(close:*)/Skill(commit:*) -- see AC-L21). AC-specific assertions
+denied Skill(close)/Skill(commit) -- see AC-L21). AC-specific assertions
 live in tests/generated/20260808-035658-lanel/test_AC_L*.py; this file is the
 broader/standalone suite named in the BA ticket's files_to_create list.
 """

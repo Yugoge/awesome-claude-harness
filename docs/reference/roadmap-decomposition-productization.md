@@ -289,6 +289,12 @@ require a mechanism decision before any split.*
 | Future-4 | Prompt partial extraction (dev/dev-overnight/qa) | Future-3 mechanism proven | byte-identical loaded-prompt diff |
 | P1..P4 | Productization (boundary cleanup) | independent of split work | leakage register empty at P4 |
 
+Deferred future work outside this roadmap's split and productization track has its own plan:
+
+- [`task-tools-migration-plan.md`](task-tools-migration-plan.md) — moving the command checklist
+  from TodoWrite to the CLI's Task tools (TaskCreate / TaskUpdate / TaskList / TaskGet). Deferred,
+  not scheduled; it starts only on the triggers in its §0.
+
 ---
 
 ## 7. Evidence cross-links

@@ -384,23 +384,34 @@ def _pre(*matchers) -> set:
 # tool the groups whose guards the merged gates now run; PostToolUse Bash runs git-warn, PostToolUse
 # Write no longer the token-verify stub, and Agent the two dispatch gates; every subagent stop the
 # producer gate.
+# OB-L02 raised the timeouts of the two matcher-less PostToolUse launchers (posttool-launch.py 690 -> 700,
+# posttool-failure-launch.py 120 -> 130) when it added posttool-orchestrator-ran.py to their rule lists: every
+# tool call meets the matcher-less PostToolUse group; only a failed call meets PostToolUseFailure's, which
+# (a) and (b) make after their landing (REACHED) and the pre-merge and harness-home sessions do not.
+POST_LAUNCH = ("PostToolUse", None)
+FAILED_LAUNCH = ("PostToolUseFailure", None)
 BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash") \
-    | {("PostToolUse", "Bash")}
+    | {("PostToolUse", "Bash"), POST_LAUNCH}
 WRITE = _pre(None, "*", "Write", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
-             "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write")}
-AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "*")}
+             "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write"), POST_LAUNCH}
+AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "*"), POST_LAUNCH}
 # The registrations (event, matcher) where this tree's settings.json differs from the base's that each
 # scenario's events after the landing reach (the harness-home session writes no todo list, no file and
 # dispatches no agent); together they must be every one that differs
-# (test_your_settings_differs_only_where_a_replay_runs_it).
-EXERCISES = {PRE.name: {STOP, TODO} | BASH | WRITE | AGENT, HOME.name: {STOP} | BASH,
+# (test_your_settings_differs_only_where_a_replay_runs_it). SessionStart (#27's P2-4: sessionstart-launch.py runs
+# prompt-workflow.py after check-todo-md-sync.py, in the event's one group, which has no matcher): the pre-merge
+# and harness-home sessions land at their start, before their session's SessionStart, so it runs this tree's list;
+# (a) and (b) each play one session, started before their landing, and start none after it.
+SESSION = ("SessionStart", None)
+EXERCISES = {PRE.name: {STOP, TODO, SESSION} | BASH | WRITE | AGENT, HOME.name: {STOP, SESSION} | BASH,
              A.name: {STOP, TODO} | BASH | WRITE | AGENT, B.name: {STOP, TODO} | BASH | WRITE | AGENT}
 # The registrations that change where EXERCISES names none: P4's close-rating hook (PostToolUse; P13-2
 # widened its matcher to AskUserQuestion|Agent, so the one registration observes every Agent dispatch and every
 # question the owner is asked; REACHED names the scenarios whose events after the landing do reach it: a
 # dispatch does, and so does the requirement round the pre-merge /dev asks, P13-1), P13-3's SubagentStart
-# score injector (every dispatch starts an agent), P13-3's codex ledger on a failed Skill call (no landing
-# scenario calls codex; tests/replay/test_score_dispatch.py plays a failed codex call of a low-record QA), and two of P12's
+# score injector and, after it, #27's P2-3 prompt-workflow.py, both run by subagentstart-launch.py (every
+# dispatch starts an agent: replay.py fires SubagentStart before the agent's first turn), P13-3's codex
+# ledger on a failed Skill call (no landing scenario calls codex; tests/replay/test_score_dispatch.py plays a failed codex call of a low-record QA), and two of P12's
 # removals: the base's posttool-git-warn.sh matcher, a regex on the tool name that matches no tool (so no
 # event's list changes; P12 registers the hook on Bash), and the Notification idle_prompt registration of an
 # exit-0 stub (no scenario raises a Notification). Each is held to exactly that change; a replay that reaches
@@ -421,16 +432,19 @@ _PROMPT_HOOKS_NOW = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-chec
                      "hooks/userprompt-restart-authorize.py", "hooks/userprompt-bulk-commit-capability.py",
                      "hooks/userprompt-consent-allowlist.sh", "hooks/userprompt-tmpfs-pressure.sh",
                      "hooks/userprompt-harness-switch.sh"]
-START = ("SubagentStart", None)  # P13-3's score injector, registered on every agent start
+START = ("SubagentStart", None)  # P13-3's score injector and P2-3's roots, registered on every agent start
 FAILED_SKILL = ("PostToolUseFailure", "Skill")  # P13-3's codex ledger on a failed Skill call; no landing scenario calls codex
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              PROMPT: (_PROMPT_HOOKS, _PROMPT_HOOKS_NOW),
-             START: ([], ["hooks/subagentstart-record.py"]),
+             START: ([], ["hooks/subagentstart-record.py", "hooks/prompt-workflow.py"]),
              FAILED_SKILL: ([], ["hooks/posttool-codex-skill-ledger.py"]),
+             FAILED_LAUNCH: ([], ["hooks/posttool-orchestrator-ran.py"]),
+             # design A's Monitor guard: a Monitor command meets every Bash hook; no landing scenario starts a monitor
+             ("PreToolUse", "Monitor"): ([], ["hooks/pretool-monitor-command.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
-REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START},
-           B.name: {RATING, START}}  # P13-3: a dispatch starts an agent
+REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START, FAILED_LAUNCH},
+           B.name: {RATING, START, FAILED_LAUNCH}}  # P13-3: a dispatch starts an agent
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that

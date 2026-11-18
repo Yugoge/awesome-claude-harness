@@ -27,44 +27,18 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import sys
 from typing import Optional, Tuple
 
-# Shell-command lexing primitives (_split_pipeline / _strip_quotes / _safe_shlex
-# / redirect scanners) → shell_lex.py (phase-1). Re-imported here to keep _core's
-# public surface unchanged.
-#
-# Dual-context import (INV-3) — REPRESENTATIVE CAUTION for every re-import block
-# below: _core runs BOTH as the `lib.runtime_guard._core` submodule (relative
-# import) AND as a direct script via the runtime_guard.py shim (`os.execv`),
-# which has no parent package so a BARE relative import raises ImportError and
-# the live hook fail-closes. The absolute-fallback form (sys.path[0] is this
-# file's dir) resolves the sibling; keeping both preserves the standalone-script
-# entrypoint pretool-bash-safety.sh depends on. Every block below repeats this
-# same try/except idiom.
-try:  # noqa: F401  — names re-exported for backward compatibility
-    from .shell_lex import (
-        _WRITE_REDIRECT_RE,
-        _has_redirect_to,
-        _is_redirect_amp,
-        _safe_shlex,
-        _split_pipeline,
-        _strip_compound_delims,
-        _strip_quotes,
-        _write_redirect_targets,
-    )
+# The shared Bash parser. Dual-context import (INV-3): _core runs both as the
+# `lib.runtime_guard._core` submodule and as a direct script through the
+# runtime_guard.py shim (`os.execv`), which has no parent package, so every
+# sibling import below falls back to an absolute import from this directory.
+try:
+    from .. import shell_parse as _sp
 except ImportError:  # executed as a top-level script (no package context)
-    from shell_lex import (  # type: ignore[no-redef]
-        _WRITE_REDIRECT_RE,
-        _has_redirect_to,
-        _is_redirect_amp,
-        _safe_shlex,
-        _split_pipeline,
-        _strip_compound_delims,
-        _strip_quotes,
-        _write_redirect_targets,
-    )
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import shell_parse as _sp  # type: ignore[no-redef]
 
 
 MAX_COMMAND_CHARS = int(os.environ.get("CLAUDE_GUARD_MAX_CHARS", "262144"))
@@ -80,8 +54,8 @@ def _block(primitive: str, reason: str) -> Verdict:
 # ── Generic verb / keyword / exec-front-end data tables → constants.py ───────
 # The ~19 pure frozenset/dict vocabularies (PKG_MANAGERS, ENV_WRAPPERS,
 # RUNTIMES, MUTATION_VERBS, KILL_VERBS, EXEC_FRONTEND_PROFILES, …) re-imported
-# here (phase-2). The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core
-# by design. Dual-context import (INV-3, see phase-1 block above).
+# here. The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core
+# by design. Dual-context import (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .constants import (
         BUILD_TOOL_BASENAMES,
@@ -131,9 +105,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── Path/glob matching primitives → pathmatch.py ────────────────────────────
 # The path-normalization + segment-boundary glob-matching family
 # (_normalize_path, _glob_to_segment_regex, _glob_parent, _path_matches_any,
-# _path_under_any, the _any_token_* scanners, ...) re-imported here (phase-3);
+# _path_under_any, the _any_token_* scanners, ...) re-imported here;
 # `_mutation_cand_hits` stays in _core (see its def below). Dual-context import
-# (INV-3, see phase-1 block above).
+# (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .pathmatch import (
         _SHELL_GLOB_METACHARS,
@@ -150,6 +124,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _path_matches_any,
         _path_matches_entries,
         _path_under_any,
+        _strip_quotes,
     )
 except ImportError:  # executed as a top-level script (no package context)
     from pathmatch import (  # type: ignore[no-redef]
@@ -167,6 +142,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _path_matches_any,
         _path_matches_entries,
         _path_under_any,
+        _strip_quotes,
     )
 
 
@@ -174,8 +150,8 @@ except ImportError:  # executed as a top-level script (no package context)
 # The config-file loader + STEP0 self-protection cluster (DATA_FILE_PATH,
 # REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
 # _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
-# _targets_config_file) re-imported here (phase-4). Dual-context import
-# (INV-3, see phase-1 block above).
+# _targets_config_file) re-imported here. Dual-context import
+# (INV-3, see the first import block above).
 #
 # DATA_FILE_PATH reload caution (CANONICAL code-site): DATA_FILE_PATH is read
 # from the env at config's MODULE-IMPORT time. The package __init__ reloads _core
@@ -219,9 +195,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # The pure find/fd argv PARSERS (path-operand / fd search-dir collection, PATH/
 # NAME predicate-value extraction, and the protected-basename matcher
 # `_name_value_matches_protected`) plus their generic option/predicate tables
-# re-imported here (phase-5); the forward-referencing orchestrators
+# re-imported here; the forward-referencing orchestrators
 # (`_find_destructive_target_hits` / `_find_filter_exonerates_reverse`) stay in
-# _core. Dual-context import (INV-3, see phase-1 block above).
+# _core. Dual-context import (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .find_cmds import (
         _FD_OPTS_WITH_ARG,
@@ -257,9 +233,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── git destructive-subcommand parsing leaves → git_cmds.py ─────────────
 # The pure git argv PARSERS (subcommand location, `-C` chdir folding, pathspec-
 # magic stripping, destructive-pathspec collection, destructive-mode predicate)
-# plus their generic verb/option tables re-imported here (phase-5); the STAYING
+# plus their generic verb/option tables re-imported here; the STAYING
 # `_git_inspection_head` and the forward-referencing `_git_destructive_pathspec_hits`
-# remain in _core. Dual-context import (INV-3, see phase-1 block above).
+# remain in _core. Dual-context import (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .git_cmds import (
         _GIT_DESTRUCTIVE_SUBCMDS,
@@ -288,9 +264,9 @@ except ImportError:  # executed as a top-level script (no package context)
 # The cleanly-extractable P0-anchor helper predicates -- the exec-token scanner,
 # the launch-position and fused-option-value primitives, the head-agnostic
 # service-control hit-detector, and the non-protected-workspace-selector
-# exemption -- re-imported here (phase-6). The P0 decision ENGINE `_p0_anchor`
+# exemption -- re-imported here. The P0 decision ENGINE `_p0_anchor`
 # and every forward-referencing anchor helper stay in _core. Dual-context import
-# (INV-3, see phase-1 block above).
+# (INV-3, see the first import block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .anchor import (
         _ANCHOR_LAUNCH_FOLLOW,
@@ -302,6 +278,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _anchor_nonprotected_workspace_selector,
         _anchor_service_hits_protected,
         _fused_option_values,
+        _service_unit_re,
     )
 except ImportError:  # executed as a top-level script (no package context)
     from anchor import (  # type: ignore[no-redef]
@@ -314,13 +291,14 @@ except ImportError:  # executed as a top-level script (no package context)
         _anchor_nonprotected_workspace_selector,
         _anchor_service_hits_protected,
         _fused_option_values,
+        _service_unit_re,
     )
 
 
 # ── Per-evaluation Context object → context.py ───────────────────────────────
 # The frozen dataclass bundling the per-evaluation inputs (cwd_base / simple_cmds
 # / groups / cfg) the decision layers thread positionally. Re-imported here
-# (dual-context, INV-3, see phase-1 block above) so _core's public surface is a
+# (dual-context, INV-3, see the first import block above) so _core's public surface is a
 # superset — no existing name removed. Internal engine plumbing: `evaluate` /
 # `main` signatures are unchanged.
 try:  # noqa: F401  — Context re-exported for engine plumbing
@@ -329,7 +307,6 @@ except ImportError:  # executed as a top-level script (no package context)
     from context import Context  # type: ignore[no-redef]
 
 
-# ── Tokenization primitives → shell_lex.py (re-imported at top of file) ──────
 # ── Path/glob primitives → pathmatch.py (re-imported just above) ─────────────
 
 # `_mutation_cand_hits` stays in _core: it forward-references
@@ -618,156 +595,104 @@ def _fold_wrapper_cwd(cwd: Optional[str], cwd_det: bool, tokens: list):
     return (os.path.normpath(wdir), False)
 
 
-# ── command-substitution extraction ──────────────────────────────────────────
+# ── reading the command through the shared parser ────────────────────────────
+
+def _word_str(w) -> str:
+    """A word as one token: its static value, or its text with quotes removed and
+    each expansion kept as written (`$X`, `${X}`, `$(…)`), so a dynamic token stays
+    recognizable."""
+    v = w.value()
+    if v is not None:
+        return v
+    raw, start = w.raw.text, w.span[0]
+    return "".join(p.text if p.kind == "lit" else raw[p.span[0] - start:p.span[1] - start]
+                   for p in w.parts)
+
+
+def _commands(text: str) -> list:
+    return list(_sp.iter_commands(_sp.parse(text), into=()))
+
+
+def _safe_shlex(simple_cmd: str) -> list:
+    """The tokens of a simple command in source order: assignments, words, and each
+    redirect as its operator then its target. Unreadable text splits on blanks."""
+    script = _sp.parse(simple_cmd)
+    if script.error is not None:
+        return simple_cmd.split()
+    toks = []
+    for c in _sp.iter_commands(script, into=()):
+        items = [(a.word.span[0], [_word_str(a.word)]) for a in c.assignments]
+        items += [(w.span[0], [_word_str(w)]) for w in c.words]
+        items += [(r.off, [(r.io or "") + r.op] + ([_word_str(r.target)] if r.target is not None else []))
+                  for r in c.redirects]
+        toks += [t for _off, ts in sorted(items, key=lambda x: x[0]) for t in ts]
+    return toks
+
+
+def _write_redirect_targets(simple_cmd: str) -> list:
+    """Every file a write redirect of the simple command opens (`>`, `>>`, `>|`,
+    `N>`, `&>`, `&>>`, `<>`)."""
+    return [_word_str(r.target) for c in _commands(simple_cmd) for r in c.redirects
+            if r.writes() and r.target is not None]
+
 
 def _command_substitutions(text: str) -> list:
-    """Return the inner text of every $(...) command substitution (top level and
-    nested, flattened) and every `...` backtick substitution found in `text`.
-
-    Used so a kill executor whose argument list is computed by an embedded
-    pipeline — e.g. `kill $(ps aux | grep <ident> | awk '{print $2}')` — can be
-    inspected for a protected identifier inside the substitution.
-    """
+    """The body text of every command and process substitution in `text`, nested
+    ones included, so a kill whose operands come from an embedded pipeline
+    (`kill $(pgrep -f <ident>)`) can be inspected."""
     out = []
-    n = len(text)
-    i = 0
-    while i < n:
-        # $(...) command substitution and <(...) / >(...) process substitution
-        if (text[i] in ("$", "<", ">")) and i + 1 < n and text[i + 1] == "(":
-            depth = 1
-            j = i + 2
-            start = j
-            while j < n and depth > 0:
-                if text[j] == "(":
-                    depth += 1
-                elif text[j] == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            inner = text[start:j]
-            out.append(inner)
-            # recurse for nested $(...) inside this one
-            out.extend(_command_substitutions(inner))
-            i = j + 1
-            continue
-        if text[i] == "`":
-            j = i + 1
-            while j < n and text[j] != "`":
-                j += 1
-            out.append(text[i + 1:j])
-            i = j + 1
-            continue
-        i += 1
+    for c in _commands(text):
+        words = [a.word for a in c.assignments] + list(c.words) + [r.target for r in c.redirects if r.target]
+        for p in (p for w in words for p in w.parts if p.body is not None):
+            out.append(p.text)
+            out.extend(_command_substitutions(p.text))
     return out
 
 
-# ── pipeline-group splitting (preserve | connectivity) ───────────────────────
-
 def _pipeline_groups(command: str) -> list:
-    """Split a command into pipeline GROUPS.
+    """The simple commands of `command` as pipeline GROUPS of their source texts.
+    Commands joined by `|`/`|&` share a group, as does the whole body of a
+    compound fed by or feeding a pipe; `;`, `&&`, `||`, `&` and newlines separate
+    groups. A compound's own redirects are a segment of their own, the commands an
+    unquoted heredoc expands are groups of their own, and on a parse error the text
+    from the start of the command it stopped in is one last group, so no write or
+    command in the text goes unread."""
+    script = _sp.parse(command)
+    groups = []  # lists of (offset, text)
 
-    Segments joined by `|` / `|&` belong to the SAME group (data flows between
-    them); `;`, `&&`, `||`, `&`, and newlines separate groups. Each group is a
-    list of its raw simple-command strings, in order. This preserves the
-    upstream→downstream connectivity that cross-segment primitives (P5 endpoint,
-    P6 prockill) need, which the flat `_split_pipeline` discards.
-    """
-    groups = []
-    cur = []
-    buf = []
-    i = 0
-    n = len(command)
-    quote = None
-    loop_depth = 0  # inside a do..done loop body fed by an upstream pipe
-    subst_depth = 0
-    backtick = False
+    def flat(cmd, out, extra):
+        if isinstance(cmd, _sp.Compound):
+            for body in cmd.body:
+                for pl, _sep in body.items:
+                    for st in pl.stages:
+                        flat(st, out, extra)
+            if cmd.redirects:
+                out.append((cmd.redirects[0].span[0],
+                            " ".join(command[r.span[0]:r.span[1]] for r in cmd.redirects)))
+            return
+        out.append((cmd.span[0], command[cmd.span[0]:cmd.span[1]].strip()))
+        for r in cmd.redirects:
+            if r.hd is not None and not r.hd.quoted:
+                extra.extend([(r.span[0], t) for t in g] for p in r.hd.expansions
+                             if p.body is not None for g in _pipeline_groups(p.text))
 
-    def flush_simple():
-        nonlocal loop_depth
-        s = "".join(buf).strip()
-        if s:
-            cur.append(s)
-            # track loop nesting so `;`/newline inside a do..done body do NOT
-            # break the pipe connectivity (`pgrep … | while read x; do kill x;
-            # done` must stay ONE group for P6).
-            words = s.split()
-            for w in words:
-                # increment ONLY on a loop OPENER (while/for/until); `do` is the
-                # body marker of the SAME loop, not a new nesting level, so
-                # counting it double-closes late and over-connects a later
-                # top-level command (e.g. a trailing `; kill 123`) to the group.
-                if w in ("while", "for", "until"):
-                    loop_depth += 1
-                elif w == "done":
-                    loop_depth = max(0, loop_depth - 1)
+    def items(script):
+        for pl, _sep in script.items:
+            if len(pl.stages) == 1 and isinstance(pl.stages[0], _sp.Compound) and not pl.stages[0].redirects:
+                for body in pl.stages[0].body:
+                    items(body)
+                continue
+            g, extra = [], []
+            for st in pl.stages:
+                flat(st, g, extra)
+            groups.append(g)
+            groups.extend(extra)
 
-    def flush_group():
-        flush_simple()
-        if cur:
-            groups.append(list(cur))
-
-    while i < n:
-        c = command[i]
-        if quote == "'":
-            buf.append(c)
-            if c == "'":
-                quote = None
-            i += 1
-            continue
-        if quote == '"':
-            if c == "\\" and i + 1 < n and command[i + 1] in ('"', "\\", "$", "`", "\n"):
-                buf.append(c); buf.append(command[i + 1]); i += 2; continue
-            buf.append(c)
-            if c == '"':
-                quote = None
-            i += 1
-            continue
-        if c in ("'", '"'):
-            quote = c
-            buf.append(c)
-            i += 1
-            continue
-        if c == "\\" and i + 1 < n:
-            buf.append(c); buf.append(command[i + 1]); i += 2; continue
-        # command-substitution: keep `$(...)`/`` `...` `` intact within ONE
-        # simple command so a kill-substitution's pipeline isn't split.
-        if c == "`":
-            backtick = not backtick
-            buf.append(c); i += 1; continue
-        if command[i:i + 2] in ("$(", "<(", ">("):
-            subst_depth += 1
-            buf.append(command[i:i + 2]); i += 2; continue
-        if c == ")" and subst_depth > 0:
-            subst_depth -= 1
-            buf.append(c); i += 1; continue
-        if subst_depth > 0 or backtick:
-            buf.append(c); i += 1; continue
-        # fd-redirection `&` is not a group separator.
-        if c == "&" and _is_redirect_amp(command, i):
-            buf.append(c); i += 1; continue
-        two = command[i:i + 2]
-        if two in ("&&", "||", "|&"):
-            if two == "|&":
-                # |& pipes stdout+stderr: stays within the SAME group
-                flush_simple(); buf = []; i += 2; continue
-            if loop_depth > 0:
-                # &&/|| inside a loop body do not break pipe connectivity
-                flush_simple(); buf = []; i += 2; continue
-            flush_group(); cur = []; buf = []; i += 2; continue
-        if c == "|":
-            flush_simple(); buf = []; i += 1; continue
-        if c in (";", "\n", "&"):
-            flush_simple()
-            if loop_depth <= 0:
-                # outside a loop body: a real group separator
-                if cur:
-                    groups.append(list(cur)); cur = []
-            buf = []; i += 1; continue
-        buf.append(c)
-        i += 1
-    flush_group()
-    return groups
+    items(script)
+    if script.error is not None:
+        cut = max([off for g in groups for off, _t in g if off <= script.error.offset] or [0])
+        groups = [[seg for seg in g if seg[0] < cut] for g in groups] + [[(cut, command[cut:])]]
+    return [[t for _off, t in g if t.strip()] for g in groups if any(t.strip() for _off, t in g)]
 
 
 # ── effective cwd tracking across a pipeline ──────────────────────────────────
@@ -976,6 +901,21 @@ def _operands_and_tdir(head: str, args: list):
     return operands, tdir
 
 
+def _dest_entries(dest: str, srcs: list, args: list) -> list:
+    """The entries a cp/mv DEST writes. When DEST is a directory (it ends in `/`, or
+    names an existing directory by an absolute or home-relative path) and `-T` /
+    `--no-target-directory` is absent, each SRC lands at DEST/basename(SRC) and the
+    directory entry itself is left in place; otherwise DEST is the written entry."""
+    st = _strip_quotes(dest)
+    norm = _normalize_path(st)
+    into_dir = (st.endswith("/") or (os.path.isabs(norm) and os.path.isdir(norm))) and not any(
+        a in ("-T", "--no-target-directory")
+        or (a.startswith("-") and not a.startswith("--") and "T" in a[1:]) for a in args)
+    if not into_dir or not srcs:
+        return [dest]
+    return [os.path.join(norm, os.path.basename(_strip_quotes(s).rstrip("/"))) for s in srcs]
+
+
 def _mutation_targets_for_verb(head: str, args: list) -> list:
     """THE SINGLE position-COMPLETE mutation-target extractor for a mutation verb's
     OWN argv (the tokens AFTER the verb). This is the ONE shared helper used by
@@ -1041,17 +981,10 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
             # BLOCK, while a literal protected source stays a read (ALLOW).
             out += [s for s in srcs if _has_shell_glob(_strip_quotes(s))]
             return out
-        # `cp SRC… DEST`: the DEST (last operand) is written. SRC is read — EXCEPT a
+        # `cp SRC… DEST`: the DEST entry is written. SRC is read — EXCEPT a
         # shell-GLOB source (`cp <dir>/* DEST`) over-blocked like the cp glob source.
-        # If DEST ends with '/' (an explicit destination DIRECTORY) the written file
-        # is DEST/basename(SRC) for each source, so emit those too (a protected exact
-        # file inside that dir must not be dropped).
-        out = barewords[-1:] if barewords else []
         srcs = barewords[:-1]
-        if barewords:
-            dest = _strip_quotes(barewords[-1])
-            if dest.endswith("/"):
-                out += [os.path.join(dest, os.path.basename(_strip_quotes(s))) for s in srcs]
+        out = _dest_entries(barewords[-1], srcs, args) if barewords else []
         out += [s for s in srcs if _has_shell_glob(_strip_quotes(s))]
         return out
     if head in ("mv", "rename"):
@@ -1060,17 +993,12 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
             out = [os.path.join(_strip_quotes(tdir), os.path.basename(_strip_quotes(s))) for s in srcs]
             out.extend(barewords)  # the SOURCEs are removed (mutated) by mv
             return out
-        # `mv SRC… DEST`: the DEST is written AND the SRC(s) are removed — both are
-        # mutation targets (moving the protected file away deletes it from its
+        # `mv SRC… DEST`: the DEST entry is written AND the SRC(s) are removed — both
+        # are mutation targets (moving the protected file away deletes it from its
         # watched path → daemon auto-handoff / statefile removal / config neuter).
-        # If DEST ends with '/' (explicit dir) also emit DEST/basename(SRC) so a
-        # protected exact file inside that dir is not dropped.
-        out = list(barewords)
-        if barewords:
-            dest = _strip_quotes(barewords[-1])
-            if dest.endswith("/"):
-                out += [os.path.join(dest, os.path.basename(_strip_quotes(s))) for s in barewords[:-1]]
-        return out
+        if not barewords:
+            return []
+        return barewords[:-1] + _dest_entries(barewords[-1], barewords[:-1], args)
     if head == "rsync":
         # `rsync SRC… DEST` — DEST may be a file or a dir. If DEST ends with '/'
         # (or is an existing dir) the written file is DEST/basename(SRC); else DEST.
@@ -1289,18 +1217,6 @@ def _step0_mutation_targets(head: str, args: list) -> list:
     --remove-source-files source, target-dir, dd of=, chmod/chown --reference,
     in-place editors, tar -C, ln dest)."""
     return _mutation_targets_for_verb(head, args)
-
-
-def _step0_redirect_target(sc: str) -> Optional[str]:
-    """Return a write-redirect target in a simple command, covering the fd-prefixed
-    and force forms `_has_redirect_to` misses: `>`, `>>`, `1>`, `2>`, `&>`, `&>>`,
-    `>|`, `N>|`. Best-effort (matches the first write redirect target). Read
-    redirects (`<`) are NOT returned. Used ONLY by STEP0 self-protection so a
-    `<wrapper> echo x 1>|<datafile>` neuter is caught."""
-    m = re.search(r"(?:^|[\s;&|])(?:&|\d+)?>>?\|?\s*([^\s;&|<>]+)", sc)
-    if m:
-        return _strip_quotes(m.group(1))
-    return None
 
 
 def _step0_targets_config_redirect(sc: str, cwd: Optional[str], cwd_det: bool) -> bool:
@@ -1531,7 +1447,7 @@ def _find_destructive_target_hits(tokens: list, exec_toks: list, globs: list,
         (`_destructive_root_contains_protected`) — closes `find packages -delete`.
     The `-name`/`-g` BASENAME predicate is SCOPED to a search root that intersects a
     protected location (root under/over a protected dir), so a routine
-    `find /tmp -name <basename> -delete` on an unrelated tree ALLOWS (codex F2)."""
+    `find /tmp -name <basename> -delete` on an unrelated tree ALLOWS."""
     for fi, st in exec_toks:
         if os.path.basename(_strip_quotes(st)) not in _FIND_EXEC_HEADS:
             continue
@@ -1789,7 +1705,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
             return _block("STEP1", "indeterminate policy: xargs kill")
         # package-manager script-run / build / global install
         if head in PKG_MANAGERS:
-            if any("-g" == t or "--global" == t for t in rest):
+            if _pm_global_args([_strip_quotes(t) for t in rest], pm=head):
                 return _block("STEP1", "indeterminate policy: global package op")
             # any non-meta pm invocation is fail-closed (build/launch family)
             if not _is_meta_query(head, rest):
@@ -2271,10 +2187,7 @@ def _p2_service(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
     services = cfg.get("protected_services", [])
     if not services:
         return None
-    # match `unit`, `unit.service`, and the template-instance form
-    # `unit@instance` / `unit@instance.service` (without matching a longer
-    # hyphenated unrelated unit name — the boundary after the instance enforces).
-    svc_re = [re.compile(r"(^|[\s=])" + re.escape(s) + r"(@[^\s.=/]*)?(\.service)?(\s|$|\.|=)") for s in services]
+    svc_re = [_service_unit_re(s) for s in services]
     for sc in simple_cmds:
         tokens = _safe_shlex(sc)
         if not tokens:
@@ -2683,6 +2596,385 @@ def _p6_prockill(ctx: "Context") -> Optional[Verdict]:
 
 # ── P7 GLOBALBIN_GUARD ───────────────────────────────────────────────────────
 
+def _pm_config_true(value: Optional[str]) -> bool:
+    """A boolean package-manager setting read as npm reads it: `false`, `null`, an
+    empty value and a numeric zero are false, any other text is true. A computed
+    value (None) is taken as true, so it cannot hide a global op."""
+    if value is None:
+        return True
+    v = value.strip().lower()
+    if v in ("false", "null", ""):
+        return False
+    try:
+        return float(v) != 0
+    except ValueError:
+        return True
+
+
+def _pm_global_setting(name: str, value: Optional[str]) -> bool:
+    """True if `name=value` (a config key, or an `npm_config_*` variable, any case)
+    makes a package-manager op global: `global` true, or `location` = `global`."""
+    key = name.lower().replace("-", "_")
+    if key.startswith("npm_config_"):
+        key = key[len("npm_config_"):]
+    if key == "global":
+        return _pm_config_true(value)
+    if key == "location":
+        return value is None or value.strip().lower() == "global"
+    return False
+
+
+_PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
+"""Package-manager subcommands that run another command: their argv after `--`
+(and npm's `-c` / `--call` string) is a nested invocation, not a script's args."""
+_PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+_PM_SUBCMDS = frozenset({
+    "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
+    "ci", "clean-install", "install-clean", "install-test", "it", "install-ci-test", "cit",
+    "uninstall", "un", "unlink", "remove", "rm", "r", "update", "up", "upgrade", "udpate", "link", "ln",
+    "run", "run-script", "rum", "urn", "test", "tst", "t", "start", "stop", "restart", "build",
+    "config", "c", "set", "get", "init", "create", "innit", "publish", "pack", "audit", "outdated",
+    "ls", "list", "la", "ll", "why", "explain", "view", "info", "show", "v", "search", "prefix",
+    "root", "bin", "cache", "help", "version", "doctor", "prune", "dedupe", "ddp", "rebuild", "rb",
+    "fund", "pkg", "query", "global", "workspace", "workspaces", "store", "patch", "import"})
+
+
+_PM_VALUE_OPTS = {
+    "npm": frozenset({
+        "--cache", "--prefix", "-C", "--tag", "-w", "--workspace", "--userconfig", "--globalconfig", "--registry",
+        "--loglevel", "--location", "-L", "--package", "--call", "-c", "--otp", "--scope", "--omit", "--include",
+        "--install-strategy", "--script-shell", "--node-options", "--before", "--access", "--auth-type", "--preid",
+        "--tag-version-prefix", "--save-prefix", "--editor", "--shell", "--browser", "--viewer", "--depth",
+        "--cpu", "--os", "--libc", "--ca", "--cafile", "--cert", "--key", "--proxy", "--https-proxy", "--noproxy",
+        "--umask", "--heading", "--message", "-m", "--fetch-retries", "--fetch-timeout", "--init-module",
+        "--init-author-name", "--init-author-email", "--init-author-url", "--init-license", "--init-version",
+        "--logs-dir", "--logs-max", "--maxsockets", "--sbom-format", "--sbom-type", "--expect-result-count",
+        "--replace-registry-host", "--provenance-file", "--diff", "--diff-src-prefix", "--diff-dst-prefix",
+        "--pack-destination", "--audit-level", "--lockfile-version", "--color", "--usage-file"}),
+    "pnpm": frozenset({
+        "-C", "--dir", "--filter", "-F", "--filter-prod", "--test-pattern", "--changed-files-ignore-pattern",
+        "--reporter", "--loglevel", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir",
+        "--global-dir", "--registry", "--config", "--workspace-concurrency", "--network-concurrency",
+        "--child-concurrency", "--package-import-method", "--node-linker", "--resolution-mode", "--package",
+        "--use-node-version", "--cache-dir", "--state-dir"}),
+    "yarn": frozenset({
+        "--cwd", "--modules-folder", "--cache-folder", "--global-folder", "--link-folder", "--mutex",
+        "--network-timeout", "--registry", "--use-yarnrc", "--preferred-cache-folder", "--network-concurrency",
+        "--emoji", "--https-proxy", "--proxy", "--otp", "--package", "-p"}),
+    "bun": frozenset({
+        "--cwd", "--filter", "-F", "--config", "-c", "--backend", "--cache-dir", "--registry", "--cafile", "--ca",
+        "--preload", "-r", "--require", "--import", "--env-file", "--tsconfig-override", "--define", "-d",
+        "--loader", "-l", "--elide-lines", "--main-fields", "--conditions", "--port", "--package", "-p", "--shell",
+        "--concurrent-scripts", "--network-concurrency", "--omit", "--linker"}),
+}
+"""Value-taking options of each package manager, read in its own argv before the subcommand: their next word is a
+value (`npm --cache install exec ...` names a cache directory `install`), never the subcommand."""
+_PM_FLAG_OPTS = {
+    "npm": frozenset({
+        "-y", "--yes", "--no", "-g", "--global", "-D", "--save-dev", "-S", "--save", "-E", "--save-exact", "-O",
+        "--save-optional", "-P", "--save-prod", "-B", "--save-bundle", "-s", "--silent", "-q", "--quiet", "-d",
+        "-dd", "-ddd", "--verbose", "-ws", "--workspaces", "--include-workspace-root", "--if-present",
+        "--ignore-scripts", "--json", "--parseable", "-p", "--long", "-l", "--force", "-f", "--dry-run",
+        "--offline", "--prefer-offline", "--prefer-online", "--legacy-peer-deps", "--strict-peer-deps",
+        "--no-save", "--no-audit", "--no-fund", "--foreground-scripts", "--no-color", "--unicode", "--progress",
+        "--no-progress", "--usage", "-h", "-H", "-?", "--help", "-v", "--version", "--all", "-a", "--production",
+        "--global-style", "--no-package-lock", "--package-lock-only", "--install-links", "--audit", "--fund",
+        "--update-notifier", "--no-update-notifier", "--timing", "--no-bin-links", "--bin-links"}),
+    "pnpm": frozenset({
+        "-w", "--workspace-root", "-r", "--recursive", "-g", "--global", "-D", "--save-dev", "-P", "--save-prod",
+        "-O", "--save-optional", "-E", "--save-exact", "-s", "--silent", "--stream", "--parallel", "--no-bail",
+        "--bail", "--if-present", "--frozen-lockfile", "--no-frozen-lockfile", "--prefer-offline", "--offline",
+        "--shamefully-hoist", "--ignore-scripts", "--json", "--long", "-h", "--help", "-v", "--version",
+        "--include-workspace-root", "--color", "--no-color", "--sort", "--no-sort", "--reverse", "--use-stderr",
+        "--prod", "--dev", "--no-optional", "-c", "--shell-mode", "--yes", "-y"}),
+    "yarn": frozenset({
+        "-s", "--silent", "--verbose", "--offline", "--prefer-offline", "--frozen-lockfile", "--pure-lockfile",
+        "--ignore-scripts", "--ignore-engines", "--ignore-optional", "--ignore-platform", "--json", "--no-progress",
+        "--non-interactive", "--production", "--prod", "--flat", "--force", "-W", "--ignore-workspace-root-check",
+        "-D", "--dev", "-P", "--peer", "-O", "--optional", "-E", "--exact", "-T", "--tilde", "-h", "--help",
+        "-v", "--version", "--no-lockfile", "--check-files", "--no-bin-links", "--har", "--no-default-rc",
+        "--skip-integrity-check", "--update-checksums", "--focus", "--no-node-version-check", "--no-color"}),
+    "bun": frozenset({
+        "-g", "--global", "--dev", "-D", "--development", "--optional", "--peer", "-E", "--exact",
+        "--production", "--frozen-lockfile", "--dry-run", "--force", "-f", "--silent", "--verbose", "--no-save",
+        "--save", "--ignore-scripts", "--bun", "-b", "--watch", "--hot", "--smol", "--no-install", "-i",
+        "--prefer-offline", "--prefer-latest", "--if-present", "--no-clear-screen", "-h", "--help", "-v",
+        "--version", "--trust", "--yarn", "-y", "--no-summary", "--no-verify", "--no-cache", "--only-missing",
+        "--lockfile-only", "--parallel", "--sequential"}),
+}
+"""Flag-only options of each package manager: the next word is the subcommand (or the next option)."""
+
+
+def _pm_subcmd_scan(args: list, pm: Optional[str]) -> Optional[str]:
+    """The package manager's subcommand word before `--`, skipping the values of its value-taking options; "?"
+    when a known subcommand word directly follows an option whose value-ness is unknown (it may be that option's
+    value); None when no known subcommand word is found. For an unknown package manager (`pm` None) every table
+    counts, and an option any of them takes a value for skips its next word."""
+    head = args[:args.index("--")] if "--" in args else args
+    known_words = _PM_SUBCMDS | _PM_EXEC_SUBCMDS
+    if pm in _PM_VALUE_OPTS:
+        value_opts, flag_opts = _PM_VALUE_OPTS[pm], _PM_FLAG_OPTS[pm]
+    else:
+        value_opts = frozenset().union(*_PM_VALUE_OPTS.values())
+        flag_opts = frozenset().union(*_PM_FLAG_OPTS.values()) - value_opts
+    i = 0
+    while i < len(head):
+        t = head[i]
+        if t.startswith("-") and len(t) > 1:
+            if "=" in t:
+                i += 1
+            elif t in value_opts:
+                i += 2
+            elif t not in flag_opts and i + 1 < len(head) and head[i + 1] in known_words:
+                return "?"  # `--unknown install exec -- ...`: `install` may be the option's value
+            else:
+                i += 1
+            continue
+        if t in known_words:
+            return t
+        i += 1
+    return None
+
+
+def _pm_exec_family(args: list, pm: Optional[str] = None) -> bool:
+    """True if the package manager's subcommand runs a nested command: `exec`, `x`, `dlx`, or bun's `run` (which
+    can run a binary on PATH, so it is read fail-closed). The subcommand is the first known subcommand word before
+    `--` that is no option's value (`npm --prefix install exec` runs `exec`); a known word right after an option
+    whose value-ness is unknown fails closed (exec-family). With no known word, any exec word counts."""
+    sub = _pm_subcmd_scan(args, pm)
+    if sub == "?":
+        return True
+    if sub is not None:
+        return sub in _PM_EXEC_SUBCMDS or (sub == "run" and pm in ("bun", None))
+    head = args[:args.index("--")] if "--" in args else args
+    return any(t in _PM_EXEC_SUBCMDS for t in head if t and not t.startswith("-"))
+
+
+_PM_DASHDASH_SUBCMDS = {
+    "npm": frozenset({
+        "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
+        "ci", "clean-install", "ic", "install-clean", "isntall-clean", "uninstall", "unlink", "un", "remove", "rm",
+        "r", "update", "up", "upgrade", "udpate", "link", "ln"}),
+    "pnpm": frozenset({
+        "install", "i", "add", "update", "up", "upgrade", "remove", "rm", "uninstall", "un", "link", "ln",
+        "unlink"}),
+}
+"""The install-family subcommands after which the package manager itself stops reading its flags at `--`. Only
+npm and pnpm are listed; yarn and bun read every argument."""
+
+
+def _pm_dashdash_ends_flags(args: list, pm: Optional[str]) -> bool:
+    """True only if the package manager's first non-option word before `--` is positively an install-family
+    subcommand of that package manager (_PM_DASHDASH_SUBCMDS), every option before it known to the package
+    manager's tables (a value option's next word skipped). Then the package manager itself parses `--` and the
+    words after it are not its flags. Anything else (an unknown option or first word, a script runner, `run`,
+    `test`, `exec`, pnpm's implicit exec of a binary, yarn, bun) is False: its argv after `--` is forwarded to
+    something that may read it, so every argument is read."""
+    if pm not in _PM_DASHDASH_SUBCMDS or "--" not in args:
+        return False
+    head = args[:args.index("--")]
+    value_opts, flag_opts = _PM_VALUE_OPTS[pm], _PM_FLAG_OPTS[pm]
+    i = 0
+    while i < len(head):
+        t = head[i]
+        if t.startswith("-") and len(t) > 1:
+            if t in value_opts:
+                i += 2
+            elif t in flag_opts or ("=" in t and t.split("=", 1)[0] in value_opts | flag_opts):
+                i += 1
+            else:
+                return False
+            continue
+        return t in _PM_DASHDASH_SUBCMDS[pm]
+    return False
+
+
+_PM_SCRIPTS = {"npm-cli.js": "npm", "npm-cli.cjs": "npm", "npm-cli.mjs": "npm", "pnpm.cjs": "pnpm",
+               "pnpm.js": "pnpm", "pnpm.mjs": "pnpm", "yarn.js": "yarn", "yarn.cjs": "yarn", "npm.cmd": "npm",
+               "npm.exe": "npm", "pnpm.cmd": "pnpm", "pnpm.exe": "pnpm", "yarn.cmd": "yarn", "yarn.exe": "yarn",
+               "bun.exe": "bun"}
+_PM_RUNNER_SCRIPTS = {"npx-cli.js": "npx", "npx.cmd": "npx", "pnpx.cmd": "pnpx", "bunx.exe": "bunx"}
+
+
+def _pm_word(t: str) -> tuple:
+    """(kind, name) for a word that runs a package manager ("pm") or an exec runner ("runner"), in every spelling
+    that runs one: a bare or path name (`npm`, `/usr/local/bin/npm`), a version-pinned package spec (`npm@10`,
+    `npm@latest`), or the package manager's own script (`npm-cli.js`, `pnpm.cjs`, `yarn.js`, run directly or as
+    `node <path>`). Else (None, None)."""
+    base = os.path.basename(t)
+    if "@" in base and not base.startswith("@"):
+        base = base.split("@", 1)[0]
+    if base in PKG_MANAGERS:
+        return "pm", base
+    if base in _PM_EXEC_RUNNERS:
+        return "runner", base
+    if base in _PM_SCRIPTS:
+        return "pm", _PM_SCRIPTS[base]
+    if base in _PM_RUNNER_SCRIPTS:
+        return "runner", _PM_RUNNER_SCRIPTS[base]
+    return None, None
+
+
+def _pm_nested_global(tokens: list, depth: int = 0) -> bool:
+    """True if a nested invocation (the argv an exec-family subcommand runs, or a
+    `-c` string) runs a package manager as a global op: a package-manager word in
+    any spelling (_pm_word: `npm`, `npm@10`, `npm-cli.js`, `node <path>/npm-cli.js`)
+    whose own arguments are global (`npm exec -- npm i -g x`), an exec runner
+    (`npx`) whose nested argv is, or a string word (`sh -c 'npm i -g x'`) read
+    the same way."""
+    if depth > 4:
+        return True  # nested past the bound: fail closed
+    for i, t in enumerate(tokens):
+        if t is None:
+            continue
+        kind, name = _pm_word(t)
+        if kind == "pm":
+            return _pm_global_args(tokens[i + 1:], depth + 1, name)
+        if kind == "runner":
+            return _pm_nested_global(_pm_runner_argv(tokens[i + 1:]), depth + 1)
+        if any(c.isspace() for c in t) and _pm_nested_global(_safe_shlex(t), depth + 1):
+            return True
+    return False
+
+
+def _pm_runner_argv(tokens: list) -> list:
+    """The argv an exec runner (`npx`) runs: everything after its own `--`, else
+    from its first non-option word."""
+    if "--" in tokens:
+        return tokens[tokens.index("--") + 1:]
+    for i, t in enumerate(tokens):
+        if t and not t.startswith("-"):
+            return tokens[i:]
+    return []
+
+
+def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> bool:
+    """True if a package manager's own arguments make it a global op: `-g`,
+    `--global`, `--global=<true>`, a short cluster holding `g` (`-gD`),
+    `--location=global` / `--location global` (or npm's unique abbreviations
+    `--locat` .. `--locatio`), a `global` subcommand (yarn), or a persistent
+    `config set global <true>` / `set location=global`. Arguments after `--` are
+    read too, except after an install-family subcommand of npm / pnpm that the
+    scan positively identifies (_pm_dashdash_ends_flags: `npm i x -- -g` is not
+    global); a script runner, `run`, `test`, an unknown first word (pnpm's
+    implicit exec, yarn / bun local binaries) forwards them to a command that may
+    run a package manager. For an exec-family
+    subcommand (`npm exec` / `x`, `pnpm exec` / `dlx`, `yarn exec` / `dlx`) they
+    are the nested command it runs, read as a nested invocation, as is npm's
+    `-c` / `--call` string, and so is bun's `run` argv. `pm` names the package
+    manager, whose option table finds the subcommand past option values; None
+    reads every table."""
+    args = [a if a is not None else "" for a in args]
+    if _pm_exec_family(args, pm):
+        nested = args[args.index("--") + 1:] if "--" in args else []
+        if nested:
+            # `npm exec npm@10 -- i -g x`: the command word may stand before `--`, its argv after it
+            head = args[:args.index("--")]
+            k = next((j for j, t in enumerate(head) if t in _PM_EXEC_SUBCMDS or t == "run"), None)
+            if k is not None:
+                nested = head[k + 1:] + nested
+        calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in ("-c", "--call")]
+        calls += [t.split("=", 1)[1] for t in args if t.startswith(("--call=", "-c="))]
+        if _pm_nested_global(nested, depth) or any(_pm_nested_global(_safe_shlex(c), depth + 1) for c in calls):
+            return True
+    if _pm_dashdash_ends_flags(args, pm):
+        args = args[:args.index("--")]
+    for i, t in enumerate(args):
+        if t in ("-g", "--global"):
+            return True
+        if re.fullmatch(r"-[A-Za-z]{2,}", t) and "g" in t[1:]:
+            return True
+        if t.startswith(("--global=", "-g=")) and _pm_config_true(t.split("=", 1)[1]):
+            return True
+        m = re.fullmatch(r"--locat(?:i(?:on?)?)?(=(.*))?", t)
+        if m and (m.group(2) == "global" if m.group(1) is not None
+                  else i + 1 < len(args) and args[i + 1] == "global"):
+            return True
+    if args[:1] == ["global"]:  # `yarn global add <pkg>`
+        return True
+    words = [t for t in args if not t.startswith("-")]
+    if "set" in words[:2] and (words[0] in ("config", "c", "set")):
+        rest = words[words.index("set") + 1:]
+        i = 0
+        while i < len(rest):  # `key=value` or `key value` pairs
+            if "=" in rest[i]:
+                if _pm_global_setting(*rest[i].split("=", 1)):
+                    return True
+                i += 1
+                continue
+            if _pm_global_setting(rest[i], rest[i + 1] if i + 1 < len(rest) else "true"):
+                return True
+            i += 2
+    return False
+
+
+_PM_ENV_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+
+
+def _p7_global_env(command: str) -> Optional[Verdict]:
+    """A package manager run as a global op through its environment or its flags,
+    read through the shared parser (wrappers, `bash -c`, `eval` peeled): a prefix
+    or `env` assignment of `npm_config_global` / `npm_config_location` (any case),
+    one set earlier in the same text (`export`, `declare -x`, a bare assignment),
+    a `sudo VAR=value` operand, or a global flag form P7's token match misses."""
+    script = _sp.parse(command)
+    shell_env: dict = {}
+    for site in _sp.walk(script):
+        cmd = site.cmd
+        if not isinstance(cmd, _sp.SimpleCommand):
+            continue
+        r = _sp.resolve(cmd)
+        if not cmd.words:
+            for a in cmd.assignments:
+                shell_env[a.name] = a.static_value()
+            continue
+        name = r.name or ""
+        args = r.argv()
+        if name == "unset":
+            for w in args:
+                if w is not None and not w.startswith("-"):
+                    shell_env.pop(w, None)
+            continue
+        if name in _PM_ENV_SETTERS:
+            for w in args:
+                if w is not None and "=" in w and not w.startswith("-"):
+                    k, v = w.split("=", 1)
+                    shell_env[k] = v
+            continue
+        env = dict(shell_env)
+        env.update({a.name: a.static_value() for a in r.assignments})
+        while name and "=" in name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", name):
+            k, v = name.split("=", 1)
+            env[k] = v
+            name = os.path.basename(args[0] or "") if args else ""
+            args = args[1:]
+        env_global = any(_pm_global_setting(k, v) for k, v in env.items()
+                         if k.lower().startswith("npm_config_"))
+        if name not in PKG_MANAGERS:
+            # a package manager in another spelling run as the command: `npx npm@10 i -g x`, `npm@10` on PATH,
+            # `npm-cli.js i -g x`, `node <path>/npm-cli.js i -g x`
+            lead = None
+            if _pm_word(name)[0]:
+                lead = [name] + [a or "" for a in args]
+            elif name in ("node", "nodejs"):
+                k = next((j for j, a in enumerate(args) if a and not a.startswith("-")), None)
+                if k is not None and _pm_word(args[k])[0]:
+                    lead = [a or "" for a in args[k:]]
+            if lead is not None and (env_global and _pm_word(lead[0])[0] == "pm" or _pm_nested_global(lead)):
+                return _block("P7", "global package install/link")
+            # `NPM_CONFIG_GLOBAL=true bash -c 'npm i x'`: the prefix reaches the nested shell's package manager
+            if env_global and r.payload is not None and any(
+                    isinstance(s.cmd, _sp.SimpleCommand) and _sp.resolve(s.cmd).name in PKG_MANAGERS
+                    for s in _sp.walk(r.payload)):
+                return _block("P7", "global package install/link (npm_config_global/location in its environment)")
+            continue
+        if env_global:
+            return _block("P7", "global package install/link (npm_config_global/location in its environment)")
+        if _pm_global_args([a or "" for a in args], pm=name):
+            return _block("P7", "global package install/link")
+    return None
+
+
 def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
     gbins = cfg.get("protected_global_bins", [])
     for sc in simple_cmds:
@@ -2694,7 +2986,7 @@ def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
             continue
         _, head, rest = cw[0]
         if head in PKG_MANAGERS:
-            is_global = any(t in ("-g", "--global") for t in rest)
+            is_global = _pm_global_args([_strip_quotes(t) for t in rest], pm=head)
             is_link = any(t in ("link", "unlink") for t in rest)
             if is_global or is_link:
                 return _block("P7", "global package install/link")
@@ -4411,7 +4703,7 @@ def _anchor_globalbin_hits(sc: str, tokens: list, exec_toks: list,
         # `link` that belongs to the pm — not an unrelated wrapper option — is what
         # is matched (mirrors P7 reading the pm's `rest`).
         own = [_strip_quotes(t) for t in tokens[pm_pos + 1:]]
-        is_global = any(t in ("-g", "--global") for t in own)
+        is_global = _pm_global_args(own, pm=os.path.basename(_strip_quotes(tokens[pm_pos])))
         is_link = any(t in ("link", "unlink") for t in own)
         if is_global or is_link:
             return True
@@ -4472,14 +4764,14 @@ def _anchor_build_hits_protected(tokens: list, exec_toks: list, cfg: dict,
     # protected bundle, so a sibling-package build under a wrapper at the repo
     # root still ALLOWS (no over-block). ONLY input-project flags (`-p`/`--project`
     # /`--tsconfig`/`--config`) exempt — an OUTPUT flag (`--outdir`/`-o`) names
-    # where output goes, NOT what is built, so it must NOT exempt (codex finding).
+    # where output goes, NOT what is built, so it must NOT exempt.
     if _anchor_explicit_nonprotected_input(raw_tokens, cfg, cwd, cwd_det):
         return False
     # An EXPLICIT workspace selector naming a KNOWN non-protected workspace proves
     # the build targets that workspace (not the protected bundle), so the
     # cwd-based fallback must not over-block `<wrapper> yarn workspace <non-prot>
     # build` at the monorepo root. A RECURSIVE/MULTI/glob selector fans into EVERY
-    # workspace (incl. the protected one), so it does NOT exempt (codex finding).
+    # workspace (incl. the protected one), so it does NOT exempt.
     if _anchor_nonprotected_workspace_selector(tokens, cfg):
         return False
     if _cwd_in_protected_build_scope(cwd, cwd_det, cfg):
@@ -4530,31 +4822,18 @@ def _anchor_explicit_nonprotected_input(tokens: list, cfg: dict,
 
 # ── Top-level evaluate ───────────────────────────────────────────────────────
 
-def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
+def evaluate(command: str, cwd_base: Optional[str] = None, cfg: Optional[dict] = None) -> Verdict:
+    """The verdict on `command`; `cfg`, when given, replaces the data file (bash-safety's daemon rule passes one)."""
     if command is None:
         return ALLOW
     if len(command) > MAX_COMMAND_CHARS:
         # oversized -> fail closed conservatively (treat as indeterminate)
         return _block("STEP1", "oversized command (fail-closed)")
-    # Normalize the bash force-clobber redirect `>|` to plain `>` BEFORE pipeline
-    # splitting. `>|` is a WRITE redirect (noclobber-override), NOT a pipe, but the
-    # `|` would otherwise make `_split_pipeline` mis-split `echo x >| <path>` into
-    # two segments and lose the redirect target — letting a clobber-write to a
-    # protected bundle / statefile / data file leak past every redirect-based
-    # guard (W6/W7/STEP0). Covers fd-prefixed forms (`1>|`, `2>|`, `&>|`). Generic
-    # bash syntax normalization — no project names.
-    command = re.sub(r"((?:&|\d+)?>>?)\|", r"\1", command)
-    # Neutralize compound-group delimiters `( ) { }` so grouped launches/builds
-    # decompose into ordinary simple commands (bare `$(`/`${` are preserved).
-    norm_command = _strip_compound_delims(command)
-    simple_cmds = _split_pipeline(norm_command)
+    groups = _pipeline_groups(command)
+    simple_cmds = [sc for g in groups for sc in g]
     if not simple_cmds:
         return ALLOW
     simple_cmds = _unwrap_corepack(simple_cmds)
-    # Pipeline GROUPS preserve `|` connectivity for cross-segment primitives
-    # (P5 endpoint, P6 prockill). Command-substitution contents are retained for
-    # inspection (the compound-strip leaves `$(...)` intact).
-    groups = _pipeline_groups(norm_command)
 
     # STEP 0 — config self-protection FIRST (before config load). Run against the
     # ORIGINAL simple commands so a self-protection mutation hidden behind a
@@ -4591,27 +4870,51 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     # family still blocks even when the data file is absent/corrupt (a benign
     # payload re-evaluates to ALLOW, so this never over-blocks).
     for payload, pcwd, pcwd_det in frontend_payloads:
-        if payload and payload not in (command, norm_command):
-            pv = evaluate(payload, pcwd if pcwd_det else None)
+        if payload and payload != command:
+            pv = evaluate(payload, pcwd if pcwd_det else None, cfg)
+            if pv[0] == "BLOCK":
+                return pv
+
+    # The code a shell `-c`, `eval` or a fed shell runs (`bash -c "…"`, `sh <<EOF`,
+    # `cat <<EOF | sh`), behind any wrapper the parser peels, is evaluated like any
+    # command. A payload whose text is computed is left to the rules above.
+    script = _sp.parse(command)
+    shell_code = [r.payload.source for r in map(_sp.resolve, _sp.iter_commands(script, into=()))
+                  if r.payload_kind in ("shell_c", "eval", "heredoc_shell") and r.unresolved is None]
+    shell_code += [site.script.source for site in _sp.walk(script, into=("pipe_shell",))
+                   if site.context == ("top", "pipe_shell")]
+    for payload in dict.fromkeys(shell_code):
+        if payload != command:
+            pv = evaluate(payload, cwd_base, cfg)
             if pv[0] == "BLOCK":
                 return pv
 
     # STEP 1 — load config; fail closed if unavailable.
-    cfg = _load_config()
+    cfg = cfg if cfg is not None else _load_config()
     if cfg is None:
         # fail-closed must also see the peeled tails (a front-end-wrapped danger
-        # family under an absent/corrupt config still blocks).
-        return _step1_indeterminate(simple_cmds)
+        # family under an absent/corrupt config still blocks). The refusal names the
+        # file's defect and its recovery (config._config_problem), so a drifted file
+        # is repairable from the message instead of wedging every node/npm command.
+        v = _step1_indeterminate(simple_cmds)
+        if v[0] == "BLOCK":
+            try:
+                why = _config._config_problem()
+            except Exception:  # noqa: BLE001 - the diagnosis is advisory; the block stands
+                why = ""
+            if why:
+                v = _block(v[1], "%s. %s" % (v[2], why))
+        return v
 
     # Runner `-c`/`--call` payloads are shell commands the runner executes —
     # recursively evaluate each under the same cwd so a daemon launch / protected
     # build hidden inside the payload is caught (a benign payload re-evaluates to
     # ALLOW, so this does not over-block).
     for payload, pcwd, pcwd_det in _runner_call_payloads(simple_cmds, cfg, cwd_base):
-        if payload and payload not in (command, norm_command):
+        if payload and payload != command:
             # recurse under the runner's effective cwd (None when indeterminate,
             # which makes relative launch/build payloads fail closed downstream)
-            pv = evaluate(payload, pcwd if pcwd_det else None)
+            pv = evaluate(payload, pcwd if pcwd_det else None, cfg)
             if pv[0] == "BLOCK":
                 return pv
 
@@ -4643,10 +4946,9 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
         return v
     # cross-segment primitives operate on pipeline GROUPS. Build the post-config
     # Context snapshot carrying the SAME per-evaluation inputs P5/P6 read (the
-    # live `groups` + `cfg` formerly passed positionally, plus `cwd_base` +
-    # `simple_cmds` so the snapshot is complete/consistent) and order P5/P6 over
-    # it. cfg is loaded (non-None) here, groups/simple_cmds reflect any front-end
-    # peel above — a fresh snapshot, never a stale pre-peel one (INV-6/INV-7).
+    # live `groups` + `cfg`, plus `cwd_base` + `simple_cmds` so the snapshot is
+    # complete/consistent) and order P5/P6 over it. cfg is loaded (non-None) here,
+    # groups/simple_cmds reflect any front-end peel above — a fresh snapshot, never a stale pre-peel one (INV-6/INV-7).
     p5p6_ctx = Context(cwd_base=cwd_base, simple_cmds=simple_cmds, groups=groups, cfg=cfg)
     v = _p5_endpoint(p5p6_ctx)
     if v is not None:
@@ -4655,6 +4957,9 @@ def evaluate(command: str, cwd_base: Optional[str] = None) -> Verdict:
     if v is not None:
         return v
     v = _p7_globalbin(simple_cmds, cfg)
+    if v is not None:
+        return v
+    v = _p7_global_env(command)
     if v is not None:
         return v
 

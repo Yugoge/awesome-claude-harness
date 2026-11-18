@@ -230,7 +230,7 @@ def test_the_text_reaches_the_agent_as_posttool_additional_context(tmp_path, hou
     lines = text.split("\n")
     if hours > 0:
         assert lines[0] == "OVERNIGHT LOOP: Cycle 1 complete (PM retro filed). Starting cycle 2."
-        assert "INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again." in lines
+        assert "INSTRUCTIONS: Reset your todo list to all-pending, then mark Step 0 and Step 1 completed." in lines
         assert lines[-1] == ("Resume from Step 2 (exploration) -- Step 1 setup is already done, and the wake"
                              " Step 0 scheduled still runs (no second CronCreate).")
     else:
@@ -252,3 +252,63 @@ def test_nothing_to_say_prints_nothing(tmp_path):
     payload["tool_input"]["todos"][-1]["status"] = "in_progress"
     result = _run_loop(payload, project_dir, home)
     assert result.returncode == 0 and result.stdout == ""
+
+
+# --------------------------------------------------------------------------
+# Only the orchestrator's own list: a subagent's payload is a no-op.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("hours", [1, -1])
+def test_a_subagents_all_completed_list_is_not_the_orchestrators(tmp_path, hours):
+    """A subagent's hook payload carries its parent's session_id plus its own
+    agent_id (lib/overnight.py's module docstring), so locate() reaches the
+    orchestrator's record from it. A built-in or plugin agent allowed TodoWrite
+    finishing its own list must get neither the cycle reset nor the
+    session-complete note: empty stdout, exit 0. The same payload without
+    agent_id (the orchestrator's) still gets the text."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    session_id = "overnight-sess-subagent"
+    state_path = _state_path(project_dir, session_id)
+    fx.write_overnight_state(state_path, session_id, cycle_count=1, end_time_minutes_from_now=60 * hours)
+    _retro_reports(project_dir, session_id, 1)
+    payload = fx.all_completed_todo_payload(session_id, transcript_path="")
+
+    orchestrator = _run_loop(payload, project_dir, home)
+    assert orchestrator.returncode == 0 and _said(orchestrator)
+
+    result = _run_loop({**payload, "agent_id": "a1b2c3d4e5f6a7b8c"}, project_dir, home)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_continuation_names_one_resume_step_step_2(tmp_path):
+    """The continuation names one resume point. commands/dev-overnight.md Step 21:
+    "reset all todos to pending ..., mark Step 0 (the wake still runs) and Step 1
+    completed, and resume from Step 2 (the working root exists)"; the hook's
+    docstring: "reset its own todos and resume from Step 2". No line may tell the
+    agent to begin Step 1 again (re-running setup in a live session), and the
+    hook still writes no state."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    session_id = "overnight-sess-resume-step"
+    state_path = _state_path(project_dir, session_id)
+    fx.write_overnight_state(state_path, session_id, cycle_count=2)
+    _retro_reports(project_dir, session_id, 2)
+    before = state_path.read_bytes()
+
+    result = _run_loop(fx.all_completed_todo_payload(session_id, transcript_path=""), project_dir, home)
+
+    assert result.returncode == 0 and result.stderr == ""
+    text = _said(result)
+    assert "begin Step 1" not in text
+    assert ("INSTRUCTIONS: Reset your todo list to all-pending, then mark Step 0 and Step 1"
+            " completed.") in text.split("\n")
+    assert "Resume from Step 2 (exploration)" in text
+    assert state_path.read_bytes() == before

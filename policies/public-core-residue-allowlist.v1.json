@@ -43,6 +43,20 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"\"public-core\": several `public-core` files still carry deferred `<author-path>` leaks (roadmap\""
     },
     {
+      "path": "docs/ENFORCEMENT-LEDGER.md",
+      "fingerprint": "1835cb91f5954c57",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "H-027 ledger row quoting, verbatim, the synthetic local-file-URL commands the bash-safety sensitive-name tests feed the hook; prose, never read as a path at runtime."
+    },
+    {
+      "path": "docs/ENFORCEMENT-LEDGER.md",
+      "fingerprint": "e86641f04513251f",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Ledger row quoting the Claude Code permissions documentation verbatim (that page's own absolute-path example, a fictional user); prose, never read as a path at runtime."
+    },
+    {
       "path": "docs/reference/roadmap-decomposition-productization.md",
       "fingerprint": "10b0f05e3268340d",
       "ordinal": 1,
@@ -132,97 +146,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# ── Build an isolated, ephemeral demo home (NOT under <author-path>, NOT /dev/shm) ────\""
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "1da6204af394735a",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "2c72294eb66b4511",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "360cbe4a6b951fb3",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "3823a164fbb97698",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# <author-path>, when HOME is unset (a fresh non-root clone).\""
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "5224cbbabb5778fe",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "5aaa4b3239004d0e",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "5aaa4b3239004d0e",
-      "ordinal": 2,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "759f6204bf4e85b6",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "802b27347f1840b7",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "b7c1ec794aeef56a",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "d64ab1c4407c1aef",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "f24165754363c4db",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/bash_write_targets.py",
-      "fingerprint": "fcb2f705a695d557",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
       "path": "hooks/lib/claude_home.py",
@@ -380,13 +303,6 @@
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "7ef21dc1e2edd890",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# literal <author-path>, so a fresh non-root home resolves its own config path.\""
-    },
-    {
-      "path": "hooks/lib/runtime_guard/config.py",
       "fingerprint": "8d3cac90d32f6a28",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
@@ -412,13 +328,6 @@
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "def _home_tilde_variant() — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "dbbb031132a3b17e",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Generic (WS1 codex #4 — no ``<author-path>``-specific branch): on a non-root home\""
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
@@ -498,13 +407,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# harness home -> cwd), never the author literal <author-path>.\""
     },
     {
-      "path": "hooks/pretool-bash-safety.sh",
-      "fingerprint": "c31356b145e8f0ee",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "_any_git_has_subcmd() — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "hooks/pretool-cp-checkin.py",
       "fingerprint": "274a66e8ff5d5c66",
       "ordinal": 1,
@@ -566,6 +468,90 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# location), instead of the author literal <author-path>. The loud-fail guard is\""
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "1276d3d7c9b75471",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "15acb43e8b453df5",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "565155e5c96bd568",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "5dec172164108b1d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "63c40ebb748a8ca2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "9ae3b20712c415aa",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "a8f75acda967d1be",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "aa318d7115b83a39",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "ab5bfe6d45d2d181",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "ca3925e9af302b95",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "d3532db490a4dba2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
+    },
+    {
+      "path": "hooks/tests/test_bash_safety_sensitive_names.py",
+      "fingerprint": "ff03637ec96912a8",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic local-file URL under a fictional user home or the superuser home fed to the bash-safety hook or is_sensitive_name as test input; the literal is the shell operand under test (an angle-bracket or $HOME placeholder would change how the shell command parses), never a real location."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1177,6 +1163,20 @@
       "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
+      "path": "tests/test_home_secret_denies.py",
+      "fingerprint": "596052ed18c73365",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic absolute home spelling the test pairs with `~/` and `$HOME/` to prove each spelling of a home secret path is denied; the literal absolute form is the case under test, never a real location."
+    },
+    {
+      "path": "tests/test_home_secret_denies.py",
+      "fingerprint": "e1ce64c8552fa294",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic absolute home spelling the test pairs with `~/` and `$HOME/` to prove each spelling of a home secret path is denied; the literal absolute form is the case under test, never a real location."
+    },
+    {
       "path": "tests/test_landing.py",
       "fingerprint": "698e2ca745682dcf",
       "ordinal": 1,
@@ -1301,6 +1301,20 @@
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_scratch_permissions.py",
+      "fingerprint": "d70d2c6f24e03150",
+      "ordinal": 1,
+      "class": "doctest_or_docstring_example",
+      "rationale": "Module docstring quoting the Claude Code permissions documentation verbatim (that page's own example of an absolute path rule, a fictional user); never read as a path."
+    },
+    {
+      "path": "tests/test_scratch_permissions.py",
+      "fingerprint": "e4ba8b13168585f9",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic project working directory under a fictional user home for the permission-rule model; the scratchpad slug the test derives from it must match, never a real location."
     }
   ]
 }

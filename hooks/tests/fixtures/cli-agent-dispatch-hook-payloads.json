@@ -1,0 +1,337 @@
+{
+ "_doc": "Payloads the CLI handed to PreToolUse/PostToolUse hooks when the main agent dispatched one subagent, recorded live (claude -p, throwaway HOME, logging hooks registered with no matcher, matcher 'Agent' and matcher 'Task'). Session ids, paths and the subagent's agentId are dropped; every other field is as recorded. Re-record with the procedure in hooks/tests/test_agent_tool_name_pin.py.",
+ "cli_version": "2.1.326",
+ "recorded": "2026-11-17",
+ "runs": [
+  {
+   "run": "agent",
+   "asked": "dispatch with the Agent tool",
+   "transcript_tool_use_names": [
+    "Agent"
+   ],
+   "hook_payloads": [
+    {
+     "registration_matcher": "*",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with the single word OK and nothing else. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    {
+     "registration_matcher": "Agent",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with the single word OK and nothing else. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    {
+     "registration_matcher": "Task",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with the single word OK and nothing else. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    {
+     "registration_matcher": "*",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with the single word OK and nothing else. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ],
+     "tool_response_status": "completed",
+     "tool_response_agentType": "general-purpose"
+    },
+    {
+     "registration_matcher": "Agent",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with the single word OK and nothing else. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ],
+     "tool_response_status": "completed",
+     "tool_response_agentType": "general-purpose"
+    },
+    {
+     "registration_matcher": "Task",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with the single word OK and nothing else. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ],
+     "tool_response_status": "completed",
+     "tool_response_agentType": "general-purpose"
+    }
+   ]
+  },
+  {
+   "run": "task-alias",
+   "asked": "emit a tool_use whose name is literally Task",
+   "transcript_tool_use_names": [
+    "Task"
+   ],
+   "hook_payloads": [
+    {
+     "registration_matcher": "*",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with OK. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    {
+     "registration_matcher": "Agent",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with OK. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    {
+     "registration_matcher": "Task",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with OK. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+     ]
+    },
+    {
+     "registration_matcher": "*",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with OK. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ],
+     "tool_response_status": "completed",
+     "tool_response_agentType": "general-purpose"
+    },
+    {
+     "registration_matcher": "Agent",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with OK. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ],
+     "tool_response_status": "completed",
+     "tool_response_agentType": "general-purpose"
+    },
+    {
+     "registration_matcher": "Task",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "probe",
+      "prompt": "Reply with OK. Use no tools.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+     },
+     "keys": [
+      "cwd",
+      "duration_ms",
+      "effort",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "scratchpad_dir",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+     ],
+     "tool_response_status": "completed",
+     "tool_response_agentType": "general-purpose"
+    }
+   ]
+  }
+ ]
+}

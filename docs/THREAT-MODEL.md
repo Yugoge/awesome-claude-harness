@@ -188,33 +188,20 @@ status: PARTIALLY MITIGATED
 
 status: MITIGATED
 
-- **Description**: the harness maintains two independently hand-authored regex engines for
-  detecting git commands.
-  `GIT_COMMAND_RE` at `hooks/pretool-git-privilege-guard.py:145 @4c33f2f5` is the Python `re`
-  pattern; `GIT_CMD_RE` at `hooks/pretool-bash-safety.sh:1654 @4c33f2f5` is the POSIX ERE used
-  by `grep -E`. Editing one without the other creates an asymmetric bypass. Both engines still
-  exist as separate hand-authored patterns. Their current definitions are:
-  - Python: `GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'`
-  - POSIX ERE: `GIT_CMD_RE='(^|[[:space:];&|()`])git'`
-- **Risk**: any future edit to one regex without updating the other creates an asymmetric
-  bypass — commands blocked by one guard but not the other can be routed through the unpatched
-  engine. Both anchor classes still lack the `/` character, which is one dimension of RISK-3.
-- **What actually mitigated it — and what did not.** Consolidation into a single engine **did
-  not occur**, and the earlier plan to perform one has been withdrawn from this entry rather
-  than left standing as an aspiration. What closed the drift risk is the originally-planned
-  cross-consistency test: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5` (added
-  `407888c4`) runs a shared corpus against both engines *and* against
-  `hooks/lib/git_command_classifier.py:1 @4c33f2f5`, asserting agreement, with accepted
-  divergences marked `xfail`. Drift between the two engines now fails a test instead of opening
-  a silent hole.
-- **Note on the classifier's role**: `hooks/lib/git_command_classifier.py:1 @4c33f2f5` is a
-  *supplementary augmentation layer* consulted by both guard sites for path-qualified forms. It
-  is not a replacement for either regex, and describing it as one would be the same overclaim
-  this section exists to remove.
-- **Standing guard**: `scripts/check-enforcement-evidence.py --claims` asserts both symbols
-  still exist on every CI run, so a future consolidation invalidates this prose loudly instead
-  of outdating it quietly.
-- **Verifying test**: `hooks/tests/test_git_cmd_cross_consistency.py:1 @4c33f2f5`.
+- **Description**: two independently hand-authored regex engines detected git commands:
+  `GIT_COMMAND_RE` in `hooks/pretool-git-privilege-guard.py` (Python `re`) and `GIT_CMD_RE` in
+  `hooks/pretool-bash-safety.sh` (POSIX ERE). Editing one without the other creates an asymmetric
+  bypass.
+- **What mitigated it**: bash-safety no longer holds a git regex. Its git rules read the
+  classifier's invocations (`hooks/lib/bash_safety_rules.py`), and the rules that read
+  `GIT_CMD_RE` (force/delete push, direct ref mutation) are the privilege guard's alone. The one
+  remaining engine is `GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'`; its
+  anchor class still lacks the `/` character, which is one dimension of RISK-3.
+  `hooks/tests/test_git_cmd_cross_consistency.py` runs a shared corpus against it and
+  `hooks/lib/git_command_classifier.py`, with accepted divergences marked `xfail`.
+- **Standing guard**: `scripts/check-enforcement-evidence.py --claims` fails if bash-safety defines
+  `GIT_CMD_RE` again or the privilege guard's anchor class changes.
+- **Verifying test**: `hooks/tests/test_git_cmd_cross_consistency.py`.
 
 ### RISK-3: Wrapper-Flag and Leading-Redirection Prefixes Defeat Git-Command Detection
 

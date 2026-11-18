@@ -1861,3 +1861,30 @@ def test_a2_a_fully_unwired_install_is_not_provable_from_the_harness_home(home: 
                        text=True, env=env, cwd=str(home), timeout=300, check=False)
     assert r.returncode == 4, r.stdout + r.stderr
     assert "not_wired" not in r.stdout
+
+
+def test_the_prescribed_in_session_call_passes_the_harness_background_hook(tmp_path: Path):
+    """The in-session action names a route the harness allows: the exact background
+    Bash it prescribes is refused without /do and passes with /do consent this turn."""
+    mod = _strict_mod()
+    assert "/do" in mod.IN_SESSION_ACTION and mod.IN_SESSION_COMMAND in mod.IN_SESSION_ACTION
+    assert mod._event_actions(True, "sid")["PreToolUse"] == mod.IN_SESSION_ACTION
+    hook = REPO / "hooks" / "pretool-block-background-tasks.py"
+    state = tmp_path / "hstate"
+    state.mkdir()
+    sid = "bg-route"
+    call = {"tool_name": "Bash", "session_id": sid,
+            "tool_input": {"command": mod.IN_SESSION_COMMAND, "run_in_background": True}}
+    env = dict(os.environ, CLAUDE_STATE_DIR=str(state))
+
+    def run(payload):
+        return subprocess.run([sys.executable, str(hook)], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, timeout=60, check=False)
+
+    refused = run(call)
+    assert refused.returncode == 2 and "run_in_background=true" in refused.stderr
+    (state / f"claude-orchestrator-consent-{sid}.flag").write_text("true\n", encoding="utf-8")
+    assert run(call).returncode == 0
+    # The read of its output that follows is not a call this hook gates.
+    assert run({"tool_name": "Read", "session_id": sid,
+                "tool_input": {"file_path": "/dev/null"}}).returncode == 0

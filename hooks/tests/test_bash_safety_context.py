@@ -1,7 +1,10 @@
-"""Unit tests for hooks/lib/bash_context_strip.py.
+"""Unit tests for the executable-context view bash-safety reads.
 
-Tests strip_non_executable_contexts() in isolation, covering the main
-Pass 1-5 transformations documented in the implementation spec.
+They were written for hooks/lib/bash_context_strip.py's
+strip_non_executable_contexts(), covering the main Pass 1-5 transformations
+documented in its spec. That module is gone: its one equivalent is the shared
+parser's hooks/lib/shell_parse.py executable_view(), which these tests now run
+against under the old name.
 
 Run with: python3 -m pytest hooks/tests/test_bash_safety_context.py -v
 """
@@ -12,7 +15,7 @@ import os
 
 # Add hooks dir to path so we can import from hooks/lib/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from hooks.lib.bash_context_strip import strip_non_executable_contexts
+from hooks.lib.shell_parse import executable_view as strip_non_executable_contexts
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

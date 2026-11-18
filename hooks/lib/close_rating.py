@@ -30,15 +30,19 @@ def source_task(tool_input) -> str | None:
 
 
 def _landed(span, task_id: str) -> int:
-    """Line of a /close span's latest ok close-QA result for the task (qa, pipeline close, the same
-    canonical task id) whose final line classify_line maps to yes; 0 when there is none."""
+    """Line at which a /close span's latest close QA for the task (qa, pipeline close, the same canonical
+    task id) stopped with a reply whose final line classify_line maps to yes; 0 when there is none. Its
+    stop and reply are read as G1 reads them (agent_returns.Returns): its Agent call's result, the
+    task-notification of a background or resumed QA, or a cut QA's own recorded stop."""
     canonical, line = _lib("obligation").canonical_task_id, 0
     want = canonical(task_id) if span is not None and span.command == "close" else None
     verdict = runpy.run_path(str(Path(__file__).with_name("close-verdict.py"))) if want else {}
-    for call, doc in span.obligations() if want else ():
-        if (doc.get("role"), doc.get("pipeline"), canonical(doc.get("task_id"))) == ("qa", "close", want) \
-                and verdict["classify_line"](verdict["last_nonempty"](span.result_text(call.id))) == "yes":
-            line = call.result_line
+    returns = _lib("agent_returns").Returns(span) if want else None
+    for call, doc in span.dispatches() if want else ():
+        if (doc.get("role"), doc.get("pipeline"), canonical(doc.get("task_id"))) == ("qa", "close", want):
+            stopped = returns.line(call)
+            if stopped and verdict["classify_line"](verdict["last_nonempty"](returns.reply(call))) == "yes":
+                line = max(line, stopped)
     return line
 
 

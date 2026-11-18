@@ -164,7 +164,10 @@ def test_control_quoted_value_resolving_to_git_still_refused():
 
 
 def test_control_obfuscated_token_still_refused():
-    assert residual_kinds('g\\it push --force') == ['obfuscated_git_token']
+    # OB-L26: the shell runs `g\\it` as git, so it is read as the force push it is.
+    invocations, residuals = classify_git_command('g\\it push --force')
+    assert residuals == []
+    assert [(inv.subcommand, inv.args) for inv in invocations] == [('push', ['--force'])]
 
 
 def test_control_substituted_command_name_still_refused():

@@ -12,7 +12,8 @@ The human's exit from an armed command, besides interrupting the session. The hu
 ## What it does
 
 1. The typed `/stop` opens a span no Stop gate holds: it ends any gated command (`/dev`, `/do`, `/close`, `/commit`, ..., even one whose gate is broken). After `/dev-overnight` the time-lock lets the session stop with no closeout check and publishes the `cancelled_by_user` receipt, the loop prints no further cycle, and the AskUserQuestion deny lifts. After the wrapper and the `CronDelete` below, the next stop attempt succeeds.
-2. The wrapper records `current_phase: completed` in this session's overnight state (found from the main checkout, a worktree or a fresh clone) and releases its isolation fields. It leaves `end_time` as it was.
+2. The typed `/stop` also revokes the /restart capability an earlier wake minted (`hooks/userprompt-restart-authorize.py`), so no wake's recovery resumes a child after it; a capability the owner's own `/restart` minted stands.
+3. The wrapper records `current_phase: completed` in this session's overnight state (found from the main checkout, a worktree or a fresh clone) and releases its isolation fields. It leaves `end_time` as it was.
 
 It does NOT remove the worktree (use `/merge` when ready), delete the state file (the cycle log stays for inspection) or touch in-flight subagents (kill those by hand).
 

@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 111
+- **Total files**: 112
 - **Subdirectories**: 8
 - **Naming convention**: kebab
 
@@ -30,6 +30,7 @@ Organization and usage documentation for `scripts/`.
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
+- `cli-fixture-record.sh` - Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 - `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 716 514" width="560" height="402" role="img" aria-labelledby="t">
+<title id="t">Prompts ask. Hooks refuse. Install, into an empty ~/.claude: 1. git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude 2. ~/.claude/scripts/bootstrap (init: asks once per optional module) 3. Then, in Claude Code: /dev &lt;requirement&gt;. One pipeline from requirement to push: /spec (optional), /dev, /close, /commit, /push.</title>
+<style>
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:28px;fill:#f0f6fc}
+.s{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;font-size:30px}
+.n{font-weight:700}
+.m,.l{fill:#9198a1}
+.k{fill:#f0f6fc}
+.h{fill:#3d444d}
+.a{fill:none;stroke:#9198a1;stroke-width:2.4}
+</style>
+<text class="s" x="0" y="30"><tspan class="m">Prompts ask. </tspan><tspan class="n">Hooks refuse.</tspan></text>
+<rect class="k" x="0" y="50" width="716" height="4"/>
+<text class="m" x="44" y="98"># needs an empty ~/.claude</text>
+<text class="n" x="0" y="136">1</text>
+<text x="44" y="136">git clone https://github.com/Yugoge/<tspan class="m">\</tspan></text>
+<text x="44" y="174">awesome-claude-harness.git ~/.claude</text>
+<text class="m" x="44" y="222"># init: asks once per optional module</text>
+<text class="n" x="0" y="260">2</text>
+<text x="44" y="260">~/.claude/scripts/bootstrap</text>
+<rect class="h" x="0" y="307.5" width="30" height="2"/>
+<text class="l" x="44" y="316">Then, in Claude Code:</text>
+<rect class="h" x="422.6" y="307.5" width="293.4" height="2"/>
+<text class="n" x="0" y="362">3</text>
+<text x="44" y="362">/dev <tspan class="m">&lt;requirement&gt;</tspan></text>
+<rect class="h" x="0" y="409.5" width="30" height="2"/>
+<text class="l" x="44" y="418">One pipeline from requirement to push.</text>
+<text x="44" y="464" textLength="387.7" lengthAdjust="spacing">/spec<tspan class="m"> (optional)   </tspan>/dev</text>
+<text x="44" y="502" textLength="438.3" lengthAdjust="spacing"><tspan class="m">  </tspan>/close<tspan class="m">   </tspan>/commit<tspan class="m">   </tspan>/push</text>
+<path class="a" d="M329.1 455.5H348.9M341.9 449L348.9 455.5L341.9 462M42.5 493.5H62.4M55.4 487L62.4 493.5L55.4 500M194.2 493.5H214.1M207.1 487L214.1 493.5L207.1 500M362.8 493.5H382.6M375.6 487L382.6 493.5L375.6 500"/>
+</svg>

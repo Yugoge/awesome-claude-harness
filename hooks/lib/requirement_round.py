@@ -2,7 +2,8 @@
 the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook (``handle``) is
 the one writer of the owner's answers. ``asked`` is the one "asked" predicate (close_rating's too): asked, never
 answered (D9b), so Skip, AFK, a denial or an error result count and record nothing. The checks G1 (``ask_first``),
-G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends_with_question``) decide by live here."""
+G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends_with_question``,
+``line_questions``) decide by live here."""
 from __future__ import annotations
 
 import hashlib
@@ -153,7 +154,8 @@ def runs_round(span) -> bool:
             body = (COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8")
         except OSError:
             body = ""
-    todos = " ".join(str(t.get("content", "")) for t in span.last_todos() or () if isinstance(t, dict))
+    todos = " ".join(str(t.get("content", "")) for t in _lib("todo_canonical").last_checklist(span) or ()
+                     if isinstance(t, dict))
     return any(m in body or m in todos for m in ROUND_MARKERS)
 
 
@@ -335,15 +337,17 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
         doc = getattr(found, "obligation", None)
         if isinstance(doc, dict):
             latest[(doc.get("role"), task_of(doc.get("task_id")))] = (call, doc)
-    contract = _lib("contract_runtime")
+    contract, returns = _lib("contract_runtime"), None
     for path, source, round_file, role in _question_files(project, task):
         rel = path.relative_to(project).as_posix()
         if rel in declared:
             return None
         owner = task if round_file else task_of(source.split(":")[1])
         call = latest.get((role, owner), (None, None))[0]
-        if call is None or not (call.result_line and call.ok):
-            continue  # its producer's latest dispatch has not come back ok: the question is not yet its to ask
+        if call is not None and returns is None:  # read once, as G1 reads a dispatch's return
+            returns = _lib("agent_returns").Returns(span, before=current)
+        if call is None or not returns.line(call):
+            continue  # its producer's latest dispatch's agent has not stopped: the question is not yet its to ask
         schema = "requirement-round.v1" if round_file else "producer-question.v1"
         # A round G2 refuses (an answered question again, a refuted BA's option) is never asked: its producer
         # writes it again, so it holds no dispatch back.
@@ -363,3 +367,33 @@ def ends_with_question(text) -> bool:
     """R7: the last non-empty line of the turn's last main-agent text ends with "?" or a full-width one."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     return bool(lines) and lines[-1].endswith(("?", "？"))
+
+
+# The first word of a clause that asks: a label before ": " that starts with one asks a question of its own.
+_ASKING = frozenset("which what who whom whose why when where how should shall do does did can could would will "
+                    "is are was were may might must am have has had want".split())
+_SENTENCE_END = re.compile(r"(?<=[.!?？。！])\s+")
+
+
+def line_questions(text) -> list | None:
+    """R7: the questions the last non-empty line of the turn's text asks, each as the forms that settle it: every
+    sentence of the line ending in "?" or a full-width one gives [the sentence] and, when the text after its last
+    ": " is a question and no ": "-separated part before it starts with an asking word (_ASKING), [the sentence,
+    that text]; the label is then a report ("Recorded in section 4: ..."), not a question. [] when the line asks
+    nothing; None when a question holds no word character (a bare "?"), which nothing settles."""
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    found = []
+    for sentence in _SENTENCE_END.split(lines[-1]) if lines else ():
+        sentence = sentence.strip()
+        if not sentence.endswith(("?", "？")):
+            continue
+        if not re.search(r"\w", sentence):
+            return None
+        forms = [sentence]
+        label, colon, tail = sentence.rpartition(": ")
+        tail = tail.strip()
+        if colon and re.search(r"\w", tail) and not any(
+                (part.split() or [""])[0].lower().strip(",;") in _ASKING for part in label.split(": ")):
+            forms.append(tail)
+        found.append(forms)
+    return found

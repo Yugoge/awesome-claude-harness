@@ -27,6 +27,12 @@ Rules enforced:
      it before train 2, and its refusal reads as origin/master's (_in_flight)
   7. The wake (/dev-overnight Step 0) completes only after a recurring
      CronCreate of the wake's prompt in the span (P1c X8)
+  8. Once every step of the checklist is completed, a list that shares no
+     step's text (content or activeForm) with the canonical list, the span's
+     first list or the checklist runs unchecked (OB-L40): it is foreign to
+     the command, and no reader of the span takes it for the checklist
+     (lib.todo_canonical.checklist_lists). A list that reuses a step's text
+     is checked as the rules above check it
 Past a command's first list, lists of one length pair by content, never index.
 
 Exit codes:
@@ -50,7 +56,7 @@ from pathlib import Path
 
 # Import shared canonical validation
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import (by_content, checklist, initial_status_violations, run_todo_script,
+from lib.todo_canonical import (by_content, checklist, initial_status_violations, is_foreign, run_todo_script,
                                 validate_against_canonical)
 
 
@@ -262,12 +268,10 @@ def _resumed(state, sid):
 def _started_at(state, content):
     """Where the result of the ok TodoWrite that set the step of ``content``
     in_progress is recorded (the latest such call: a step set back to pending
-    and started again, as a new overnight cycle does, needs a new call)."""
+    and started again, as a new overnight cycle does, needs a new call). Only
+    the checklist's lists count: a foreign list (rule 8) sets no step."""
     start, was = None, None
-    for use in state.span.uses('TodoWrite'):
-        todos = use.input.get('todos')
-        if not use.ok or not isinstance(todos, list):
-            continue
+    for use, todos in state.lists():
         now = next((t.get('status') for t in todos if isinstance(t, dict) and t.get('content') == content), None)
         if now == 'in_progress' and was != 'in_progress':
             start = use.result_at
@@ -339,8 +343,7 @@ def _counted_in_flight(state, calls):
     call's result is recorded, the call counts for the first step of
     ip..ip+2 that names its type and has no call yet; a step set back to
     pending (a new overnight cycle) needs a new call."""
-    events = sorted([(u.result_at, 0, u) for u in state.span.uses('TodoWrite')
-                     if u.ok and u.result_at is not None and isinstance(u.input.get('todos'), list)]
+    events = sorted([(u.result_at, 0, u) for u, _todos in state.lists() if u.result_at is not None]
                     + [(at, 1, c) for at, c in calls if at is not None], key=lambda e: (e[0], e[1]))
     current, steps, counted = [], [], set()
     for _, is_call, use in events:
@@ -458,6 +461,11 @@ def main():
         sys.exit(0)
     last = state.todos
     cmd = state.command
+    # Rule 8 (OB-L40): past a checklist all completed, a list foreign to the command is the session's
+    # own; the canonical list, the span's first list and the checklist bound what is foreign.
+    if (last is not None and all(t.get('status') == 'completed' for t in last)
+            and is_foreign(new_todos, state.canonical, last, next((t for _c, t in state.lists()), None))):
+        sys.exit(0)
     if last is None or len(last) != len(new_todos):
         validate_against_canonical_if_needed(cmd, new_todos, state.arguments)
         if last is None and initial_status_violations(new_todos):
