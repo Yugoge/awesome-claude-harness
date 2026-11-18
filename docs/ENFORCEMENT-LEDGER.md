@@ -575,8 +575,11 @@ no per-rule budget exists.
   (`python3 -c "open(<consent flag>,'w')"`) passes the permission layer, on the base as after (Read
   and Edit rules "don't apply to … arbitrary subprocesses that read or write files indirectly"); that
   is a hook matter. The proof layer is `source-level` because the test models the CLI's documented
-  matching over every gate-read path it scans from hooks/ and scripts/; the measurement is not a CI
-  job.
+  matching over every gate-read path it scans from hooks/ and scripts/ (shell `${TMPDIR}/…` spellings
+  by pattern, and Python f-string, `os.path.join`/`Path` and `/` or `+` joins over a TMPDIR,
+  CLAUDE_TMPDIR or daemon-restart grant-dir root from each module's syntax tree, so the daemon-restart
+  flag `hooks/lib/bash_safety_rules.py` builds in Python is found by the scan); the measurement is not
+  a CI job.
 - **S-018** — OB-L16 (owner decision): the one deny `Bash(*session_dirs.txt*)` matched any command
   text naming the file, so a search for the name (`grep -rn session_dirs.txt docs/`, `rg`, `git grep`,
   `git log -S`/`-G`) and a commit message naming it were refused with the reads. An allow entry cannot

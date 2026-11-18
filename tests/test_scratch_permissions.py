@@ -40,6 +40,7 @@ write, and they are subsumed by `Bash(cat:*)` and `Bash(rm:*)`.
 """
 from __future__ import annotations
 
+import ast
 import json
 import posixpath
 import re
@@ -257,6 +258,15 @@ _STATE_SOURCES = [
 _TMPDIR_SOURCE = re.compile(
     r"\$\{?(?:TMPDIR|CLAUDE_TMPDIR|DAEMON_RESTART_GRANT_DIR)(?::-[^}]*\}|%/\}|\})?/([A-Za-z0-9_.${}*/-]+)")
 _ROLE_SOURCE = re.compile(r"/tmp/claude-scratch/")
+# The Python spelling of the same paths (hooks/lib/bash_safety_rules.py builds the daemon-restart flag as
+# f"{one_slash(grant_dir)}/claude-allow-daemon-restart-{target}.flag" since P14-5), read from the syntax tree
+# of every Python source: an f-string, os.path.join / Path(...) join, `/` join or `+ "/..."` concatenation
+# whose base is a TMPDIR root. A root is os.environ / getenv / .get of one of _PY_TMP_ENV, tempfile.gettempdir(),
+# a name in _PY_TMP_NAMES, a one-argument wrapper of a root (one_slash, realpath, str, Path), an `or` chain
+# holding one, and, per file, a name assigned a root or a dict key whose value is one (`env["grant_dir"]`).
+# A name assigned such a path carries it on (`flag + ".lock"`).
+_PY_TMP_ENV = frozenset({"TMPDIR", "CLAUDE_TMPDIR", "CLAUDE_DAEMON_RESTART_GRANT_DIR"})
+_PY_TMP_NAMES = frozenset({"TMPDIR", "CLAUDE_TMPDIR", "DAEMON_RESTART_GRANT_DIR", "grant_dir"})
 
 LISTED_STATE_NAMES = [
     "claude-orchestrator-consent-{sid}.flag",
@@ -309,6 +319,107 @@ def _scan(rxs) -> set[str]:
     return names
 
 
+def _callee(node: ast.Call) -> str:
+    f = node.func
+    return f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
+
+
+class _PyTmpPaths:
+    """The names a Python module builds under a TMPDIR root, as `{expr}` templates like the shell scan's."""
+
+    def __init__(self, tree: ast.AST):
+        self.roots, self.keys, self.paths = set(_PY_TMP_NAMES), set(_PY_TMP_ENV), {}
+        assigns = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None]
+        dicts = [n for n in ast.walk(tree) if isinstance(n, ast.Dict)]
+        changed = True
+        while changed:
+            before = (len(self.roots), len(self.keys), len(self.paths))
+            for a in assigns:
+                for t in a.targets if isinstance(a, ast.Assign) else [a.target]:
+                    if isinstance(t, ast.Name):
+                        if self.is_root(a.value):
+                            self.roots.add(t.id)
+                        elif (p := self.path_of(a.value)) and t.id not in self.paths:
+                            self.paths[t.id] = p
+            for d in dicts:
+                self.keys |= {k.value for k, v in zip(d.keys, d.values)
+                              if isinstance(k, ast.Constant) and isinstance(k.value, str) and self.is_root(v)}
+            changed = before != (len(self.roots), len(self.keys), len(self.paths))
+        self.names = {p for n in ast.walk(tree) if isinstance(n, ast.expr) and (p := self.path_of(n))}
+
+    def is_root(self, n: ast.AST) -> bool:
+        if isinstance(n, ast.Name):
+            return n.id in self.roots
+        if isinstance(n, ast.Subscript):
+            return isinstance(n.slice, ast.Constant) and n.slice.value in self.keys
+        if isinstance(n, ast.BoolOp):
+            return any(self.is_root(v) for v in n.values)
+        if isinstance(n, ast.IfExp):
+            return self.is_root(n.body) or self.is_root(n.orelse)
+        if isinstance(n, ast.Call):
+            name, args = _callee(n), n.args
+            if name == "gettempdir":
+                return True
+            if name in ("get", "getenv") and args and isinstance(args[0], ast.Constant):
+                return args[0].value in self.keys
+            return name != "join" and len(args) == 1 and self.is_root(args[0])
+        return False
+
+    @staticmethod
+    def template(n: ast.AST) -> str:
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            return n.value
+        if isinstance(n, ast.JoinedStr):
+            return "".join(v.value if isinstance(v, ast.Constant) else "{" + ast.unparse(v.value) + "}"
+                           for v in n.values)
+        return "{" + ast.unparse(n) + "}"
+
+    def under(self, base: ast.AST, rest: list) -> str | None:
+        tail = "/".join(self.template(r) for r in rest)
+        if self.is_root(base):
+            return tail or None
+        head = self.path_of(base)
+        return f"{head}/{tail}" if head and tail else None
+
+    def path_of(self, n: ast.AST) -> str | None:
+        if isinstance(n, ast.Name):
+            return self.paths.get(n.id)
+        if isinstance(n, ast.JoinedStr) and n.values and isinstance(n.values[0], ast.FormattedValue):
+            rest = self.template(ast.JoinedStr(values=n.values[1:]))
+            return (rest[1:] or None) if self.is_root(n.values[0].value) and rest.startswith("/") else None
+        if isinstance(n, ast.Call) and n.args:
+            name = _callee(n)
+            if name in ("join", "Path", "PurePath", "PosixPath") and len(n.args) > 1:
+                return self.under(n.args[0], n.args[1:])
+            return self.path_of(n.args[0]) if len(n.args) == 1 and name != "join" else None
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div):
+            return self.under(n.left, [n.right])
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+            if not isinstance(n.right, (ast.Constant, ast.JoinedStr)):
+                return None
+            right = self.template(n.right)
+            if self.is_root(n.left):
+                return (right[1:] or None) if right.startswith("/") else None
+            head = self.path_of(n.left)
+            return head + right if head else None
+        return None
+
+
+def _scan_py_tmpdir(sources: list | None = None) -> set[str]:
+    """_PyTmpPaths over every Python source (a .py file or a python shebang) of _sources()."""
+    names: set[str] = set()
+    for f in sources if sources is not None else _sources():
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        if f.suffix != ".py" and not re.match(r"#!.*python", text):
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        names |= _PyTmpPaths(tree).names
+    return names
+
+
 def _instantiate(name: str) -> str:
     name = re.sub(r"\$\{[^}]*\}?|\$[A-Za-z_$]+|\{[^}]*\}?|\[[^\]]*\]", "abc", name)
     name = name.replace("**", "abc").replace("*", "abc").rstrip("/}")
@@ -319,7 +430,10 @@ def gate_read_paths(layer: str) -> list[str]:
     env = LAYERS[layer]["env"]
     state_roots = {STATE_DEFAULT_ROOT, env.get("CLAUDE_STATE_DIR") or STATE_DEFAULT_ROOT}
     state = _scan(_STATE_SOURCES) | set(LISTED_STATE_NAMES)
-    tmp_names = _scan([_TMPDIR_SOURCE]) | set(LISTED_TMPDIR_NAMES)
+    # The Python scan also finds the CLI scratchpad itself (hooks/pretool-orchestrator-gate.py locates it):
+    # that is the scratch this lane grants (must_pass), not a gate-read file, so it is not a must-ask path.
+    py_names = {n for n in _scan_py_tmpdir() if not re.fullmatch(r"claude-[^/]+/[^/]+/[^/]+/scratchpad", n)}
+    tmp_names = _scan([_TMPDIR_SOURCE]) | py_names | set(LISTED_TMPDIR_NAMES)
     tmpdirs = {env["TMPDIR"], env.get("CLAUDE_CODE_TMPDIR", env["TMPDIR"]), SESSION_ROOT}
     paths = {f"{r}/{_instantiate(n)}" for r in state_roots for n in state}
     paths |= {f"{t}/{_instantiate(n)}" for t in tmpdirs for n in tmp_names}
@@ -330,8 +444,11 @@ def test_source_scan_is_not_vacuous():
     state = _scan(_STATE_SOURCES)
     assert "claude-orchestrator-consent-{sid}.flag" in state
     assert "claude-tool-streak-{session_id}.json" in state
-    tmp = _scan([_TMPDIR_SOURCE])
+    py = _scan_py_tmpdir()
+    tmp = _scan([_TMPDIR_SOURCE]) | py
     assert any(n.startswith("claude-allow-daemon-restart-") for n in tmp), tmp
+    # The daemon-restart grant and its lock are found in the Python source, not only in LISTED_TMPDIR_NAMES.
+    assert {"claude-allow-daemon-restart-{target}.flag", "claude-allow-daemon-restart-{target}.flag.lock"} <= py, py
     assert any(n.startswith("claude-git-blessed") for n in tmp), tmp
     assert not [n for n in state if n.split("/")[0] == "claude-scratch"], "state under the role root"
 
