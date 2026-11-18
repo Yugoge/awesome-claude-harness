@@ -12,9 +12,10 @@ the CLI's own (measured by the audit), not documented.
 
 The change is prose only: tests/lint/cd_read.py finds a `cd <dir> && <read command>` in the
 prompt corpus and skills, and requires CLAUDE.md to state the convention while a Read() deny
-rule exists. The settings stay as they were: the Read() deny entries are pinned below, so
-`cat .env` stays denied and `cd config && cat .env` keeps the guard (the guard is the CLI's;
-it is modelled here by "a Read() deny rule exists", not measured).
+rule exists. The settings keep that intent, checked below without pinning the list (other lanes
+own its entries): a Read() deny rule exists, so `cd config && cat .env` keeps the guard, and
+`cat .env` stays denied under the documented matching model (the guard is the CLI's; it is
+modelled here by "a Read() deny rule exists", not measured).
 """
 from __future__ import annotations
 
@@ -30,13 +31,6 @@ from tests.lint.cd_read import CD_READ, check_cd_reads, corpus, read_denies
 from tests.lint.tree import Tree
 
 REPO = Path(__file__).resolve().parents[1]
-
-# settings.json permissions.deny Read() entries at the lane base (origin/claude/train-c d1abc798).
-BASE_READ_DENIES = [
-    "Read(**/*.key)", "Read(**/*.pem)", "Read(**/*password*)", "Read(**/*secret*)", "Read(**/.env)",
-    "Read(**/.env.*)", "Read(**/credentials*)", "Read(**/passwd)", "Read(**/session_dirs.txt)",
-    "Read(**/shadow)", "Read(.env)", "Read(//etc/passwd)", "Read(//etc/shadow)",
-]
 
 CONVENTION_LINE = ("- Search with a path operand, not a `cd` in a compound command: while settings.json has a "
                    "`Read()` deny rule the CLI asks for approval.\n")
@@ -130,10 +124,6 @@ def test_this_tree_has_no_cd_read_and_states_the_convention():
 # ---------------------------------------------------------------- settings unchanged (must still refuse)
 
 
-def test_read_deny_entries_are_unchanged():
-    assert read_denies(Tree(REPO)) == BASE_READ_DENIES
-
-
 def _read_denied(path: str, rules: list[str]) -> bool:
     """Model of the documented gitignore matching for the relative and `**/` forms only."""
     for rule in rules:
@@ -158,3 +148,21 @@ def test_must_still_refuse_reads_stay_denied(path, denied):
     assert _read_denied(path, rules) is denied
     # Any Read() deny keeps the CLI's cd guard armed, so `cd config && cat .env` still asks.
     assert rules
+
+
+def _check_read_deny_intent(rules: list[str]) -> None:
+    # Any Read() deny keeps the CLI's cd guard armed; `cat .env` must stay denied. No entry is pinned.
+    assert rules, "settings.json has no Read() deny rule: the CLI's cd guard is disarmed"
+    assert _read_denied(".env", rules), "`cat .env` is no longer denied by a Read() deny rule"
+
+
+def test_read_deny_entries_are_unchanged():
+    """The Read() deny intent holds on this tree, and the check fails when that intent is broken."""
+    rules = read_denies(Tree(REPO))
+    _check_read_deny_intent(rules)
+    with pytest.raises(AssertionError, match="no Read\\(\\) deny rule"):
+        _check_read_deny_intent([])
+    without_env = [r for r in rules if not _read_denied(".env", [r])]
+    assert without_env, "the mutation must leave other Read() denies in place"
+    with pytest.raises(AssertionError, match="`cat .env` is no longer denied"):
+        _check_read_deny_intent(without_env)
