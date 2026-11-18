@@ -51,7 +51,7 @@ Exempt, once nothing above holds, when the realpath is:
     .env and .vscode/... stay protected).
 
 Own output versus gate-read artifact: the line is the reader, not the writer. A draft no gate,
-command or step script reads (a role's /tmp/claude-scratch/<role>/ or docs/codex/ notes,
+command or step script reads (a role's own scratch directory or docs/codex/ notes,
 build/out.txt, or docs/dev/arch-probe.md for an actor tool-policy lets write docs/dev/) may be
 replaced; a report, context, ticket, manifest, grant or spec that a later gate trusts keeps the
 Edit-only rule even when untracked, so a Write-only role writes it once, complete.
