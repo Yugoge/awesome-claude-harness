@@ -637,14 +637,35 @@ class _Ctx:
         return sorted({r["component"] for r in self.regs if r.get("type") == "gate_rule" and r.get("gate") == gate
                        and (not deciding or _decides(r))})
 
-    def _gate_deciders(self, gate: str, key: str, tool: str | None = None) -> list[str]:
+    def _gate_deciders(self, gate: str, key: str, tool: str | None = None, file: bool = False) -> list[str]:
         """The refusing rule files of a gate whose own code decides on `key` (static deciding reads):
         the deciders a change of the gate's decision on it stands for. On a measured call of `tool`,
         only the rules the gate runs on that tool: a rule whose RULES entry declares other tools never
         ran there (tests/replay/sites.py narrows the same way); one that declares none runs on every
-        call."""
+        call. On a `file` artifact (no code tests it to be a directory), a deciding read whose site
+        reads the path by directory tests alone stands for nothing (_dir_test_only)."""
         return [f for f in self.rule_files(gate, deciding=True)
-                if self._rule_runs_on(gate, f, tool) and self._deciding_on(f, key)]
+                if self._rule_runs_on(gate, f, tool)
+                and any(not (file and self._dir_test_only(d)) for d in self._deciding_on(f, key))]
+
+    def _dir_test_only(self, d: dict) -> bool:
+        """A deciding read whose own read site reads its path by directory tests alone (_DIR_TEST:
+        os.path.isdir, Path.is_dir, `test -d`). Such a test answers False for a regular file and for a
+        missing path alike, and never raises on the removal (CPython 3.10/3.12: genericpath.isdir
+        returns False on any OSError of its stat; pathlib's is_dir returns False on ENOENT, ENOTDIR,
+        EBADF, ELOOP), so it cannot observe a regular file removed or rewritten in place: rule (4)'s
+        mutations of a file artifact."""
+        if ("read_sites",) not in self.texts:
+            by: dict = {}
+            for r in self.recs:
+                if r["kind"] in ("relation", "unresolved") and r.get("op") == "read":
+                    by.setdefault((r.get("through") or [r["site"]])[-1], []).append(r)
+            self.texts[("read_sites",)] = by
+        site = (d.get("read_through") or [d["read_site"]])[-1]
+        reads = [r for r in self.texts[("read_sites",)].get(site, ())
+                 if r["kind"] == "unresolved" or r.get("path") == d["path"]]
+        return bool(reads) and all(r.get("mode") == "name" and _DIR_TEST.search(r.get("via") or "")
+                                   for r in reads)
 
     def _rule_runs_on(self, gate: str, rule: str, tool: str | None) -> bool:
         """The gate runs refusing rule file `rule` on a call of `tool` (any call when `tool` is None):
@@ -1021,7 +1042,8 @@ class _Ctx:
                     for reader in r["readers"]:
                         # a gate's process runs its rule files' code: what the trace measures of the
                         # gate on an artifact its refusing rules decide on, it measures of them
-                        rules = self._gate_deciders(os.path.normpath(reader), key, u.get("tool"))
+                        rules = self._gate_deciders(os.path.normpath(reader), key, u.get("tool"),
+                                                    file=a.kind == "file" and key not in self.dirs)
                         for rk in [(os.path.normpath(reader), key)] + [(f, key) for f in rules]:
                             rec = self.measured.setdefault(rk, {"changed": set(), "settings": set(), "reproduced": False})
                             rec["settings"].add(run.settings)

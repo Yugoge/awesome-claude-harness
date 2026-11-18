@@ -1007,6 +1007,53 @@ def test_a_gate_rule_declared_for_other_tools_decides_nothing_of_a_measured_call
     assert {d.matcher for d in a.decisions if d.who == "hooks/rec-bash-guard.py"} <= {"Bash"}
 
 
+
+def test_a_gate_rule_testing_a_path_is_a_directory_decides_nothing_of_a_file(tmp_path):
+    """A rule whose only read of a path is a directory test (os.path.isdir of a destination the
+    command names, a path the static half cannot resolve) cannot observe a regular file removed or
+    rewritten in place: isdir answers False for both. A change of the gate's decision on such a file
+    is not that rule's; a rule that reads the file's content still stands for it."""
+    settings = _registered(("PostToolUse", "Bash", "hooks/rec-writer.py"),
+                           ("PreToolUse", "*", "hooks/write-gate.py"))
+    root = make_tree(tmp_path, {
+        "hooks/lib/gates.py": GATE_LIB,
+        "hooks/write-gate.py": GATE_HEAD + (
+            'RULES = [\n'
+            '    Rule("dirs", str(HOOKS / "dir-guard.py")),\n'
+            '    Rule("rec", str(HOOKS / "rec-guard.py")),\n'
+            ']\n'),
+        "hooks/rec-writer.py": hook('open(harness_state_dir() + "/claude-rec.json", "w").write("{}")\n'),
+        "hooks/dir-guard.py": hook('''
+            import json
+            dest = json.load(sys.stdin)["tool_input"]["command"].split()[-1]
+            if os.path.isdir(dest):
+                sys.exit(2)
+        '''),
+        "hooks/rec-guard.py": REC_GUARD,
+    }, settings)
+    st = derive(root)
+    run = C.Run("fake", "shipped", "")
+    run.env = {"CLAUDE_STATE_DIR": "/sbx/state"}
+    run.events = [{"comp": "hooks/write-gate.py", "origin": "hooks/write-gate.py", "actor": "main", "op": "read",
+                   "pattern": "<state>/claude-rec.json", "event": 1, "bulk": False, "raw": "/sbx/state/claude-rec.json"}]
+    run.invocations = {1: {"seq": 1, "event": "PreToolUse", "label": "Bash mv", "payload": {"tool_name": "Bash"}}}
+    run.differential = {"units": [{"seq": 1, "event": "PreToolUse", "label": "Bash mv", "tool": "Bash",
+                                   "origin": "hooks/write-gate.py", "kind": "hook", "reproduced": True,
+                                   "runs": [{"pattern": "<state>/claude-rec.json", "raw": "/sbx/state/claude-rec.json",
+                                             "readers": ["hooks/write-gate.py"], "changed": True, "how": how}
+                                            for how in ("removed", "invalid")]}]}
+    # the directory test is the dir guard's one read, of a path it cannot resolve: it matches the file
+    assert [d["path"] for d in st.records if d["kind"] == "deciding" and d["component"] == "hooks/dir-guard.py"]
+    m = C.derive(str(root), st, [run])
+    a = m.artifacts["<state>/claude-rec.json"]
+    measured = {d.who for d in a.decisions if d.source == "differential"}
+    # the directory test answers False on the file intact, removed or rewritten: not its decision
+    assert "hooks/dir-guard.py" not in measured
+    # the content read stands for the gate's change, as before
+    assert "hooks/rec-guard.py" in measured
+    assert "4-one-rule" not in rules_on(C.violations(m, st.records), a.key)
+
+
 # ------------------------------------------- a handler on the read's call chain that swallows
 
 _REC_LIB = '''
