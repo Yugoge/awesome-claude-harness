@@ -17,12 +17,17 @@ whitelist. Now:
 - The CLI delivers a Monitor command to Bash-matcher hooks registered in settings.json as a Bash
   call (measured on 2.1.325); pretool-bash-safety.sh is one, and stays registered that way.
 
+The Bash probe here is a command lib/bash_read_only does not prove read-only (python3 runs code): a
+proven read-only command passes uncounted (OB-L03) and would never reach the shared cap. CLAUDE.md's
+"Always allowed" line also names the gate's READ_ONLY_ALLOWED tools after "and the read-only" (OB-L01).
+
 Each hook runs as a subprocess with a PreToolUse payload as the CLI sends it, its state dir, HOME,
 project and TMPDIR inside the test's tmp_path.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -82,7 +87,7 @@ class Session:
         return self.run(GATE, tool, tool_input, **kw)
 
     def bash(self) -> subprocess.CompletedProcess:
-        return self.gate("Bash", {"command": "true", "description": "probe"})
+        return self.gate("Bash", {"command": "python3 x.py", "description": "probe"})
 
     def monitor(self, **kw) -> subprocess.CompletedProcess:
         return self.gate("Monitor", {"description": "CI run", "timeout_ms": 300000,
@@ -313,18 +318,32 @@ def test_bash_safety_stays_a_settings_level_bash_matcher():
     assert any("pretool-bash-safety.sh" in c for c in commands), commands
 
 
+def _set_literal(node: ast.expr):
+    """A set display, or frozenset() of one, as a Python set; None for anything else."""
+    if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "frozenset" and len(node.args) == 1:
+        node = node.args[0]
+    return ast.literal_eval(node) if isinstance(node, ast.Set) else None
+
+
 def test_the_whitelist_is_exactly_the_documented_set():
-    """CLAUDE.md's Orchestrator-Only Rule names the gate's ALWAYS_ALLOWED set; they move together."""
-    import ast
+    """CLAUDE.md's Orchestrator-Only Rule names the gate's ALWAYS_ALLOWED set, then (after "and the
+    read-only") its READ_ONLY_ALLOWED set (OB-L01); they move together."""
     tree = ast.parse(GATE.read_text())
-    sets = {t.id: ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
-            for t in node.targets if isinstance(t, ast.Name) and isinstance(node.value, ast.Set)}
+    sets = {t.id: _set_literal(node.value) for node in tree.body if isinstance(node, ast.Assign)
+            for t in node.targets if isinstance(t, ast.Name) and _set_literal(node.value) is not None}
     expected = {"Agent", "TodoWrite", "AskUserQuestion", "Skill", "CronCreate", "CronDelete", "CronList",
                 "ScheduleWakeup", "Bash", "Read", "Glob", "Grep",
                 "Monitor", "TaskStop", "ListAgents", "PushNotification"}
+    read_only = {"LSP", "TaskOutput", "BashOutput", "ReadMcpResourceTool", "ListMcpResourcesTool"}
     assert sets["ALWAYS_ALLOWED"] == expected
+    assert sets["READ_ONLY_ALLOWED"] == read_only
     assert sets["BASH_CAPPED"] == {"Bash", "Monitor"}
     assert sets["PERMANENTLY_BLOCKED"] == {"EnterPlanMode", "ExitPlanMode"}
     line = next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if ln.startswith("- Always allowed:"))
-    named = set(line.split(".", 1)[0].replace("`", "").replace("- Always allowed:", "").replace(" ", "").split(","))
+    head = line.split(".", 1)[0].replace("- Always allowed:", "")
+    plain, _, read_only_part = head.partition(", and the read-only ")
+    named = set(plain.replace("`", "").replace(" ", "").split(","))
+    named_read_only = set(read_only_part.replace("`", "").replace(" ", "").split(","))
     assert named == expected, named ^ expected
+    assert named_read_only == read_only, named_read_only ^ read_only
+    assert named | named_read_only == sets["ALWAYS_ALLOWED"] | sets["READ_ONLY_ALLOWED"]

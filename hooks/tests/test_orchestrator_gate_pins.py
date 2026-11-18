@@ -3,8 +3,8 @@
 Pins the gate's always-allowed set, its Bash cap and its permanent plan-mode block, where no test did.
 
 Already pinned elsewhere, and not repeated here:
-- the ALWAYS_ALLOWED literal, BASH_CAPPED and PERMANENTLY_BLOCKED as parsed from the source, and the
-  literal's agreement with CLAUDE.md's "Always allowed" line
+- the ALWAYS_ALLOWED and READ_ONLY_ALLOWED literals, BASH_CAPPED and PERMANENTLY_BLOCKED as parsed from
+  the source, and the literals' agreement with CLAUDE.md's "Always allowed" line
   (test_orchestrator_gate_newer_tools.py::test_the_whitelist_is_exactly_the_documented_set);
 - five Bash calls pass and the sixth is refused, an Agent dispatch resets the count
   (test_orchestrator_gate_in_flight.py::test_in_flight_keeps_the_rule_and_the_counts, CURRENT_BASH);
@@ -14,11 +14,16 @@ Already pinned elsewhere, and not repeated here:
 
 Pinned here:
 1. The set the gate runs with, read from the loaded module (not only its literal), equals CLAUDE.md's
-   list, and every documented name passes more than once a turn without a count of its own.
-   CLAUDE.md's stated cap ("capped at 5 calls: the 6th") is the gate's BASH_MAX_CONSECUTIVE.
+   list: ALWAYS_ALLOWED the names before "and the read-only", READ_ONLY_ALLOWED the read-only names
+   after it (OB-L01). Every documented name passes more than once a turn without a count of its own.
+   CLAUDE.md's stated cap ("capped at 5 calls: the 6th") is the gate's BASH_MAX_CONSECUTIVE. A name
+   off the list passes once a turn, a retrieval tool (WebFetch) the calls per turn CLAUDE.md's
+   "Retrieval tools" line states (OB-L01).
 2. The Bash cap end to end through the real prompt hook: the 6th call is refused and the next prompt
    (hooks/prompt-workflow.py) lets Bash run again. No other tool resets the count, whether it is
-   always allowed, counted once per turn, or refused.
+   always allowed, counted once per turn, or refused. The Bash probe is a command lib/bash_read_only
+   does not prove read-only (COUNTED_BASH); one it proves passes uncounted (OB-L03, pinned in
+   test_orchestrator_gate_read_only_bash.py), so it would not reach the cap.
 3. EnterPlanMode and ExitPlanMode: refused on every call, under /do too, and nothing is counted;
    only an /allow grant naming the tool passes, for one call (posttool-allowlist-consume.py spends
    it), and a grant naming one does not pass the other.
@@ -47,8 +52,10 @@ CONSUME = HOOKS / "posttool-allowlist-consume.py"
 CAPPED = "used consecutively beyond limit"
 PERMANENT = "Permanently blocked"
 PLAN_TOOLS = ("EnterPlanMode", "ExitPlanMode")
+# A Bash command that counts: python3 runs code, so lib/bash_read_only does not prove it read-only (OB-L03).
+COUNTED_BASH = "python3 x.py"
 
-# Input shapes as the CLI sends them; the gate reads only tool_name (and Write's file_path).
+# Input shapes as the CLI sends them; the gate reads tool_name, Bash's command and Write's file_path.
 TOOL_INPUT = {
     "Agent": {"subagent_type": "general-purpose", "prompt": "x", "run_in_background": False},
     "TodoWrite": {"todos": [{"content": "a", "status": "pending", "activeForm": "a"}]},
@@ -58,7 +65,7 @@ TOOL_INPUT = {
     "CronDelete": {"id": "c1"},
     "CronList": {},
     "ScheduleWakeup": {"delaySeconds": 600, "prompt": "x"},
-    "Bash": {"command": "true", "description": "probe"},
+    "Bash": {"command": COUNTED_BASH, "description": "probe"},
     "Read": {"file_path": "/etc/hostname"},
     "Glob": {"pattern": "*.py"},
     "Grep": {"pattern": "x"},
@@ -66,6 +73,11 @@ TOOL_INPUT = {
     "TaskStop": {"task_id": "b1"},
     "ListAgents": {},
     "PushNotification": {"message": "done", "status": "proactive"},
+    "LSP": {"operation": "goToDefinition", "filePath": "/x.py", "line": 1, "character": 1},
+    "TaskOutput": {"task_id": "t1"},
+    "BashOutput": {"bash_id": "b1"},
+    "ReadMcpResourceTool": {"server": "docs", "uri": "docs://a"},
+    "ListMcpResourcesTool": {},
     "Edit": {"file_path": "/nonexistent/a.py", "old_string": "a", "new_string": "b"},
     "WebFetch": {"url": "https://example.invalid", "prompt": "x"},
     "TaskCreate": {"subject": "a", "description": "b"},
@@ -74,11 +86,28 @@ TOOL_INPUT = {
 }
 
 
+def _claude_md_line(prefix: str) -> str:
+    return next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if ln.startswith(prefix))
+
+
 def documented_allowed() -> set:
     """The names on CLAUDE.md's "- Always allowed:" line, up to its first full stop."""
-    line = next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if ln.startswith("- Always allowed:"))
-    head = line[len("- Always allowed:"):].split(".", 1)[0]
+    head = _claude_md_line("- Always allowed:")[len("- Always allowed:"):].split(".", 1)[0]
     return set(re.findall(r"`([A-Za-z]+)`", head))
+
+
+def documented_read_only() -> set:
+    """The names that line lists after "and the read-only" (the gate's READ_ONLY_ALLOWED)."""
+    head = _claude_md_line("- Always allowed:").split(".", 1)[0]
+    return set(re.findall(r"`([A-Za-z]+)`", head.partition("and the read-only")[2]))
+
+
+def documented_retrieval() -> tuple[set, int]:
+    """The names CLAUDE.md's "- Retrieval tools (" line backticks, and the calls per tool name per turn it states."""
+    line = _claude_md_line("- Retrieval tools (")
+    stated = re.search(r"\): (\d+) calls per tool name per turn", line)
+    assert stated, line
+    return set(re.findall(r"`([A-Za-z]+)`", line.split(")", 1)[0])), int(stated.group(1))
 
 
 class Session:
@@ -170,15 +199,18 @@ def test_the_loaded_gate_runs_with_exactly_the_documented_set(tmp_path):
              "spec = importlib.util.spec_from_file_location('gate', sys.argv[1])\n"
              "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
              "print(json.dumps({'allowed': sorted(m.ALWAYS_ALLOWED), 'capped': sorted(m.BASH_CAPPED),\n"
+             "                  'read_only': sorted(m.READ_ONLY_ALLOWED),\n"
              "                  'blocked': sorted(m.PERMANENTLY_BLOCKED), 'cap': m.BASH_MAX_CONSECUTIVE}))\n")
     s = Session(tmp_path)
     p = subprocess.run([sys.executable, "-c", probe, str(GATE)], capture_output=True, text=True,
                        env=s.env(), cwd=s.project, timeout=60)
     assert p.returncode == 0, p.stderr
     loaded = json.loads(p.stdout)
-    documented = documented_allowed()
-    assert len(documented) == 16, sorted(documented)
-    assert set(loaded["allowed"]) == documented, set(loaded["allowed"]) ^ documented
+    documented, read_only = documented_allowed(), documented_read_only()
+    assert (len(documented), len(read_only)) == (21, 5), (sorted(documented), sorted(read_only))
+    assert set(loaded["read_only"]) == read_only, set(loaded["read_only"]) ^ read_only
+    assert not set(loaded["allowed"]) & read_only
+    assert set(loaded["allowed"]) == documented - read_only, set(loaded["allowed"]) ^ (documented - read_only)
     assert loaded["capped"] == ["Bash", "Monitor"]
     assert loaded["blocked"] == list(PLAN_TOOLS)
     stated = re.search(r"`Bash` is capped at (\d+) calls: the (\d+)th", (ROOT / "CLAUDE.md").read_text())
@@ -194,12 +226,26 @@ def test_every_documented_name_passes_every_call_without_a_count(session, tool):
 
 @pytest.mark.parametrize("tool", ["Edit", "WebFetch", "TaskCreate"])
 def test_a_name_off_the_list_passes_once_a_turn(session, tool):
+    """Once a turn; WebFetch, a retrieval tool, gets the calls per turn CLAUDE.md states for them (OB-L01)."""
     assert tool not in documented_allowed()
-    assert session.passes(tool)
-    assert not session.passes(tool), f"a second {tool} in one turn"
+    retrieval, budget = documented_retrieval()
+    assert (tool in retrieval) == (tool == "WebFetch") and budget > 1, (retrieval, budget)
+    for n in range(budget if tool in retrieval else 1):
+        assert session.passes(tool), f"{tool} call {n + 1} in one turn"
+    assert not session.passes(tool), f"{tool} beyond its turn's budget"
 
 
 # --- 2. The Bash cap -----------------------------------------------------------------------------
+
+def test_the_bash_probe_is_not_proven_read_only():
+    """The cap counts only a command lib/bash_read_only does not prove read-only (OB-L03)."""
+    sys.path.insert(0, str(HOOKS / "lib"))
+    try:
+        from bash_read_only import is_read_only
+    finally:
+        sys.path.pop(0)
+    assert not is_read_only(COUNTED_BASH)
+
 
 def test_the_sixth_bash_is_refused_until_the_next_prompt(session):
     for _ in range(5):
