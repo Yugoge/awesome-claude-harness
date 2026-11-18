@@ -1,10 +1,8 @@
 <div align="center">
 
-# awesome-claude-harness
+<a href="#install"><img src=".github/assets/logo.png" width="420" alt="awesome-claude-harness"></a>
 
 **An agent operating system for Claude Code.**
-
-<a href="#install"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/install-hero-dark.svg"><img src=".github/assets/install-hero-light.svg" alt="Prompts ask. Hooks refuse. Install into an empty ~/.claude: git clone https://github.com/Yugoge/awesome-claude-harness.git ~/.claude, then ~/.claude/scripts/bootstrap, which asks once per optional module, then in Claude Code: /dev &lt;requirement&gt;. One pipeline from requirement to push: /spec (optional), /dev, /close, /commit, /push."></picture></a>
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-000000)](LICENSE)
 [![Claude Code: required](https://img.shields.io/badge/Claude_Code-required-000000)](#install)
