@@ -34,7 +34,6 @@ sys.path.insert(0, str(ROOT / "hooks" / "lib"))
 from git_command_classifier import classify_git_command  # noqa: E402
 
 GUARD = ROOT / "hooks" / "pretool-git-privilege-guard.py"
-BASH_SAFETY = ROOT / "hooks" / "pretool-bash-safety.sh"
 
 PUSH = "BLOCKED: agent git push"
 FORCE_PUSH = "BLOCKED: agent git push - force/delete/ref-rewrite push is forbidden."
@@ -167,11 +166,13 @@ def test_the_guard_passes_a_respelled_read_only_command(sandbox, command, _sub, 
 @pytest.mark.parametrize("command", [
     "git reset '--hard'", "git 'reset' --hard HEAD~1", "\\git reset --hard", "git reset '--har'",
 ])
-def test_bash_safety_reads_the_unquoted_reset_option(sandbox, command):
-    # pretool-bash-safety.sh reads reset --hard from the classifier's args.
-    proc = _run(sandbox, BASH_SAFETY, command, "subagent")
+def test_the_guard_reads_the_unquoted_reset_option(sandbox, command):
+    # The hard reset has one refusal, the privilege guard's (ledger H-031): pretool-bash-safety.sh's own
+    # reset rule (BS-40) was merged into it, and hooks/tests/test_bash_safety_rules.py pins that hand-over.
+    proc = _run(sandbox, GUARD, command, "subagent")
     assert proc.returncode == 2, (command, proc.stderr)
-    assert "'git reset --hard' is forbidden" in proc.stderr, proc.stderr
+    assert "BLOCKED: agent git reset --hard - hard reset is forbidden from agent flow" in proc.stderr, proc.stderr
+    assert UNCLASSIFIED not in proc.stderr, (command, proc.stderr)
 
 
 @pytest.mark.parametrize("command,kept", [
