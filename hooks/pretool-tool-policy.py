@@ -679,15 +679,17 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
 # Edit, MultiEdit or NotebookEdit of a qa-report or ba-qa-report. A read is never refused,
 # and a target this reading cannot resolve (a computed directory, an unknown `cd`) is
 # left to the gate.
-_REPORT_NAME = re.compile(r"(?:ba-)?qa-report-[^/]+\.json|dev-report-[^/]+\.json")
+# The gate-read report families, named once: qa-report, ba-qa-report and dev-report.
+_REPORT_FAMILY = r"(?:(?:ba-)?qa-report|dev-report)"
+_REPORT_NAME = re.compile(_REPORT_FAMILY + r"-[^/]+\.json")
 _TOOL_REPORT_NAME = re.compile(r"(?:ba-)?qa-report-[^/]+\.json")
-_REPORT_TOKEN = re.compile(r"(?<![\w.-])(?:(?:ba-)?qa|dev)-report-[^\s/'\"`;|&<>(){}\\]*\.json")
-_DOCS_DEV_REPORT_TEXT = re.compile(r"(?:\A|/)docs/+dev/+(?:(?:ba-)?qa|dev)-report-[^/]+\.json\Z")
+_REPORT_TOKEN = re.compile(r"(?<![\w.-])" + _REPORT_FAMILY + r"-[^\s/'\"`;|&<>(){}\\]*\.json")
+_DOCS_DEV_REPORT_TEXT = re.compile(r"(?:\A|/)docs/+dev/+" + _REPORT_FAMILY + r"-[^/]+\.json\Z")
 _CODE_INTERPRETER = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php)\Z")
 _IN_PLACE_INTERPRETER = re.compile(r"(?:perl|ruby)[\d.]*\Z")
 # A string literal (the path), then what makes the code write it: an open in a writing
 # mode, a write/copy/move/link call whose destination it is, a perl '>' open.
-_LIT = r"""(['"`])([^'"`\n]*?(?:qa|dev)-report-[^'"`\n/]*\.json)\1"""
+_LIT = r"""(['"`])([^'"`\n]*?""" + _REPORT_FAMILY + r"""-[^'"`\n/]*\.json)\1"""
 _WMODE = r"""\s*,\s*(?:mode\s*=\s*)?['"][rbt]*[wax+][rwaxbt+]*['"]"""
 _CODE_WRITE_FORMS = [re.compile(p) for p in (
     r"\bopen\(\s*" + _LIT + _WMODE,                                   # python/ruby open(P, 'w')
@@ -701,7 +703,7 @@ _CODE_WRITE_FORMS = [re.compile(p) for p in (
     r"\b(?:copy\w*|move|rename\w*|replace|link\w*|symlink\w*|cp|cpSync|cp_r|mv|ln_s|ln|"
     r"install)\(\s*[^;\n]*?,\s*" + _LIT + r"\s*[,)]",              # a copy/move/link's destination
     r"""['"]\+?>{1,2}['"]\s*,\s*""" + _LIT,                            # perl open(F, '>', P)
-    r"""(['"])\+?>{1,2}\s*([^'"\n]*?(?:qa|dev)-report-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
+    r"""(['"])\+?>{1,2}\s*([^'"\n]*?""" + _REPORT_FAMILY + r"""-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
 )]
 _DEST_MODES = ("copy-dest", "move-dest", "link")
 _WRITER_NAMES = frozenset({"tee", "cp", "mv", "install", "ln", "rsync", "dd", "truncate", "sed", "sh", "bash",
