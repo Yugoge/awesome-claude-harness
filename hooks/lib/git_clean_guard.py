@@ -67,9 +67,9 @@ import re
 import sys
 
 try:
-    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, ansi_decode, lex
+    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, ansi_decode, lex
+    from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
@@ -134,8 +134,29 @@ class _Word:
 
 
 def _tokens(text):
-    """lex() of text; text it cannot read is read with its quoting, then its syntax, removed."""
-    for form in (text, _QUOTING_RE.sub("", text), _SYNTAX_RE.sub(" ", text)):
+    """lex() of text; text it cannot read is read with its quoting, then its syntax, removed.
+
+    A here-document with no terminating line is not unreadable: bash reads its
+    body to the end of the text ("here-document delimited by end-of-file") and
+    feeds it to the command that owns the `<<`, so no line of it is a command.
+    The lexer raises unterminated_heredoc only after that body has consumed the
+    rest of the text, so the tokens it read are the whole text read as bash
+    reads it, the body held on its Redir (`hd`). Stripping the syntax instead
+    would turn the `<<` into a word and every body line into a command. As
+    OB-L30 read it, a body whose delimiter carries `$` or a backquote is not
+    read so: that text goes on to the forms below, its lines read as commands.
+    """
+    toks = []
+    try:
+        _lex_into(Src.from_raw(text), toks)
+        return toks
+    except LexError as exc:
+        if exc.code == "unterminated_heredoc" and not any(
+                tok[0] == "R" and tok[1].hd is not None and not tok[1].hd.terminated
+                and ("$" in tok[1].hd.delim or "`" in tok[1].hd.delim)
+                for tok in toks):
+            return toks
+    for form in (_QUOTING_RE.sub("", text), _SYNTAX_RE.sub(" ", text)):
         try:
             return lex(Src.from_raw(form))
         except LexError:
@@ -185,8 +206,11 @@ def _commands(text, info):
         at_start, prev = False, None
         if tok[0] == "R":
             redir = tok[1]
-            if redir.heredoc is not None:
-                current["bodies"].append(redir.heredoc[2].text)
+            if redir.op in ("<<", "<<-"):
+                # hd holds the body, terminated or (read to the end of the
+                # text) not; a `<<` that ends the text has none: empty stdin.
+                if redir.hd is not None:
+                    current["bodies"].append(redir.hd.body)
                 current["redirs"].append((redir, None))
             elif redir.target is not None:
                 word, bodies = _static_word(redir.target)
