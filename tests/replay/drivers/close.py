@@ -936,19 +936,55 @@ class CloseRun:
         fact(self.rp, "routed", {"label": label, "path": path, "role": role, "new": len(self.routed) - n})
         return d, role
 
+    def do_bullet(self) -> str:
+        """Routes' /do bullet ("" on a text without one)."""
+        return next((it for it in re.split(r"\n(?=- )", self.routing_section()) if it.startswith("- A `/do` task")), "")
+
     def do_template(self) -> str:
         """The obligation Routes' /do bullet spells (its inline `<obligation v="1">` block)."""
-        item = next((it for it in re.split(r"\n(?=- )", self.routing_section()) if it.startswith("- A `/do` task")), "")
-        m = re.search(r'`(<obligation v="1">\{.*?\}</obligation>)`', item)
+        m = re.search(r'`(<obligation v="1">\{.*?\}</obligation>)`', self.do_bullet())
         if not m:
             raise cmdtext.TextNotFound("Routes' /do bullet spells no obligation")
         return m.group(1)
+
+    def takes_over(self) -> bool:
+        """Whether Routes' /do bullet has dev's report list, beside the files dev wrote, each file the do-report
+        lists, dev naming each in one of its Bash commands so G2 counts it (P5-62: the chain's Q7 check holds
+        dev's report to the do-report's files, since /commit plans from it). A text without it plays the
+        agent text's file-list rule alone."""
+        return "beside the files dev wrote, each file the do-report lists" in self.do_bullet()
+
+    def take_over(self, sub, dev_part: dict) -> None:
+        """The do-report's files `dev_part` (dev's own lists, roles.dev's) does not list yet: dev Reads the
+        do-report, names them in one Bash command (`git diff -- <path>`, the example the chain's
+        FILES_NOT_DEV_REPORT line spells) and lists each under the do-report's own key. A file dev wrote is
+        listed already; nothing to take over makes no call."""
+        if not self.do_report:
+            return
+        with self.rp.acting("driver"):
+            with open(os.path.join(self.o.project, self.do_report), encoding="utf-8") as fh:
+                do = json.load(fh).get("do") or {}
+        project = os.path.normpath(self.o.project)
+        rel = lambda p: os.path.relpath(os.path.normpath(p), project) if os.path.isabs(p) else os.path.normpath(p)
+        have = set(dev_part["files_modified"]) | set(dev_part["files_created"])
+        lacking = {key: [r for r in dict.fromkeys(rel(p) for p in do.get(key) or [] if isinstance(p, str))
+                         if r not in have] for key in ("files_modified", "files_created")}
+        lacking["files_created"] = [r for r in lacking["files_created"] if r not in lacking["files_modified"]]
+        names = lacking["files_modified"] + lacking["files_created"]
+        if not names:
+            return
+        sub.read(os.path.join(self.o.project, self.do_report), label=f"{sub.role} Read {self.do_report} (take over)")
+        sub.bash("git diff -- " + " ".join(shlex.quote(r) for r in names), "Name the /do's files this dev takes over",
+                 label=f"{sub.role} Bash git diff (take over)")
+        for key, rels in lacking.items():
+            dev_part[key] = sorted(set(dev_part[key]) | set(rels))
 
     def do_dev(self, path: str, detail: str, label: str, edits=None):
         """The Routes /do bullet: dev under the same task id with the obligation the bullet spells. With
         `--arg dev_stop=unwritten` the first such dev stops leaving that artifact as it is, with
         `dev_stop=uncompleted` having written it with its terminal field short of completed; on G2's block it
-        writes it completed and stops again."""
+        writes it completed and stops again. Where the bullet says so (takes_over), dev's report also lists
+        each file the do-report lists, named in one of dev's Bash commands (take_over)."""
         o = self.o
         prompt = o.instantiate(self.do_template() + f"\n\nComplete the /do work of task {self.tid}: {path}: {detail}\n",
                                self.tid)
@@ -958,11 +994,15 @@ class CloseRun:
         if edits is None and hasattr(self.producer, "pending_edits"):
             edits = self.producer.pending_edits()
         # The files dev declares are the ones it wrote (agents/dev.md's file-list rule, since P6): no
-        # baseline is needed to derive them, so a /do task's absent baseline takes no fallback.
+        # baseline is needed to derive them, so a /do task's absent baseline takes no fallback. Beside
+        # them, the do-report's files where the bullet has dev take them over.
         dev_work = roles.dev(list(edits or []))
+        takes_over = self.takes_over()
 
         def work(sub, brief, player):
             done.update(dev_work(sub, brief, player) or {})
+            if takes_over:
+                self.take_over(sub, done["*"]["dev"])
             for art in arts if short == "uncompleted" else ():
                 doc = player.json_doc(art, done)
                 for dotted in player.tree.terminal_vocabulary().get(art["schema"], {}):

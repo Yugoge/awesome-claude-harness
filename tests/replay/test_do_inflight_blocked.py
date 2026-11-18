@@ -18,8 +18,11 @@ Checked per case and settings file:
   - Step 0's first disposition is incomplete on the do-report alone (do.status:blocked);
   - Routes' /do bullet dispatches exactly one dev: the task's id, pipeline do, the dev-report declared;
   - the /close main agent writes no file (no Write, Edit, MultiEdit or NotebookEdit) and no subagent
-    writes the do-report; dev's report (dev.status completed) lists exactly the files it edited
-    (toy/__init__.py where the /do left part of the change, none where it left none);
+    writes the do-report; dev edits exactly the files the /do left changes in (toy/__init__.py where
+    the /do left part of the change, none where it left none); dev's report (dev.status completed)
+    lists those and, beside them, each file the do-report lists (commands/close.md's Routes /do
+    bullet, P5-62: dev names each in one of its Bash commands so G2 counts it, and the chain's Q7
+    check holds dev's report to them, since /commit plans from it): toy/__init__.py in every case;
   - Step 0 again: chain_pass (the G2-verified dev-report concludes the task, Q7); one close-QA round;
     `CLOSE: YES` as the close report's last line; the only question is Step 4's rating;
   - no hook error, no network attempt; no block other than the case's own and the host's below.
@@ -42,9 +45,11 @@ The cases (left= of drivers/do.py; every one is a /do ending a compliant /do of 
          prints FILES_NOT_DEV_REPORT on the do-report (it lists [], dev's report ["toy/__init__.py"])
          and is still incomplete after 4 routing rounds, since no dispatch may rewrite the do-report.
   all    left=all: the change is made, the toy tests stayed unauthorized (A4 (g) as P4 first ran it);
-         dev edits nothing. Fails on the base at scripts/resolve-dev-artifact-chain.py:1750 (group 2):
-         Step 0 prints FILES_NOT_DEV_REPORT on the do-report (it lists ["toy/__init__.py"], dev's
-         report []) and is still incomplete after 4 routing rounds.
+         dev edits nothing and its report takes over the do-report's toy/__init__.py. Fails on the base
+         at scripts/resolve-dev-artifact-chain.py:1750 (group 2): Step 0 prints FILES_NOT_DEV_REPORT on
+         the do-report (it lists ["toy/__init__.py"], dev's report []) and is still incomplete after 4
+         routing rounds; since P5-62 the gap names dev's report, and a dev that lists only the files it
+         edited leaves it, round after round.
 And on this tree's own text the driver refuses variant=blocked before typing the /do.
 REPLAY_WORK keeps the runs.
 """
@@ -71,8 +76,12 @@ WRITES = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 # case -> its driver arguments beside variant=blocked (the module text says what each plays)
 CASES = {"plain": (("left", "half"),), "g2": (("left", "half"), ("dev_stop", "uncompleted")),
          "none": (("left", "none"),), "all": (("left", "all"),)}
-# case -> the files dev's report lists: the ones it edited, the rest of the change the /do left
+# case -> the product files dev edits: the rest of the change the /do left
 DEV_FILES = {"plain": ["toy/__init__.py"], "g2": ["toy/__init__.py"], "none": ["toy/__init__.py"], "all": []}
+# case -> the files dev's report lists: the ones it edited and each file the do-report lists (Routes' /do
+# bullet, P5-62), so toy/__init__.py where the /do made all of the change too
+REPORT_FILES = {"plain": ["toy/__init__.py"], "g2": ["toy/__init__.py"], "none": ["toy/__init__.py"],
+                "all": ["toy/__init__.py"]}
 # (case, cost: the wall seconds of its two replays side by side, for conftest.py's CI split)
 COSTS = {"plain": 70, "g2": 80, "none": 70, "all": 70}
 CANARY = "scripts/canary-verify.sh"
@@ -226,7 +235,7 @@ def _verdict(case: str, r: suite.Result, settings: str, host: list[str]) -> list
     dev_uses = [u for n in order for u in _tool_uses(agents[n])]
     last = _final(dev_uses, f"dev-report-{tid}.json").get("dev") or {}
     if last.get("status") != "completed" or (last.get("files_modified") or []) + (last.get("files_created") or []) \
-            != DEV_FILES[case]:
+            != REPORT_FILES[case]:
         bad.append(f"dev's last report: {last}")
     rounds = [f["value"] for f in r.facts if f.get("key") == "close QA round"]
     if len(rounds) != 1:
