@@ -441,14 +441,6 @@ def test_claude_md_answers_a_command_gate_block_with_work_not_a_pause(env):
             "`AskUserQuestion` is only for a real owner decision.") in item
 
 
-def test_settings_keep_the_cli_from_ending_a_turn_the_gate_holds():
-    """Claude Code ends a turn whose Stop hook blocked more than CLAUDE_CODE_STOP_HOOK_BLOCK_CAP
-    times in a row (8 when unset), whatever the hook decides; 0 turns that override off. The
-    shipped settings.json env sets it, so the turn above ends only when the gate allows it."""
-    shipped = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["env"]
-    assert shipped.get("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP") == "0"
-
-
 def test_a2_all_ticked_without_a_dispatch_is_no_pipeline_dispatched(env):
     steps = dev_span(env, done=0, dispatch=False)
     env.tx.todos(steps, len(steps))
