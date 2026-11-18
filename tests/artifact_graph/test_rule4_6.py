@@ -966,6 +966,47 @@ def test_a_gates_process_writes_and_decides_as_its_rule_files(tmp_path):
     assert {(d.who, d.position, d.source) for d in a.decisions} == {("hooks/rec-guard.py", "G1", "differential")}
 
 
+
+def test_a_gate_rule_declared_for_other_tools_decides_nothing_of_a_measured_call(tmp_path):
+    """A merged gate runs a rule only on the tools its RULES entry declares (tests/replay/sites.py
+    narrows the gate's sites the same way): a change of the gate's decision measured on a call of
+    another tool is not that rule's decision. A rule that declares no tools runs on every call and
+    stands for the change, as before."""
+    settings = _registered(("PostToolUse", "Bash", "hooks/rec-writer.py"),
+                           ("PreToolUse", "*", "hooks/write-gate.py"))
+    root = make_tree(tmp_path, {
+        "hooks/lib/gates.py": GATE_LIB,
+        "hooks/write-gate.py": GATE_HEAD + (
+            'RULES = [\n'
+            '    Rule("bash", str(HOOKS / "rec-bash-guard.py"), frozenset({"Bash"})),\n'
+            '    Rule("rec", str(HOOKS / "rec-guard.py")),\n'
+            ']\n'),
+        "hooks/rec-writer.py": hook('open(harness_state_dir() + "/claude-rec.json", "w").write("{}")\n'),
+        "hooks/rec-bash-guard.py": REC_GUARD,
+        "hooks/rec-guard.py": REC_GUARD,
+    }, settings)
+    st = derive(root)
+    run = C.Run("fake", "shipped", "")
+    run.env = {"CLAUDE_STATE_DIR": "/sbx/state"}
+    run.events = [{"comp": "hooks/write-gate.py", "origin": "hooks/write-gate.py", "actor": "main", "op": "read",
+                   "pattern": "<state>/claude-rec.json", "event": 1, "bulk": False, "raw": "/sbx/state/claude-rec.json"}]
+    run.invocations = {1: {"seq": 1, "event": "PreToolUse", "label": "Edit x", "payload": {"tool_name": "Edit"}}}
+    run.differential = {"units": [{"seq": 1, "event": "PreToolUse", "label": "Edit x", "tool": "Edit",
+                                   "origin": "hooks/write-gate.py", "kind": "hook", "reproduced": True,
+                                   "runs": [{"pattern": "<state>/claude-rec.json", "raw": "/sbx/state/claude-rec.json",
+                                             "readers": ["hooks/write-gate.py"], "changed": True, "how": how}
+                                            for how in ("removed", "invalid")]}]}
+    m = C.derive(str(root), st, [run])
+    a = m.artifacts["<state>/claude-rec.json"]
+    measured = {d.who for d in a.decisions if d.source == "differential"}
+    # the Bash-only rule never ran on the Edit: the gate's change is not its decision
+    assert "hooks/rec-bash-guard.py" not in measured
+    # the rule that declares no tools ran on it: the change is its decision, as before
+    assert "hooks/rec-guard.py" in measured
+    # its own static branch still decides where the gate runs it: on Bash
+    assert {d.matcher for d in a.decisions if d.who == "hooks/rec-bash-guard.py"} <= {"Bash"}
+
+
 # ------------------------------------------- a handler on the read's call chain that swallows
 
 _REC_LIB = '''

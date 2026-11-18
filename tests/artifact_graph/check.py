@@ -637,10 +637,23 @@ class _Ctx:
         return sorted({r["component"] for r in self.regs if r.get("type") == "gate_rule" and r.get("gate") == gate
                        and (not deciding or _decides(r))})
 
-    def _gate_deciders(self, gate: str, key: str) -> list[str]:
+    def _gate_deciders(self, gate: str, key: str, tool: str | None = None) -> list[str]:
         """The refusing rule files of a gate whose own code decides on `key` (static deciding reads):
-        the deciders a change of the gate's decision on it stands for."""
-        return [f for f in self.rule_files(gate, deciding=True) if self._deciding_on(f, key)]
+        the deciders a change of the gate's decision on it stands for. On a measured call of `tool`,
+        only the rules the gate runs on that tool: a rule whose RULES entry declares other tools never
+        ran there (tests/replay/sites.py narrows the same way); one that declares none runs on every
+        call."""
+        return [f for f in self.rule_files(gate, deciding=True)
+                if self._rule_runs_on(gate, f, tool) and self._deciding_on(f, key)]
+
+    def _rule_runs_on(self, gate: str, rule: str, tool: str | None) -> bool:
+        """The gate runs refusing rule file `rule` on a call of `tool` (any call when `tool` is None):
+        a gate_rule registration of it declaring no tools, or declaring `tool`."""
+        if not tool:
+            return True
+        return any(r.get("tools") is None or tool in r["tools"] for r in self.regs
+                   if r.get("type") == "gate_rule" and r.get("gate") == gate and r.get("component") == rule
+                   and _decides(r))
 
     def _loads(self, component: str, lib: str, depth: int = 3) -> bool:
         """The component's code runs `lib`'s in its own process: its text sources or imports `lib`
@@ -1008,7 +1021,7 @@ class _Ctx:
                     for reader in r["readers"]:
                         # a gate's process runs its rule files' code: what the trace measures of the
                         # gate on an artifact its refusing rules decide on, it measures of them
-                        rules = self._gate_deciders(os.path.normpath(reader), key)
+                        rules = self._gate_deciders(os.path.normpath(reader), key, u.get("tool"))
                         for rk in [(os.path.normpath(reader), key)] + [(f, key) for f in rules]:
                             rec = self.measured.setdefault(rk, {"changed": set(), "settings": set(), "reproduced": False})
                             rec["settings"].add(run.settings)
