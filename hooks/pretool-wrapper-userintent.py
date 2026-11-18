@@ -215,6 +215,7 @@ _BRACE_SEQ = re.compile(r'\{(-?\w+)\.\.(-?\w+)\}')
 _FIND_CAP = 5000
 _RG_CONF_UNKNOWN = object()  # an rg config whose programs the guard cannot read
 _COMPUTED = object()  # a program name built at run time
+_GIT_LESS = object()  # git's own pager when nothing sets one: `less`, looked up on PATH
 
 
 def _brace_variants(text: str, cap: int = 64) -> list[str]:
@@ -2723,9 +2724,13 @@ class _Scan:
         if prog is None:
             # no program: git opens the files in its pager, which the command may set
             prog = self._git_pager_setting(vals[:k], dirs)
-        if prog is not None and prog is not _COMPUTED and self._plain_pager(prog):
+        if prog is _GIT_LESS:
+            # git's own less, run from PATH: never a file of the directory the command names
+            if self._plain_pager('less'):
+                return
+        elif prog is not None and prog is not _COMPUTED and self._plain_pager(prog):
             return  # less / more / cat only read the files
-        if prog is not None and prog is not _COMPUTED:
+        if prog is not None and prog is not _COMPUTED and prog is not _GIT_LESS:
             pv = self.home + prog[1:] if prog[:1] == '~' and (len(prog) == 1 or prog[1] == '/') else prog
             if _dequoted_mentions(prog) or any(self._wrapper_file(f) is not None
                                                for f in (self._existing(pv, False) or [])):
@@ -2789,8 +2794,9 @@ class _Scan:
         """The pager `git grep -O` with no program opens. git takes GIT_PAGER, then
         pager.grep / core.pager (from `-c` or the git config on disk), then PAGER, then
         less; every one of them is read, and the first that is not a plain pager (or is
-        computed) is returned, else 'less'. A `git config` write, a GIT_CONFIG_* variable
-        or a write to a git config file in the same command makes the pager computed."""
+        computed) is returned, else _GIT_LESS (git's own less). A `git config` write, a
+        GIT_CONFIG_* variable or a write to a git config file in the same command makes the
+        pager computed."""
         cands = []
         k = 0
         while k < len(gvals):
@@ -2823,7 +2829,7 @@ class _Scan:
         for c in cands:
             if c is _COMPUTED or not self._plain_pager(c):
                 return c
-        return 'less'
+        return _GIT_LESS
 
     @staticmethod
     def _git_disk_pagers(dirs) -> list:
