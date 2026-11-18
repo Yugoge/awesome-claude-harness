@@ -625,8 +625,9 @@ jobs:
     if: ${{ github.event_name == 'pull_request' && (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # Train A (4d1b5458..87731833, 13 merges, 447 ids red then green) took 25 min on 4 CPUs; still
-    # inside the replay shards' critical path (about 58 min), so it adds nothing to the run.
-    timeout-minutes: 60
+    # inside the replay shards' critical path (about 58 min), so it adds nothing to the run. The final
+    # train (about 80 merges, 201 changed test files) ran past 60 min twice: 360, the hosted-runner limit.
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
