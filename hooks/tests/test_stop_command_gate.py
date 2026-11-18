@@ -385,6 +385,55 @@ def test_a2_esc_then_the_humans_next_prompt(env, monkeypatch, during, after, cod
     assert command_span.active_span(env.tx.path).command == ("dev" if after.startswith("plain") else after)
 
 
+# The owner's report (2026-11-18): a /dev cut by the weekly usage limit at Step 8 (the BA-QA
+# iteration), then a bare /restart that found nothing to resume, and the main agent ended its turn
+# with "say if you want me to continue". The usage limit's record is the CLI's synthetic assistant
+# record (model <synthetic>, isApiErrorMessage, error, apiErrorStatus); the CLI runs StopFailure, not
+# Stop, for that turn. Nothing after it closes the span: /restart is a CONTROL command and "continue"
+# a plain prompt, so every text-only Stop that follows is held, however many in a row; the human's
+# /stop is the exit.
+def usage_limit(env):
+    record = synthesize("assistant", "text", message__content=[
+        {"type": "text", "text": "You've hit your weekly limit · resets 2pm (UTC)"}])
+    record["isApiErrorMessage"], record["error"], record["apiErrorStatus"] = True, "rate_limit", 429
+    record["message"]["model"] = "<synthetic>"
+    env.tx.add(record)
+
+
+@pytest.mark.parametrize("prompt", ["restart", "continue"])
+def test_a2_a_dev_cut_by_a_usage_limit_is_held_through_ten_text_only_stops(env, prompt):
+    steps = dev_span(env, done=10)  # Step 8: BA-QA iteration loop, in progress
+    assert steps[10]["content"].startswith("Step 8: ")
+    usage_limit(env)
+    if prompt == "restart":
+        env.tx.command("restart")
+        helper = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py"'
+        env.tx.tool("Bash", {"command": f"{helper} prepare"},
+                    result=json.dumps({"candidate_count": 0, "candidates": [], "operator_guidance": None}))
+        env.tx.tool("Bash", {"command": f"{helper} finalize"}, result=json.dumps({"complete": True}))
+    else:
+        env.tx.typed("continue")
+    codes = []
+    for k in range(10):
+        env.tx.say("/restart found nothing to recover. Say if you want me to continue from there.")
+        code, text = run(env, stop_hook_active=k > 0)
+        codes.append(code)
+        assert text.startswith("COMMAND_GATE /dev: not complete\n"), text
+        assert f"- todo: not completed: {steps[10]['content']}" in text
+    assert codes == [2] * 10
+    assert command_span.active_span(env.tx.path).command == "dev"
+    env.tx.command("stop")
+    assert run(env, stop_hook_active=True) == (0, "")
+
+
+def test_settings_keep_the_cli_from_ending_a_turn_the_gate_holds():
+    """Claude Code ends a turn whose Stop hook blocked more than CLAUDE_CODE_STOP_HOOK_BLOCK_CAP
+    times in a row (8 when unset), whatever the hook decides; 0 turns that override off. The
+    shipped settings.json env sets it, so the turn above ends only when the gate allows it."""
+    shipped = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["env"]
+    assert shipped.get("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP") == "0"
+
+
 def test_a2_all_ticked_without_a_dispatch_is_no_pipeline_dispatched(env):
     steps = dev_span(env, done=0, dispatch=False)
     env.tx.todos(steps, len(steps))
