@@ -1894,6 +1894,8 @@ def parse_src(src, depth=0, max_depth=MAX_DEPTH):
     except LexError as exc:
         lex_error = ParseError(exc.code, exc.offset, src.text[:80])
     except (RecursionError, ValueError, IndexError) as exc:
+        if isinstance(exc, RecursionError):
+            _RECURSION_TRIPS[0] += 1
         lex_error = ParseError("unexpected_token", -1, type(exc).__name__)
     g = _Grammar(toks, src, depth)
     try:
@@ -1901,10 +1903,42 @@ def parse_src(src, depth=0, max_depth=MAX_DEPTH):
         if g.error is None and g.pos < len(toks):
             g.fail("unexpected_token", g.tok_off(g.peek()))
     except RecursionError:
+        _RECURSION_TRIPS[0] += 1
         items = []
         g.fail("depth_limit", src.off(0))
     error = lex_error or g.error
     return Script(items, src.text, span, error, depth)
+
+
+# One payload, many readers: every rule resolves the commands of its own parse of the hook's text, so a shell's -c
+# string (or eval's code) reaches the parser once per resolve call, about 30 times in one hook call, and a payload
+# of 20,000 words cost seconds. The parse is a pure function of the payload's text, its raw offsets and its depth,
+# and a returned tree is never mutated after construction (Part.body fills in lazily, to the same value), so the
+# payload parse is memoised on exactly that content, raw offsets included, so two command nodes share a tree only
+# when a fresh parse would build an identical one at the same offsets (a re-parse of the same text). A payload
+# re-read from a joined string (offsets from 0) is not memoised: two identical ones would share a tree. A parse
+# that hit Python's own recursion limit depends on the stack it ran on, not only on its input, so it is never stored.
+_RECURSION_TRIPS = [0]
+_PAYLOAD_MEMO = {}
+_PAYLOAD_MEMO_MAX = 32
+
+
+def _memoised(key, build):
+    hit = _PAYLOAD_MEMO.get(key)
+    if hit is not None:
+        return hit
+    trips = _RECURSION_TRIPS[0]
+    script = build()
+    if _RECURSION_TRIPS[0] == trips:
+        if len(_PAYLOAD_MEMO) >= _PAYLOAD_MEMO_MAX:
+            _PAYLOAD_MEMO.pop(next(iter(_PAYLOAD_MEMO)))
+        _PAYLOAD_MEMO[key] = script
+    return script
+
+
+def _payload_parse_src(src, depth):
+    """``parse_src(src, depth)``, memoised for a shell payload."""
+    return _memoised(("src", src.text, tuple(src.idx), depth), lambda: parse_src(src, depth))
 
 
 def _nested_scripts(script):
@@ -2396,7 +2430,7 @@ def _payload_from_words(words, depth):
     if len(words) == 1:
         w = words[0]
         if all(p.quote != ANSI_C for p in w.parts) and w.literal() is not None:
-            return parse_src(w.content(), depth + 1)
+            return _payload_parse_src(w.content(), depth + 1)
         return parse(vals[0])
     return parse(" ".join(vals))
 
@@ -2407,9 +2441,9 @@ def _payload_template(words, depth):
         raw = words[0].raw
         t = raw.text
         if len(t) >= 2 and t[0] == '"' and t[-1] == '"':
-            return parse_src(raw.slice(1, len(t) - 1), depth + 1)
+            return _payload_parse_src(raw.slice(1, len(t) - 1), depth + 1)
         if len(t) >= 2 and t[0] == "'" and t[-1] == "'":
-            return parse_src(raw.slice(1, len(t) - 1), depth + 1)
+            return _payload_parse_src(raw.slice(1, len(t) - 1), depth + 1)
     return parse(" ".join(w.text for w in words))
 
 
