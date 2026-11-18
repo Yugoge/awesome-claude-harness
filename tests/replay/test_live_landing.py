@@ -384,11 +384,17 @@ def _pre(*matchers) -> set:
 # tool the groups whose guards the merged gates now run; PostToolUse Bash runs git-warn, PostToolUse
 # Write no longer the token-verify stub, and Agent the two dispatch gates; every subagent stop the
 # producer gate.
+# OB-L02 raised the timeouts of the two matcher-less PostToolUse launchers (posttool-launch.py 690 -> 700,
+# posttool-failure-launch.py 120 -> 130) when it added posttool-orchestrator-ran.py to their rule lists: every
+# tool call meets the matcher-less PostToolUse group; only a failed call meets PostToolUseFailure's, which no
+# landing scenario makes after its landing (ELSEWHERE).
+POST_LAUNCH = ("PostToolUse", None)
+FAILED_LAUNCH = ("PostToolUseFailure", None)
 BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash") \
-    | {("PostToolUse", "Bash")}
+    | {("PostToolUse", "Bash"), POST_LAUNCH}
 WRITE = _pre(None, "*", "Write", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
-             "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write")}
-AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "*")}
+             "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write"), POST_LAUNCH}
+AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "*"), POST_LAUNCH}
 # The registrations (event, matcher) where this tree's settings.json differs from the base's that each
 # scenario's events after the landing reach (the harness-home session writes no todo list, no file and
 # dispatches no agent); together they must be every one that differs
@@ -432,6 +438,9 @@ ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              PROMPT: (_PROMPT_HOOKS, _PROMPT_HOOKS_NOW),
              START: ([], ["hooks/subagentstart-record.py", "hooks/prompt-workflow.py"]),
              FAILED_SKILL: ([], ["hooks/posttool-codex-skill-ledger.py"]),
+             FAILED_LAUNCH: ([], ["hooks/posttool-orchestrator-ran.py"]),
+             # design A's Monitor guard: a Monitor command meets every Bash hook; no landing scenario starts a monitor
+             ("PreToolUse", "Monitor"): ([], ["hooks/pretool-monitor-command.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
 REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START},
