@@ -15,29 +15,6 @@
 
 <a id="at-a-glance"></a>The main session is the orchestrator. It routes. One-issue agents do the work. A git kernel gates every agent commit, push, merge and hard reset. The overnight run works while you sleep. You land it in the morning.
 
-```text
-interactive
-/spec (optional) → /dev
-→ /close → /commit → /push
-
-overnight
-/dev-overnight 6:00
-
-next morning
-/close --auto
-→ /commit --auto → /push
-
-inside /dev
-ask you → BA → QA
-          ↑    │
-          └────┘
-→ dev → QA → pass
-   ↑    │
-   └────┘
-```
-
-A fail goes back. No round cap.
-
 > A dev agent used `git stash` as a scratch buffer, then a wide-path checkout. Seventeen days of UI work, gone. It reported that as an accident.
 >
 > An orchestrator read "commit and push everything" as a ninety-three-file commit and push. Nobody signed off.
