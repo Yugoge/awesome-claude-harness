@@ -123,8 +123,10 @@ class Session:
                               text=True, env=env, cwd=self.project, timeout=60)
 
     def bash(self) -> subprocess.CompletedProcess:
+        """A Bash call the cap counts: python3 runs code, so lib/bash_read_only does not prove it read-only
+        (a proven read-only command passes uncounted, OB-L03, and would never reach the cap)."""
         return self.run(GATE, {"hook_event_name": "PreToolUse", "permission_mode": "default", "tool_name": "Bash",
-                               "tool_input": {"command": "true", "description": "probe"}})
+                               "tool_input": {"command": "python3 x.py", "description": "probe"}})
 
 
 def test_the_recorded_task_alias_dispatch_resets_the_bash_cap_and_passes_the_no_background_rule(tmp_path):
