@@ -426,6 +426,21 @@ def test_a2_a_dev_cut_by_a_usage_limit_is_held_through_ten_text_only_stops(env, 
     assert run(env, stop_hook_active=True) == (0, "")
 
 
+def test_claude_md_answers_a_command_gate_block_with_work_not_a_pause(env):
+    """The Stop gate's block lists the work left and ends by saying to finish it, asking with
+    AskUserQuestion only for a real decision; CLAUDE.md's Hook Discipline #1 (PAUSE on a rejection)
+    says the same of that block: it is answered by working its gaps, not by pausing."""
+    steps = dev_span(env, done=10)
+    code, block = run(env)
+    assert code == 2 and f"- todo: not completed: {steps[10]['content']}" in block
+    assert block.endswith("Finish the gaps above. Ask with AskUserQuestion only for a real decision the user must "
+                          "make.\n"), block
+    text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    item = next(line for line in text.splitlines() if line.startswith("1. **PAUSE**"))
+    assert ("A Stop `COMMAND_GATE` block is answered by working the gaps it lists, not by pausing; "
+            "`AskUserQuestion` is only for a real owner decision.") in item
+
+
 def test_settings_keep_the_cli_from_ending_a_turn_the_gate_holds():
     """Claude Code ends a turn whose Stop hook blocked more than CLAUDE_CODE_STOP_HOOK_BLOCK_CAP
     times in a row (8 when unset), whatever the hook decides; 0 turns that override off. The
