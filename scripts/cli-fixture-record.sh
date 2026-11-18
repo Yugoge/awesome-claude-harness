@@ -20,7 +20,9 @@
 #   compacts (/compact: system/compact_boundary and the summary record).
 #   Writes tests/fixtures/cli/<version>/{transcript.jsonl,subagent.jsonl,subagent.meta.json,
 #   stdin/<Event>.json,shapes.json} and sets tests/fixtures/cli/CURRENT to <version>; stdin is
-#   the first three runs' (the events of the later runs leave it as those wrote it).
+#   the first three runs' (the events of the later runs leave it as those wrote it). On a new
+#   version it prints the shape diff (tests/cli_shapes.py diff) from the shapes.json of the version
+#   CURRENT named before: what the upgrade changed in the records the hooks read.
 # Kept: hook attachment records, system/stop_hook_summary, system/compact_boundary, the
 #   queued_command attachment, the queue-operation, user and assistant envelopes, each event's
 #   hook stdin and the first subagent's meta file. Home, cwd, uuids, agent ids and timestamps
@@ -407,5 +409,16 @@ PY
 )
 
 python3 "$REPO/tests/cli_shapes.py" shape "$DEST" > "$DEST/shapes.json"
+# What the upgrade changed in the record shapes, from the version CURRENT named until now.
+PREV="$(cat "$OUT_ROOT/CURRENT" 2>/dev/null || true)"
+if [[ "$PREV" =~ ^[0-9][0-9A-Za-z.+-]*$ && "$PREV" != "$VERSION" && -f "$OUT_ROOT/$PREV/shapes.json" ]]; then
+  rc=0
+  python3 "$REPO/tests/cli_shapes.py" diff "$OUT_ROOT/$PREV/shapes.json" "$DEST/shapes.json" >&2 || rc=$?
+  case "$rc" in
+    0) echo "cli-fixture-record: the record shapes are those of $PREV" >&2 ;;
+    1) echo "cli-fixture-record: the record shapes changed from $PREV (above)" >&2 ;;
+    *) echo "cli-fixture-record: the record shapes could not be compared with $PREV" >&2 ;;
+  esac
+fi
 printf '%s\n' "$VERSION" > "$OUT_ROOT/CURRENT"
 echo "cli-fixture-record: wrote $DEST (CURRENT=$VERSION)" >&2
