@@ -75,6 +75,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -918,10 +919,28 @@ def test_the_venv_the_hooks_run_is_asked():
     assert "venv/bin/python" in (HOOKS / "pretool-bash-safety.sh").read_text(encoding="utf-8")
 
 
+def _bash_ask_matches(entry: str, text: str) -> bool:
+    """`*` is any text; everything else, `?` and `[` included, is literal (tests/test_session_dirs_permission.py)."""
+    rule = entry[len("Bash("):-1]
+    if rule.endswith(":*"):
+        rule = rule[:-2] + " *"
+    return re.fullmatch(".*".join(re.escape(p) for p in rule.split("*")), text, re.S) is not None
+
+
 def test_the_entries_measured_are_the_entries_shipped():
+    """permissions.ask holds OB-L08's entries, in OB-L08's order, with HOME_ASKS as the tail. Other lanes' Bash
+    ask entries (OB-L07, OB-L21, the pipe-to-shell lane) may sit in the same list: the Edit decisions measured
+    above do not depend on them. Any other non-Bash ask entry still fails here, and so does a Bash ask entry
+    that matches a Bash command measured above (its whole text or a part at `;`, `&`, `|` or a newline), since
+    that row's decision would no longer be the one measured."""
     perms = _permissions()
-    assert perms["ask"] == MEASURED_ASK
+    others = [rule for rule in perms["ask"] if rule.startswith("Bash(")]
+    assert [rule for rule in perms["ask"] if rule not in others] == MEASURED_ASK
     assert perms["ask"][-len(HOME_ASKS):] == HOME_ASKS
+    measured_bash = {r[3] for r in MEASURED + MEASURED_HOME if r[2] == "Bash"}
+    texts = {t.strip() for cmd in measured_bash for t in [cmd] + re.split(r"\|\||&&|[;|&\n]", cmd)} - {""}
+    reached = [(rule, t) for rule in others for t in sorted(texts) if _bash_ask_matches(rule, t)]
+    assert not reached, "a Bash ask entry reaches a measured Bash row: %s" % reached
     assert "Edit(./**)" in perms["allow"]
     assert "Edit(.claude/settings.local.json)" in perms["deny"]
 
