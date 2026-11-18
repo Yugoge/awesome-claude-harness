@@ -168,7 +168,8 @@ TP_HOOK="$CLONE/hooks/pretool-tool-policy.py"
 
 # NEGATIVE: dev role attempts a tool NOT in its allowlist (WebFetch) -> BLOCK (2)
 # with the guard's own marker "BLOCKED by tool-policy.v1".
-neg_payload='{"agent_id":"smoke","agent_type":"dev","tool_name":"WebFetch","tool_input":{"url":"http://x"}}'
+# OB-L23 (owner decision) gives dev WebFetch/WebSearch/Context7; a GitHub write stays refused for every role.
+neg_payload='{"agent_id":"smoke","agent_type":"dev","tool_name":"mcp__github__create_pull_request","tool_input":{"owner":"o","repo":"r","title":"t","head":"h","base":"b"}}'
 err="$(printf '%s' "$neg_payload" | run_probe "$CLONE" HOME="$CLONE" CLAUDE_PROJECT_DIR="$CLONE" -- \
         python3 "$TP_HOOK" 2>&1 1>/dev/null)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -q "BLOCKED by tool-policy.v1"; then
