@@ -240,3 +240,21 @@ def test_a_harmless_command_passes_and_keeps_the_sentinel(env, command, where):
     proc = _run(env, command, where)
     assert proc.returncode == 0, proc.stderr
     assert _sentinel(env).exists(), "a harmless command consumed the single-use sentinel"
+
+
+# /commit Phase 3 evals the session-index emitter's output (shell assignments): naming that harness
+# script is no wrapper context, so the eval passes as on the base; any other harness script's eval'd
+# output still fails closed, and a computed run beside the wrapper stays refused.
+COMMIT_EMITTER = 'eval "$(python3 ~/.claude/scripts/session-index.py init --git-root "${GIT_ROOT}")" || exit 1'
+
+
+def test_commit_phase3_session_index_eval_passes(env):
+    (env["harness"] / "scripts" / "session-index.py").write_text("print('export GIT_INDEX_FILE=/tmp/i')\n")
+    proc = _run(env, COMMIT_EMITTER, "P")
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+
+
+def test_eval_of_another_harness_script_still_fails_closed(env):
+    (env["harness"] / "scripts" / "emit.py").write_text("print('true')\n")
+    proc = _run(env, 'eval "$(python3 ~/.claude/scripts/emit.py)"', "P")
+    assert proc.returncode == 2 and "USER-INTENT GUARD" in proc.stderr, (proc.returncode, proc.stderr)

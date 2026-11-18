@@ -83,6 +83,8 @@ _GUARDED_WRAPPERS = {
 }
 _MENTION_RE = re.compile(r'stop\.sh|break-overnight-lock')
 _WRAPPER_MODULES = frozenset(('break-overnight-lock',))
+# Harness scripts whose stdout is eval'd by the harness's own procedures (shell assignments only).
+_EVAL_EMITTERS = frozenset(('session-index.py',))
 
 # The base text rule: refuses a wrapper path after a command position or an
 # interpreter word. It still decides whatever the guard cannot prove harmless.
@@ -3123,8 +3125,12 @@ class _Scan:
         dirs = _harness_dirs()
 
         def inside(p):
-            """The directory itself, or a non-directory name directly in it."""
+            """The directory itself, or a non-directory name directly in it. The harness's own eval
+            emitters (/commit Phase 3's `eval "$(python3 .../session-index.py init ...)"`) print shell
+            assignments, not a run: naming one is no context for the wrapper."""
             for q in (os.path.normpath(p), os.path.realpath(p)):
+                if os.path.basename(q) in _EVAL_EMITTERS and os.path.dirname(q) in dirs:
+                    return False
                 if q in dirs or (os.path.dirname(q) in dirs and not os.path.isdir(q)):
                     return True
             return False
