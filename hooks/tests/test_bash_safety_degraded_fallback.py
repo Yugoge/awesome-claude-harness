@@ -10,6 +10,7 @@ HOME and global git config.
 """
 import json
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -296,14 +297,21 @@ def test_unimportable_analyzer_tables_refuse_every_trailing_option(tmp_path, bod
     assert code == 2 and DEGRADED in err, err
 
 
-def run_hook(command, hook=None, **env_extra):
+def child_cpu():
+    """CPU seconds of every finished child process: what a hook run costs, apart from how busy the runner is."""
+    r = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return r.ru_utime + r.ru_stime
+
+
+def run_hook(command, hook=None, timeout=None, **env_extra):
     home = tempfile.mkdtemp(prefix="degraded-home-")
     gitconfig = os.path.join(home, "gitconfig")
     open(gitconfig, "w").close()
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
     env.update(HOME=home, GIT_CONFIG_GLOBAL=gitconfig, **env_extra)
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    p = subprocess.run(["bash", hook or HOOK], input=payload, capture_output=True, text=True, cwd=home, env=env)
+    p = subprocess.run(["bash", hook or HOOK], input=payload, capture_output=True, text=True, cwd=home, env=env,
+                       timeout=timeout)
     return p.returncode, p.stderr
 
 
@@ -442,9 +450,9 @@ ADVERSARIAL_LONG = {
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL_LONG))
 def test_adversarial_long_lines_are_read_in_bounded_time(name):
     command = ADVERSARIAL_LONG[name]
-    started = time.monotonic()
+    started = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
     refused = R.degraded_refuses(command, _rmref())
-    assert time.monotonic() - started < 2.0, name
+    assert time.process_time() - started < 2.0, name
     if "r''m" in command or "-de''lete" in command:
         assert refused, name
 
@@ -454,13 +462,13 @@ def test_adversarial_long_line_refuses_through_the_hook_in_bounded_time(mode):
     # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
     command = "ls " + "git ssh hash kubectl " * 5000 + "-q\nr''m -rf /dev/shm/v/s"
     assert len(command) > 100_000
-    started = time.monotonic()
-    code, err = run_hook(command, **MODES[mode])
+    started = child_cpu()
+    code, err = run_hook(command, timeout=120, **MODES[mode])
     assert code == 2 and DEGRADED in err
-    # Bounded, not fast: the guard against a hang. The whole PreToolUse pipeline reads 100 KB here; a shared CI
-    # runner under xdist took 15.1-15.9 s (2026-11-18), so the bound leaves room for runner speed, far under the
-    # launcher's 700 s timeout.
-    assert time.monotonic() - started < 30.0
+    # Bounded, not fast: the whole PreToolUse pipeline reads 100 KB here. CPU seconds, not wall time: a shared CI
+    # runner under xdist took 15.1-31.3 s of wall time (2026-11-18), while the hook's CPU time stays about 4.7 s idle
+    # and 4.8 s beside 8 CPU-bound processes on 4 cores (whose wall time went to 11.3 s). The timeout catches a hang.
+    assert child_cpu() - started < 15.0
 
 
 def test_a_degraded_reading_past_its_time_bound_refuses(monkeypatch):

@@ -10,6 +10,7 @@ git config and a valid empty protected-runtime file. No command is ever executed
 """
 import json
 import os
+import resource
 import subprocess
 import sys
 import time
@@ -37,6 +38,12 @@ def sandbox(tmp_path_factory):
            "TMPDIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8",
            "CLAUDE_PROTECTED_RUNTIME_FILE": str(runtime)}
     return {"env": env, "repo": str(repo)}
+
+
+def child_cpu():
+    """CPU seconds of every finished child process: what a hook run costs, apart from how busy the runner is."""
+    r = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return r.ru_utime + r.ru_stime
 
 
 def run(sandbox, command):
@@ -259,16 +266,16 @@ def test_a_running_git_working_tree_change_is_refused(sandbox, command, marker):
 @pytest.mark.parametrize("command", ["git" + " -Pgit" * 10000 + " !", "git" + " -c a=bgit" * 5000])
 def test_quote_neutralised_option_scan_is_linear(command):
     from lib.bash_safety_rules import _worktree_raw_fallback
-    start = time.monotonic()
+    start = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
     _worktree_raw_fallback(command, globals_=True)
-    assert time.monotonic() - start < 1.0
+    assert time.process_time() - start < 1.0
 
 
 def test_shell_payload_with_long_option_run_is_fast(sandbox):
     command = "fish -c 'git" + " -Pgit" * 3000 + "'"
-    start = time.monotonic()
+    start = child_cpu()
     r = run(sandbox, command)
-    elapsed = time.monotonic() - start
+    elapsed = child_cpu() - start
     assert r.returncode in (0, 2), r.stderr
     assert elapsed < 2.0, elapsed
 
@@ -321,10 +328,10 @@ def test_uncapped_option_scan_is_linear(command, hit):
 
 def test_shell_payload_with_a_very_long_option_run_is_refused_fast(sandbox):
     command = "fish -c 'git" + " -P" * 20000 + " stash'"
-    start = time.monotonic()
+    start = child_cpu()
     r = run(sandbox, command)
-    elapsed = time.monotonic() - start
+    elapsed = child_cpu() - start
     assert r.returncode == 2 and STASH in r.stderr, r.stderr[-300:]
-    # The re-lex this guards against took 10.6 s (N6). Resolved once it takes about 1.9 s on a 4-core box and
-    # 2.6 s on a shared CI runner under xdist; 5 s catches the regression without failing on runner speed.
+    # The re-lex this guards against took 10.6 s (N6). Resolved, it takes about 2.5 s of the hook's CPU time; CPU
+    # seconds, not wall time, since a shared CI runner under xdist took 5.04 s of wall time (2026-11-18).
     assert elapsed < 5.0, elapsed
