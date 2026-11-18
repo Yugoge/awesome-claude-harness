@@ -284,9 +284,12 @@ def test_hard_ban_empty_entries_never_match_and_session_dirs_ban_stays(sandbox):
         assert hook(env, "ls notes.txt", CLAUDE_HARD_BANNED_SCRIPTS=value).returncode == 0, value
     r = hook(env, "ls demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
     assert r.returncode == 2 and "hard-banned script 'demo-restart'" in r.stderr
-    # The session_dirs.txt ban is settings.json's permissions.deny, for Bash, Read and Edit alike.
+    # The session_dirs.txt ban is settings.json's permissions.deny: Read and Edit refuse the file, and since OB-L16
+    # per-command Bash entries refuse a command that reads, writes or runs it (a search or commit mention passes).
     deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
-    assert {"Bash(*session_dirs.txt*)", "Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
+    assert {"Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
+    stems = ("cat *", "cp *", "rm *", "tee *", "bash *", "sh *", "source *", ". *", "eval *", "python*")
+    assert {f"Bash({stem}{tail})" for stem in stems for tail in ("session_dirs.t*", "session_dirs?*")} <= set(deny)
 
 
 def test_harness_home_resolves_from_the_hook_location(sandbox):
