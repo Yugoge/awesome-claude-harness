@@ -432,7 +432,8 @@ def test_l4s_whole_registration_change():
     switch's own registration and P13-3's two (the SubagentStart injector, the codex ledger on
     PostToolUseFailure) make 55; #27's P2-4 and P2-3 make 57: prompt-workflow.py at SessionStart and at
     SubagentStart, each a rule of its event's launcher, after the event's hook registered before it;
-    T4's Monitor rule makes 58."""
+    OB-L02's two make 59: posttool-orchestrator-ran.py on every tool at PostToolUse and at
+    PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -450,11 +451,15 @@ def test_l4s_whole_registration_change():
     for event, before in (("SessionStart", "check-todo-md-sync.py"), ("SubagentStart", "subagentstart-record.py")):
         assert [(m, c, t) for e, m, c, t in regs if e == event and c.startswith("python")] == \
             [(None, f'python3 "{w._HOME}{name}"', None) for name in (before, "prompt-workflow.py")], event
+    # OB-L02: the orchestrator gate's record of the calls that ran, on both events that follow a call that ran
+    assert [(e, m, t) for e, m, c, t in regs if c.endswith('/posttool-orchestrator-ran.py"')] == \
+        [("PostToolUse", None, 10), ("PostToolUseFailure", None, 10)]
     # + 1: the harness switch's own UserPromptSubmit registration (hooks/userprompt-harness-switch.sh);
     # - 2: P13-3's two, the SubagentStart injector and the codex ledger on PostToolUseFailure;
     # - 2: #27's two, prompt-workflow.py at SessionStart (P2-4) and at SubagentStart (P2-3);
+    # - 2: OB-L02's two, posttool-orchestrator-ran.py at PostToolUse and at PostToolUseFailure;
     # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py)
-    assert len(regs) - 2 - 2 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+    assert len(regs) - 2 - 2 - 2 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
         - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
