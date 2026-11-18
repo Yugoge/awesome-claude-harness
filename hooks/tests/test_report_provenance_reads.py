@@ -69,9 +69,9 @@ REFUSED = {
     "glob-direct-exec": f"{H}/pretool-laun*.py < /tmp/p.json",
     "cd-glob-entry": f"cd {H} && python3 ./pretool-tool-pol[i]cy.py < /tmp/p.json",
     # find -exec
-    "find-exec-python": f"find {H} -maxdepth 1 -name pretool-tool-policy.py -exec python3 {{}} \; < /tmp/p.json",
-    "find-exec-glob-name": f"find {H} -maxdepth 1 -name 'pretool-tool-pol*' -exec timeout 5 python3 {{}} \;",
-    "find-execdir-direct": f"find {H} -name 'pretool-launch.py' -execdir {{}} \;",
+    "find-exec-python": f"find {H} -maxdepth 1 -name pretool-tool-policy.py -exec python3 {{}} \\; < /tmp/p.json",
+    "find-exec-glob-name": f"find {H} -maxdepth 1 -name 'pretool-tool-pol*' -exec timeout 5 python3 {{}} \\;",
+    "find-execdir-direct": f"find {H} -name 'pretool-launch.py' -execdir {{}} \\;",
     # inline python with its directory in the hooks dir importing hooks modules
     "cd-hooks-from-lib": (f"cd {H} && python3 - <<'PEOF'\nfrom lib import write_gate, rule_runner\n"
                           "r=[x for x in write_gate.RULES if x.name=='tool-policy'][0]\nPEOF"),
