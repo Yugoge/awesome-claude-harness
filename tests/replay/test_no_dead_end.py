@@ -47,7 +47,8 @@ from tests.replay.test_faults import CLAIMS, FAULTS as FAULT_SPECS
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
             "todo-first")
-PLAIN_CASES = ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema")
+PLAIN_CASES = ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+               "qa-provenance")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)

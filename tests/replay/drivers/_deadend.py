@@ -83,6 +83,14 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   check (the dispatch declares nothing, so the reports its transcript shows it
                   wrote) refuses the stop; at its next round it edits the report into the one its
                   schema asks for and stops: passes.
+  qa-provenance   a plain prompt whose QA dispatches each declare the same qa-report.v2 (CD-6's report
+                  provenance, subagentstop-e2e-enforce.py): the first QA writes it and stops: passes;
+                  a second QA, dispatched after that write, stops without writing it: the E2E gate
+                  refuses the stop (the report is an earlier QA's); at its next round it writes its
+                  own report and stops: passes. The main agent then rewrites the report by a route
+                  the tool policy leaves to the gate (a computed directory) and dispatches a third
+                  QA, which stops without writing it: refused (the main agent wrote it); at its next
+                  round it writes its own report and stops: passes.
   qa-declared     /dev (drivers/dev.py, plain), G2 advisory in its environment
                   (CLAUDE_OBLIGATION_STOPGATE=advisory), whose Step 13 QA, dispatched with its
                   obligation, stops without the QA report it declares (faults.py missing): the E2E
@@ -329,9 +337,67 @@ def _plain(rp, case: str) -> None:
         rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
     elif case == "report-schema":
         _registry_report(rp, s, path, rounds)
+    elif case == "qa-provenance":
+        _qa_provenance(rp, s, path, rounds)
     ev = s.stop("add(a, b) returns a + b.", label="Stop")
     ok = bool(rounds) and not rounds[-1]["blocked"]
     rp.terminal("plain", ok, ev, case=case, rounds=rounds)
+
+
+def _qa_provenance(rp, s, toy: str, rounds: list) -> None:
+    """qa-provenance: the E2E gate judges the declared report by who last wrote it (CD-6,
+    lib/report_provenance.py): another QA of an earlier round, then the main agent; each refused QA
+    writes its own report at its next round."""
+    from .. import agents, schemagen
+    project, tid = rp.layout.project, "20990101-000001"
+    rel = f"docs/dev/qa-report-{tid}.json"
+    report = os.path.join(project, rel)
+    schema = agents.Tree(rp).schema("qa-report.v2")
+
+    def text(who: str) -> str:
+        return json.dumps(schemagen.instance(schema, {"task_id": tid, "request_id": tid, "qa": {
+            "status": "pass", "e2e_enforcement": {"status": "legitimately_skipped",
+                                                  "blocking_reason": f"a library function, no UI ({who})"}}}),
+                          indent=2) + "\n"
+
+    def prompt(n: int) -> str:
+        doc = {"task_id": tid, "role": "qa", "pipeline": "dev", "profile": "singular",
+               "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "artifacts": [{"kind": "json", "path": rel, "schema": "qa-report.v2", "identity": {"task_id": tid}}]}
+        return (f"Problem: verify that toy.add returns a + b (QA round {n}); your report is {rel}.\n"
+                "DO NOT: modify any other file.\n" + '<obligation v="1">' + json.dumps(doc) + "</obligation>")
+
+    def first(sub):
+        sub.read(toy, label="agent:qa Read")
+        agents.put(sub, report, text("round 1"), f"agent:qa Write {rel}")
+        # its next call's PreToolUse records the change as its own (a change is seen at the next call)
+        sub.read(report, label=f"agent:qa Read {rel} back")
+
+    def reads_only(sub):
+        sub.read(toy, label="agent:qa Read")
+
+    def own(n: int):
+        left = iter([1])
+
+        def again(sub, ev):  # its next round: the report it owes, written by itself
+            if next(left, None) is None:
+                return None
+            agents.put(sub, report, text(f"round {n}"), f"agent:qa Write {rel} (next round)")
+            return "add(a, b) returns a + b; my report is written."
+        return again
+
+    def dispatch(n: int, body, again=None, what: str = ""):
+        d = s.dispatch("qa", prompt(n), description=f"Verify toy.add (round {n})", body=body,
+                       result="add(a, b) returns a + b.", on_stop_block=again, stop_rounds=3,
+                       label=f"main Agent(qa) round {n}{what}")
+        rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    dispatch(1, first)
+    dispatch(2, reads_only, own(2), ": the report is round 1's")
+    # The main agent rewrites the report through a directory computed at run time, which no reading of
+    # the command resolves: the tool policy leaves it to the gate (pretool-tool-policy.py, CD-6).
+    s.bash(f"D=$(printf %s docs/dev); cat > \"$D/qa-report-{tid}.json\" <<'EOF'\n{text('the main agent')}EOF",
+           label="main Bash: the report rewritten through a computed directory")
+    dispatch(3, reads_only, own(3), ": the report is the main agent's")
 
 
 def _registry_report(rp, s, toy: str, rounds: list) -> None:
@@ -511,7 +577,8 @@ def run(rp) -> None:
         return _qa_declared(rp)
     if case == "ask-first":
         return _ask_first(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):
+    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+                "qa-provenance"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
                     "checklist-lock"):
