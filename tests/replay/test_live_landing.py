@@ -386,8 +386,8 @@ def _pre(*matchers) -> set:
 # producer gate.
 # OB-L02 raised the timeouts of the two matcher-less PostToolUse launchers (posttool-launch.py 690 -> 700,
 # posttool-failure-launch.py 120 -> 130) when it added posttool-orchestrator-ran.py to their rule lists: every
-# tool call meets the matcher-less PostToolUse group; only a failed call meets PostToolUseFailure's, which no
-# landing scenario makes after its landing (ELSEWHERE).
+# tool call meets the matcher-less PostToolUse group; only a failed call meets PostToolUseFailure's, which
+# (a) and (b) make after their landing (REACHED) and the pre-merge and harness-home sessions do not.
 POST_LAUNCH = ("PostToolUse", None)
 FAILED_LAUNCH = ("PostToolUseFailure", None)
 BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash") \
@@ -443,8 +443,8 @@ ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              ("PreToolUse", "Monitor"): ([], ["hooks/pretool-monitor-command.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
              ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
-REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START},
-           B.name: {RATING, START}}  # P13-3: a dispatch starts an agent
+REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START, FAILED_LAUNCH},
+           B.name: {RATING, START, FAILED_LAUNCH}}  # P13-3: a dispatch starts an agent
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that
