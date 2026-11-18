@@ -1171,6 +1171,26 @@ def wake_recovery(user_input: str) -> str:
     ])
 
 
+def carry_on_line(state) -> str:
+    """For a human /restart or a plain prompt that lands while a gated command's checklist is open
+    (``state``, _checklist's): one line saying to carry on with that command from its step in
+    progress, as wake_recovery says for the overnight wake; '' with no open gated checklist."""
+    from stop_contract import GATED_COMMANDS  # hooks/lib is on sys.path (see the WS1 block above)
+    if state is None or state.command not in GATED_COMMANDS:
+        return ''
+    todos = state.todos if state.todos is not None else state.canonical
+    step = next((t for t in todos if t.get('status') == 'in_progress'), None) \
+        or next((t for t in todos if t.get('status') != 'completed'), None)
+    if step is None:
+        return ''
+    content = str(step.get('content') or '')
+    label = content.split(':', 1)[0] if content.startswith('Step ') else f'step {todos.index(step) + 1}'
+    pause = ('never stop, ask or wait' if state.command == 'dev-overnight'
+             else 'pause only with AskUserQuestion')
+    return (f'CARRY ON: carry on with /{state.command} {label}; this turn cannot end until its '
+            f'checklist is complete; {pause}; /stop is the exit.')
+
+
 def handle_phase_b(session_id: str) -> None:
     """Phase B: inject overnight continuation and/or workflow progress."""
     overnight_ctx = check_overnight_continuation(session_id)
@@ -1196,6 +1216,9 @@ def handle_phase_b(session_id: str) -> None:
     if all(t.get('status') == 'completed' for t in todos):
         return
     print(format_active_progress(todos, state.todos is not None))
+    line = carry_on_line(state)
+    if line:
+        print(line)
 
 
 def checklist_message(cmd_name: str, todos: list) -> str:
@@ -1939,6 +1962,10 @@ def main():
                 print(recovery)
         else:
             handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
+            if cmd_name == 'restart':  # a control command: the span it lands in stays open
+                line = carry_on_line(_checklist())
+                if line:
+                    print(line)
             try:  # an ask span opens with the main agent's own record, and the roles on notice (D29, D32): context, never a verdict
                 import score_view  # hooks/lib is on sys.path (see the WS1 block above)
                 line = score_view.main_line(cmd_name, str(PROJECT_DIR))

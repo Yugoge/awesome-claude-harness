@@ -11,7 +11,9 @@ CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and CLAUDE_PROJECT_DIR are tmp_path's own.
   /dev-overnight span, never after the owner's /stop, and to every prompt starting with /restart as before
   (X8: the hook cannot tell a scheduled prompt from a typed one); the owner's /stop revokes a capability
   an earlier wake minted (the exact recovery SendMessage is refused after it) and leaves the owner's own;
-* prompt-workflow.py hands over commands/restart.md's recovery for the wake inside that span only;
+* prompt-workflow.py hands over commands/restart.md's recovery for the wake inside that span only; a
+  human /restart or a plain prompt while a gated command's checklist is open gets the same carry-on
+  line (carry on from the step in progress; ask only with AskUserQuestion, nobody inside the overnight);
 * the Stop gate's time-lock (stop-command-gate.py's step 4, P5) refuses a Stop after end_time, its closeout
   met, while the transcript's wake has no later CronDelete, naming the id, whatever span is active; a
   transcript with no wake meets nothing (P2's locator and window, faked from this base's own readers);
@@ -255,6 +257,57 @@ def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
     night.typed("/stop")
     p = night.hook("prompt-workflow.py", "UserPromptSubmit", prompt=WAKE)
     assert "OVERNIGHT WAKE" not in p.stdout and "Mandatory procedure" not in p.stdout
+
+
+# ---------------------------------------------------------------- a human /restart or a plain prompt in an open span
+
+CARRY_ON = ("CARRY ON: carry on with /dev Step 8; this turn cannot end until its checklist is complete; "
+            "pause only with AskUserQuestion; /stop is the exit.")
+
+
+def _usage_limit(s):
+    """The CLI's synthetic assistant record for a usage limit (model <synthetic>, isApiErrorMessage)."""
+    s.add({"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit", "apiErrorStatus": 429,
+           "message": {"role": "assistant", "model": "<synthetic>", "content": [
+               {"type": "text", "text": "You've hit your weekly limit · resets 2pm (UTC)"}]}})
+
+
+def _cut_dev(tmp_path, done=10):
+    """A /dev a usage limit cut at Step 8 (the BA-QA iteration, its 11th step) with its checklist open."""
+    s = Session(tmp_path)
+    s.typed("/dev fix the widget")
+    s.use("TodoWrite", {"todos": _frontier(todo_canonical.run_todo_script("dev", "fix the widget"), done)})
+    _usage_limit(s)
+    return s
+
+
+@pytest.mark.parametrize("prompt", ["/restart", "/restart  ", "continue"])
+def test_a_restart_or_plain_prompt_in_an_open_dev_span_carries_on(tmp_path, prompt):
+    """The owner's report: a /dev cut at Step 8, then a bare /restart that found nothing to resume, and
+    the orchestrator stopped. Like the overnight wake (wake_recovery), the prompt now says to carry on."""
+    p = _cut_dev(tmp_path).hook("prompt-workflow.py", "UserPromptSubmit", prompt=prompt)
+    assert p.returncode == 0
+    assert CARRY_ON in p.stdout.splitlines(), p.stdout
+
+
+def test_no_carry_on_line_without_an_open_gated_checklist(tmp_path):
+    s = _cut_dev(tmp_path, done=len(todo_canonical.run_todo_script("dev", "fix the widget")))
+    assert "CARRY ON" not in s.hook("prompt-workflow.py", "UserPromptSubmit", prompt="/restart").stdout
+    bare = Session(tmp_path / "bare")
+    assert "CARRY ON" not in bare.hook("prompt-workflow.py", "UserPromptSubmit", prompt="/restart").stdout
+    spec = Session(tmp_path / "spec")  # /spec is no gated command: no Stop gate holds its turn
+    spec.typed("/spec the widget")
+    spec.use("TodoWrite", {"todos": _frontier(todo_canonical.run_todo_script("spec", "the widget"), 4)})
+    assert "CARRY ON" not in spec.hook("prompt-workflow.py", "UserPromptSubmit", prompt="continue").stdout
+
+
+def test_inside_dev_overnight_the_carry_on_line_asks_nobody(night):
+    night.use("TodoWrite", {"todos": _frontier(_canonical(), 3)})
+    p = night.hook("prompt-workflow.py", "UserPromptSubmit", prompt="/restart")
+    line = next(x for x in p.stdout.splitlines() if x.startswith("CARRY ON: "))
+    assert line.startswith("CARRY ON: carry on with /dev-overnight Step ")
+    assert line.endswith("; this turn cannot end until its checklist is complete; never stop, ask or wait; "
+                         "/stop is the exit.")
 
 
 # ---------------------------------------------------------------- the time-lock's wake check
