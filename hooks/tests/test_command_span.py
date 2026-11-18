@@ -682,3 +682,43 @@ def test_opener_remotes_read_the_remote_lines_of_an_opener_with_a_head_line(tmp_
     _context(tx, f"[/push] remote at the opener: origin {digest} - none\n")
     assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_remotes() == {
         "origin": (digest, "-", None, None)}
+
+
+# CLI 2.1.322 (measured on the owner's host, entrypoint "sdk-cli") and the 2.1.325/2.1.326
+# recordings (entrypoint "remote") record a typed prompt with turnOrigin "sdk": before this, no
+# span ever opened in such a session, so the Stop gate let every stop of a /dev through.
+SDK_DEV = "<command-message>dev</command-message>\n<command-name>/dev</command-name>\n<command-args>fix the bug</command-args>"
+
+
+def _sdk_typed(tx, content):
+    """A typed prompt as CLI 2.1.322 records it under the SDK entrypoint: turnOrigin "sdk", no origin."""
+    return tx.add(tx._envelope("user", promptId=f"prompt-{len(tx.records) + 1:04d}",
+                               message={"role": "user", "content": content}, permissionMode="default",
+                               promptSource="sdk", turnOrigin="sdk", entrypoint="sdk-cli", userType="external"))
+
+
+def test_a_typed_command_with_sdk_turn_origin_opens_the_span(tmp_path):
+    tx = _Transcript()
+    start = _sdk_typed(tx, SDK_DEV)
+    span = command_span.active_span(tx.write(tmp_path / "sdk.jsonl"))
+    assert span is not None and (span.command, span.args, span.start_line) == ("dev", "fix the bug", start)
+    _sdk_typed(tx, "<command-message>restart</command-message>\n<command-name>/restart</command-name>")
+    span = command_span.active_span(tx.write(tmp_path / "sdk-restart.jsonl"))
+    assert (span.command, span.start_line) == ("dev", start)  # /restart is a control command
+
+
+def test_recorded_sdk_prompts_are_typed_and_notifications_are_not():
+    root = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "cli"
+    seen = {"sdk": 0, "task_notification": 0}
+    for path in sorted(root.glob("*/transcript.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            kind = record.get("turnOrigin")
+            if record.get("type") != "user" or kind not in seen or record.get("isMeta"):
+                continue
+            content = (record.get("message") or {}).get("content")
+            if kind == "sdk" and not isinstance(content, str):
+                continue  # a tool result the SDK turn carries
+            seen[kind] += 1
+            assert (command_span.prompt_text(record) is not None) == (kind == "sdk"), (path, kind)
+    assert seen["sdk"] and seen["task_notification"], seen

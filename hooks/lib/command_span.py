@@ -50,6 +50,11 @@ GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
 _NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
+# The origin kinds of a prompt the owner typed. A session driven through the SDK entrypoint (the
+# desktop app, Remote Control: entrypoint "sdk-cli" or "remote") records its typed prompts with
+# turnOrigin "sdk" (CLI 2.1.322, and the 2.1.325/2.1.326 recordings in tests/fixtures/cli); a
+# scheduled task's prompt ("scheduled") and an agent's task notification stay out.
+_TYPED_ORIGINS = frozenset(("human", "sdk"))
 # The CLI records a typed command as <command-message>..</command-message>
 # <command-name>/x</command-name><command-args>..</command-args> at the start.
 _CMD_TAG_RE = re.compile(
@@ -73,10 +78,10 @@ def prompt_text(record) -> str | None:
         return None
     if any(record.get(key) for key in _NON_HUMAN_KEYS):
         return None
-    for key in ("origin", "turnOrigin"):  # a typed prompt records origin kind "human"
+    for key in ("origin", "turnOrigin"):  # a typed prompt records origin kind "human", or "sdk"
         value = record.get(key)
         kind = value.get("kind") if isinstance(value, dict) else value
-        if kind is not None and kind != "human":
+        if kind is not None and kind not in _TYPED_ORIGINS:
             return None
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
