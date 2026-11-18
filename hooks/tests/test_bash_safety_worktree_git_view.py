@@ -325,4 +325,6 @@ def test_shell_payload_with_a_very_long_option_run_is_refused_fast(sandbox):
     r = run(sandbox, command)
     elapsed = time.monotonic() - start
     assert r.returncode == 2 and STASH in r.stderr, r.stderr[-300:]
-    assert elapsed < 2.0, elapsed
+    # The re-lex this guards against took 10.6 s (N6). Resolved once it takes about 1.9 s on a 4-core box and
+    # 2.6 s on a shared CI runner under xdist; 5 s catches the regression without failing on runner speed.
+    assert elapsed < 5.0, elapsed

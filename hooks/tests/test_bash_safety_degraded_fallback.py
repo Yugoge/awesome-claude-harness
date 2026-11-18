@@ -457,7 +457,10 @@ def test_adversarial_long_line_refuses_through_the_hook_in_bounded_time(mode):
     started = time.monotonic()
     code, err = run_hook(command, **MODES[mode])
     assert code == 2 and DEGRADED in err
-    assert time.monotonic() - started < 15.0
+    # Bounded, not fast: the guard against a hang. The whole PreToolUse pipeline reads 100 KB here; a shared CI
+    # runner under xdist took 15.1-15.9 s (2026-11-18), so the bound leaves room for runner speed, far under the
+    # launcher's 700 s timeout.
+    assert time.monotonic() - started < 30.0
 
 
 def test_a_degraded_reading_past_its_time_bound_refuses(monkeypatch):
