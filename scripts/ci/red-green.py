@@ -11,7 +11,7 @@ Given a base and a head, the script finds their merge base and judges the diff m
   red: the merge base with only the head's changed ``test_*.py`` and ``conftest.py`` laid over it, so
   test helpers and fixtures stay the base's; green: the head.
 - A ``Red-test: none: <reason>`` trailer says no red is possible; its reason is printed first in the
-  summary.
+  summary and nothing runs, since the reason alone passes the job.
 
 Trailers are read from the trailer block of each commit message of merge-base..head, and from any line
 of ``--body-file`` (a PR body).
@@ -186,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     collect_errors: list[str] = []
     if exempt:
         status = "exempt: the diff changes only tests and docs"
+    elif reasons:
+        status = "exempt: Red-test: none"
     elif not targets:
         status = "no red: no changed test_*.py and no Red-test: <nodeid> trailer"
     else:
