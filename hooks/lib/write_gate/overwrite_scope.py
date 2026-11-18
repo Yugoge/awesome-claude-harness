@@ -285,8 +285,8 @@ def _git_dir_of(top: str, project: str = ""):
     if os.path.realpath(os.path.join(git_dir, back)) != os.path.realpath(entry):
         raise _Doubt("gitdir back-link names another work tree")
     worktrees = os.path.dirname(git_dir)
-    common = os.path.dirname(worktrees)
-    if os.path.basename(worktrees) != "worktrees" or _common_dir(git_dir) != common:
+    common = _common_dir(git_dir)  # the common git dir its commondir file names, as git finds it
+    if os.path.basename(worktrees) != "worktrees" or os.path.dirname(worktrees) != common:
         raise _Doubt("not a linked worktree's git dir")
     if not (os.path.isfile(os.path.join(common, "HEAD"))
             and os.path.isdir(os.path.join(common, "objects"))):
