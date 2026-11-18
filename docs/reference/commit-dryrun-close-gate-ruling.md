@@ -10,7 +10,7 @@ Rationale: a `--dry-run` invocation creates no commit, moves no ref, leaves HEAD
 
 ## Measured caveat on the ruling's phrasing
 
-The ruling assumed a dry-run never touches the index at all. Measured otherwise: `agents/changelog-analyst.md` saves the index bytes and installs a restoring exit trap (mutate-then-restore), and `scripts/stage-owned-hunks.py` redirects `GIT_INDEX_FILE` to a throwaway index for untracked candidates. What holds is the byte-identical outcome, not a never-touched mechanism.
+The ruling assumed a dry-run never touches the index at all. Measured otherwise: `agents/changelog-analyst.md` saves the index bytes and installs a restoring exit trap (mutate-then-restore), and `scripts/stage-owned-hunks.py` redirects `GIT_INDEX_FILE` to a throwaway index for untracked candidates. What holds is the byte-identical outcome, not a never-touched mechanism. Since 2026-11-17 the restore is gone: the restoring copy was a write into `.git/` that changelog-analyst's write policy refuses, so the dry run now stages into a temporary copy of the index (`GIT_INDEX_FILE` under the role's scratch) and only reads the index itself.
 
 ## Scope at the time
 

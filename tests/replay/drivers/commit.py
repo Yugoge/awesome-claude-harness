@@ -43,8 +43,8 @@ the role work below): Phase 1's plan checks (the three equality reads and the st
 the provenance diff), the candidate set the whitelist items name (the report's files, the chain's
 commit_whitelist_artifacts, the anchored post-chain artifacts of the task and, with no chain, the
 anchored do-path set, both name lists read from Phase 2's text) intersected with git
-status and with QA_APPROVED_FILES; in a dry run Phase 4's index save and restore around the
-staging; in a real run the message written with the Write tool at the path the text gives
+status and with QA_APPROVED_FILES; in a dry run the staging into Phase 4's temporary copy of the
+index (GIT_INDEX_FILE), the index itself only read; in a real run the message written with the Write tool at the path the text gives
 (Phase 8 step 1's `MSGFILE=` path, its placeholders bound), then one Bash process holding the Phase 3 lock block
 (lock and session-index init as written) that runs Phase 4's pre-staged check, Phase 5's
 individual `git add -- <path>`, the Phase 8 drift re-check and commit block and the SHA/branch
@@ -629,15 +629,24 @@ class CommitRun:
         return "fix(toy): add validates its arguments"
 
     def dry_stage(self, sub, root: str, cands: list, order: int) -> None:
-        """A dry run (Phase 4): the exact index bytes saved, an exit trap restoring them, the candidate set
-        staged and its staged stat read."""
+        """A dry run (Phase 4): in one Bash process the index copied as it is (`cp -p`) to the temporary index
+        the text names under the role's scratch, GIT_INDEX_FILE exported to the copy, the candidate set staged
+        there and its staged stat read. The index itself is only read; nothing is copied back onto it."""
+        sec = cmdtext.section(self.analyst_text, "Phase 4: Pre-staged verification")
+        if "GIT_INDEX_FILE" not in sec:
+            raise cmdtext.TextNotFound("Phase 4 names no temporary index (GIT_INDEX_FILE) for a dry run")
+        m = re.search(r"`(/tmp/claude-scratch/changelog-analyst/)`[^`]*`(dryrun-index-<unique>)`", sec)
+        if not m:
+            raise cmdtext.TextNotFound("Phase 4 names no dry-run index copy under the role's scratch")
         q = shlex.quote(root)
+        # The path `git rev-parse --path-format=absolute --git-path index` prints in the toy clone, spelled literally.
         idx = os.path.join(root, ".git", "index")
-        saved = f"/tmp/claude-scratch/changelog-analyst/index-{self.tid}-{order}.bak"
+        copy = m.group(1) + m.group(2).replace("<unique>", f"{self.tid}-{order}")
         add = "\n".join(f"git -C {q} add -- {shlex.quote(p)}" for p in cands)
-        sub.bash(f"mkdir -p /tmp/claude-scratch/changelog-analyst\ncp -p {shlex.quote(idx)} {saved}\n"
-                 f"trap 'cp -p {saved} {shlex.quote(idx)}' EXIT\n{add}\ngit -C {q} diff --cached --stat",
-                 "Dry run: stage the candidate set, then restore the index", label=f"{sub.role} Bash dry-run stage {order}")
+        sub.bash(f"mkdir -p {m.group(1).rstrip('/')}\ncp -p {shlex.quote(idx)} {copy}\n"
+                 f"export GIT_INDEX_FILE={copy}\n{add}\ngit -C {q} diff --cached --stat",
+                 "Dry run: stage the candidate set into a temporary copy of the index",
+                 label=f"{sub.role} Bash dry-run stage {order}")
 
     def commit_repo(self, sub, repo: dict, cands: list, order: int) -> dict:
         o, tid = self.o, self.tid
