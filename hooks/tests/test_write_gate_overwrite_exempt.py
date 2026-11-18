@@ -326,8 +326,9 @@ def test_hardlink_in_temp_to_a_tracked_file_refused(lab):
 _DECL = re.compile(r'"kind"\s*:\s*"[a-z_-]+"\s*,\s*"path"\s*:\s*"([^"\\]+)')
 _TEMPLATED = re.compile(r"(?:docs|tests)/[a-z_-]+/[A-Za-z0-9_.{}<>$*/-]*[<{$*][A-Za-z0-9_.{}<>$*/-]*")
 # docs/ and tests/ directories whose templated files no gate, command or step script reads as
-# evidence: codex output kept for the human (commands/codex.md) and /clean's archive.
-_NOT_ARTIFACT_DIRS = ("docs/codex/", "docs/archive/")
+# evidence: codex output kept for the human (commands/codex.md), /clean's archive and recorded
+# test fixtures (a CLI recorder's tests/fixtures/cli/<version>/ output, a hook docstring's example).
+_NOT_ARTIFACT_DIRS = ("docs/codex/", "docs/archive/", "tests/fixtures/")
 _PLACEHOLDER = re.compile(r"<[^<>]*>|\{[^{}]*\}|\$\{[^{}]*\}|\$[A-Za-z_]+|\*")
 
 
