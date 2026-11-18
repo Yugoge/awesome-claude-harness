@@ -65,3 +65,54 @@ def test_the_canary_is_unchanged_without_a_host_file(tmp_path):
     rc, err = _canary(tmp_path, None)
     assert rc == 0, err
     assert not [line for line in err if "[FAIL]" in line], err
+
+
+# The write-gate probe (N14). Its deny case once overwrote a bare file it made below $TMPDIR; OB-L46's
+# overwrite scope lets a Write replace such a temp file, so the real gate allowed it and the canary
+# reported "FAILED to block Write to existing file" at every SessionStart (every armed replay). The
+# probe is now a tracked file below tests/reports/ in a throwaway git work tree: refused by the
+# overwrite rule wherever that tree lies, temp root or not.
+
+WRITE_GATE_FAIL = "pretool-write-gate.py FAILED to block Write to existing file"
+
+
+def _run(tmp_path: Path, home: Path):
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "user"), "CLAUDE_HOME": str(home),
+           "CLAUDE_STATE_DIR": str(tmp_path / "state"), "TMPDIR": str(tmp_path / "tmp"),
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    (tmp_path / "user").mkdir(exist_ok=True)
+    (tmp_path / "tmp").mkdir(exist_ok=True)
+    root = tmp_path / "host"
+    root.mkdir(exist_ok=True)
+    proc = subprocess.run(["bash", str(home / "scripts" / "canary-verify.sh"), "--host-root", str(root)],
+                          cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    return proc.returncode, proc.stderr.splitlines()
+
+
+def _home_with_stub_write_gate(tmp_path: Path) -> Path:
+    """This tree's harness home, but its write gate allows every call (a fail-open gate)."""
+    home = _home(tmp_path)
+    (home / "hooks").unlink()
+    (home / "hooks").mkdir()
+    for entry in (REPO / "hooks").iterdir():
+        if entry.name != "pretool-write-gate.py":
+            (home / "hooks" / entry.name).symlink_to(entry)
+    (home / "hooks" / "pretool-write-gate.py").write_text("import sys\nsys.stdin.read()\nsys.exit(0)\n")
+    return home
+
+
+def test_the_real_write_gate_passes_the_probe_with_tmpdir_a_temp_root(tmp_path):
+    rc, err = _run(tmp_path, _home(tmp_path))
+    assert not [line for line in err if WRITE_GATE_FAIL in line], err
+    assert rc == 0, err
+
+
+def test_a_fail_open_write_gate_is_still_reported(tmp_path):
+    rc, err = _run(tmp_path, _home_with_stub_write_gate(tmp_path))
+    assert rc == 2, err
+    assert err[0].startswith("canary-verify[FAIL]: " + WRITE_GATE_FAIL), err
+
+
+def test_the_write_probe_leaves_nothing_in_tmpdir(tmp_path):
+    _run(tmp_path, _home(tmp_path))
+    assert not [p.name for p in (tmp_path / "tmp").iterdir() if p.name.startswith("canary-")]
