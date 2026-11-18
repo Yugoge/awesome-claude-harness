@@ -19,9 +19,9 @@ role the name plays:
 - a URL (`scheme://host...`), with `url=True`: only for a positional URL operand or curl `--url` value of a
   network client (curl, wget, http, https, httpie, xh, aria2c) whose output file the URL does not name (the caller
   decides that); an option's value is a local path (`curl -c http://../.env URL`). A `file:` URL in any case
-  (`file:///home/u/.env`, `FILE://localhost/...`, `file:/x/.env`) and a URL whose host is empty, `.` or `..`
+  (`file:///home/<user>/.env`, `FILE://localhost/...`, `file:/x/.env`) and a URL whose host is empty, `.` or `..`
   (`http:///x/.env`, `http://../.env`) name a local file and are never exempt. A redirection target, a write target or another
-  command's operand is a local path, so `echo x > http://x/.env` and `cat file:///home/u/.env > /tmp/y` stay
+  command's operand is a local path, so `echo x > http://x/.env` and `cat file:///home/<user>/.env > /tmp/y` stay
   sensitive;
 - a report or log, with `report=True`: only for a write target, a base name with `report` as a whole token
   (bounded by the name's start or end or `-`, `_`, `.`) or ending in `.log` (`secret-scan-report.txt`,
