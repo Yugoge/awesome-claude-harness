@@ -69,16 +69,16 @@ def session(tmp_path):
     return Session(tmp_path)
 
 
-def test_gh_pr_create_is_refused_as_bash_and_as_monitor(session):
-    bash = session.run("Bash", {"command": "gh pr create --title t --body b", "description": "open PR"})
+def test_git_worktree_add_is_refused_as_bash_and_as_monitor(session):
+    bash = session.run("Bash", {"command": "git worktree add ../side", "description": "add worktree"})
     assert bash.returncode == 2, bash.stderr
-    mon = session.run("Monitor", monitor("gh pr create --title t --body b"))
+    mon = session.run("Monitor", monitor("git worktree add ../side"))
     assert mon.returncode == 2, (mon.stdout, mon.stderr)
     assert "checked as a Bash call" in mon.stderr
 
 
-def test_a_branch_created_inside_a_monitor_pipeline_is_refused(session):
-    mon = session.run("Monitor", monitor("tail -f build.log & git checkout -b side; wait"))
+def test_a_worktree_created_inside_a_monitor_pipeline_is_refused(session):
+    mon = session.run("Monitor", monitor("tail -f build.log & git worktree add ../side; wait"))
     assert mon.returncode == 2, (mon.stdout, mon.stderr)
 
 
