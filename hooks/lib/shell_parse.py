@@ -2745,7 +2745,8 @@ def _resolve_shell(r, head, words, cmd, depth):
             k += 1
             break
         if len(v) > 1 and v[0] in "-+" and not v.startswith("--"):
-            if v[0] == "-" and "c" in v[1:]:
+            # bash and dash read `+c` (and a `+` cluster with c) as -c.
+            if "c" in v[1:]:
                 has_c = True
             if v[0] == "-" and "s" in v[1:]:
                 has_s = True
@@ -2861,9 +2862,9 @@ _DATA_ARG_KEEP = frozenset({"killall", "pkill", "kill", "rm", "mv"})
 def executable_view(text):
     """``text`` with its non-executable parts blanked, offsets kept.
 
-    Blanked: comments; heredoc bodies of a command that is not a shell; the
-    quoted arguments of a command that only reads them as data (substitutions
-    inside them stay). Kept: every command word, every shell ``-c`` payload
+    Blanked: comments; heredoc bodies of a command that is not a shell nor
+    piped into one; the quoted arguments of a command that only reads them as
+    data (substitutions inside them stay). Kept: every command word, every shell ``-c`` payload
     (its quotes blanked so the code reads bare), the arguments of the commands
     whose arguments are the target (kill, rm, mv ...), with their quotes
     blanked. A text that does not parse is returned unchanged (fail closed).
@@ -2875,7 +2876,9 @@ def executable_view(text):
         return text
     out = list(text)
     _blank_comments(text, out)
-    for site in walk(script, into=("cmdsub", "backtick", "procsub")):
+    sites = list(walk(script, into=("cmdsub", "backtick", "procsub")))
+    piped_code = _heredocs_piped_to_shell(sites)
+    for site in sites:
         cmd = site.cmd
         res = resolve(cmd)
         name = res.name
@@ -2883,7 +2886,7 @@ def executable_view(text):
             continue
         is_shell = name in SHELLS
         for red in cmd.redirects:
-            if red.hd is not None and not is_shell:
+            if red.hd is not None and not is_shell and id(red) not in piped_code:
                 a, b = red.hd.body_span
                 _blank(out, a, b, keep_newlines=True)
         if is_shell:
@@ -2915,6 +2918,37 @@ def executable_view(text):
                 continue
             _blank(out, *w.span)
     return "".join(out)
+
+
+def _heredocs_piped_to_shell(sites):
+    """ids of the heredoc redirections of a pipeline stage whose output a shell
+    reads as its code (`cat <<EOF | bash`, `... | /usr/bin/bash`)."""
+    keep, seen = set(), set()
+    for site in sites:
+        if id(site.script) in seen:
+            continue
+        seen.add(id(site.script))
+        for pl, _sep in site.script.items:
+            for k in range(1, len(pl.stages)):
+                nxt = pl.stages[k]
+                if not isinstance(nxt, SimpleCommand):
+                    continue
+                res = resolve(nxt)
+                if res.name in SHELLS and res.payload_kind != "shell_c" and res.stdin_shell and \
+                        _stdin_redirect(nxt.redirects) is None:
+                    _collect_heredocs(pl.stages[k - 1], keep)
+    return keep
+
+
+def _collect_heredocs(cmd, keep):
+    for red in cmd.redirects:
+        if red.hd is not None:
+            keep.add(id(red))
+    if isinstance(cmd, Compound):
+        for body in cmd.body:
+            for pl, _sep in getattr(body, "items", ()):
+                for stage in pl.stages:
+                    _collect_heredocs(stage, keep)
 
 
 def without_heredoc_bodies(text):
