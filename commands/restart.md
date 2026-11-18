@@ -93,8 +93,12 @@ never an error to retry.
 7. **Branch on the guidance text.** Read the top-level `operator_guidance` field of step 2's JSON,
    present even at zero candidates and still there after step 6; do not look for the guidance file,
    whose name is derived from the capability step 6 consumes.
-   - **No guidance** (a bare invocation): report that no recoverable interrupted child exists, and
-     stop. Start no work and dispatch nothing.
+   - **No guidance** (a bare invocation): report in one line that no recoverable interrupted
+     child exists, then carry on with the active gated command from its checklist step in
+     progress, by step 8's rules: the rule of step 5 and of the overnight wake. The turn ends only
+     when no gated command's checklist is open. Never end it with an offer to continue ("say if
+     you want me to continue"); a real owner decision is asked with `AskUserQuestion` only, and
+     `/stop` is the exit.
    - **Guidance present**: continue to step 8.
 8. **Continue this session's own main agent.** With no interrupted child, the main agent is what
    continues, and the invocation is a directive addressed to it. All of these bind:
