@@ -54,6 +54,11 @@ MUST_PASS = [
     'command echo "git clean -fd"',
     'grep -rn "git clean -fd" .',
     "grep -rn 'eval' hooks/ | grep -c 'git clean'",
+    # A heredoc with no terminator: bash reads its body to the end of the text
+    # ("here-document delimited by end-of-file") and feeds it to the command,
+    # so the body is data and no line of it is a command.
+    "cat <<EOF\ngit clean -fdx",
+    "cat > notes.md <<'EOF'\nrun git clean -fd later",
 ]
 
 # ---------------------------------------------------------------------------
@@ -101,6 +106,9 @@ DATA_THAT_EXECUTES = [
     "cat > x.sh <<'EOF'\ngit clean -fd\nEOF\nbash x.sh",
     "cat <<'EOF' | bash\ngit clean -fd\nEOF",
     "cat <<'EOF' | sh -s\ngit clean -fd\nEOF",
+    # With no terminator the body still reaches the shell it feeds.
+    "bash <<EOF\ngit clean -fd",
+    "cat <<'EOF' | bash\ngit clean -fd",
     "$(cat <<'EOF'\ngit clean -fd\nEOF\n)",
     "cat <<EOF\n$(git clean -fd)\nEOF",
     "cat <<EOF\n`git clean -fd`\nEOF",
@@ -124,6 +132,8 @@ DATA_THAT_EXECUTES = [
     # A heredoc whose delimiter carries an expansion is not captured; the line
     # after the literal terminator is a real command.
     "cat <<$X\nfoo\n$X\ngit clean -fd",
+    # With no terminator its lines are still scanned, as on OB-L30's head.
+    "cat <<$X\ngit clean -fd",
     # A real clean next to data still snapshots.
     "echo hi && git clean -fd",
     "cat <<'EOF'\nnotes\nEOF\ngit clean -fd",
