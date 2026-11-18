@@ -384,11 +384,13 @@ def run_commit_guard(payload, command, home):
                    f"is not", f"Command: {command}")
     elif verdict.startswith('FILTER '):
         top, _, bad = verdict[7:].partition('\t')
-        lines = [f"BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is "
-                 f"not registered in {top}", f"Command: {command}", f"Run scripts/bootstrap in {top} first, then retry."]
+        # Literal refuse() calls, so the replay's site catalog (tests/replay/sites.py) reads the text.
         if bad:
-            lines.append(f"settings.json is unusable: {bad}")
-        refuse(*lines)
+            refuse(f"BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is "
+                   f"not registered in {top}", f"Command: {command}", f"Run scripts/bootstrap in {top} first, then retry.",
+                   f"settings.json is unusable: {bad}")
+        refuse(f"BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is "
+               f"not registered in {top}", f"Command: {command}", f"Run scripts/bootstrap in {top} first, then retry.")
     else:
         refuse("BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / config-keystone-write / "
                "unregistered-settings-filter guard returned no verdict", f"Command: {command}")
