@@ -24,8 +24,9 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   TodoWrite carries the first call the refusal prints.
   todo-sequence   the first advance completes Step 1 and Step 2 in one TodoWrite: refused; the next
                   TodoWrite completes Step 1 only.
-  checklist-lock  the main agent reads a file before its first TodoWrite: refused; it makes the
-                  TodoWrite the refusal names, then reads the file.
+  checklist-lock  the main agent runs a Bash command (a cat of a file) before its first TodoWrite:
+                  refused; it makes the TodoWrite the refusal names, then runs the command. (A Read,
+                  Grep or Glob passes the not-started lock since OB-L39; Bash is still held.)
   dev-early       /dev (drivers/dev.py, plain) whose main agent marks BA's step completed before
                   dispatching BA: refused (the step's subagent call is not made); its next action is
                   the dispatch, then the completion; the cycle reaches its terminal.
@@ -101,6 +102,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 
@@ -134,7 +136,7 @@ class Turn(DoTurn):
         o = self.o
         if self.case not in ("todo-canonical", "todo-first", "checklist-lock"):
             return super().start()
-        lead = self.label("Read before the first TodoWrite") if self.case == "checklist-lock" else None
+        lead = self.label("Bash before the first TodoWrite") if self.case == "checklist-lock" else None
         import re
         o.slash(self.task, label="/do")
         self.tid = re.search(r"task-id minted:\s*(\S+)", o.hook_out).group(1)
@@ -142,8 +144,9 @@ class Turn(DoTurn):
         d = re.search(r"→\s*(\S+)/claude-do-task-<sid>\.json", o.hook_out)
         self.printed_dir = d.group(1) if d else ""
         path = os.path.join(o.project, "toy/__init__.py")
+        cat = f"cat {shlex.quote(path)}"
         if lead:
-            self.note(o.s.read(path, label=lead))
+            self.note(o.s.bash(cat, label=lead))
         o.todos = o.canonical_todos()
         if self.case == "todo-canonical":
             bad = [dict(t) for t in o.todos]
@@ -155,7 +158,7 @@ class Turn(DoTurn):
             self.note(o.s.todo(bad, label=self.label("TodoWrite first list with Step 1 completed")))
         o._todo(self.label("TodoWrite canonical list"))
         if lead:
-            self.note(o.s.read(path, label=self.label("Read after the TodoWrite")))
+            self.note(o.s.bash(cat, label=self.label("Bash after the TodoWrite")))
 
     def note(self, call) -> None:
         self.rounds.append({"label": call.label, "blocked": call.blocked,
