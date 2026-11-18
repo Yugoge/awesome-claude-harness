@@ -11,6 +11,8 @@ shards so pytest-xdist spreads them.
 import collections
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -45,7 +47,7 @@ def test_no_unexplained_difference(shard, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("command,reader,label", [
     ("echo hi # don't", "census", None),
-    ("git commit -m a\\; rm x", "allow_subs", "old splits at an escaped separator, `>|` or `|&`"),
+    ("git commit -m a\\; rm x", "git", None),
     ("tail rm.log", "wt_touched", None),
     ("/bin/rm 2>/dev/null qa-target-1.txt", "wt_touched", None),
 ])
@@ -58,6 +60,35 @@ def test_labels_are_reached(command, reader, label, tmp_path, monkeypatch):
         assert diffs == []
     else:
         assert diffs and all(d[1] == label for d in diffs), diffs
+
+
+# What bash runs, as argv lists: an escaped `;` is an argument, `>|` a redirection, `|&` a pipe.
+SEPARATORS = [
+    ("git commit -m a\\; rm x", [["git", "commit", "-m", "a;", "rm", "x"]]),
+    ("git commit -m a; rm x", [["git", "commit", "-m", "a"], ["rm", "x"]]),
+    ("git commit -m a >| x", [["git", "commit", "-m", "a"]]),
+    ("git commit -m a |& rm x", [["git", "commit", "-m", "a"], ["rm", "x"]]),
+]
+RECORD_ARGV = r"""command_not_found_handle(){ local IFS=$'\037'; printf '%s\036' "$*" >> "$E1_ARGV"; }
+"""
+
+
+@pytest.mark.parametrize("command,runs", SEPARATORS)
+def test_the_parser_splits_where_bash_splits(command, runs, tmp_path):
+    """The parser's commands are the argv lists bash runs. /allow grant matching reads commands
+    through the parser, so this, not an allow reader of its own, is the check here. bash runs
+    each command with an empty PATH and a command_not_found_handle that records its argv, so
+    nothing real runs (as in test_bash_oracle.py)."""
+    log, empty, work = tmp_path / "argv", tmp_path / "no-programs", tmp_path / "work"
+    empty.mkdir()
+    work.mkdir()
+    subprocess.run([shutil.which("bash"), "-c", RECORD_ARGV + command], capture_output=True, timeout=10,
+                   stdin=subprocess.DEVNULL, cwd=work,
+                   env={"PATH": str(empty), "LC_ALL": "C", "HOME": str(work), "E1_ARGV": str(log)})
+    ran = sorted(r.split("\x1f") for r in log.read_text(encoding="utf-8").split("\x1e")[:-1])
+    parsed = sorted(site.cmd.argv() for site in E1.sp.walk(E1.sp.parse(command)))
+    assert ran == sorted(runs)
+    assert parsed == ran
 
 
 @pytest.mark.parametrize("command,items,label", [

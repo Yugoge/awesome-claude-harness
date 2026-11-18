@@ -7,12 +7,14 @@ compares them and labels each difference with the reason it is allowed:
   * a reading the old reader gets wrong and the plan fixes (O4: a comment read
     as code; O6: quoted, option, heredoc or argument text read as code);
   * a fact the new view states another way (an undecidable target, a computed
-    command word, an assignment projected into ``$X``, a path the caller
+    git subcommand, an assignment projected into ``$X``, a path the caller
     derives from ``WriteTarget.source``);
   * a string bash itself rejects (``bash -n -c``, which runs nothing).
 
 A difference with no label is unexplained, and the test that uses this module
-fails on it.
+fails on it. /allow grant matching (lib/allowlist.py) reads commands through the
+shared parser, so it has no reader here; test_differential.py checks the
+separators it relies on against bash.
 """
 
 import collections
@@ -30,7 +32,6 @@ for path in (LIB, os.path.join(LIB, "runtime_guard")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-import allowlist as AL  # noqa: E402
 import bash_active_syntax_census as C  # noqa: E402
 import bash_write_targets as WT  # noqa: E402
 import git_command_classifier as GC  # noqa: E402
@@ -50,8 +51,6 @@ RG = _load(os.path.join(LIB, "runtime_guard", "_core.py"), "e1_runtime_core")
 GG = _load(os.path.join(HOOKS, "pretool-grep-backtrack-guard.py"), "e1_grep_guard")
 HS = _load(os.path.join(HOOKS, "pretool-harness-switch-guard.py"), "e1_switch_guard")
 
-RESERVED = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "for", "select",
-            "case", "esac", "in", "function", "{", "}", "[[", "]]", "!", "time", "coproc"}
 WRITE_VERBS = set(sp.VERBS) | {"git rm", "git mv"}
 GREPS = ("grep", "egrep", "fgrep", "ugrep")
 
@@ -78,7 +77,6 @@ def old_facts(c):
     f["git"] = _safe(lambda: [[g.cmd_token, g.subcommand] for g in GC.iter_git_invocations(c)])
     f["grep"] = _safe(lambda: [x[0] if isinstance(x, (list, tuple)) else x for x in GG._find_searches(c)])
     f["settings"] = _safe(lambda: HS.writes_settings_file(c))
-    f["allow_subs"] = _safe(lambda: AL._bash_subcommands(c))
     f["rg_redirs"] = _safe(lambda: [t for g in RG._pipeline_groups(c) for seg in g
                                     for t in RG._write_redirect_targets(seg)])
     f["census_fatal"] = _safe(lambda: C.census(c)["fatal"])
@@ -341,36 +339,6 @@ def differences(c, m, n):
         words = n["argv"] + n["heredocs"] + n["targets"]
         if not any(re.search(r"settings[\w.-]*\.json", x) for x in words):
             add("settings", None, "")
-
-    if isinstance(m["allow_subs"], list):
-        heads = {re.sub(r"['\"\\\n]", "", h) for h in n["heads"]}
-        for sub in m["allow_subs"]:
-            bare = re.sub(r"^(\d*[<>]+\s*\S+\s*)+", "", re.sub(r"^\(?[^()\s]*\)\s*", "", sub.strip()))
-            bare = re.sub(r"^(\(\s*|\{\s+)+", "", bare)
-            toks_ = bare.split()
-            while toks_ and re.match(r"^[A-Za-z_]\w*=", toks_[0]):
-                toks_ = toks_[1:]
-            first = toks_[0].strip("'\"()") if toks_ else ""
-            if not first or first in RESERVED:
-                continue
-            flat = re.sub(r"['\"\\\n]", "", bare)
-            if any(flat.startswith(h) for h in heads if h) or any(
-                    re.sub(r"['\"\\\n]", "", " ".join(toks_)).startswith(h) for h in heads if h):
-                continue
-            label = None
-            if any(sub.strip() in b for b in n["heredocs"]) or first in re.findall(r"<<-?\s*['\"]?(\w+)", c):
-                label = "old splits heredoc data lines (documented over-split)"
-            elif "\\\n" in c:
-                label = "covered:a line continuation"
-            elif re.search(r"\bcase\b", c):
-                label = "old splits a case pattern at |"
-            elif "\\;" in c or ">|" in c or "|&" in c:
-                label = "old splits at an escaped separator, `>|` or `|&`"
-            elif "`" in c or "$(" in c:
-                label = "old over-splits inside a substitution (documented)"
-            elif n["dynamic"]:
-                label = "covered:a computed command word (Site.dynamic)"
-            add("allow_subs", label, repr(sub)[:100], [first])
 
     if isinstance(m["rg_redirs"], list):
         targets = {x for x in n["redirs"] if x}
