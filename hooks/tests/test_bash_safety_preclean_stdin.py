@@ -27,7 +27,9 @@ BIG = 138 * 1024  # over MAX_ARG_STRLEN (32 pages = 131072 bytes)
 
 def _heredoc_write(size=BIG, tail=""):
     line = "fixture line with harmless text 0123456789 abcdefghijklmnopqrstuvwxyz\n"
-    body = (line * (size // len(line) + 1))[:size]
+    # Whole lines, so `EOF` is a line of its own. A body cut mid-line puts it on
+    # that line: bash then reads the heredoc to the end of the text, tail included.
+    body = line * (size // len(line) + 1)
     return "cat > fixture.txt <<'EOF'\n" + body + "EOF\n" + tail
 
 
