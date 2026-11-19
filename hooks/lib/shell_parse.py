@@ -2667,6 +2667,7 @@ def resolve(cmd, depth=None):
 
 
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the start paths
 FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
 
 

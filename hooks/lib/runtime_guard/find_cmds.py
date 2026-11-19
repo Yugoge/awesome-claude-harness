@@ -18,10 +18,16 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 
 # find/fd argv parsers key on the quote stripper and the
 # basename-glob matchers. Dual-context import (INV-3; the contract
 # is stated at _core's first import block).
+try:
+    from .. import shell_parse as _sp
+except ImportError:  # executed as a top-level script (no package context)
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import shell_parse as _sp  # type: ignore[no-redef]
 try:
     from .pathmatch import _strip_quotes
     from .pathmatch import _glob_to_segment_regex, _has_shell_glob
@@ -34,7 +40,7 @@ except ImportError:  # executed under the top-level-script shim (no package)
 # options (`-H`/`-L`/`-P`), the `-D <debugopts>` and `-O<level>` forms. These come
 # BEFORE the paths, so the path scan must skip them (not stop at them). Generic
 # find grammar, no project names.
-_FIND_GLOBAL_NOARG_OPTS = frozenset({"-H", "-L", "-P"})
+_FIND_GLOBAL_NOARG_OPTS = frozenset(_sp.FIND_SYMLINK_OPTS)
 _FIND_GLOBAL_ARG_OPTS = frozenset({"-D"})
 # pre-path POSITION options that take ONE numeric/string arg and may appear before
 # the path on some `find` builds / fd (`-maxdepth N` / `-mindepth N`). Skipped with

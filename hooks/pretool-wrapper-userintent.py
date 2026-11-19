@@ -1399,7 +1399,7 @@ class _Scan:
         """`find ... -exec {}`: the files find hands to a command that may run them."""
         vals = [self._expand(w)[0] for w in args]
         i = 0
-        while i < len(vals) and vals[i] in ('-L', '-H', '-P'):
+        while i < len(vals) and vals[i] in _sp.FIND_SYMLINK_OPTS:
             i += 1
         starts = []
         while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in ('(', '!', ')'))):
