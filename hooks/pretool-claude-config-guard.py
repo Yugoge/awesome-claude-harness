@@ -365,37 +365,6 @@ def _sed_long_in_place(args, vals) -> list:
     return [(w.value() or w.text, w) for w in (ops if script else ops[1:])]
 
 
-def _sort_outputs(args, vals) -> list:
-    """sort's output file: -o F, -oF, a cluster ending in o (`-no F`), --output and its
-    abbreviations (`--o`, `--outp=F`)."""
-    out, k = [], 0
-    while k < len(args):
-        v = vals[k]
-        if v == '--':
-            break
-        if v.startswith('--') and _long_prefix(v, '--output', 3):
-            if '=' in v:
-                out.append((v.split('=', 1)[1], args[k]))
-            elif k + 1 < len(args):
-                out.append((vals[k + 1] or args[k + 1].text, args[k + 1]))
-                k += 1
-        elif v.startswith('-') and not v.startswith('--') and len(v) > 1:
-            for j, c in enumerate(v[1:], 1):
-                if c in 'ktST':
-                    if j == len(v) - 1:
-                        k += 1
-                    break
-                if c == 'o':
-                    if j < len(v) - 1:
-                        out.append((v[j + 1:], args[k]))
-                    elif k + 1 < len(args):
-                        out.append((vals[k + 1] or args[k + 1].text, args[k + 1]))
-                        k += 1
-                    break
-        k += 1
-    return out
-
-
 _TAR_VALUE_LETTERS = 'fCbTXgKNVLH'
 
 
@@ -453,8 +422,8 @@ def _tar_writes(args, vals, head) -> list:
 
 
 def _site_writes(sp, raw: str, res) -> list:
-    """(path text, word) writes of commands the shared parser has no write rule for: touch, perl -i,
-    patch, tar -x -C, unzip -d, git checkout/apply into a folder, sed's w command, find's -fprint
+    """(path text, word) writes of commands the shared parser has no write rule for: perl code that
+    writes its operands, patch, tar -x -C, unzip -d, git checkout/apply into a folder, sed's w command, find's -fprint
     family and -delete."""
     name, args = res.name, list(res.args)
     vals = [w.value() or '' for w in args]
@@ -486,10 +455,8 @@ def _site_writes(sp, raw: str, res) -> list:
                 found.append((v[len(short):], args[k]))
         return found
 
-    if name == 'touch':
-        out += [(w.value() or w.text, w) for w in operands(takes=('-r', '--reference', '-d', '--date', '-t'))]
-    elif name == 'perl':
-        inplace, code, ops, k = False, [], [], 0
+    if name == 'perl':
+        code, ops, k = [], [], 0
         while k < len(args):
             v = vals[k]
             if v == '--':
@@ -503,14 +470,13 @@ def _site_writes(sp, raw: str, res) -> list:
                 continue
             flags = v[1:]
             if not v.startswith('--') and flags[:1] not in ('M', 'm', 'I', 'x', 'C', 'd', 'D'):
-                inplace = inplace or 'i' in re.split(r'[eE]', flags, 1)[0]
                 if flags[-1:] in ('e', 'E') and k + 1 < len(args):
                     code.append(args[k + 1])
                     k += 2
                     continue
             k += 1
         operand_words = ops if code else ops[1:]
-        if inplace or any(_PERL_WRITE.search(w.value() or w.text) for w in code):
+        if any(_PERL_WRITE.search(w.value() or w.text) for w in code):  # perl -i is the parser's
             out += [(w.value() or w.text, w) for w in operand_words]
     elif name == 'patch':
         ops = operands(takes=('-p', '-d', '--directory', '-o', '--output', '-i', '--input', '-r',
@@ -533,8 +499,6 @@ def _site_writes(sp, raw: str, res) -> list:
         if not any(v in ('-O', '--output-document') or v.startswith(('-O', '--output-document=')) for v in vals):
             prefix = option_values('-P', '--directory-prefix')
             out += prefix or ([('.', res.head)] if res.head is not None else [])
-    elif name == 'sort':
-        out += _sort_outputs(args, vals)
     elif name == 'git':
         k, cdir = 0, None
         while k < len(vals) and vals[k].startswith('-'):
@@ -797,7 +761,7 @@ def _parsed_kind(command: str) -> tuple:
 # The proof that lets a command the base reading refuses go through (_proven_harmless).
 # Commands that write nothing and run nothing, whatever their words say.
 _PURE_READERS = bash_read_only.ANY_ARGS | {'test', '[', 'exit', 'sleep', 'wait'}
-# Write verbs whose every written path the shared parser reads (with sed -i and touch read here).
+# Write verbs whose every written path the shared parser reads (with sed -i read here).
 _PROOF_WRITERS = frozenset({'cp', 'mv', 'install', 'tee', 'rm', 'rmdir', 'unlink', 'truncate', 'touch', 'sed'})
 _PROOF_WRAPPERS = frozenset({'env', 'timeout', 'nice', 'command', 'exec', 'setsid'})
 # Variables a prefix assignment (`LC_ALL=C cp ...`) may set: none of them moves a directory, names a
@@ -1195,10 +1159,7 @@ def _proven_harmless(command: str, start: str) -> bool:
                     return False  # a link into whatever the source is, or a strip program run
                 if alias:
                     aliasing.add(cmd.span)
-            extra = []
-            if name == 'touch':
-                extra = [w for _t, w in _site_writes(sp, command, res)]
-            sites.append((cmd, name, res, extra))
+            sites.append((cmd, name, res, []))
             continue
         else:
             return False

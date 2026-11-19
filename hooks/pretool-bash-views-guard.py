@@ -217,23 +217,6 @@ def _into_dir_texts(script, dirs):
     return out
 
 
-# touch creates or stamps each operand.
-_TOUCH_SPEC = None if _sp is None else _sp._spec(
-    ("-a", "-c", "--no-create", "-f", "-h", "--no-dereference", "-m"),
-    ("-d", "--date", "-r", "--reference", "-t", "--time"))
-
-
-def _touch_texts(script):
-    out = []
-    for site in _sp.walk(script):
-        res = _sp.resolve(site.cmd)
-        if res.name != "touch":
-            continue
-        _opts, operands, _err = _sp.split_options(list(res.args), _TOUCH_SPEC, 0, permute=True, lenient=True)
-        out.extend(t for t in (_word_text(w) for w in operands) if t)
-    return out
-
-
 def _target_texts(command, script):
     """The path text of every non-delete write target the parser finds."""
     out = []
@@ -258,11 +241,10 @@ def _matches_block(command, call_dir):
             dirs = _cd_dirs(script, call_dir)
         except Exception:
             pass
-        for extra in (lambda: _touch_texts(script), lambda: _into_dir_texts(script, dirs)):
-            try:
-                texts += extra()
-            except Exception:
-                pass
+        try:
+            texts += _into_dir_texts(script, dirs)
+        except Exception:
+            pass
     for text in dict.fromkeys(texts):
         if not text:
             continue

@@ -3146,6 +3146,22 @@ VERBS = {
                    "--separate", "-u", "--unbuffered", "-z", "--null-data", "--posix",
                    "--debug", "--sandbox", "--follow-symlinks"),
                   ("-e", "--expression", "-f", "--file", "-l", "--line-length")), "sed", IN_PLACE),
+    "touch": (_spec(("-a", "-c", "--no-create", "-f", "-h", "--no-dereference", "-m"),
+                    ("-d", "--date", "-r", "--reference", "-t", "--time")), "all", CREATE),
+    "sort": (_spec(("-b", "--ignore-leading-blanks", "-d", "--dictionary-order", "-f", "--ignore-case",
+                    "-g", "--general-numeric-sort", "-i", "--ignore-nonprinting", "-M", "--month-sort",
+                    "-h", "--human-numeric-sort", "-n", "--numeric-sort", "-R", "--random-sort", "-r",
+                    "--reverse", "-V", "--version-sort", "-c", "-C", "--check", "-m", "--merge", "-s",
+                    "--stable", "-u", "--unique", "-z", "--zero-terminated", "--debug"),
+                   ("-k", "--key", "-o", "--output", "-S", "--buffer-size", "-t", "--field-separator",
+                    "-T", "--temporary-directory", "--batch-size", "--compress-program", "--files0-from",
+                    "--parallel", "--random-source", "--sort")), "value:-o,--output", TRUNCATE),
+    "uniq": (_spec(("-c", "--count", "-d", "--repeated", "-D", "--all-repeated", "--group", "-i",
+                    "--ignore-case", "-u", "--unique", "-z", "--zero-terminated"),
+                   ("-f", "--skip-fields", "-s", "--skip-chars", "-w", "--check-chars")), "second", TRUNCATE),
+    "sponge": (_spec(("-a",)), "all", TRUNCATE),
+    "perl": (None, "perl", IN_PLACE),
+    "gawk": (None, "gawk", IN_PLACE),
     "dd": (_spec(), "dd", TRUNCATE),
     "curl": (_spec(), "opt:-o,--output", TRUNCATE),
     "wget": (_spec(), "opt:-O,--output-document", TRUNCATE),
@@ -3155,6 +3171,9 @@ VERBS = {
     "chattr": (None, "attr", IN_PLACE),
     "setfacl": (None, "attr", IN_PLACE),
 }
+VERBS["gsed"] = VERBS["sed"]  # GNU sed's name where sed is another one
+VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
+
 # The commands that change a file's mode, owner, attributes or ACL: the file
 # keeps its bytes, but `chmod -x` of a hook turns the hook off, so each path
 # operand is written in place. Per verb: the short flags (letters that take no
@@ -3466,6 +3485,11 @@ def _verb_targets(name, verb, args, env, context):
         for w, path, dec in _flag_values(args, short, long_opt, env):
             out.append(WriteTarget(path, mode, name + "-output", None, dec, w, None, context))
         return out
+    if reading in ("perl", "gawk"):
+        for w in (_perl_in_place if reading == "perl" else _gawk_in_place)(args):
+            path, dec = _project(w, env)
+            out.append(WriteTarget(path, IN_PLACE, reading + "-in-place", None, dec, w, None, context))
+        return out
     if reading == "sed":
         in_place = False
         script_given = False
@@ -3521,6 +3545,18 @@ def _verb_targets(name, verb, args, env, context):
             path, dec = _project(w, env)
             out.append(WriteTarget(path, TRUNCATE, "truncate", None, dec, w, None, context))
         return out
+    if reading.startswith("value:"):
+        for o, w in opts:
+            if o in reading[6:].split(",") and w is not None:
+                path, dec = _project(w, env)
+                out.append(WriteTarget(path, mode, name + "-output", None, dec, w, None, context))
+        return out
+    if reading == "second":
+        for w in operands[1:2]:
+            if w.value() != "-":
+                path, dec = _project(w, env)
+                out.append(WriteTarget(path, mode, name + "-output", None, dec, w, None, context))
+        return out
     if reading == "all":
         for w in operands:
             path, dec = _project(w, env)
@@ -3550,6 +3586,63 @@ def _verb_targets(name, verb, args, env, context):
                 sp, sdec = _project(s, env)
                 out.append(WriteTarget(sp, DELETE, name + "-source", None, sdec, s, None, context))
     return out
+
+
+def _perl_in_place(args):
+    """The files `perl -i` edits in place: the operands after the script (after the -e/-E code, or
+    after the script file operand), when a -i appears in a cluster before its e/E code letter."""
+    inplace, code, k = False, False, 0
+    while k < len(args):
+        v = args[k].value() or ""
+        if v == "--":
+            k += 1
+            break
+        if not v.startswith("-") or v == "-":
+            break
+        if v == "-I":
+            k += 2
+            continue
+        flags = v[1:]
+        if not v.startswith("--") and flags[:1] not in ("M", "m", "I", "x", "C", "d", "D"):
+            inplace = inplace or "i" in re.split(r"[eE]", flags, 1)[0]
+            if flags[-1:] in ("e", "E"):
+                code = True
+                k += 2
+                continue
+        k += 1
+    return (args[k:] if code else args[k + 1:]) if inplace else []
+
+
+_GAWK_VALUES = ("-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load",
+                "-e", "--source", "-E", "--exec")
+
+
+def _gawk_in_place(args):
+    """The files `gawk -i inplace` (also -iinplace, --include=inplace) edits: its file operands
+    (not var=value), after the program text unless -f, -e or -E gave the program."""
+    vals = [w.value() or "" for w in args]
+    inplace = any(v in ("-iinplace", "--include=inplace") or (v in ("-i", "--include") and nxt == "inplace")
+                  for v, nxt in zip(vals, vals[1:] + [""]))
+    if not inplace:
+        return []
+    program_given, operands, k = False, [], 0
+    while k < len(args):
+        v = vals[k]
+        if v == "--":
+            operands += args[k + 1:]
+            break
+        if v in _GAWK_VALUES:
+            program_given = program_given or v in ("-f", "--file", "-e", "--source", "-E", "--exec")
+            k += 2
+            continue
+        if v.startswith(("-f", "--file=", "-e", "--source=", "-E", "--exec=")) and not v.startswith("--field"):
+            program_given = True
+        if not v.startswith("-") or v == "-":
+            operands.append(args[k])
+        k += 1
+    if not program_given:
+        operands = operands[1:]
+    return [w for w in operands if not _ASSIGN_RE.match(w.value() or "") and w.value() != "-"]
 
 
 def _flag_values(args, short, long_opt, env):
