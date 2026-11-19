@@ -436,6 +436,7 @@ COMMAND_LOOKUP_OPTS = ("-v", "-V")  # `command -v NAME` / `-V NAME` describe NAM
 ITEM_RUNNERS = ("xargs", "parallel")  # run their command once per input item, operands built at run time
 REEXPAND_OPS = ("P", "E", "A")  # ${x@P} ${x@E} ${x@A}: the value is read again as shell text
 PARALLEL_SEPARATORS = (":::", ":::+", "::::", "::::+")  # GNU parallel: the input sources after the command
+SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so does a lone backquote)
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command

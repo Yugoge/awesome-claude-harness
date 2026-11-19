@@ -67,9 +67,9 @@ import re
 import sys
 
 try:
-    from lib.shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, LexError, Src, _lex_into, ansi_decode, lex
+    from lib.shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, LexError, Src, _lex_into, ansi_decode, lex
+    from shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
@@ -80,7 +80,7 @@ _REDIRECT_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
 _REDIRECT_CONFIG_KEYS = frozenset({"core.worktree", "core.gitdir"})
 
 # Shell builtins that move the effective working directory.
-_SUBST_MARKERS = ("$(", "<(", ">(", "`")
+_SUBST_MARKERS = SUBST_OPENERS + ("`",)
 
 # Reserved words / decorators that never move the target and take no operand.
 _RESERVED_DECORATORS = frozenset({

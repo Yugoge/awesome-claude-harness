@@ -113,7 +113,7 @@ def _segments_with_kind(c):
         two = c[i:i + 2]
         if two in ('&&', '||'):
             _flush('separator'); i += 2; continue
-        if two in ('$(', '<(', '>('):
+        if two in shell_parse.SUBST_OPENERS:
             subshell_stack.append(_buf_is_cmd_position())
             _flush('separator'); i += 2; continue
         ch = c[i]
