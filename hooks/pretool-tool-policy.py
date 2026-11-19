@@ -333,24 +333,24 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
         return (True, "ok")
     status = _scratch_status(role, target, data)
     if status == "sibling":
-        return (False, "sibling scratch target denied: actor-exact namespace" + _own_scratch_hint(role, data, target))
+        return (False, "sibling scratch target denied: actor-exact namespace")
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
-        return (False, "arbitrary /tmp and /var/tmp are denied for every role" + _own_scratch_hint(role, data, target))
+        return (False, "arbitrary /tmp and /var/tmp are denied for every role")
     return (True, "ok")
 
 
-def _own_scratch_hint(role: str, data: dict, target) -> str:
-    """'; <the caller's own scratch directory, literal>' for a refused write of
-    ``target`` to system temp or scratch, else ''. It is the directory
+def _note_own_scratch(role: str, data: dict, target) -> None:
+    """After a refused write of ``target`` to system temp or scratch, name the
+    caller's own scratch directory as a literal path. It is the directory
     _scratch_status judges "owner": the resource session's when one resolves,
     else <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
     from pathlib import Path
 
     try:
         if _scratch_status(role, target, data) not in ("sibling", "system_temp"):
-            return ""
+            return
         binding = _owner_binding(role, data)
         if binding is not None:
             from lib import session_resources
@@ -359,14 +359,14 @@ def _own_scratch_hint(role: str, data: dict, target) -> str:
         else:
             parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
             if not all(p and "/" not in p and p not in (".", "..") for p in parts):
-                return ""
+                return
             own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
         if _scratch_status(role, str(own / "f"), data) != "owner":
-            return ""
+            return
+        sys.stderr.write(f"tool-policy.v1 note: your own scratch directory is {own}/ (mkdir -p {own} first; "
+                         f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")
     except Exception:
-        return ""
-    return (f"; your own scratch directory is {own}/ (mkdir -p {own} first; a program "
-            f"that writes under $TMPDIR: TMPDIR={own} <command>)")
+        pass
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -1851,8 +1851,9 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
         else:
             allowed, reason = is_allowed(role, check_tool, target, carveouts)
         if not allowed:
-            reason += _own_scratch_hint(role, data, target if check_tool in WRITE_TOOLS else None)
             _emit_block(role, check_tool, target, reason)
+            if check_tool in WRITE_TOOLS:
+                _note_own_scratch(role, data, target)
             if tool_name == "Bash":
                 _note_bash_write_target(data, target)
             _note_inflight_token_route(role, tool_name, target)
@@ -1861,6 +1862,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
+                _note_own_scratch(role, data, target)
                 if tool_name == "Bash":
                     _note_bash_write_target(data, target)
                 sys.exit(2)
