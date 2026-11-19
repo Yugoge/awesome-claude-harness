@@ -333,16 +333,44 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
         return (True, "ok")
     status = _scratch_status(role, target, data)
     if status == "sibling":
-        return (False, "sibling scratch target denied: actor-exact namespace")
+        return (False, "sibling scratch target denied: actor-exact namespace" + _own_scratch_hint(role, data))
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
-        return (
-            False,
-            "arbitrary /tmp and /var/tmp are denied for every role; use the "
-            "managed scratch namespace .claude/scratch/<session>/<role>/<dispatch>/",
-        )
+        return (False, "arbitrary /tmp and /var/tmp are denied for every role" + _own_scratch_hint(role, data))
     return (True, "ok")
+
+
+def _own_scratch_hint(role: str, data: dict, target=True) -> str:
+    """'; <the caller's own scratch directory, literal>' for a refusal of a
+    write to system temp or to scratch (``target``, when one is given), or ''.
+
+    The directory is the one _scratch_status judges "owner" for this caller:
+    the provisioned resource session's when one resolves, else
+    <project>/.claude/scratch/<session_id>/<role>/<agent_id>/. A program that
+    writes under $TMPDIR is pointed there by setting TMPDIR for its command.
+    """
+    from pathlib import Path
+
+    try:
+        if target is not True and _scratch_status(role, target, data) not in ("sibling", "system_temp"):
+            return ""
+        binding = _owner_binding(role, data)
+        if binding is not None:
+            from lib import session_resources
+
+            own = session_resources.scratch_path(_project_root(), binding)
+        else:
+            parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
+            if not all(p and "/" not in p and p not in (".", "..") for p in parts):
+                return ""
+            own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
+        if _scratch_status(role, str(own / "f"), data) != "owner":
+            return ""
+    except Exception:
+        return ""
+    return (f"; your own scratch directory is {own}/ (mkdir -p {own} first; a program "
+            f"that writes under $TMPDIR: TMPDIR={own} <command>)")
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -1827,6 +1855,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
         else:
             allowed, reason = is_allowed(role, check_tool, target, carveouts)
         if not allowed:
+            reason += _own_scratch_hint(role, data, target if check_tool in WRITE_TOOLS else None)
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash":
                 _note_bash_write_target(data, target)
