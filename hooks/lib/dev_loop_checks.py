@@ -180,7 +180,8 @@ def minimum_diff(report: dict, project: str, rep_rel: str) -> list[str]:
 
 def advice(payload: dict) -> list[str]:
     """The advice for this Agent call, by its event; [] when there is none."""
-    if payload.get("tool_name") not in ("Agent", "Task"):
+    from lib.subagent import DISPATCH_TOOLS
+    if payload.get("tool_name") not in DISPATCH_TOOLS:
         return []
     tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     if tool_input.get("subagent_type") != "dev":

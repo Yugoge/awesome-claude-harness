@@ -35,8 +35,8 @@ def _git(env: dict, repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def harness(tmp_path: Path) -> tuple[Path, dict]:
-    home = tmp_path / "harness"
+def harness(tmp_path: Path, request) -> tuple[Path, dict]:
+    home = tmp_path / getattr(request, "param", "harness")  # a parametrized name may hold a space
     shutil.copytree(
         ROOT / "hooks", home / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__")
     )
@@ -173,9 +173,11 @@ def test_refusal_free_failure_is_silent_in_silent_mode(harness) -> None:
     assert (proc.returncode, proc.stdout) == (0, "")
 
 
+@pytest.mark.parametrize("harness", ["harness", "my harness"], indirect=True)
 def test_a_file_in_an_agent_worktree_is_checkpointed_in_that_worktree(harness) -> None:
     """The payload's file_path selects the worktree (audit 5.3-2: the branch read TOOL_INPUT,
-    which the CLI never sets, so it always checkpointed the main repository)."""
+    which the CLI never sets, so it always checkpointed the main repository). A worktree whose path
+    holds a space counted its changes as one word too, `git -C <path>`, and is snapshotted alike."""
     home, env = harness
     (home / ".gitignore").write_text("/settings.machine.json\n/private-literals.txt\n/.claude/\n")
     _git(env, home, "commit", "-q", "-am", "ignore worktrees")

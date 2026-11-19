@@ -667,6 +667,15 @@ def _head_word(text):
     return eb.lex(eb.Src.from_raw(text))[0][1]
 
 
+def _holds_removal_word(command):
+    """The hook's own removal-word predicate, read from its one file."""
+    import re
+    path = os.path.join(REPO_ROOT, "hooks", "lib", "pol_degraded_removal_reference.ere")
+    with open(path, encoding="utf-8") as fh:
+        pattern = next(ln.strip() for ln in fh if ln.strip() and not ln.startswith("#"))
+    return re.search(pattern, command) is not None
+
+
 class TestDataReadingOfValueWords:
     @pytest.mark.parametrize("command", DATA_WORD_ORDINARY_WORK
                              + DATA_WORD_ORDINARY_CONTROLS)
@@ -695,9 +704,23 @@ class TestDataReadingOfValueWords:
 
     @pytest.mark.parametrize("command", DATA_WORD_REMOVAL_REFERENCES[:6])
     def test_the_hook_denies_the_url_shaped_ones_end_to_end(self, command):
+        # The analyzer authorizes none of the six (the test above). Since the
+        # owner's rule of 2026-11-19 the hook refuses an unproven command only
+        # when its text holds a removal word by the shared predicate file:
+        # three of the six name `rm` and are refused; the three that spell it
+        # as a glob or a brace (`/bin/r?`, `/bin/{r,}m`) name none and run.
         code, _out, err = run_hook_command(command)
-        assert code == BLOCK, command
-        assert "removal-policy" in err, err
+        if _holds_removal_word(command):
+            assert code == BLOCK, command
+            assert "removal-policy" in err, err
+        else:
+            assert "/bin/r?" in command or "/bin/{r,}m" in command, command
+            assert code == ALLOW, (command, err)
+            assert "removal-policy" not in err, err
+
+    def test_the_url_shaped_ones_split_three_and_three(self):
+        named = [c for c in DATA_WORD_REMOVAL_REFERENCES[:6] if _holds_removal_word(c)]
+        assert len(named) == 3, named
 
     @pytest.mark.parametrize("command", [
         "a?x=1 y", "* x", "count(*)", "https://example.com/a?x=1&y=2",
@@ -745,12 +768,16 @@ class TestPatternHeadProof:
 
 
 class TestNoFailurePathAllows:
-    """AC-R02-05: every degraded mode must deny, not just the modelled ones."""
+    """AC-R02-05, as the owner's rule of 2026-11-19 restates it: every degraded
+    mode denies a command whose text holds a removal word, and no failure of
+    the interpreter allows anything."""
 
-    # Obfuscated command heads carry NO literal removal token, so a fallback
-    # that greps for rm|unlink|shred|srm is structurally blind to them. QA
-    # measured 23 of 360 dangerous forms allowed under analyzer timeout and
-    # under memory starvation for exactly this reason.
+    # Obfuscated command heads carry NO literal removal token. Until the
+    # owner's rule every one of them was denied on silence, in degraded mode
+    # and by the analyzer (UNRESOLVED). The rule lets an unproven command whose
+    # text holds no removal word run and hands it to the record, on the
+    # degraded path as on the primary one: these thirteen now run. They are
+    # the same shape as `$PY --version`, which the rule exists to let run.
     TOKENLESS_DANGEROUS = [
         "R=r; M=m; ${R}${M} qa-d", "R=/bin/r; \"${R}m\" qa-e",
         "$'\\x72m' qa-k", "$'\\u0072\\u006d' qa-l",
@@ -758,18 +785,41 @@ class TestNoFailurePathAllows:
         "/bin/{r,}m qa-u", "C=r; C+=m; \"$C\" qa-ab",
         "bash -c", "env -S", "echo >", "$UNKNOWN qa-mal-12",
     ]
+    # The same forms once the text names the removal: denied in every mode.
+    NAMED_DANGEROUS = [
+        "R=rm; $R qa-d", "R=/bin/rm; \"${R}\" qa-e", "r${EMPTY}m qa-p # rm",
+        "/bin/rm qa-s", "/bin/{rm,} qa-u", "C=unlink; \"$C\" qa-ab",
+        "bash -c 'rm qa'", "env -S 'shred qa'", "echo rmdir >",
+        "$UNKNOWN remove qa-mal-12", "$UNKNOWN --delete qa-mal-12",
+    ]
+    KNOBS = [("CLAUDE_HOOK_BOUNDARY_TIMEOUT", "0.001s"),
+             ("CLAUDE_HOOK_BOUNDARY_MEM_KB", "4096")]
 
     @pytest.mark.parametrize("command", TOKENLESS_DANGEROUS)
-    @pytest.mark.parametrize("knob,value", [
-        ("CLAUDE_HOOK_BOUNDARY_TIMEOUT", "0.001s"),
-        ("CLAUDE_HOOK_BOUNDARY_MEM_KB", "4096"),
-    ])
-    def test_degraded_mode_denies_forms_carrying_no_removal_token(
+    @pytest.mark.parametrize("knob,value", KNOBS)
+    def test_degraded_mode_lets_forms_carrying_no_removal_token_run(
             self, command, knob, value):
+        assert not _holds_removal_word(command), command
+        env = dict(os.environ, **{knob: value})
+        code, _out, err = run_hook_command(command, env=env)
+        assert code == ALLOW, "%s=%s refused %r: %s" % (knob, value, command, err)
+
+    @pytest.mark.parametrize("command", NAMED_DANGEROUS)
+    @pytest.mark.parametrize("knob,value", KNOBS)
+    def test_degraded_mode_denies_every_form_naming_a_removal(
+            self, command, knob, value):
+        assert _holds_removal_word(command), command
         env = dict(os.environ, **{knob: value})
         code, _out, err = run_hook_command(command, env=env)
         assert code == BLOCK, "%s=%s allowed %r" % (knob, value, command)
-        assert err.strip()
+        assert "removal-policy FAIL-CLOSED" in err, err
+
+    @pytest.mark.parametrize("command", TOKENLESS_DANGEROUS)
+    def test_the_analyzer_still_authorizes_none_of_the_tokenless_forms(
+            self, command):
+        # The rule changes what the hook does with an unproven command, never
+        # what the analyzer proves.
+        assert eb.analyze(command)["verdict"] == eb.UNRESOLVED, command
 
     @pytest.mark.parametrize("broken", [
         {"CLAUDE_PYTHON_BIN": "/nonexistent/python",

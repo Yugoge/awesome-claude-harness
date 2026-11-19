@@ -592,7 +592,7 @@ def test_the_shipped_settings_register_the_hook_once_for_askuserquestion_and_age
     settings = _expanded(json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8")))
     found = [(event, group.get("matcher"), hook["command"]) for event, groups in settings["hooks"].items()
              for group in groups for hook in group["hooks"] if "posttool-close-rating.py" in hook["command"]]
-    assert found == [("PostToolUse", "AskUserQuestion|Agent",
+    assert found == [("PostToolUse", "AskUserQuestion|Agent|Task",  # the dispatch names, lib/subagent.DISPATCH_TOOLS
                       'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py"')]
 
 

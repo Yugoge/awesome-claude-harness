@@ -16,9 +16,11 @@ subagent, each other path by which an agent call could switch the harness or fak
                         a file under <H>/.harness-switch/; the home's settings files; any
                         settings*.json that would set disableAllHooks; a script outside a harness
                         checkout that names the switch's state
-  CronCreate / ScheduleWakeup / SendMessage
-                        a prompt or message that types /harness (a scheduled prompt reaches
-                        UserPromptSubmit as if typed)
+  every other tool      a string of its input, under any key at any depth, that types /harness (a
+                        delivered or scheduled prompt reaches UserPromptSubmit as if typed), whatever
+                        the tool's name; only the CLI's own tools that deliver no prompt are named
+                        (harness_switch.NO_PROMPT: they pass); Agent / Task is refused only where a
+                        string is the command
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
@@ -63,6 +65,7 @@ from claude_home import load_settings  # noqa: E402 -- the one load of a setting
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
+from subagent import DISPATCH_TOOLS  # noqa: E402 -- the tool names a subagent is dispatched under
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
 
@@ -74,6 +77,10 @@ GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file 
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
+TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/harness-switch reads (parse_prompt)
+PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
+WHOLE = re.compile(r"\s*(?:/harness(?:\s+\S+)?|(?:<command-message>.*?</command-message>\s*)?" + TAGGED + r".*)\s*",
+                   re.S)  # a prompt that is the command, as scripts/harness-switch acts on one
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
@@ -517,11 +524,14 @@ def check_skill(tool: str, ti: dict) -> int:
     return 0
 
 
-def check_prompt(tool: str, ti: dict) -> int:
-    for key in ("prompt", "message", "content"):
-        value = ti.get(key)
-        if isinstance(value, str) and TYPED.search(value):
+def check_prompt(tool: str, ti: dict, typed=PROMPT.search) -> int:
+    """Refuse a tool whose input holds, under any key at any depth, a string `typed` matches."""
+    stack = [ti]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str) and typed(value):
             return refuse("this %s carries a prompt that types /harness" % tool)
+        stack.extend(value.values() if isinstance(value, dict) else value if isinstance(value, list) else ())
     return 0
 
 
@@ -541,9 +551,9 @@ def main() -> int:
         return check_write(tool, ti, cwd, data)
     if tool in ("Skill", "SlashCommand"):
         return check_skill(tool, ti)
-    if tool in ("CronCreate", "ScheduleWakeup", "SendMessage"):
-        return check_prompt(tool, ti)
-    return 0
+    if tool in DISPATCH_TOOLS:
+        return check_prompt(tool, ti, WHOLE.fullmatch)
+    return 0 if tool in harness_switch.NO_PROMPT else check_prompt(tool, ti)
 
 
 if __name__ == "__main__":

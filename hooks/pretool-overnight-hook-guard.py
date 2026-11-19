@@ -42,6 +42,7 @@ from lib import command_span, locations, overnight, shell_parse as sp, stop_cont
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
 from lib import git_facts  # noqa: E402
 from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES  # noqa: E402
+from lib.subagent import is_subagent  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -139,9 +140,9 @@ def _is_harness_state_path(target: str) -> bool:
 
 
 def _is_orchestrator_actor() -> bool:
-    """True iff the payload carries no agent_id (the orchestrator, the main agent)."""
+    """True iff the caller is the main agent (the orchestrator): no subagent (lib/subagent)."""
     payload = _REQUEST_CTX.get('payload') or {}
-    return not payload.get('agent_id')
+    return not is_subagent(payload)
 
 
 def _is_harness_state_exempt(target: str) -> bool:
@@ -409,9 +410,11 @@ def _body_mentions_protected_branch(body: str) -> bool:
 
 
 def _is_path_exempt(file_path: str) -> bool:
-    """Check if path is exempt from overnight worktree restrictions: the null device, a temp
-    directory the session's own files go to, the hook state root (lib/locations: both sides resolved)."""
-    if os.path.realpath(os.path.abspath(file_path)) == locations.NULL_DEVICE:
+    """Check if path is exempt from overnight worktree restrictions: the null device, a sink no file
+    lies behind (by name: /dev/stderr is a link to this process's own descriptor), a temp directory the
+    session's own files go to, the hook state root (lib/locations: both sides resolved)."""
+    named = os.path.abspath(file_path)
+    if os.path.realpath(named) == locations.NULL_DEVICE or locations.is_sink(named):
         return True
     roots = locations.session_temp_roots() + (locations.state_root(),)
     return any(root != os.sep and locations.is_inside(file_path, root) for root in roots)
@@ -462,11 +465,15 @@ def _block_global_worktree(tool_name: str, target: str, worktree_paths: list[str
     )
 
 
+def _edit_target(tool_name: str, tool_input: dict) -> str:
+    """The file a file-writing tool names ('' for any other): command_span.EDIT_TOOLS holds each tool's path key."""
+    key = command_span.EDIT_TOOLS.get(tool_name)
+    return str(tool_input.get(key) or '') if key else ''
+
+
 def _enforce_write_edit_all_sessions(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
     """Block Write/Edit outside active overnight worktrees for all sessions (self_repair-grant aware)."""
-    if tool_name not in ('Write', 'Edit', 'MultiEdit'):
-        return
-    fp = tool_input.get('file_path', '')
+    fp = _edit_target(tool_name, tool_input)
     if not fp or _is_path_allowed_during_overnight(fp, worktree_paths) or _grant_skips_block(fp):
         return
     _block_global_worktree(tool_name, fp, worktree_paths)
@@ -541,7 +548,7 @@ class _Read:
         self.script = sp.parse(command)
         self.unreadable = bool(self.script.errors())
         self.resolved = [(site, sp.resolve(site.cmd)) for site in sp.walk(self.script)]
-        self.targets = sp.write_targets(self.script, env=env)
+        self.targets = sp.write_targets(self.script, env=env, raw=command)
 
 
 @functools.lru_cache(maxsize=8)
@@ -595,8 +602,8 @@ def _target_text(t) -> str:
 def _bash_write_paths(command: str, skip=frozenset()) -> list[str]:
     """The path of each file the command writes or creates (a deletion is not one), first seen order.
     ``skip`` holds the ids of target words not to report."""
-    found = (_target_text(t) for t in _read(command).targets
-             if t.mode != sp.DELETE and id(t.word) not in skip)
+    found = (p for t in _read(command).targets if t.mode != sp.DELETE and id(t.word) not in skip
+             for p in t.placed(_target_text(t)))  # at each directory a `cd` before it may have left
     return list(dict.fromkeys(p for p in found if p))
 
 
@@ -758,8 +765,8 @@ def _check_write_edit_security(tool_name: str, file_path: str) -> None:
 def apply_global_security_checks(tool_name: str, tool_input: dict) -> None:
     """Block hooks/commands/state modifications for ALL sessions during any overnight. A Bash write
     to .claude/hooks/ or .claude/commands/ is pretool-claude-config-guard.py's refusal."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
-        _check_write_edit_security(tool_name, tool_input.get('file_path', ''))
+    if tool_name in command_span.EDIT_TOOLS:
+        _check_write_edit_security(tool_name, _edit_target(tool_name, tool_input))
     if tool_name == 'Bash' and check_bash_targets_state(tool_input.get('command', '')):
         _block('\nOVERNIGHT STATE PROTECTION: Modifying or deleting '
                'overnight-state-*.json via Bash is blocked.\n')
@@ -790,7 +797,7 @@ def _block_worktree_string_violation(tool_name: str, path: str) -> None:
 
 def _check_write_edit_string(tool_name: str, tool_input: dict, worktree_path: str) -> None:
     """Block a Write/Edit outside the session worktree (self_repair-grant aware)."""
-    file_path = tool_input.get('file_path', '')
+    file_path = _edit_target(tool_name, tool_input)
     if not file_path or _is_path_exempt(file_path) or _is_harness_state_exempt(file_path) or _grant_skips_block(file_path):
         return
     if is_outside_worktree(file_path, worktree_path):
@@ -808,7 +815,7 @@ def _check_bash_string(tool_input: dict, worktree_path: str) -> None:
 
 def apply_worktree_string_check(tool_name: str, tool_input: dict, worktree_path: str) -> None:
     """Block when an overnight session writes outside its worktree_path."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
+    if tool_name in command_span.EDIT_TOOLS:
         _check_write_edit_string(tool_name, tool_input, worktree_path)
     if tool_name == 'Bash':
         _check_bash_string(tool_input, worktree_path)
@@ -1803,13 +1810,13 @@ def _block_git_config(tool_name: str, target: str) -> None:
            f'leaves both as they are.\nBlocked: {tool_name} to {target}\n')
 
 
-def _emit_command_rewrite(new_command: str) -> None:
-    """Emit the Claude Code PreToolUse command-rewrite and exit 0. The runtime
-    replaces tool_input.command with `new_command` (the bwrap re-exec)."""
+def _emit_command_rewrite(new_command: str, tool_input: dict) -> None:
+    """Emit the Claude Code PreToolUse command-rewrite and exit 0. updatedInput replaces the whole
+    tool input, so it is `tool_input` with only its command replaced (the bwrap re-exec)."""
     out = {
         'hookSpecificOutput': {
             'hookEventName': 'PreToolUse',
-            'updatedInput': {'command': new_command},
+            'updatedInput': {**tool_input, 'command': new_command},
         }
     }
     sys.stdout.write(json.dumps(out))
@@ -1848,7 +1855,7 @@ def _raw_git_metadata_write_into_main(command: str, main_root: str,
 
 
 def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
-                          journal: tuple = ()) -> None:
+                          journal: tuple = (), tool_input: dict | None = None) -> None:
     """For the overnight actor's Bash command: re-exec it inside the bwrap RO-bind
     boundary (emit updatedInput.command) when the boundary is available; FAIL-CLOSED
     (deny non-worktree-local commands) when bwrap is unavailable. No-op only for an
@@ -1876,7 +1883,7 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
-            _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv))
+            _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv), tool_input or {})
         # boundary requested but argv could not be built -> fall through to the
         # fail-closed deny below (do not silently allow).
     # FAIL-CLOSED: bwrap unavailable OR argv unbuildable. The write guarantee
@@ -1990,13 +1997,13 @@ def main():
             # its journal bound writable: a check of the helper against its blobs at the harness's
             # HEAD cannot see what it runs (its hooks/lib modules load from untracked __pycache__
             # bytecode, and the untracked venv runs any .pth in it).
-            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload))
+            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload), tool_input)
         elif classification == 'worktree_context':
             # No governing state: the main_root cannot be derived to scope a targeted
             # block, so any git / interpreter command is refused; any other command is
             # left to the worktree-boundary enforcement below.
             _fail_closed_worktree_context(command)
-    target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
+    target = _edit_target(tool_name, tool_input)
     if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
             and target and _targets_git_config(target):
         _block_git_config(tool_name, target)

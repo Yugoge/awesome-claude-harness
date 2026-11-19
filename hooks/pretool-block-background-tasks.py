@@ -44,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def first_present(mapping, names, default=None):
@@ -92,7 +93,7 @@ def _is_spec_explore_exempt(tool_name, params, payload: dict) -> bool:
     """Narrow exemption: an EXPLICIT background Explore agent during a live /spec
     interview. Everything else (other subagent types, other tools, non-/spec
     sessions, absent run_in_background) is NOT exempt and stays blocked."""
-    if tool_name not in {"Agent", "Task"}:
+    if tool_name not in DISPATCH_TOOLS:
         return False
     if params.get("run_in_background") is not True:
         return False
@@ -188,7 +189,7 @@ def main():
     # Agent and Task default to BACKGROUND when the field is absent, so anything
     # other than an explicit False (i.e. True or None/absent) is a background
     # dispatch and is blocked.
-    if tool_name in {"Agent", "Task"} and rib is not False:
+    if tool_name in DISPATCH_TOOLS and rib is not False:
         print(
             f"[BLOCK] {tool_name} runs in the background by default and is forbidden "
             "for the orchestrator.\n"

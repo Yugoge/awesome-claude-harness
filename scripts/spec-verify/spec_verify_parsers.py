@@ -33,6 +33,9 @@ CONSUMERS_INLINE_REGEX = re.compile(
 )
 _HEADING_PREFIX_RE = re.compile(r"^(#{1,6})(\s|$)")
 _FM_FENCE = "---"
+# Files of a spec folder that are not role views: spec-verify's view list, the required-consumer
+# check and the Role Mandate check all leave them out.
+SKIP_FILES = frozenset({"orchestrator.md", "manifest.json", "INDEX.md", "README.md", "checkpoints.json"})
 _FM_LIST_KEYS = ("required_consumers", "committed_requirement_ids")
 
 

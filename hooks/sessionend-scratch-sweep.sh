@@ -38,13 +38,12 @@ fi
 
 # Charset guard: SID becomes a literal path component below and must never
 # carry a path separator or traversal sequence — this is the ONLY thing that
-# stands between "remove our own dir" and "remove something else."
-case "$SID $PSID" in
-  */*|*..*)
-    # unsafe session id '$SID $PSID' — skipping
-    exit 0
-    ;;
-esac
+# stands between "remove our own dir" and "remove something else" (the one rule of
+# hooks/lib/scratch_owner.py, as the ownership guard below).
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/scratch_owner.py" --safe-sid "$SID" ${PSID:+"$PSID"} 2>/dev/null; then
+  # unsafe session id '$SID $PSID' — skipping
+  exit 0
+fi
 
 # This session's own runtime files in the project (prompt-workflow.py's, keyed by
 # session id) go with it: the workflow bookmark, its start lock, its start replays.
