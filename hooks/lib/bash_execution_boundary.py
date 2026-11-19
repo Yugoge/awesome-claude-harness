@@ -62,7 +62,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    AWK_NAMES, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
@@ -766,7 +766,7 @@ INTERPRETERS = {
     "nodejs": ("-e", "--eval", "-p"), "php": ("-r",), "lua": ("-e",),
     "lua5.1": ("-e",), "lua5.3": ("-e",), "deno": ("eval",),
 }
-AWKS = {"awk", "gawk", "mawk", "nawk", "busybox-awk"}
+AWKS = set(AWK_NAMES) | {"busybox-awk"}  # and busybox's applet, as this reader names it
 
 # Calls that only render text. A removal token reaching one of these and
 # nothing else is PROVEN inert; anything else is not proven and denies.

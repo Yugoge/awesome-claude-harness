@@ -171,7 +171,7 @@ _RUBY_BAD = re.compile(
     r'syscall|trap|at_exit|ENV|Dir|Object|BasicObject|Class|Module|Signal)\b|`|%x|\$0|::')
 _AWK_BAD = re.compile(r'\bsystem\b|\|&?|\bgetline\b|@\w+|\b(?:print|printf)\b[^;{}\n]*>|'
                       r'\bENVIRON\b|\bPROCINFO\b')
-_AWK_NAMES = frozenset(('awk', 'gawk', 'mawk', 'nawk'))
+_AWK_NAMES = frozenset(_sp.AWK_NAMES) if _sp is not None else frozenset()
 _SED_SAFE = re.compile(
     r'^\s*(?:(?:\d+|\$|/(?:\\.|[^/])*/)(?:\s*,\s*(?:\d+|\$|/(?:\\.|[^/])*/|[+~]\d+))?\s*!?\s*)?'
     r'(?:[pd=lnq]|s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpiImM0-9]*)?\s*$')

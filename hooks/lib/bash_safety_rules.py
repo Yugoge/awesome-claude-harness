@@ -2636,6 +2636,7 @@ def _consent_text_names_state(view, text):
 
 def _consent_read_only(cmd, name, view, named_writes):
     """None when the simple command is one of the read-only shapes, else why not."""
+    from lib.shell_parse import AWK_NAMES
     words = list(cmd.words[1:])
     vals = [w.value() for w in words]
     if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in ("lit", "glob") for p in w.parts)
@@ -2666,7 +2667,7 @@ def _consent_read_only(cmd, name, view, named_writes):
             if re.search(r"[wWe]", s):
                 return "a `sed` script can write a file or run a command"
         return None
-    if name in ("awk", "gawk", "mawk", "nawk"):
+    if name in AWK_NAMES:
         prog, skip = None, False
         for i, v in enumerate(vals):
             if skip:
@@ -4397,6 +4398,7 @@ def _raw_workflow(text, view):
 def _daemon_json_write(sv):
     """A redirection into daemon.json; tee, cp or mv naming it; dd with of= it; sed or awk editing it in place or naming
     it in code."""
+    from lib.shell_parse import AWK_NAMES
     for site in sv.redirect_sites:
         if any(x.writes() and x.target is not None and DOCKER_DAEMON_JSON in x.target.text for x in site.cmd.redirects):
             return True
@@ -4413,7 +4415,7 @@ def _daemon_json_write(sv):
             continue
         if name in ("tee", "cp", "mv"):
             return True
-        if name in ("sed", "gsed", "awk", "gawk", "mawk", "nawk"):
+        if name in ("sed", "gsed") + AWK_NAMES:
             vals = [w.value() for w in args]
             in_place = any(v is not None and (re.match(r"^-[A-Za-z]*i", v) or v.startswith("--in-place")
                                               or v in ("inplace", "--include=inplace")) for v in vals)

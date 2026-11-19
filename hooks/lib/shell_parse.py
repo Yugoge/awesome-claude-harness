@@ -3181,6 +3181,7 @@ TARGET_DIR_OPTS = ("-t", "--target-directory")
 NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the written file, never a directory
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
+AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
 # The commands that change a file's mode, owner, attributes or ACL: the file

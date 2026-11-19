@@ -859,13 +859,14 @@ def _operand_writes(name: str, values: list) -> list:
     """The paths a writer names among its operands (as written): a sed ``w`` command, an awk
     ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with ``--output-dir``, wget's ``-O``/``-P``
     (sort -o and uniq IN OUT are the shared parser's). Only literal operands; a read never names one."""
+    from lib import shell_parse as sp
     out = []
     plain = [v for v in values if v is not None]
     if name in ("sed", "gsed"):
         for v in plain:
             for m in _SED_W.finditer(v):
                 out.append(m.group(1) or m.group(3))
-    elif name in ("awk", "gawk", "mawk", "nawk"):
+    elif name in sp.AWK_NAMES:
         for v in plain:
             out += _AWK_OUT.findall(v)
     elif name == "openssl":
@@ -886,7 +887,6 @@ def _operand_writes(name: str, values: list) -> list:
         if remote:
             out += [os.path.join(out_dir, _url_name(u)) for u in urls if _url_name(u)]
     elif name == "wget":
-        from lib import shell_parse as sp
         prefix, urls = "", []
         for i, v in enumerate(plain):
             if v in ("-P", "--directory-prefix") and i + 1 < len(plain):
