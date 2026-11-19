@@ -48,7 +48,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
-    SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+    OPTION_ENDS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -139,7 +139,7 @@ def _uniq(args) -> bool:
     # uniq IN OUT writes OUT: no operand at all, so only stdin to stdout. A bare
     # `--` ends option parsing and makes every later word an operand, dash-named
     # ones included (uniq -- -in -out writes -out), so it is refused too.
-    return all(a.startswith("-") and a not in ("-", "--") for a in args)
+    return all(a.startswith("-") and a not in OPTION_ENDS for a in args)
 
 
 # A sed script is admitted only when this small grammar matches the WHOLE of

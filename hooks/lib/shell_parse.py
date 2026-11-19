@@ -422,6 +422,7 @@ _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
+OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
 
 
 def _match_pair(t, i, opener, closer):
@@ -2777,7 +2778,7 @@ def _resolve_shell(r, head, words, cmd, depth):
                 _set_payload(r, [words[later[0] + 1]], "shell_c", depth, "shell_c_dynamic")
             r.unresolved = "computed-shell-option"
             return r
-        if v in ("--", "-"):
+        if v in OPTION_ENDS:
             k += 1
             break
         if len(v) > 1 and v[0] in "-+" and not v.startswith("--"):

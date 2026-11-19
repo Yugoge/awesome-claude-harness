@@ -3391,13 +3391,14 @@ def _hb_shell_options(args):
     off), so the shell reads its script or `-c` string without running it; an interactive (`-i`) shell, which
     ignores noexec, runs. verbose is True when any `-v`, `-o verbose` or `--verbose` appears (the shell then echoes
     the script it reads). None for an option it cannot read."""
+    from lib.shell_parse import OPTION_ENDS
     noexec = interactive = has_c = has_s = verbose = False
     k = 0
     while k < len(args):
         v = args[k].value()
         if v is None:
             return None
-        if v in ("--", "-"):
+        if v in OPTION_ENDS:
             k += 1
             break
         if v.startswith("--"):
@@ -5657,6 +5658,7 @@ _VISIBLE = {"top", "cmdsub", "backtick", "procsub"}
 def _interpreter_code(res, cmd):
     """The code an interpreter command runs from its own arguments (`-c CODE`, `-cCODE`, a cluster ending in the
     code option, `--eval=CODE`) or, with no script operand, from a heredoc or here-string; None if none."""
+    from lib.shell_parse import OPTION_ENDS
     name = res.name or ""
     spec = next(((c, v) for rx, c, v in _INTERP_CODE_OPTS if rx.match(name)), None)
     if spec is None:
@@ -5682,7 +5684,7 @@ def _interpreter_code(res, cmd):
         if a in value_opts:
             k += 2
             continue
-        if a == "--" or a == "-" or not a.startswith("-"):
+        if a in OPTION_ENDS or not a.startswith("-"):
             break
         k += 1
     if all(a is None or a == "-" or a.startswith("-") for a in args):
@@ -6577,6 +6579,7 @@ def _sd_scan(args, spec, permute=True, operands=None):
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
+    from lib.shell_parse import OPTION_ENDS
     k = 0
     while k < len(args) and args[k].startswith("-"):
         if args[k] == "-C" and k + 1 < len(args):
@@ -6621,7 +6624,7 @@ def _sd_git(args):
         allowed, stdin, j = set(), False, 0
         while j < len(rest):
             a = rest[j]
-            if a == "--" or not a.startswith("-") or a == "-":
+            if a in OPTION_ENDS or not a.startswith("-"):
                 return allowed, stdin  # a pathspec follows: its words are not messages
             if a.startswith("--"):
                 name, eq, val = a.partition("=")
@@ -6960,6 +6963,7 @@ def _sd_glob_operand(res, out_safe):
 def _sd_interpreter_code(res, cmd):
     """The code an interpreter call runs from its own words or its stdin: a -c/-e/-r style option's value (awk's
     program operand), and a heredoc or here-string. A script path and the script's arguments are not code."""
+    from lib.shell_parse import OPTION_ENDS
     name = res.name.lower()
     vals = [w.value() if w.value() is not None else w.text for w in res.args]
     code = []
@@ -6991,7 +6995,7 @@ def _sd_interpreter_code(res, cmd):
         k = 0
         while k < len(vals):
             a = vals[k]
-            if a in ("--", "-"):
+            if a in OPTION_ENDS:
                 break
             if a.startswith("--"):
                 nm, eq, v = a.partition("=")

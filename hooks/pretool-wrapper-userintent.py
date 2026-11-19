@@ -710,7 +710,7 @@ class _Scan:
                     if lead_ok is not None and lead_ok(k):
                         return True
                 return noexec and last_open and k == len(vals) - 1
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 break
             if v.startswith('--'):
                 if v in ('--rcfile', '--init-file'):
@@ -1204,7 +1204,7 @@ class _Scan:
                 if self._built(args[k]):
                     self.computed_run = True  # a script operand built at run time
                 return
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 k += 1
                 break
             if len(v) > 1 and v[0] in '-+' and not v.startswith('--'):

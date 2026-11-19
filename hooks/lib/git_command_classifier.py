@@ -1304,7 +1304,7 @@ def _shell_c_operand(words, i):
             maybe_c = True  # an unknown word may be any option, -c included
             i += 1
             continue
-        if value in ('--', '-'):
+        if value in shell_parse.OPTION_ENDS:
             i += 1
             break
         if value.startswith('--'):
@@ -1715,7 +1715,7 @@ def _shell_args_run_runtime(args, as_command):
         value, runtime = args[i]
         if runtime:
             return True
-        if value in ('--', '-'):
+        if value in shell_parse.OPTION_ENDS:
             i += 1
             break
         if value.startswith('--'):
@@ -1974,7 +1974,7 @@ def _hidden_inline_code(name, argv):
     codes = []
     for i, arg in enumerate(argv):
         nxt = argv[i + 1] if i + 1 < len(argv) else None
-        if arg is None or not arg.startswith('-') or arg in ('-', '--'):
+        if arg is None or not arg.startswith('-') or arg in shell_parse.OPTION_ENDS:
             continue
         if arg.startswith('--'):
             opt, eq, val = arg.partition('=')
