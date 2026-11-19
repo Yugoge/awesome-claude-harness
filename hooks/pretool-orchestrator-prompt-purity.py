@@ -46,6 +46,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.subagent import DISPATCH_TOOLS, is_subagent  # noqa: E402
+
 
 # Rule-doc pointers are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the stderr message names the files that
@@ -242,7 +245,7 @@ def _parse_payload():
 
 def _extract_prompt(data: dict):
     tool_name = data.get("tool_name") or data.get("toolName") or ""
-    if tool_name and tool_name != "Agent":
+    if tool_name and tool_name not in DISPATCH_TOOLS:
         return None
     tool_input = data.get("tool_input") or data.get("toolInput") or {}
     prompt = tool_input.get("prompt")
@@ -273,8 +276,7 @@ def main() -> int:
     if hit is None:
         return 0
     category, snippet = hit
-    is_subagent = bool(data.get("agent_id"))
-    return _route_hit(category, snippet, is_subagent)
+    return _route_hit(category, snippet, is_subagent(data))
 
 
 if __name__ == "__main__":

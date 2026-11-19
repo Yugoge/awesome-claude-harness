@@ -44,7 +44,8 @@ EXEMPT_PATHS = {
     ".next", "coverage", ".venv", "venv", "package-lock.json",
     "yarn.lock", "pnpm-lock.yaml",
 }
-CHECKABLE_EXTS = {".py", ".ts", ".js", ".tsx", ".jsx"}
+JS_TS_EXTS = (".ts", ".js", ".tsx", ".jsx")  # checked with the JavaScript/TypeScript rules
+CHECKABLE_EXTS = {".py", *JS_TS_EXTS}
 
 
 def is_exempt(file_path):
@@ -273,7 +274,7 @@ def _functions_for_ext(lines, ext):
     """Return per-function list and max-nesting for the given extension."""
     if ext == ".py":
         return iter_python_functions(lines), _max_nesting_py(lines)[0]
-    if ext in (".ts", ".js", ".tsx", ".jsx"):
+    if ext in JS_TS_EXTS:
         return iter_ts_functions(lines), _max_nesting_ts(lines)[0]
     return [], 0
 
@@ -340,7 +341,7 @@ def collect_violations(content, ext):
     out.extend(check_file_length(lines))
     if ext == ".py":
         out.extend(check_function_length_python(lines))
-    elif ext in (".ts", ".js", ".tsx", ".jsx"):
+    elif ext in JS_TS_EXTS:
         out.extend(check_function_length_ts(lines))
     out.extend(check_nesting_depth(lines, ext))
     return out

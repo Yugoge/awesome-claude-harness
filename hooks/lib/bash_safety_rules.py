@@ -1255,8 +1255,6 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
                               "-H", "--set-home"})
 """sudo's options that keep its command as named: -s/--shell and -i/--login run it through `$SHELL -c`, and any
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
-_SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
-"""A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
 # The global options that point git at another directory, file, ref namespace or program set (every value option
 # but -c, and --exec-path).
 _GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
@@ -1554,8 +1552,11 @@ from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and l
 from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
     BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
     DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
-    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, PRINTERS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
+
+_SHAPE_HEAD_RE = re.compile("[^/]+|(?:%s)/[^/]+" % "|".join(locations.BIN_DIRS))
+"""The strict shape's command word (_shape_strict_ok): a bare name found on PATH, or <a plain program directory>/<name>."""
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -2901,7 +2902,7 @@ def consent_flag_verdict(command, cwd, state):
         why = _consent_read_only(cmd, name, view, named_writes)
         if why:
             return why + ", and the command names the consent flag"
-        if name in ("echo", "printf") and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
+        if name in PRINTERS and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
             emits = True
     for w in named_writes:
         why = (view.target(toks=w[1], named=True) if isinstance(w, tuple) else
@@ -3407,7 +3408,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = ("bash", "sh", "dash")
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS),
+_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.BIN_DIRS),
                                             "|".join(_HB_NOEXEC_SHELLS)))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
@@ -3697,14 +3698,14 @@ def hard_ban_mask(t):
 
 
 def _hb_only_reads(command):
-    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a system program directory
-    (lib/locations.SYSTEM_BIN_DIRS) read as its bare name: it runs nothing it chooses, so a name in it is only read."""
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a plain program directory
+    (lib/locations.BIN_DIRS, as each rule here) read as its bare name: it runs nothing it chooses, so a name is only read."""
     try:
         from lib.bash_read_only import is_read_only
         from lib.shell_parse import parse, walk
         out = list(command)
         for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
-            if (name := w.text.rpartition("/"))[0] in locations.SYSTEM_BIN_DIRS and name[2]:
+            if (name := w.text.rpartition("/"))[0] in locations.BIN_DIRS and name[2]:
                 out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
         return is_read_only("".join(out))
     except Exception:  # noqa: BLE001
@@ -4127,7 +4128,7 @@ def sensitive_redirect(command, kept=False):
                 args = resolve(site.cmd).args
                 texts = [w.text if w.value() is None else w.value() for w in args]
                 spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
-                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in ("echo", "printf") else ()
+                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in PRINTERS else ()
                 skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
                 for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
                     if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
@@ -4783,8 +4784,9 @@ def _scratch_owner(payload):
     """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
     naming that directory or ""). Both are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch),
     loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an actor may write
-    scratch files, with no second one here. An actor the write policy gives no directory (the main agent, a
-    subagent whose role does not resolve) owns nothing, and so does any failure to ask."""
+    scratch files, with no second one here. An actor the write policy gives no directory (a main agent whose
+    session scratch was not made, a subagent whose role does not resolve) owns nothing, and so does any failure
+    to ask."""
     import importlib.util
     import io
     try:
@@ -4801,7 +4803,7 @@ def _scratch_owner(payload):
 
     def owns(path):
         try:
-            return bool(role) and policy._scratch_status(role, path, payload) == "owner"
+            return policy._scratch_status(role, path, payload) == "owner"
         except Exception:  # noqa: BLE001
             return False
     return owns, note.getvalue().strip()
@@ -5938,7 +5940,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", locations.STDIN_DEVICE):
+                    if name == "--file" and value in ("-",) + locations.STDIN_DEVICES:
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -5954,7 +5956,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", locations.STDIN_DEVICE):
+                    if c == "F" and value in ("-",) + locations.STDIN_DEVICES:
                         stdin = True
                     if not attached:
                         j += 1

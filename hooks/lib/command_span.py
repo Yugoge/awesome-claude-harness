@@ -49,6 +49,9 @@ GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 # Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
+# The transcript record types that are conversation turns (the others: attachments, summaries,
+# meta, api-request blobs); only they hold a turn's calls and results.
+TURN_RECORD_TYPES = ("user", "assistant")
 _NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
 # The origin kinds of a prompt the owner typed. A session driven through the SDK entrypoint (the
 # desktop app, Remote Control: entrypoint "sdk-cli" or "remote") records its typed prompts with
@@ -65,9 +68,11 @@ _SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
 
 
 def harness_commands() -> frozenset:
-    """commands/*.md stems of this harness, INDEX and README excluded."""
+    """commands/*.md stems of this harness, the folder documents (INDEX, README) excluded."""
+    import importlib
+    docs = importlib.import_module(f"{__package__}.harness_vocabulary" if __package__ else "harness_vocabulary")
     try:
-        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.stem not in ("INDEX", "README"))
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.name not in docs.FOLDER_DOCUMENTS)
     except OSError:
         return frozenset()
 
@@ -313,7 +318,7 @@ def _blocks(record: dict | None, sidechain: bool = False):
     results. Any other record holds none, whatever it carries (CLI 2.1.322's api-request-blob repeats
     each message of a model request, its tool_use and tool_result blocks too: a call read twice). A
     subagent's own record (isSidechain) only with ``sidechain``."""
-    if not isinstance(record, dict) or record.get("type") not in ("user", "assistant") \
+    if not isinstance(record, dict) or record.get("type") not in TURN_RECORD_TYPES \
             or (record.get("isSidechain") and not sidechain):
         return ()
     message = record.get("message")
@@ -585,7 +590,7 @@ class Span:
         """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
         however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
         ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls(*_subagent().DISPATCH_TOOLS))
         return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def obligations(self) -> list:
@@ -744,6 +749,11 @@ OPENER_REMOTE_LINE_RE = re.compile(r"^\[/push\] remote at the opener: (\S+) ([0-
 def _obligation():  # imported when first asked: a reader that needs none loads none of it
     import importlib
     return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
+
+
+def _subagent():
+    import importlib
+    return importlib.import_module(f"{__package__}.subagent" if __package__ else "subagent")
 
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):

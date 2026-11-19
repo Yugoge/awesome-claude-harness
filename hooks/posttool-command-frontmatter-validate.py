@@ -27,6 +27,9 @@ import json
 import sys
 import re
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from harness_vocabulary import FOLDER_DOCUMENTS  # noqa: E402
+
 
 def get_file_path():
     try:
@@ -44,7 +47,7 @@ def is_command_file(path):
 
 def validate(path):
     basename = path.rsplit('/', 1)[-1]
-    if basename in {'INDEX.md', 'README.md'}:
+    if basename in FOLDER_DOCUMENTS:
         return True, []
 
     try:
