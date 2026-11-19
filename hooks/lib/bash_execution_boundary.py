@@ -30,8 +30,9 @@ word (lib/pol_degraded_removal_reference.ere) and otherwise runs, handed to the
 record as let through unproven, after a snapshot (lib/checkpoint-core.sh) of the
 repository holding the call's cwd, named in the record.  The snapshot holds that
 repository's tracked and untracked files, not ignored ones, not the classes the
-snapshot code leaves out, not another repository, not files outside any; with no
-snapshot the command still runs and the record says why.  FORBIDDEN_REMOVAL is
+snapshot code leaves out, not another repository, not files outside any.  With no
+snapshot (also for a while after one ran past its time limit) the command still
+runs and the record says why.  FORBIDDEN_REMOVAL is
 refused whatever the text holds.  So a proof here now decides whether a command that NAMES a removal may
 run, and a FORBIDDEN_REMOVAL finding still refuses a removal the text does not
 name (``r''m x``).

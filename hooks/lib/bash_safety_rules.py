@@ -11,6 +11,7 @@ them; every later rule is released by both. A view that cannot be built degrades
 helper refuses more, never less.
 """
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import resource
 import signal
 import subprocess
 import sys
+import time
 import urllib.parse
 
 HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -4758,15 +4760,35 @@ def let_through_unproven(entry, payload):
 def snapshot_before(payload):
     """lib/checkpoint-core.sh write_checkpoint, run in the payload's cwd within CLAUDE_HOOK_SNAPSHOT_TIMEOUT (10 s:
     with the analyzer's 15 s it stays inside the CLI's 60 s for this hook, which settings.json leaves at its
-    default), starting no push. A snapshot that is not taken never refuses: the reply says why.
-    Returns {"ref", "commit", "restore"} (and "left_out" when files were left out) or {"none": why}."""
+    default), starting no push. A snapshot that is not taken never refuses: the reply says why. A repository whose
+    snapshot ran past that limit gets none for CLAUDE_HOOK_SNAPSHOT_PAUSE (30 min) after it, so a repository too big
+    to snapshot costs one wait per period, not one per command; its mark is a file in the hook state root, named by
+    the repository's real top-level path. Returns {"ref", "commit", "restore"} (and "left_out" when files were left
+    out) or {"none": why}."""
     cwd = payload.get("cwd") if isinstance(payload, dict) else None
     if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
         return {"none": "the call names no working directory"}
     limit = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_TIMEOUT", ""), "10s") or 10.0
-    script = ('cd -- "$1" && . "$2" || exit 90; export CHECKPOINT_NO_PUSH=1; write_checkpoint "" "$3" "pre-command snapshot"; rc=$?; '
-              'printf "%s\\n" "$rc" "$checkpoint_commit" "$checkpoint_ref" "$(git rev-parse --show-toplevel 2>/dev/null)" '
-              '"$checkpoint_left_out$checkpoint_notice"')
+    try:
+        top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=limit).stdout.strip()
+    except subprocess.TimeoutExpired:
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+    except (OSError, subprocess.SubprocessError):
+        top = ""
+    if not top:
+        return {"none": "not inside a git repository"}
+    top = os.path.realpath(top)
+    mark = os.path.join(state_dir(), ".checkpoint-overtime-" + hashlib.sha256(os.fsencode(top)).hexdigest()[:24])
+    pause = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_PAUSE", ""), "30m") or 1800.0
+    with contextlib.suppress(OSError):
+        since = os.stat(mark).st_mtime
+        if 0 <= time.time() - since < pause:
+            return {"none": "the last snapshot of this repository ran past its time limit at "
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(since))}; the next is tried "
+                    f"{pause:g} s after it (CLAUDE_HOOK_SNAPSHOT_PAUSE)"}
+    script = ('. "$2" || exit 90; export CHECKPOINT_NO_PUSH=1; write_checkpoint "$1" "$3" "pre-command snapshot"; '
+              'printf "%s\\n" "$?" "$checkpoint_commit" "$checkpoint_ref" "$checkpoint_left_out$checkpoint_notice"')
     try:
         p = subprocess.Popen(["bash", "-c", script, "snapshot", cwd, os.path.join(LIB, "checkpoint-core.sh"),
                               "an unproven Bash command let through (removal policy)"],
@@ -4780,8 +4802,10 @@ def snapshot_before(payload):
         with contextlib.suppress(OSError):
             os.killpg(p.pid, signal.SIGKILL)  # git and all; its temp index is swept by a later snapshot
         p.wait()
+        with contextlib.suppress(OSError), open(mark, "w", encoding="utf-8") as fh:
+            fh.write(top + "\n")
         return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
-    rc, commit, ref, top, note = (out.split("\n", 4) + [""] * 5)[:5]
+    rc, commit, ref, note = (out.split("\n", 3) + [""] * 4)[:4]
     note = note.strip()
     if rc == "0" and commit:
         shot = {"ref": ref, "commit": commit, "restore": f"git -C {top} restore --source={commit} -- <path>, or "

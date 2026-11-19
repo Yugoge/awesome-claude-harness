@@ -56,11 +56,13 @@ def git(cwd, *args, **kw):
 def env(tmp_path):
     return {**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path), "CHECKPOINT_LOG_DIR": str(tmp_path / "logs"),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@example.invalid", "CLAUDE_HOOK_BOUNDARY_TIMEOUT": "120s"}
+            "GIT_COMMITTER_EMAIL": "t@example.invalid", "CLAUDE_HOOK_BOUNDARY_TIMEOUT": "120s",
+            "CLAUDE_STATE_DIR": str(tmp_path / "state")}
 
 
 @pytest.fixture
 def repo(tmp_path, env):
+    os.makedirs(env["CLAUDE_STATE_DIR"])
     """A repository with a modified tracked file and an untracked one: the state before the call."""
     r = tmp_path / "repo"
     r.mkdir()
@@ -71,6 +73,14 @@ def repo(tmp_path, env):
     (r / "tracked.txt").write_bytes(b"modified \x00 before the call\n")
     (r / "untracked.bin").write_bytes(bytes(range(256)))
     return r
+
+
+def slow(repo, env):
+    """A snapshot that runs past a 1 s limit, as one of a very large repository does: `git add -A` runs a clean
+    filter that sleeps, so the time goes where it goes in a large tree, in the snapshot's staging."""
+    git(repo, "config", "filter.slow.clean", "sleep 20; cat", env=env)
+    (repo / ".gitattributes").write_text("*.txt filter=slow\n")
+    return {**env, "CLAUDE_HOOK_SNAPSHOT_TIMEOUT": "1s"}
 
 
 def decide(command, cwd, env):
@@ -158,10 +168,10 @@ def test_a_failed_snapshot_lets_the_command_run_and_says_why(repo, env):
 def test_a_snapshot_past_its_time_limit_is_abandoned_and_the_command_runs(repo, env):
     index = (repo / ".git" / "index").read_bytes()
     start = time.monotonic()
-    result = decide(UNPROVEN, repo, {**env, "CLAUDE_HOOK_SNAPSHOT_TIMEOUT": "0.001s"})
+    result = decide(UNPROVEN, repo, slow(repo, env))
     assert result["verdict"] == "ALLOW", result
     assert result["calls"][0]["snapshot"] == {
-        "none": "the snapshot took longer than 0.001 s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+        "none": "the snapshot took longer than 1 s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
     assert time.monotonic() - start < 60
     assert (repo / ".git" / "index").read_bytes() == index and checkpoint_refs(repo) == []
 
@@ -183,3 +193,46 @@ def test_two_snapshots_at_the_same_moment_damage_neither_each_other_nor_the_inde
     assert git(repo, "status", "--porcelain").replace("".join(f"?? mine-{i}.txt\n" for i in range(4)), "") == status
     subprocess.run(["git", "-C", str(repo), "fsck", "--no-dangling"], check=True, capture_output=True)
     assert not list((repo / ".git").glob("checkpoint-index.*"))
+
+
+def test_after_a_snapshot_past_its_time_limit_the_repository_gets_none_for_a_period_then_one_again(repo, env):
+    """A repository too big to snapshot: one wait per period, not one per command."""
+    first = decide(UNPROVEN, repo, slow(repo, env))["calls"][0]["snapshot"]
+    assert first["none"].startswith("the snapshot took longer than"), first
+    marks = os.listdir(env["CLAUDE_STATE_DIR"])
+    assert len(marks) == 1
+    start = time.monotonic()
+    second = decide(UNPROVEN, repo, env)  # the ordinary limit would now let it finish: the pause decides
+    assert second["verdict"] == "ALLOW" and checkpoint_refs(repo) == [], second
+    assert second["calls"][0]["snapshot"]["none"].startswith(
+        "the last snapshot of this repository ran past its time limit at "), second
+    assert time.monotonic() - start < 30
+    # The same repository reached from a subdirectory and through a link shares the mark.
+    (repo / "sub").mkdir()
+    os.symlink(repo, os.path.join(os.path.dirname(repo), "link"))
+    for cwd in (repo / "sub", os.path.join(os.path.dirname(repo), "link")):
+        assert "ran past its time limit" in decide(UNPROVEN, cwd, env)["calls"][0]["snapshot"]["none"]
+    # After the period it tries again (the filter no longer sleeps).
+    git(repo, "config", "filter.slow.clean", "cat", env=env)
+    mark = os.path.join(env["CLAUDE_STATE_DIR"], marks[0])
+    os.utime(mark, (time.time() - 1801, time.time() - 1801))
+    third = decide(UNPROVEN, repo, env)["calls"][0]["snapshot"]
+    assert "commit" in third and checkpoint_refs(repo) == [third["ref"], third["commit"]], third
+
+
+def test_the_library_snapshots_a_repository_whose_path_holds_a_space(tmp_path, env):
+    """write_checkpoint's ordinary entry, called with the work directory from elsewhere."""
+    r = tmp_path / "a dir" / "my repo"
+    r.mkdir(parents=True)
+    git(r, "init", "-q", "-b", "main", env=env)
+    (r / "f.txt").write_text("committed\n")
+    git(r, "add", "f.txt", env=env)
+    git(r, "commit", "-q", "-m", "c", env=env)
+    (r / "f.txt").write_text("changed\n")
+    (r / "new file.txt").write_text("new\n")
+    lib = os.path.join(HOOKS_DIR, "lib", "checkpoint-core.sh")
+    p = subprocess.run(["bash", "-c", '. "$1"; CHECKPOINT_NO_PUSH=1 write_checkpoint "$2" "test"; echo "$? $checkpoint_commit"',
+                        "t", lib, str(r)], capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=60)
+    rc, commit = p.stdout.split()
+    assert rc == "0" and git(r, "rev-parse", "refs/checkpoints/main").strip() == commit, p
+    assert git(r, "show", f"{commit}:f.txt") == "changed\n" and git(r, "show", f"{commit}:new file.txt") == "new\n"
