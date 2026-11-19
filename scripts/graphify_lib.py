@@ -82,6 +82,13 @@ _FILESYSTEM_NOISE_FRAGMENTS = (
 # Combined tuple exposed as the public API.
 EXCLUDE_FRAGMENTS = _SENSITIVE_DATA_FRAGMENTS + _FILESYSTEM_NOISE_FRAGMENTS
 
+# Graph relations that are coupling (real blast radius): graphify-enrich's reverse dependents
+# and forward context, graphify-query's excerpt priority. `contains` (file->symbol) and bare
+# `references` are not.
+COUPLING_RELATIONS = frozenset(
+    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
+)
+
 # ---------------------------------------------------------------------------
 # Status constants
 # ---------------------------------------------------------------------------
