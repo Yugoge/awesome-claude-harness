@@ -4780,10 +4780,18 @@ def let_through_unproven(entry, payload):
          "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
     Before the command runs, a snapshot of the repository at the payload's cwd is taken and named in the entry
     (entry["snapshot"], see snapshot_before()), so what the command removes or overwrites there can be brought back
-    (the owner, 2026-10-04: discard, but recoverably). This module writes no log of its own: the record's writer is
-    called from here, after the snapshot, and records the entry with it.
+    (the owner, 2026-10-04: discard, but recoverably). Then the entry goes to the refusal record (record(), kind
+    "unproven") as one line: what was let through and why, then "snapshot: <ref> <commit>; bring a file back: ..."
+    (and what it left out) or "snapshot: none, <why>".
     """
-    entry["snapshot"] = snapshot_before(payload)
+    shot = entry["snapshot"] = snapshot_before(payload)
+    lines = [f"{entry.get('rule', 'removal-policy')} let through unproven: {entry.get('reason', '')}"]
+    if "none" in shot:
+        lines.append(f"snapshot: none, {shot['none']}")
+    else:
+        lines.append(f"snapshot: {shot['ref']} {shot['commit']}; bring a file back: {shot['restore']}")
+        lines += [f"snapshot left out: {shot['left_out']}"] if shot.get("left_out") else []
+    record("\n".join(lines), "unproven")
 
 
 def snapshot_before(payload):

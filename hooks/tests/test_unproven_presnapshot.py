@@ -84,7 +84,8 @@ def slow(repo, env):
 
 
 def decide(command, cwd, env):
-    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "presnap", "cwd": str(cwd)}
+    payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command},
+               "session_id": "presnap", "tool_use_id": "toolu_" + str(abs(hash((command, str(cwd))))), "cwd": str(cwd)}
     p = subprocess.run([sys.executable, "-c", _DECIDE, HOOKS_DIR], input=json.dumps(payload), capture_output=True,
                        text=True, cwd=str(cwd), env=env, timeout=180)
     assert p.stdout.strip(), p.stderr
@@ -236,3 +237,38 @@ def test_the_library_snapshots_a_repository_whose_path_holds_a_space(tmp_path, e
     rc, commit = p.stdout.split()
     assert rc == "0" and git(r, "rev-parse", "refs/checkpoints/main").strip() == commit, p
     assert git(r, "show", f"{commit}:f.txt") == "changed\n" and git(r, "show", f"{commit}:new file.txt") == "new\n"
+
+
+def record_lines(env):
+    """Every line of the refusal record this test's HOME holds, read where its one writer puts it."""
+    sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
+    import refusal_record
+    folder = refusal_record.directory()
+    assert folder.startswith(env["HOME"] + os.sep), folder  # the test's own home, never the user's
+    if not os.path.isdir(folder):
+        return []
+    return [json.loads(ln) for name in sorted(os.listdir(folder)) for ln in open(os.path.join(folder, name))]
+
+
+def test_the_record_holds_one_unproven_line_naming_the_snapshot_and_none_for_a_refused_or_proven_command(repo, env):
+    shot = decide(UNPROVEN, repo, env)["calls"][0]["snapshot"]
+    assert decide("$TOOL remove pkg", repo, env)["code"] == 2      # refused: a refusal line, no let-through
+    assert decide("ls -la", repo, env)["verdict"] == "ALLOW"        # proven: nothing at all
+    unproven = [r for r in record_lines(env) if r["kind"] == "unproven"]
+    assert len(unproven) == 1, unproven
+    (line,) = unproven
+    assert line["refused"] == UNPROVEN and line["tool"] == "Bash" and line["event"] == "PreToolUse"
+    first, second = line["message"].splitlines()[:2]
+    assert first == "removal-policy let through unproven: UNRESOLVED dynamic_command_head:$PY", first
+    assert second == f"snapshot: {shot['ref']} {shot['commit']}; bring a file back: {shot['restore']}", second
+    assert [r["rules"][0]["id"] for r in unproven] == [
+        "removal-policy-let-through-unproven-unresolved-dynamic_command_head"]
+    assert [r["kind"] for r in record_lines(env)].count("refusal") == 1
+
+
+def test_the_record_says_why_there_is_no_snapshot(tmp_path, env):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    decide(UNPROVEN, plain, env)
+    (line,) = [r for r in record_lines(env) if r["kind"] == "unproven"]
+    assert line["message"].splitlines()[1] == "snapshot: none, not inside a git repository"
