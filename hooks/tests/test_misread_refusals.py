@@ -358,3 +358,40 @@ CONSENT_WRITES = [
 def test_a_write_into_the_state_directory_or_of_the_flag_is_still_refused(sandbox, command):
     r = bash_safety(sandbox, command.replace("{S}", sandbox["state"]))
     assert r.returncode == 2 and CONSENT in r.stderr, (command, r.stderr)
+
+
+# ── A command with no git commit bypasses no commit hook ─────────────────────
+# 1 recorded refusal: a double-quoted `python3 -c "..."` inside a double-quoted $(...), with `git status` and a
+# path holding `config` after it. The guard's own splitter cannot follow that quoting; hooks/lib/shell_parse.py
+# can, and reads no commit and no config in it.
+BYPASS = "commit-hook-bypass"
+NO_COMMIT = ('cd /srv/work; echo "files: $(python3 -c "\nimport json\nprint(len(json.load(open(\'.claude/files.json\'))))")"; '
+             "git status --porcelain src/alpha.py; ls src/_resolver.py config/rules.json")
+NO_COMMIT_LOOP = ('cd /srv/work; for f in alpha beta; do echo "$f: $(python3 -c "\nimport json;d=json.load(open(\'.claude/files.json\'))\n'
+                  'print([k for k,(m,c) in d.items() if any(x.endswith(\'/$f.py\') for x in m+c)])")"; done; '
+                  "git status --porcelain src/alpha.py; ls src/_resolver.py config/rules.json")
+
+
+def test_a_command_with_no_commit_is_no_commit_hook_bypass(sandbox):
+    r = bash_safety(sandbox, NO_COMMIT)
+    assert r.returncode == 0, r.stderr
+    # the recorded command itself: no longer this rule's refusal (the removal policy still reads its inline Python)
+    assert BYPASS not in bash_safety(sandbox, NO_COMMIT_LOOP).stderr
+
+
+COMMIT_BYPASSES = [
+    'echo "$(bash -c "git commit --no-verify -m x")"',
+    'echo "$(eval "git commit -n -m x")"',
+    'echo "$(sh -c "git config --global core.hooksPath /x")"',
+    'echo "files: $(python3 -c "print(1)")"; git commit --no-verify -m x',
+    'echo "files: $(python3 -c "print(1)")"; git -c core.hooksPath=/dev/null commit -m x',
+    'echo "files: $(python3 -c "print(1)")"; G=git; $G commit --no-verify -m x; ls config',
+    'echo "files: $(python3 -c "import os; os.system(\'git commit --no-verify -m $f\')")"',
+    "git commit --no-verify -m x",
+]
+
+
+@pytest.mark.parametrize("command", COMMIT_BYPASSES)
+def test_a_commit_that_skips_the_hooks_is_still_refused(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 2 and BYPASS in r.stderr, (command, r.stderr)

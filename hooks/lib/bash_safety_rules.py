@@ -160,6 +160,23 @@ def commit_guard_applies(command):
     return ("commit" in s or "config" in s) and re.search(r"(^|[^\w])git", s) is not None
 
 
+def _no_commit_or_config(command):
+    """lib/shell_parse.py's reading of a command whose quoting the commit guard's own splitter cannot follow: True
+    when it parses, no command word or payload is computed, no computed word spells git with commit or config, and
+    every git invocation it runs or carries in a static string is read whole, sets no configuration and is neither
+    commit nor config."""
+    try:
+        from lib.shell_parse import git_invocations, parse, walk
+        script = parse(command)
+        return not script.errors() and not any(
+            s.dynamic or s.templated or any(w.value() is None and commit_guard_applies(w.text) for w in s.cmd.words)
+            for s in walk(script)) and all(
+            i.unresolved is None and i.subcommand not in (None, "commit", "config") and not (i.config_pairs or i.env)
+            for i in git_invocations(script, strings=True))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def commit_guard(payload):
     """BS-04, BS-05, BS-06: 'HOOKS <why>', 'CONFIG <key>', 'FILTER <top>[\\t<why>]' or 'OK'.
 
@@ -227,7 +244,8 @@ def commit_guard(payload):
             m = (DQ if st[-1:] == '"' else UQ).match(t, i)
             k, s, i = m.lastgroup, m.group(), m.end()
             o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
-            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]):
+            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]) \
+                    and not _no_commit_or_config(d.get('tool_input', {}).get('command', '')):
                 unread('a double-quoted bash -c/eval string inside a double-quoted $(...)')
             st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
         return t if st else o
