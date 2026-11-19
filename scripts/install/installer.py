@@ -86,7 +86,6 @@ from pathlib import Path
 
 STATE_REL = "state/install-state.json"
 BACKUPS_REL = "backups"
-STATE_SCHEMA_V1 = "claude-harness/install-state/v1"
 STATE_SCHEMA = "claude-harness/install-state/v2"
 
 # R9 -- the self-management bundle. An EXPLICIT, NON-RECURSIVE, versioned file
@@ -102,7 +101,6 @@ SELF_MANAGE_FILES = ("installer.py", "profile.json", "uninstall")
 RESIDUAL_ACTIONS = ("un-merge", "residual")
 
 EXIT_OK = 0
-EXIT_FAILURE = 1
 EXIT_REFUSAL = 2
 EXIT_PARTIAL = 3
 

@@ -87,7 +87,6 @@ VERDICTS = (WHOLE, SYNTH, ENTANGLED, INSUFFICIENT, NOT_TASK)
 UNUSABLE = {aj.OVERSIZE, aj.NOTFILE, "unreadable"}
 NO_SELECTION_LITERAL = ("NO SIDE HAS BEEN SELECTED AND NOTHING HAS BEEN DISCARDED: both versions "
                         "are preserved below; a human must decide.")
-PAIRWISE_CAP = 400
 
 
 def _load_verify():

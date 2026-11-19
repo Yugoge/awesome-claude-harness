@@ -20,6 +20,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -1588,6 +1589,52 @@ def test_a8_auto_targets_come_from_the_lifecycle_function_never_a_tool_result(en
     assert {c[1] for c in env.fake.calls} == {FAMILY}
 
 
+LANDING = [{"kind": "response_block", "begin": "--- B ---", "end": "--- E ---", "format": "json",
+            "schema": "changelog-status.v1"}]
+
+
+def landing(env, task, status):
+    env.tx.dispatch(task, role="changelog-analyst", pipeline="commit", profile="commit-landing", artifacts=LANDING,
+                    result=f"--- B ---\n{json.dumps(status)}\n--- E ---")
+
+
+@pytest.mark.parametrize("auto", [True, False])
+@pytest.mark.parametrize("case", ["refused-reported", "refused-unreported", "other-failure", "line-names-another",
+                                  "landed-again"])
+def test_a_parent_a_hook_refused_and_reported_is_no_longer_owed(env, monkeypatch, auto, case):
+    """commit.md Step 7 and its --auto walk: a parent whose commit a hook refused, reported on a REFUSED: line
+    naming it, is no longer owed; the other parent still is, until it lands. Every other unlanded case holds:
+    the refusal not reported, another failure code, a line naming another task; a later landing dispatch of the
+    task whose block lands it replaces the refusal."""
+    if auto:
+        lifecycle = types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY, OTHER])
+        monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
+    env.tx.command("commit", "--auto" if auto else FAMILY)
+    task_file(env)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.fake.answers[(OTHER, "commit")] = trailer_gap(OTHER)
+    code = "grant_missing" if case == "other-failure" else "hook_blocked"
+    landing(env, FAMILY, {"commit_status": "failed", "failure_code": code, "failure_reason": "BLOCKED: x"})
+    if case == "landed-again":
+        landing(env, FAMILY, {"commit_status": "committed"})
+    if case != "refused-unreported":
+        named = OTHER if case == "line-names-another" else FAMILY
+        env.tx.say(f"REFUSED: pretool-bash-safety.sh refused `git commit` in /p (`git commit -F m`) for task {named}"
+                   "\n\nBLOCKED: unregistered-settings-filter")
+    if auto:
+        landing(env, OTHER, {"commit_status": "committed"})
+        env.tx.say(f"{FAMILY}: refused\n{OTHER}: committed")
+    code, text = run(env)
+    released = case == "refused-reported"
+    assert (f"Task-id: {FAMILY}" in text) is not released, (case, text)
+    assert (f"Task-id: {OTHER}" in text) is auto, (case, text)  # under --auto the other parent is still owed
+    assert code == (0 if released and not auto else 2), (case, text)
+    env.fake.answers[(OTHER, "commit")] = []  # the other parent lands
+    if case == "landed-again":
+        env.fake.answers[(FAMILY, "commit")] = []  # the later landing's commit
+    assert (run(env)[0] == 0) is (released or case == "landed-again"), case
+
+
 def test_a8_no_target_names_the_gap(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
     env.tx.command("close")
@@ -2993,6 +3040,78 @@ def test_rc2_a_command_that_only_mentions_merge_sh_is_no_refusal(env, repo, comm
     env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
     code, text = run(env)
     assert code == 2 and "no merge of feature into refs/heads/master" in text, (command, text)
+
+
+# Step 5 as the agent writes it from the command text: <HARNESS_ROOT> as ${CLAUDE_HOME:-$HOME/.claude}, the push
+# call over continued lines, exactly as commands/push.md and commands/merge.md fence it.
+SPELLED_HOME = "${CLAUDE_HOME:-$HOME/.claude}"
+
+
+def fenced(command: str, marker: str, values: dict) -> str:
+    """The first ```bash fence of commands/<command>.md holding ``marker``, its placeholders filled."""
+    text = (REPO / "commands" / f"{command}.md").read_text(encoding="utf-8")
+    block = next(b for b in re.findall(r"```bash\n(.*?)```", text, re.S) if marker in b)
+    block = block.split("\n\n")[0]  # push.md's first form: without --auto
+    block = "\n".join(line for line in block.splitlines() if not line.startswith("#"))
+    for key, value in {"<HARNESS_ROOT>": SPELLED_HOME, **values}.items():
+        block = block.replace(key, value)
+    return block.strip()
+
+
+PUSH_FENCE = {"<REPO_HASH>": "0123456789abcdef", "<BRANCH>": "topic", "<RESOLVED_REMOTE>": "origin",
+              "<REQUEST_ID>": "00000000000000000000000000000001", "<REPO_ROOT>": "/p"}
+
+
+def test_rc2_step_5_as_the_text_spells_it_is_step_5(monkeypatch):
+    """The real spelling: ${CLAUDE_HOME:-$HOME/.claude}, line continuations. Pointed at another home, it is not
+    this harness's script."""
+    push = fenced("push", "execute-push.py", PUSH_FENCE)
+    merge = fenced("merge", "merge.sh", {"<resolved-ref>": "feature"})
+    assert "\\\n" in push and SPELLED_HOME in push and SPELLED_HOME in merge
+    monkeypatch.setenv("CLAUDE_HOME", str(REPO))
+    assert gate.step5_call(push, gate.PUSH_CALL) and gate.step5_call(merge, gate.MERGE_CALL, "feature")
+    monkeypatch.setenv("CLAUDE_HOME", "/nonexistent-harness-home")
+    assert not gate.step5_call(push, gate.PUSH_CALL) and not gate.step5_call(merge, gate.MERGE_CALL)
+
+
+@pytest.mark.parametrize("case", ["refused", "not-run", "succeeded-after"])
+def test_rc2_a_push_refused_as_the_text_spells_step_5_ends(env, remotes, monkeypatch, case):
+    """Step 5 written as push.md writes it, refused on an unreachable remote: reported, the Stop passes. Not run,
+    or run again and succeeding, the gate holds as before."""
+    monkeypatch.setenv("CLAUDE_HOME", str(REPO))
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin")
+    unreachable(env, "origin")
+    step5 = fenced("push", "execute-push.py", PUSH_FENCE)
+    if case != "not-run":
+        env.tx.tool("Bash", {"command": step5}, ok=False, result=PUSH_FAILED)
+    if case == "succeeded-after":
+        env.tx.tool("Bash", {"command": step5}, result="push.sh: nothing to push")
+    env.tx.say("The push was refused: origin is unreachable; topic is not published.")
+    code, text = run(env)
+    if case == "refused":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"- push: topic at {head} is not published" in text, (case, text)
+
+
+@pytest.mark.parametrize("case", ["refused", "not-run"])
+def test_rc2_merge_conflicts_refused_as_the_text_spells_step_5_end(env, repo, monkeypatch, case):
+    monkeypatch.setenv("CLAUDE_HOME", str(REPO))
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    code, output = merge_wrapper(repo, "feature")
+    assert code != 0
+    if case == "refused":
+        env.tx.tool("Bash", {"command": fenced("merge", "merge.sh", {"<resolved-ref>": "feature"})}, ok=False,
+                    result=output)
+    env.tx.say("merge.sh refused: the conflicts in base.txt are unresolved; master is unchanged.")
+    code, text = run(env)
+    if case == "refused":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and "no merge of feature into refs/heads/master" in text, text
 
 
 def test_rc2_step_5s_call_is_a_real_invocation_of_the_script():
