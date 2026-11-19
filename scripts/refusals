@@ -187,7 +187,8 @@ def transcript_refusals(roots, since: str) -> tuple[list, int]:
 
 
 def extracted_refusals(path: str) -> tuple[list, int]:
-    """The transcript side from a file of extracted rows (the 2026-11 census's refusals.jsonl shape)."""
+    """The transcript side from a file of extracted rows: one JSON object a line, hook_event empty for a denial
+    by the CLI's own permission rules."""
     found, denials = [], 0
     with open(path, encoding="utf-8") as handle:
         for row in map(json.loads, filter(str.strip, handle)):

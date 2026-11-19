@@ -132,14 +132,14 @@ SAME_RULE = [
     ("BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:sed:s#^(..)#\\1#",
      "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:psql:-c",
      "blocked-removal-policy-unresolved-unproven_boundary_with_removal_reference"),
-    ("[Write Guard] BLOCKED: File already exists: /root/a/tests/07_search.js\nWrite would replace",
+    ("[Write Guard] BLOCKED: File already exists: /work/a/tests/report.js\nWrite would replace",
      "[Write Guard] BLOCKED: File already exists: /srv/b.md", "write-guard-blocked-file-already-exists"),
     ("BLOCKED: hard-banned script 'alpha-recovery' is refused", "BLOCKED: hard-banned script 'beta-restart' is refused",
      "blocked-hard-banned-script-is-refused"),
-    ("OBLIGATION_STOPGATE_BLOCKED: agent a8bb562569d1e33bb (role=ba, task_id=20261118-104042) declared 1 obligated "
-     "artifact(s); 1 finding(s) to repair before you stop:\n  - docs/dev/ba-panel-20261118-104042-C.md: artifact_missing",
-     "OBLIGATION_STOPGATE_BLOCKED: agent af7abe095c7b0fa2c (role=dev, task_id=20261117-173256-r15) declared 3 obligated "
-     "artifact(s); 2 finding(s) to repair before you stop:\n  - docs/dev/x-20261117-173256.json: artifact_missing",
+    ("OBLIGATION_STOPGATE_BLOCKED: agent a0b1c2d3e4f506172 (role=ba, task_id=20260101-000001) declared 1 obligated "
+     "artifact(s); 1 finding(s) to repair before you stop:\n  - docs/dev/ba-panel-20260101-000001-C.md: artifact_missing",
+     "OBLIGATION_STOPGATE_BLOCKED: agent a9f8e7d6c5b4a3921 (role=dev, task_id=20260102-000002-r15) declared 3 obligated "
+     "artifact(s); 2 finding(s) to repair before you stop:\n  - docs/dev/x-20260102-000002.json: artifact_missing",
      "obligation_stopgate_blocked-agent-declared-obligated-to-repair-before-you-artifact_missing"),
     ("COMMAND_GATE /dev: not complete\n- todo: not completed: Step 10", "COMMAND_GATE /push: not complete\n- todo: x",
      "command_gate-not-complete"),
@@ -187,6 +187,15 @@ def test_the_reports_of_one_call_are_one_line_naming_every_rule(order):
     (line,) = lines()
     assert [(r["hook"], r["id"], r["by"]) for r in line["rules"]] == MERGED
     assert "BLOCKED by tool-policy.v1: no" in line["message"] and "kill with signals" in line["message"]
+
+
+@pytest.mark.parametrize("order", [("Bash", "Monitor"), ("Monitor", "Bash")])
+def test_a_call_handed_to_hooks_under_two_tool_names_names_both(order):
+    """The CLI hands a Monitor's command to the Bash-matched hooks as a Bash call with the same id."""
+    for tool, report in zip(order, (REPORTS[2], ([("hooks/pretool-monitor-command.py", "Monitor's command is refused\n")], LAUNCH))):
+        assert R.write(payload(tool), *report)
+    (line,) = lines()
+    assert line["tool"] == "Bash|Monitor" and len(line["rules"]) == 2
 
 
 def test_another_call_between_two_reports_is_kept_whole():

@@ -67,9 +67,12 @@ def fallback(raw: bytes, reason: str) -> int:
 
 def record(raw: bytes, hook, text: str) -> None:
     """One line in the refusal record (hooks/lib/refusal_record.py) for a blocked stop; it changes no answer."""
-    writer = _load("refusal_record")
-    if writer is not None:
-        writer.write(raw, [(str(hook), text)], __file__)
+    try:
+        sys.path.insert(0, str(HOOKS))
+        from lib import refusal_record
+        refusal_record.write(raw, [(str(hook), text)], __file__)
+    except Exception:
+        pass
 
 
 def main() -> int:

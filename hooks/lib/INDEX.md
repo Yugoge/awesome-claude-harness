@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-19T03:20:24Z*
-**Total entries**: 81
+*Last updated: 2026-11-17T19:34:23Z*
+**Total entries**: 79
 **Convention**: kebab
 
 ## Tree
@@ -65,8 +65,6 @@ lib/
 ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
-├── `refusal_record.py` - The gates' advisory logs had no reader and were deleted (P1b, 3507c9b08); since then nothing could
-├── `refusal_record.sh` - refusal_record.sh -- a shell hook's report to the refusal record (hooks/lib/refusal_record.py).
 ├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front

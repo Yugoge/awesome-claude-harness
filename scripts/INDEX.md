@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-19T03:20:25Z*
-**Total entries**: 170
+*Last updated: 2026-11-17T12:10:48Z*
+**Total entries**: 169
 **Convention**: kebab
 
 ## Tree
@@ -146,7 +146,6 @@ scripts/
 ├── `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 ├── `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
 ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
-├── `refusals` - refusals file
 ├── `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.

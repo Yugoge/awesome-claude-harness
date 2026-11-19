@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The refusal record: one line for every tool call, stop or prompt a registered hook refuses.
 
-The gates' advisory logs had no reader and were deleted (P1b, 3507c9b08); since then nothing could
-say what the harness refused. This file is the record's one writer and the one definition of where
+The gates' advisory logs had no reader and were deleted (P1b); since then nothing could say what
+the harness refused. This file is the record's one writer and the one definition of where
 it lives; scripts/refusals reads it (totals, counts, loops, the reconcile with the transcripts).
 
 Who reports. The process that sees a hook refuse, naming the refusing hook file and the text it gave
@@ -59,8 +59,13 @@ _EDGE, _QUOTE = "[](){}.,;:!?\u2014\u2013", ("'", '"', "`")
 def directory() -> str:
     """The record's directory: the one definition, for this writer and for scripts/refusals."""
     home = harness_switch.harness_home()
-    key = f"{os.path.basename(home).lstrip('.') or 'home'}-{zlib.crc32(os.fsencode(home)):08x}"
+    key = "-".join((home.rsplit(os.sep, 1)[-1].lstrip("."), f"{zlib.crc32(os.fsencode(home)):08x}"))
     return os.path.join(os.path.expanduser("~"), ".local", "state", "claude-harness", key, "refusals")
+
+
+def day_file(now: float) -> str:
+    """The name of the file holding the records of `now`'s UTC day."""
+    return "refusals-" + time.strftime("%Y-%m-%d", time.gmtime(now)) + ".jsonl"
 
 
 def _stamp(now: float) -> str:
@@ -153,15 +158,17 @@ def same(old: dict, new: dict) -> bool:
 
 def merge(old: dict, new: dict) -> dict:
     """Two reports of one call as one record: the first report's fields, every rule once in a fixed
-    order, a hook's own report in place of what its parent said of that hook, and the longer text (both
-    where neither holds the other)."""
+    order, a hook's own report in place of what its parent said of that hook, the longer text (both
+    where neither holds the other), and each tool name a hook was handed the call under (the CLI hands
+    a Monitor's command to the Bash-matched hooks as a Bash call)."""
     rules = old.get("rules", []) + [r for r in new.get("rules", []) if r not in old.get("rules", [])]
     said = {r.get("by") for r in rules}
     rules = sorted((r for r in rules if r.get("hook") == r.get("by") or r.get("hook") not in said),
                    key=lambda r: (str(r.get("hook")), str(r.get("id")), str(r.get("by"))))
     texts = sorted({old.get("message") or "", new.get("message") or ""} - {""})
     message = next((t for t in texts if all(x in t for x in texts)), "\n".join(texts))
-    return dict(old, rules=rules[:RULES_MAX], message=message[:MESSAGE_MAX])
+    tools = sorted({t for x in (old, new) for t in str(x.get("tool") or "").split("|") if t})
+    return dict(old, rules=rules[:RULES_MAX], message=message[:MESSAGE_MAX], tool="|".join(tools) or None)
 
 
 def write(payload, rules, by, kind=REFUSAL) -> bool:
@@ -212,13 +219,13 @@ def _append(record: dict, now: float) -> bool:
     folder = directory()
     if not os.path.isabs(folder):  # no home to expand "~" to
         return False
-    path = os.path.join(folder, time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(now)))
+    path = os.path.join(folder, day_file(now))
     try:
         fd = os.open(path, os.O_RDWR)
     except FileNotFoundError:  # the day's first record: the folder if need be, and the days past KEEP_DAYS go
         os.makedirs(folder, mode=0o700, exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        oldest = time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(now - KEEP_DAYS * 86400))
+        oldest = day_file(now - KEEP_DAYS * 86400)
         try:
             for name in os.listdir(folder):
                 if name.startswith("refusals-") and name.endswith(".jsonl") and name < oldest:

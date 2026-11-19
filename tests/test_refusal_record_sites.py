@@ -115,39 +115,50 @@ def scratch(tmp_path_factory):
     return Scratch(tmp_path_factory.mktemp("sites"))
 
 
-def test_every_blocking_site_refuses_into_the_record(scratch):
-    enumerated = sites.Enumerator(str(REPO))
-    commands = registered_commands()
-    cases, skipped = {}, set()          # (command, event, stand-in file) -> (matcher, the stand-in is a rule of the command)
+@pytest.fixture(scope="module")
+def cases():
+    """{registered command: {(event, stand-in file): (matcher, the stand-in is a rule of the command)}} for
+    every blocking site of the enumeration, at the events an exit 2 refuses."""
+    enumerated, commands = sites.Enumerator(str(REPO)), registered_commands()
+    out, elsewhere = {}, set()
     for site in enumerated.sites():
         for hook, event, matcher in site.regs:
             command = commands[(event, hook)]
             if event not in refusal_record.EVENTS:
-                skipped.add((event, command))
+                elsewhere.add(event)
             elif site.file != command:
-                cases.setdefault((command, event, site.file), (matcher, site.role in ("main", "rule")))
+                out.setdefault(command, {}).setdefault((event, site.file), (matcher, site.role in ("main", "rule")))
             else:  # the registered file's own site: through each file it runs
-                for child in enumerated.children.get(command, []):
-                    cases.setdefault((command, event, child), (matcher, False))
-                assert enumerated.children.get(command), f"{command} refuses at {site.id} and runs no file a test can replace"
-    assert cases and all(event in ("SessionStart", "SessionEnd", "SubagentStart", "Notification") for event, _ in skipped)
+                children = enumerated.children.get(command, [])
+                assert children, f"{command} refuses at {site.id} and runs no file a test can stand in for"
+                for child in children:
+                    out.setdefault(command, {}).setdefault((event, child), (matcher, False))
+    assert out and elsewhere <= {"SessionStart", "SessionEnd", "SubagentStart", "Notification"}, elsewhere
+    return out, enumerated.children
 
+
+REFUSING = sorted({command for (event, _hook), command in registered_commands().items() if event in refusal_record.EVENTS})
+
+
+@pytest.mark.parametrize("command", REFUSING)
+def test_every_blocking_site_refuses_into_the_record(scratch, cases, command):
+    by_command, children = cases
     problems, refused, rows = [], set(), []
-    for (command, event, stand_in), (matcher, is_rule) in sorted(cases.items()):
-        for code in (2, 1, 0) if stand_in in enumerated.children.get(command, []) else (2,):
+    for (event, stand_in), (matcher, is_rule) in sorted(by_command.get(command, {}).items()):
+        for code in (2, 1, 0) if stand_in in children.get(command, []) else (2,):
             status, stderr, lines = scratch.run(command, stand_in, code, event, matcher)
             rows.append(f"{event:18s} {command:36s} {stand_in:48s} stand-in exit {code}: exit {status}, {len(lines)} line(s)")
             where = f"{command} at {event} with {stand_in} exiting {code}"
             if (status == 2) != (len(lines) == 1) or len(lines) > 1:
                 problems.append(f"{where}: exit {status} and {len(lines)} line(s) in the record\n{stderr[-600:]}")
             elif status == 2:
-                refused.add((command, event))
+                refused.add(event)
                 if lines[0]["event"] != event or lines[0]["kind"] != refusal_record.REFUSAL or not lines[0]["rules"]:
                     problems.append(f"{where}: the line is {lines[0]}")
             if is_rule and code == 2 and not (status == 2 and lines and MARK in lines[0]["message"]
                                               and any(r["hook"] == stand_in for r in lines[0]["rules"])):
                 problems.append(f"{where}: a rule's refusal is not in the record under its file\n{stderr[-600:]}")
-    print("\n" + "\n".join(rows))
-    silent = sorted({(c, e) for c, e, _ in cases} - refused)
-    assert not silent, f"no stand-in made these registered commands refuse, so nothing shows they report: {silent}"
+    print("\n" + "\n".join(rows or [f"{command}: the enumeration finds no blocking site under it"]))
+    silent = sorted({event for event, _ in by_command.get(command, {})} - refused)
+    assert not silent, f"no stand-in made {command} refuse at {silent}, so nothing shows it reports there"
     assert not problems, f"{len(problems)} of {len(rows)} runs:\n" + "\n\n".join(problems)
