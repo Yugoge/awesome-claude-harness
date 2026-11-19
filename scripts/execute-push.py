@@ -128,14 +128,14 @@ def _refused_inflight_token_write(repo_root: str, repo_hash: str, branch: str, h
     written to since HEAD's commit are read, each only when its bytes name the
     repository's token directory."""
     import command_span  # hooks/lib, stdlib only (P5 R10)
-    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")) / "projects"
+    from subagent_restart import config_projects  # every configuration directory named, not only the caller's
     try:
         committed = int(_git_out("log", "-1", "--format=%ct", head) or 0)
     except ValueError:
         return None
     needle = f"/agentic-commit/push/{repo_hash}/".encode()
     name = branch.replace("/", "__")
-    for agent in projects.glob("*/*/subagents/agent-*.jsonl"):
+    for agent in (a for root in config_projects() for a in root.glob("*/*/subagents/agent-*.jsonl")):
         try:
             if agent.stat().st_mtime < committed - 1:
                 continue

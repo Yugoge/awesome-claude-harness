@@ -84,7 +84,7 @@ Exit codes: 0=success, 1=usage error (missing/invalid CLI input), 2=refused
 (corrupt registry data, or a downstream failure such as teardown-declare
 exiting non-zero).
 
---registry-dir defaults to ~/.paseo/schedules (the real, live registry).
+--registry-dir defaults to $PASEO_HOME/schedules, else ~/.paseo/schedules (the real, live registry).
 Every test MUST override it to a pytest tmp_path; --ledger-root has no
 default at all (see M6) to avoid a footgun that could reach the real
 ledger from a stray invocation.
@@ -670,7 +670,8 @@ def cmd_resume(args):
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--registry-dir", default=str(Path.home() / ".paseo" / "schedules"),
+    p.add_argument("--registry-dir",
+                   default=str(Path(os.environ.get("PASEO_HOME") or Path.home() / ".paseo") / "schedules"),
                    help="on-disk schedule registry directory (tests MUST use a tmp_path)")
     p.add_argument("--now", default=None, help="fake clock: aware ISO-8601 timestamp (tests)")
     sub = p.add_subparsers(dest="cmd", required=True)

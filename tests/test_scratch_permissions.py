@@ -455,7 +455,7 @@ def test_source_scan_is_not_vacuous():
     assert any(n.startswith("claude-allow-daemon-restart-") for n in tmp), tmp
     # The daemon-restart grant and its lock are found in the Python source, not only in LISTED_TMPDIR_NAMES.
     assert {"claude-allow-daemon-restart-{target}.flag", "claude-allow-daemon-restart-{target}.flag.lock"} <= py, py
-    assert any(n.startswith("claude-git-blessed") for n in tmp), tmp
+    assert any(n.startswith("checkpoint-result") for n in tmp), tmp  # S31 removed the blessed-token grants
     assert not [n for n in state if n.split("/")[0] == "claude-scratch"], "state under the role root"
 
 

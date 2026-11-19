@@ -652,7 +652,9 @@ class Progress:
 
 
 def _default_project_dir() -> str:
-    return str(Path(__file__).resolve().parent.parent)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
+    import locations  # noqa: E402 -- the one project-root resolution
+    return str(locations.project_root(bash=True))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

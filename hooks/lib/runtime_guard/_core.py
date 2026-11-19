@@ -66,6 +66,8 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
+        INPLACE_EDITORS,
+        PKG_LINK_WORDS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
@@ -84,6 +86,8 @@ except ImportError:  # executed as a top-level script (no package context)
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
+        INPLACE_EDITORS,
+        PKG_LINK_WORDS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
@@ -776,7 +780,7 @@ def _is_inplace_editor_args(head: str, args: list) -> bool:
     contain `i` (`-Ei`, `-ri`, `-nei`), and Perl `-i`/`-iSUFFIX`/clustered
     `-pi`/`-0pi`/`-Tpi`. A plain `sed s/a/b/ file` (stream to stdout, no -i) is
     NOT in-place and must not match (it reads, does not mutate)."""
-    if head not in ("sed", "perl"):
+    if head not in INPLACE_EDITORS:
         return False
     for a in args:
         if a == "--in-place" or a.startswith("--in-place"):
@@ -834,7 +838,7 @@ def _operands_and_tdir(head: str, args: list):
     Unknown single-dash tokens are treated as no-arg flags (dropped) — the fail-safe
     direction: a flag we do not model never STEALS an operand slot, so a real
     protected operand is never dropped because of an unmodeled flag."""
-    tdir_verbs = ("cp", "mv", "install", "rename", "ln")
+    tdir_verbs = _sp.TARGET_DIR_VERBS + ("rename",)  # and rename, read here with mv's options
     val_opts = _VALUE_OPTS.get(head, set())
     operands = []
     tdir = None
@@ -864,7 +868,7 @@ def _operands_and_tdir(head: str, args: list):
             continue
         # exact long/short option taking a SEPARATED value.
         if a in val_opts and i + 1 < n:
-            if a in ("-t", "--target-directory") and head in tdir_verbs:
+            if a in _sp.TARGET_DIR_OPTS and head in tdir_verbs:
                 tdir = args[i + 1]
             i += 2
             continue
@@ -903,7 +907,7 @@ def _dest_entries(dest: str, srcs: list, args: list) -> list:
     st = _strip_quotes(dest)
     norm = _normalize_path(st)
     into_dir = (st.endswith("/") or (os.path.isabs(norm) and os.path.isdir(norm))) and not any(
-        a in ("-T", "--no-target-directory")
+        a in _sp.NO_TARGET_DIR_OPTS
         or (a.startswith("-") and not a.startswith("--") and "T" in a[1:]) for a in args)
     if not into_dir or not srcs:
         return [dest]
@@ -951,7 +955,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
     # coreutils that define it ({cp, mv, install, ln}); for every other verb it is
     # None and the verb's own last-operand-is-dest logic runs unchanged.
     barewords, tdir = _operands_and_tdir(head, args)
-    if head in ("cp", "install"):
+    if head in _sp.COPY_VERBS:
         # `install -d DIR…` / `install --directory DIR…` (incl. clustered `-Dd`)
         # CREATES every named directory (there is NO source operand). So EVERY
         # operand is a target — creating/`mkdir -p`-ing a protected ancestor/config
@@ -959,7 +963,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
         # logic below would only flag the last operand (dest), dropping a protected
         # dir that appears earlier in a multi-dir `install -d A B <protecteddir>`.
         if head == "install" and any(
-            a == "-d" or a == "--directory"
+            a in _sp.INSTALL_DIR_OPTS
             or (a.startswith("-") and not a.startswith("--") and "d" in a[1:])
             for a in args
         ):
@@ -1069,7 +1073,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
         # no -d: members extracted into cwd; with no explicit members the whole
         # archive is unpacked into cwd (caller's cwd resolution handles relative).
         return members
-    if head in ("sed", "perl") and _is_inplace_editor_args(head, args):
+    if head in INPLACE_EDITORS and _is_inplace_editor_args(head, args):
         return barewords
     if head in ("chmod", "chown", "chgrp"):
         # chmod MODE FILE… / chown OWNER FILE… / chgrp GROUP FILE… — the first
@@ -1636,7 +1640,7 @@ def _step0_self_protection(ctx: "Context") -> Optional[Verdict]:
         # `perl -i` MUTATE the file in place — the inspection gate would wrongly skip
         # them. (Behind a wrapper the head is the wrapper, so the head-agnostic
         # anchor below also catches it; this branch covers the bare head form.)
-        if head in ("sed", "perl") and _is_inplace_editor_args(head, list(rest)):
+        if head in INPLACE_EDITORS and _is_inplace_editor_args(head, list(rest)):
             for tgt in [t for t in rest if not t.startswith("-")]:
                 for cand in _resolve_rel(tgt, cwd, cwd_det):
                     if _path_matches_any(cand, list(_config_path_variants())):
@@ -2265,7 +2269,7 @@ def _p4_statefile(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
 
 # ── P5 ENDPOINT_GUARD ────────────────────────────────────────────────────────
 
-LOOPBACK_RE = re.compile(r"(127\.0\.0\.1|localhost|\[::1\]|::1)", re.IGNORECASE)
+LOOPBACK_RE = re.compile("(%s)" % "|".join(map(re.escape, _sp.LOOPBACK_HOSTS)), re.IGNORECASE)
 # Raw byte-stream clients: the request line (incl. the control path) is supplied
 # on STDIN, so the path legitimately arrives from an UPSTREAM pipeline segment.
 RAW_SOCKET_HEADS = frozenset({"nc", "ncat", "netcat", "socat", "telnet"})
@@ -2996,7 +3000,7 @@ def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
         _, head, rest = cw[0]
         if head in PKG_MANAGERS:
             is_global = _pm_global_args([_strip_quotes(t) for t in rest], pm=head)
-            is_link = any(t in ("link", "unlink") for t in rest)
+            is_link = any(t in PKG_LINK_WORDS for t in rest)
             if is_global or is_link:
                 return _block("P7", "global package install/link")
         # writes to protected global bin paths (any mutation head)
@@ -4704,7 +4708,7 @@ def _anchor_globalbin_hits(sc: str, tokens: list, exec_toks: list,
         # is matched (mirrors P7 reading the pm's `rest`).
         own = [_strip_quotes(t) for t in tokens[pm_pos + 1:]]
         is_global = _pm_global_args(own, pm=os.path.basename(_strip_quotes(tokens[pm_pos])))
-        is_link = any(t in ("link", "unlink") for t in own)
+        is_link = any(t in PKG_LINK_WORDS for t in own)
         if is_global or is_link:
             return True
     # write to a protected global-bin path via a mutation verb / redirect.

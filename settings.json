@@ -43,7 +43,6 @@
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/detect-orphan-commands.sh\":*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/detect-orphan-scripts.sh\":*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/install-git-keystone.sh\":*)",
-      "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/mint-git-blessed-token.sh\":*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh\" clean-execute:*)",
       "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh\" clean-inspect:*)",
       "Bash(~/.claude/scripts/orchestrator.sh clean-inspect:*)",
