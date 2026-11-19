@@ -615,7 +615,7 @@ class _CdScopes:
         for cwd, old in states:
             if ops and ops[0].value() == '-' or (name == 'pushd' and not ops):
                 new.add((old, cwd) if old != '?' else ('?', cwd))
-            elif ops and (ops[0].value() or '').startswith(('+', '-')):
+            elif ops and (ops[0].value() or '').startswith(self.sp.OPTION_SIGNS):
                 new.add(self.UNKNOWN)  # a pushd/cd stack index
             else:
                 new.add((self._target(cwd, ops[0] if ops else None), cwd))

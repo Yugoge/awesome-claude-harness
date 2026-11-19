@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    OPTION_SIGNS, PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -1754,7 +1754,7 @@ class Analyzer:
         stripped by the split search, so the value is what gets recognised.
         """
         raw = _strip_outer_quotes(w.raw.text)
-        if not raw[:1] in ("-", "+"):
+        if not raw[:1] in OPTION_SIGNS:
             return False
         return Analyzer.attached_value_names_removal(raw[1:])
 
@@ -2211,8 +2211,7 @@ class Analyzer:
                 self.git_rm_cwds.append(ops[0])
                 return
         elif base == "set":  # allexport, keyword and posix let an assignment reach git
-            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in (
-                    "-", "+") and x != "--" and ("a" in x or "k" in x) for x in lits):
+            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in OPTION_SIGNS and x != "--" and ("a" in x or "k" in x) for x in lits):
                 return
         elif base == "printf":
             if None not in lits and not any(x.startswith("-v") for x in lits):
@@ -3029,7 +3028,7 @@ class Analyzer:
         n = len(args)
         while i < n:
             lit = args[i].literal()
-            if lit is None or not lit or lit[0] not in "-+" or lit in ("-", "+"):
+            if lit is None or not lit or lit[0] not in "-+" or lit in OPTION_SIGNS:
                 break
             if lit == "--":
                 i += 1

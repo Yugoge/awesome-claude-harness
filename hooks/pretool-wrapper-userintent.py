@@ -788,7 +788,7 @@ class _Scan:
                         if got is None:
                             return False
                         firsts.extend(got)
-                if any(f[:1] in ('-', '+') for f in firsts):
+                if any(f[:1] in _sp.OPTION_SIGNS for f in firsts):
                     return False
             if not empty:
                 return True
@@ -1528,7 +1528,7 @@ class _Scan:
             self._python(site, res, args)
             return
         if name in _OTHER_SHELLS:
-            ops = [w for w in args if not (w.value() or '-').startswith(('-', '+'))]
+            ops = [w for w in args if not (w.value() or '-').startswith(_sp.OPTION_SIGNS)]
             if ops and not any((w.value() or '') in ('-c', '-n') for w in args):
                 self._path_target(ops[0])
         if name in _PY_RUNNERS:
@@ -2108,7 +2108,7 @@ class _Scan:
 
     def _less(self, args):
         """less with a LESSOPEN/LESSCLOSE the command sets runs it over each file it opens."""
-        ops = [w for w in args if not (w.value() or 'x').startswith(('-', '+'))]
+        ops = [w for w in args if not (w.value() or 'x').startswith(_sp.OPTION_SIGNS)]
         self._words_hold_wrapper(ops)
 
     def _loop(self, var, items, body):

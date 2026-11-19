@@ -421,6 +421,7 @@ _WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
+OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 
 
 def _match_pair(t, i, opener, closer):
@@ -1223,7 +1224,7 @@ def split_opts(ws, spec, start=0):
             return i, None
         if lit == "--":
             return i + 1, None
-        if lit in ("-", "+"):
+        if lit in OPTION_SIGNS:
             return i, None
         if len(lit) > 1 and lit[:2] == "--":
             name = lit.split("=", 1)[0]
@@ -1277,7 +1278,7 @@ def split_options(words, spec, start=0, permute=False, lenient=False):
     while i < n:
         w = words[i]
         lit = w.value()
-        if lit is None or lit in ("-", "+") or len(lit) < 2 or lit[0] not in "-+":
+        if lit is None or lit in OPTION_SIGNS or len(lit) < 2 or lit[0] not in "-+":
             operands.append(w)
             i += 1
             if not permute:

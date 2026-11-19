@@ -1999,7 +1999,7 @@ def _hidden_script_path(name, head, argv):
                 skip = False
             elif arg in _HIDDEN_SHELL_VALUE_OPTS:
                 skip = True
-            elif name in ('source', '.') or not arg.startswith(('-', '+')):
+            elif name in ('source', '.') or not arg.startswith(shell_parse.OPTION_SIGNS):
                 return (arg, True) if arg not in _STDIN_PATHS else None
             elif 'c' in arg[1:] and not arg.startswith('--') or arg == '-s':
                 return None

@@ -4928,8 +4928,9 @@ def _dg_ends_on_option(line):
     `"-c''"`), or before a redirection, a comment or a closing parenthesis (`docker create -l 2>/dev/null`)."""
     if DEGRADED_TRAILING_OPTION.search(line):
         return True
+    from lib.shell_parse import OPTION_SIGNS
     parsed = _dg_commands(line)
-    return bool(parsed) and any(w[:1] in ("-", "+") for words in parsed[0] for w in _dg_last_words(words))
+    return bool(parsed) and any(w[:1] in OPTION_SIGNS for words in parsed[0] for w in _dg_last_words(words))
 
 
 _DG_RESERVED = frozenset(("if", "then", "else", "elif", "while", "until", "do", "!", "{", "time"))
@@ -7129,12 +7130,13 @@ def _sd_display(stage):
 
 def _sd_display_args(spec, vals, numeric):
     """True when every option is on the filter's own list and the operands are within its limit."""
+    from lib.shell_parse import OPTION_SIGNS
     flags, short_vals, long_flags, long_vals, most = spec
     operands, k, dashdash = 0, 0, False
     while k < len(vals):
         a = vals[k]
         k += 1
-        if dashdash or a == "-" or not a.startswith(("-", "+")) or (a.startswith("+") and not numeric):
+        if dashdash or a == "-" or not a.startswith(OPTION_SIGNS) or (a.startswith("+") and not numeric):
             operands += 1
             continue
         if a == "--":
