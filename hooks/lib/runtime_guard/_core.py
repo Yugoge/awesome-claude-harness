@@ -3248,7 +3248,7 @@ def _explicit_workspace_selector(pm_head: str, rest: list) -> Optional[str]:
             return _classify_filter_value(_strip_quotes(t.split("=", 1)[1]))
         if t in ("--workspaces", "-ws"):
             return "<MULTI>"
-        if t in ("-r", "--recursive"):
+        if t in _RECURSIVE_WS_FLAGS:
             return "<MULTI>"
         i += 1
     return None
