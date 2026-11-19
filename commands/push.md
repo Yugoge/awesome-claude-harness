@@ -26,7 +26,7 @@ group: Ship
 
 ## Agentic dispatch protocol (pre-execution)
 
-Run these steps in order. Where one refuses, end with the refusal reported in the reply: its message with its facts and the action it names. Nobody is asked about it, and the refused call is not run again.
+Run these steps in order. Where one refuses, nobody is asked about it. An action the refusal names that is the agent's own ("re-run the snapshot now", "re-run the analysis now") is taken at once, once; met again, the refusal ends the run. Any other action is the owner's: end with the refusal reported in the reply, its message with its facts and the action it names, and the refused call is not run again.
 
 **Step 0: Parse arguments and resolve remote**
 

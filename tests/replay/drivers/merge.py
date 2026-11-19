@@ -108,7 +108,8 @@ def refusal(rp, label: str) -> str:
     return f"{b['hook']} refused {label!r}: {b['text'][:300]}" if b else f"a hook refused {label!r}"
 
 
-REPORTED = "Nobody is asked about it, and the refused call is not run again."
+REPORTED = "Where one refuses, nobody is asked about it."
+OWN_ACTIONS = re.compile(r'An action the refusal names that is the agent\'s own \(("[^)]*)\) is taken at once')
 
 
 def ask_refusal(o, devs, label: str, sec: str, anchor: str, facts: str = "") -> str:
@@ -118,8 +119,11 @@ def ask_refusal(o, devs, label: str, sec: str, anchor: str, facts: str = "") -> 
     reports the refusal and asks nobody (the 2026-11-19 text) asks nothing: (action, None)."""
     i = sec.find(anchor)
     act = re.search(r'action "([^"]+)"', sec[i:]) if i >= 0 else None
-    if act and REPORTED in " ".join(o.text.split()):
-        return " ".join(act.group(1).split()), None
+    text = " ".join(o.text.split())
+    if act and (REPORTED in text or REPORTED.replace("Where one", "Where a step below") in text):
+        action = " ".join(act.group(1).split())
+        own = OWN_ACTIONS.search(text)
+        return action, (action if own and f'"{action}"' in own.group(1) else None)
     other = re.search(r'\(Recommended\), and "([^"]+)"', o.text)
     if not (act and other):
         raise cmdtext.TextNotFound(f"no refusal action after {anchor!r}, or no Refusals rule")
