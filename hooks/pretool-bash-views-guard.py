@@ -142,7 +142,7 @@ def _cd_dirs(script, call_dir):
     dirs = [call_dir]
     for site in _sp.walk(script):
         res = _sp.resolve(site.cmd)
-        if res.name not in ("cd", "pushd"):
+        if res.name not in _sp.CD_TARGET_BUILTINS:
             continue
         args = [w.value() for w in res.args]
         args = [a for a in args if a is None or not (a.startswith("-") and a != "-")]

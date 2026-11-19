@@ -669,7 +669,7 @@ def _git_runs(command: str, payload_cwd: str) -> list:
     out = []
     cwd, known = None, True
     for site, res in _read(command).resolved:
-        if res.name in ('cd', 'pushd'):
+        if res.name in sp.CD_TARGET_BUILTINS:
             cwd, known = _cd_target(res, cwd or payload_cwd)
         moved = any(v is not None for _name, opts in res.wrappers for _o, v in opts)
         out.extend((inv, cwd, known and not moved) for inv in _git_of(site, res))

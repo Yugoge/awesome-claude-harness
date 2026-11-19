@@ -63,7 +63,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
+    OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
+    _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
 from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
 from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
@@ -163,20 +165,6 @@ _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # is reached from static call sites; the analyzer is a single-shot CLI.
 _PAYLOAD_NESTING = [0]
 
-# Environment variables whose VALUE is executed by the command that follows
-# them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
-# a fixture-pinned safe row -- but these named vectors are documented command
-# hooks, so `GIT_EXTERNAL_DIFF=/bin/rm git diff` runs the removal.
-EXEC_ASSIGNMENT_VARS = {
-    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND",
-    "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_ASKPASS", "GIT_MERGE_TOOL",
-    "GIT_DIFF_TOOL", "GIT_TEXTCONV", "GIT_PROXY_COMMAND", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "PAGER", "MANPAGER", "LESSOPEN", "LESSCLOSE", "LESSEDIT", "EDITOR",
-    "VISUAL", "FCEDIT", "BROWSER", "SSH_ASKPASS", "SUDO_EDITOR", "SUDO_ASKPASS",
-    "DIFFPROG", "MERGE", "PERL5OPT", "PYTHONSTARTUP", "BASH_ENV", "ENV",
-    "SHELL", "RSYNC_RSH", "CVS_RSH", "SVN_SSH", "HGEDITOR", "P4EDITOR",
-    "SYSTEMD_PAGER", "SYSTEMD_EDITOR", "DEBUGINFOD_URLS", "LD_PRELOAD",
-}
 
 
 def _static_prefix(w):
@@ -746,8 +734,7 @@ COND_SHELLS = {"bash", "zsh", "ksh", "ksh93", "mksh", "rbash", "bash5"}
 # word of a command (`if [[`, `! [[`, `while ! [[`, `{ [[` ...). Any other word,
 # an assignment or a redirection before it makes `[[` an argument or a command
 # name, and then nothing inside it is a conditional expression.
-COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
-                                "until", "do", "{"))
+COND_OPENER_PREFIX = COMMAND_PREFIX_WORDS
 # Builtins that can stop `[[` from being read as the reserved word on a later
 # line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
 # command, and zsh's `disable -r` switches the reserved word off.
@@ -832,12 +819,6 @@ DOCKER_RESOURCE_NOUNS = {"container", "image", "volume", "network", "system",
                          "builder", "buildx", "config", "secret", "service",
                          "stack", "node", "plugin", "context", "compose"}
 
-XARGS = _spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose",
-               "-p", "--interactive", "-x", "--exit", "--open-tty", "--show-limits",
-               "--process-slot-var"),
-              ("-n", "--max-args", "-L", "-l", "--max-lines", "-P", "--max-procs",
-               "-s", "--max-chars", "-I", "--replace", "-i", "-d", "--delimiter",
-               "-E", "-e", "--eof", "-a", "--arg-file"))
 
 PARALLEL = _spec(
     ("--gnu", "--bar", "--eta", "--progress", "-k", "--keep-order", "--will-cite",
@@ -853,15 +834,9 @@ PARALLEL = _spec(
      "--trc", "-a", "--arg-file", "-N", "-L", "-l", "-I", "--recstart", "--recend",
      "--transfer", "--cleanup", "--sshloginfile", "--interactive", "--limit"))
 
-WATCH = _spec(("-d", "--differences", "-t", "--no-title", "-b", "--beep",
-               "-e", "--errexit", "-g", "--chgexit", "-c", "--color", "-x", "--exec",
-               "-h", "--help", "-v", "--version", "-p", "--precise", "-w", "--no-wrap"),
-              ("-n", "--interval"))
+WATCH = PEEL["watch"][0]
 
-SSH_SPEC = _spec(("-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M",
-                  "-N", "-n", "-q", "-s", "-T", "-t", "-V", "-v", "-X", "-x", "-Y", "-y"),
-                 ("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L",
-                  "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w"))
+SSH_SPEC = _SSH_SPEC
 
 FIND_EXEC_OPS = {"-exec", "-execdir", "-ok", "-okdir"}
 FIND_DELETE_OPS = {"-delete"}
@@ -1750,7 +1725,7 @@ class Analyzer:
         stripped by the split search, so the value is what gets recognised.
         """
         raw = _strip_outer_quotes(w.raw.text)
-        if not raw[:1] in ("-", "+"):
+        if not raw[:1] in OPTION_SIGNS:
             return False
         return Analyzer.attached_value_names_removal(raw[1:])
 
@@ -1927,7 +1902,7 @@ class Analyzer:
             elif kind == "param":
                 body = s.text
                 if body.startswith("!") or (
-                        "@" in body and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                        "@" in body and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                     self.note("param_reexpand", off)
                     self.structural("param_reexpansion", body)
                 self.scan_expansions(s, env)
@@ -1984,7 +1959,7 @@ class Analyzer:
                         body = s.text
                         if body.startswith("!") or (
                                 "@" in body
-                                and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                                and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                             self.note("param_reexpand", off)
                             self.structural("param_reexpansion", body)
                         self.scan_expansions(s, env)
@@ -2064,7 +2039,7 @@ class Analyzer:
                     cond_depth = None
                 self.flush(cur, env, piped)
                 cur = []
-                piped = next_piped = (op in ("|", "|&"))
+                piped = next_piped = (op in PIPE_OPS)
                 continue
             if tok[0] == "W":
                 if cond_depth is None:
@@ -2201,14 +2176,13 @@ class Analyzer:
     def _shell_state(self, base, args):
         """Record what a later command inherits from shell builtin `base` (see _GIT_RM_LOCATION_OPTS)."""
         lits = [a.literal() for a in args]
-        if base in ("cd", "pushd"):  # popd only returns to a directory already listed
+        if base in CD_TARGET_BUILTINS:  # popd only returns to a directory already listed
             ops = [x for x in lits if x is None or x == "-" or not x.startswith("-")]
             if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
                 self.git_rm_cwds.append(ops[0])
                 return
         elif base == "set":  # allexport, keyword and posix let an assignment reach git
-            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in (
-                    "-", "+") and x != "--" and ("a" in x or "k" in x) for x in lits):
+            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in OPTION_SIGNS and x != "--" and ("a" in x or "k" in x) for x in lits):
                 return
         elif base == "printf":
             if None not in lits and not any(x.startswith("-v") for x in lits):
@@ -2587,7 +2561,7 @@ class Analyzer:
             lit = a.literal()
             if lit is None:
                 break
-            if lit in ("-S", "--split-string"):
+            if lit in ENV_SPLIT_OPTS:
                 if idx + 1 >= len(args):
                     self.structural("missing_option_value", "env -S")
                     return
@@ -2691,11 +2665,7 @@ class Analyzer:
     _h_builtin = _h_busybox
 
     def _h_flock(self, name, args, redirs, env, piped):
-        spec = _spec(("-s", "--shared", "-x", "--exclusive", "-u", "--unlock",
-                      "-n", "--nonblock", "-o", "--close", "-v", "--verbose",
-                      "-F", "--no-fork"),
-                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code"))
-        i, err = split_opts(args, spec)
+        i, err = split_opts(args, PEEL["flock"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "flock")
             return
@@ -2705,7 +2675,7 @@ class Analyzer:
         i += 1  # the lock file / directory / fd operand
         if self._swallowed_removal("flock", args[:i]):
             return
-        if i < len(args) and args[i].literal() in ("-c", "--command"):
+        if i < len(args) and args[i].literal() in COMMAND_OPTS:
             self._shell_code_operand(args, i + 1, env, "flock")
             return
         payload = args[i:]
@@ -2715,30 +2685,18 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_su(self, name, args, redirs, env, piped):
-        spec = _spec(("-l", "--login", "-", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-c", "--command", "-s", "--shell", "-g", "--group",
-                      "-G", "--supp-group", "-w", "--whitelist-environment"))
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "su")
-                return
-        i, err = split_opts(args, spec)
+        if self._command_option(args, env, "su", SU_COMMAND_OPTS):
+            return
+        i, err = split_opts(args, _SU_SPEC)
         if err:
             self.scoped(err, "su")
             return
         self._terminal_inert("su_without_command", "su", args)
 
     def _h_runuser(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "runuser")
-                return
-        spec = _spec(("-l", "--login", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-u", "--user", "-g", "--group", "-G", "--supp-group",
-                      "-s", "--shell", "-w", "--whitelist-environment"))
-        i, err = split_opts(args, spec)
+        if self._command_option(args, env, "runuser", SU_COMMAND_OPTS):
+            return
+        i, err = split_opts(args, PEEL["runuser"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "runuser")
             return
@@ -2759,10 +2717,8 @@ class Analyzer:
         self._terminal_inert("sg_without_command", "sg", args)
 
     def _h_script(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "script")
-                return
+        if self._command_option(args, env, "script"):
+            return
         # `-c` is matched EXACTLY above, so `script -qc '<code>'` (a clustered
         # short option, the canonical documented form) misses it. Falling to a
         # residual-proof terminal is what makes the miss deny instead of allow.
@@ -2880,7 +2836,7 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_xargs(self, name, args, redirs, env, piped):
-        i, err = split_opts(args, XARGS)
+        i, err = split_opts(args, XARGS_SPEC)
         if err == "missing_option_value":
             self.structural("missing_option_value", "xargs")
             return
@@ -2897,7 +2853,7 @@ class Analyzer:
     def _h_parallel(self, name, args, redirs, env, piped):
         cut = len(args)
         for idx, a in enumerate(args):
-            if (a.literal() or "") in (":::", "::::", ":::+", "::::+"):
+            if (a.literal() or "") in PARALLEL_SEPARATORS:
                 cut = idx
                 break
         head_args = args[:cut]
@@ -2922,7 +2878,7 @@ class Analyzer:
         # belong to the same argv. Passing them through is both more faithful
         # and what lets `parallel echo ::: /bin/rm` explain its removal name.
         items = [a for a in args[cut:]
-                 if (a.literal() or "") not in (":::", "::::", ":::+", "::::+")]
+                 if (a.literal() or "") not in PARALLEL_SEPARATORS]
         self.eval_argv(payload + items, [], env)
 
     def _h_find(self, name, args, redirs, env, piped):
@@ -2991,6 +2947,21 @@ class Analyzer:
 
     # -- shells --------------------------------------------------------------
 
+    def _command_option(self, args, env, who, names=COMMAND_OPTS):
+        """Analyze the code of a `-c CODE`, `--command CODE` or `--command=CODE` among args."""
+        for idx, a in enumerate(args):
+            lit = a.literal()
+            if lit in names:
+                self._shell_code_operand(args, idx + 1, env, who)
+                return True
+            long = next((n for n in names if n.startswith("--") and (lit or "").startswith(n + "=")), None)
+            if long is not None:
+                content = a.content()
+                start = len(content.text) - (len(lit) - len(long) - 1)
+                self.analyze_code(content.slice(start, len(content.text)), Env(env.hashed, env.aliases))
+                return True
+        return False
+
     def _shell_code_operand(self, args, idx, env, who):
         if idx >= len(args):
             self.structural("missing_option_value", who)
@@ -3025,7 +2996,7 @@ class Analyzer:
         n = len(args)
         while i < n:
             lit = args[i].literal()
-            if lit is None or not lit or lit[0] not in "-+" or lit in ("-", "+"):
+            if lit is None or not lit or lit[0] not in "-+" or lit in OPTION_SIGNS:
                 break
             if lit == "--":
                 i += 1
