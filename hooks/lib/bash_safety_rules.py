@@ -275,9 +275,9 @@ def commit_guard(payload):
         if ' ' in t[i]:
             return scan(' '.join(t[i:]), depth + 1, lg, gc)
         b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
-        if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c:
+        if b in COMMON_SHELLS and c:
             scan(t[c[0] + 1], depth + 1, lg, gc)
-        if b in ('cd', 'pushd'):
+        if b in CD_TARGET_BUILTINS:
             cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0])
             dirs.append(cur[0])
         if b != 'git':
@@ -525,7 +525,7 @@ def daemon_restart(command, payload, prefix):
         cwd = (payload.get("tool_input") or {}).get("cwd") or os.getcwd()
         verbs = DAEMON_VERBS[1:-1].split("|")
         return _core.evaluate(command, cwd, cfg)[0] == "BLOCK" and any(
-            r.name in ("systemctl", "service") and any(a in verbs for a in r.argv())
+            r.name in _core._SERVICE_MANAGER_PROGRAMS and any(a in verbs for a in r.argv())
             for r in (resolve(site.cmd) for site in walk(parse(command))))
     except Exception:  # noqa: BLE001 - the guard or the parser unavailable: the raw reading, which over-blocks
         return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
@@ -1015,7 +1015,7 @@ def _relaxed_writes_namespace(command, ns_re):
         if grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one):
             return True
     one = command.replace("\n", " ")
-    listed = any(c.kind in ("for", "select") and any(grep(ns_re, w.text) for w in c.header[1:])
+    listed = any(c.kind in LOOP_VAR_KINDS and any(grep(ns_re, w.text) for w in c.header[1:])
                  for c in _compounds(command) or ())
     return bool(
         (sites is not None and _xargs_fed_writer(command))
@@ -1192,7 +1192,7 @@ def _relaxation_shape_ok(command, carries):
         if k.kind in ("cond", "arith"):
             continue
         text = command[k.span[0]:k.span[1]]
-        if k.kind in ("function", "coproc") or not text or piped or k.redirects or "<<" in command \
+        if k.kind in DEFINER_KINDS or not text or piped or k.redirects or "<<" in command \
                 or "$'" in text or carries(text) or carries(re.sub(r"""[\\'"]""", "", text)):
             return False
     sites = _parsed_sites(command)
@@ -1253,7 +1253,6 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
 _SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
 """A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
-_SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
 # The global options that point git at another directory, file, ref namespace or program set (every value option
 # but -c, and --exec-path).
 _GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
@@ -1372,7 +1371,7 @@ def _shape_strict_ok(command, carries, sites):
             if name not in _SHAPE_WRAPPERS or (name == "env" and opts) or \
                     (name == "sudo" and any(o not in _SHAPE_SUDO_OPTS for o, _v in opts)):
                 return False
-        if res.name in _SHAPE_DIR_CHANGE:
+        if res.name in CWD_BUILTINS:
             return False
         if res.name == "git":
             for w in res.args:
@@ -1547,6 +1546,10 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
+    BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
+    DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
@@ -1674,7 +1677,7 @@ class _ConsentView:
             for a in cmd.assignments:
                 self._define(a.name, a)
             r = sp.resolve(cmd)
-            if r.name in ("export", "declare", "typeset", "local", "readonly"):
+            if r.name in sp.DECLARATION_BUILTINS:
                 for w in r.args:
                     m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=", w.raw.text)
                     if m:
@@ -1690,7 +1693,7 @@ class _ConsentView:
         scripts[id(script)] = script
         for sc in scripts.values():
             for c in _consent_compounds(sc, sp):
-                if c.kind in ("for", "select") and c.header and c.header[0].value():
+                if c.kind in sp.LOOP_VAR_KINDS and c.header and c.header[0].value():
                     name = c.header[0].value()
                     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
                         for w in c.header[1:] or [None]:
@@ -1700,9 +1703,9 @@ class _ConsentView:
         self.cwds = [(cwd, False)]
         for s in sites:
             r = sp.resolve(s.cmd)
-            if r.name not in ("cd", "pushd"):
+            if r.name not in sp.CD_TARGET_BUILTINS:
                 continue
-            args = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+            args = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
             if not args:
                 self.cwds.append((self.home or "/", True))
                 continue
@@ -2852,7 +2855,7 @@ def consent_flag_verdict(command, cwd, state):
                                 "state directory")
         # 3a. xargs, parallel and find -exec build their operands at run time: none may aim at the state directory.
         head = s.cmd.head().value() if s.cmd.words and s.cmd.head().value() else ""
-        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in ("xargs", "parallel") or \
+        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in sp.ITEM_RUNNERS or \
                 "exec_argv" in s.context:
             if view.cwd_state(".") == "explicit":
                 return "it runs a command with operands built at run time in the state directory"
@@ -3249,8 +3252,7 @@ def _base_bulk_sentinel_decision(cmd):
     if tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         return 'DENY'
     keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select'}
-    redirects = {'>', '>>', '<', '<>', '>|', '&>', '&>>', '>&', '<&', '<<', '<<-', '<<<'}
-    if any(t in keywords or t in redirects for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
+    if any(t in keywords or t in REDIRECT_OPS for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
         return 'DENY'
     actions = {'-exec', '-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}
     for t in tokens:
@@ -3301,7 +3303,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
         return 'DENY'
     if named:
         compounds = _compounds(cmd)
-        if compounds is None or any(k.kind in ("for", "select") and any(_bulk_word_mentions(w) for w in k.header[1:])
+        if compounds is None or any(k.kind in LOOP_VAR_KINDS and any(_bulk_word_mentions(w) for w in k.header[1:])
                                     for k in compounds):
             return 'DENY'
     for site, res in sites:
@@ -3396,10 +3398,11 @@ def executable_view_or_raw(command):
         return command
 
 
-_HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
+_HB_NOEXEC_SHELLS = ("bash", "sh", "dash")
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile("(%s)?(bash|sh|dash)" % "|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS))
+_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS),
+                                            "|".join(_HB_NOEXEC_SHELLS)))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -3424,7 +3427,7 @@ def _hb_shell_options(args):
         v = args[k].value()
         if v is None:
             return None
-        if v in ("--", "-"):
+        if v in OPTION_ENDS:
             k += 1
             break
         if v.startswith("--"):
@@ -4102,7 +4105,7 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
-            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+            if any(r.fd == 1 or r.op in BOTH_STREAMS_OPS for r in outputs) and tuple(site.context) == ("top",) \
                     and is_read_only(command[slice(*site.cmd.span)]):
                 outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
@@ -4260,6 +4263,7 @@ class ServiceView:
 # npx, nsenter, git -c alias.x='!..', git rebase --exec, PAGER=..) loses no refusal the rules had before.
 _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "ls", "echo",
                             "printf", "wc"})
+_KILL_PROBE_OPTS = ("-0", "-l", "-L")  # kill -0 probes a pid, -l / -L list the signals: nothing is sent
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
@@ -4313,7 +4317,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
         elif x.op == "<":
             if not reads_ok or x.fd != 0 or x.target is None or not _plain_word(x.target):
                 return False
-        elif x.op in (">", ">>", ">|", "&>", "&>>"):
+        elif x.op in OUTPUT_REDIRECT_OPS:
             if x.fd not in (1, 2, None) or x.target is None or not _plain_file(x.target, sv):
                 return False
         else:
@@ -4369,7 +4373,7 @@ def _plain_simple(cmd, sv, piped):
     if piped and name not in _PLAIN_FILTERS:
         return False
     if name == "kill":  # a probe or a listing of literal words, or `kill -0 "$PID"` alone
-        return bool(vals) and vals[0] in ("-0", "-l", "-L") and _plain_kill_args(args[1:]) \
+        return bool(vals) and vals[0] in _KILL_PROBE_OPTS and _plain_kill_args(args[1:]) \
             and _plain_redirects(cmd, sv, reads_ok=False)
     if name == "dd":
         return _plain_dd(vals, sv) and _plain_redirects(cmd, sv, reads_ok=False)
@@ -4640,7 +4644,7 @@ def _kill_protected_family(sv, family):
 
 def _kill_signal(sv):
     """kill with an option other than the exact -0 (probe), -l or -L (list): -09 is SIGKILL."""
-    return any(v is not None and v.startswith("-") and v not in ("-0", "-l", "-L")
+    return any(v is not None and v.startswith("-") and v not in _KILL_PROBE_OPTS
                for _n, args, _s, _r in sv.named("kill") for v in (w.value() for w in args))
 
 
@@ -4891,7 +4895,7 @@ def _interpreter_code(res, cmd):
         if a in value_opts:
             k += 2
             continue
-        if a == "--" or a == "-" or not a.startswith("-"):
+        if a in OPTION_ENDS or not a.startswith("-"):
             break
         k += 1
     if all(a is None or a == "-" or a.startswith("-") for a in args):
@@ -5112,7 +5116,7 @@ def data_shape(command, invs):
             return False
         state = {"writes": False, "git": False}
         for pipeline, sep in script.items:
-            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in ("|", "|&") for p in pipeline.pipes):
+            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in PIPE_OPS for p in pipeline.pipes):
                 return False
             if not all(_shape_simple(stage, invs, k, state) for k, stage in enumerate(pipeline.stages)):
                 return False
@@ -5318,7 +5322,8 @@ def _worktree_base_hits(command, view):
     hit["bare"] = hit["bare"] or any(not i["args"] for i in view.outer("stash"))
     hit["checkout"] = hit["checkout"] or any(_wide_path_after_dashdash(i["args"]) for i in view.outer("checkout"))
     hit["restore"] = hit["restore"] or any(
-        any(a in ("--source", "-s") or a.startswith(("--source=", "-s=")) for a in i["args"])
+        any(a in GIT_RESTORE_SOURCE_OPTS or a.startswith(tuple(o + "=" for o in GIT_RESTORE_SOURCE_OPTS))
+            for a in i["args"])
         and _wide_path_after_dashdash(i["args"]) for i in view.outer("restore"))
     return hit
 
@@ -5411,7 +5416,7 @@ _WT_PUSH_RE = re.compile(r"stash\s+(" + _STASH_SAVE_ALT + r")\b")
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
-_WT_SOURCE_RE = re.compile(r"(?=(--source\b|-s\b))")
+_WT_SOURCE_RE = re.compile(r"(?=(%s))" % "|".join(o + r"\b" for o in GIT_RESTORE_SOURCE_OPTS))
 _WT_WIDE_RE = re.compile(r"(?=(--\s+(\.|\*|[^ /]+/)\s*($|[;&|])))")
 
 
@@ -5825,7 +5830,7 @@ def _sd_git(args):
         allowed, stdin, j = set(), False, 0
         while j < len(rest):
             a = rest[j]
-            if a == "--" or not a.startswith("-") or a == "-":
+            if a in OPTION_ENDS or not a.startswith("-"):
                 return allowed, stdin  # a pathspec follows: its words are not messages
             if a.startswith("--"):
                 name, eq, val = a.partition("=")
@@ -6051,7 +6056,7 @@ def _sd_env(sites):
         found = list(site.cmd.assignments)
         try:
             res = resolve(site.cmd)
-            if res.name in ("export", "declare", "typeset", "local", "readonly"):
+            if res.name in DECLARATION_BUILTINS:
                 found += [Assignment(w) for w in res.args if "=" in w.text]
         except Exception:  # noqa: BLE001
             pass
@@ -6195,7 +6200,7 @@ def _sd_interpreter_code(res, cmd):
         k = 0
         while k < len(vals):
             a = vals[k]
-            if a in ("--", "-"):
+            if a in OPTION_ENDS:
                 break
             if a.startswith("--"):
                 nm, eq, v = a.partition("=")
@@ -6287,7 +6292,7 @@ def _sd_streams(node, out, err):
     for r in node.redirects:
         if r.op in ("<", "<<", "<<-", "<<<", "<&"):
             continue
-        both = r.op in ("&>", "&>>") or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
+        both = r.op in BOTH_STREAMS_OPS or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
         fd = None if both else r.fd
         if fd is None and not both:
             out = err = False  # a {NAME}> form
@@ -6339,7 +6344,7 @@ def _sd_display_args(spec, vals, numeric):
     while k < len(vals):
         a = vals[k]
         k += 1
-        if dashdash or a == "-" or not a.startswith(("-", "+")) or (a.startswith("+") and not numeric):
+        if dashdash or a == "-" or not a.startswith(OPTION_SIGNS) or (a.startswith("+") and not numeric):
             operands += 1
             continue
         if a == "--":
@@ -6409,7 +6414,7 @@ def _sd_output_safety(script, traced=False):
                     if res.payload is not None and res.payload_kind:
                         visit(res.payload, o, e, ctx + (res.payload_kind,))
                 elif isinstance(st, Compound):
-                    inner = st.kind not in ("function", "coproc")
+                    inner = st.kind not in DEFINER_KINDS
                     for body in st.body:
                         visit(body, o and inner, e and inner, ctx)
 
@@ -6429,7 +6434,7 @@ def _sd_redefines(site):
     if any(n in _SD_DEFINERS for n in names):
         return True
     texts = [a.word.text for a in cmd.assignments] + [a.word.text for a in res.assignments]
-    if res.name in ("export", "declare", "typeset", "readonly", "local", "set", "env"):
+    if res.name in DECLARATION_BUILTINS + ("set", "env"):
         texts += [w.value() or w.text for w in res.args]
     return any(_SD_VARIABLE.match(t.lstrip("'\"")) for t in texts)
 
@@ -6508,7 +6513,6 @@ def _sd_reads_back(site, res):
 # into display filters and redirected only to /dev/null or between stdout and stderr. Nothing in it assigns or
 # exports a variable, defines, configures or reads back anything, or writes a file.
 _SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
-_SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
 _SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
 # git options of those subcommands that run a program or write a file (taken in any abbreviation).
 _SD_PLAIN_GIT_REFUSED = git_facts.GIT_RUN_OR_WRITE_OPTIONS
@@ -6580,7 +6584,7 @@ def _sd_plain_command(cmd):
     if not literal or not _sd_quiet_redirects(cmd.redirects):
         return False
     vals = [w.value() for w in res.args]
-    if name in _SD_PLAIN_SHELLS:
+    if name in COMMON_SHELLS:
         return len(vals) == 2 and vals[0] == "-c" and isinstance(res.payload, Script) and \
             _sd_plain_script(res.payload)
     if name == "find":
@@ -6603,7 +6607,7 @@ def _sd_plain_script(script):
     if script.error is not None:
         return False
     for pl, sep in script.items:
-        if sep == "&" or any(p not in ("|", "|&") for p in pl.pipes):
+        if sep == "&" or any(p not in PIPE_OPS for p in pl.pipes):
             return False
         for k, st in enumerate(pl.stages):
             if k > 0:
