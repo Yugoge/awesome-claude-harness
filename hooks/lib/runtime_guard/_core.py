@@ -1901,7 +1901,7 @@ def _exec_subcommand_after_selector(head: str, rest: list):
     # already consumed by _explicit_workspace_selector, so scan all of rest.
     i = 0
     while i < len(rest):
-        if rest[i] in ("exec", "dlx", "x"):
+        if rest[i] in _PM_EXEC_SUBCMDS:
             toks = rest[i + 1:]
             j = 0
             while j < len(toks):
@@ -2138,7 +2138,7 @@ def _package_runner_invocation(head: str, rest: list):
         i = 0
         while i < len(rest):
             t = rest[i]
-            if t in ("exec", "dlx", "x"):
+            if t in _PM_EXEC_SUBCMDS:
                 toks = rest[i + 1:]
                 break
             if t in ("run", "run-script"):
@@ -3153,7 +3153,7 @@ def _tokens_after_runner_target(head: str, rest: list) -> list:
     elif head in PKG_MANAGERS:
         toks = None
         for i, t in enumerate(rest):
-            if t in ("exec", "dlx", "x"):
+            if t in _PM_EXEC_SUBCMDS:
                 toks = rest[i + 1:]
                 break
         if toks is None:
@@ -3400,7 +3400,7 @@ def _p9_pkgscript(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
         # runner form, NOT a bare script-run — P9 abstains so it is not
         # mis-classified as a protected-cwd script (the `-c` payload is
         # recursively evaluated separately).
-        if _first_subcommand(head, rest) in ("exec", "dlx", "x"):
+        if _first_subcommand(head, rest) in _PM_EXEC_SUBCMDS:
             continue
 
         # compute effective cwd from cd/pushd in the chain, then fold a leading
@@ -3770,7 +3770,7 @@ def _runner_call_payloads(simple_cmds: list, cfg: Optional[dict] = None,
             runner_args = rest
         elif head in PKG_MANAGERS:
             for i, t in enumerate(rest):
-                if t in ("exec", "dlx", "x"):
+                if t in _PM_EXEC_SUBCMDS:
                     runner_args = rest[i + 1:]
                     break
         if runner_args is None:
