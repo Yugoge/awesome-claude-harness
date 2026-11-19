@@ -52,3 +52,16 @@ GIT_CONFIG_READ_MODIFIERS = frozenset({
     "--name-only", "--includes", "--no-includes", "--bool", "--int", "--bool-or-int", "--path",
     "--expiry-date",
 })
+
+# Subcommand options (any subcommand, a long option's unique prefix included) whose argument line
+# names a program git runs or a file it writes: --output and format-patch's --output-directory write
+# a file; --upload-pack, --receive-pack and --exec name the program on the other end; grep's
+# --open-files-in-pager (-O) the pager it opens.
+GIT_ARGV_RUN_OR_WRITE_OPTIONS = frozenset({
+    "--output", "--output-directory", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager",
+})
+# Those, and the options that make git run a program the configuration names: --ext-diff and
+# --textconv (diff and textconv drivers), --filters (cat-file runs the clean/smudge filters), --edit
+# (the editor) and --paginate (the pager).
+GIT_RUN_OR_WRITE_OPTIONS = GIT_ARGV_RUN_OR_WRITE_OPTIONS | {
+    "--ext-diff", "--textconv", "--filters", "--edit", "--paginate"}

@@ -241,15 +241,16 @@ def _git_settled(res, raw) -> bool:
     if k is None or vals[k] not in _GIT_READS:
         return False
     for v in vals[k + 1:]:
-        if v is None or v.startswith(('--output', '--ext-diff', '-O', '--open-files-in-pager', '--exec')):
+        if v is None or v.startswith(('-O',) + _GIT_RUN_OPTIONS):
             return False
-        if v.startswith('--') and any(_long_prefix(v, full, least) for full, least in _GIT_RUN_OPTIONS):
+        if v.startswith('--') and any(_long_prefix(v, full, 4) for full in _GIT_RUN_OPTIONS):
             return False  # an abbreviation (`--outp=`, `--ext-dif`, `--open-files-in=`)
     return True
 
 
-# git options that write a file or run a program, with the shortest abbreviation git would take.
-_GIT_RUN_OPTIONS = (('--output', 5), ('--ext-diff', 5), ('--open-files-in-pager', 4), ('--exec', 5))
+# git options that write a file or run a program; an abbreviation counts from four characters (`--ou`).
+from lib.git_facts import GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
+_GIT_RUN_OPTIONS = tuple(sorted(GIT_RUN_OR_WRITE_OPTIONS))
 
 
 def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:

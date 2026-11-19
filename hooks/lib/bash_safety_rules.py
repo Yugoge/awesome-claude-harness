@@ -27,6 +27,9 @@ sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 from lib import git_facts  # noqa: E402
 from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
 from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS  # noqa: E402
+# A git option word that runs a program or writes a file: grep's -O, or one starting with a long option of
+# git_facts.GIT_RUN_OR_WRITE_OPTIONS (`--output=x`, `--exec=...`).
+_GIT_RUN_OR_WRITE_PREFIXES = ("-O",) + tuple(sorted(git_facts.GIT_RUN_OR_WRITE_OPTIONS))
 
 
 def refuse(*lines):
@@ -612,7 +615,7 @@ def _http_reader_ok(site, r):
         return False
     if name == "git":
         return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
-            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args) \
+            a.startswith(_GIT_RUN_OR_WRITE_PREFIXES) for a in args) \
             and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
     if name == "uniq":
         return _uniq_operands(args) < 2
@@ -2925,7 +2928,7 @@ _GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit"
                         "diff-files", "diff-index", "range-diff", "reflog", "branch", "tag", "merge-base", "name-rev",
                         "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
 """git subcommands that take a protected name as a path or message to read, never as code or an output file."""
-_GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_GIT_RUN_OR_WRITE_OPTS = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
 """Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
 _BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
@@ -4279,8 +4282,7 @@ def _plain_git(words):
         k += 2 if vals[k] == "-C" else 1
     if k >= len(vals) or vals[k] not in _PLAIN_GIT_READS:
         return False
-    return not any(v.startswith(("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--exec"))
-                   or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
+    return not any(v.startswith(_GIT_RUN_OR_WRITE_PREFIXES) or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
 
 
 def _plain_simple(cmd, sv, piped):
@@ -5066,7 +5068,7 @@ def _dg_subcommands(*allowed):
 _DG_GIT_GLOBAL_OK = GIT_INERT_FLAGS | {"--version", "--help"}
 # Options no subcommand may carry: a file written (--output), a program named (upload/receive pack, archive --exec,
 # grep's pager). Per subcommand: (refused options, refused words); interactive patch modes and history rewriting.
-_DG_GIT_ALL = ("--output", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager")
+_DG_GIT_ALL = tuple(sorted(git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS))
 _DG_GIT_SUB = {
     **dict.fromkeys(("status", "log", "diff", "show", "rev-parse", "describe", "shortlog", "ls-files", "ls-tree",
                      "cherry", "count-objects", "blame", "commit", "version", "range-diff", "merge-base",
@@ -7315,7 +7317,7 @@ _SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
 _SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
 _SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
 # git options of those subcommands that run a program or write a file (taken in any abbreviation).
-_SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
+_SD_PLAIN_GIT_REFUSED = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _SD_PLAIN_COMPOUNDS = frozenset({"group", "subshell", "if"})
 
 

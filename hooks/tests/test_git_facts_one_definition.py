@@ -218,3 +218,44 @@ class TestGitWorktreeDiscarders:
         assert git_cmds._git_is_destructive_invocation(toks, 1, "checkout-index")
         assert not git_cmds._git_is_destructive_invocation(["git", "checkout-index", "a/b"], 1, "checkout-index")
         assert not git_cmds._git_is_destructive_invocation(["git", "stash", "push"], 1, "stash")
+
+
+def _resolved(cmd):
+    return sp.resolve(next(iter(sp.walk(sp.parse(cmd)))).cmd)
+
+
+class TestGitRunOrWriteOptions:
+    """git-exec-or-write-options: the subcommand options that run a program or write a file.
+
+    The read-proving rules (the orchestrator's read-only gate, the config guard's settled read, the
+    plain-git, http-reader, bulk and session_dirs rules) each refused a different subset; they now read
+    git_facts.GIT_RUN_OR_WRITE_OPTIONS. The disk guard refuses only the options whose argument line
+    names the program or file (GIT_ARGV_RUN_OR_WRITE_OPTIONS): a driver the configuration names runs
+    for every git call it allows."""
+
+    RUNS = ["git show --textconv HEAD:f", "git log --ext-diff -p", "git diff --output=o", "git grep -O x",
+            "git log --exec=x", "git cat-file --filters HEAD:f"]
+
+    @pytest.mark.parametrize("cmd", RUNS)
+    def test_read_provers_agree(self, cmd):
+        from lib.bash_read_only import is_read_only
+        from lib import bash_safety_rules as bsr
+        cg = _load("pretool-claude-config-guard.py")
+        res = _resolved(cmd)
+        assert not is_read_only(cmd)
+        assert not cg._git_settled(res, cmd)
+        assert not bsr._plain_git(list(res.args))
+        assert not bsr._sd_plain_git([w.value() for w in res.args])
+
+    @pytest.mark.parametrize("cmd", ["git show HEAD:f", "git log -p", "git diff"])
+    def test_plain_reads_still_read(self, cmd):
+        from lib.bash_read_only import is_read_only
+        from lib import bash_safety_rules as bsr
+        cg = _load("pretool-claude-config-guard.py")
+        res = _resolved(cmd)
+        assert is_read_only(cmd) and cg._git_settled(res, cmd) and bsr._plain_git(list(res.args))
+
+    def test_disk_guard_set_is_the_argv_subset(self):
+        from lib import bash_safety_rules as bsr, git_facts
+        assert set(bsr._DG_GIT_ALL) == git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS < git_facts.GIT_RUN_OR_WRITE_OPTIONS
+        assert bsr._dg_git_runs(["git", "diff", "--output=o"]) and not bsr._dg_git_runs(["git", "log", "--textconv"])

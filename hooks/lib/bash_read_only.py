@@ -52,6 +52,7 @@ from shell_parse import (  # noqa: E402
 from shell_parse import GIT_INERT_FLAGS  # noqa: E402
 from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
 from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
+from git_facts import GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -260,8 +261,7 @@ def _awk(args) -> bool:
 
 # Long options that write a file, run a program, or start a pager, refused (or
 # any abbreviation of them) on every git subcommand.
-_GIT_FORBIDDEN = ("--output", "--output-directory", "--ext-diff", "--textconv", "--open-files-in-pager",
-                  "--filters", "--exec", "--upload-pack", "--receive-pack", "--edit", "--paginate")
+_GIT_FORBIDDEN = GIT_RUN_OR_WRITE_OPTIONS
 
 # Builtin subcommands that only read, and those that read in a listing form _git_sub checks.
 _GIT_READ = GIT_READ_SUBCOMMANDS | GIT_LISTING_SUBCOMMANDS
