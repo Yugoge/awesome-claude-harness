@@ -742,9 +742,7 @@ def cmd_hook():
     ctx = {"session_id": payload.get("session_id"), "transcript_path": payload.get("transcript_path"),
            "cwd": payload.get("cwd") if isinstance(payload.get("cwd"), str) else None}
     verb = args.split()[0] if args else "status"
-    sys.path.insert(0, os.path.join(HOME, "hooks", "lib"))
-    from harness_switch import VERBS
-    sys.path.pop(0)
+    sys.path.insert(0, os.path.join(HOME, "hooks", "lib")); from harness_switch import VERBS; sys.path.pop(0)  # noqa: E702
     if verb not in VERBS or len(args.split()) > 1:
         emit("HARNESS SWITCH: usage: /harness off | on | status (nothing changed). Tell the owner so.",
              "harness: usage: /harness off | on | status")
