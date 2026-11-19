@@ -1196,7 +1196,7 @@ def _branch_writes(inv):
         return False, []
     if sub in ('merge', 'cherry-pick', 'revert', 'am', 'reset'):
         return sub != 'reset' or _reset_moves(args), []
-    if sub in ('pull', 'fetch'):  # a refspec's destination is a local ref
+    if sub in _FETCHING:  # a refspec's destination is a local ref
         return sub == 'pull', [o.rpartition(':')[2] for o in ops if ':' in o]
     if sub == 'rebase':
         ops = _operands(args, ('--onto', '-x', '--exec', '-s', '--strategy', '-X',
