@@ -3084,6 +3084,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "package-managers",
+   "source": "defs-shell lane, audit f199dfb1e family package-managers (undecided)",
+   "reason": "runtime_guard._PM_AT_VERSION_RE names the package managers corepack proxies (corepack yarn|pnpm|npm[@version]; corepack has no bun shim), constants.PKG_MANAGERS the node package managers the runtime guard reads, bun included.",
+   "sides": [
+    [
+     {
+      "name": "<module>:re",
+      "fingerprint": "6092f667d082bd7c",
+      "at": "hooks/lib/runtime_guard/_core.py:4034"
+     }
+    ],
+    [
+     {
+      "name": "<module>.PKG_MANAGERS",
+      "fingerprint": "44c99a4901e66f30",
+      "at": "hooks/lib/runtime_guard/constants.py:11"
+     }
+    ]
+   ]
   }
  ]
 }
