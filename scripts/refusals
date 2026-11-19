@@ -56,7 +56,8 @@ def _stamp(seconds: float) -> str:
 
 def records(folder: str, since: str, until: str) -> tuple[list, int]:
     """(the records of [since, until), the lines that could not be read). Reports of one call that a writer
-    could not merge (the day file's lock was not free) are joined here, as the writer joins them."""
+    did not merge (the earlier one lay beyond the tail it searches, or in the day before's file) are joined
+    here, as the writer joins them."""
     out, at, damaged = [], {}, 0
     for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else ():
         if not (name.startswith("refusals-") and name.endswith(".jsonl") and since[:10] <= name[9:19] <= until[:10]):

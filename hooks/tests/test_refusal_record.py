@@ -10,6 +10,7 @@
   unreadable payload) write() returns False, raises nothing, and a launcher answers as it did. A hook
   reports through report(), which runs the writer as a process of its own: a writer that is missing,
   fails or hangs changes nothing for the hook, and a payload that names no event starts no process.
+  The writer's own process ends itself after REPORT_WAIT seconds: a shell hook waits for it unbounded.
 - The directory is private, the days past KEEP_DAYS go, a day's file stops at MAX_DAY_BYTES, and
   writers running at once lose no line.
 - Writer and reader resolve one directory in each layout: ~/.claude itself; a home elsewhere reached
@@ -26,6 +27,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -505,3 +507,21 @@ def test_a_shell_hook_reports_through_the_command_line(tmp_path):
     assert codes == [2, 2, 1, 0]
     assert [(x["tool_use_id"], x["rules"][0]["hook"], x["rules"][0]["id"], x["rules"][0]["by"]) for x in lines()] == [
         ("t0", str(hook), "blocked-shell-rule", str(hook)), ("t1", "hooks/lib/bash_safety_rules.py", "", str(hook))]
+
+
+def test_the_writers_own_process_ends_itself_where_its_input_never_ends(tmp_path):
+    """A shell hook's trap waits for the writer with no bound of its own: the writer's process ends itself
+    REPORT_WAIT seconds (here 1) after it started, whatever it waits on, and leaves no line."""
+    writer = _home(tmp_path / "harness") / "hooks" / "lib" / "refusal_record.py"
+    text, bound = writer.read_text(), "REPORT_WAIT = 2.0, 30, 10 "
+    assert text.count(bound) == 1
+    writer.write_text(text.replace(bound, "REPORT_WAIT = 2.0, 30, 1 "))
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"}
+    held = subprocess.Popen([sys.executable, str(writer), "refusal", "hooks/x.sh", "hooks/x.sh", "BLOCKED: no"],
+                            stdin=subprocess.PIPE, env=env)                  # its input stays open: the payload never ends
+    try:
+        assert held.wait(timeout=60) == -signal.SIGALRM
+    finally:
+        held.kill()
+        held.stdin.close()
+    assert not list(tmp_path.glob(".local/state/claude-harness/*/refusals/*.jsonl"))

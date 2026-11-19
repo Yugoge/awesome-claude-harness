@@ -24,7 +24,8 @@ and the days older than KEEP_DAYS go when a new day's file starts.
 
 Recording never decides: ``write`` returns False where it cannot write (no space, no permission, the
 day file's lock not free within LOCK_WAIT seconds) and never raises; ``report`` waits at most
-REPORT_WAIT seconds for the writer and reads nothing back from it.
+REPORT_WAIT seconds for the writer and reads nothing back from it, and the writer's own process ends
+itself after as long (a shell hook's trap waits for it with no bound of its own).
 
 Kinds. REFUSAL; UNPROVEN, a command the removal policy could not prove safe and let through: the
 same fields, counted apart by the reader and left out of its reconcile.
@@ -301,4 +302,6 @@ def _append(record: dict, now: float) -> bool:
 
 if __name__ == "__main__" and len(sys.argv) > 3:
     # a report: <kind> <reporting hook>, then <refusing hook> <its text> for each rule; the payload on stdin
+    import signal
+    signal.alarm(REPORT_WAIT)  # a shell hook waits for this process unbounded: it ends itself where its input or its place hangs
     write(sys.stdin.buffer.read(), list(zip(sys.argv[3::2], sys.argv[4::2])), sys.argv[2], sys.argv[1])
