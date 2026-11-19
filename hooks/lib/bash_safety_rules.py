@@ -2014,25 +2014,13 @@ _CONSENT_SPEC_TEXT = {
     "sed": ("-n -E -r -s -u -z -i --quiet --silent --debug --follow-symlinks --posix --regexp-extended --separate "
             "--sandbox --unbuffered --null-data --in-place --help --version",
             "-e -f -l --expression --file --line-length"),
-    "cp": ("-a -b -d -f -i -H -l -L -n -P -p -R -r -s -T -u -v -x -Z --archive --attributes-only --backup "
-           "--copy-contents --force --interactive --link --dereference --no-clobber --no-dereference --preserve "
-           "--parents --recursive --reflink --remove-destination --strip-trailing-slashes --symbolic-link "
-           "--no-target-directory --update --verbose --one-file-system --context --debug --keep-directory-symlink "
-           "--help --version",
-           "-S -t --suffix --target-directory --no-preserve --sparse"),
-    "mv": ("-b -f -i -n -T -u -v -Z --backup --force --interactive --no-clobber --no-target-directory "
-           "--strip-trailing-slashes --update --verbose --context --no-copy --exchange --debug --help --version",
-           "-S -t --suffix --target-directory"),
-    "ln": ("-b -d -F -f -i -L -n -P -r -s -T -v --backup --directory --force --interactive --logical "
-           "--no-dereference --physical --relative --symbolic --no-target-directory --verbose --help --version",
-           "-S -t --suffix --target-directory"),
-    "install": ("-b -c -C -d -D -p -s -T -v -Z --backup --compare --directory --preserve-timestamps --strip "
-                "--no-target-directory --verbose --preserve-context --context --debug --help --version",
-                "-g -m -o -S -t --group --mode --owner --strip-program --suffix --target-directory"),
 }
 
 
 def _consent_spec(name):
+    if name in ("cp", "mv", "ln", "install"):  # the copy verbs' getopt tables are the parser's
+        from lib import shell_parse as sp
+        return sp.VERBS[name][0]
     if name not in _CONSENT_SPECS and name in _CONSENT_SPEC_TEXT:
         from lib import shell_parse as sp
         bools, vals = _CONSENT_SPEC_TEXT[name]

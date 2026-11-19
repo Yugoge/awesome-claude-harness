@@ -1048,12 +1048,7 @@ _CURL_CODE_SHORT_OPTS = frozenset({'K'})
 # load code: locale names select a compiled locale, TZ/TERM name a data file,
 # the rest are numbers, flags or plain strings. HOME is absent: the Python user
 # site, `~/.node_modules` and `~/.ssh/config` live under it.
-_SAFE_ENV_VARS = frozenset({
-    'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES',
-    'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'PWD',
-    'OLDPWD', 'USER', 'LOGNAME', 'HOSTNAME', 'TMPDIR', 'DISPLAY', 'NO_COLOR',
-    'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
-})
+_SAFE_ENV_VARS = shell_parse.INERT_ENV_VARS
 # A shell named among another command's words (`find -exec sh -c`), by name:
 # the shape _SHELL_NAME_RE reads also matches `push`.
 _EMBEDDED_SHELL_RE = re.compile(r'(?:ba|rba|da|a|z|k|mk|c|tc|fi|y|pw)?sh[0-9.]*\Z')

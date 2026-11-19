@@ -49,7 +49,10 @@ QUOTES = (BARE, SINGLE, DOUBLE, ANSI_C, LOCALE, ESCAPED)
 MAX_DEPTH = 24
 MAX_LEN = 262_144
 
-_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+# A subscript runs to its ], quoted text and escapes in it included (`m["a]b"]=1`).
+_SUBSCRIPT = r"""\[(?:[^\]'"\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")*\]"""
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:%s)?\+?=" % _SUBSCRIPT, re.S)
+_SUBSCRIPT_START_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\[")
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FD_VAR_RE = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -723,7 +726,34 @@ def _span(src, a, b):
     return (src.off(a), src.off(b - 1) + 1 if b > a else src.off(a))
 
 
-def _lex_word(src, i, depth=0):
+def _open_subscript(raw):
+    """True when ``raw`` is NAME[ followed by an unclosed subscript (quotes and $( ) skipped)."""
+    m = _SUBSCRIPT_START_RE.match(raw)
+    if not m:
+        return False
+    level, j = 1, m.end()
+    while j < len(raw):
+        c = raw[j]
+        if c == "\\":
+            j += 1
+        elif c in QUOTE_CHARS:
+            k = raw.find(c, j + 1)
+            j = len(raw) if k < 0 else k
+        elif raw.startswith("$(", j):
+            k = _match_pair(raw, j + 1, "(", ")")
+            j = len(raw) if k < 0 else k - 1
+        elif c == "[":
+            level += 1
+        elif c == "]":
+            level -= 1
+        j += 1
+    return level > 0
+
+
+def _lex_word(src, i, depth=0, assign=False):
+    """One word from ``src`` at ``i``. ``assign``: the word stands where an assignment may
+    (before a command's name), so a NAME[ subscript runs to its ] across blanks and
+    operators, as bash reads `m[a b]=c`."""
     t = src.text
     n = len(t)
     start = i
@@ -771,6 +801,10 @@ def _lex_word(src, i, depth=0):
     while i < n:
         c = t[i]
         if c in " \t\n" or c in _OP_CHARS:
+            if assign and _open_subscript(t[start:i]):
+                keep(i)
+                i += 1
+                continue
             if c == "(" and lit_chars and _ASSIGN_RE.match("".join(lit_chars)):
                 # NAME=( ... ) array assignment: the parens belong to the word.
                 end = _match_pair(t, i, "(", ")")
@@ -912,7 +946,7 @@ def _lex_word(src, i, depth=0):
             continue
         if c == "[":
             j = t.find("]", i + 1)
-            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`" for x in t[i:j]):
+            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`'\"" for x in t[i:j]):
                 flush()
                 segs.append(("glob", src.slice(i, j + 1), src.off(i)))
                 parts.append(Part("glob", t[i:j + 1], BARE, _span(src, i, j + 1)))
@@ -938,6 +972,8 @@ def _lex_word(src, i, depth=0):
         keep(i)
         i += 1
 
+    if assign and _open_subscript(t[start:i]):
+        raise LexError("unterminated_subscript", src.off(start))  # bash: looking for matching `]'
     flush()
     return Word(segs, src.off(start), src.slice(start, i), parts), i
 
@@ -1141,7 +1177,7 @@ def _lex_into(src, toks, depth=0, comments=None):
                 r.end = r.target.raw.end_off()
             toks.append(("R", r))
             continue
-        w, i = _lex_word(src, i, depth)
+        w, i = _lex_word(src, i, depth, _assignment_position(toks))
         if not w.segs and not w.parts:
             i += 1
             continue
@@ -1151,6 +1187,19 @@ def _lex_into(src, toks, depth=0, comments=None):
     if pending_heredocs:
         raise LexError("unterminated_heredoc", pending_heredocs[0][0].off)
     return toks
+
+
+def _assignment_position(toks):
+    """True when a word lexed after ``toks`` stands where bash accepts an assignment: first in
+    a command (after an operator, a reserved prefix word or an assignment; redirections aside)."""
+    for tok in reversed(toks):
+        if tok[0] == "R":
+            continue
+        if tok[0] == "OP":
+            return True
+        text = tok[1].raw.text
+        return bool(_ASSIGN_RE.match(text)) or text in COMMAND_PREFIX_WORDS
+    return True
 
 
 def _expansion_word(body, depth=0):
@@ -1468,7 +1517,7 @@ class Assignment:
         return "Assignment(%s=%r)" % (self.name, self.value.text if self.value else self.array)
 
 
-_ASSIGN_PARTS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=")
+_ASSIGN_PARTS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(%s)?(\+?)=" % _SUBSCRIPT, re.S)
 
 
 class SimpleCommand:
@@ -3263,25 +3312,27 @@ VERBS = {
                   "--no-dereference", "-p", "-R", "-r", "--recursive", "-s", "--symbolic-link",
                   "-T", "--no-target-directory", "-u", "--update", "-v", "--verbose", "-x",
                   "--one-file-system", "--parents", "--remove-destination", "--strip-trailing-slashes",
-                  "--attributes-only", "--debug", "-Z"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup", "--preserve",
-                  "--no-preserve", "--reflink", "--sparse", "--context")), "last", COPY_DEST),
+                  "--attributes-only", "--debug", "-Z", "--backup", "--preserve", "--reflink", "--context",
+                  "--copy-contents", "--keep-directory-symlink", "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix", "--no-preserve", "--sparse")), "last", COPY_DEST),
     "mv": (_spec(("-b", "-f", "--force", "-i", "--interactive", "-n", "--no-clobber", "-T",
                   "--no-target-directory", "-u", "--update", "-v", "--verbose", "-Z",
-                  "--strip-trailing-slashes", "--debug", "--exchange", "--no-copy"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup", "--context")),
+                  "--strip-trailing-slashes", "--debug", "--exchange", "--no-copy", "--backup", "--context",
+                  "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix")),
            "last", MOVE_DEST),
     "install": (_spec(("-b", "-C", "--compare", "-c", "-d", "--directory", "-D", "-p",
                        "--preserve-timestamps", "-s", "--strip", "-v", "--verbose", "-T",
-                       "--no-target-directory", "-Z"),
+                       "--no-target-directory", "-Z", "--backup", "--context", "--debug", "--preserve-context",
+                       "--help", "--version"),
                       ("-g", "--group", "-m", "--mode", "-o", "--owner", "-S", "--suffix",
-                       "-t", "--target-directory", "--strip-program", "--backup", "--context")),
+                       "-t", "--target-directory", "--strip-program")),
                 "last", COPY_DEST),
     "ln": (_spec(("-b", "-d", "-F", "--directory", "-f", "--force", "-i", "--interactive",
                   "-L", "--logical", "-n", "--no-dereference", "-P", "--physical", "-r",
                   "--relative", "-s", "--symbolic", "-T", "--no-target-directory", "-v",
-                  "--verbose"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup")), "last", LINK),
+                  "--verbose", "--backup", "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix")), "last", LINK),
     "rsync": (_spec(("-a", "--archive", "-v", "--verbose", "-z", "--compress", "-r",
                      "--recursive", "-u", "--update", "-n", "--dry-run", "-q", "--quiet",
                      "-P", "-h", "--human-readable", "-c", "--checksum", "-l", "--links",
@@ -3297,7 +3348,12 @@ VERBS = {
                      "--chmod", "--chown", "-B", "--block-size", "--log-file", "--bwlimit",
                      "--suffix", "--backup-dir", "--timeout", "--port", "--password-file",
                      "--compare-dest", "--copy-dest", "--link-dest", "--max-size",
-                     "--min-size", "--partial-dir")), "last", COPY_DEST),
+                     "--min-size", "--partial-dir", "-M", "--remote-option", "--address", "--checksum-choice",
+                     "--checksum-seed", "--compress-choice", "--compress-level", "--contimeout", "--copy-as",
+                     "--debug", "--early-input", "--groupmap", "--iconv", "--info", "--log-file-format",
+                     "--max-alloc", "--max-delete", "--modify-window", "--only-write-batch", "--out-format",
+                     "--outbuf", "--protocol", "--read-batch", "--skip-compress", "--sockopts", "--stderr",
+                     "--stop-after", "--stop-at", "--usermap", "--write-batch")), "last", COPY_DEST),
     "truncate": (_spec(("-c", "--no-create", "-o", "--io-blocks"),
                        ("-s", "--size", "-r", "--reference")), "all", TRUNCATE),
     "unlink": (_spec(), "all", DELETE),
@@ -3372,6 +3428,22 @@ RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+# Environment variables an assignment to which cannot change what a command runs (locale, terminal,
+# identity, colour); the directory ones among them (DIR_ENV_VARS) do move where a command reads or writes.
+INERT_ENV_VARS = frozenset({
+    "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "TZ", "TERM",
+    "COLUMNS", "LINES", "PWD", "OLDPWD", "USER", "LOGNAME", "HOSTNAME", "TMPDIR", "DISPLAY", "NO_COLOR",
+    "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"})
+DIR_ENV_VARS = frozenset({"PWD", "OLDPWD", "TMPDIR"})
+# man's options whose value names a program it runs (man-db 2.12: the pager, the HTML browser).
+MAN_PROGRAM_OPTS = ("-P", "--pager", "-H", "--html", "-B", "--browser")
+# grep's options that take a value (GNU grep 3.11 --help; --color[=WHEN] takes one only after `=`): those
+# every grep-like search shares, then GNU grep's own.
+GREP_CORE_VALUE_OPTS = GREP_PATTERN_OPTS + GREP_PATTERN_FILE_OPTS + (
+    "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context")
+GREP_VALUE_OPTS = GREP_CORE_VALUE_OPTS + ("-d", "--directories", "-D", "--devices", "--binary-files", "--include",
+                                          "--exclude", "--exclude-dir", "--exclude-from", "--label",
+                                          "--group-separator")
 RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip", "--pre-glob")
 # ripgrep's options that take a value: the short letters and the long names.
 RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
