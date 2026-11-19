@@ -134,7 +134,7 @@ def _in_harness_checkout(path: str) -> bool:
 def _text(word, env: dict) -> str:
     """A parsed word as text: its static parts, a $NAME `env` holds as its value, any other
     expansion as ${...} (no file name is read from what the shell computes)."""
-    return "".join(p.text if p.kind in ("lit", "glob", "brace") else env[p.text] if p.text in env and p.kind == "param"
+    return "".join(p.text if p.kind in shell_parse.LITERAL_PART_KINDS else env[p.text] if p.text in env and p.kind == "param"
                    else "${%s}" % (p.text if p.kind == "param" else "") for p in word.parts)
 
 

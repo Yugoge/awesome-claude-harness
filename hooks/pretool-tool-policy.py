@@ -1141,7 +1141,6 @@ _WRITES = re.compile(
     r"[\"']\+?>{1,2}|[\"']\+<|print\([^)]*file\s*=")
 # Top-level module names an import statement in python code names.
 _PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
-_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 _FIND_NAME_OPTS = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"})
 _EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
                             "sudo", "ionice", "chrt", "taskset", "xargs"})
@@ -1234,7 +1233,8 @@ def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
 def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
     """`find ... -name <entry> -exec <interpreter> {} ;` (or `-exec {}`): the entry run by find."""
     words = [a if a is not None else t for a, t in zip(args, texts)]
-    starts = [i for i, w in enumerate(words) if w in _FIND_EXEC]
+    from lib.shell_parse import FIND_EXEC
+    starts = [i for i, w in enumerate(words) if w in FIND_EXEC]
     if not starts:
         return None
     runs = False

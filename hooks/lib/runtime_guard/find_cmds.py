@@ -88,7 +88,7 @@ def _fd_positional_roots(tokens: list, fd_idx: int) -> list:
             i += 1
             continue
         # a path-like bareword positional is a search directory.
-        if "/" in st or st in (".", "..") or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
+        if "/" in st or st in (os.curdir, os.pardir) or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
             out.append(st)
         i += 1
     return out

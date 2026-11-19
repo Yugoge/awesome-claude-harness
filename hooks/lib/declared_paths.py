@@ -92,7 +92,7 @@ def _shape(path: str):
         names = rest.split("/")
         if ".." in names:
             return _ANY
-        names = [n for n in names if n not in ("", ".")]
+        names = [n for n in names if n not in ("", os.curdir)]
         if names:
             return ("last", names[-1])
     return _ANY if head in ("", ".", "..") else ("ends", head)

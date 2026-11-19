@@ -90,7 +90,7 @@ from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     AWK_NAMES, AWK_SOURCE_OPTS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
-    _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    FIND_EXEC, GIT_CONFIG_OPTS, HEREDOC_OPS, LITERAL_PART_KINDS, SHELL_FILE_OPTS, _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
 from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
 from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
@@ -351,13 +351,13 @@ _GREP_DATA = GREP_VALUE_OPTS
 # selector's own value position.
 SELECTOR_DATA_OPTIONS = {
     "pytest": ("-k", "-m", "--deselect", "--ignore", "--ignore-glob"),
-    "py.test": ("-k", "-m", "--deselect", "--ignore", "--ignore-glob"),
     "go": ("-run", "-bench", "-skip"),
     "cargo": ("--test", "--bench", "--example"),
     "ctest": ("-R", "-E", "--tests-regex", "--exclude-regex"),
     "tox": ("-e",),
     "nox": ("-s",),
 }
+SELECTOR_DATA_OPTIONS["py.test"] = SELECTOR_DATA_OPTIONS["pytest"]  # pytest's older entry point, the same program
 
 GIT_DATA_OPTIONS = frozenset((
     # `-m` is git's own short spelling of `--message`; both spellings must
@@ -768,7 +768,7 @@ SHELL_SHORT_BOOL = set("abBCefhHiklmnpPrstTuvxD")
 SHELL_LONG_BOOL = {"--posix", "--norc", "--noprofile", "--login", "--restricted",
                    "--verbose", "--debugger", "--dump-strings", "--dump-po-strings",
                    "--help", "--version", "--noediting", "--protected", "--pretty-print"}
-SHELL_LONG_VAL = {"--rcfile", "--init-file"}
+SHELL_LONG_VAL = SHELL_FILE_OPTS
 
 INTERPRETERS = {
     "python": ("-c",), "python2": ("-c",), "python3": ("-c",),
@@ -860,7 +860,7 @@ WATCH = PEEL["watch"][0]
 
 SSH_SPEC = _SSH_SPEC
 
-FIND_EXEC_OPS = {"-exec", "-execdir", "-ok", "-okdir"}
+FIND_EXEC_OPS = FIND_EXEC
 FIND_DELETE_OPS = {"-delete"}
 
 BWRAP_NARGS = {
@@ -1070,7 +1070,7 @@ def word_chunks(w):
 # those answers "it could".
 # ---------------------------------------------------------------------------
 
-_PATTERN_SEGS = ("lit", "glob", "brace")
+_PATTERN_SEGS = LITERAL_PART_KINDS
 # Glob or brace text whose meaning ``_glob_to_regex`` / ``_brace_alternatives``
 # do not model: an extglob group, a POSIX bracket class / equivalence class /
 # collating symbol, a sequence expression, and any expansion, substitution or
@@ -2081,7 +2081,7 @@ class Analyzer:
         if not words and not redirs:
             return
         for r in redirs:
-            if r.op in ("<<", "<<-"):
+            if r.op in HEREDOC_OPS:
                 self.note("heredoc", r.off)
                 # An UNQUOTED delimiter leaves the body subject to expansion, so
                 # any substitution inside it runs even when the body is mere
@@ -3018,7 +3018,7 @@ class Analyzer:
     def _stdin_code(self, redirs):
         """Return the Src of code arriving on stdin, or None when not provable."""
         for r in redirs:
-            if r.op in ("<<", "<<-") and (r.io in (None, "0")):
+            if r.op in HEREDOC_OPS and (r.io in (None, "0")):
                 if r.heredoc is None:
                     return None
                 delim, quoted, body = r.heredoc
@@ -3318,7 +3318,7 @@ class Analyzer:
                 break
             if not lit.startswith("-"):
                 break
-            if lit in ("-c", "--config-env") or lit.startswith("-c="):
+            if lit in GIT_CONFIG_OPTS or lit.startswith("-c="):
                 val = None
                 val_word = None
                 if "=" in lit and lit.startswith("--config-env="):

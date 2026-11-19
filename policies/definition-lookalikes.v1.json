@@ -81,113 +81,10 @@
    ]
   },
   {
-   "id": "docker-management-nouns",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "DOCKER_RESOURCE_NOUNS is every docker management noun the execution boundary skips before the verb; the two bash_safety_rules sets are the nouns whose subcommands the docker rule and the docker read rule judge.",
-   "sides": [
-    [
-     {
-      "name": "<module>.DOCKER_RESOURCE_NOUNS",
-      "fingerprint": "3fdd605760229119",
-      "at": "hooks/lib/bash_execution_boundary.py:835"
-     }
-    ],
-    [
-     {
-      "name": "_dg_docker:in",
-      "fingerprint": "d1b3c477d238237f",
-      "at": "hooks/lib/bash_safety_rules.py:5375"
-     },
-     {
-      "name": "_dg_docker_read:in",
-      "fingerprint": "d1b3c477d238237f",
-      "at": "hooks/lib/bash_safety_rules.py:5401"
-     }
-    ]
-   ]
-  },
-  {
    "id": "dot-dotdot",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "15 identical {., ..}; the variants add '' (an empty component) or .git for their own tests.",
    "sides": [
-    [
-     {
-      "name": "state_path_for:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/doc_sync/notice.py:262"
-     },
-     {
-      "name": "_http_lift_url_ok:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/bash_safety_rules.py:770"
-     },
-     {
-      "name": "_bash_named:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/command_span.py:937"
-     },
-     {
-      "name": "_classify_filter_value:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/runtime_guard/_core.py:3221"
-     },
-     {
-      "name": "_fd_positional_roots:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/runtime_guard/find_cmds.py:85"
-     },
-     {
-      "name": "_git_destructive_pathspecs:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/runtime_guard/git_cmds.py:223"
-     },
-     {
-      "name": "_git_is_destructive_invocation:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/runtime_guard/git_cmds.py:253"
-     },
-     {
-      "name": "_identifier:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/session_resources.py:92"
-     },
-     {
-      "name": "_own_scratch:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/write_gate/overwrite_scope.py:175"
-     },
-     {
-      "name": "_into_dir_texts:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/pretool-bash-views-guard.py:215"
-     },
-     {
-      "name": "_session_scratch_of:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/pretool-orchestrator-gate.py:450"
-     },
-     {
-      "name": "scratch_write:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/pretool-orchestrator-gate.py:483"
-     },
-     {
-      "name": "_Scan._cd:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/pretool-wrapper-userintent.py:1365"
-     },
-     {
-      "name": "_safe_task_id:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "scripts/resolve-dev-artifact-chain.py:304"
-     },
-     {
-      "name": "_safe_name:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "scripts/steps/codex-run.py:53"
-     }
-    ],
     [
      {
       "name": "_shape:in",
@@ -220,28 +117,6 @@
       "name": "_project_relative:in",
       "fingerprint": "4774367ac5f59b1d",
       "at": "hooks/lib/command_span.py:926"
-     }
-    ],
-    [
-     {
-      "name": "_http_out_path_ok:in",
-      "fingerprint": "e7613ee89276ae31",
-      "at": "hooks/lib/bash_safety_rules.py:761"
-     },
-     {
-      "name": "_doc_path_ok:in",
-      "fingerprint": "e7613ee89276ae31",
-      "at": "hooks/lib/bash_safety_rules.py:5747"
-     },
-     {
-      "name": "_shape:in",
-      "fingerprint": "e7613ee89276ae31",
-      "at": "hooks/lib/declared_paths.py:95"
-     },
-     {
-      "name": "_in_checkpoint_ns:in",
-      "fingerprint": "e7613ee89276ae31",
-      "at": "hooks/pretool-git-privilege-guard.py:1399"
      }
     ]
    ]
@@ -539,34 +414,9 @@
    "sides": [
     [
      {
-      "name": "Analyzer._h_git:in",
+      "name": "<module>.GIT_CONFIG_OPTS",
       "fingerprint": "7ef1b907e4cc41e3",
-      "at": "hooks/lib/bash_execution_boundary.py:3307"
-     },
-     {
-      "name": "commit_guard.one:in",
-      "fingerprint": "7ef1b907e4cc41e3",
-      "at": "hooks/lib/bash_safety_rules.py:303"
-     },
-     {
-      "name": "_consent_git_tree:in",
-      "fingerprint": "7ef1b907e4cc41e3",
-      "at": "hooks/lib/bash_safety_rules.py:2413"
-     },
-     {
-      "name": "_git_invocation:in",
-      "fingerprint": "7ef1b907e4cc41e3",
-      "at": "hooks/lib/git_clean_guard.py:345"
-     },
-     {
-      "name": "_invocations:in",
-      "fingerprint": "7ef1b907e4cc41e3",
-      "at": "hooks/lib/git_command_classifier.py:682"
-     },
-     {
-      "name": "<module>._GIT_CONFIG_OPTS",
-      "fingerprint": "7ef1b907e4cc41e3",
-      "at": "hooks/lib/git_command_classifier.py:713"
+      "at": "hooks/lib/shell_parse.py:476"
      }
     ],
     [
@@ -791,9 +641,9 @@
     ],
     [
      {
-      "name": "_CdScopes.run_cmd:in",
+      "name": "CdScopes.run_cmd:in",
       "fingerprint": "7dc2fd8f59c75fa4",
-      "at": "hooks/pretool-claude-config-guard.py:650"
+      "at": "hooks/lib/shell_parse.py:3633"
      }
     ]
    ]
@@ -827,102 +677,15 @@
    ]
   },
   {
-   "id": "help-version-options",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Each table is one program's help/version spellings.",
-   "sides": [
-    [
-     {
-      "name": "<module>._DG_INFO",
-      "fingerprint": "c37ea0c39d0c8fea",
-      "at": "hooks/lib/bash_safety_rules.py:4675"
-     }
-    ],
-    [
-     {
-      "name": "_dg_pip:in",
-      "fingerprint": "b1dc5c76c1ef0ace",
-      "at": "hooks/lib/bash_safety_rules.py:5390"
-     }
-    ],
-    [
-     {
-      "name": "_is_meta_query.meta",
-      "fingerprint": "0d5901cd44fdfa5c",
-      "at": "hooks/lib/runtime_guard/_core.py:1772"
-     }
-    ],
-    [
-     {
-      "name": "_dg_docker:in",
-      "fingerprint": "c6f2f24236755b6e",
-      "at": "hooks/lib/bash_safety_rules.py:5372"
-     }
-    ],
-    [
-     {
-      "name": "_dg_python:in",
-      "fingerprint": "ac7608f04b8acf5c",
-      "at": "hooks/lib/bash_safety_rules.py:5411"
-     }
-    ]
-   ]
-  },
-  {
    "id": "heredoc-operators",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "Ten tables ask 'is this a here-document' ({<< <<-}), three ask 'does this redirect feed text' (with <<<). f11_options: bash <<<, <<EOF and <<-EOF payloads are refused alike by six hooks.",
    "sides": [
     [
      {
-      "name": "Analyzer.flush:in",
+      "name": "<module>.HEREDOC_OPS",
       "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/bash_execution_boundary.py:2088"
-     },
-     {
-      "name": "Analyzer._stdin_code:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/bash_execution_boundary.py:3011"
-     },
-     {
-      "name": "_sd_message_doc:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/bash_safety_rules.py:6674"
-     },
-     {
-      "name": "_sd_allowed:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/bash_safety_rules.py:6722"
-     },
-     {
-      "name": "_sd_quiet_redirects:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/bash_safety_rules.py:7326"
-     },
-     {
-      "name": "_commands:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/git_clean_guard.py:209"
-     },
-     {
-      "name": "_lex_into:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/shell_parse.py:1042"
-     },
-     {
-      "name": "_feed:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/shell_parse.py:2012"
-     },
-     {
-      "name": "_stdin_payload:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/shell_parse.py:2868"
-     },
-     {
-      "name": "_heredoc_scripts:in",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/pretool-grep-backtrack-guard.py:382"
+      "at": "hooks/lib/shell_parse.py:472"
      }
     ],
     [
@@ -1116,14 +879,9 @@
    "sides": [
     [
      {
-      "name": "<module>._SEPARATORS",
+      "name": "<module>.SEQUENCE_OPS",
       "fingerprint": "5f35a153798ee96c",
-      "at": "hooks/lib/bash_read_only.py:59"
-     },
-     {
-      "name": "data_shape:in",
-      "fingerprint": "5f35a153798ee96c",
-      "at": "hooks/lib/bash_safety_rules.py:5905"
+      "at": "hooks/lib/shell_parse.py:477"
      }
     ],
     [
@@ -1213,34 +971,9 @@
    "sides": [
     [
      {
-      "name": "<module>._PATTERN_SEGS",
+      "name": "<module>.LITERAL_PART_KINDS",
       "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/lib/bash_execution_boundary.py:1080"
-     },
-     {
-      "name": "_command_ok:in",
-      "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/lib/bash_read_only.py:438"
-     },
-     {
-      "name": "<module>._LITERAL_PARTS",
-      "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/pretool-grep-backtrack-guard.py:135"
-     },
-     {
-      "name": "_text:in",
-      "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/pretool-harness-switch-guard.py:130"
-     },
-     {
-      "name": "_Scan._names_harness:in",
-      "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/pretool-wrapper-userintent.py:2161"
-     },
-     {
-      "name": "_Scan._names_harness:in",
-      "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/pretool-wrapper-userintent.py:2188"
+      "at": "hooks/lib/shell_parse.py:473"
      }
     ],
     [
@@ -1354,11 +1087,6 @@
       "name": "_consent_read_only:in",
       "fingerprint": "e6c6b8721ef594dc",
       "at": "hooks/lib/bash_safety_rules.py:2687"
-     },
-     {
-      "name": "_dg_kubectl_output:in",
-      "fingerprint": "e6c6b8721ef594dc",
-      "at": "hooks/lib/bash_safety_rules.py:5210"
      }
     ],
     [
@@ -2001,39 +1729,9 @@
    "sides": [
     [
      {
-      "name": "<module>.SHELL_LONG_VAL",
+      "name": "<module>.SHELL_FILE_OPTS",
       "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/lib/bash_execution_boundary.py:759"
-     },
-     {
-      "name": "_hb_shell_options:in",
-      "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/lib/bash_safety_rules.py:3404"
-     },
-     {
-      "name": "_shell_c_operand:in",
-      "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/lib/git_command_classifier.py:1311"
-     },
-     {
-      "name": "_shell_args_run_runtime:in",
-      "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/lib/git_command_classifier.py:1722"
-     },
-     {
-      "name": "_resolve_shell:in",
-      "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/lib/shell_parse.py:2790"
-     },
-     {
-      "name": "_Scan._shell_noexec:in",
-      "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/pretool-wrapper-userintent.py:716"
-     },
-     {
-      "name": "_Scan._shell:in",
-      "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/pretool-wrapper-userintent.py:1222"
+      "at": "hooks/lib/shell_parse.py:471"
      }
     ],
     [
@@ -2133,63 +1831,9 @@
    "sides": [
     [
      {
-      "name": "_ConsentView._var:in",
+      "name": "<module>.CMDSUB_KINDS",
       "fingerprint": "0e831ad7282e9cf8",
-      "at": "hooks/lib/bash_safety_rules.py:1769"
-     },
-     {
-      "name": "_sd_glob_hit:in",
-      "fingerprint": "0e831ad7282e9cf8",
-      "at": "hooks/lib/bash_safety_rules.py:6826"
-     },
-     {
-      "name": "_Scan._part_values:in",
-      "fingerprint": "0e831ad7282e9cf8",
-      "at": "hooks/pretool-wrapper-userintent.py:833"
-     },
-     {
-      "name": "_Scan._built:in",
-      "fingerprint": "0e831ad7282e9cf8",
-      "at": "hooks/pretool-wrapper-userintent.py:1657"
-     },
-     {
-      "name": "_Scan._alts:in",
-      "fingerprint": "0e831ad7282e9cf8",
-      "at": "hooks/pretool-wrapper-userintent.py:2256"
-     }
-    ],
-    [
-     {
-      "name": "_ConsentView.tokens:in",
-      "fingerprint": "b475f95d90dd36c7",
-      "at": "hooks/lib/bash_safety_rules.py:1837"
-     },
-     {
-      "name": "_word_is_static:in",
-      "fingerprint": "b475f95d90dd36c7",
-      "at": "hooks/lib/bash_safety_rules.py:5766"
-     },
-     {
-      "name": "Part.body:in",
-      "fingerprint": "b475f95d90dd36c7",
-      "at": "hooks/lib/shell_parse.py:246"
-     },
-     {
-      "name": "<module>._SUBST_KINDS",
-      "fingerprint": "b475f95d90dd36c7",
-      "at": "hooks/pretool-wrapper-userintent.py:115"
-     }
-    ],
-    [
-     {
-      "name": "<module>._SHAPE_COMPUTED_PARTS",
-      "fingerprint": "bfd83a9a5501660e",
-      "at": "hooks/lib/bash_safety_rules.py:1202"
-     },
-     {
-      "name": "_sd_glob_hit:in",
-      "fingerprint": "bfd83a9a5501660e",
-      "at": "hooks/lib/bash_safety_rules.py:6825"
+      "at": "hooks/lib/shell_parse.py:474"
      }
     ],
     [
@@ -2460,16 +2104,16 @@
    "sides": [
     [
      {
-      "name": "<module>._ANCESTOR_STOP_ROOTS",
+      "name": "<module>.SYSTEM_ROOTS",
       "fingerprint": "1a73a8d86b85f87e",
-      "at": "hooks/lib/runtime_guard/config.py:175"
+      "at": "hooks/lib/locations.py:44"
      }
     ],
     [
      {
-      "name": "<module>._PLAIN_UNSAFE_DIRS",
+      "name": "<module>.UNSAFE_DIRS",
       "fingerprint": "d103402a9bf111f5",
-      "at": "hooks/lib/bash_safety_rules.py:4190"
+      "at": "hooks/lib/locations.py:43"
      }
     ]
    ]
@@ -2715,27 +2359,6 @@
       "name": "_consent_unpack_dirs:in",
       "fingerprint": "f1b411d842a3d7a4",
       "at": "hooks/lib/bash_safety_rules.py:2361"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "ruled-out-16-hooks-lib-bash-read-only-py-331",
-   "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "share list, show; git stash/worktree read forms vs pip read subcommands",
-   "sides": [
-    [
-     {
-      "name": "_git_sub:in",
-      "fingerprint": "9b0571585ec01a7a",
-      "at": "hooks/lib/bash_read_only.py:331"
-     }
-    ],
-    [
-     {
-      "name": "_dg_pip:in",
-      "fingerprint": "63635c60bbf2ea2d",
-      "at": "hooks/lib/bash_safety_rules.py:5392"
      }
     ]
    ]
@@ -3140,27 +2763,6 @@
    ]
   },
   {
-   "id": "shell-set-options",
-   "source": "defs-shell lane, audit f199dfb1e family shell-set-options (undecided)",
-   "reason": "bash_safety_rules._HB_INERT_SET lists the -o values a shell invocation (bash -o X -c ...) may carry and stay readable, noexec and posix included because that reader follows noexec and needs no later word read differently; the degraded set reader's value_ok list (_DG_SET_OPTS) accepts on a later `set -o` only the four that change nothing a later word means, so noexec (later commands not run) and posix (parsing changes) are out.",
-   "sides": [
-    [
-     {
-      "name": "<module>._HB_INERT_SET",
-      "fingerprint": "a5e37477665a6369",
-      "at": "hooks/lib/bash_safety_rules.py:3385"
-     }
-    ],
-    [
-     {
-      "name": "<module>:in",
-      "fingerprint": "677de015dea86fa5",
-      "at": "hooks/lib/bash_safety_rules.py:5243"
-     }
-    ]
-   ]
-  },
-  {
    "id": "shell-long-bool-options",
    "source": "defs-shell lane, audit f199dfb1e family shell-long-bool-options (undecided)",
    "reason": "bash_execution_boundary.SHELL_LONG_BOOL is bash's long options that take no value (for splitting a shell's options); bash_safety_rules._HB_SHELL_LONG the long options the harmless-bash reader can read at all (others make the reading None); _HB_INERT_LONG the subset that leaves the run inert (not --login, which reads profile files, nor --verbose, which echoes the script). Three questions; bash --help decides only the first.",
@@ -3231,27 +2833,6 @@
    ]
   },
   {
-   "id": "container-launchers",
-   "source": "defs-shell lane, audit f199dfb1e family container-launchers (undecided)",
-   "reason": "git_command_classifier._EXEC_LAUNCHERS names the container launchers whose exec/run arguments may run git (docker, podman, kubectl); bash_safety_rules._DG_READ_HANDLERS names the commands the degraded reader has its own subcommand handler for (git, docker, kubectl, find, hash, ssh). A launcher set and a dispatch table.",
-   "sides": [
-    [
-     {
-      "name": "<module>._EXEC_LAUNCHERS",
-      "fingerprint": "bb35e013ddb182ab",
-      "at": "hooks/lib/git_command_classifier.py:1041"
-     }
-    ],
-    [
-     {
-      "name": "<module>._DG_READ_HANDLERS",
-      "fingerprint": "f2262a747587f24d",
-      "at": "hooks/lib/bash_safety_rules.py:4686"
-     }
-    ]
-   ]
-  },
-  {
    "id": "pm-builtin-subcommands",
    "source": "defs-shell lane, audit f199dfb1e family pm-builtin-subcommands (undecided)",
    "reason": "constants.DEP_BUILTINS is the dependency-management subcommands common to npm, yarn, pnpm and bun (install, add, remove ...), the guard's P9 dependency-op rule; _core._PM_SUBCMDS is npm's full builtin list with its typo aliases (install-test, isntall, ...), read to find npm's subcommand word past its options, and holds words (build, test, start) that yarn and pnpm run as package scripts; DEP_SHORTHAND_NPM is npm's four lifecycle shorthands (start, stop, restart, test) that RUN a script. Three questions.",
@@ -3305,13 +2886,6 @@
    "source": "lane defs-programs reading",
    "reason": "The disk guard's _DG_FIND_WORDS is the whole find grammar it admits; the userintent rule's two sets are the words it skips before reading -exec and those of them that take a value; the runtime guard's _FIND_PREPATH_ARG_OPTS the depth options (find's and fd's) that may come before the start paths. Each is a different reading of find.",
    "sides": [
-    [
-     {
-      "name": "<module>._DG_FIND_WORDS",
-      "fingerprint": "60af0ddeb92cbce2",
-      "at": "hooks/lib/bash_safety_rules.py:5427"
-     }
-    ],
     [
      {
       "name": "_Scan._find:in",
@@ -3394,6 +2968,69 @@
       "name": "_parsed_kind:in",
       "fingerprint": "407cad7a32e5eb89",
       "at": "hooks/pretool-claude-config-guard.py:544"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "origin-url-not-a-local-root",
+   "source": "defs-shell lane, check group on integration edc54b6e7",
+   "reason": "The same question in two shell programs that run apart: hooks/git-keystone/reference-transaction runs from the relocated core.hooksPath inside git's ref transaction, scripts/overnight-git/git-policy-shim stands first on PATH; each reads remote.origin.url and treats an empty or network URL (''|*://*|*@*:*) as naming no local root. Neither sources a shared shell file or can read a Python table, so the case arm is written in each.",
+   "sides": [
+    [
+     {
+      "name": "_obp_origin_root:case",
+      "fingerprint": "03a14c7edd652947",
+      "at": "hooks/git-keystone/reference-transaction:178"
+     }
+    ],
+    [
+     {
+      "name": "_obp_origin_root:case",
+      "fingerprint": "03a14c7edd652947",
+      "at": "scripts/overnight-git/git-policy-shim:286"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "census-reexpand-letters",
+   "source": "defs-shell lane, check group on integration edc54b6e7",
+   "reason": "shell_parse.REEXPAND_OPS (the ${x@op} letters whose value is read again as shell text) is read by the parser and the removal analyzer; bash_active_syntax_census holds its own copy by contract: it is the independent second reading the analyzer is checked against and imports nothing from it (module docstring, 'do not weaken'), so a hole in one is not a hole in both.",
+   "sides": [
+    [
+     {
+      "name": "<module>.REEXPAND_OPS",
+      "fingerprint": "fbdf6a3afaf68b53",
+      "at": "hooks/lib/shell_parse.py:456"
+     }
+    ],
+    [
+     {
+      "name": "census:in",
+      "fingerprint": "fbdf6a3afaf68b53",
+      "at": "hooks/lib/bash_active_syntax_census.py:311"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "mktemp-template-vs-trap-action",
+   "source": "defs-shell lane, check group on integration edc54b6e7",
+   "reason": "bash_safety_rules._ConsentView.made asks whether mktemp's one operand is a template (not an option, which starts with '-', and not empty); shell_parse.resolve asks whether trap's first operand is code or one of trap's two non-code actions ('-' resets the signal, '' ignores it). The same two strings, two programs' different grammars.",
+   "sides": [
+    [
+     {
+      "name": "_ConsentView.made:in",
+      "fingerprint": "f540bd8c5ab313d3",
+      "at": "hooks/lib/bash_safety_rules.py:1755"
+     }
+    ],
+    [
+     {
+      "name": "resolve:in",
+      "fingerprint": "f540bd8c5ab313d3",
+      "at": "hooks/lib/shell_parse.py:2716"
      }
     ]
    ]

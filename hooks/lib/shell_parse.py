@@ -258,7 +258,7 @@ class Part:
 
     @property
     def body(self):
-        if self.kind not in ("cmdsub", "backtick", "procsub_in", "procsub_out"):
+        if self.kind not in SUBST_KINDS:
             return None
         if self._body is None:
             self._body = parse_src(self.src, self.depth + 1)
@@ -468,6 +468,13 @@ FIND_EXEC_IN_MATCH_DIR = ("-execdir", "-okdir")  # find actions that run in each
 MOVE_MECHANISMS = ("mv", "git-mv")  # WriteTarget mechanisms of a move: its sources follow as <mechanism>-source
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
+SHELL_FILE_OPTS = ("--rcfile", "--init-file")  # bash: the options that read a startup file named by the next word
+HEREDOC_OPS = ("<<", "<<-")  # the redirections that open a here-document
+LITERAL_PART_KINDS = ("lit", "glob", "brace")  # word parts whose text is written in the command
+CMDSUB_KINDS = ("cmdsub", "backtick")  # word parts that run a command and splice its output
+SUBST_KINDS = CMDSUB_KINDS + ("procsub_in", "procsub_out")  # word parts whose body runs as a command
+GIT_CONFIG_OPTS = ("-c", "--config-env")  # git: the global options that set a configuration value
+SEQUENCE_OPS = ("", ";", "&&", "||", "\n")  # list operators that run the next pipeline after this one, in the shell
 # Package runners (pnpx is `pnpm dlx`) and the package-manager subcommands that run another
 # command: their argv after `--`, and npm's `-c` / `--call` string, is a nested invocation.
 NODE_PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})  # the node package managers
@@ -1165,7 +1172,7 @@ def _lex_into(src, toks, depth=0, comments=None):
             r = Redir(op, io, src.off(i))
             r.fd_var = fd_var
             i += len(op)
-            if op in ("<<", "<<-"):
+            if op in HEREDOC_OPS:
                 while i < n and t[i] in " \t":
                     i += 1
                 delim, quoted, i = _read_heredoc_delim(t, i, r.off)
@@ -2153,7 +2160,7 @@ def _feed(cmd, piped):
     for r in cmd.redirects:
         if r.fd != 0:
             continue
-        if r.op in ("<<", "<<-"):
+        if r.op in HEREDOC_OPS:
             fed.add("heredoc")
         elif r.op == "<<<":
             fed.add("herestring")
@@ -2887,10 +2894,11 @@ def resolve(cmd, depth=None):
     return r
 
 
-_FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")  # find actions that run a command
 FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the start paths
 FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
 _FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
+FIND_ACTIONS = FIND_EXEC + _FIND_FILE + ("-delete",)  # find actions that run a command, write a file or delete
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -2900,7 +2908,7 @@ def _resolve_find(r, head, words, cmd, depth):
     items = []
     k = 1
     while k < len(words):
-        if words[k].value() in _FIND_EXEC:
+        if words[k].value() in FIND_EXEC:
             j = k + 1
             while j < len(words) and words[j].value() not in FIND_EXEC_ENDS:
                 j += 1
@@ -3008,7 +3016,7 @@ def _resolve_shell(r, head, words, cmd, depth):
             k += 2 if v[-1] in "oO" else 1
             continue
         if v.startswith("--"):
-            k += 2 if v in ("--rcfile", "--init-file") else 1
+            k += 2 if v in SHELL_FILE_OPTS else 1
             continue
         break
     for a in r.assignments:
@@ -3086,7 +3094,7 @@ def _stdin_payload(r, cmd, depth, inherited=None):
             by_fd[fd] = red
     red = by_fd.get(0, inherited)
     for red in ([red] if red is not None else []):
-        if red.op in ("<<", "<<-") and red.hd is not None:
+        if red.op in HEREDOC_OPS and red.hd is not None:
             if red.hd.quoted:
                 r.payload = parse_src(red.hd.body_src, depth + 1)
             else:
@@ -4119,7 +4127,7 @@ def _find_write_targets(args, env, context):
     out, k = [], 0
     while k < len(args):
         v = args[k].value()
-        if v in _FIND_EXEC:
+        if v in FIND_EXEC:
             while k < len(args) and args[k].value() not in FIND_EXEC_ENDS:
                 k += 1
         elif v in _FIND_FILE and k + 1 < len(args):
