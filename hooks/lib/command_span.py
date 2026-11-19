@@ -65,9 +65,11 @@ _SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
 
 
 def harness_commands() -> frozenset:
-    """commands/*.md stems of this harness, INDEX and README excluded."""
+    """commands/*.md stems of this harness, the folder documents (INDEX, README) excluded."""
+    import importlib
+    docs = importlib.import_module(f"{__package__}.harness_vocabulary" if __package__ else "harness_vocabulary")
     try:
-        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.stem not in ("INDEX", "README"))
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.name not in docs.FOLDER_DOCUMENTS)
     except OSError:
         return frozenset()
 
