@@ -365,8 +365,10 @@ _SPEC_EXTENSION_RE = re.compile(r'[^./\\]\.[A-Za-z0-9]{1,10}$')
 _SPEC_WRAP_LEAD = '"\'`<('
 _SPEC_WRAP_TRAIL = '"\'`>),;:.'
 # A token that may precede a leading flag: an option, or /dev-overnight's end time.
+_DEV_COMMANDS = ('dev', 'dev-command', 'redev')  # the commands that start an ordinary /dev cycle
+_AMPM = 'AM|PM|am|pm'  # the meridiem spellings an end time may carry
 _SPEC_LEAD_TOKEN_RE = re.compile(
-    r'^(?:-\S*|\+?\d+(?:\.\d+)?[hm]|\d{1,2}:\d{2}(?:AM|PM|am|pm)?|AM|PM|am|pm)$')
+    r'^(?:-\S*|\+?\d+(?:\.\d+)?[hm]|\d{1,2}:\d{2}(?:%s)?|%s)$' % (_AMPM, _AMPM))
 
 
 def _unwrap_spec_token(token: str) -> str:
@@ -459,7 +461,7 @@ def _match_end_time_token(args: str) -> tuple[str, str]:
         bad = args.split(None, 1)[0]
         rest = args[len(bad):].lstrip()
         return f'INVALID:{bad}', rest
-    time_match = re.match(r'^(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\s*(.*)', args)
+    time_match = re.match(r'^(\d{1,2}:\d{2}\s*(?:%s)?)\s*(.*)' % _AMPM, args)
     if time_match:
         return time_match.group(1).strip(), time_match.group(2).strip()
     return '', args
@@ -1768,7 +1770,7 @@ def _roots_ahead_of(start, cmd_name: str, sid: str) -> None:
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
-    if cmd_name in ('dev', 'dev-command', 'redev'):
+    if cmd_name in _DEV_COMMANDS:
         _roots_ahead_of(lambda: _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest), cmd_name, sid)
         return
     if cmd_name != 'dev-overnight':
@@ -2037,7 +2039,7 @@ def cli(argv: list) -> int:
         sid = os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or ''
         user_input = sys.stdin.read().strip()
         cmd_name = extract_command_name(user_input)
-        if not sid or cmd_name not in ('dev', 'dev-command', 'redev'):
+        if not sid or cmd_name not in _DEV_COMMANDS:
             print('prompt-workflow.py start: needs CLAUDE_CODE_SESSION_ID and the '
                   '/dev, /dev-command or /redev command text on stdin', file=sys.stderr)
             return 2

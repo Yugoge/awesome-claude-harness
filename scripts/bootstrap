@@ -318,6 +318,7 @@ if [ "$IS_GIT" -eq 1 ]; then
 else
   echo "bootstrap: not a git checkout — no settings filter to register; rendering from the working settings.json"
 fi
+_MOVE_RE='move (it|them) into'  # render-settings' and doctor's line naming entries to move to the overlay
 _SBACKUP=""
 if [ "$FORCE" -eq 1 ] && [ -f "$SETTINGS" ]; then
   _SBACKUP="$(_backup_name "$SETTINGS")"
@@ -335,7 +336,7 @@ if [ -n "$_SBACKUP" ]; then
 fi
 if [ "$_rc" -ne 0 ]; then
   echo "bootstrap: render-settings render failed (see above)." >&2
-  if printf '%s\n' "$RENDER_OUT" | grep -qiE 'move (it|them) into'; then
+  if printf '%s\n' "$RENDER_OUT" | grep -qiE "$_MOVE_RE"; then
     echo "  Move those entries into settings.machine.json and re-run, or re-run with --force to drop them." >&2
   fi
   exit 1
@@ -571,7 +572,7 @@ if [ "$RUN_DOCTOR" -eq 1 ]; then
   DOCTOR_OUT="$(bash "$SELF_DIR/doctor" --venv "$VENV_DIR" 2>&1)"; _drc=$?
   printf '%s\n' "$DOCTOR_OUT"
 fi
-_MOVES="$(printf '%s\n%s\n' "$RENDER_OUT" "$DOCTOR_OUT" | grep -iE 'move (it|them) into' | awk '!seen[$0]++')"
+_MOVES="$(printf '%s\n%s\n' "$RENDER_OUT" "$DOCTOR_OUT" | grep -iE "$_MOVE_RE" | awk '!seen[$0]++')"
 if [ -n "$_MOVES" ]; then
   echo
   echo "bootstrap: entries to move into settings.machine.json:"

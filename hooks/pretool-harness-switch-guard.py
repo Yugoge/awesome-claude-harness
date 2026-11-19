@@ -76,7 +76,7 @@ SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
 GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
-TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
+TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:%s)\b|\s*$|[\s\"'`)])" % "|".join(harness_switch.VERBS), re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/harness-switch reads (parse_prompt)
 PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
@@ -274,7 +274,7 @@ def _message(plain: list) -> bool:
     """A commit, tag or PR command: its words are a message, prose that may name a path."""
     head, sub = os.path.basename(plain[0]), next((w for w in plain[1:] if not w.startswith("-")), "")
     return (head == "git" and sub in ("commit", "tag", "notes", "merge", "revert")) or (
-        head == "gh" and sub in ("pr", "issue", "release"))
+        head == "gh" and sub in git_facts.GH_MESSAGE_SUBCOMMANDS)
 
 
 def _operands(plain: list, moves: bool) -> list:
