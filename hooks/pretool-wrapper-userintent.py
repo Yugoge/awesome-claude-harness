@@ -105,6 +105,7 @@ try:
     from lib import shell_parse as _sp
 except Exception:  # pragma: no cover - fail-soft when lib missing
     _sp = None
+from lib import bash_read_only as _bro  # noqa: E402 -- the programs that only read
 
 # Directory holding the user-intent sentinels (overridable for sandbox tests).
 _SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_dir())
@@ -122,16 +123,13 @@ _NO_EXEC = frozenset((
     'break', 'continue', 'let', 'getopts', 'umask', 'ulimit', 'jobs', 'fg', 'bg', 'kill',
     'history', 'shopt', 'times', 'trap', 'disown', 'help', 'logout', 'mapfile',
     'readarray', 'compgen', 'complete', 'caller', 'eval', 'which', 'whereis'))
+# Readers that stay readers whatever words xargs appends (no option of theirs runs a program
+# or names one: not find, rg, ag, sort, sed, awk, git, less ...): lib/bash_read_only's
+# readers, and those of its checked ones whose other forms write but run nothing.
+_XARGS_SAFE = _bro.ANY_ARGS | {'file', 'printf', 'test', '[', 'uniq', 'xxd', 'tree', 'shellcheck'}
 # Readers: they never run an operand. Their operands, patterns and strings are
 # harmless while their output goes nowhere that runs.
-_PLAIN_READERS = frozenset((
-    'grep', 'egrep', 'fgrep', 'zgrep', 'rg', 'ag', 'cat', 'tac', 'nl', 'head', 'tail', 'less',
-    'more', 'wc', 'ls', 'stat', 'file', 'du', 'tree', 'sha1sum', 'sha224sum', 'sha256sum',
-    'sha384sum', 'sha512sum', 'md5sum', 'b2sum', 'cksum', 'sum', 'diff', 'cmp', 'comm', 'sort',
-    'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump', 'strings', 'readlink', 'realpath', 'basename',
-    'dirname', 'column', 'paste', 'fold', 'fmt', 'expand', 'unexpand', 'rev', 'jq', 'echo',
-    'printf', 'true', 'false', 'test', '[', 'shellcheck', 'type', 'which', 'whereis', 'find',
-    'hash', 'pwd', ':'))
+_PLAIN_READERS = _XARGS_SAFE | {'zgrep', 'rg', 'ag', 'less', 'more', 'sort', 'find', 'hash'}
 # Commands that never change a file's content (a run target they name is still
 # the file on disk).
 _CONTENT_KEEPING = frozenset(('chmod', 'chown', 'chgrp', 'touch'))
@@ -639,8 +637,7 @@ class _Scan:
         vals = [w.value() for w in res.args]
         sv = [v for v in vals if v is not None]
         if name in _PLAIN_READERS:
-            if name == 'rg' and any((v.startswith('--pre') and not v.startswith('--pre-glob')) or
-                                    v.startswith('--hostname-bin') for v in sv):
+            if name == 'rg' and any(v.split('=', 1)[0] in _sp.RG_PROGRAM_OPTS for v in sv):
                 return False
             if name == 'rg' and '--no-config' not in sv and self._rg_config_progs():
                 return False
@@ -1631,15 +1628,6 @@ class _Scan:
                 self.unsure = True
 
     # -- runs built at run time, rg --pre, sed e, LESSOPEN, loops -----------------
-    # Readers that stay readers whatever words xargs appends (no option of theirs runs
-    # a program or names one: not find, rg, ag, sort, sed, awk, git, less ...).
-    _XARGS_SAFE = frozenset((
-        'grep', 'egrep', 'fgrep', 'cat', 'tac', 'nl', 'head', 'tail', 'wc', 'ls', 'stat',
-        'file', 'du', 'sha1sum', 'sha224sum', 'sha256sum', 'sha384sum', 'sha512sum', 'md5sum',
-        'b2sum', 'cksum', 'sum', 'cmp', 'comm', 'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump',
-        'strings', 'readlink', 'realpath', 'basename', 'dirname', 'column', 'paste', 'fold',
-        'fmt', 'expand', 'unexpand', 'rev', 'echo', 'printf', 'true', 'false', 'test', '[',
-        'shellcheck', 'type', 'which', 'whereis', 'pwd', ':', 'diff', 'jq', 'tree'))
     _RG_VALUE_SHORT = 'efgtTmABCMjrEd'
     _RG_VALUE_LONG = frozenset((
         '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--max-count',
@@ -1665,7 +1653,7 @@ class _Scan:
         if hv is None:
             return False
         name = os.path.basename(hv)
-        if name in self._XARGS_SAFE:
+        if name in _XARGS_SAFE:
             return True
         if _PYTHON_RE.match(name):
             vals = [w.value() for w in res.args]
