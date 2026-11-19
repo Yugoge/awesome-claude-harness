@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
 from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
+from lib.harness_vocabulary import GATE_MODES
 from lib import contract_runtime
 from lib import final_report
 from lib import dispatch_template
@@ -826,7 +827,7 @@ def main() -> None:
     env_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE")
     stopgate_mode = (env_mode.strip().lower() if env_mode is not None
                      else settings_switch("CLAUDE_OBLIGATION_STOPGATE", "advisory"))
-    if stopgate_mode not in {"advisory", "block", "off"}:
+    if stopgate_mode not in GATE_MODES:
         stopgate_mode = "advisory"
     resolution = None
     if stopgate_mode != "off":
