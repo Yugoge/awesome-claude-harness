@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:27:55Z*
-**Total entries**: 313
+*Last updated: 2026-11-19T03:29:25Z*
+**Total entries**: 315
 **Convention**: kebab
 
 ## Tree
@@ -273,6 +273,8 @@ tests/
 ├── `test_readme_facts.py` - names its input when it is missing
 ├── `test_readme_regions.py` - and the numbers and names in the prose around them
 ├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
+├── `test_refusal_record_sites.py` - The sites are the replay suite's own enumeration (tests/replay/sites.py), read when the test runs:
+├── `test_refusals_reader.py` - - For a period it gives the totals and the counts by event, rule, hook, role, project, day and
 ├── `test_registry_artifacts_resolved.py` - 761b72c routed every registry-dir site through hooks/lib/obligation.py, and
 ├── `test_registry_dir_one_rule.py` - directory takes it from the one rule (hooks/lib/obligation.py,
 ├── `test_release_pipeline_contract.py` - verifier

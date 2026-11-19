@@ -58,9 +58,18 @@ def fallback(raw: bytes, reason: str) -> int:
     window = _holds(lambda: overnight.window_open(payload))
     gated = _holds(lambda: reader.active_command(payload.get("transcript_path")) in reader.GATED_COMMANDS)
     if window or gated:
-        sys.stderr.write(f"COMMAND_GATE instrument failure: {reason}. The gate is broken; the human can type /stop\n")
+        text = f"COMMAND_GATE instrument failure: {reason}. The gate is broken; the human can type /stop\n"
+        sys.stderr.write(text)
+        record(raw, __file__, text)
         return 2
     return 0
+
+
+def record(raw: bytes, hook, text: str) -> None:
+    """One line in the refusal record (hooks/lib/refusal_record.py) for a blocked stop; it changes no answer."""
+    writer = _load("refusal_record")
+    if writer is not None:
+        writer.write(raw, [(str(hook), text)], __file__)
 
 
 def main() -> int:
@@ -81,6 +90,8 @@ def main() -> int:
         return fallback(raw, f"{name} exited {done.returncode}" + (f" ({last})" if last else ""))
     sys.stdout.buffer.write(done.stdout)
     sys.stderr.buffer.write(done.stderr)
+    if done.returncode == 2:
+        record(raw, HOOKS / name, done.stderr.decode("utf-8", "replace"))
     return done.returncode
 
 

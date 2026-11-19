@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:34:23Z*
-**Total entries**: 1102
+*Last updated: 2026-11-19T03:29:24Z*
+**Total entries**: 1108
 **Convention**: kebab
 
 ## Tree
@@ -170,6 +170,8 @@ dot-claude/
 │   │   ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 │   │   ├── `pol_degraded_removal_reference.ere` - ere file
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+│   │   ├── `refusal_record.py` - The gates' advisory logs had no reader and were deleted (P1b, 3507c9b08); since then nothing could
+│   │   ├── `refusal_record.sh` - refusal_record.sh -- a shell hook's report to the refusal record (hooks/lib/refusal_record.py).
 │   │   ├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 │   │   ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 │   │   ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
@@ -371,6 +373,7 @@ dot-claude/
 │   │   ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
 │   │   ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 │   │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+│   │   ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
 │   │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 │   │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   │   ├── `test_report_provenance_gate.py` - The orchestrator could forge ``docs/dev/qa-report-*.json`` (an ``e2e_enforcement.status`` of
@@ -741,6 +744,7 @@ dot-claude/
 │   ├── `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 │   ├── `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
 │   ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
+│   ├── `refusals` - refusals file
 │   ├── `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
 │   ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 │   ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
@@ -1037,6 +1041,8 @@ dot-claude/
 │   ├── `test_readme_facts.py` - names its input when it is missing
 │   ├── `test_readme_regions.py` - and the numbers and names in the prose around them
 │   ├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
+│   ├── `test_refusal_record_sites.py` - The sites are the replay suite's own enumeration (tests/replay/sites.py), read when the test runs:
+│   ├── `test_refusals_reader.py` - - For a period it gives the totals and the counts by event, rule, hook, role, project, day and
 │   ├── `test_registry_artifacts_resolved.py` - 761b72c routed every registry-dir site through hooks/lib/obligation.py, and
 │   ├── `test_registry_dir_one_rule.py` - directory takes it from the one rule (hooks/lib/obligation.py,
 │   ├── `test_release_pipeline_contract.py` - verifier

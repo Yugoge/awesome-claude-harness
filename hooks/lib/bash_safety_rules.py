@@ -25,11 +25,25 @@ LIB = os.path.join(HOOKS, "lib")
 sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
 
+PAYLOAD = ""  # the call's payload text (decide() sets it), for the refusal record
+
+
 def refuse(*lines):
     """Refuse the call: the lines go to stderr, and the process exits 2, which the shell entry relays."""
     sys.stderr.write("".join(line + "\n" for line in lines))
     sys.stderr.flush()
+    record("\n".join(lines))
     sys.exit(2)
+
+
+def record(text, kind="refusal"):
+    """One line for this call in the refusal record (lib/refusal_record.py): a refusal, or kind "unproven" for a
+    command the removal policy lets through unproven. It never changes the verdict."""
+    try:
+        import refusal_record
+        refusal_record.write(PAYLOAD, [(__file__, text)], __file__, kind)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def released_line():
@@ -7531,6 +7545,8 @@ def environment():
 
 def decide(payload_text):
     """The verdict token, or a refusal (refuse() exits 2)."""
+    global PAYLOAD
+    PAYLOAD = payload_text
     try:
         payload = json.loads(payload_text)
     except ValueError:

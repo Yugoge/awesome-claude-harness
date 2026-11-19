@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:34:23Z*
-**Total entries**: 483
+*Last updated: 2026-11-19T03:29:24Z*
+**Total entries**: 486
 **Convention**: kebab
 
 ## Tree
@@ -84,6 +84,8 @@ hooks/
 │   ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 │   ├── `pol_degraded_removal_reference.ere` - ere file
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+│   ├── `refusal_record.py` - The gates' advisory logs had no reader and were deleted (P1b, 3507c9b08); since then nothing could
+│   ├── `refusal_record.sh` - refusal_record.sh -- a shell hook's report to the refusal record (hooks/lib/refusal_record.py).
 │   ├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 │   ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 │   ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
@@ -294,6 +296,7 @@ hooks/
 │   ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
 │   ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+│   ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
 │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   ├── `test_report_provenance_gate.py` - The orchestrator could forge ``docs/dev/qa-report-*.json`` (an ``e2e_enforcement.status`` of

@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:34:23Z*
-**Total entries**: 263
+*Last updated: 2026-11-19T03:29:24Z*
+**Total entries**: 264
 **Convention**: kebab
 
 ## Tree
@@ -195,6 +195,7 @@ tests/
 ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
 ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
 ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 ├── `test_report_provenance_gate.py` - The orchestrator could forge ``docs/dev/qa-report-*.json`` (an ``e2e_enforcement.status`` of
