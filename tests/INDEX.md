@@ -54,7 +54,8 @@ tests/
 │   │   └── `qa_only.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
-│   └── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+│   ├── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+│   └── `post-commit-lfs-auto-push` - post-commit - Combined hook: Git LFS + Auto-Push
 ├── instructions/
 │   ├── `execution-guide.md` - AI Test Execution Guide
 │   └── `validation-guide.md` - AI-Driven Validation Guide

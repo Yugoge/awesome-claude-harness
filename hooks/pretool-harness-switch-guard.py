@@ -66,6 +66,7 @@ import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
 from subagent import DISPATCH_TOOLS  # noqa: E402 -- the tool names a subagent is dispatched under
+from harness_vocabulary import WRITE_TOOLS  # noqa: E402 -- the tools that write a file
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
 
@@ -75,7 +76,7 @@ SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
 GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
-TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
+TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:%s)\b|\s*$|[\s\"'`)])" % "|".join(harness_switch.VERBS), re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/harness-switch reads (parse_prompt)
 PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
@@ -273,7 +274,7 @@ def _message(plain: list) -> bool:
     """A commit, tag or PR command: its words are a message, prose that may name a path."""
     head, sub = os.path.basename(plain[0]), next((w for w in plain[1:] if not w.startswith("-")), "")
     return (head == "git" and sub in ("commit", "tag", "notes", "merge", "revert")) or (
-        head == "gh" and sub in ("pr", "issue", "release"))
+        head == "gh" and sub in git_facts.GH_MESSAGE_SUBCOMMANDS)
 
 
 def _operands(plain: list, moves: bool) -> list:
@@ -547,7 +548,7 @@ def main() -> int:
     cwd = data.get("cwd") if isinstance(data.get("cwd"), str) and data.get("cwd") else os.getcwd()
     if tool == "Bash":
         return check_bash(str(ti.get("command") or ""), cwd, data)
-    if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    if tool in WRITE_TOOLS:
         return check_write(tool, ti, cwd, data)
     if tool in ("Skill", "SlashCommand"):
         return check_skill(tool, ti)

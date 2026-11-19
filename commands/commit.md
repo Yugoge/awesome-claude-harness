@@ -44,7 +44,7 @@ token, if any, is `TASK_ID`.
 (`validate_auto_flag_combination` in `scripts/dev-lifecycle.py`). When `AUTO=true` and any of the
 three is set, take no action and end with one line `NO_TARGET: --auto takes no task-id, --force or
 --bulk; run /commit --auto, /commit <task-id> or /commit --bulk`. Nobody is asked; the Stop gate
-(`hooks/stop-command-gate.py`, `no_target_end`) lets a run that dispatched nothing end on that
+(`stop-command-gate.py`, `no_target_end`) lets a run that dispatched nothing end on that
 line. A legal `--auto` skips Step 2: the `--auto` mode section binds `TASK_ID` once per discovered
 parent.
 
@@ -71,7 +71,7 @@ If `BULK=false` and `AUTO=false`:
   lists (the first word of each line), then those `--next-action close` lists (Step 3 closes them
   first), each as `/commit <task-id>`, plus `/commit --auto`, and end; the owner types `/commit`
   again with the id. When neither list names a parent, the line is `NO_TARGET: dev-lifecycle.py
-  lists no commit_pending or close_pending parent.` The Stop gate (`hooks/stop-command-gate.py`,
+  lists no commit_pending or close_pending parent.` The Stop gate (`stop-command-gate.py`,
   `no_target_end`) lets a run that bound no task and dispatched nothing end on that line.
 
 If `BULK=true`, `TASK_ID` may stay empty.
@@ -576,7 +576,7 @@ hook refusing an operation. The Retryable rule above takes a fresh grant for the
 nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
 line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim,
 with the remedy the hook names or the `/allow` line that would let it through, and end: the commit
-is not retried, and the Stop gate (`hooks/stop-command-gate.py`, `hook_refused_tasks`) owes that
+is not retried, and the Stop gate (`stop-command-gate.py`, `hook_refused_tasks`) owes that
 task's landing no more once that line names it. The operation runs again only on
 the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.
 

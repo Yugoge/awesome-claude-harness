@@ -66,7 +66,7 @@ import locations  # noqa: E402
 # path is resolved at load time via claude_home so a fresh non-root clone (whose
 # home is NOT /root/.claude) still finds its own policy.
 POLICY_RELPATH = "policies/tool-policy.v1.json"
-WRITE_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
+from harness_vocabulary import WRITE_TOOLS  # noqa: E402,F401 -- the tools that write a file
 # On policy load failure (missing/unparseable policy) the dev role gets a
 # fail-safe ALLOW (historical baseline behavior); every other role fails CLOSED.
 # The policy PATH is resolved portably via claude_home (the de-hardcode), but the

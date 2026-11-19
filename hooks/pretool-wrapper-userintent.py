@@ -192,6 +192,7 @@ _CMD_VAR_RE = re.compile(
     r'GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|SSH_ASKPASS|SUDO_ASKPASS|'
     r'\w*(?:EDITOR|PAGER|_COMMAND|_CMD|ASKPASS|_PROGRAM|_HOOK|_HOOKS))$')
 # git configuration keys whose value runs a command (lib/git_facts.py).
+from lib.git_facts import GH_MESSAGE_SUBCOMMANDS as _GH_MESSAGE_SUBS  # noqa: E402
 from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
@@ -204,7 +205,7 @@ _GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset(
 from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
 from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
 from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
-_GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
+_DEFAULT_MAKEFILES = ('GNUmakefile', 'makefile', 'Makefile')  # what make reads with no -f, in its order
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
                        '.cshrc', '.tcshrc', '.inputrc', 'config.fish', 'environment',
@@ -769,7 +770,7 @@ class _Scan:
         script operand and every later word is an argument of the script; a word that may
         expand to no field passes only as the last word (`bash -n` then reads stdin, still
         under -n). Never with BASH_ENV / ENV set by the command."""
-        if any(a.name in ('BASH_ENV', 'ENV') for a in
+        if any(a.name in _sp.SHELL_STARTUP_VARS for a in
                list(getattr(cmd, 'assignments', ())) + list(getattr(res, 'assignments', ()))):
             return None
         args = list(args)
@@ -1242,7 +1243,7 @@ class _Scan:
                 continue
             break
         for a in res.assignments:
-            if a.name in ('BASH_ENV', 'ENV') and a.value is not None:
+            if a.name in _sp.SHELL_STARTUP_VARS and a.value is not None:
                 self._path_target(a.value)
         if has_c:
             code = args[k] if k < len(args) else None
@@ -1417,7 +1418,7 @@ class _Scan:
         while i < len(vals) and vals[i] in _sp.FIND_SYMLINK_OPTS:
             i += 1
         starts = []
-        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in ('(', '!', ')'))):
+        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in _sp.FIND_OPERATORS)):
             starts.append(vals[i])
             i += 1
         names, blocks, simple = [], [], True
@@ -2945,11 +2946,11 @@ class _Scan:
                         self.match = self.match or 'stop'
                         return
         texts, unreadable, blind = [], shell_unknown, False
-        if not files and any(os.path.basename(ov or '') in ('GNUmakefile', 'makefile', 'Makefile')
+        if not files and any(os.path.basename(ov or '') in _DEFAULT_MAKEFILES
                              for _ow, ov in self.others):
             texts.append(self.command)  # the default makefile is written by this command
             for _ow, ov in self.others:
-                if ov and os.path.basename(ov) not in ('GNUmakefile', 'makefile', 'Makefile'):
+                if ov and os.path.basename(ov) not in _DEFAULT_MAKEFILES:
                     texts.extend(self._file_texts(ov))
         for v, w in files:
             if v is None:
