@@ -11,9 +11,10 @@
         exit status 1 when there is one. The transcripts are those under --transcripts, by default every
         account's and this configuration directory's (hooks/lib/subagent_restart.py); --refusals reads
         the transcript side from a file of extracted rows instead (one JSON object a line: tool_use_id
-        or record_uuid, ts, session_id, agent_id, hook_event). Not compared, and counted: a refused
-        prompt (it leaves no transcript line), a Codex seat's record, an unproven let-through, and a
-        denial by the CLI's own permission rules (no hook ran).
+        or record_uuid, ts, session_id, agent_id, hook_event). Not compared, and counted: a record of
+        a refused prompt or of a call rejected after it ran that no transcript line shows (neither
+        leaves a tool result or a feedback message), a Codex seat's record, an unproven let-through,
+        and a denial by the CLI's own permission rules (no hook ran).
 
 T is a UTC date or time (2026-11-16, 2026-11-16T08:30). The record is read where refusal_record.py's
 directory() puts it for this harness home, the one definition the hooks write by; --dir reads another.
@@ -33,6 +34,7 @@ import refusal_record as R  # noqa: E402
 
 MARGIN = 300  # seconds a refusal's record and its transcript line may lie apart, across a bound of the period too
 STOPS = ("Stop", "SubagentStop")
+UNSHOWN = ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure")  # no tool result or feedback message shows these
 _HOOK = re.compile(r"(PreToolUse|PostToolUse|PostToolUseFailure):(\S+) hook error: \[")
 _FEEDBACK = re.compile(r"(Stop|SubagentStop) hook feedback:")
 
@@ -209,8 +211,7 @@ def reconcile(recorded: list, found: list, since: str, until: str) -> tuple[list
     def inside(x) -> bool:
         return since <= str(x.get("ts")) < until
 
-    compared = [r for r in recorded if r.get("kind") == R.REFUSAL and r.get("provider") != "codex"
-                and r.get("event") != "UserPromptSubmit"]
+    compared = [r for r in recorded if r.get("kind") == R.REFUSAL and r.get("provider") != "codex"]
     by_id = {r["tool_use_id"]: r for r in compared if r.get("tool_use_id")}
     loose = [r for r in compared if not r.get("tool_use_id")]
     paired, differences = set(), []
@@ -224,9 +225,11 @@ def reconcile(recorded: list, found: list, since: str, until: str) -> tuple[list
             paired.add(id(partner))
         elif inside(t):
             differences.append(("in the transcripts, not in the record", t))
-    differences += [("in the record, not in the transcripts", r) for r in compared if id(r) not in paired and inside(r)]
-    counts = {"transcripts": sum(map(inside, found)), "record": sum(map(inside, compared)), "differences": len(differences),
-              "not_compared": {"prompts": sum(r.get("event") == "UserPromptSubmit" for r in recorded if inside(r)),
+    alone = [r for r in compared if id(r) not in paired and inside(r)]
+    differences += [("in the record, not in the transcripts", r) for r in alone if r.get("event") not in UNSHOWN]
+    unshown = sum(r.get("event") in UNSHOWN for r in alone)
+    counts = {"transcripts": sum(map(inside, found)), "record": sum(map(inside, compared)) - unshown, "differences": len(differences),
+              "not_compared": {"no transcript line": unshown,
                                "codex": sum(r.get("provider") == "codex" for r in recorded if inside(r)),
                                "unproven": sum(r.get("kind") == R.UNPROVEN for r in recorded if inside(r))}}
     return differences, counts

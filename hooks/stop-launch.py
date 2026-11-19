@@ -66,11 +66,11 @@ def fallback(raw: bytes, reason: str) -> int:
 
 
 def record(raw: bytes, hook, text: str) -> None:
-    """One line in the refusal record (hooks/lib/refusal_record.py) for a blocked stop; it changes no answer."""
+    """One line in the refusal record for a blocked stop, written by hooks/lib/refusal_record.py as a process of
+    its own: this file loads no harness module for it, and whatever that process does the answer stands."""
     try:
-        sys.path.insert(0, str(HOOKS))
-        from lib import refusal_record
-        refusal_record.write(raw, [(str(hook), text)], __file__)
+        subprocess.run([sys.executable, str(HOOKS / "lib" / "refusal_record.py"), __file__, str(hook), text[:4000]],
+                       input=raw, capture_output=True, timeout=30)
     except Exception:
         pass
 

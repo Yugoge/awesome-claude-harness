@@ -7,11 +7,12 @@ it lives; scripts/refusals reads it (totals, counts, loops, the reconcile with t
 
 Who reports. The process that sees a hook refuse, naming the refusing hook file and the text it gave
 the agent: a launcher (lib/hook_launch.py) its rules, a gate (hooks/pretool-write-gate.py,
-lib/gate_runner.py) the rules of its table, hooks/stop-launch.py the Stop coordinator,
-lib/bash_safety_rules.py itself, a shell hook through this file's command line at its exit 2. The
-reports of one call merge into one line (``same``, ``merge``): a hook that reported its own rules
-replaces what its parent said of it. A payload that names no refusing event (a canary's probe, a
-unit test's input) is no call of the CLI and is not recorded.
+lib/gate_runner.py) the rules of its table, lib/bash_safety_rules.py itself; hooks/stop-launch.py
+(the Stop coordinator's block, or its own) and a shell hook (at its exit 2) through this file's
+command line, a process of its own. The reports of one call merge into one line (``same``,
+``merge``): a hook that reported its own rules replaces what its parent said of it. A payload that
+names no refusing event (a canary's probe, a unit test's input) is no call of the CLI and is not
+recorded.
 
 Where. ``directory()``: <user's home>/.local/state/claude-harness/<harness home's name>-<crc32 of
 its real path>/refusals/refusals-<UTC day>.jsonl. The harness home is the one lib/harness_switch.py
@@ -36,7 +37,7 @@ import sys
 import time
 import zlib
 
-try:  # as lib.refusal_record; else with hooks/lib on the path, or loaded by path (hooks/stop-launch.py)
+try:  # as lib.refusal_record; else with hooks/lib on the path (lib/bash_safety_rules.py), or run as a script
     from . import harness_switch
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -105,29 +106,34 @@ def _words(line: str, skip, limit: int) -> list[str]:
     left out, unless it is a plain word (letters first; at most two digits; no path, quote, option,
     assignment or other sign in it), not in `skip`, and outside a quoted span; `code:detail` gives
     the code and ends the line."""
+    def plain(word: str) -> bool:
+        return bool(_WORD.match(word)) and sum(c.isdigit() for c in word) <= 2 and word not in skip
+
     out, quoted = [], False
     for token in line.split():
+        code, _, detail = token.partition(":")
+        coded = bool(detail) and not quoted and plain(code.strip(_EDGE))
         opens, closes = token[0] in _QUOTE, token.rstrip(_EDGE)[-1:] in _QUOTE
-        if quoted or opens or closes:
+        if not coded and (quoted or opens or closes):
             quoted = (quoted or opens) and not closes
             continue
-        code, _, detail = token.partition(":")
-        word = (code if detail else token).strip(_EDGE)
-        if not _WORD.match(word) or sum(c.isdigit() for c in word) > 2 or word in skip:
+        word = (code if coded else token).strip(_EDGE)
+        if not plain(word):
             continue
         out.append(word.lower())
-        if detail or len(out) >= limit:
+        if coded or len(out) >= limit:
             break
     return out
 
 
 def rule_id(text, skip=()) -> str:
     """The identifier of the rule that gave `text`: the constant words of its first line (``_words``),
-    WORDS at most, and of the line after it where the first ends in a colon; the same for every call the
-    rule refuses. A JSON object in the line stands for its sentence, the string value with the most words,
-    and its other string values are variable text, as the words of `skip` are (the call's tool, role and ids)."""
-    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
-    head, skip = (lines[0] if lines else ""), set(skip)
+    WORDS at most, and of the line after it where the first ends in a colon and that one is its detail
+    (indented, or a list item); the same for every call the rule refuses. A JSON object in the line
+    stands for its sentence, the string value with the most words, and its other string values are
+    variable text, as the words of `skip` are (the call's tool, role and ids)."""
+    lines = [ln for ln in str(text).splitlines() if ln.strip()]
+    head, skip = (lines[0].strip() if lines else ""), set(skip)
     a, b = head.find("{"), head.rfind("}")
     if 0 <= a < b:
         try:
@@ -138,7 +144,7 @@ def rule_id(text, skip=()) -> str:
             sentence = max(values, key=lambda v: len(v.split()))
             head, skip = head[:a] + sentence + head[b + 1:], skip | (set(values) - {sentence})
     words = _words(head, skip, WORDS)
-    if head.endswith(":") and len(lines) > 1:
+    if head.endswith(":") and len(lines) > 1 and lines[1][0] in " \t-*":
         words += _words(lines[1], skip, WORDS // 2)
     return "-".join(words)
 

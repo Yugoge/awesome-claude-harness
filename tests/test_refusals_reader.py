@@ -5,8 +5,9 @@
   (unproven) apart from the refusals; reports a writer could not merge count once.
 - reconcile pairs the record with the hook refusals of the session transcripts by tool-call id (a
   blocked stop by session, agent and time): no difference exits 0; a line taken out of the record,
-  and a line no transcript holds, are each printed and exit 1. A refused prompt, a Codex seat's
-  record, a let-through and a denial by the CLI's own permission rules are not compared.
+  and a line no transcript holds, are each printed and exit 1. A refused prompt and a call rejected
+  after it ran (no transcript line shows them), a Codex seat's record, a let-through and a denial
+  by the CLI's own permission rules are counted, not compared.
 - The transcript records are built from the recorded CLI fixture (tests/fixtures/cli), never by hand.
 - It reads the directory the writer writes, with no argument naming it (the reader is the record's
   consumer: without it this file fails, and the record would be written and never read).
@@ -140,6 +141,8 @@ def transcripts(cli_record, root: Path, refused: dict, stops: list, denied: str)
 
 def test_reconcile_is_zero_and_every_removed_or_added_line_is_a_difference(monkeypatch, cli_record, tmp_path):
     a_week(monkeypatch)
+    R.write(call("Agent", {"prompt": "p"}, "toolu_8", "PostToolUse"), [("hooks/posttool-overnight-file-check.py", "FILE CHECK BLOCK")],
+            "hooks/posttool-dispatch-record.py")
     hook = 'PreToolUse:{} hook error: [python3 "/h/hooks/pretool-launch.py"]: {}'
     refused = {"toolu_1": hook.format("TodoWrite", POLICY[1]), "toolu_6": hook.format("Bash", "BLOCKED: agent git push"),
                **{f"toolu_{i}": hook.format("Bash", REMOVAL[1]) for i in (2, 3, 4)}}
@@ -150,7 +153,7 @@ def test_reconcile_is_zero_and_every_removed_or_added_line_is_a_difference(monke
     out = reader("reconcile", "--transcripts", str(projects), str(projects))
     assert out.returncode == 0, out.stdout + out.stderr
     assert "hook refusals in the transcripts: 6    in the record: 6    differences: 0" in out.stdout
-    assert "'prompts': 1, 'codex': 1, 'unproven': 1}, CLI permission-rule denials 1" in out.stdout
+    assert "{'no transcript line': 2, 'codex': 1, 'unproven': 1}, CLI permission-rule denials 1" in out.stdout
 
     day = next(Path(R.directory()).glob("*.jsonl"))
     kept = day.read_text().splitlines()

@@ -130,8 +130,14 @@ SAME_RULE = [
      "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:m=$((m+1))\nCommand: b",
      "blocked-removal-policy-unresolved-dynamic_command_head"),
     ("BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:sed:s#^(..)#\\1#",
-     "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:psql:-c",
+     "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:curl:\nCommand: date -u; for s in a b",
      "blocked-removal-policy-unresolved-unproven_boundary_with_removal_reference"),
+    ('BLOCKED: removal-policy — UNRESOLVED dynamic_git_subcommand:--git-dir="$g"\nCommand: for g in a b',
+     "BLOCKED: removal-policy — UNRESOLVED dynamic_git_subcommand:$sub\nCommand: git $sub",
+     "blocked-removal-policy-unresolved-dynamic_git_subcommand"),
+    ("BLOCKED: removal-policy — UNRESOLVED interpreter_dynamic_attribute_access:python3:\nexec\nCommand: python3 - <<'EOF'",
+     "BLOCKED: removal-policy — UNRESOLVED interpreter_dynamic_attribute_access:python:(getattr\nCommand: python -c x",
+     "blocked-removal-policy-unresolved-interpreter_dynamic_attribute_access"),
     ("[Write Guard] BLOCKED: File already exists: /work/a/tests/report.js\nWrite would replace",
      "[Write Guard] BLOCKED: File already exists: /srv/b.md", "write-guard-blocked-file-already-exists"),
     ("BLOCKED: hard-banned script 'alpha-recovery' is refused", "BLOCKED: hard-banned script 'beta-restart' is refused",
@@ -159,8 +165,10 @@ def test_the_calls_own_tool_and_role_are_no_part_of_the_identifier():
     assert R.rule_id(text.format("Bash", 6), {"Bash"}) == R.rule_id(text.format("Edit", 2), {"Edit"}) \
         == "orchestrator-gate-blocked-used-consecutively-beyond-limit"
     assert len({R.rule_id(x[0]) for x in SAME_RULE}) == len(SAME_RULE)       # and two rules are two identifiers
+    # a line after the first joins the identifier only as that line's detail (indented, or a list item)
     assert R.rule_id("Monitor's command, checked as a Bash call, is refused:\nBLOCKED: kill with signals is refused") \
-        == "monitor's-command-checked-as-a-bash-call-is-blocked-kill-with-signals"
+        == "monitor's-command-checked-as-a-bash-call-is"
+    assert R.rule_id("GATE BLOCK (x):\n  - docs/a-20260101-000001.md: artifact_missing: no file") == "gate-block-x-artifact_missing-no-file"
 
 
 # ------------------------------------------------------------------ the reports of one call
@@ -264,30 +272,32 @@ def test_a_held_lock_is_waited_for_a_bounded_time_then_given_up(monkeypatch):
 LAUNCHER = """
 import sys
 sys.path.insert(0, {hooks!r})
-from lib.hook_launch import Rule, main
+from lib.{module} import Rule, main
 sys.exit(main("PreToolUse", (Rule("allow", {allow!r}), Rule("refuse", {refuse!r}, ("Bash",)))))
 """
 
 
-def _launch(tmp_path, home, tool):
+def _launch(tmp_path, home, tool, module):
     for name, body in (("allow", "import sys\nsys.exit(0)\n"),
                        ("refuse", "import sys\nsys.stderr.write('BLOCKED: scratch rule\\n')\nsys.exit(2)\n")):
         (tmp_path / f"{name}.py").write_text(body)
     launcher = tmp_path / "launch.py"
-    launcher.write_text(LAUNCHER.format(hooks=str(HOOKS), allow=str(tmp_path / "allow.py"), refuse=str(tmp_path / "refuse.py")))
+    launcher.write_text(LAUNCHER.format(hooks=str(HOOKS), module=module, allow=str(tmp_path / "allow.py"),
+                                        refuse=str(tmp_path / "refuse.py")))
     env = {"PATH": os.environ["PATH"], "HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"}
     p = subprocess.run([sys.executable, str(launcher)], input=json.dumps(payload(tool)), capture_output=True, text=True,
                        env=env, timeout=120)
     return p.returncode, p.stdout, p.stderr
 
 
-def test_a_launcher_answers_the_same_with_and_without_a_writable_record(tmp_path):
+@pytest.mark.parametrize("module", ["hook_launch", "hook_launch_fallback"])  # the launcher, and its fallback when it cannot load
+def test_a_launcher_answers_the_same_with_and_without_a_writable_record(tmp_path, module):
     good, bad = tmp_path / "home", tmp_path / "not-a-directory"
     good.mkdir()
     bad.write_text("")
     for tool, code in (("Bash", 2), ("Read", 0)):
-        assert _launch(tmp_path, good, tool) == _launch(tmp_path, bad, tool)
-        assert _launch(tmp_path, good, tool)[0] == code
+        assert _launch(tmp_path, good, tool, module) == _launch(tmp_path, bad, tool, module)
+        assert _launch(tmp_path, good, tool, module)[0] == code
     records = list(good.rglob("refusals-*.jsonl"))
     assert len(records) == 1 and not list(bad.parent.rglob("not-a-directory/*"))
     rows = [json.loads(x) for x in records[0].read_text().splitlines()]
@@ -318,6 +328,7 @@ WRITER = """
 import json, sys
 sys.path.insert(0, {hooks!r})
 from lib import refusal_record as R
+R.LOCK_WAIT = 120  # a loaded runner may hold a writer off the processor longer than the hooks' bound
 who, n = sys.argv[1], int(sys.argv[2])
 for i in range(n):
     p = {{"hook_event_name": "PreToolUse", "session_id": "s", "tool_name": "Bash", "tool_input": {{"command": "c"}},
