@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PostToolUse Hook (Write|Edit|NotebookEdit|MultiEdit matcher): the one
-producer of a fan-out's canonical aggregate dev-report (P1b E5). A write of a
-lane report (lib.dev_report_shard_patterns.classify_filename reads it as
+producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
+of a lane report (lib.dev_report_shard_patterns.classify_filename reads it as
 ("worker", task_id, lane); its own `lane_set` declares the fan-out) runs the
 harness's `scripts/aggregate-dev-report.py --task-id <task_id> --project-dir
 <project>` (bounded timeout), so the canonical follows the lane reports as they
