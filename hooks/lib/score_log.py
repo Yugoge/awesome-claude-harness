@@ -81,8 +81,9 @@ def identity(role, pipeline) -> str | None:
     return "close-qa" if (role, pipeline) == ("qa", "close") else role or None
 
 
-def log_path() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "lifecycle.jsonl"
+def log_path() -> Path:  # one log per harness home, whichever account runs the session
+    home = importlib.import_module(".claude_home" if __package__ else "claude_home", __package__ or None)
+    return home.config_home() / "logs" / "lifecycle.jsonl"
 
 
 @contextmanager

@@ -231,6 +231,18 @@ def project_dir() -> Path:
     return Path.cwd()
 
 
+def config_home() -> Path:
+    """Where harness records that must not split by account live (score log, logs, restart state): the
+    directory of the settings.json Claude Code loads from its configuration directory (CLAUDE_CONFIG_DIR,
+    else ~/.claude), links followed. One home for every account whose settings.json links to it; the
+    configuration directory itself when its settings.json is absent. Shell twin: claude_config_home."""
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        return (config / _SENTINEL_FILE).resolve(strict=True).parent
+    except (OSError, RuntimeError):
+        return config
+
+
 def settings_env(*keys: str, any_session: bool = False) -> dict[str, str]:
     """P7b R7: a Claude Code process (CLAUDECODE or CLAUDE_PROJECT_DIR set) whose env lacks
     CLAUDE_HOME started before its settings carried the overlay: the keys it lacks come from the
