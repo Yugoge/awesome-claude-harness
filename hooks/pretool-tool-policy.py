@@ -2075,8 +2075,8 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
     hook's own decision (_decide) as that subagent's Write of it, its dispatch recorded as the CLI
     records one (the call, the child's first record and meta) in a store of its own."""
     prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
-    if not isinstance(prompt, str) or "<obligation" not in prompt:
-        return
+    if not isinstance(prompt, str) or "<obligation" not in prompt or '"path"' not in prompt:
+        return  # no block, or one declaring no file: a file artifact's fields hold its path
     import contextlib
     import io
     import shutil
