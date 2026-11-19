@@ -4759,8 +4759,49 @@ def let_through_unproven(entry, payload):
         {"rule": "removal-policy", "kind": "let_through_unproven",
          "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no usable verdict),
          "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
-    This module writes no log of its own: the record's writer is called from here.
+    Before the command runs, a snapshot of the repository at the payload's cwd is taken and named in the entry
+    (entry["snapshot"], see snapshot_before()), so what the command removes or overwrites there can be brought back
+    (the owner, 2026-10-04: discard, but recoverably). This module writes no log of its own: the record's writer is
+    called from here, after the snapshot, and records the entry with it.
     """
+    entry["snapshot"] = snapshot_before(payload)
+
+
+def snapshot_before(payload):
+    """lib/checkpoint-core.sh write_checkpoint, run in the payload's cwd within CLAUDE_HOOK_SNAPSHOT_TIMEOUT (10 s:
+    with the analyzer's 15 s it stays inside the CLI's 60 s for this hook, which settings.json leaves at its
+    default), starting no push. A snapshot that is not taken never refuses: the reply says why.
+    Returns {"ref", "commit", "restore"} (and "left_out" when files were left out) or {"none": why}."""
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        return {"none": "the call names no working directory"}
+    limit = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_TIMEOUT", ""), "10s") or 10.0
+    script = ('cd -- "$1" && . "$2" || exit 90; export CHECKPOINT_NO_PUSH=1; write_checkpoint "" "$3" "pre-command snapshot"; rc=$?; '
+              'printf "%s\\n" "$rc" "$checkpoint_commit" "$checkpoint_ref" "$(git rev-parse --show-toplevel 2>/dev/null)" '
+              '"$checkpoint_left_out$checkpoint_notice"')
+    try:
+        p = subprocess.Popen(["bash", "-c", script, "snapshot", cwd, os.path.join(LIB, "checkpoint-core.sh"),
+                              "an unproven Bash command let through (removal policy)"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                             start_new_session=True)
+    except OSError as exc:
+        return {"none": f"the snapshot could not start: {exc}"}
+    try:
+        out = p.communicate(timeout=limit)[0]
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(p.pid, signal.SIGKILL)  # git and all; its temp index is swept by a later snapshot
+        p.wait()
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+    rc, commit, ref, top, note = (out.split("\n", 4) + [""] * 5)[:5]
+    note = note.strip()
+    if rc == "0" and commit:
+        shot = {"ref": ref, "commit": commit, "restore": f"git -C {top} restore --source={commit} -- <path>, or "
+                f"git -C {top} show {commit}:<path from the repository's top>"}
+        return {**shot, "left_out": note} if note else shot
+    return {"none": {"0": "write_checkpoint wrote none (/harness off)", "2": "not inside a git repository",
+                     "90": "the snapshot library could not be loaded"}.get(rc) or note
+            or f"write_checkpoint failed (rc={rc or p.returncode}); see the checkpoint log"}
 
 
 def _scratch_owner(payload):
