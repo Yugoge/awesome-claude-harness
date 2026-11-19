@@ -159,6 +159,23 @@ def commit_guard_applies(command):
     return ("commit" in s or "config" in s) and re.search(r"(^|[^\w])git", s) is not None
 
 
+def _no_commit_or_config(command):
+    """lib/shell_parse.py's reading of a command whose quoting the commit guard's own splitter cannot follow: True
+    when it parses, no command word or payload is computed, no computed word spells git with commit or config, and
+    every git invocation it runs or carries in a static string is read whole, sets no configuration and is neither
+    commit nor config."""
+    try:
+        from lib.shell_parse import git_invocations, parse, walk
+        script = parse(command)
+        return not script.errors() and not any(
+            s.dynamic or s.templated or any(w.value() is None and commit_guard_applies(w.text) for w in s.cmd.words)
+            for s in walk(script)) and all(
+            i.unresolved is None and i.subcommand not in (None, "commit", "config") and not (i.config_pairs or i.env)
+            for i in git_invocations(script, strings=True))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def commit_guard(payload):
     """BS-04, BS-05, BS-06: 'HOOKS <why>', 'CONFIG <key>', 'FILTER <top>[\\t<why>]' or 'OK'.
 
@@ -226,7 +243,8 @@ def commit_guard(payload):
             m = (DQ if st[-1:] == '"' else UQ).match(t, i)
             k, s, i = m.lastgroup, m.group(), m.end()
             o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
-            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]):
+            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]) \
+                    and not _no_commit_or_config(d.get('tool_input', {}).get('command', '')):
                 unread('a double-quoted bash -c/eval string inside a double-quoted $(...)')
             st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
         return t if st else o
@@ -1705,6 +1723,14 @@ class _ConsentView:
         else:
             self.defs.setdefault(name, []).append(("text", a.word.text))
 
+    def made(self, p):
+        """The path `$(mktemp [-d] TEMPLATE)` prints, written as its template: mktemp makes that name new, below the
+        template's directory, so it is never the state directory itself. None for any other substitution."""
+        cmds = [s.cmd for s in self.sp.walk(p.body)] if p.body is not None and p.body.error is None else []
+        vals = [w.value() for w in cmds[0].words] if len(cmds) == 1 and not (cmds[0].redirects or cmds[0].assignments) else []
+        ops = [v for v in vals[1:] if v not in ("-d", "-q", "--directory", "--quiet")]
+        return ops[0] if vals[:1] == ["mktemp"] and None not in vals and len(ops) == 1 and ops[0][:1] not in ("-", "") else None
+
     def marks_state(self, text):
         """Does computed source text (a substitution's body, a read's input) point at the state directory?"""
         text = text or ""
@@ -1834,6 +1860,8 @@ class _ConsentView:
                         out.append((("*",), "state"))
                 else:
                     out.append((("*",), "unk"))
+            elif p.kind in ("cmdsub", "backtick") and self.made(p):
+                out.extend((("c", ch), "lit") for ch in self.made(p))
             elif p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and self.marks_state(p.text):
                 out.extend((("c", ch), "state") for ch in self.state)
             else:
@@ -3660,9 +3688,25 @@ def hard_ban_mask(t):
     return t if o is None or _HB_RUNS_TEXT.search("".join(u)) else "".join(o)
 
 
+def _hb_only_reads(command):
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word written under /bin, /usr/bin
+    or /usr/local/bin read as its bare name: it runs nothing of its choosing, so a name in it is searched or printed."""
+    try:
+        from lib.bash_read_only import is_read_only
+        from lib.shell_parse import parse, walk
+        out = list(command)
+        for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
+            if re.fullmatch(r"(/usr/local|/usr)?/bin/[^/]+", w.text):
+                out[w.span[0]:w.span[1]] = w.text.rsplit("/", 1)[1].rjust(len(w.text))
+        return is_read_only("".join(out))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def hard_ban_rule(command):
     """Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs,
-    each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word: in the
+    each matched anywhere in a command that is not read-only as a whole (_hb_only_reads: a search, listing or print
+    of the script's file runs nothing); unset, session-recovery and restart-all-sessions match only as the command word: in the
     text with its quoted data masked (unless a word outside quotes names a program that runs text), or in the
     parser's executable view, which keeps what a shell `-c`, a git alias or a substitution runs and blanks the data
     an option such as git's `-c` merely configures. The default names pass a whole command of hard_ban_inert_shape
@@ -3686,6 +3730,8 @@ def hard_ban_rule(command):
             text = command + hard_ban_run_lines(command)
         except Exception:  # noqa: BLE001
             text = command
+    elif _hb_only_reads(command):
+        return
     for ban in bans:
         if configured:
             rx = ban
@@ -4032,6 +4078,7 @@ def sensitive_redirect(command):
     from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
                                      is_sensitive_name)
     try:
+        from lib.bash_read_only import is_read_only
         from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
@@ -4056,6 +4103,9 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
+            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+                    and is_read_only(command[slice(*site.cmd.span)]):
+                outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
@@ -4138,20 +4188,23 @@ class ServiceView:
 
     def __init__(self, command, cwd=None):
         self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
-        self.exec_redirects, self.plain = [], False
+        self.exec_redirects, self.plain, self.command, self.sets = [], False, command, {}
         self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         try:
-            from lib.shell_parse import parse, resolve, walk
+            from lib.shell_parse import _AssignScope, parse, resolve, walk
             script = parse(command)
             if script.error is not None:
                 raise ValueError(script.error.code)
-            nested = False
+            nested, scope = False, _AssignScope(script)
             for site in walk(script):
                 r = resolve(site.cmd)
                 if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
                     self.raw = True
                 nested = nested or tuple(site.context) != ("top",)
                 self.redirect_sites.append(site)
+                if not site.cmd.words and tuple(site.context) == ("top",) and scope.certain(site, site.cmd):
+                    self.sets.update((a.name, (a.word.span[0], a.static_value())) for a in site.cmd.assignments
+                                     if a.static_value() and not a.append)
                 if [w.value() for w in site.cmd.words] == ["exec"]:
                     self.exec_redirects.extend(site.cmd.redirects)  # they hold for every later command
                 name = r.name
@@ -4176,6 +4229,30 @@ class ServiceView:
 
     def named(self, *names):
         return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
+
+    def set_once(self, word, at, rx):
+        """True for a word that ends in one bare `$name` (or `${name}`) whose name the command sets once, to a static
+        value `rx` matches whole, unconditionally and before offset `at`, and names nowhere else but as `$name`, and
+        which sources and evals nothing: nothing else can have set it."""
+        p = word.parts[-1]
+        n = re.escape(p.text)
+        where, value = self.sets.get(p.text, (at, "")) if p.kind == "param" else (at, "")
+        return where < at and re.fullmatch(rx, value) is not None and not self.named("source", ".", "eval") \
+            and len(re.findall(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", self.command)) \
+            == 1 + len(re.findall(rf"\$(?:{n}(?![A-Za-z0-9_])|\{{{n}\}})", self.command))
+
+    def without(self, view, name, whole):
+        """`view` without the `name` commands the command-position reading reads whole (`whole(cmd, self)`): the
+        command word of an unwrapped simple command at the top level (inside if, for, while and until too), where
+        the program runs, so the raw reading of the rest of the command has nothing to add about it."""
+        out = list(view)
+        for _n, _a, site, r in self.named(name) if not self.raw and len(view) == len(self.command) else ():
+            words = site.cmd.words
+            if tuple(site.context) == ("top",) and not (site.cmd.assignments or r.wrappers or r.payload is not None
+                                                        or r.unresolved) and whole(site.cmd, self) \
+                    and _plain_redirects(site.cmd, self, reads_ok=False):
+                out[words[0].span[0]:words[-1].span[1]] = " " * (words[-1].span[1] - words[0].span[0])
+        return "".join(out)
 
 
 # The plain shape. Only a command made wholly of these simple commands, each with static arguments and plain
@@ -4329,6 +4406,27 @@ def _plain_kill_args(words):
     return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
         and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
         and not words[0].substitutions()
+
+
+def _dd_whole(cmd, sv):
+    """dd that only reads: every word is one of its own operands and none is of=, so its output goes to standard
+    output alone (a pipe, or the plain redirection `without` asks for). A word is static, or an operand name and one
+    `$name` the command sets once to a plain path (ServiceView.set_once), which no splitting turns into an of=."""
+    return all(w.static_prefix().startswith(_DD_OPERANDS) and not w.static_prefix().startswith("of=") and (
+        w.value() is not None or len(w.parts) == 2 and sv.set_once(w, cmd.span[0], "[A-Za-z0-9_.,:+@%/-]+"))
+        for w in cmd.words[1:])
+
+
+def _kill_probe(cmd, sv):
+    """The liveness probe, which sends no signal: `kill -0` and then only PIDs, as literal words that are no option,
+    one double-quoted bare parameter, or one `$name` alone that the command sets once to digits
+    (ServiceView.set_once: digits split into digits, never into `-s SIG`)."""
+    rest = cmd.words[2:]
+    if not rest or [w.value() if _plain_word(w) else None for w in cmd.words[:2]] != ["kill", "-0"] \
+            or any((w.value() or w.text).startswith("-") for w in rest):
+        return False
+    return _plain_kill_args(rest) or (len(rest) == 1 and len(rest[0].parts) == 1
+                                      and sv.set_once(rest[0], cmd.span[0], "[0-9]+"))
 
 
 def _plain_script(script, sv):
@@ -4610,7 +4708,7 @@ def service_rules(command, view, env, sv=None):
         return structural() or any(raw_rule(t) for t in sv.code + sv.runners) \
             or (not sv.plain and raw_rule(command))
 
-    def reads_view(view_rule, structural):  # an executable-view rule: runner lines keep it
+    def reads_view(view_rule, structural, view=view):  # an executable-view rule: runner lines keep it
         if sv.raw:
             return view_rule(view)
         return structural() or any(view_rule(t) for t in sv.runners) or (not sv.plain and view_rule(view))
@@ -4621,12 +4719,12 @@ def service_rules(command, view, env, sv=None):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
     if reads(_raw_prune, lambda: _docker_prune_all(sv)):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
-    if reads_view(_raw_disk, lambda: _destructive_disk(sv)):
+    if reads_view(_raw_disk, lambda: _destructive_disk(sv), sv.without(view, "dd", _dd_whole)):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
     if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv)):
+    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv), sv.without(view, "kill", _kill_probe)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
