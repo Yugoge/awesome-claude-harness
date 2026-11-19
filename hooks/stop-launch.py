@@ -26,6 +26,7 @@ from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
 COORDINATOR_TIMEOUT = 280  # under the registration's 300 s
+RECORDER = HOOKS / "lib" / "refusal_record.py"  # the refusal record's writer, run as a process of its own (record)
 
 
 def _load(name: str):
@@ -66,11 +67,11 @@ def fallback(raw: bytes, reason: str) -> int:
 
 
 def record(raw: bytes, hook, text: str) -> None:
-    """One line in the refusal record for a blocked stop, written by hooks/lib/refusal_record.py as a process of
-    its own: this file loads no harness module for it, and whatever that process does the answer stands."""
+    """One line in the refusal record for a blocked stop, written by RECORDER as a process of its own: this file
+    loads no harness module for it, and whatever that process does the answer stands."""
     try:
-        subprocess.run([sys.executable, str(HOOKS / "lib" / "refusal_record.py"), __file__, str(hook), text[:4000]],
-                       input=raw, capture_output=True, timeout=30)
+        subprocess.run([sys.executable, str(RECORDER), __file__, str(hook), text[:4000]], input=raw, capture_output=True,
+                       timeout=30)
     except Exception:
         pass
 
