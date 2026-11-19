@@ -3072,13 +3072,12 @@ _GIT_INERT_CONFIG_RE = re.compile(
 """The exact `git -c` keys that only change how git prints: two segments, a value with no dot or path. Any other
 setting (diff.external, diff.<driver>.textconv or .command, core.pager=<program>, core.editor, core.hooksPath,
 core.sshCommand, include.path, alias.*, a filter or a credential helper, safe.directory ...) can make git run a
-program or read another repository's config, so beside a protected name it is refused."""
-_GIT_RUN_KEY_RE = re.compile(r"[^=]*\.(command|textconv|external|driver|program|cmd|helper|path)(=.*)?", re.IGNORECASE)
+program or read another repository's config, so beside a protected name it is refused. The one key on the list that runs a
+program, core.pager, is on it only with a value that reads (git_facts.GIT_RUN_CONFIG_KEY_RE holds the keys that run)."""
 
 
 def _git_config_inert(setting):
-    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting)) and \
-        not _GIT_RUN_KEY_RE.fullmatch(setting)
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting))
 
 
 

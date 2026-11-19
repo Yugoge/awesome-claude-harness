@@ -8,6 +8,8 @@ command.
 """
 from __future__ import annotations
 
+import re
+
 # The config files of a git dir: `config`, and `config.worktree` (read when
 # extensions.worktreeConfig is on). Writing either changes what every later git
 # run in that checkout does.
@@ -81,3 +83,16 @@ GIT_COMMIT_VALUE_OPTIONS = frozenset({
 # `submodule foreach <cmd>`, `rebase --exec/-x <cmd>`, `difftool --extcmd/-x <cmd>` and filter-branch's
 # --*-filter <cmd>. Not mergetool: it runs the tool the configuration names, and takes no command.
 GIT_SHELL_PAYLOAD_SUBCOMMANDS = frozenset({"bisect", "difftool", "filter-branch", "rebase", "submodule"})
+
+# The configuration keys whose value makes git run a program (a pager, editor, driver, helper, hook,
+# alias, remote helper, ssh command ...) or read another configuration or repository (include.path,
+# url.<base>.insteadOf, protocol.*.allow letting an ext:: URL run a command). Matched against the key
+# alone, case-insensitively, as git compares keys.
+GIT_RUN_CONFIG_KEY_RE = re.compile(
+    r'^(?:alias\..*|core\.(?:pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy|alternaterefscommand)|'
+    r'pager\..*|sequence\.editor|include\..*|includeif\..*|filter\..*|diff\..*|merge\..*|'
+    r'gpg\..*|credential.*|uploadpack\..*|receive\..*|man\..*|web\..*|browser\..*|'
+    r'sendemail\..*|interactive\..*|protocol\..*|url\..*\.(?:insteadof|pushinsteadof)|'
+    r'remote\..*\.(?:uploadpack|receivepack|vcs)|submodule\..*\.update|'
+    r'.*\.(?:pager|editor|command|cmd|textconv|program|helper|external|driver|path|tool|hook|sshcommand|'
+    r'difffilter|clean|smudge|process))$', re.IGNORECASE)

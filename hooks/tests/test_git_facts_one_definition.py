@@ -322,3 +322,28 @@ class TestGitShellPayloadSubcommands:
         from lib import bash_execution_boundary as beb, git_facts
         assert beb.GIT_PAYLOAD_FORWARDING_SUBCOMMANDS == git_facts.GIT_SHELL_PAYLOAD_SUBCOMMANDS
         assert "mergetool" not in git_facts.GIT_SHELL_PAYLOAD_SUBCOMMANDS
+
+
+class TestGitRunConfigKeys:
+    """git-config-run-keys: which configuration keys make git run a program or read another config.
+
+    audit f17 §1: userintent passed seven keys that run a command (core.alternateRefsCommand,
+    remote.<n>.uploadpack/receivepack/vcs, submodule.<n>.update, url.<b>.insteadOf,
+    protocol.ext.allow), which the bash-safety rules refused."""
+
+    RUN = ["core.alternateRefsCommand", "remote.origin.uploadpack", "remote.origin.receivepack",
+           "remote.origin.vcs", "submodule.x.update", "url.x.insteadOf", "protocol.ext.allow",
+           "core.pager", "diff.x.textconv", "alias.x", "include.path", "merge.x.driver"]
+
+    @pytest.mark.parametrize("key", RUN)
+    def test_userintent_and_bash_safety_agree(self, key):
+        from lib import bash_safety_rules as bsr, git_facts
+        ui = _load("pretool-wrapper-userintent.py")
+        assert git_facts.GIT_RUN_CONFIG_KEY_RE.match(key)
+        assert ui._GIT_RUN_KEY is git_facts.GIT_RUN_CONFIG_KEY_RE
+        assert not bsr._git_config_inert(f"{key}=x")
+
+    @pytest.mark.parametrize("setting", ["color.ui=never", "core.pager=cat", "log.decorate=short", "advice.x=false"])
+    def test_print_only_settings_stay_inert(self, setting):
+        from lib import bash_safety_rules as bsr
+        assert bsr._git_config_inert(setting)
