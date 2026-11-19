@@ -8,6 +8,8 @@
 # This file MUST be sourced, not executed directly:
 #   source ~/.claude/hooks/lib/checkpoint-core.sh
 #   write_checkpoint "$GIT_DIR" "trigger reason" ["custom message"]
+# On return 0 checkpoint_ref and checkpoint_commit name the commit holding the snapshot (empty when
+# none was written: /harness off). CHECKPOINT_NO_PUSH=1 in the caller's environment starts no push.
 #
 # ----------------------------------------------------------------------------
 # Ref layout
@@ -472,7 +474,7 @@ write_checkpoint() {
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
     local count_file="" ref=""
-    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out=""
+    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out="" checkpoint_ref="" checkpoint_commit=""
 
     # /harness off: no snapshot is written, by any writer (hooks/lib/harness_switch.sh)
     if . "${BASH_SOURCE[0]%/*}/harness_switch.sh" 2>/dev/null && harness_switch_off; then
@@ -700,7 +702,7 @@ write_checkpoint() {
             # Idempotency short-circuit: if the pre-built tree matches the
             # CURRENT parent tree (latest, under the lock), do not commit.
             if [ -n "$parent_tree_inner" ] && [ "$tree_sha" = "$parent_tree_inner" ]; then
-                : > "$result_file"
+                printf '%s' "$parent_sha_inner" > "$result_file"  # it holds this snapshot already
                 exit 2
             fi
 
@@ -755,10 +757,13 @@ write_checkpoint() {
         trap - EXIT INT TERM HUP
 
         case "$rc" in
+            0|2) checkpoint_ref="$ref" checkpoint_commit=$(cat "$result_file" 2>/dev/null) ;;
+        esac
+        case "$rc" in
             0)
                 rm -f "$result_file"
                 _checkpoint_record_success
-                _checkpoint_rate_limited_push "$work_dir" "$ref"
+                [ -n "${CHECKPOINT_NO_PUSH:-}" ] || _checkpoint_rate_limited_push "$work_dir" "$ref"
                 return 0
                 ;;
             2)
@@ -802,6 +807,7 @@ write_checkpoint() {
 
         # Idempotency short-circuit on pre-built tree.
         if [ -n "$parent_tree" ] && [ "$tree_sha" = "$parent_tree" ]; then
+            checkpoint_ref="$ref" checkpoint_commit="$parent_sha"
             rm -f "$result_file"
             _checkpoint_record_success
             return 0
@@ -840,8 +846,9 @@ write_checkpoint() {
             rm -f "$result_file"
             rm -f "$TMP_INDEX"
             trap - EXIT INT TERM HUP
+            checkpoint_ref="$ref" checkpoint_commit="$new_sha"
             _checkpoint_record_success
-            _checkpoint_rate_limited_push "$work_dir" "$ref"
+            [ -n "${CHECKPOINT_NO_PUSH:-}" ] || _checkpoint_rate_limited_push "$work_dir" "$ref"
             return 0
         fi
 
