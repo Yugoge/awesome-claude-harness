@@ -176,3 +176,23 @@ def test_every_doc_sync_listing_leaves_out_the_same_files(tmp_path, monkeypatch)
     relay = _hook("userprompt-doc-sync-check.py")
     assert relay.get_dir_snapshot(folder) == {"a.md"}
     assert {"lifecycle.jsonl", "agent-scores.json"} <= set(_doc_sync("main").SKIP_FILES)
+
+
+# ---------------------------------------------------------------- session-id-path-safety
+@pytest.mark.parametrize("sid", ["a b", "a..b", "x/y", "..", "0f5c2a8e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"])
+def test_scratch_init_and_doc_sync_notice_agree_on_a_session_dir_name(sid, tmp_path, monkeypatch):
+    """The scratch init refused only ids with '/' or '..'; doc-sync's notice, the orchestrator
+    gate and the write gate's own-scratch rule each had their own test ('a b' passed the first and
+    failed the notice's pattern). Now the init creates the session's directory exactly when the
+    notice would keep its state there, and every consumer reads lib/scratch_owner's rule."""
+    root = tmp_path / "scratch"
+    env = {**os.environ, "TMPDIR": str(root), "CLAUDE_CODE_SESSION_ID": sid, "CLAUDE_HOME": str(ROOT)}
+    subprocess.run(["bash", str(HOOKS / "session-scratch-init.sh")], input="{}", capture_output=True,
+                   text=True, env=env, timeout=60)
+    created = (root / sid / ".owner").is_file() if "/" not in sid and sid != ".." else False
+    safe = _lib("scratch_owner").is_safe_session_dir_name(sid)
+    assert created is safe
+    monkeypatch.setenv(_doc_sync("notice").STATE_ROOT_ENV, str(root))
+    assert (_doc_sync("notice").state_path_for({"session_id": sid}) is not None) is safe
+    gate = _hook("pretool-orchestrator-gate.py")
+    assert "_SCRATCH_SID" not in vars(gate)
