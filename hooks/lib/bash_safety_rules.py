@@ -3738,7 +3738,7 @@ def _read_made_to_run(name, args):
     """A read that one of its words makes run a program or write a file: the option, else None. rg with an option
     whose value is a program (shell_parse.RG_PROGRAM_OPTS); a git read subcommand (git_facts.GIT_READ_SUBCOMMANDS)
     with `-c`/`--config-env` naming a key whose value git runs (GIT_RUN_CONFIG_KEY_RE; a pager key set to a plain
-    pager, bash_read_only.PLAIN_PAGERS, only shows), `--exec-path=`, or an option of GIT_RUN_OR_WRITE_OPTIONS."""
+    pager, bash_read_only.PLAIN_PAGERS, only shows; git_facts.git_config_value_names_no_program runs nothing), `--exec-path=`, or an option of GIT_RUN_OR_WRITE_OPTIONS."""
     from lib.bash_read_only import PLAIN_PAGERS, _long_hits
     from lib.shell_parse import RG_PROGRAM_OPTS, git_global_options
     if name == "rg":
@@ -3752,7 +3752,8 @@ def _read_made_to_run(name, args):
         if args[i] in GIT_CONFIG_OPTS:
             key, _eq, value = (args[v] if v is not None and args[v] is not None else "").partition("=")
             if v is None or args[v] is None or (git_facts.GIT_RUN_CONFIG_KEY_RE.match(key) and not (
-                    key.lower().endswith("pager") and value in PLAIN_PAGERS)):
+                    (key.lower().endswith("pager") and value in PLAIN_PAGERS)
+                    or git_facts.git_config_value_names_no_program(key, value))):
                 return f"{args[i]} {args[v] if v is not None else ''}".strip()
         elif args[i].startswith("--exec-path="):
             return args[i]

@@ -194,6 +194,7 @@ _CMD_VAR_RE = re.compile(
 # git configuration keys whose value runs a command (lib/git_facts.py).
 from lib.git_facts import GH_MESSAGE_SUBCOMMANDS as _GH_MESSAGE_SUBS  # noqa: E402
 from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
+from lib.git_facts import GIT_BOOLEAN_VALUES as _GIT_BOOLEAN_VALUES  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -2783,7 +2784,7 @@ class _Scan:
         return all(w.startswith('-') and 'k' not in w.lstrip('-')[:1] and 'lesskey' not in w
                    for w in words[1:])
 
-    _GIT_BOOL = frozenset(('true', 'false', 'yes', 'no', 'on', 'off', '1', '0', ''))
+    _GIT_BOOL = _GIT_BOOLEAN_VALUES
 
     def _git_pager_setting(self, gvals, dirs):
         """The pager `git grep -O` with no program opens. git takes GIT_PAGER, then
