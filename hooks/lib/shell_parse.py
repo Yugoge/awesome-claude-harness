@@ -3549,7 +3549,8 @@ class CdScopes:
             return os.path.normpath(arg)
         if cwd == '?':
             return '?'
-        return os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+        target = os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+        return '' if target == '.' else target
 
     def _cd(self, name: str, args, states) -> tuple:
         """(the states after the cd, the states it may have failed in: all but those whose one operand is reached)."""
@@ -3589,12 +3590,15 @@ class CdScopes:
                     if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
                         here = {(self._target(cwd, val), cwd) for cwd, _old in here}
             self._record(cmd.span, here | set(states))  # its redirections open where the shell is
+            for r in cmd.redirects:
+                if r.hd is not None:  # an unquoted body's substitutions run where its command does
+                    self._record(r.hd.body_span, set(states))
             if res.name in CWD_BUILTINS and res.payload is None:
                 return self._cd(res.name, res.args, states)
             if res.payload is not None:
                 if res.payload_kind == 'eval':
                     return self.run_script(res.payload, states)
-                self.run_script(res.payload, here)
+                self.run_script(res.payload, {self.UNKNOWN} if _runs_elsewhere(res) else here)
             return set(states), set(states)
         if isinstance(cmd, Compound):
             self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
@@ -3714,11 +3718,14 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=Non
     seed = dict(env or {})
     envs, exported, prefix = {}, set(), {}
     scope = _AssignScope(script)
+    carriers, carrier = {}, None   # target -> the raw command whose payload it was read from
     for site in walk(script, into=into):
         first = len(out)
         env = None
         try:
             cmd = site.cmd
+            if raw is not None:
+                carrier = _payload_carrier(site, raw, carrier)
             # A shell started with -c or fed code sees the caller's variables, the ones exported before
             # it and its own command's prefix assignments; a templated payload's expansions are the
             # outer shell's.
@@ -3794,12 +3801,38 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=Non
         finally:
             for t in out[first:] if env is not None else ():
                 _carry_word(t, env)
+            for t in out[first:] if raw is not None else ():
+                carriers[id(t)] = carrier
     if raw is not None and out:
         gone = any(t.mode in (DELETE, MOVE_DEST) for t in out)
         scopes = CdScopes(raw, lambda w: _project(w, seed)[0] or w.text, None if gone else reached).run(script)
         for t in out:
             t.dirs = scopes.of(t.word)
+            word = carriers.get(id(t))
+            if t.dirs == {'?'} and word is not None and t.word is not None \
+                    and raw[slice(*t.word.span)] != t.word.text:
+                t.dirs = scopes.of(word)
     return out
+
+
+def _payload_carrier(site, raw, carrier):
+    """The first word of the raw command whose re-read payload (eval, env -S, a here-string or alias
+    a shell reads, find -exec ...) ``site`` belongs to, as long as that code runs in the directory
+    that command runs in; None once it may not: ssh runs it on another host, find -execdir or
+    -okdir in each match's directory, and a cd, pushd or popd read from the payload moves it."""
+    words = site.cmd.words
+    if words and raw[slice(*words[0].span)] == words[0].text:
+        return None if _runs_elsewhere(resolve(site.cmd)) else words[0]
+    if words and resolve(site.cmd).name in CWD_BUILTINS + ("ssh",):
+        return None
+    return carrier
+
+
+def _runs_elsewhere(res):
+    """True when the code ``res`` hands on runs in another directory than its own command: ssh on
+    another host, find's -execdir and -okdir in each match's directory."""
+    return res.name == "ssh" or (res.name == "find" and any(w.value() in ("-execdir", "-okdir")
+                                                            for w in res.args))
 
 
 _COPY_MOVE_WORD_RE = re.compile(r"(?:%s)(?!\w)" % "|".join(CP_MV))
