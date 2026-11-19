@@ -1513,7 +1513,7 @@ class _Scan:
             return
         name = os.path.basename(head)
         args = list(res.args)
-        if name in ('cd', 'pushd'):
+        if name in _sp.CD_TARGET_BUILTINS:
             self._cd(args)
             return
         if name in ('source', '.'):

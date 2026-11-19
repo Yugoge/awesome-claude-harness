@@ -179,8 +179,6 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # committer uses them, so a commit under a grant that carries one is refused.
 _GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
 _GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
-# Builtins that move a later commit to another cwd than the guard probes.
-_CWD_CHANGE_CMDS = ('cd', 'pushd', 'popd')
 
 
 def _block(message):
@@ -771,7 +769,7 @@ def _commit_records(command):
     invocation statically). A command the parser cannot read yields none."""
     sites, invocations = _git_view(command)
     moves = [k for k, site in enumerate(sites)
-             if shell_parse.resolve(site.cmd).name in _CWD_CHANGE_CMDS]
+             if shell_parse.resolve(site.cmd).name in shell_parse.CWD_BUILTINS]
     assigned = any(a.name in _GIT_REDIRECT_ENV_VARS for site in sites for a in site.cmd.assignments)
     records = []
     for at, inv in invocations:

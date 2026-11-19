@@ -178,6 +178,7 @@ def commit_guard(payload):
     H = HOOKS
     from lib.git_command_classifier import _command_token_index, _git_subcommand
     from lib.claude_home import load_settings
+    from lib.shell_parse import CD_TARGET_BUILTINS
     s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
     og = iu.module_from_spec(s)
     s.loader.exec_module(og)
@@ -255,7 +256,7 @@ def commit_guard(payload):
         b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
         if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c:
             scan(t[c[0] + 1], depth + 1, lg, gc)
-        if b in ('cd', 'pushd'):
+        if b in CD_TARGET_BUILTINS:
             cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0])
             dirs.append(cur[0])
         if b != 'git':
@@ -1231,7 +1232,6 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
 _SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
 """A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
-_SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
 _GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
                  "--config-env")
 _SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
@@ -1329,6 +1329,7 @@ def _shape_strict_ok(command, carries, sites):
     names a protected name; no write target but /dev/null (a redirection, tee, sort -o, uniq's second operand, git
     --output); a `git -c` only with an exact display key (_git_config_inert); and, when a word names the writer script,
     no write target at all and no command that runs a file (an interpreter, a shell, sed, awk, make, find ...)."""
+    from lib.shell_parse import CWD_BUILTINS
     scripts = _shape_scripts(command)
     if scripts is None or any(sep == "&" for sc in scripts for _pl, sep in sc.items):
         return False
@@ -1349,7 +1350,7 @@ def _shape_strict_ok(command, carries, sites):
             if name not in _SHAPE_WRAPPERS or (name == "env" and opts) or \
                     (name == "sudo" and any(o not in _SHAPE_SUDO_OPTS for o, _v in opts)):
                 return False
-        if res.name in _SHAPE_DIR_CHANGE:
+        if res.name in CWD_BUILTINS:
             return False
         if res.name == "git":
             for w in res.args:
@@ -1676,7 +1677,7 @@ class _ConsentView:
         self.cwds = [(cwd, False)]
         for s in sites:
             r = sp.resolve(s.cmd)
-            if r.name not in ("cd", "pushd"):
+            if r.name not in sp.CD_TARGET_BUILTINS:
                 continue
             args = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
             if not args:

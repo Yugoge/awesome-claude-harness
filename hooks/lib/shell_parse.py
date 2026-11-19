@@ -424,6 +424,8 @@ PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
 CD_OPTIONS = ("-L", "-P", "-e", "-@", "--")  # bash: cd [-L|[-P [-e]] [-@]] [--] [dir]
+CD_TARGET_BUILTINS = ("cd", "pushd")  # move to the directory their operand names (popd returns to one listed)
+CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what follows
 
 
 def _match_pair(t, i, opener, closer):

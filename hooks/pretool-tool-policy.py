@@ -814,7 +814,7 @@ def _call_dirs(script, sp, cwd: str):
     dirs, unknown, first = [cwd], False, True
     for site in sp.walk(script):
         r = sp.resolve(site.cmd)
-        if r.name not in ("cd", "pushd"):
+        if r.name not in sp.CD_TARGET_BUILTINS:
             continue
         first, was_first = False, first
         operands = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]

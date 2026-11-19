@@ -172,7 +172,6 @@ def _legacy_kind(command: str) -> str:
 # anything below it (`cp -t .claude/hooks x`, `--target-directory=.claude/commands`).
 _PROTECTED = re.compile(r'\.claude/(hooks|commands)(?![A-Za-z0-9_.-])')
 _DOT_SEGMENTS = re.compile(r'/(?:\.?/)+')
-_CD = frozenset({'cd', 'pushd', 'popd'})
 _FED = frozenset({'pipe', 'heredoc', 'herestring'})
 # Text in a word that makes it code or a command line rather than a path (`rsync -e 'cp x ...'`).
 _CODE_CHARS = re.compile(r'[\s;|&<>`]|\$\(')
@@ -635,7 +634,7 @@ class _CdScopes:
                     if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
                         here = {(self._target(cwd, val), cwd) for cwd, _old in here}
             self._record(cmd.span, here)
-            if res.name in _CD and res.payload is None:
+            if res.name in self.sp.CWD_BUILTINS and res.payload is None:
                 return self._cd(res.name, res.args, states), set(states)
             if res.payload is not None:
                 if res.payload_kind == 'eval':
@@ -719,7 +718,7 @@ def _cd_dirs(sp, sites) -> list:
     cdpaths = [v for site, _res in sites for a in site.cmd.assignments if a.name == 'CDPATH'
                for v in (a.word.value() or '').split('=', 1)[-1].split(':') if v]
     for site, res in sites:
-        if res.name not in _CD:
+        if res.name not in sp.CWD_BUILTINS:
             continue
         ops = [w for w in res.args if not (w.value() or '').startswith('-')]
         if not ops:
@@ -756,7 +755,7 @@ def _parsed_kind(command: str) -> tuple:
     # a cd the scopes did not follow (inside a substitution, a re-parsed payload): every relative
     # write after it is read from every directory (fail closed)
     unfollowed = [site.cmd.span[0] if command[slice(*site.cmd.span)].startswith(site.cmd.words[0].text) else 0
-                  for site, res in sites if res.name in _CD and site.cmd.words
+                  for site, res in sites if res.name in sp.CWD_BUILTINS and site.cmd.words
                   and site.cmd.span not in scopes.visited]
     writes = []
     for t in sp.write_targets(script):
@@ -1145,7 +1144,7 @@ def _proven_harmless(command: str, start: str) -> bool:
         if head is None or '/' in head or name is None:
             return False
         vals = [w.value() for w in res.args]
-        if name in _CD:
+        if name in sp.CWD_BUILTINS:
             if assigns:
                 return False
             continue

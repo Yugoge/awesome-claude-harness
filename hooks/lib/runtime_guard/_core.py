@@ -735,7 +735,7 @@ def _effective_cwd_after(simple_cmds: list, upto_index: int, cwd_base: Optional[
         if not toks:
             continue
         base = os.path.basename(_strip_quotes(toks[0]))
-        if base in ("cd", "pushd"):
+        if base in _sp.CD_TARGET_BUILTINS:
             target = _cd_target(toks[1:])
             if target is None:
                 continue

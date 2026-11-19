@@ -3063,6 +3063,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "cd-builtins",
+   "source": "defs-shell lane, audit f199dfb1e family cd-builtins (undecided)",
+   "reason": "shell_parse.CWD_BUILTINS names the builtins that change the working directory of what follows (cd, pushd, popd); runtime_guard._NAV_OPERAND_HEADS names heads whose trailing words are a directory operand and so data, never a command to launch, and holds chdir, which bash does not have (`chdir /tmp` is command not found and moves nothing), so it cannot join the first.",
+   "sides": [
+    [
+     {
+      "name": "<module>.CWD_BUILTINS",
+      "fingerprint": "a403866ae5cecc8d",
+      "at": "hooks/lib/shell_parse.py:428"
+     }
+    ],
+    [
+     {
+      "name": "<module>._NAV_OPERAND_HEADS",
+      "fingerprint": "436dbf43d0786dad",
+      "at": "hooks/lib/runtime_guard/_core.py:4121"
+     }
+    ]
+   ]
   }
  ]
 }

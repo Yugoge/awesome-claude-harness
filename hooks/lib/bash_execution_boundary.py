@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    OPTION_SIGNS, PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, OPTION_SIGNS, PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -2205,7 +2205,7 @@ class Analyzer:
     def _shell_state(self, base, args):
         """Record what a later command inherits from shell builtin `base` (see _GIT_RM_LOCATION_OPTS)."""
         lits = [a.literal() for a in args]
-        if base in ("cd", "pushd"):  # popd only returns to a directory already listed
+        if base in CD_TARGET_BUILTINS:  # popd only returns to a directory already listed
             ops = [x for x in lits if x is None or x == "-" or not x.startswith("-")]
             if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
                 self.git_rm_cwds.append(ops[0])
