@@ -22,7 +22,7 @@ supported without a project-root override.
 
 | Flag | Meaning |
 |------|---------|
-| `<task-id>` | Optional when the session identifies the active cycle (Step 2: ambiguity is asked, never guessed). An explicit task-id that names a task is authoritative (Step 2 checks it). Unused with `--bulk`; not allowed with `--auto`. |
+| `<task-id>` | Optional when the session identifies the active cycle (Step 2: ambiguity ends the run with the candidates, never guessed). An explicit task-id that names a task is authoritative (Step 2 checks it). Unused with `--bulk`; not allowed with `--auto`. |
 | `--force` | No-op alias of the normal path: Step 3 and Step 6 both still run. Its one effect is Step 4's audit-log append. |
 | `--bulk` | Batch mode: group by task-id then subsystem, commit coherently, flag orphan files separately. Skips Step 3; keeps the Step 6 QA gate. |
 | `--dry-run` | Step 3 completes the cycle as a real run does; Steps 5-6 plan and review; print the plan and the QA verdict; commit nothing. |
@@ -42,16 +42,11 @@ token, if any, is `TASK_ID`.
 
 **`--auto` flag combination**: `--auto` takes no task-id, `--force` or `--bulk`
 (`validate_auto_flag_combination` in `scripts/dev-lifecycle.py`). When `AUTO=true` and any of the
-three is set, take no action and ask one AskUserQuestion: header `Flags`, question `--auto takes
-no task-id, --force or --bulk: which /commit should run?`, options:
-- `--auto`: every `commit_pending` parent, each through Steps 3-8;
-- `<task-id> only`: the task-id typed, else the first parent Step 2's `list-actionable` call
-  lists, alone through Steps 3-8;
-- `--bulk` (only when `--bulk` was typed): the batch sweep, Steps 5-8, with no Step 3.
-
-Continue in this turn with the mode the answer names (`--force`, a no-op, is dropped; `--dry-run`
-and `--codex` stay as typed). A legal `--auto` skips Step 2: the `--auto` mode section binds
-`TASK_ID` once per discovered parent.
+three is set, take no action and end with one line `NO_TARGET: --auto takes no task-id, --force or
+--bulk; run /commit --auto, /commit <task-id> or /commit --bulk`. Nobody is asked; the Stop gate
+(`hooks/stop-command-gate.py`, `no_target_end`) lets a run that dispatched nothing end on that
+line. A legal `--auto` skips Step 2: the `--auto` mode section binds `TASK_ID` once per discovered
+parent.
 
 ### Step 2: Resolve task-id (unless --bulk or --auto)
 
@@ -60,9 +55,8 @@ If `BULK=false` and `AUTO=false`:
   it in its name (the task's own report or ticket, or a lane's of that parent), or, typed as a
   path, that file exists. Check it before Step 3 (that look verifies the typed id; it picks no
   task, so it is not the scan the next bullet forbids). One that names no task (a mistyped id) is
-  not authoritative, and no conversation candidate replaces it unasked: ask the `Which task`
-  question below, as `close.md`'s Task-id resolution asks it for a path that does not exist, and
-  bind the answer. The `/commit` Stop reads the same rule (`_targets` in the command Stop gate,
+  not authoritative, and no conversation candidate replaces it: end as the `Which task` bullet
+  below says, as `close.md`'s Task-id resolution does for a path that does not exist. The `/commit` Stop reads the same rule (`_targets` in the command Stop gate,
   `stop-command-gate.py`): a typed id that names no task gives way to the task this `/commit`'s
   dispatches name, and with none dispatched the Stop holds, naming the typed id.
 - Otherwise (no `TASK_ID` supplied) infer it from the conversation: the parent task-id of the
@@ -71,13 +65,14 @@ If `BULK=false` and `AUTO=false`:
   reports). Inference succeeds
   only when the conversation names exactly one candidate: Step 3 completes and closes whatever
   task it is given, so with two or more candidates, or any doubt, do not guess.
-- No unambiguous candidate: ask one AskUserQuestion, header `Task`, question `Which task should
-  /commit land?`, options: up to three parents that
+- No unambiguous candidate (`Which task`): nobody is asked. Print one line `NO_TARGET: ` followed
+  by the parents that
   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action commit --project-dir "<PROJECT_ROOT>"`
   lists (the first word of each line), then those `--next-action close` lists (Step 3 closes them
-  first), each labelled with its task-id, plus `/commit --auto`. Bind `TASK_ID` to the answer, or
-  run `--auto` mode. When neither list names a parent, print `No task to commit: dev-lifecycle.py
-  lists no commit_pending or close_pending parent.` and end.
+  first), each as `/commit <task-id>`, plus `/commit --auto`, and end; the owner types `/commit`
+  again with the id. When neither list names a parent, the line is `NO_TARGET: dev-lifecycle.py
+  lists no commit_pending or close_pending parent.` The Stop gate (`hooks/stop-command-gate.py`,
+  `no_target_end`) lets a run that bound no task and dispatched nothing end on that line.
 
 If `BULK=true`, `TASK_ID` may stay empty.
 
@@ -118,11 +113,9 @@ found. Act on its JSON answer:
 - `null` in a commit-QA round, and a commit-QA finding that cites no artifact: the path becomes
   that round's own report, `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA dispatch runs again
   (Step 6) and names a path, routed as above.
-- `null` for any other path: no dispatch or request exists to re-run. Ask one AskUserQuestion
-  (header `Request`) what the cycle should deliver, naming the task and the artifact; the options
-  are the requests the task's own artifacts state (its ticket or user-requirement file) and up to
-  two parents `dev-lifecycle.py list-actionable --next-action commit` lists (`Commit <task-id>
-  instead`); then dispatch dev under the same task id for the answer.
+- `null` for any other path: no dispatch or request exists to re-run. Nobody is asked: end with a
+  report naming the task, the artifact and that no dispatch or request owes it, with the requests
+  the task's own artifacts state (its ticket or user-requirement file).
 
 There is no default role. Once the dispatch returns, run again the one check that named the path;
 a gap or finding it names again is routed the same way, with no round cap.
@@ -573,20 +566,19 @@ with no round cap. `scope_violation` means the tree changed after QA reviewed it
 and dispatch a fresh QA over the actual set.
 
 **A hook rejection** (`hook_blocked`, or any hook refusing a tool call during `/commit`) is
-the owner's decision (CLAUDE.md Subagent Hook Discipline #1-#3): the rejected operation is
-never retried without the owner's grant, and never wrapped or bypassed. This rule does not
+reported, never asked about (CLAUDE.md Subagent Hook Discipline #1-#4): the rejected operation is
+never retried, wrapped or bypassed. This rule does not
 cover `grant_missing`, `grant_expired` and `grant_consumed`, though each reaches the analyst as
 the privilege guard refusing the commit for want of a live grant: they are the commit grant's
 own lifecycle (absent, past `expires_at`, or spent by an earlier attempt;
 `agents/changelog-analyst.md` § failure_code values keeps them apart from `hook_blocked`), not a
 hook refusing an operation. The Retryable rule above takes a fresh grant for them and asks
-nothing, and after a landing the Non-retryable rule routes them. Ask one
-AskUserQuestion — header `Authorize`,
-question `<hook> refused <the operation> for task <TASK_ID>: authorize it?` with the hook's
-output verbatim, options `Authorize it` (description: the exact command the owner runs to
-authorize it, for example `/allow <op> <args>`; `/commit` runs the operation again once the
-grant exists) and `Do not authorize` (description: `/commit` goes on without that operation
-where every acceptance criterion still holds without it, Hook Discipline #4).
+nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
+line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim,
+with the remedy the hook names or the `/allow` line that would let it through, and end: the commit
+is not retried, and the Stop gate (`hooks/stop-command-gate.py`, `hook_refused_landing`) lets the
+run end on that line. The operation runs again only on
+the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.
 
 ### Step 8: Spec-update dispatch (post-commit, advisory)
 
@@ -675,9 +667,8 @@ time, through the same unmodified Step 3 to Step 8 an explicit `/commit <task-id
    `nothing_to_commit`, `push_gate_reconciled`, `nothing_to_commit_precommitted`) or, under
    `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
    inside the walk (Steps 3-7); a `partially_committed` parent continues its remaining repositories
-   in order under fresh grants (Step 7). A hook rejection, or another decision only the owner can
-   make, is one AskUserQuestion naming that parent and the decision (Step 7's question for a hook);
-   the walk goes on after the answer.
+   in order under fresh grants (Step 7). A hook rejection is reported for that parent as Step 7
+   reports it (`REFUSED:` and the hook's output), never asked about; the walk goes on.
 4. **Batch summary**: once every parent has landed, print one line per parent:
    `task-id: <landed outcome>`.
 

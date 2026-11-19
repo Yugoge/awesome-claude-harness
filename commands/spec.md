@@ -23,7 +23,7 @@ If `$ARGUMENTS` contains the literal token `--codex` (any position), strip it fr
 Then branch on the remaining text:
 
 - **Non-empty non-flag text**: it is the first requirement. Go to Step 3.
-- **Empty**: ask once with ONE AskUserQuestion in the user's language (en or zh): what should this spec be about, with 2-4 likely areas as options (the owner can type their own); use the answer as the first requirement.
+- **Empty**: end: say, in the user's language (en or zh), that `/spec` was given no requirement and that `/spec <what it should be about>` starts one. Nobody is asked.
 
 No preview-and-confirm gate. The owner's intent, scope, edge cases and acceptance are asked in the requirement round (Step 3a), never in plain text.
 
@@ -31,7 +31,7 @@ No preview-and-confirm gate. The owner's intent, scope, edge cases and acceptanc
 
 Only when Section 5 cannot be sketched at all: no topic, feature or issue, no actionable phrase ("help", "fix it", "something's wrong", a bare emoji). Otherwise go to Step 3.
 
-1. Ask ONE specific question about what Section 5 should say, with AskUserQuestion inside the turn.
+1. Ask ONE specific question about what Section 5 should say, with AskUserQuestion inside the turn, `metadata.source` `spec-question:clarify-<n>` (n: 1, 2, 3).
 2. If Section 5 can now be sketched, go to Step 3; otherwise ask again.
 3. After the 3rd answer, proceed anyway: write whatever Section 5 content you can extract plus an `_Assumption_` note.
 
@@ -143,7 +143,7 @@ Then branch on the turn:
   <verbatim requirement text>
   ```
 - **Design/evidence only** (no new requirement text, not a conclusion) → the precondition already persisted it to Section 9 and the companion files. Append no `### 5.N` block, leave Section 5 alone, and wait.
-- **Exploration findings arrive** → integrate into Section 1 silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, ask one targeted question with AskUserQuestion inside the turn ("I looked at X and found Y; does that match?"), then loop back. Never gate the loop on exploration.
+- **Exploration findings arrive** → integrate into Section 1 silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, ask one targeted question with AskUserQuestion inside the turn, `metadata.source` `spec-question:match-<n>` ("I looked at X and found Y; does that match?"), then loop back. Never gate the loop on exploration.
 - **Mid-loop vague input** → apply Step 2 (max 3 rounds) to that message before appending, then loop back. A clarification answer is itself a user turn: run the capture precondition on it first, so design or evidence in a reply is not dropped.
 
 Keep `turn_count` internally (not shown to the user), incremented per user response. There is no turn cap: only the Step 5 signal ends the loop.

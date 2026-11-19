@@ -74,6 +74,8 @@ project's root README.md and ARCHITECTURE.md by its rule-inspector only
 (_check_clean_writes; hooks/pretool-claude-config-guard.py reads clean_grant).
 
 Behavior:
+  - Every caller: an AskUserQuestion that is not a kind lib/requirement_round.KEPT keeps,
+    in the step that owns it -> exit 2 (question_refusal).
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
   - Every caller, before any check: who changed each docs/dev/qa-report-*.json
@@ -2181,6 +2183,13 @@ def _decide(data: dict) -> None:
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
+    if tool_name == "AskUserQuestion":  # only the kinds requirement_round.KEPT keeps reach the owner
+        from lib import requirement_round
+
+        why = requirement_round.question_refusal(data)
+        if why:
+            _emit_block(_caller_label(role, data), tool_name, "the owner", why)
+            sys.exit(2)
     _check_dispatch_writes(tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     approved = _check_clean_writes(role, tool_name, targets, data)
