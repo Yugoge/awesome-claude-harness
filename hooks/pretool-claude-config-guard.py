@@ -156,7 +156,6 @@ def _legacy_kind(command: str) -> str:
 # anything below it (`cp -t .claude/hooks x`, `--target-directory=.claude/commands`).
 _PROTECTED = re.compile(r'\.claude/(hooks|commands)(?![A-Za-z0-9_.-])')
 _DOT_SEGMENTS = re.compile(r'/(?:\.?/)+')
-_CD = frozenset({'cd', 'pushd', 'popd'})
 _FED = frozenset({'pipe', 'heredoc', 'herestring'})
 # Text in a word that makes it code or a command line rather than a path (`rsync -e 'cp x ...'`).
 _CODE_CHARS = re.compile(r'[\s;|&<>`]|\$\(')
@@ -173,12 +172,8 @@ _STDIN_DATA = (bash_read_only.ANY_ARGS | frozenset(bash_read_only.PAGERS)
 # _site_writes finds; one named inside code-looking text (`rsync -e 'cp x ...'`) is not settled.
 _OPERAND_COMMANDS = frozenset({'rg', 'ag', 'tar', 'find', 'touch', 'sort', 'zip', 'unzip', 'patch',
                                'perl', 'cd', 'pushd', 'popd'})
-_GIT_READS = frozenset({
-    'log', 'diff', 'show', 'status', 'blame', 'annotate', 'ls-files', 'ls-tree', 'rev-parse',
-    'shortlog', 'describe', 'cat-file', 'commit', 'add', 'grep', 'whatchanged', 'reflog',
-    'check-ignore', 'show-ref',
-})
-_GIT_VALUE_GLOBALS = frozenset({'-C', '--git-dir', '--work-tree', '--namespace'})
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib.git_facts import GIT_KEEPS_NAMED_FILES as _GIT_READS  # noqa: E402 -- git calls that write no file they name
 
 
 def _protected_kind(text: str) -> str:
@@ -217,24 +212,24 @@ def _git_settled(res, raw) -> bool:
     """A git call naming a protected folder is settled when it reads (log, diff, a commit message)
     with no `-c` setting, no config or alias, no pager, editor or output option."""
     vals = [w.value() for w in res.args]
-    k = 0
-    while k < len(vals) and (vals[k] or '').startswith('-'):
-        v = vals[k]
-        if v in ('-c', '--config-env', '--exec-path') or (v or '').startswith(('-c', '--config-env', '--exec-path=')):
+    opts, k = _shell_parse().git_global_options(vals)
+    for i, _value in opts:
+        v = vals[i]
+        if v in ('-c', '--config-env', '--exec-path') or v.startswith(('-c', '--config-env', '--exec-path=')):
             return False
-        k += 2 if v in _GIT_VALUE_GLOBALS else 1
-    if k >= len(vals) or vals[k] not in _GIT_READS:
+    if k is None or vals[k] not in _GIT_READS:
         return False
     for v in vals[k + 1:]:
-        if v is None or v.startswith(('--output', '--ext-diff', '-O', '--open-files-in-pager', '--exec')):
+        if v is None or v.startswith(('-O',) + _GIT_RUN_OPTIONS):
             return False
-        if v.startswith('--') and any(_long_prefix(v, full, least) for full, least in _GIT_RUN_OPTIONS):
+        if v.startswith('--') and any(_long_prefix(v, full, 4) for full in _GIT_RUN_OPTIONS):
             return False  # an abbreviation (`--outp=`, `--ext-dif`, `--open-files-in=`)
     return True
 
 
-# git options that write a file or run a program, with the shortest abbreviation git would take.
-_GIT_RUN_OPTIONS = (('--output', 5), ('--ext-diff', 5), ('--open-files-in-pager', 4), ('--exec', 5))
+# git options that write a file or run a program; an abbreviation counts from four characters (`--ou`).
+from lib.git_facts import GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
+_GIT_RUN_OPTIONS = tuple(sorted(GIT_RUN_OR_WRITE_OPTIONS))
 
 
 def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
@@ -448,17 +443,15 @@ def _site_writes(sp, raw: str, res) -> list:
             prefix = option_values('-P', '--directory-prefix')
             out += prefix or ([('.', res.head)] if res.head is not None else [])
     elif name == 'git':
-        k, cdir = 0, None
-        while k < len(vals) and vals[k].startswith('-'):
-            if vals[k] == '-C' and k + 1 < len(args):
-                cdir = args[k + 1]
-            k += 2 if vals[k] in _GIT_VALUE_GLOBALS else 1
+        opts, k = sp.git_global_options(vals)
+        cdir = next((args[j] for i, j in reversed(opts) if vals[i] == '-C' and j is not None), None)
+        k = len(vals) if k is None else k
         sub = vals[k] if k < len(vals) else ''
         if sub in ('checkout', 'restore', 'apply', 'reset', 'stash', 'clean', 'switch', 'am', 'merge',
                    'pull', 'cherry-pick', 'revert', 'rm', 'mv'):
             if cdir is not None:
                 out.append((cdir.value() or cdir.text, cdir))
-            if sub in ('checkout', 'restore'):
+            if sub in sp.GIT_RESTORE_PATHS:
                 out += [(w.value() or w.text, w) for w in args[k + 1:]
                         if not (w.value() or '-').startswith('-')]
             if sub == 'apply':
@@ -528,7 +521,7 @@ class _CdScopes:
         for cwd, old in states:
             if ops and ops[0].value() == '-' or (name == 'pushd' and not ops):
                 new.add((old, cwd) if old != '?' else ('?', cwd))
-            elif ops and (ops[0].value() or '').startswith(('+', '-')):
+            elif ops and (ops[0].value() or '').startswith(self.sp.OPTION_SIGNS):
                 new.add(self.UNKNOWN)  # a pushd/cd stack index
             else:
                 new.add((self._target(cwd, ops[0] if ops else None), cwd))
@@ -548,7 +541,7 @@ class _CdScopes:
                     if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
                         here = {(self._target(cwd, val), cwd) for cwd, _old in here}
             self._record(cmd.span, here)
-            if res.name in _CD and res.payload is None:
+            if res.name in self.sp.CWD_BUILTINS and res.payload is None:
                 return self._cd(res.name, res.args, states), set(states)
             if res.payload is not None:
                 if res.payload_kind == 'eval':
@@ -559,7 +552,7 @@ class _CdScopes:
             self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
             self._record(cmd.span, states)
             scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, sp.Script)]
-            self.functions = self.functions or cmd.kind in ('function', 'coproc')
+            self.functions = self.functions or cmd.kind in sp.DEFINER_KINDS
             if cmd.kind in ('subshell', 'coproc'):
                 for s in scripts:
                     self.run_script(s, states)
@@ -632,7 +625,7 @@ def _cd_dirs(sp, sites) -> list:
     cdpaths = [v for site, _res in sites for a in site.cmd.assignments if a.name == 'CDPATH'
                for v in (a.word.value() or '').split('=', 1)[-1].split(':') if v]
     for site, res in sites:
-        if res.name not in _CD:
+        if res.name not in sp.CWD_BUILTINS:
             continue
         ops = [w for w in res.args if not (w.value() or '').startswith('-')]
         if not ops:
@@ -669,7 +662,7 @@ def _parsed_kind(command: str, start: str = None) -> tuple:
     # a cd the scopes did not follow (inside a substitution, a re-parsed payload): every relative
     # write after it is read from every directory (fail closed)
     unfollowed = [site.cmd.span[0] if command[slice(*site.cmd.span)].startswith(site.cmd.words[0].text) else 0
-                  for site, res in sites if res.name in _CD and site.cmd.words
+                  for site, res in sites if res.name in sp.CWD_BUILTINS and site.cmd.words
                   and site.cmd.span not in scopes.visited]
     writes = []
     for t in sp.write_targets(script):
@@ -879,10 +872,8 @@ def _rg_proof(vals) -> bool:
 
 def _git_subcommand(vals):
     """The subcommand word of a git call (after its global options), or None."""
-    k = 0
-    while k < len(vals) and (vals[k] or '').startswith('-'):
-        k += 2 if vals[k] in _GIT_VALUE_GLOBALS else 1
-    return vals[k] if k < len(vals) else None
+    k = _shell_parse().git_subcommand_index(vals)
+    return None if k is None else vals[k]
 
 
 def _copy_links(name: str, vals) -> tuple:
@@ -1039,7 +1030,7 @@ def _proven_harmless(command: str, start: str) -> bool:
         if head is None or '/' in head or name is None:
             return False
         vals = [w.value() for w in res.args]
-        if name in _CD:
+        if name in sp.CWD_BUILTINS:
             if assigns:
                 return False
             continue
@@ -1059,8 +1050,8 @@ def _proven_harmless(command: str, start: str) -> bool:
             if not _rg_proof(vals):
                 return False
         elif name == 'git':
-            if not _git_settled(res, command) or 'add' in vals or any(
-                    v.startswith(('--git-dir', '--work-tree', '--namespace')) for v in vals):
+            redirect = tuple(_shell_parse().GIT_REDIRECT_OPTS)
+            if not _git_settled(res, command) or 'add' in vals or any(v.startswith(redirect) for v in vals):
                 return False  # another git directory or work tree (git writes its index there), an add
             if _git_subcommand(vals) not in _PROOF_GIT_READS:
                 return False  # commit, add, status: they run hooks or filters

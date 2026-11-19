@@ -364,6 +364,22 @@ def test_a_dispatch_counts_as_returned_exactly_when_its_agent_stopped(tmp_path, 
         assert REFUSAL.format(qa=qa) in result.stderr, result.stderr
 
 
+@pytest.mark.parametrize("channel", CHANNELS, ids=lambda c: c.__name__)
+def test_the_cli_s_request_copies_change_no_answer(tmp_path, channel):
+    """CLI 2.1.322 repeats each message of its next model request in an api-request-blob record, a
+    tool_use block (same id) among them, after the call's result (tests/fixtures/cli-request-copies). A
+    dispatch counts as returned exactly as it does without them, and one still running is still refused."""
+    home, payload, qa, stopped = _world(tmp_path, channel)
+    for path in [Path(payload["transcript_path"]), *Path(payload["cwd"]).glob("*/subagents/*.jsonl")]:
+        cli_shapes.add_request_copies(path)
+    assert '"api-request-blob"' in Path(payload["transcript_path"]).read_text()
+    result = run_gate(REPO, home, payload)
+    if stopped:
+        assert result.returncode == 0 and result.stderr == "", result.stderr
+    else:
+        assert result.returncode == 2 and REFUSAL.format(qa=qa) in result.stderr, result.stderr
+
+
 def test_the_records_each_channel_writes_have_the_recorded_shapes(tmp_path):
     for channel in CHANNELS:
         home, payload, _qa, _stopped = _world(tmp_path / channel.__name__, channel)

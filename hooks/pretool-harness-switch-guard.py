@@ -62,6 +62,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "li
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
+import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
 
@@ -69,8 +70,7 @@ HOME = harness_switch.harness_home()
 STATE_DIR = os.path.join(HOME, harness_switch.DIR_NAME)
 SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json")
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
-GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
-                 "grep", "rev-parse", "stash"}
+GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
@@ -178,12 +178,14 @@ REDIRECT_OP = re.compile(r"(?:\d*|&|\{\w+\})[<>][<>&|-]*\Z")  # an operator _com
 def _read_only(words: list) -> bool:
     """The command writes no file a word of it names: a reader of hooks/lib/bash_read_only.py
     (its pagers included) whose arguments pass that program's check, or a reading git call."""
-    words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        words = words[1:]  # the command's prefix assignments (`-c a=b` keeps its value word)
     if not words:
         return True
     head = os.path.basename(words[0])
     if head == "git":
-        sub = next((w for w in words[1:] if not w.startswith("-")), "")
+        k = shell_parse.git_subcommand_index(words[1:])
+        sub = "" if k is None else words[1 + k]
         return (sub in GIT_READ_ONLY or _git_reads(words[1:])) and "-delete" not in words
     args, it = [], iter(words[1:])
     for w in it:
@@ -294,7 +296,7 @@ def settings_writes(command: str, cwd: str) -> list:
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = list(_commands(command, "shell"))
-    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
+    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in shell_parse.CD_TARGET_BUILTINS)
     dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
     out, seen, home = [], set(), _settings_files()
     for words, written in segments:

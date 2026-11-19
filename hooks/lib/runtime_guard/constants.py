@@ -8,7 +8,6 @@ ZERO project identifiers.
 """
 
 # ── Generic verb / keyword vocabularies (no project names) ───────────────────
-PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})
 # The package-manager words that link or unlink a package into the global bin (P7).
 PKG_LINK_WORDS = ("link", "unlink")
 # The programs that edit a file in place by a script under -i (_is_inplace_editor_args).
@@ -22,31 +21,6 @@ ENV_WRAPPERS = frozenset({
     "stdbuf", "nice", "ionice", "setsid", "systemd-run", "daemonize",
     "chrt", "taskset", "setarch", "eatmydata", "exec",
 })
-# `exec [-cl] [-a name] command` — only -a consumes an operand; -c/-l do not.
-_EXEC_OPTS_WITH_ARG = frozenset({"-a"})
-# Wrapper -> set of options that consume ONE following operand (value).
-_WRAPPER_OPTS_WITH_ARG = {
-    "timeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
-    "nice": frozenset({"-n", "--adjustment"}),
-    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
-    "stdbuf": frozenset({"-i", "-o", "-e"}),
-    "systemd-run": frozenset({
-        "--unit", "-u", "--property", "-p", "--slice", "--description",
-        "--on-active", "--on-calendar", "--uid", "--gid", "--setenv", "-E",
-        "--working-directory", "--service-type", "--nice", "-H", "--host",
-        "-M", "--machine", "--on-boot", "--on-startup", "--on-unit-active",
-        "--on-unit-inactive", "--timer-property",
-        # NOTE: -d/--scope/-G/--pty/-t/--quiet are NO-ARG (must NOT consume an
-        # operand); they are intentionally absent here.
-    }),
-    "chrt": frozenset({"-p"}),
-    "taskset": frozenset({"-p", "-c", "--cpu-list"}),
-    "setarch": frozenset(),
-    "env": frozenset({"-C", "--chdir", "-u", "--unset", "-S", "--split-string"}),
-    "doas": frozenset({"-u", "-C"}),
-    "sudo": frozenset({"-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt", "-U", "--other-user", "-r", "--role", "-t", "--type"}),
-    "exec": _EXEC_OPTS_WITH_ARG,
-}
 # Wrappers that take ONE leading positional operand before the real command
 # word: timeout DURATION; chrt PRIORITY; taskset MASK; setarch ARCH. For
 # chrt/taskset the operand may instead be supplied via a value option
@@ -62,13 +36,6 @@ RUNTIMES = frozenset({"node", "nodejs", "tsx", "bun", "deno", "ts-node", "ts-nod
 # skipped so `deno run <path>`, `tsx watch <path>`, `bun run <path>` reach the
 # protected path. These tokens are not the script; the script follows them.
 _RUNTIME_SUBCOMMANDS = frozenset({"run", "watch"})
-# Runtime flags that consume one following value (so the script positional is
-# not mistaken for the value, and a value is not mistaken for the script).
-_RUNTIME_OPTS_WITH_ARG = frozenset({
-    "-r", "--require", "--loader", "--experimental-loader", "--import",
-    "--env-file", "--conditions", "-C", "--cpu-prof-dir", "--heap-prof-dir",
-    "--tsconfig", "--inspect-brk", "--max-old-space-size",
-})
 # Tokens that, after a workspace selector, must route a launch decision to P1.
 EXEC_RUNNER_TOKENS = frozenset({"node", "nodejs", "tsx", "ts-node", "bun", "deno", "exec", "dlx", "npx", "bunx", "x", "run-script"})
 DEP_BUILTINS = frozenset({
@@ -169,33 +136,26 @@ _GIT_READONLY_SUBCMDS = frozenset({
 #   joins_tail_as_shell : True when the front-end joins its WHOLE trailing argv
 #                         into a single shell-evaluated string (watch <cmd...>),
 #                         so the joined tail is recursed through evaluate().
+# opts_with_arg (the options that take the next word) comes from the program's
+# option spec in hooks/lib/shell_parse.py (WRAPPERS / PEEL / _SU_SPEC), read by
+# _core; only a program the parser has no spec for lists its own here.
 # Options not listed are treated as no-arg flags (skipped). Unknown long opts of
 # the `--opt=value` fused form are single tokens. A fused short opt (`-fXYZ`) is
 # a single token. `--` ends option scanning; the next token starts the tail.
 EXEC_FRONTEND_PROFILES = {
     # singleton-daemon launcher: `flock [opts] LOCKFILE cmd...` OR `flock -c 'str'`
     "flock": {
-        "opts_with_arg": frozenset({"-w", "--timeout", "-E", "--conflict-exit-code"}),
         "leading_positionals": 1,
-        "payload_opts": frozenset({"-c", "--command"}),
     },
     # sandbox: `firejail [opts] cmd...` (its own opts are mostly --opt=value)
-    "firejail": {"opts_with_arg": frozenset(), "leading_positionals": 0},
+    "firejail": {"leading_positionals": 0},
     # namespace: `unshare [opts] cmd...`. `--wd <dir>` chdirs the wrapped cmd.
     "unshare": {
-        "opts_with_arg": frozenset({
-            "--map-user", "--map-group", "--setgroups", "--wd", "--wd=",
-            "--mount", "--propagation", "-S", "--setuid", "-G", "--setgid",
-        }),
         "leading_positionals": 0,
         "cwd_opts": frozenset({"--wd"}),
     },
     # enter ns: `nsenter [opts] cmd...`
     "nsenter": {
-        "opts_with_arg": frozenset({
-            "-t", "--target", "-S", "--setuid", "-G", "--setgid",
-            "--wd", "--wdns", "-T", "--timens",
-        }),
         "leading_positionals": 0,
     },
     # privilege switch: `runuser -u USER -- cmd...` OR `runuser [opts] USER -c 'str'`
@@ -203,61 +163,47 @@ EXEC_FRONTEND_PROFILES = {
     # without -u): `runuser root -c 'str'`. Treat a bare positional before the
     # payload/tail as the user operand (consume_user_positional).
     "runuser": {
-        "opts_with_arg": frozenset({"-u", "--user", "-g", "--group", "-G", "--supp-group", "-s", "--shell"}),
         "leading_positionals": 0,
         "consume_user_positional": True,
-        "payload_opts": frozenset({"-c", "--command", "--session-command"}),
     },
     # privilege switch: `su [opts] [USER] -c 'str'` OR `su USER cmd?`. The USER is
     # an optional leading positional; -c/--command/--session-command may appear
     # before OR after it. Consume one bare positional as the user before the tail.
     "su": {
-        "opts_with_arg": frozenset({"-g", "--group", "-G", "--supp-group", "-s", "--shell"}),
         "leading_positionals": 0,
         "consume_user_positional": True,
-        "payload_opts": frozenset({"-c", "--command", "--session-command"}),
     },
     # trace: `strace [opts] cmd...`
     "strace": {
-        "opts_with_arg": frozenset({"-o", "-p", "-e", "-s", "-a", "-E", "-P", "-S", "-u", "-I", "-b", "-x"}),
         "leading_positionals": 0,
     },
     "ltrace": {
-        "opts_with_arg": frozenset({"-o", "-p", "-e", "-s", "-a", "-E", "-l", "-u", "-n"}),
         "leading_positionals": 0,
     },
     # repeat-watch: `watch [opts] cmd...` (joins tail into a shell-evaluated str)
     "watch": {
-        "opts_with_arg": frozenset({"-n", "--interval", "-d", "--differences"}),
         "leading_positionals": 0,
         "joins_tail_as_shell": True,
     },
     # cpu cap: `cpulimit [opts] -- cmd...`
     "cpulimit": {
-        "opts_with_arg": frozenset({"-l", "--limit", "-p", "--pid", "-e", "--exe", "-c", "--cpu"}),
         "leading_positionals": 0,
     },
     # privilege drop: `setpriv [opts] cmd...`
     "setpriv": {
-        "opts_with_arg": frozenset({
-            "--reuid", "--regid", "--groups", "--inh-caps", "--ambient-caps",
-            "--bounding-set", "--securebits", "--selinux-label", "--apparmor-profile",
-        }),
         "leading_positionals": 0,
     },
     # resource limit: `prlimit [opts] cmd...`
     "prlimit": {
-        "opts_with_arg": frozenset({"-p", "--pid"}),
         "leading_positionals": 0,
     },
     # perf: `perf <subcmd> [opts] cmd...` — its subcmd (stat/record/trace) is a
     # leading positional; opts before the tail are mostly --opt=value or no-arg.
     "perf": {
-        "opts_with_arg": frozenset({"-o", "--output", "-p", "--pid", "-e", "--event", "-C", "--cpu"}),
         "leading_positionals": 1,
     },
     # valgrind: `valgrind [opts] cmd...` (opts are --opt=value)
-    "valgrind": {"opts_with_arg": frozenset(), "leading_positionals": 0},
+    "valgrind": {"leading_positionals": 0},
     # record-replay: `rr record cmd...` / `rr cmd...` — subcmd is a leading pos.
     "rr": {
         "opts_with_arg": frozenset({"-o", "--output-trace-dir"}),
@@ -276,7 +222,6 @@ EXEC_FRONTEND_PROFILES = {
     # protected RELATIVE tail under it cannot be proven non-protected; the
     # leading-positional consumption + tail re-analysis stays conservative).
     "chroot": {
-        "opts_with_arg": frozenset({"--userspec", "--groups"}),
         "leading_positionals": 1,
     },
     # proot: `proot [opts] cmd...`. `-w/--cwd <dir>` chdirs the wrapped cmd.
@@ -287,12 +232,10 @@ EXEC_FRONTEND_PROFILES = {
     },
     # virtual X server: `xvfb-run [opts] cmd...`
     "xvfb-run": {
-        "opts_with_arg": frozenset({"-n", "--server-num", "-s", "--server-args", "-f", "--auth-file", "-e", "--error-file", "-w", "--wait"}),
         "leading_positionals": 0,
     },
     # dbus session: `dbus-run-session [opts] -- cmd...`
     "dbus-run-session": {
-        "opts_with_arg": frozenset({"--config-file", "--dbus-daemon"}),
         "leading_positionals": 0,
     },
     # gdb: `gdb [opts] --args cmd...` — the tail begins ONLY after `--args`.

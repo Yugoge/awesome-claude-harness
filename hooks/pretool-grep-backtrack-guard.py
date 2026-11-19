@@ -123,10 +123,10 @@ _FUNCTION_PRESERVING_WRAPPERS = {"time"}
 
 # A shell started by bare name inherits the function shadow; one started by path
 # does not, and the search inside it runs the system grep.
-_SHELL_INTERP_NAMES = {"bash", "sh", "zsh", "dash", "ksh"}
+_SHELL_INTERP_NAMES = shell_parse.COMMON_SHELLS
 
 # Only `command`/`builtin` may stand between `eval` or a shell and the payload it runs.
-_PAYLOAD_WRAPPERS = {"command", "builtin"}
+_PAYLOAD_WRAPPERS = set(shell_parse.LOOKUP_BUILTINS)
 
 # Nested code walked as the same shell: substitution bodies.
 _SUBSTITUTIONS = ("cmdsub", "backtick", "procsub")

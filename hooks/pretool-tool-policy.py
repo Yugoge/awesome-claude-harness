@@ -336,12 +336,36 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
-        return (
-            False,
-            "arbitrary /tmp and /var/tmp are denied for every role; use the "
-            "managed scratch namespace .claude/scratch/<session>/<role>/<dispatch>/",
-        )
+        return (False, "arbitrary /tmp and /var/tmp are denied for every role")
     return (True, "ok")
+
+
+def _note_own_scratch(role: str, data: dict, target) -> None:
+    """After a refused write of ``target`` to system temp or scratch, name the
+    caller's own scratch directory as a literal path. It is the directory
+    _scratch_status judges "owner": the resource session's when one resolves,
+    else <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
+    from pathlib import Path
+
+    try:
+        if _scratch_status(role, target, data) not in ("sibling", "system_temp"):
+            return
+        binding = _owner_binding(role, data)
+        if binding is not None:
+            from lib import session_resources
+
+            own = session_resources.scratch_path(_project_root(), binding)
+        else:
+            parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
+            if not all(parts):  # an id that is no single name fails the owner check below
+                return
+            own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
+        if _scratch_status(role, str(own / "f"), data) != "owner":
+            return
+        sys.stderr.write(f"tool-policy.v1 note: your own scratch directory is {own}/ (mkdir -p {own} first; "
+                         f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")
+    except Exception:
+        pass
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -814,10 +838,10 @@ def _call_dirs(script, sp, cwd: str):
     dirs, unknown, first = [cwd], False, True
     for site in sp.walk(script):
         r = sp.resolve(site.cmd)
-        if r.name not in ("cd", "pushd"):
+        if r.name not in sp.CD_TARGET_BUILTINS:
             continue
         first, was_first = False, first
-        operands = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+        operands = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
         if not operands:
             dest = os.environ.get("HOME") or os.path.expanduser("~")
         else:
@@ -929,7 +953,7 @@ def _bash_report_writes(command: str, cwd: str) -> list:
     # command that names a report, may write it.
     for site in sites:
         words = [sp.basename(w.value() or "") for w in site.cmd.words]
-        if tokens and words and words[0] in ("xargs", "parallel") and (
+        if tokens and words and words[0] in sp.ITEM_RUNNERS and (
                 _WRITER_NAMES & set(words[1:]) or any(">" in (w.text or "") for w in site.cmd.words[1:])):
             found.append(tokens[0])
     for t in writes:
@@ -1072,7 +1096,6 @@ _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
-_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "source", "."})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
@@ -1265,20 +1288,20 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
                 i += 2
                 continue
-            if name in _SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+            if name in sp.SCRIPT_RUNNERS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
                 operand = None
                 break  # `sh -c CODE`: walked as commands of its own
-            if name in _SHELLS and a in _SHELL_VALUE_OPTS:
+            if name in sp.SCRIPT_RUNNERS and a in _SHELL_VALUE_OPTS:
                 if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
                     noexec = a == "-o"
                 i += 2
                 continue
-            if name in _SHELLS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
+            if name in sp.SCRIPT_RUNNERS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
                 if "n" in a[1:]:
                     noexec = a[0] == "-"  # `-n` reads without running; a later `+n` runs
                 i += 1
                 continue
-            if name not in _SHELLS and _INLINE_FLAGS.fullmatch(a):
+            if name not in sp.SCRIPT_RUNNERS and _INLINE_FLAGS.fullmatch(a):
                 if i + 1 < len(args):
                     inline.append(texts[i + 1] if args[i + 1] is None else args[i + 1])
                 break
@@ -1295,12 +1318,12 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
                 return f"-m {module} from the harness hooks directory"
             continue
         if operand not in (None, "-"):
-            if noexec and name in _SHELLS and name not in ("source", "."):
+            if noexec and name in sp.SCRIPT_RUNNERS and name not in ("source", "."):
                 continue  # a syntax check (`bash -n`) runs nothing
             if _hook_entry_path(operand, dirs):
                 return operand
             continue
-        if name in _SHELLS:
+        if name in sp.SCRIPT_RUNNERS:
             continue  # a shell's code is walked as commands of its own
         if operand == "-" or not inline:
             for red in site.cmd.redirects:
@@ -1817,6 +1840,8 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = is_allowed(role, check_tool, target, carveouts)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
+            if check_tool in WRITE_TOOLS:
+                _note_own_scratch(role, data, target)
             if tool_name == "Bash":
                 _note_bash_write_target(data, target)
             _note_inflight_token_route(role, tool_name, target)
@@ -1825,6 +1850,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
+                _note_own_scratch(role, data, target)
                 if tool_name == "Bash":
                     _note_bash_write_target(data, target)
                 sys.exit(2)
@@ -1862,8 +1888,9 @@ def _home_git_files(home) -> list:
         git_dir, common = out.stdout.splitlines()[:2] if out.returncode == 0 else ("", "")
     except (OSError, subprocess.SubprocessError, ValueError):
         git_dir = common = ""
-    for root, names, label in ((common, ("config", "hooks"), "git common dir's"),
-                               (git_dir, ("config", "config.worktree"), "git dir's")):
+    from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES
+    for root, names, label in ((common, GIT_COMMON_DIR_PROTECTED, "git common dir's"),
+                               (git_dir, GIT_DIR_CONFIG_FILES, "git dir's")):
         held += [(os.path.join(root, n), f"the harness home's {label} {n}") for n in names if root]
     return held
 

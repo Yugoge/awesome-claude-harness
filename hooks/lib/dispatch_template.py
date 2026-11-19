@@ -22,9 +22,9 @@ import re
 from pathlib import Path
 
 try:  # imported as hooks.lib.dispatch_template (tests) or lib.dispatch_template (hooks)
-    from . import stop_contract
+    from . import command_span, stop_contract
 except ImportError:  # hooks/lib placed directly on sys.path
-    import stop_contract  # type: ignore[no-redef]
+    import command_span, stop_contract  # type: ignore[no-redef]  # noqa: E401
 
 DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
 _FENCE_RE = re.compile(r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```", re.M | re.S)
@@ -60,10 +60,8 @@ def dispatch_of(agent_transcript: str | Path) -> tuple[str, str, str] | None:
                 opener = stop_contract.span_opener(record, commands)
                 if opener:
                     command = opener[0]
-                message = record.get("message") if isinstance(record, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
-                for block in content if isinstance(content, list) else ():
-                    if (isinstance(block, dict) and block.get("type") == "tool_use"
+                for block in command_span._blocks(record, sidechain=True):
+                    if (block.get("type") == "tool_use"
                             and block.get("id") == tool_use_id and isinstance(block.get("input"), dict)):
                         if command is None:
                             return None
