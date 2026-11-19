@@ -93,7 +93,10 @@ def is_subagent(data: dict) -> bool:
     if any(_truthy(os.environ.get(key)) for key in SUBAGENT_ENV_KEYS):
         return True
 
-    if _transcript_meta_says_subagent(str(data.get("transcript_path") or "").strip()):
+    # A spawned agent's session_meta is a Codex transcript's record (a Claude Code transcript has
+    # none), so the transcript is read only under a compat runtime: a Claude Code call never opens it.
+    if (_truthy(os.environ.get(COMPAT_RUNTIME_ENV)) or data.get("runtime") or data.get("client")) \
+            and _transcript_meta_says_subagent(str(data.get("transcript_path") or "").strip()):
         return True
 
     return False
