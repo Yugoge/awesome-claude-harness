@@ -481,7 +481,7 @@ def parse_overnight_args(prompt_text: str) -> tuple[str, str, str, bool, str]:
     would hide the conflict instead of surfacing it. '' means neither flag was
     given, which the launcher resolves to in-place.
     """
-    match = re.search(r'/dev-overnight\s+(.*)', prompt_text.strip())
+    match = re.search(r'/%s\s+(.*)' % 'dev-overnight', prompt_text.strip())  # the command's name, then its arguments
     args = match.group(1).strip() if match else ''
     # Extract --codex flag (boolean toggle, no value)
     codex_required = '--codex' in args.split()
