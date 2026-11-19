@@ -89,8 +89,8 @@ def decide(payload: dict) -> tuple[str, str] | None:
     if tool in QUESTIONS:
         return None
     bypass = mode == "bypassPermissions"
-    if tool in ("Bash", "Monitor"):
-        command = str((payload.get("tool_input") or {}).get("command", ""))
+    command = (payload.get("tool_input") or {}).get("command")
+    if isinstance(command, str):  # a call that runs a shell command: Bash, Monitor
         refusal, rule = bash_rules(payload), denied_in_text(command)
         if refusal is not None:
             return "deny", refusal

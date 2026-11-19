@@ -252,6 +252,7 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | SessionStart | 8 | Session info banner, scratch-directory init, runtime-directory gitignore propagation, todo/command drift check, hook canary, tmpfs banner (plus opt-in git init and RAM-disk promotion) |
 | UserPromptSubmit | 6 | Command start (checklist injection, cycle ids, verbatim requirement to disk), `/allow` grant, `/restart` and `/commit --bulk` capability minting, doc-sync deletion check, tmpfs pressure warning |
 | PreToolUse | 35 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| PermissionRequest | 1 | Answers every permission request by rule (see "Permission prompts" below) |
 | PostToolUse | 17 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
 | Notification | 1 | An exit-0 stub (`notification-idle-overnight.py`): reads and writes nothing |
@@ -260,6 +261,19 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | SubagentStop | 8 | cp-state enforcement, artifact contract, e2e and codex-ledger checks, `/restart` response evidence, minimum-diff, layer-match and guard-integrity warnings |
 
 Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. Three are still registered in `settings.json` and count in the table above: `notification-idle-overnight.py`, `posttool-push-gate-token-verify.py` and `pretool-push-analyst-grant-guard.py`. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
+
+#### Permission prompts
+
+A person is never asked to approve a tool call. A rule allows the call or refuses it:
+
+| Where the call stands | What decides |
+|---|---|
+| A deny rule in `settings.json` matches | Claude Code refuses it |
+| A PreToolUse hook refuses it | Refused, with the hook's reason |
+| Claude Code would ask (its own `rm`/`rmdir` critical-path check, a deny rule's command found inside a command it cannot split, or, outside `bypassPermissions` mode, no allow rule) | `hooks/permissionrequest-answer.py` answers at once. A Bash or Monitor command is refused when the Bash rules (`lib/bash_safety_rules.py`, the removal rule among them) or a Bash deny rule refuse it, and otherwise runs in `bypassPermissions` mode; a removal runs in any mode once the removal rule has proved it. Another tool runs in `bypassPermissions` mode and is refused in any other mode. An error, or no answer within 30 seconds, is a refusal |
+| Anything else | It runs |
+
+`settings.json` holds no `ask` rule (`tests/test_no_permission_prompt.py`). `AskUserQuestion` and `ExitPlanMode` put a question to a person rather than ask for a permission; their own hooks answer them. If the answer hook itself dies without printing an answer, Claude Code applies no decision: a run without a prompt host refuses the call, and a session driven by a host (`--permission-prompt-tool stdio`) leaves it to that host.
 
 ## Design philosophy
 
