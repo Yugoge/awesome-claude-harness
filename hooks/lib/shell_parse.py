@@ -44,7 +44,6 @@ DOUBLE = "double"
 ANSI_C = "ansi_c"
 LOCALE = "locale"
 ESCAPED = "escaped"
-QUOTES = (BARE, SINGLE, DOUBLE, ANSI_C, LOCALE, ESCAPED)
 
 MAX_DEPTH = 24
 MAX_LEN = 262_144
@@ -400,11 +399,11 @@ class Redir:
 
     @property
     def close(self):
-        return self.op in (">&", "<&") and self.target is not None and self.target.literal() == "-"
+        return self.op in DUP_OPS and self.target is not None and self.target.literal() == "-"
 
     @property
     def dup(self):
-        if self.op in (">&", "<&") and self.target is not None:
+        if self.op in DUP_OPS and self.target is not None:
             lit = self.target.literal()
             if lit is not None and lit.endswith("-") and _digits(lit[:-1]):
                 lit = lit[:-1]          # N>&M- moves M onto N
@@ -432,13 +431,19 @@ class Redir:
 # ---------------------------------------------------------------------------
 
 _OP_CHARS = ";&|()"
-_WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 BOTH_STREAMS_OPS = ("&>>", "&>")  # redirect stdout and stderr together (they take no fd)
 REDIRECT_OPS = BOTH_STREAMS_OPS + _REDIR_OPS  # every redirection operator, longest first
 OUTPUT_REDIRECT_OPS = (">", ">>", ">|") + BOTH_STREAMS_OPS  # send output to their target
 WRITE_REDIRECT_OPS = OUTPUT_REDIRECT_OPS + ("<>",)  # open their target for writing (<> read-write)
+INPUT_REDIRECT_OPS = ("<", "<>")  # open their target for reading (<> read-write)
+HEREDOC_OPS = ("<<", "<<-", "<<<")  # feed a here-document or a here-string
+DUP_OPS = (">&", "<&")  # duplicate a file descriptor (or close one, with `-`)
+AND_OR_OPS = ("&&", "||")  # run what follows depending on what precedes
+STATIC_PART_KINDS = ("lit", "glob")  # word parts the shell does not compute (a glob only expands to names)
+BODY_PART_KINDS = frozenset({"sub", "arith", "procsub"})  # word parts whose body the shell runs
+DYNAMIC_PART_KINDS = BODY_PART_KINDS | {"param"}  # word parts the shell computes
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
@@ -460,7 +465,9 @@ SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so
 # shell the parser knows), and with `source` and `.` the commands that run a script file
 # operand as shell text in this or a new shell.
 COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
-SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
+SOURCE_BUILTINS = ("source", ".")  # run a script file in this shell
+SCRIPT_RUNNERS = COMMON_SHELLS + SOURCE_BUILTINS
+SHELL_VALUE_OPTS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")  # a shell's options that take a value
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 PRINTERS = ("echo", "printf")  # print their arguments and run nothing
@@ -1669,7 +1676,7 @@ class _Grammar:
             if self.is_op(tok, *_TERMINATORS):
                 sep = tok[1]
                 self.pos += 1
-                if sep in ("&&", "||"):
+                if sep in AND_OR_OPS:
                     self.skip_newlines()
                     nxt = self.peek()
                     if nxt is None or (self.is_op(nxt) and nxt[1] in _TERMINATORS + end_ops + (")",)) or (
@@ -2157,7 +2164,7 @@ def _feed(cmd, piped):
             fed.add("heredoc")
         elif r.op == "<<<":
             fed.add("herestring")
-        elif r.op in ("<", "<>"):
+        elif r.op in INPUT_REDIRECT_OPS:
             fed.add("file")
     return frozenset(fed)
 
@@ -2533,13 +2540,6 @@ SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", 
 # A command shaped like a shell (`*sh`, `*sh93`) that SHELLS does not name, given
 # a -c option, is read as a shell, and its reading is unresolved.
 _SHELL_LIKE_RE = re.compile(r"[a-z]*sh[0-9.]*")
-SHELL_SPEC = _spec(("-e", "-x", "-u", "-v", "-n", "-f", "-h", "-k", "-m", "-p", "-t",
-                    "-a", "-b", "-B", "-C", "-E", "-H", "-P", "-T", "-i", "-l", "-r", "-s",
-                    "+e", "+x", "+u", "+v", "+f", "+h", "+m", "+B", "+H", "+o", "+O",
-                    "--login", "--noprofile", "--norc", "--posix", "--restricted",
-                    "--noediting", "--verbose", "--debugger", "--dump-strings",
-                    "--dump-po-strings", "--help", "--version", "-c"),
-                   ("-o", "-O", "--rcfile", "--init-file"))
 # su and runuser (util-linux --help): runuser adds -u/--user; -c, --command and
 # --session-command pass the command to the shell.
 SU_COMMAND_OPTS = COMMAND_OPTS + ("--session-command",)
@@ -2716,7 +2716,7 @@ def resolve(cmd, depth=None):
             if len(ops) > 1 and ops[0].value() not in ("-", ""):
                 _set_payload(r, [ops[0]], "eval", depth, "trap_dynamic")
             return r
-        if name in ("source", "."):
+        if name in SOURCE_BUILTINS:
             r.head = head
             r.args = tuple(words[1:])
             ops = list(words[1:])
@@ -3428,6 +3428,14 @@ NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the w
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
 AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+GREP_NAMES = ("grep", "egrep", "fgrep")  # the program names that are grep
+PYTHON_NAMES = ("python", "pypy")  # the names a Python interpreter starts with (python3.12, pypy3)
+SED_SCRIPT_OPTS = ("-e", "--expression")  # sed: the option whose value is a script
+SED_QUIET_OPTS = ("-n", "--quiet", "--silent")  # sed: print only what the script prints
+SORT_OUTPUT_OPTS = ("-o", "--output")  # sort: the option whose value is the file it writes
+GIT_REDIRECT_ENV_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")  # move git to another repository
+GIT_MESSAGE_OPTS = ("-m", "--message")  # git commit, tag, stash: the option whose value is the message
+FIND_NAME_TESTS = ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename")  # find: match a name glob
 # The host names that are the local machine as a network client's destination (0.0.0.0 connects to it on
 # Linux; ::1 is bare in a socket client's arguments and bracketed in a URL).
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0")
@@ -3528,7 +3536,10 @@ class CdScopes:
     a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
     stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
     starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
-    computed target, CDPATH, popd, a function body, more than LIMIT possibilities) leaves the unknown directory '?'.
+    computed target, CDPATH, popd, the body of a function the command defines but never calls where it is
+    followed, more than LIMIT possibilities) leaves the unknown directory '?'. A brace group, loop, if or case body
+    runs in the shell's own directory, and so do a compound's own redirections; a function called in the command
+    runs its body where it is called.
     ``spell(word)`` is a cd operand's text (default: its static value, else as written, quotes removed);
     ``reached(dir)`` says a directory is there now, so one `cd` to it cannot fail (default: any cd may fail)."""
 
@@ -3537,6 +3548,7 @@ class CdScopes:
 
     def __init__(self, raw: str, spell=None, reached=None):
         self.raw, self.spans, self.visited, self.unfollowed = raw, [], set(), []
+        self.defs, self.calling = {}, set()  # functions defined in the command; those being followed
         self.cdpath = 'CDPATH' in raw
         self.functions = False  # a function or coprocess defined anywhere it walked
         self.spell = spell or (lambda w: w.text.replace('"', '').replace("'", '') if w.value() is None else w.value())
@@ -3591,6 +3603,15 @@ class CdScopes:
                     if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
                         here = {(self._target(cwd, val), cwd) for cwd, _old in here}
             self._record(cmd.span, here | set(states))  # its redirections open where the shell is
+            if res.name in self.defs and res.name not in self.calling and res.payload is None:
+                # a function defined in this command runs its body where it is called
+                self.calling.add(res.name)
+                succ, fail = set(), set()
+                for s in self.defs[res.name]:
+                    s_succ, s_fail = self.run_script(s, states)
+                    succ, fail = succ | s_succ, fail | s_fail
+                self.calling.discard(res.name)
+                return succ, fail
             for r in cmd.redirects:
                 if r.hd is not None:  # an unquoted body's substitutions run where its command does
                     self._record(r.hd.body_span, set(states))
@@ -3604,6 +3625,9 @@ class CdScopes:
         if isinstance(cmd, Compound):
             self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
             self._record(cmd.span, states)
+            for r in cmd.redirects:
+                if r.target is not None:
+                    self._record(r.target.span, states)
             scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, Script)]
             self.functions = self.functions or cmd.kind in DEFINER_KINDS
             if cmd.kind in ('subshell', 'coproc'):
@@ -3616,9 +3640,7 @@ class CdScopes:
                     succ, fail = self.run_script(s, succ)
                 return succ, fail
             if cmd.kind == 'function':
-                for s in scripts:
-                    self._record(s.span, {self.UNKNOWN})
-                    self.run_script(s, {self.UNKNOWN})
+                self.defs[cmd.name] = scripts  # followed where it is called; never called: see run()
                 return set(states), set(states)
             acc = set(states)
             for s in scripts:
@@ -3667,6 +3689,11 @@ class CdScopes:
         """Follow ``script`` from ``start``; a `cd` it did not follow (in a substitution, a re-parsed payload) makes
         the directory of everything written after it unknown."""
         self.run_script(script, {(start, '?')})
+        for name, scripts in self.defs.items():  # a body called nowhere it was followed: run where it may be
+            if not any(s.span[0] <= a < s.span[1] for s in scripts for a, _b, _st in self.spans):
+                for s in scripts:
+                    self._record(s.span, {self.UNKNOWN})
+                    self.run_script(s, {self.UNKNOWN})
         self.unfollowed = [s.cmd.span[0] if self.raw[slice(*s.cmd.span)].startswith(s.cmd.words[0].text) else 0
                            for s in walk(script) if s.cmd.words and s.cmd.span not in self.visited
                            and resolve(s.cmd).name in CWD_BUILTINS]
@@ -3681,11 +3708,12 @@ class CdScopes:
 
     def at(self, offset: int):
         """The possible directories at raw ``offset``: the innermost recorded command around it."""
-        best = None
+        best, found = None, set()
         for a, b, states in self.spans:
-            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
-                best = (a, b, states)
-        return {cwd for cwd, _old in best[2]} if best else {'?'}
+            if a <= offset < b and (best is None or b - a <= best):
+                found = (found if best == b - a else set()) | set(states)
+                best = b - a
+        return {cwd for cwd, _old in found} if best is not None else {'?'}
 
 
 
@@ -3881,7 +3909,7 @@ class _AssignScope:
         before = None
         for pl, sep in site.script.items:
             if any(st is cmd for st in pl.stages):
-                return len(pl.stages) == 1 and sep != "&" and before not in ("&&", "||")
+                return len(pl.stages) == 1 and sep != "&" and before not in AND_OR_OPS
             before = sep
         return False
 

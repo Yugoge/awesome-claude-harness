@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
-    from . import roster
+    from . import locations, roster
     from .subagent_restart import (
         AGENT_RE,
         SESSION_RE,
@@ -55,6 +55,7 @@ try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
         project_slug,
     )
 except ImportError:  # hooks/lib placed directly on sys.path
+    import locations  # type: ignore[no-redef]
     import roster  # type: ignore[no-redef]
     from subagent_restart import (  # type: ignore[no-redef]
         AGENT_RE,
@@ -744,7 +745,7 @@ def registry_dir_named(project_dir: str | Path, name: Any) -> Path | None:
     today, but the artifact check reads the two spellings as two artifacts:
     the writer at ``dev-<ts>``, its readers at the name. None for a name that
     is not one plain path component."""
-    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+    if not isinstance(name, str) or name in locations.NAMELESS_PARTS or Path(name).name != name:
         return None
     return _registry_root(project_dir) / name
 
@@ -844,27 +845,6 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
         )
         return text or None
     return None
-
-
-def candidate_transcript_paths(
-    session_id: str,
-    agent_id: str,
-    project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
-) -> list[Path]:
-    """Session-scoped candidate paths across every account root (design
-    §1.3-G2 L1): ``<root>/<slug>/<session_id>/subagents/agent-<agent_id>.jsonl``.
-
-    Reuses ``project_slug`` / ``account_project_roots``
-    (subagent_restart.py:551-577). Session scoping kills the observed
-    cross-session agent-id reuse (agent_resolver.py:23-29). Multi-root copies
-    are split views of the SAME child (design :196-199)."""
-    resolved_roots = list(roots) if roots is not None else account_project_roots()
-    slug = project_slug(project_dir)
-    return [
-        Path(root) / slug / session_id / "subagents" / f"agent-{agent_id}.jsonl"
-        for root in resolved_roots
-    ]
 
 
 def _meta_path(transcript_path: Path) -> Path:

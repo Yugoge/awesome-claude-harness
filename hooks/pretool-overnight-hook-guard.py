@@ -663,7 +663,7 @@ def _git_of(site, res) -> list:
     if res.payload is not None:
         return []
     texts = [w.value() for w in res.args] + [r.hd.body if r.hd is not None else r.target.value()
-                                            for r in site.cmd.redirects if r.op in ('<<', '<<-', '<<<')]
+                                            for r in site.cmd.redirects if r.op in sp.HEREDOC_OPS]
     return [inv for t in texts if t and 'git' in t
             for inv in sp.git_invocations(sp.parse(t), strings=True)]
 

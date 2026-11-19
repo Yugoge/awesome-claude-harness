@@ -74,6 +74,8 @@ project's root README.md and ARCHITECTURE.md by its rule-inspector only
 (_check_clean_writes; hooks/pretool-claude-config-guard.py reads clean_grant).
 
 Behavior:
+  - Every caller: an AskUserQuestion that is not a kind lib/requirement_round.KEPT keeps,
+    in the step that owns it -> exit 2 (question_refusal).
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
   - Every caller, before any check: who changed each docs/dev/qa-report-*.json
@@ -136,6 +138,7 @@ import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import shell_parse as _sp_names  # noqa: E402 -- the shell and program vocabulary
 
 # The deny-logic imports are loaded inside a FAIL-CLOSED bootstrap
 # guard, NOT at module top (where an ImportError would be a dirty uncaught
@@ -839,19 +842,9 @@ def _hits(cand: str, dirs: list) -> bool:
 
 
 def _known_text(text: str, cwd: str | None = None):
-    """``text`` with ~, $HOME, $CLAUDE_PROJECT_DIR and (at the call's start) $PWD expanded; None
-    when an expansion stays."""
-    known = {"HOME": os.environ.get("HOME") or os.path.expanduser("~")}
-    if cwd:
-        known["PWD"] = cwd
-    if os.environ.get("CLAUDE_PROJECT_DIR"):
-        known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
-    for name, value in known.items():
-        text = text.replace("${%s}" % name, value).replace("$" + name, value)
-    text = text.replace('"', "").replace("'", "")
-    if any(c in text for c in "$`*?["):
-        return None
-    return os.path.expanduser(text) if text.startswith("~") else text
+    from lib import claude_home
+
+    return claude_home.known_text(text, cwd)
 
 
 def _call_dirs(script, sp, cwd: str):
@@ -1120,7 +1113,6 @@ _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
-_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
 _HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
@@ -1142,7 +1134,6 @@ _WRITES = re.compile(
 # Top-level module names an import statement in python code names.
 _PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
 _FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
-_FIND_NAME_OPTS = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"})
 _EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
                             "sudo", "ionice", "chrt", "taskset", "xargs"})
 _BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
@@ -1226,7 +1217,7 @@ def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
         return name + " code importing the provenance module"
     if _PROVENANCE_TEXT.search(code) and _WRITES.search(code):
         return name + " code writing the provenance ledger"
-    if name.startswith(("python", "pypy")) and _imports_from(code, dirs):
+    if name.startswith(_sp_names.PYTHON_NAMES) and _imports_from(code, dirs):
         return name + " code importing from the harness hooks directory"
     return None
 
@@ -1254,7 +1245,7 @@ def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
             break
         roots.append(w)
     for i, w in enumerate(words[:-1]):
-        if w not in _FIND_NAME_OPTS:
+        if w not in _sp_names.FIND_NAME_TESTS:
             continue
         pat = words[i + 1].replace('"', "").replace("'", "")
         if _HOOK_ENTRY.search(pat) or _PROVENANCE_TEXT.search(pat):
@@ -1306,16 +1297,16 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if a == "--":
                 operand = args[i + 1] if i + 1 < len(args) else None
                 break
-            if name.startswith(("python", "pypy")) and a == "-m":
+            if name.startswith(_sp_names.PYTHON_NAMES) and a == "-m":
                 module = args[i + 1] if i + 1 < len(args) else ""
                 break
-            if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
+            if name.startswith(_sp_names.PYTHON_NAMES) and a in _PY_VALUE_OPTS:
                 i += 2
                 continue
             if name in sp.SCRIPT_RUNNERS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
                 operand = None
                 break  # `sh -c CODE`: walked as commands of its own
-            if name in sp.SCRIPT_RUNNERS and a in _SHELL_VALUE_OPTS:
+            if name in sp.SCRIPT_RUNNERS and a in _sp_names.SHELL_VALUE_OPTS:
                 if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
                     noexec = a == "-o"
                 i += 2
@@ -1342,7 +1333,7 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
                 return f"-m {module} from the harness hooks directory"
             continue
         if operand not in (None, "-"):
-            if noexec and name in sp.SCRIPT_RUNNERS and name not in ("source", "."):
+            if noexec and name in sp.SCRIPT_RUNNERS and name not in sp.SOURCE_BUILTINS:
                 continue  # a syntax check (`bash -n`) runs nothing
             if _hook_entry_path(operand, dirs):
                 return operand
@@ -1361,7 +1352,7 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             hit = _inline_runs_hook(name, code or "", dirs)
             if hit:
                 return hit
-            if pythonpath_hooks and name.startswith(("python", "pypy")):
+            if pythonpath_hooks and name.startswith(_sp_names.PYTHON_NAMES):
                 return "PYTHONPATH on the harness hooks directory"
     return None
 
@@ -1906,7 +1897,7 @@ def _home_git_files(home) -> list:
     held = [(dot, "the harness home's .git file")]
     import subprocess
 
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")}
+    env = {k: v for k, v in os.environ.items() if k not in _sp_names.GIT_REDIRECT_ENV_VARS}
     try:
         out = subprocess.run(["git", "-C", home, "rev-parse", "--path-format=absolute", "--git-dir",
                               "--git-common-dir"], capture_output=True, text=True, timeout=10, env=env)
@@ -2181,6 +2172,13 @@ def _decide(data: dict) -> None:
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
+    if tool_name == "AskUserQuestion":  # only the kinds requirement_round.KEPT keeps reach the owner
+        from lib import requirement_round
+
+        why = requirement_round.question_refusal(data)
+        if why:
+            _emit_block(_caller_label(role, data), tool_name, "the owner", why)
+            sys.exit(2)
     _check_dispatch_writes(tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     approved = _check_clean_writes(role, tool_name, targets, data)

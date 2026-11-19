@@ -1187,7 +1187,7 @@ def carry_on_line(state) -> str:
     content = str(step.get('content') or '')
     label = content.split(':', 1)[0] if content.startswith('Step ') else f'step {todos.index(step) + 1}'
     pause = ('never stop, ask or wait' if state.command == 'dev-overnight'
-             else 'pause only with AskUserQuestion')
+             else 'a refusal is reported, never asked about')
     return (f'CARRY ON: carry on with /{state.command} {label}; this turn cannot end until its '
             f'checklist is complete; {pause}; /stop is the exit.')
 

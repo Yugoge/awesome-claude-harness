@@ -113,7 +113,7 @@ _UGREP_ARGV0 = "ugrep"
 # ---------------------------------------------------------------------------
 # Step 1: recover (pattern, mode) pairs from the command's search invocations.
 # ---------------------------------------------------------------------------
-_SEARCH_NAMES = ("grep", "egrep", "fgrep")
+_SEARCH_NAMES = shell_parse.GREP_NAMES
 
 # Wrappers that keep the shell function in play: a search behind them still
 # reaches the embedded engine. Every other wrapper execs the named binary through
@@ -426,39 +426,6 @@ _GAP_RE = re.compile(
     """,
     re.VERBOSE,
 )
-
-
-def _has_top_level_alternation(pattern):
-    """True if an unescaped, top-level (depth-0) `|` exists in the pattern."""
-    depth = 0
-    i = 0
-    n = len(pattern)
-    while i < n:
-        c = pattern[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c == "[":
-            # skip a character class
-            j = i + 1
-            if j < n and pattern[j] == "^":
-                j += 1
-            if j < n and pattern[j] == "]":
-                j += 1
-            while j < n and pattern[j] != "]":
-                if pattern[j] == "\\":
-                    j += 1
-                j += 1
-            i = j + 1
-            continue
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth = max(0, depth - 1)
-        elif c == "|" and depth == 0:
-            return True
-        i += 1
-    return False
 
 
 def is_catastrophic_shape(pattern, mode):

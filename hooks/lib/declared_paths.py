@@ -26,7 +26,7 @@ from pathlib import Path
 
 # The hook imports this as lib.declared_paths, so these are the lib.* modules
 # its own code and the tests patch.
-from . import command_span, dispatch_template, obligation, requirement_round, stop_contract
+from . import command_span, dispatch_template, locations, obligation, requirement_round, stop_contract
 
 _HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
@@ -95,7 +95,7 @@ def _shape(path: str):
         names = [n for n in names if n not in ("", ".")]
         if names:
             return ("last", names[-1])
-    return _ANY if head in ("", ".", "..") else ("ends", head)
+    return _ANY if head in locations.NAMELESS_PARTS else ("ends", head)
 
 
 _DECISION = None  # within one decision: what it read of the command files

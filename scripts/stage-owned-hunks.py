@@ -2854,24 +2854,15 @@ def _screen_entry_stage(git_root, rel, abspath):
 
 CLASSIFY_SCHEMA_ID = "owned-edits-classification.v1"
 
-EVIDENCE_STATUS_ENUM = ("admissible", "boundaries_undeterminable",
-                        "census_incomplete")
-
 OVERLAP_CLASSIFICATION_ENUM = ("disjoint", "conflict", "not_applicable",
                                "not_computed")
 
 V_ELIGIBLE = "eligible_for_staging"
-V_NOTHING_OWNED = "nothing_owned"
 V_UNACCOUNTED = "unaccounted_bytes"
 V_NOT_SEPARABLE = "accounted_not_separable"
 V_CONFLICT = "ownership_conflict"
 V_BOUNDARIES = "boundaries_undeterminable"
 V_CENSUS = "classification_undeterminable"
-
-CLASSIFICATION_VERDICT_ENUM = (
-    V_ELIGIBLE, V_NOTHING_OWNED, V_UNACCOUNTED, V_NOT_SEPARABLE,
-    V_CONFLICT, V_BOUNDARIES, V_CENSUS,
-)
 
 # Enumeration (A) -- owned by classification_verdict == boundaries_undeterminable.
 BOUNDARY_UNDETERMINABLE_REASON_ENUM = (
