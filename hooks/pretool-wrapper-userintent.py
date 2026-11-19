@@ -1036,9 +1036,9 @@ class _Scan:
             v = vals[k]
             if v is None:
                 return False
-            if v in ('-n', '--quiet', '--silent'):
+            if v in _sp.SED_QUIET_OPTS:
                 quiet = True
-            elif v in ('-e', '--expression'):
+            elif v in _sp.SED_SCRIPT_OPTS:
                 if k + 1 >= len(vals) or vals[k + 1] is None:
                     return False
                 scripts.append(vals[k + 1])
@@ -1185,7 +1185,7 @@ class _Scan:
         for red in cmd.redirects:
             if red.fd != 0:
                 continue
-            if red.op in ('<', '<>') and red.target is not None:
+            if red.op in _sp.INPUT_REDIRECT_OPS and red.target is not None:
                 self._path_target(red.target)
                 return
             if red.hd is not None or red.op == '<<<':
@@ -1506,7 +1506,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if words == ['exec']:
             for red in cmd.redirects:
-                if red.fd == 0 and red.op in ('<', '<>') and red.target is not None:
+                if red.fd == 0 and red.op in _sp.INPUT_REDIRECT_OPS and red.target is not None:
                     self.exec_stdin = red.target
         if res.head is None:
             if res.args or (res.unresolved and words):
@@ -1531,7 +1531,7 @@ class _Scan:
         if name in _sp.CD_TARGET_BUILTINS:
             self._cd(args)
             return
-        if name in ('source', '.'):
+        if name in _sp.SOURCE_BUILTINS:
             ops = args[1:] if args and args[0].value() == '--' else args
             if ops:
                 self._operand(site, res, ops[0], shell=True)
@@ -2767,7 +2767,7 @@ class _Scan:
             return ''
         return out
 
-    _PLAIN_PAGERS = frozenset(('less', 'more', 'cat'))
+    _PLAIN_PAGERS = _bro.PLAIN_PAGERS
 
     def _plain_pager(self, prog) -> bool:
         """A pager that only reads the files git hands it: less, more or cat (with options),

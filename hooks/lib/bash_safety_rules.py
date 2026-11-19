@@ -1553,6 +1553,8 @@ from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_F
 from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and link verbs
 from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
     BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
+    DUP_OPS, FIND_NAME_TESTS, GIT_MESSAGE_OPTS, GREP_NAMES, HEREDOC_OPS, PYTHON_NAMES, SED_QUIET_OPTS, SED_SCRIPT_OPTS,
+    SORT_OUTPUT_OPTS, STATIC_PART_KINDS,
     DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
     OUTPUT_REDIRECT_OPS, PIPE_OPS, PRINTERS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
@@ -2518,7 +2520,7 @@ def _consent_git_tree(view, sp, r):
             v = w.value()
             if v is not None and v.lower() == "core.worktree":
                 keyed = True
-            elif v is None and any(p.kind not in ("lit", "glob") for p in w.parts) and "worktree" in w.text.lower():
+            elif v is None and any(p.kind not in STATIC_PART_KINDS for p in w.parts) and "worktree" in w.text.lower():
                 keyed = True
             elif keyed and not (v or "").startswith("-"):
                 cfg_trees.append(view.tokens(w))
@@ -2672,7 +2674,7 @@ def _consent_read_only(cmd, name, view, named_writes):
     from lib.shell_parse import AWK_DATA_OPTS, AWK_NAMES
     words = list(cmd.words[1:])
     vals = [w.value() for w in words]
-    if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in ("lit", "glob") for p in w.parts)
+    if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in STATIC_PART_KINDS for p in w.parts)
                                             for w, v in zip(words, vals)):
         return f"`{name}` takes a computed argument"
     vals = [v if v is not None else "" for v in vals]  # a glob operand: a file name, read only
@@ -2691,7 +2693,7 @@ def _consent_read_only(cmd, name, view, named_writes):
             return "`sed` edits in place or reads its script from a file"
         if err:
             return f"`sed` reads {err}"
-        scripts = [_consent_text(v) for o, v, _ in opts if o in ("-e", "--expression")]
+        scripts = [_consent_text(v) for o, v, _ in opts if o in SED_SCRIPT_OPTS]
         if not scripts:
             scripts = [_consent_text(view.tokens(w)) for w in operands[:1]]
         for s in scripts:
@@ -2728,7 +2730,7 @@ def _consent_read_only(cmd, name, view, named_writes):
         if err:
             return f"`sort` reads {err}"
         for o, v, w in opts:
-            if o in ("-o", "--output") and v is not None:
+            if o in SORT_OUTPUT_OPTS and v is not None:
                 named_writes.append(w if w is not None else ("toks", v))
         return None
     if name == "tee":
@@ -2761,7 +2763,7 @@ def _consent_read_only(cmd, name, view, named_writes):
                 if skip:
                     skip = False
                     continue
-                if v in ("-m", "--message"):
+                if v in GIT_MESSAGE_OPTS:
                     skip = True
                 elif v.startswith("--message=") or (v.startswith("-m") and not v.startswith("--")):
                     continue
@@ -3071,7 +3073,7 @@ def _bulk_static_args(name, args):
         if v is not None:
             ended = ended or v == "--"
             continue
-        if any(p.kind not in ("lit", "glob") for p in w.parts):
+        if any(p.kind not in STATIC_PART_KINDS for p in w.parts):
             return False
         prefix = w.static_prefix()
         if ended or (prefix and not prefix.startswith("-")) or re.fullmatch(r"--[A-Za-z0-9][A-Za-z0-9-]*=.*", prefix):
@@ -3096,7 +3098,7 @@ def _bulk_standalone(w):
 
 _GIT_INERT_CONFIG_RE = re.compile(
     r"color\.[a-z]+(=(never|always|auto|true|false))?"
-    r"|core\.pager=(cat|less|more)"
+    r"|core\.pager=(%s)" % "|".join(sorted(_bash_read_only.PLAIN_PAGERS)) +
     r"|core\.(quotepath|abbrev)(=[a-z0-9]+)?"
     r"|log\.(abbrevcommit|decorate|follow|showroot|date)(=[a-z0-9:_-]*)?"
     r"|diff\.(renames|context|algorithm|colormoved|colormovedws|noprefix|mnemonicprefix|relative|interhunkcontext"
@@ -3535,7 +3537,7 @@ def _hb_inert_redirect(r):
     """True for a redirection that only discards or duplicates: a dup or close, or /dev/null."""
     if r.hd is not None or r.heredoc is not None or r.fd_var is not None:
         return False
-    if r.op in (">&", "<&"):
+    if r.op in DUP_OPS:
         return r.dup is not None or r.close
     return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == locations.NULL_DEVICE
 
@@ -4292,7 +4294,7 @@ _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", 
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
-_PLAIN_HEREDOC_OPS = ("<<", "<<-", "<<<")
+_PLAIN_HEREDOC_OPS = HEREDOC_OPS
 
 
 def _plain_word(w, params=False):
@@ -4335,7 +4337,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
                 return False
         elif x.close:
             continue
-        elif x.op in (">&", "<&") and x.dup is not None:
+        elif x.op in DUP_OPS and x.dup is not None:
             if x.fd not in (1, 2) or x.dup not in (1, 2):
                 return False
         elif x.op == "<":
@@ -4415,7 +4417,7 @@ def _plain_simple(cmd, sv, piped):
     if name == "sed":
         opts = [v for v in vals if v.startswith("-")]
         rest = [v for v in vals if not v.startswith("-")]
-        if not opts or any(v not in ("-n", "--quiet", "--silent") for v in opts) or not rest \
+        if not opts or any(v not in SED_QUIET_OPTS for v in opts) or not rest \
                 or not _SED_PRINT.match(rest[0]):
             return False
     return _plain_redirects(cmd, sv)
@@ -4605,7 +4607,7 @@ def _dd_fd_of(path):
     return int(m.group(2)) if m else None
 
 
-_HEREDOC_OPS = ("<<", "<<-", "<<<")
+_HEREDOC_OPS = HEREDOC_OPS
 
 
 def _dd_redirect_targets(site, fds=(), extra=()):
@@ -5015,7 +5017,7 @@ def kill_pid_rule(command, view, sv=None):
 # a command the parser cannot read takes the base pass alone.
 
 _INTERP_CODE_OPTS = (  # interpreter name pattern, the options whose value is the code, options taking a value
-    (re.compile(r"^(python|pypy)[\d.]*$"), ("-c",), ("-W", "-X")),
+    (re.compile(r"^(%s)[\d.]*$" % "|".join(PYTHON_NAMES)), ("-c",), ("-W", "-X")),
     (re.compile(r"^(node|nodejs|bun|deno)[\d.]*$"), ("-e", "--eval", "-p", "--print"),
      ("-r", "--require", "--import", "--loader", "--experimental-loader", "--input-type", "--env-file")),
     (re.compile(r"^perl[\d.]*$"), ("-e", "-E"), ("-I", "-M", "-m")),
@@ -6082,7 +6084,7 @@ def _sd_allowed(site):
             v = "message"
         args.append(v)
     stdin = False
-    if res.name in ("grep", "egrep", "fgrep"):
+    if res.name in GREP_NAMES:
         found = _sd_scan(args, _SD_GREP)
     elif res.name == "rg":
         found = _sd_scan(args, _SD_RG)
@@ -6143,12 +6145,12 @@ _SD_LISTERS = frozenset({"ls", "dir", "vdir", "du", "echo", "printf", "stat", "f
 # What a later word can use to reach an earlier command's last argument (`grep -l session_dirs.txt; cat $_`).
 _SD_LAST_ARG = re.compile(r"\$(_(?![A-Za-z0-9_])|\{_(?![A-Za-z0-9_])|\{?BASH_(ARGV|ARGC|COMMAND|EXECUTION_STRING)|\{!)"
                           r"|!\$")
-_SD_FIND_NAMES = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"}
+_SD_FIND_NAMES = set(FIND_NAME_TESTS)
 _SD_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 # Interpreters: (short options whose value is code, short options that take the next word, long options whose
 # value is code).
 _SD_CODE_OPTS = (
-    (re.compile(r"(python|pypy)[0-9.]*"), "c", "mWXQ", set()),
+    (re.compile(r"(%s)[0-9.]*" % "|".join(PYTHON_NAMES)), "c", "mWXQ", set()),
     (re.compile(r"node(js)?|bun"), "ep", "r", {"--eval", "--print"}),
     (re.compile(r"deno"), "", "", {"--eval"}),
     (re.compile(r"perl[0-9.]*"), "eE", "", set()),
@@ -6297,7 +6299,7 @@ def _sd_glob_operand(res, out_safe):
         return None
     if name == "rg":
         hits = [h for h in opt_values({"--glob", "--iglob"}, "g") if not h.startswith("!")]
-    elif name in ("grep", "egrep", "fgrep"):
+    elif name in GREP_NAMES:
         hits = opt_values({"--include"})
     elif name == "rsync":
         hits = opt_values({"--include"})

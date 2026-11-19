@@ -92,8 +92,9 @@ def _matches_any(command: str, patterns: list) -> bool:
 # so each spelling of them counts as the home (fails closed), as an unknown prefix before a
 # written-out `.claude/hooks/` is refused today.
 _HOME = '~/.claude'
-_HOME_VARS = ('CLAUDE_HOME', 'CLAUDE_CONFIG_DIR')
-_BARE_HOME_VAR = re.compile(r'\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)(?![A-Za-z0-9_])')
+_HOME_VARS = locations.CONFIG_HOME_VARS
+_HOME_VAR_ALT = '|'.join(_HOME_VARS)
+_BARE_HOME_VAR = re.compile(r'\$(?:%s)(?![A-Za-z0-9_])' % _HOME_VAR_ALT)
 _BRACE = re.compile(r'\$\{|\}')
 _PARAMETER = re.compile(r'([A-Za-z_][A-Za-z0-9_]*|[0-9]+)(:?[-=?+])?(.*)\Z', re.S)
 
@@ -279,7 +280,7 @@ def _sed_scripts(args) -> list:
     while k < len(args):
         v = args[k].value() or ''
         if v in ('-e', '--expression', '-f', '--file') and k + 1 < len(args):
-            if v in ('-e', '--expression'):
+            if v in _shell_parse().SED_SCRIPT_OPTS:
                 scripts.append(args[k + 1])
             k += 2
             continue
@@ -578,8 +579,8 @@ _SED_BOOL_LONG = bash_read_only.SED_LONG_FLAGS
 
 
 _ENV_PATH_WORD = re.compile(
-    r'"(?:\$HOME|\$\{HOME\}|\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)|\$\{(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)\}'
-    r'|\$\{(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR):-\$HOME/[^"$`\\{}*?\[]*\})'
+    r'"(?:\$HOME|\$\{HOME\}|\$(?:%s)|\$\{(?:%s)\}' % (_HOME_VAR_ALT, _HOME_VAR_ALT) +
+    r'|\$\{(?:%s):-\$HOME/[^"$`\\{}*?\[]*\})' % _HOME_VAR_ALT +
     r'/[^"$`\\]*"\Z')
 
 

@@ -67,8 +67,10 @@ import re
 import sys
 
 try:
+    from lib.shell_parse import BODY_PART_KINDS, DYNAMIC_PART_KINDS, GIT_REDIRECT_ENV_VARS
     from lib.shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
+    from shell_parse import BODY_PART_KINDS, DYNAMIC_PART_KINDS, GIT_REDIRECT_ENV_VARS
     from shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 try:
     from . import locations
@@ -79,7 +81,7 @@ except ImportError:  # loaded outside its package (by path, or from hooks/lib): 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = GIT_LOCATION_OPTS
 # Environment assignments that redirect the target.
-_REDIRECT_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
+_REDIRECT_ENV = frozenset(GIT_REDIRECT_ENV_VARS)
 # `-c key=value` config keys that redirect the work tree. `-c` is config, not
 # the `-C` chdir: `-c clean.requireForce=false` is not a redirect.
 _REDIRECT_CONFIG_KEYS = frozenset({"core.worktree", "core.gitdir"})
@@ -119,9 +121,9 @@ _MAX_EMBED_DEPTH = 3
 _QUOTING_RE = re.compile(r"['\"`\\]")
 _SYNTAX_RE = re.compile(r"['\"`\\$()<>]")
 # Word parts with no static text: an expansion the shell computes at run time.
-_DYNAMIC_PARTS = frozenset({"param", "sub", "arith", "procsub"})
+_DYNAMIC_PARTS = DYNAMIC_PART_KINDS
 # Parts that run a command (substitutions), whose bodies are commands too.
-_BODY_PARTS = frozenset({"sub", "procsub", "arith"})
+_BODY_PARTS = BODY_PART_KINDS
 
 
 class _Word:

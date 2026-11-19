@@ -136,6 +136,7 @@ import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import shell_parse as _sp_names  # noqa: E402 -- the shell and program vocabulary
 
 # The deny-logic imports are loaded inside a FAIL-CLOSED bootstrap
 # guard, NOT at module top (where an ImportError would be a dirty uncaught
@@ -1120,7 +1121,7 @@ _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
-_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_SHELL_VALUE_OPTS = frozenset(_sp_names.SHELL_VALUE_OPTS)
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
 _HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
@@ -1142,7 +1143,7 @@ _WRITES = re.compile(
 # Top-level module names an import statement in python code names.
 _PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
 _FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
-_FIND_NAME_OPTS = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"})
+_FIND_NAME_OPTS = frozenset(_sp_names.FIND_NAME_TESTS)
 _EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
                             "sudo", "ionice", "chrt", "taskset", "xargs"})
 _BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
@@ -1226,7 +1227,7 @@ def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
         return name + " code importing the provenance module"
     if _PROVENANCE_TEXT.search(code) and _WRITES.search(code):
         return name + " code writing the provenance ledger"
-    if name.startswith(("python", "pypy")) and _imports_from(code, dirs):
+    if name.startswith(_sp_names.PYTHON_NAMES) and _imports_from(code, dirs):
         return name + " code importing from the harness hooks directory"
     return None
 
@@ -1306,10 +1307,10 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if a == "--":
                 operand = args[i + 1] if i + 1 < len(args) else None
                 break
-            if name.startswith(("python", "pypy")) and a == "-m":
+            if name.startswith(_sp_names.PYTHON_NAMES) and a == "-m":
                 module = args[i + 1] if i + 1 < len(args) else ""
                 break
-            if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
+            if name.startswith(_sp_names.PYTHON_NAMES) and a in _PY_VALUE_OPTS:
                 i += 2
                 continue
             if name in sp.SCRIPT_RUNNERS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
@@ -1342,7 +1343,7 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
                 return f"-m {module} from the harness hooks directory"
             continue
         if operand not in (None, "-"):
-            if noexec and name in sp.SCRIPT_RUNNERS and name not in ("source", "."):
+            if noexec and name in sp.SCRIPT_RUNNERS and name not in sp.SOURCE_BUILTINS:
                 continue  # a syntax check (`bash -n`) runs nothing
             if _hook_entry_path(operand, dirs):
                 return operand
@@ -1361,7 +1362,7 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             hit = _inline_runs_hook(name, code or "", dirs)
             if hit:
                 return hit
-            if pythonpath_hooks and name.startswith(("python", "pypy")):
+            if pythonpath_hooks and name.startswith(_sp_names.PYTHON_NAMES):
                 return "PYTHONPATH on the harness hooks directory"
     return None
 
@@ -1906,7 +1907,7 @@ def _home_git_files(home) -> list:
     held = [(dot, "the harness home's .git file")]
     import subprocess
 
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")}
+    env = {k: v for k, v in os.environ.items() if k not in _sp_names.GIT_REDIRECT_ENV_VARS}
     try:
         out = subprocess.run(["git", "-C", home, "rev-parse", "--path-format=absolute", "--git-dir",
                               "--git-common-dir"], capture_output=True, text=True, timeout=10, env=env)
