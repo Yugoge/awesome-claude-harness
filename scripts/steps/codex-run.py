@@ -64,7 +64,15 @@ def resolve_wrapper(env) -> str:
 
 
 def _project_root(env) -> str:
-    return env.get("CLAUDE_PROJECT_DIR") or os.getcwd()  # the hooks' project root
+    """CLAUDE_PROJECT_DIR, else the cwd (the hooks' root, R1) inside a repository; elsewhere "" (the fallback)."""
+    if env.get("CLAUDE_PROJECT_DIR"):
+        return env["CLAUDE_PROJECT_DIR"]
+    try:
+        inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True,
+                                check=False, env=env).stdout.strip() == "true"
+    except OSError:
+        inside = False
+    return os.getcwd() if inside else ""
 
 
 def resolve_output_path(env) -> Path:
