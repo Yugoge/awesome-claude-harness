@@ -87,7 +87,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    AWK_NAMES, AWK_SOURCE_OPTS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    AWK_NAMES, AWK_SOURCE_OPTS, HEREDOC_OPS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, DECLARATION_BUILTINS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
     _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
@@ -2354,7 +2354,7 @@ class Analyzer:
         # <path>'`, `strace -c '<removal>'`, `exec -c '<removal>'`. Testing
         # arguments alone leaves that entire shape authorized.
         stdin = [r.heredoc[2].text if r.heredoc is not None else self._word_text(r.target)
-                 for r in redirs if r.op in ("<<", "<<-", "<<<") and r.io in (None, "0")
+                 for r in redirs if r.op in HEREDOC_OPS and r.io in (None, "0")
                  and (r.heredoc is not None or r.target is not None)]
         if stdin:
             # What an unmodelled program does with text on its standard input is unknown: that text
@@ -3259,7 +3259,7 @@ class Analyzer:
                     for r in redirs:
                         self.cover_redir(r)
                 return
-            fed = [r for r in redirs if r.op in ("<<", "<<-", "<<<") and r.io in (None, "0")]
+            fed = [r for r in redirs if r.op in HEREDOC_OPS and r.io in (None, "0")]
             if fed:  # an unquoted delimiter whose body the shell rewrites first
                 self.structural("interpreter_stdin_code_rewritten", base, self._scope_text())
                 return
