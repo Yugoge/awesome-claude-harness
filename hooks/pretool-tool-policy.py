@@ -476,7 +476,6 @@ def _session_transcript(data: dict):
 # without one declares nothing and is no caller's dispatch. One search of this
 # needle replaces one of "Agent" and one of "Task", each a pass over the file.
 _PROMPT_KEY = b'"prompt"'
-_DISPATCH_NAMES = (b'"Agent"', b'"Task"')
 _PIECE = 1 << 22  # bytes per read of the forward scan
 _BACK_PIECE = 1 << 20  # the first read back from an offset; each further read doubles
 
@@ -577,6 +576,8 @@ class _Record:
         from the end of the file as _dispatch_calls reads a call; None when no
         call has both. Only lines that hold the id's JSON string are decoded."""
         from lib import command_span
+        from lib.subagent import DISPATCH_TOOLS
+        names = _dispatch_names(DISPATCH_TOOLS)
 
         token = json.dumps(ident).encode()
         top = self.size  # the lines from offset top on are searched
@@ -587,9 +588,9 @@ class _Record:
                 end = data.find(b"\n", pos, top - base)
                 end = top - base if end < 0 else end
                 line = data[begin:end]
-                if any(name in line for name in _DISPATCH_NAMES):
+                if any(name in line for name in names):
                     for block in command_span._blocks(command_span._decode(line)):
-                        if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                        if (block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS
                                 and isinstance(block.get("input"), dict) and (block.get("id") or "") == ident
                                 and block["input"].get("prompt") == prompt):
                             return command_span.Call(id=ident, name=block["name"], input=block["input"],
@@ -621,6 +622,11 @@ class _Record:
         return found[1] if found else None
 
 
+def _dispatch_names(tools) -> tuple:
+    """The JSON strings of the dispatch tool names, as a record line holds them."""
+    return tuple(json.dumps(t).encode() for t in tools)
+
+
 def _dispatch_calls(record: _Record) -> list:
     """The session's Agent/Task calls, read as command_span's Span.calls reads
     them (its line reader, the main session's own records only), without the
@@ -632,13 +638,15 @@ def _dispatch_calls(record: _Record) -> list:
     against the commands that open spans, and numbering every line of a long
     transcript would be a pass of its own."""
     from lib import command_span
+    from lib.subagent import DISPATCH_TOOLS
 
+    names = _dispatch_names(DISPATCH_TOOLS)
     calls = []
     for begin, _end, line in record.lines(_PROMPT_KEY):
-        if not any(name in line for name in _DISPATCH_NAMES):
+        if not any(name in line for name in names):
             continue
         for block in command_span._blocks(command_span._decode(line)):
-            if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+            if (block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS
                     and isinstance(block.get("input"), dict)):
                 calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
                                                line=begin, result_line=0, ok=False))
@@ -657,7 +665,8 @@ def _declarations(record, calls: list, targets=None) -> list:
 def _caller_label(role, data: dict) -> str:
     if role:
         return role
-    if not data.get("agent_id"):
+    from lib.subagent import is_subagent
+    if not is_subagent(data):
         return "main"
     return data.get("agent_type") or "unresolved"
 
@@ -729,7 +738,7 @@ _CODE_WRITE_FORMS = [re.compile(p) for p in (
     r"""['"]\+?>{1,2}['"]\s*,\s*""" + _LIT,                            # perl open(F, '>', P)
     r"""(['"])\+?>{1,2}\s*([^'"\n]*?""" + _REPORT_FAMILY + r"""-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
 )]
-_DEST_MODES = ("copy-dest", "move-dest", "link")
+_DEST_MODES = ("copy-dest", "move-dest", "link")  # the write modes that stage a destination
 _WRITER_NAMES = frozenset({"tee", "cp", "mv", "install", "ln", "rsync", "dd", "truncate", "sed", "sh", "bash",
                            "dash", "zsh", "ksh", "sponge", "sort", "uniq", "awk", "gawk", "curl", "wget", "touch"})
 _CD_LIMIT = 64
@@ -1032,7 +1041,8 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
     pins it as allowed; an owner decision). Whatever this misses, the e2e gate refuses by
     provenance (lib/report_provenance.py)."""
     global _DECLARED_REPORTS
-    if data.get("agent_id") or not isinstance(tool_input, dict):
+    from lib.subagent import is_subagent
+    if is_subagent(data) or not isinstance(tool_input, dict):
         return
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if tool_name in WRITE_TOOLS or tool_name == "Bash":
@@ -1344,7 +1354,8 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
 
 def _check_hook_replay(role, tool_name: str, tool_input: dict, data: dict) -> None:
     """Exit 2 on the main agent's Bash call that runs the harness's own hook code by hand (above)."""
-    if data.get("agent_id") or tool_name != "Bash" or not isinstance(tool_input, dict):
+    from lib.subagent import is_subagent
+    if is_subagent(data) or tool_name != "Bash" or not isinstance(tool_input, dict):
         return
     command = tool_input.get("command")
     if not isinstance(command, str) or not command:
@@ -1635,6 +1646,7 @@ def _clean_holds(data: dict, project: str) -> list:
     """[(role, call id, prompt, paths written, paths removed)] of each producer
     dispatch of the active span when a human-typed /clean opened it, else []."""
     from lib import claude_home, command_span, obligation
+    from lib.subagent import DISPATCH_TOOLS
 
     transcript = _session_transcript(data)
     span = command_span.active_span(transcript) if transcript else None
@@ -1644,7 +1656,7 @@ def _clean_holds(data: dict, project: str) -> list:
     home = os.path.normpath(str(home)) if home else None
     root = (frozenset(f for name in _CLEAN_ROOT_DOCS for f in _clean_forms(name, project)), frozenset())
     holds, answered, approvals, read = [], False, {}, {}
-    for use in span.uses("Agent", "Task", "AskUserQuestion", "Write"):
+    for use in span.uses(*DISPATCH_TOOLS, "AskUserQuestion", "Write"):
         if use.name == "AskUserQuestion":
             answered = answered or use.ok
             continue
@@ -1782,9 +1794,6 @@ def _approved_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
-_STAGING_MODES = ("link", "copy-dest", "move-dest")
-
-
 def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
     """The Bash write targets a write carve-out may not admit: each path that
     another operation of the same command first makes as a link, copy or move
@@ -1802,8 +1811,8 @@ def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
         from lib import policy_registry
 
         command = tool_input.get("command") or ""
-        found = [(bwt._render(t, command), t.mode) for t in bwt.extract_bash_write_targets_with_modes(command)]
-        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _STAGING_MODES]
+        found = [(p, t.mode) for t in bwt.extract_bash_write_targets_with_modes(command) for p in bwt._placed(t, command)]
+        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _DEST_MODES]
         out = set()
         for j, (path, _) in enumerate(found):
             if path and any(i != j and policy_registry._path_is_prefix(s, os.path.abspath(path))
@@ -1831,6 +1840,8 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     check_tool = "Write" if tool_name == "Bash" else tool_name
     restaged = _restaged_targets(tool_name, data.get("tool_input"))
     for target in targets:
+        if check_tool in WRITE_TOOLS and locations.is_sink(target):
+            continue  # the null device, the caller's own streams, terminal or descriptor: no file is written
         carveouts = restaged is not None and target not in restaged
         if check_tool in WRITE_TOOLS and target in approved and target not in own:
             allowed, reason = _approved_write_allowed(role, check_tool, target)
@@ -2095,9 +2106,9 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
     import shutil
     import tempfile
     from lib import obligation
-    from lib.send_policy import AGENT_TOOLS
+    from lib.subagent import DISPATCH_TOOLS
 
-    if tool_name not in AGENT_TOOLS:
+    if tool_name not in DISPATCH_TOOLS:
         return
 
     parsed = obligation.parse_obligation(prompt)

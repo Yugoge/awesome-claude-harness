@@ -30,6 +30,7 @@ try:
     from lib.hook_launch import Rule, main
 except Exception:  # the hooks still run, each as its own process
     from lib.hook_launch_fallback import Rule, main
+from lib.subagent import DISPATCH_TOOLS  # the dispatch tool names, one list for every reader
 
 EVENT = "PostToolUse"
 RULES = (
@@ -42,11 +43,11 @@ RULES = (
          after=('attribution-post',)),  # rewrites the CLAUDE.md attribution-post hashes
     Rule('command-frontmatter-validate', 'posttool-command-frontmatter-validate.py', ('Write', 'Edit', 'NotebookEdit', 'MultiEdit')),
     Rule('lane-completeness-watch', 'posttool-lane-completeness-watch.py', ('Write', 'Edit', 'NotebookEdit', 'MultiEdit')),
-    Rule('dispatch-record', 'posttool-dispatch-record.py', ('Agent',)),
+    Rule('dispatch-record', 'posttool-dispatch-record.py', DISPATCH_TOOLS),
     Rule('restart-sendmessage', 'posttool-restart-sendmessage.py', ('SendMessage',)),
     Rule('runcode-watchdog', 'posttool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
     Rule('codex-skill-ledger', 'posttool-codex-skill-ledger.py', ('Skill',)),
-    Rule('close-rating', 'posttool-close-rating.py', ('AskUserQuestion', 'Agent')),
+    Rule('close-rating', 'posttool-close-rating.py', ('AskUserQuestion', *DISPATCH_TOOLS)),
 )
 
 if __name__ == "__main__":

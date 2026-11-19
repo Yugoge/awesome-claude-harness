@@ -34,11 +34,25 @@ from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS, git_global_o
 _GIT_RUN_OR_WRITE_PREFIXES = ("-O",) + tuple(sorted(git_facts.GIT_RUN_OR_WRITE_OPTIONS))
 
 
+PAYLOAD = ""  # the call's payload text (decide() sets it), for the refusal record
+
+
 def refuse(*lines):
     """Refuse the call: the lines go to stderr, and the process exits 2, which the shell entry relays."""
     sys.stderr.write("".join(line + "\n" for line in lines))
     sys.stderr.flush()
+    record("\n".join(lines))
     sys.exit(2)
+
+
+def record(text, kind="refusal"):
+    """A report of this call to the refusal record (lib/refusal_record.py): a refusal, or kind "unproven" for a
+    command the removal policy lets through unproven. It never changes the verdict."""
+    try:
+        import refusal_record
+        refusal_record.report(PAYLOAD, [(__file__, text)], __file__, kind)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def released_line():
@@ -1243,8 +1257,6 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
                               "-H", "--set-home"})
 """sudo's options that keep its command as named: -s/--shell and -i/--login run it through `$SHELL -c`, and any
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
-_SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
-"""A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
 # The global options that point git at another directory, file, ref namespace or program set (every value option
 # but -c, and --exec-path).
 _GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
@@ -1542,8 +1554,11 @@ from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and l
 from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
     BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
     DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
-    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, PRINTERS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
+
+_SHAPE_HEAD_RE = re.compile("[^/]+|(?:%s)/[^/]+" % "|".join(locations.BIN_DIRS))
+"""The strict shape's command word (_shape_strict_ok): a bare name found on PATH, or <a plain program directory>/<name>."""
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -2889,7 +2904,7 @@ def consent_flag_verdict(command, cwd, state):
         why = _consent_read_only(cmd, name, view, named_writes)
         if why:
             return why + ", and the command names the consent flag"
-        if name in ("echo", "printf") and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
+        if name in PRINTERS and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
             emits = True
     for w in named_writes:
         why = (view.target(toks=w[1], named=True) if isinstance(w, tuple) else
@@ -3395,7 +3410,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = ("bash", "sh", "dash")
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS),
+_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.BIN_DIRS),
                                             "|".join(_HB_NOEXEC_SHELLS)))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
@@ -3685,14 +3700,14 @@ def hard_ban_mask(t):
 
 
 def _hb_only_reads(command):
-    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a system program directory
-    (lib/locations.SYSTEM_BIN_DIRS) read as its bare name: it runs nothing it chooses, so a name in it is only read."""
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a plain program directory
+    (lib/locations.BIN_DIRS, as each rule here) read as its bare name: it runs nothing it chooses, so a name is only read."""
     try:
         from lib.bash_read_only import is_read_only
         from lib.shell_parse import parse, walk
         out = list(command)
         for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
-            if (name := w.text.rpartition("/"))[0] in locations.SYSTEM_BIN_DIRS and name[2]:
+            if (name := w.text.rpartition("/"))[0] in locations.BIN_DIRS and name[2]:
                 out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
         return is_read_only("".join(out))
     except Exception:  # noqa: BLE001
@@ -4051,11 +4066,14 @@ def _command_name(cmd):
         return None
 
 
-def sensitive_redirect(command):
+def sensitive_redirect(command, kept=False):
     """BS-20/21 (audit BS-10/11). 'write' when a command writes a file lib/sensitive_names.py calls sensitive (a
     redirection into it, or tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming
     it), 'redirect' when such a name is a word or an input redirection of a command whose output goes to a file, or
-    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise.
+    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise. A word counts
+    only where it can be a source: not a grep or rg pattern, not echo's or printf's static text, and a command line
+    a shell or a runner (docker exec, ssh, watch ...) is handed is read as the commands it holds, their output kept
+    (``kept``) as its own is.
 
     Read from lib/shell_parse.py's parsed commands, payloads included (eval, bash -c, a heredoc-fed shell), so a
     name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
@@ -4076,7 +4094,7 @@ def sensitive_redirect(command):
                                      is_sensitive_name)
     try:
         from lib.bash_read_only import is_read_only
-        from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
+        from lib.shell_parse import SHELLS, _DEFAULT_INTO, parse, resolve, walk, write_targets
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
@@ -4108,8 +4126,19 @@ def sensitive_redirect(command):
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
                     return "redirect"
                 continue
-            if outputs:
-                words = list(enumerate(site.cmd.words[1:]))
+            if outputs or kept:
+                args = resolve(site.cmd).args
+                texts = [w.text if w.value() is None else w.value() for w in args]
+                spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
+                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in PRINTERS else ()
+                skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
+                for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
+                    if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
+                        inner = sensitive_redirect(w.value(), True)
+                        if inner:
+                            return inner
+                        skip.add(id(w))
+                words = [(i, w) for i, w in enumerate(site.cmd.words[1:]) if id(w) not in skip]
             elif name in _SENSITIVE_COPIERS:
                 # A copy's source operands, its options and their values aside (`rsync --exclude .env`): a
                 # source-code file is no secret read (its destination was judged above).
@@ -5968,7 +5997,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", locations.STDIN_DEVICE):
+                    if name == "--file" and value in ("-",) + locations.STDIN_DEVICES:
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -5984,7 +6013,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", locations.STDIN_DEVICE):
+                    if c == "F" and value in ("-",) + locations.STDIN_DEVICES:
                         stdin = True
                     if not attached:
                         j += 1
@@ -6863,6 +6892,8 @@ def environment():
 
 def decide(payload_text):
     """The verdict token, or a refusal (refuse() exits 2)."""
+    global PAYLOAD
+    PAYLOAD = payload_text
     try:
         payload = json.loads(payload_text)
     except ValueError:

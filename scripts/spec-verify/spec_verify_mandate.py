@@ -26,6 +26,7 @@ import os
 import re
 
 from spec_verify_parsers import (
+    SKIP_FILES as _MANDATE_SKIP_FILES,
     lookup_role_block,
     parse_consumers_tags,
     parse_front_matter,
@@ -33,14 +34,6 @@ from spec_verify_parsers import (
 )
 from spec_verify_summary import CheckResult, validate_layer_1
 
-
-# Files that do not carry a per-agent Role Mandate section. Mirrors the
-# parent module's SKIP_FILES set; orchestrator.md is also excluded
-# because its mandate is structurally different (Pipeline Workflow).
-_MANDATE_SKIP_FILES = {
-    "orchestrator.md", "manifest.json", "INDEX.md",
-    "README.md", "checkpoints.json",
-}
 
 
 _INFERRED_MARKER_RE = re.compile(

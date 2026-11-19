@@ -31,14 +31,15 @@ from typing import Any
 
 try:  # package import (hooks.lib.send_policy) or lib/ on sys.path
     from . import command_span, subagent_restart as restart
+    from .subagent import DISPATCH_TOOLS
     from .interruption_signals import is_interrupt_text, is_quota_text
 except ImportError:  # pragma: no cover - direct sys.path import
     import command_span  # type: ignore[no-redef]
     import subagent_restart as restart  # type: ignore[no-redef]
+    from subagent import DISPATCH_TOOLS  # type: ignore[no-redef]
     from interruption_signals import is_interrupt_text, is_quota_text  # type: ignore[no-redef]
 
 OBLIGATION_TOKEN = "<obligation"
-AGENT_TOOLS = ("Agent", "Task")
 
 
 def _text(content: Any) -> str:
@@ -86,7 +87,7 @@ def children(transcript_path: Any, session_id: str = "") -> tuple[dict[str, dict
             blocks = content if isinstance(content, list) else []
             if record.get("type") == "assistant":
                 for b in blocks:
-                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in AGENT_TOOLS \
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in DISPATCH_TOOLS \
                             and isinstance(b.get("input"), dict):
                         calls[str(b.get("id") or "")] = {"input": b["input"], "command": current}
                     elif isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SendMessage" \
