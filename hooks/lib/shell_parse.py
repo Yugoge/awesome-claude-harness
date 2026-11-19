@@ -2324,6 +2324,17 @@ WRAPPERS = {
     "coproc": None,
 }
 
+# GNU xargs (findutils 4.9): the options that take the next word as their value,
+# and those whose value is optional and only ever attached (`-i{}`, `-e`, `-l5`,
+# `--eof=E`, `--replace=R`, `--max-lines=N`): `xargs -i cmd` runs cmd.
+XARGS_VALUES = ("-n", "--max-args", "-P", "--max-procs", "-I", "-L", "-s", "--max-chars",
+                "-d", "--delimiter", "-E", "-a", "--arg-file", "--process-slot-var")
+XARGS_ATTACHED = ("-i", "--replace", "-e", "--eof", "-l", "--max-lines")
+XARGS_REPLACE_OPTS = ("-I", "-i", "--replace")  # run the command once per item, the item put in place
+XARGS_SPEC = _spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p",
+                    "--interactive", "-x", "--exit", "-o", "--open-tty", "--show-limits"),
+                   XARGS_VALUES + XARGS_ATTACHED, {o: 0 for o in XARGS_ATTACHED})
+
 # Wrappers the removal analyzer gives no generic reading but ``resolve`` peels:
 # the option spec and the fixed operands before the command word.
 PEEL = {
@@ -2349,11 +2360,7 @@ PEEL = {
                       ("-i", "--interleave", "-w", "--weighted-interleave", "-N", "--cpunodebind",
                        "-C", "--physcpubind", "-m", "--membind", "-p", "--preferred",
                        "-P", "--preferred-many")), 0),
-    "xargs": (_spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p",
-                     "--interactive", "-x", "--exit", "-o", "--open-tty"),
-                    ("-n", "--max-args", "-P", "--max-procs", "-I", "--replace", "-L",
-                     "--max-lines", "-s", "--max-chars", "-d", "--delimiter", "-E", "-a",
-                     "--arg-file", "-i", "-e", "-l")), 0),
+    "xargs": (XARGS_SPEC, 0),
     "flock": (_spec(("-s", "--shared", "-x", "--exclusive", "-e", "-u", "--unlock", "-n",
                      "--nb", "--nonblock", "-o", "--close", "-F", "--no-fork"),
                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code", "-c",
@@ -2708,9 +2715,6 @@ def cmd_source(cmd):
     return " ".join(w.text for w in cmd.words)
 
 
-_XARGS_VALUES = ("-n", "--max-args", "-P", "--max-procs", "-I", "--replace", "-L", "--max-lines",
-                 "-s", "--max-chars", "-d", "--delimiter", "-E", "-a", "--arg-file",
-                 "--process-slot-var")
 
 
 def _peel_xargs(r, words):
@@ -2726,10 +2730,10 @@ def _peel_xargs(r, words):
             k += 1
             break
         name = v.split("=", 1)[0]
-        if name in _XARGS_VALUES and "=" not in v and (v.startswith("--") or len(v) == 2):
+        if name in XARGS_VALUES and "=" not in v and (v.startswith("--") or len(v) == 2):
             val = words[k + 1].value() if k + 1 < len(words) else None
             opts.append((name, words[k + 1] if k + 1 < len(words) else None))
-            if name in ("-I", "--replace"):
+            if name == "-I":
                 replace = val
             k += 2
             continue
@@ -3328,7 +3332,7 @@ _COPY_MOVE_WORD_RE = re.compile(r"(?:cp|mv)(?!\w)")
 
 def _appends_args(res):
     """True when xargs appends words after the written operands, so the last is no destination."""
-    return any(name == "xargs" and not any(o in ("-I", "-i", "--replace") or (o or "").startswith("--replace=")
+    return any(name == "xargs" and not any(o in XARGS_REPLACE_OPTS or (o or "").startswith("--replace=")
                                            for o, _v in opts)
                for name, opts in res.wrappers)
 

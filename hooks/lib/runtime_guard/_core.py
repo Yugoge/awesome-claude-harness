@@ -2063,11 +2063,7 @@ def _xargs_target(rest: list):
     (-I/-n/-P/-d/-E/-s/--max-args/etc.). Returns (None, None) if no target
     command word follows (then xargs defaults to echo — not a launch).
     """
-    opts_with_arg = frozenset({
-        "-I", "-i", "--replace", "-n", "--max-args", "-L", "--max-lines",
-        "-P", "--max-procs", "-d", "--delimiter", "-E", "-e", "--eof",
-        "-s", "--max-chars", "-a", "--arg-file",
-    })
+    opts_with_arg = _sp.XARGS_VALUES
     i = 0
     n = len(rest)
     while i < n:

@@ -63,7 +63,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, OPTION_SIGNS, PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, OPTION_SIGNS, PIPE_OPS, XARGS_SPEC,
+    _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -836,12 +837,6 @@ DOCKER_RESOURCE_NOUNS = {"container", "image", "volume", "network", "system",
                          "builder", "buildx", "config", "secret", "service",
                          "stack", "node", "plugin", "context", "compose"}
 
-XARGS = _spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose",
-               "-p", "--interactive", "-x", "--exit", "--open-tty", "--show-limits",
-               "--process-slot-var"),
-              ("-n", "--max-args", "-L", "-l", "--max-lines", "-P", "--max-procs",
-               "-s", "--max-chars", "-I", "--replace", "-i", "-d", "--delimiter",
-               "-E", "-e", "--eof", "-a", "--arg-file"))
 
 PARALLEL = _spec(
     ("--gnu", "--bar", "--eta", "--progress", "-k", "--keep-order", "--will-cite",
@@ -2877,7 +2872,7 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_xargs(self, name, args, redirs, env, piped):
-        i, err = split_opts(args, XARGS)
+        i, err = split_opts(args, XARGS_SPEC)
         if err == "missing_option_value":
             self.structural("missing_option_value", "xargs")
             return

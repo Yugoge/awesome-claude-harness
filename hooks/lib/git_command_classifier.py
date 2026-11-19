@@ -166,7 +166,8 @@ def _unquote_token(tok):
 _WRAPPER_SPECS = {name: entry for table in (shell_parse.WRAPPERS, shell_parse.PEEL)
                   for name, entry in table.items() if entry is not None}
 _WRAPPERS = set(_WRAPPER_SPECS) | {'eval'}
-_WRAPPER_VALUE_FLAGS = {name: spec['val'] for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
+_WRAPPER_VALUE_FLAGS = {name: {o for o in spec['val'] if spec['nargs'].get(o, 1)}
+                        for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
 _WRAPPER_POSITIONALS = {name: fixed for name, (_spec, fixed) in _WRAPPER_SPECS.items() if fixed}
 
 # Reserved words (and `!`) after which the grammar puts a command word. `for`,

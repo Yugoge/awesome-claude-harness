@@ -84,6 +84,9 @@ CASES = [
     ("xargs-value-options", "xargs -e {} < /dev/null", ("gp", "tp")),
     ("xargs-value-options", "xargs -l {} < /dev/null", ("gp", "tp")),
     ("xargs-value-options", "xargs --process-slot-var V {} < /dev/null", ("gp", "tp")),
+    # one XARGS_SPEC: --replace and --max-lines take a value only when attached
+    ("xargs-value-options", "xargs --replace {} < /dev/null", ("gp", "bs", "tp")),
+    ("xargs-value-options", "xargs --max-lines {} < /dev/null", ("gp", "bs", "tp")),
     ("shell-state-builtins", "trap '{}' EXIT", ("gp", "bs", "tp")),
     ("shell-state-builtins", "function f { {}; }; f", ("gp", "bs", "tp")),
 ]
