@@ -10,10 +10,18 @@ name, the part of its identity that survives a move to another line or file:
   py-regex   an alternation (a|b|c) inside a string passed to re.*, or assigned to a name the
              file passes to re.*; one definition per group      -> <scope>:re  (or <scope>.NAME:re)
   sh-case    one case arm a|b|c)                                    -> <function>:case
+             (not an arm of `case "$1"` whose words are all options: that is the script's
+             own command line, like argparse in Python, not a fact about another program)
   sh-array   NAME=(a b c)                                           -> <function>.NAME
   sh-for     for x in a b c                                         -> <function>:for
   sh-regex   an alternation in a [[ =~ ]] operand or a grep -E / sed -E pattern -> <function>:re
-<scope> is the dotted class/function path, "<module>" at module level.
+<scope> is the dotted class/function path, "<module>" at module level; in shell, the last
+function defined above the line, "<script>" before the first.
+
+Not seen: a fact written as code (a function, a chain of startswith tests, a loop), tables
+built at run time ("|".join(...), set unions), dict keys, JSON and settings files, Python
+inside a shell here-document, and a regex alternation unless every alternative is plain
+text (a nested group or a class such as [a-z] keeps the alternation out; `x?` is expanded).
 """
 from __future__ import annotations
 
@@ -108,15 +116,25 @@ def _alternations(pat: str) -> list[list[str]]:
     return res
 
 
-def _literal_alt(a: str) -> str | None:
-    """An alternative as the literal text it matches, or None when it is not a plain literal
-    (anchors and word boundaries at its ends are dropped; escapes are undone)."""
+OPT_CHAR = re.compile(r"(\\.|[^\\])\?")
+
+
+def _literal_alt(a: str) -> list[str] | None:
+    """The literal texts an alternative matches, or None when it is not a plain literal.
+    Anchors and word boundaries at its ends are dropped, escapes undone, and a single
+    optional character expanded (`ya?ml` is yaml and yml; at most two per alternative)."""
     a = GROUP_PREFIX.sub("", a)
     a = re.sub(r"^(?:\\b|\^|\\A|\\s\+|\\s\*)+", "", a)
     a = re.sub(r"(?:\\b|\$|\\Z|\\s\+|\\s\*)+$", "", a)
-    if not a or META.search(a):
+    forms = [a]
+    for _ in range(2):
+        m = OPT_CHAR.search(forms[0])
+        if not m or m.group(1) in "()[]{}":
+            break
+        forms = [f[:m.start()] + x + f[m.end():] for f in forms for x in (m.group(1), "")]
+    if not a or any(not f or META.search(f) for f in forms):
         return None
-    return re.sub(r"\\(.)", r"\1", a)
+    return [re.sub(r"\\(.)", r"\1", f) for f in forms]
 
 
 def regex_tables(pat: str) -> list[frozenset]:
@@ -124,8 +142,10 @@ def regex_tables(pat: str) -> list[frozenset]:
     out = []
     for alts in _alternations(pat):
         lits = [_literal_alt(a) for a in alts]
-        if all(x is not None for x in lits) and len(set(lits)) >= 2:
-            out.append(frozenset(lits))
+        if all(x is not None for x in lits):
+            members = frozenset(m for x in lits for m in x)
+            if len(members) >= 2:
+                out.append(members)
     return out
 
 
@@ -145,6 +165,15 @@ def _strs(node) -> list[str] | None:
             isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
         return [e.value for e in node.elts]
     return None
+
+
+def _inline_strs(node) -> list[str] | None:
+    """A literal tested inline: as _strs, but other elements (None, a named constant) are
+    left out, as the first inventory did."""
+    m = _strs(node)
+    if m is None and isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        m = [e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return m or None
 
 
 def _target(t) -> str:
@@ -203,7 +232,7 @@ class _Py(ast.NodeVisitor):
     def visit_Compare(self, n):
         for op, comp in zip(n.ops, n.comparators):
             if isinstance(op, (ast.In, ast.NotIn)):
-                m = _strs(comp)
+                m = _inline_strs(comp)
                 if m is not None:
                     self.add("py-in", n.lineno, f"{self.where()}:in", m)
         self.generic_visit(n)
