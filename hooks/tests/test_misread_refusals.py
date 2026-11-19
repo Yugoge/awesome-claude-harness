@@ -395,3 +395,47 @@ COMMIT_BYPASSES = [
 def test_a_commit_that_skips_the_hooks_is_still_refused(sandbox, command):
     r = bash_safety(sandbox, command)
     assert r.returncode == 2 and BYPASS in r.stderr, (command, r.stderr)
+
+
+# ── A search of the banned script's file is no run of it ─────────────────────
+# 1 recorded refusal, with a configured ban list (CLAUDE_HARD_BANNED_SCRIPTS, each entry matched anywhere): two
+# `/usr/bin/grep -rI...` searches naming the script's file. A command hooks/lib/bash_read_only.py proves read-only
+# as a whole runs nothing, so the name in it is searched, listed or printed.
+BANNED = "hard-banned script"
+BAN_READS = [
+    '/usr/bin/grep -rIn -e "svc-dev/logs" -e "SVC_HOME_DIR" /srv/bin/svc-session-recovery.sh /etc/systemd/system/'
+    'svc-watcher.service 2>/dev/null | cut -c1-220 | head -30; echo "--- any script mentioning .svc-dev:"; '
+    '/usr/bin/grep -rIl "\\.svc-dev" /srv/bin /usr/local/bin 2>/dev/null | head -20',
+    "cat /srv/bin/svc-session-recovery.sh",
+    "ls -l /srv/bin/svc-restart.sh",
+]
+
+
+@pytest.mark.parametrize("command", BAN_READS)
+def test_a_search_or_print_of_the_banned_scripts_file_passes(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+BAN_RUNS = [
+    "bash /srv/bin/svc-session-recovery.sh",
+    "/srv/bin/svc-session-recovery.sh --all",
+    "sudo /srv/bin/svc-restart.sh",
+    "source /srv/bin/svc-session-recovery.sh",
+    "nohup svc-session-recovery &",
+    "cat /srv/bin/svc-session-recovery.sh | sh",                      # the print feeds a shell
+    "/usr/bin/grep -l x /srv/bin/svc-restart.sh | xargs sh",
+    "echo svc-restart | bash",
+    'echo "$(svc-restart)"',
+    "if /usr/bin/grep -q x /srv/bin/svc-restart.sh; then svc-restart; fi",
+    "find /srv/bin -name 'svc-restart*' -exec sh {} \\;",
+    "awk 'BEGIN { system(\"svc-restart\") }'",
+    "/srv/evil/grep x /srv/bin/svc-restart.sh",                       # a grep that is not the system's
+    "/usr/bin/grep -rn x /srv/bin/svc-restart.sh > /srv/work/out.txt",  # not read-only as a whole: as before
+]
+
+
+@pytest.mark.parametrize("command", BAN_RUNS)
+def test_a_run_of_the_banned_script_is_still_refused(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 2 and BANNED in r.stderr, (command, r.stderr)

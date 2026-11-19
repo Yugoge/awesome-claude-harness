@@ -3688,9 +3688,25 @@ def hard_ban_mask(t):
     return t if o is None or _HB_RUNS_TEXT.search("".join(u)) else "".join(o)
 
 
+def _hb_only_reads(command):
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word written under /bin, /usr/bin
+    or /usr/local/bin read as its bare name: it runs nothing of its choosing, so a name in it is searched or printed."""
+    try:
+        from lib.bash_read_only import is_read_only
+        from lib.shell_parse import parse, walk
+        out = list(command)
+        for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
+            if re.fullmatch(r"(/usr/local|/usr)?/bin/[^/]+", w.text):
+                out[w.span[0]:w.span[1]] = w.text.rsplit("/", 1)[1].rjust(len(w.text))
+        return is_read_only("".join(out))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def hard_ban_rule(command):
     """Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs,
-    each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word: in the
+    each matched anywhere in a command that is not read-only as a whole (_hb_only_reads: a search, listing or print
+    of the script's file runs nothing); unset, session-recovery and restart-all-sessions match only as the command word: in the
     text with its quoted data masked (unless a word outside quotes names a program that runs text), or in the
     parser's executable view, which keeps what a shell `-c`, a git alias or a substitution runs and blanks the data
     an option such as git's `-c` merely configures. The default names pass a whole command of hard_ban_inert_shape
@@ -3714,6 +3730,8 @@ def hard_ban_rule(command):
             text = command + hard_ban_run_lines(command)
         except Exception:  # noqa: BLE001
             text = command
+    elif _hb_only_reads(command):
+        return
     for ban in bans:
         if configured:
             rx = ban
