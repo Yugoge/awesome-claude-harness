@@ -1,0 +1,29 @@
+#!/bin/bash
+# post-commit - Combined hook: Git LFS + Auto-Push
+
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PART 1: Git LFS Post-Commit Hook
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+if command -v git-lfs >/dev/null 2>&1; then
+    git lfs post-commit "$@"
+fi
+
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PART 2: Auto-Push Hook
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BRANCH=$(git branch --show-current 2>/dev/null)
+
+if [ -z "$BRANCH" ]; then
+  exit 0
+fi
+
+# The repository's harness.autoPush decides first, else GIT_AUTO_PUSH=1 (D1 as amended);
+# the harness's reader is under CLAUDE_HOME or ~/.claude, and without it nothing is pushed.
+. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/auto_push.sh" 2>/dev/null || exit 0
+harness_auto_push . || exit 0
+
+nohup git push origin "$BRANCH" >/dev/null 2>&1 &
+
+exit 0
