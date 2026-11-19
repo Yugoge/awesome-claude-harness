@@ -69,6 +69,14 @@ Bracket expressions are no way to narrow `./**`: `Edit(./[!.]*)`, `Edit(./[^.]*)
 see a redirect (`Bash(*>*hooks/*)` and similar left the redirects allowed). `Edit(/tests/*)` was
 measured matching `tests/generated/x.py` (a directory pattern covers what is below it), hence the
 per-subdirectory entries under tests/.
+
+Since 2026-11-19 no ask rule remains (docs/how-it-works.md, "Permission prompts"). The harness-home asks are
+removed: hooks/ and commands/ are decided by the config guard (tests below), the harness-switch keys of
+settings.local.json by its guard and the deny entry, and the venv the hooks run is a deny entry
+(`Edit(/venv/**)`, `Edit(/.venv/**)`). The HOME dot-state asks are removed too: a write of a home file that
+is no secret store (~/.gitconfig, ~/.config/gh/config.yml) runs without anyone being asked; the secret stores
+stay denied (tests/test_home_secret_denies.py). The 2.1.326 tables stay as history: their "now" column is the
+settings of that time, whose ask list is tests/fixtures/permissions-ask-until-20261119.json.
 """
 from __future__ import annotations
 
@@ -81,6 +89,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from tests.test_permission_ask_dry_run import OLD_ASK
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / "hooks"
@@ -847,7 +857,7 @@ def _permissions() -> dict:
 def _anchored_asks() -> list[str]:
     """The settings-source-anchored ask patterns, without `Edit(/` and `)`, a trailing `/**` dropped."""
     out = []
-    for rule in _permissions()["ask"]:
+    for rule in OLD_ASK:  # the ask list of that time (module text)
         if rule.startswith("Edit(/") and not rule.startswith("Edit(//"):
             body = rule[len("Edit(/"):-1]
             out.append(body[:-3] if body.endswith("/**") else body)
@@ -866,12 +876,26 @@ def _tracked() -> list[str]:
     return [f for f in out.split("\0") if f]
 
 
+def _existed(path: str) -> bool:
+    """Whether the top-level entry of `path` is one the 2026-11-19 ask list was derived for."""
+    if path.startswith("tests/"):
+        parts = path.split("/")
+        return len(parts) == 2 or "/".join(parts[:2]) in KNOWN_TOP | {"tests/generated"}
+    return path.split("/")[0] in KNOWN_TOP
+
+
+_OLD_EDIT = [r[len("Edit(/"):-1] for r in OLD_ASK if r.startswith("Edit(/")]
+KNOWN_TOP = {e.split("/")[0] for e in _OLD_EDIT} | {"/".join(e.split("/")[:2]) for e in _OLD_EDIT if e.startswith("tests/")} \
+    | RESIDUAL | CLI_OWNED
+
+
 def test_every_harness_home_entry_is_asked():
-    """Each top-level entry of the harness home -- tracked, a runtime entry .gitignore names, or a name the CLI
+    """History, as of 2026-11-19 (the tree is read as it was then: entries added later are not checked, since no
+    ask list exists any more and tests/test_no_permission_prompt.py requires that). Each top-level entry of the harness home -- tracked, a runtime entry .gitignore names, or a name the CLI
     reads from its config directory (CLI_READ) -- and each
     entry directly under tests/ is asked at the settings source, or is a named residual. A new top-level
     file or directory fails here until it gets an ask entry or a stated reason."""
-    tracked = _tracked()
+    tracked = [f for f in _tracked() if _existed(f)]
     missing = []
     for top in sorted({f.split("/")[0] for f in tracked}):
         if top == "tests" or _covered(top):
@@ -915,8 +939,10 @@ def test_no_home_ask_covers_the_claude_config_dir():
 
 def test_the_venv_the_hooks_run_is_asked():
     """hooks/pretool-bash-safety.sh runs the home's venv interpreter; a .pth there runs inside the hook."""
-    assert "venv" in _anchored_asks()
+    assert "venv" in _anchored_asks()  # history
     assert "venv/bin/python" in (HOOKS / "pretool-bash-safety.sh").read_text(encoding="utf-8")
+    deny = _permissions()["deny"]  # now: refused, not asked
+    assert "Edit(/venv/**)" in deny and "Edit(/.venv/**)" in deny and not _permissions().get("ask")
 
 
 def _bash_ask_matches(entry: str, text: str) -> bool:
@@ -933,7 +959,7 @@ def test_the_entries_measured_are_the_entries_shipped():
     above do not depend on them. Any other non-Bash ask entry still fails here, and so does a Bash ask entry
     that matches a Bash command measured above (its whole text or a part at `;`, `&`, `|` or a newline), since
     that row's decision would no longer be the one measured."""
-    perms = _permissions()
+    perms = dict(_permissions(), ask=OLD_ASK)  # history: the settings measured
     others = [rule for rule in perms["ask"] if rule.startswith("Bash(")]
     assert [rule for rule in perms["ask"] if rule not in others] == MEASURED_ASK
     assert perms["ask"][-len(HOME_ASKS):] == HOME_ASKS
@@ -943,6 +969,7 @@ def test_the_entries_measured_are_the_entries_shipped():
     assert not reached, "a Bash ask entry reaches a measured Bash row: %s" % reached
     assert "Edit(./**)" in perms["allow"]
     assert "Edit(.claude/settings.local.json)" in perms["deny"]
+    assert not _permissions().get("ask")  # now
 
 
 ALL_ROWS = MEASURED + MEASURED_HOME
@@ -1000,8 +1027,9 @@ def test_own_auto_memory_keeps_its_base_decision():
                   "W M plan cwd=HOME"):
         assert rows[label][6] == rows[label][4], label
     assert rows["W M own memory cwd=HOME"][4] == "allow"
-    assert "Edit(/.claude/**)" not in _permissions()["ask"]
-    assert "Edit(/.claude/.awesome-claude-harness)" in _permissions()["ask"]
+    assert "Edit(/.claude/**)" not in OLD_ASK
+    assert "Edit(/.claude/.awesome-claude-harness)" in OLD_ASK
+    assert not [r for r in _permissions()["deny"] if r.startswith("Edit(/.claude")]  # now: nothing refuses it
 
 
 def test_project_local_settings_entry_is_denied():

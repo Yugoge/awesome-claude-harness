@@ -3716,6 +3716,85 @@ def _hb_only_reads(command):
         return False
 
 
+def _dry_run_only(name, args):
+    """`npm publish` and `kubectl apply|create`, which act on a registry or a cluster: the refusal text when the
+    call is the real one, None when it is no such call or its dry run (npm `--dry-run`; kubectl `--dry-run=client`
+    or `=server`, or the value as the next word). A word computed at run time proves no dry run."""
+    if name == "npm" and next((a for a in args if a is None or not a.startswith("-")), "") in (None, "publish"):
+        if "--dry-run" in args or "--dry-run=true" in args:
+            return None
+        return "npm publish runs only as its dry run (npm publish --dry-run)"
+    if name == "kubectl" and ("apply" in args or "create" in args):
+        pairs = zip(args, args[1:] + [None])
+        if any(a in ("--dry-run=client", "--dry-run=server") or (a == "--dry-run" and b in ("client", "server"))
+               for a, b in pairs):
+            return None
+        return "kubectl apply and kubectl create run only as their dry run (--dry-run=client or --dry-run=server)"
+    return None
+
+
+def _read_made_to_run(name, args):
+    """A read that one of its words makes run a program or write a file: the option, else None. rg with an option
+    whose value is a program (shell_parse.RG_PROGRAM_OPTS); a git read subcommand (git_facts.GIT_READ_SUBCOMMANDS)
+    with `-c`/`--config-env` naming a key whose value git runs (GIT_RUN_CONFIG_KEY_RE; a pager key set to a plain
+    pager, bash_read_only.PLAIN_PAGERS, only shows), `--exec-path=`, or an option of GIT_RUN_OR_WRITE_OPTIONS."""
+    from lib.bash_read_only import PLAIN_PAGERS, _long_hits
+    from lib.shell_parse import RG_PROGRAM_OPTS, git_global_options
+    if name == "rg":
+        return next((a for a in args if a is not None and _long_hits(a, RG_PROGRAM_OPTS)), None)
+    if name != "git":
+        return None
+    opts, sub = git_global_options(args)
+    if sub is None or args[sub] not in git_facts.GIT_READ_SUBCOMMANDS:
+        return None
+    for i, v in opts:
+        if args[i] in ("-c", "--config-env"):
+            key, _eq, value = (args[v] if v is not None and args[v] is not None else "").partition("=")
+            if v is None or args[v] is None or (git_facts.GIT_RUN_CONFIG_KEY_RE.match(key) and not (
+                    key.lower().endswith("pager") and value in PLAIN_PAGERS)):
+                return f"{args[i]} {args[v] if v is not None else ''}".strip()
+        elif args[i].startswith("--exec-path="):
+            return args[i]
+    return next((a for a in args[sub + 1:] if a is not None and _long_hits(a, git_facts.GIT_RUN_OR_WRITE_OPTIONS)),
+                None)
+
+
+def outward_rule(command):
+    """What acts beyond this machine with no undo: a real `npm publish`, `kubectl apply` or `kubectl create` (their
+    dry runs run), and code fetched by an HTTP client (HTTP_CLIENTS: curl, wget, ...) piped into a shell
+    (`curl -s URL | bash`). Read through the
+    parser (lib/shell_parse.walk, resolve), so wrappers, `bash -c` and substitutions are seen; a shell fed by a
+    heredoc, a file or another program's output, and `bash script.sh`, are not refused here."""
+    from lib.shell_parse import SHELLS, SimpleCommand, _stdin_redirect, parse, resolve, walk
+    sites = list(walk(parse(command)))
+    scripts = {}
+    for site in sites:
+        scripts.setdefault(id(site.script), site.script)
+        res = resolve(site.cmd) if isinstance(site.cmd, SimpleCommand) else None
+        why = _dry_run_only(res.name, res.argv()) if res is not None else None
+        made = _read_made_to_run(res.name, res.argv()) if res is not None and not why else None
+        if made:
+            refuse(f"BLOCKED: {res.name} reads, but {made} makes it run a program or write a file.",
+                   f"Command: {command}", f"REASON: run the {res.name} read without {made}; to run a program, run it "
+                   "as its own command, where the rules read it.", released_line())
+        if why:
+            refuse(f"BLOCKED: {why}.", f"Command: {command}",
+                   "REASON: a publish or a cluster change acts outside this machine and cannot be taken back; "
+                   "its dry run shows the same result and runs.", released_line())
+    for script in scripts.values():
+        for pl, _sep in script.items:
+            fetched = False
+            for stage in pl.stages:
+                res = resolve(stage) if isinstance(stage, SimpleCommand) else None
+                if fetched and res is not None and res.name in SHELLS and res.payload_kind != "shell_c" \
+                        and res.stdin_shell and _stdin_redirect(stage.redirects) is None:
+                    refuse("BLOCKED: code fetched by curl, wget or another HTTP client is piped into a shell.",
+                           f"Command: {command}",
+                           "REASON: the code that would run is not in the command, so no rule can read it first. "
+                           "Download it to a file, read it, then run the file (bash <file>).", released_line())
+                fetched = fetched or (res is not None and res.name in HTTP_CLIENTS)
+
+
 def hard_ban_rule(command):
     """Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs,
     each matched anywhere in a command that is not read-only as a whole (_hb_only_reads: a search, listing or print
@@ -6947,6 +7026,7 @@ def decide(payload_text):
     view = GitView(command)
     bulk_sentinel_rule(command)
     hard_ban_rule(command)
+    outward_rule(command)
     executable = executable_view_or_raw(command)
     sv = ServiceView(command, get("cwd"))
     service_rules(command, executable, env, sv)

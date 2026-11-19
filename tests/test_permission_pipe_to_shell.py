@@ -34,6 +34,16 @@ only, holding only a `permissions` block, a throwaway cwd, and a local mock Mess
 one Bash tool_use and records the tool_result. Under bypassPermissions these ask entries still
 prompted; the CLI's own prompts for unmatched commands (`| sh`, `| zsh`, `sh -c "$(curl x)"`) ran.
 KNOWN_GAPS still run unprompted in default mode; docs/ENFORCEMENT-LEDGER.md S-022 lists every gap.
+
+Since 2026-11-19 no ask rule remains (docs/how-it-works.md, "Permission prompts"), and these 18 could not
+stay as deny rules: measured on Claude Code 2.1.322 (bypassPermissions, the 18 entries as deny), they refused
+`bash <<'EOF' ... EOF`, `bash -s <<EOF`, `cat x | bash`, `echo hi | bash` and `basename /opt/flash` along
+with `curl ... | bash`. The Bash rules decide instead (lib/bash_safety_rules.py `outward_rule`, read through
+the parser): code fetched by curl or wget piped into a shell is refused, in every form above and every
+KNOWN_GAP; a shell fed by a heredoc, a file or a local program, and `bash script.sh`, run. The tables
+measured on 2.1.326 stay as history, checked against `_then()` (today's allow and deny, unchanged, with
+the ask list of tests/fixtures/permissions-ask-until-20261119.json); the "now" assertions check the shipped
+settings and the Bash rules.
 """
 from __future__ import annotations
 
@@ -43,6 +53,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+from tests.test_permission_ask_dry_run import OLD_ASK, _bash_rules_refuse
 
 REPO = Path(__file__).resolve().parent.parent
 DEAD = ("Bash(curl:* | sh:*)", "Bash(wget:* | sh:*)")
@@ -142,6 +154,15 @@ STILL_RUNS = [
 @functools.lru_cache(maxsize=1)
 def _permissions() -> dict:
     return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+
+
+def _then() -> dict:
+    """The permissions the 2.1.326 tables were measured under (see the module text)."""
+    return dict(_permissions(), ask=OLD_ASK)
+
+
+def _fetched_pipe_refused(cmd: str) -> bool:
+    return "piped into a shell" in _bash_rules_refuse(cmd)
 
 
 def _bash_rules(entries) -> list[str]:
@@ -307,33 +328,37 @@ def test_dead_entry_could_never_match(entry):
 
 
 def test_stdin_bash_entries_are_ask():
+    """History: they were ask entries. Now: no ask list, and none is a deny entry (the Bash rules decide)."""
+    assert set(STDIN_BASH) <= set(OLD_ASK), sorted(set(STDIN_BASH) - set(OLD_ASK))
     perms = _permissions()
-    assert set(STDIN_BASH) <= set(perms.get("ask", [])), sorted(set(STDIN_BASH) - set(perms.get("ask", [])))
-    assert not set(STDIN_BASH) & set(perms["deny"])
+    assert not perms.get("ask") and not set(STDIN_BASH) & set(perms["deny"])
 
 
 def test_no_ask_entry_sits_in_the_exact_tier():
     """An exact-tier ask outranks a wildcard deny past a wrapper (measured): every ask entry needs a
     `*` that is not a trailing `:*`, which matches its bare prefix in the exact tier."""
-    for entry in _bash_rules(_permissions().get("ask", [])):
+    for entry in _bash_rules(_then()["ask"]):
         assert "*" in entry.replace(":*", "") , entry
 
 
 @pytest.mark.parametrize("cmd", PIPE_TO_BASH)
 def test_pipe_to_bash_prompts(cmd):
-    assert decision(cmd) == "ask"
+    assert decision(cmd, _then()) == "ask"  # history
+    assert _fetched_pipe_refused(cmd)  # now
 
 
 @pytest.mark.parametrize("cmd", PROMPTED_ON_BASE)
 def test_base_prompts_still_prompt(cmd):
-    assert decision(cmd) in ("ask", "prompt")
+    assert decision(cmd, _then()) in ("ask", "prompt")  # history
+    assert _fetched_pipe_refused(cmd)  # now: refused, not asked
 
 
 @pytest.mark.parametrize("cmd", DENIED_ON_BASE)
 def test_every_base_deny_stays_denied(cmd):
     base_like = {**_permissions(), "ask": []}
     assert decision(cmd, base_like) == "deny"
-    assert decision(cmd) == "deny"
+    assert decision(cmd, _then()) == "deny"
+    assert decision(cmd) == "deny"  # now
 
 
 def test_exact_tier_asks_would_have_downgraded_sudo():
@@ -344,25 +369,28 @@ def test_exact_tier_asks_would_have_downgraded_sudo():
 
 @pytest.mark.parametrize("cmd", LOCAL_STDIN_BASH)
 def test_local_stdin_bash_prompts_and_is_not_denied(cmd):
-    assert decision(cmd) == "ask"
+    assert decision(cmd, _then()) == "ask"  # history
+    assert decision(cmd) != "deny" and _bash_rules_refuse(cmd) == ""  # now: it runs
 
 
 @pytest.mark.parametrize("cmd", KNOWN_GAPS)
 def test_known_gaps_still_run(cmd):
-    """Pinned so a later rule that closes one shows up here (move it to PIPE_TO_BASH then)."""
-    assert decision(cmd) == "allow"
+    """History: these ran unprompted at the permission layer, and still do; now the Bash rules refuse each."""
+    assert decision(cmd, _then()) == "allow" and decision(cmd) == "allow"
+    assert _fetched_pipe_refused(cmd)
 
 
 @pytest.mark.parametrize("cmd", KNOWN_COLLATERAL)
 def test_known_collateral_prompts(cmd):
     """The `*` in `b*ash` spans spaces and `/`: these prompt now and were never denied."""
-    assert decision(cmd) == "ask"
-    assert decision(cmd, {**_permissions(), "ask": []}) != "deny"
+    assert decision(cmd, _then()) == "ask"  # history
+    assert decision(cmd) == "allow" and _bash_rules_refuse(cmd) == ""  # now: it runs as on the base
 
 
 @pytest.mark.parametrize("cmd", STILL_RUNS)
 def test_plain_downloads_and_scripts_still_run(cmd):
-    assert decision(cmd) == "allow"
+    assert decision(cmd, _then()) == "allow" and decision(cmd) == "allow"
+    assert _bash_rules_refuse(cmd) == ""
 
 
 def test_no_shell_wide_rule():
