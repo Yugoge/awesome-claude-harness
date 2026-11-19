@@ -66,6 +66,7 @@ import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
 from subagent import DISPATCH_TOOLS  # noqa: E402 -- the tool names a subagent is dispatched under
+from harness_vocabulary import WRITE_TOOLS  # noqa: E402 -- the tools that write a file
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
 
@@ -547,7 +548,7 @@ def main() -> int:
     cwd = data.get("cwd") if isinstance(data.get("cwd"), str) and data.get("cwd") else os.getcwd()
     if tool == "Bash":
         return check_bash(str(ti.get("command") or ""), cwd, data)
-    if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    if tool in WRITE_TOOLS:
         return check_write(tool, ti, cwd, data)
     if tool in ("Skill", "SlashCommand"):
         return check_skill(tool, ti)

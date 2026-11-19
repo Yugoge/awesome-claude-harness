@@ -750,19 +750,9 @@
    "sides": [
     [
      {
-      "name": "_p6_prockill:in",
+      "name": "<module>._NAME_KILL_HEADS",
       "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:2576"
-     },
-     {
-      "name": "_p6_prockill:in",
-      "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:2577"
-     },
-     {
-      "name": "_p0_anchor:in",
-      "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:4464"
+      "at": "hooks/lib/runtime_guard/_core.py:3502"
      }
     ],
     [
@@ -1167,21 +1157,6 @@
    "sides": [
     [
      {
-      "name": "_exec_subcommand_after_selector:in",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:1912"
-     },
-     {
-      "name": "_package_runner_invocation:in",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:2162"
-     },
-     {
-      "name": "_strip_selector_tokens.sel_flags",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:3104"
-     },
-     {
       "name": "<module>._PM_FLAGS_WITH_VALUE",
       "fingerprint": "91b7c01c06df6d5c",
       "at": "hooks/lib/runtime_guard/_core.py:3502"
@@ -1189,14 +1164,9 @@
     ],
     [
      {
-      "name": "_post_selector_tokens:in",
+      "name": "<module>._WS_SELECTOR_FLAGS",
       "fingerprint": "30fcac140e0219eb",
-      "at": "hooks/lib/runtime_guard/_core.py:3543"
-     },
-     {
-      "name": "_anchor_nonprotected_workspace_selector.sel_flags",
-      "fingerprint": "30fcac140e0219eb",
-      "at": "hooks/lib/runtime_guard/anchor.py:191"
+      "at": "hooks/lib/runtime_guard/anchor.py:176"
      }
     ],
     [
@@ -1416,7 +1386,7 @@
     ],
     [
      {
-      "name": "<module>:re",
+      "name": "<module>._KEY_NAME:re",
       "fingerprint": "d7439167d45ec3bf",
       "at": "hooks/lib/sensitive_names.py:47"
      }
@@ -2797,6 +2767,48 @@
       "name": "_sd_writes_output:eq",
       "fingerprint": "e6c6b8721ef594dc",
       "at": "hooks/lib/bash_safety_rules.py:5896"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "mode-operators-vs-attr-operand-signs",
+   "source": "defs-tools lane, check group on integration edc54b6e7",
+   "reason": "runtime_guard's _mutation_targets_for_verb asks whether a chmod argument is a symbolic mode (+, - or = followed only by mode letters, so it is not a path the chmod changes); shell_parse's _attr_operands asks where the option words of chmod, chown, chattr and setfacl end and their path operands begin (a word led by -, + or = is an option or a chattr attribute change, not a path). One classifies a mode string, the other splits options from operands for four verbs; they share only the three sign characters.",
+   "sides": [
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "206ca566a91f492e",
+      "at": "hooks/lib/runtime_guard/_core.py:1088"
+     }
+    ],
+    [
+     {
+      "name": "_attr_operands:in",
+      "fingerprint": "206ca566a91f492e",
+      "at": "hooks/lib/shell_parse.py:3505"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "write-tools-vs-file-path-tools",
+   "source": "defs-tools lane, check group on integration edc54b6e7",
+   "reason": "harness_vocabulary.WRITE_TOOLS asks which tools write a file (the write gate's rules, tool-policy's role rows, the cp-state, config and switch guards), NotebookEdit included; spec_path.EDIT_TOOLS asks which tool calls name their target in tool_input.file_path: spec_path reads it to find the last write of a spec monolith (a markdown file, which NotebookEdit cannot write), report_provenance to find the main agent's previous file write, with NotebookEdit's notebook_path on a branch of its own. Different questions: adding NotebookEdit to EDIT_TOOLS would read file_path from a call that does not send it.",
+   "sides": [
+    [
+     {
+      "name": "<module>.WRITE_TOOLS",
+      "fingerprint": "95d7e6945ed2d49b",
+      "at": "hooks/lib/harness_vocabulary.py:18"
+     }
+    ],
+    [
+     {
+      "name": "<module>.EDIT_TOOLS",
+      "fingerprint": "d8533eb90bdb17ea",
+      "at": "hooks/lib/spec_path.py:21"
      }
     ]
    ]

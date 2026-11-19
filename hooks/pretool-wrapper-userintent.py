@@ -769,7 +769,7 @@ class _Scan:
         script operand and every later word is an argument of the script; a word that may
         expand to no field passes only as the last word (`bash -n` then reads stdin, still
         under -n). Never with BASH_ENV / ENV set by the command."""
-        if any(a.name in ('BASH_ENV', 'ENV') for a in
+        if any(a.name in _sp.SHELL_STARTUP_VARS for a in
                list(getattr(cmd, 'assignments', ())) + list(getattr(res, 'assignments', ()))):
             return None
         args = list(args)
@@ -1242,7 +1242,7 @@ class _Scan:
                 continue
             break
         for a in res.assignments:
-            if a.name in ('BASH_ENV', 'ENV') and a.value is not None:
+            if a.name in _sp.SHELL_STARTUP_VARS and a.value is not None:
                 self._path_target(a.value)
         if has_c:
             code = args[k] if k < len(args) else None
@@ -1417,7 +1417,7 @@ class _Scan:
         while i < len(vals) and vals[i] in _sp.FIND_SYMLINK_OPTS:
             i += 1
         starts = []
-        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in ('(', '!', ')'))):
+        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in _sp.FIND_OPERATORS)):
             starts.append(vals[i])
             i += 1
         names, blocks, simple = [], [], True
