@@ -3090,7 +3090,7 @@ class Analyzer:
         if body is not None:
             self.analyze_code(body, Env())
             return
-        self.scoped("at_stdin_payload_unknown", name)
+        self.scoped("at_stdin_payload_unknown", name, self._stdin_text(redirs, piped))
 
     _h_batch = _h_at
 
@@ -3140,12 +3140,12 @@ class Analyzer:
         payload = head_args[i:]
         if not payload:
             # With no template the command itself comes from the input stream.
-            self.scoped("parallel_command_from_input", "parallel")
+            self.scoped("parallel_command_from_input", "parallel", self._stdin_text(redirs, piped))
             return
         if "{" in (payload[0].literal() or "{"):
             # A placeholder in command position: the head comes from the input
             # items, which this analyzer cannot enumerate.
-            self.scoped("parallel_command_from_input", "parallel")
+            self.scoped("parallel_command_from_input", "parallel", self._stdin_text(redirs, piped))
             return
         # Input items are substituted as ARGUMENTS of the template, so they
         # belong to the same argv. Passing them through is both more faithful

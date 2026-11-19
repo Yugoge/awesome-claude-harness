@@ -14,6 +14,20 @@ analyzer (``bash_execution_boundary.py``) must independently report that it
 consumed every one of those offsets.  Any obligation the analyzer did not
 discharge makes the command UNRESOLVED (deny).
 
+WHAT AN UNDISCHARGED OBLIGATION DOES (the owner's rule, 2026-11-19).  An
+undischarged substitution, process substitution, heredoc or re-expansion is
+active syntax the analyzer did not read: the command is UNRESOLVED and the
+removal policy asks its word list of the whole text.  An undischarged
+REMOVAL_REFERENCE alone is a removal name in a place no site of the walk
+explained; it keeps the command UNRESOLVED (so it is recorded) but refuses
+nothing by itself, because a word that is only text must not refuse.  That is
+safe ONLY WHILE EVERY PLACE A PROGRAM CAN RUN FROM IS A SITE OF THE WALK, which
+judges a removal there itself: every program head in the analyzer's tables
+that runs an operand, a payload or its standard input as a program must see a
+removal behind it.  hooks/tests/test_removal_policy_parsed_rule.py::
+test_every_head_that_runs_a_program_sees_a_removal_behind_it holds that
+condition; a new head that runs a program goes into that test with it.
+
 CONTRACT (do not weaken):
   * This module MUST NOT import, call, or otherwise consume the semantic
     analyzer's conclusions.  It is a second opinion, not a summary of the first.
