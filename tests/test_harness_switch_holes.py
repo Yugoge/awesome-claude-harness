@@ -75,15 +75,20 @@ def test_the_same_words_pass_where_no_session_takes_them_as_typed(guard_home, pr
 
 
 def test_the_rule_sees_every_tool():
-    """No list of tool names stands between a call and the rule: a tool added tomorrow reaches it."""
+    """No list of names decides which tools reach the rule: a tool added tomorrow does. The one list
+    (lib/harness_switch.NO_PROMPT) names the CLI's own tools the rule would pass unread, and the gate
+    and the rule read the same one."""
     code = ("import sys; sys.path.insert(0, sys.argv[1]); from lib.write_gate import RULES; "
-            "rule = next(r for r in RULES if r.name == 'harness-switch'); "
-            "print(rule.tools, all(rule.applies(t) for t in sys.argv[2:]))")
+            "from lib import harness_switch; rule = next(r for r in RULES if r.name == 'harness-switch'); "
+            "print(rule.tools, rule.skips == harness_switch.NO_PROMPT, all(rule.applies(t) for t in sys.argv[2:]), "
+            "sorted(t for t in harness_switch.NO_PROMPT if rule.applies(t)), "
+            "sorted(t for t in harness_switch.NO_PROMPT if t.startswith('mcp__') or t in ('Agent', 'Task', 'Bash')))")
     import subprocess
     import sys
     out = subprocess.run([sys.executable, "-c", code, str(ROOT / "hooks"), "mcp__paseo__send_agent_prompt",
-                          "mcp__x__y", "SomeLaterTool", "Read"], capture_output=True, text=True, check=True).stdout
-    assert out.split() == ["None", "True"]
+                          "mcp__x__y", "SomeLaterTool", "Agent", "CronCreate", "SendMessage", "Bash", "Write"],
+                         capture_output=True, text=True, check=True).stdout
+    assert out.split() == ["None", "True", "True", "[]", "[]"]
 
 
 # ---------------------------------------------------------------------------------- finding 4

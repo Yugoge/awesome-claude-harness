@@ -18,6 +18,7 @@ Each rule declares:
 - ``exemptions``: what lets the rule allow a call it would otherwise refuse. Each rule
   checks its own; the gate grants none (no consent check at the gate's entry).
 - ``budget``: seconds, measured (test_write_gate.py::test_budgets_cover_the_measured_times).
+  ``skips``: tools the rule would pass unread (default none): the gate does not load it for them.
 
 Combining, as the CLI combines parallel hooks (code.claude.com/docs/en/hooks,
 PreToolUse decision control: deny > defer > ask > allow):
@@ -46,6 +47,10 @@ try:
     _OVERWRITE = os.path.relpath(os.path.abspath(_overwrite.__file__), HOOKS_DIR)
 except Exception:
     _OVERWRITE = os.path.join("lib", "write_gate", "overwrite.py")
+try:  # the tools the switch rule passes unread (lib/harness_switch.py): the gate need not load it for them
+    from ..harness_switch import NO_PROMPT as _NO_PROMPT
+except Exception:  # not importable this way: the rule then sees every tool and passes them itself
+    _NO_PROMPT = frozenset()
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 
@@ -59,9 +64,10 @@ class Rule:
     fail: str                      # "open" | "closed"
     exemptions: tuple
     budget: float                  # seconds
+    skips: frozenset = frozenset()  # tools the rule would pass unread: named, so any other tool reaches it
 
     def applies(self, tool: str | None) -> bool:
-        return self.tools is None or tool is None or tool in self.tools
+        return (self.tools is None or tool is None or tool in self.tools) and tool not in self.skips
 
     @property
     def file(self) -> str:
@@ -91,14 +97,14 @@ RULES: tuple[Rule, ...] = (
          "both", "open",
          ("the project's .claude/.hook-refactor-allow sentinel, made by hand",
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
-    # Every tool: a tool that delivers a prompt is known by what its input holds, not by a list of names.
+    # Every tool but the CLI's own that deliver no prompt: one that does is known by its input, not by a name.
     Rule("harness-switch", "pretool-harness-switch-guard.py", None,
          "both", "closed",  # an overrun refuses: an agent pads a command past the budget at will
          ("reading the switch's state or settings files",
           "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files",
           "an /allow grant for the one call, for a Claude Code settings file's env, hooks or permissions "
           "(a Bash grant naming the command, any actor; a Write or tool grant, main agent)"),
-         5.0),
+         5.0, _NO_PROMPT),
 )
 
 

@@ -18,8 +18,9 @@ subagent, each other path by which an agent call could switch the harness or fak
                         checkout that names the switch's state
   every other tool      a string of its input, under any key at any depth, that types /harness (a
                         delivered or scheduled prompt reaches UserPromptSubmit as if typed), whatever
-                        the tool's name; only the CLI's own tools that deliver no prompt are named:
-                        NO_PROMPT passes, Agent / Task is refused only where a string is the command
+                        the tool's name; only the CLI's own tools that deliver no prompt are named
+                        (harness_switch.NO_PROMPT: they pass); Agent / Task is refused only where a
+                        string is the command
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
@@ -79,11 +80,6 @@ TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/har
 PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
 WHOLE = re.compile(r"\s*(?:/harness(?:\s+\S+)?|(?:<command-message>.*?</command-message>\s*)?" + TAGGED + r".*)\s*",
                    re.S)  # a prompt that is the command, as scripts/harness-switch acts on one
-# The CLI's own tools whose input reaches no session as a prompt (readers, the caller's own lists and tasks, the
-# owner's; a Monitor's command meets the Bash rule, hooks/pretool-monitor-command.py). Any other tool may deliver one.
-NO_PROMPT = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSearch", "ToolSearch", "TodoWrite", "TodoRead",
-                       "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "BashOutput", "TaskStop",
-                       "KillShell", "AskUserQuestion", "PushNotification", "ExitPlanMode", "Monitor"})
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
@@ -543,7 +539,7 @@ def main() -> int:
         return check_skill(tool, ti)
     if tool in ("Agent", "Task"):
         return check_prompt(tool, ti, WHOLE.fullmatch)
-    return 0 if tool in NO_PROMPT else check_prompt(tool, ti)
+    return 0 if tool in harness_switch.NO_PROMPT else check_prompt(tool, ti)
 
 
 if __name__ == "__main__":
