@@ -281,3 +281,11 @@ class TestGitRemoteReadFlags:
         from lib import bash_safety_rules as bsr
         assert not is_read_only(cmd)
         assert not bsr._dg_git(None, cmd.split())
+
+
+def test_git_rm_options_one_definition():
+    """git-rm-options (undecided in the audit, "7 of 12 names common"): the removal policy's spec held
+    rm's short options beside the same eight long ones shell_parse lists; it now reads shell_parse's."""
+    from lib import bash_execution_boundary as beb
+    longs = {o for o in beb.GIT_RM["bool"] | beb.GIT_RM["val"] if o.startswith("--")}
+    assert longs == set(sp.GIT_LONG_OPTIONS["rm"])

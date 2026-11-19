@@ -65,6 +65,7 @@ from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
+from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -778,9 +779,9 @@ OUTPUT_SINKS = {
 
 GIT_GLOBAL = _spec(GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS)
 
+# git rm's options: its long ones as shell_parse lists them, and the short ones.
 GIT_RM = _spec(
-    ("-n", "--dry-run", "-r", "--cached", "-f", "--force", "-q", "--quiet",
-     "--ignore-unmatch", "--sparse", "--pathspec-file-nul"),
+    ("-n", "-r", "-f", "-q") + tuple(o for o in GIT_LONG_OPTIONS["rm"] if o != "--pathspec-from-file"),
     ("--pathspec-from-file",))
 # A non-forced `git rm` is recoverable: git refuses a file that differs from HEAD or the index, and a
 # removed clean file comes back with `git checkout <sha>^ -- <path>`. It is allowed only when the walk
