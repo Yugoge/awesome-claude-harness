@@ -3749,7 +3749,7 @@ def _read_made_to_run(name, args):
     if sub is None or args[sub] not in git_facts.GIT_READ_SUBCOMMANDS:
         return None
     for i, v in opts:
-        if args[i] in ("-c", "--config-env"):
+        if args[i] in GIT_CONFIG_OPTS:
             key, _eq, value = (args[v] if v is not None and args[v] is not None else "").partition("=")
             if v is None or args[v] is None or (git_facts.GIT_RUN_CONFIG_KEY_RE.match(key) and not (
                     key.lower().endswith("pager") and value in PLAIN_PAGERS)):
