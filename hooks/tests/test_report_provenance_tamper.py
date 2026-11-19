@@ -47,8 +47,8 @@ OWN = FORGED.replace("performed", "ran")
 
 
 class World(base.World):
-    def __init__(self, tmp: Path):
-        super().__init__(tmp)
+    def __init__(self, tmp: Path, project: Path | None = None):
+        super().__init__(tmp, project)
         (self.stage / N).write_text(FORGED + "\n")
 
     def obligation_prompt(self, path: str) -> str:
@@ -143,7 +143,8 @@ class World(base.World):
 
 @pytest.fixture()
 def world(tmp_path):
-    return World(tmp_path)
+    with base.project_outside_temp() as project:
+        yield World(tmp_path, project)
 
 
 def _refused(proc, why=PROVENANCE):

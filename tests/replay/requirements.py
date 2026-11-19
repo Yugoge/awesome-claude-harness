@@ -64,7 +64,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HOOKS = os.path.join(REPO, "hooks")
 PLACEHOLDER = re.compile(r"<[^<>\n]+>|\{[A-Za-z_.]+\}")
 CLI_VERSION = "2.1.326"
-# Where the project lies. A home path: under the user's home (REPLAY_DEADEND_HOME names another directory
+# Where the project lies. A home path: under the user's home (HARNESS_TEST_PROJECT_ROOT names another directory
 # outside /tmp, /var/tmp and /dev, where the write rules treat a project as they treat one under a home);
 # a RAM disk: under /dev/shm, the tmpfs a project may live on (and where this harness home lies on the
 # machine that found C1).
@@ -294,7 +294,7 @@ class Hooks:
 @contextlib.contextmanager
 def projects(work: str):
     """situation -> a project directory there, each its own git repository; removed afterwards."""
-    bases = {"home": os.environ.get("REPLAY_DEADEND_HOME") or os.path.expanduser("~"), "ram-disk": "/dev/shm"}
+    bases = {"home": os.environ.get("HARNESS_TEST_PROJECT_ROOT") or os.path.expanduser("~"), "ram-disk": "/dev/shm"}
     made = {}
     try:
         for situation in SITUATIONS:
