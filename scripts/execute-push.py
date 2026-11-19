@@ -127,6 +127,7 @@ def _refused_inflight_token_write(repo_root: str, repo_hash: str, branch: str, h
     BRANCH, and the Write came back refused by the tool policy. Only transcripts
     written to since HEAD's commit are read, each only when its bytes name the
     repository's token directory."""
+    import command_span  # hooks/lib, stdlib only (P5 R10)
     projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")) / "projects"
     try:
         committed = int(_git_out("log", "-1", "--format=%ct", head) or 0)
@@ -154,12 +155,10 @@ def _refused_inflight_token_write(repo_root: str, repo_hash: str, branch: str, h
             if needle not in raw and b'"tool_result"' not in raw:
                 continue
             try:
-                content = (json.loads(raw).get("message") or {}).get("content")
-            except (ValueError, AttributeError):
+                record = json.loads(raw)
+            except ValueError:
                 continue
-            for block in content if isinstance(content, list) else []:
-                if not isinstance(block, dict):
-                    continue
+            for block in command_span._blocks(record, sidechain=True):
                 if block.get("type") == "tool_use" and block.get("name") == "Write":
                     ti = block.get("input") if isinstance(block.get("input"), dict) else {}
                     m = _REFUSED_TOKEN_WRITE_RE.search(str(ti.get("file_path") or ""))

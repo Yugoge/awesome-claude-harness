@@ -287,24 +287,26 @@ REQUEST_COPIES = FIXTURES.parent / "cli-request-copies" / "transcript-2.1.322.js
 
 def with_request_copies(records: list) -> list:
     """``records`` (one transcript's, in order) with the api-request-blob records the CLI writes among them:
-    after each user record (the CLI's next request follows it), a copy of each message before it not yet
-    copied, the assistant records in a row as one message (the recorded copy, its values filled). The
-    user record itself is copied at the next one, as the recording's tool result is."""
+    after each user record that a model request follows (the next message is the model's), a copy of
+    each message before it not yet copied, the assistant records in a row as one message (the recorded
+    copy, its values filled). The user record itself is copied at the next request, as the recording's
+    tool result is; the messages of a turn no request followed (an agent's last), after the next prompt."""
     import hashlib
 
     blob = next(r for r in map(json.loads, REQUEST_COPIES.read_text().splitlines()) if r["type"] == "api-request-blob")
+    said = [k for k, rec in enumerate(records) if rec.get("type") in ("user", "assistant") and _content(rec) is not None]
     out, pending = [], []
-    for rec in records:
+    for k, rec in enumerate(records):
         out.append(rec)
-        content = _content(rec)
-        if rec.get("type") not in ("user", "assistant") or content is None:
+        if k not in said:
             continue
-        content = content if isinstance(content, list) else [{"type": "text", "text": content}]
+        content = _content(rec) if isinstance(_content(rec), list) else [{"type": "text", "text": _content(rec)}]
         if pending and pending[-1][0] == rec["type"] == "assistant":
             pending[-1][1].extend(content)
         else:
             pending.append((rec["type"], list(content), rec))
-        if rec["type"] != "user":
+        after = [records[j]["type"] for j in said if j > k][:1]
+        if rec["type"] != "user" or after != ["assistant"]:
             continue
         for role, blocks, first in pending[:-1]:
             message = dict(blob["message"], role=role, content=blocks)

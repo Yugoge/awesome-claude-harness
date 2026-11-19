@@ -67,9 +67,9 @@ AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 # was unwinnable by construction. See that module's docstring for the corpus
 # measurement and the three evidence tiers.
 try:  # package import (hooks.lib.subagent_restart)
-    from . import interruption_signals as signals
+    from . import command_span, interruption_signals as signals
 except ImportError:  # direct sys.path import (lib/ on path)
-    import interruption_signals as signals  # type: ignore[no-redef]
+    import command_span, interruption_signals as signals  # type: ignore[no-redef]  # noqa: E401
 
 
 def _is_quota_text(value: Any) -> bool:
@@ -556,10 +556,16 @@ def _read_parent_calls(
         raise RestartError(f"cannot read parent transcript: {exc}") from exc
     with lines:
         for line_no, line in enumerate(lines, 1):
+            try:
+                record = json.loads(line)
+            except ValueError:
+                record = None
             # Notifications can appear as top-level queue-operation content,
             # message.content, or attachment.prompt. Scan the complete JSONL line
-            # before walking message blocks so all three persisted forms count.
-            for block in _iter_notification_blocks(line):
+            # so all three persisted forms count; a record of another kind (the
+            # CLI's api-request-blob copy of a message) delivered nothing.
+            copy = isinstance(record, dict) and record.get("type") not in ("user", "attachment", "queue-operation")
+            for block in () if copy else _iter_notification_blocks(line):
                 match = TASK_NOTIFICATION_RE.search(block)
                 if not match:
                     continue
@@ -573,19 +579,7 @@ def _read_parent_calls(
                         "status": match.group(2).lower(),
                         "quota_interrupted": signals.is_quota_text(tail),
                     }
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            message = record.get("message") if isinstance(record, dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, str):
-                continue
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
+            for block in command_span._blocks(record, sidechain=True):
                 if block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
                     tool_id = block.get("id")
                     if isinstance(tool_id, str) and tool_id:
