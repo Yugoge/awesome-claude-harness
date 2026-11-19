@@ -5550,15 +5550,33 @@ def degraded_refuses(command, rmref):
                 or grep(r"[<>|&;][ \t]*$", command) or _dg_unbalanced(command))
 
 
-def removal_policy(payload_text, command):
-    """Every execution boundary must be proven inert or a safe removal by lib/bash_execution_boundary.py.
+def let_through_unproven(entry, payload):
+    """THE SEAM for the refusal record: the one place that learns an unproven command was let run.
 
-    The analyzer runs in its own process under a time and memory limit. When it gives no usable verdict the
-    command passes only if it is provably plain: no removal reference (lib/pol_degraded_removal_reference.ere), no
-    assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), no line ending on a
-    dangling operator or redirect, balanced quoting, no command head holding whitespace or shell syntax, and no
-    command ending on an option-like word unless every command on every line has an allowlisted head (_DG_ALLOW) and
-    passes degraded_trailing_option_is_plain()'s table-derived layers (degraded_refuses), within a 3 s bound.
+    decide() calls it once per Bash call, and only when that call's verdict is ALLOW and removal_policy() could not
+    prove the command safe (so not when a later rule of this hook refuses the call, and not under a /do or /allow
+    release, which the removal policy never sees). `payload` is the parsed PreToolUse payload. `entry` is what
+    removal_policy() returned:
+        {"rule": "removal-policy", "kind": "let_through_unproven",
+         "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no usable verdict),
+         "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
+    This module writes no log of its own: the record's writer is called from here.
+    """
+
+
+def removal_policy(payload_text, command):
+    """lib/bash_execution_boundary.py's verdict, then the owner's rule (2026-11-19) for what it cannot prove.
+
+    The analyzer runs in its own process under a time and memory limit. A command it proves (PROVEN_INERT,
+    PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused. A command it cannot
+    prove safe, because it answers UNRESOLVED (the primary path) or gives no usable verdict (timeout, memory
+    ceiling, crash, bad JSON: the degraded path), is refused when its text holds a removal word, by the single
+    definition in lib/pol_degraded_removal_reference.ere, and otherwise runs. Both paths ask that one question of the
+    same text, so they give an unproven command the same answer, and the primary path lets through unproven nothing
+    the degraded path denies.
+
+    Returns None for a proven command and, for an unproven one let run, the entry described at
+    let_through_unproven().
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
     decision = ""
@@ -5590,31 +5608,32 @@ def removal_policy(payload_text, command):
         except Exception:  # noqa: BLE001 - timeout, memory ceiling, crash, bad JSON: degraded mode
             decision = ""
     if decision == "ALLOW":
-        return
-    if decision.startswith("DENY "):
+        return None
+    unproven = not decision or decision.startswith("DENY UNRESOLVED ")
+    if unproven:
+        ere_file = os.path.join(LIB, "pol_degraded_removal_reference.ere")
+        try:
+            with open(ere_file, encoding="utf-8", errors="replace") as fh:
+                rmref = next((ln.rstrip("\n") for ln in fh if not re.match(r"^\s*#", ln) and not re.match(r"^\s*$", ln)), "")
+        except OSError:
+            rmref = ""
+        if not rmref:
+            refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
+                       f"missing or empty. Denied conservatively.", f"Command: {command}")
+        if not grep(rmref, command):
+            return {"rule": "removal-policy", "kind": "let_through_unproven", "path": "primary" if decision else "degraded",
+                    "reason": decision[5:] or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
+    if decision:
         refuse(f"BLOCKED: removal-policy — {decision[5:]}", f"Command: {command}",
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
                    "git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no "
-                   "submodule); this command has a boundary that is none of these.", released_line())
-    ere_file = os.path.join(LIB, "pol_degraded_removal_reference.ere")
-    try:
-        with open(ere_file, encoding="utf-8", errors="replace") as fh:
-            rmref = next((ln.rstrip("\n") for ln in fh if not re.match(r"^\s*#", ln) and not re.match(r"^\s*$", ln)), "")
-    except OSError:
-        rmref = ""
-    if not rmref:
-        refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
-                   f"missing or empty. Denied conservatively.", f"Command: {command}")
-    _degraded_tables()  # loaded under its own alarm, before the bound below
-    try:
-        refused = with_alarm(_DG_TIME_LIMIT, degraded_refuses, command, rmref)
-    except (TimeoutError, RecursionError):
-        refused = True  # a fallback that cannot finish its reading refuses
-    if refused:
-        refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
-                   "usable verdict, and this command is not provably plain. Denied conservatively.",
-                   f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; never widen this "
-                   f"fallback to allow.")
+                   "submodule); this command has a boundary that is none of these."
+                   + (" It could not be proven, and its text holds a removal word (an unproven command that holds none "
+                      "runs)." if unproven else ""), released_line())
+    refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
+               "usable verdict, and this command's text holds a removal word. Denied conservatively.",
+               f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; an unproven command "
+               f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).")
 
 
 def kill_pid_rule(command, view, sv=None):
@@ -7572,12 +7591,14 @@ def decide(payload_text):
     executable = executable_view_or_raw(command)
     sv = ServiceView(command, get("cwd"))
     service_rules(command, executable, env, sv)
-    removal_policy(payload_text, command)
+    unproven = removal_policy(payload_text, command)
     kill_pid_rule(command, executable, sv)
     invs = git_view(command)
     shape = data_shape(command, invs)
     worktree_git_rules(command, invs, view, shape)
     git_clean_rule(command, executable, view, invs, shape)
+    if unproven:
+        let_through_unproven(unproven, payload)
     return "ALLOW"
 
 
