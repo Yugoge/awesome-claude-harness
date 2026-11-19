@@ -1678,7 +1678,7 @@ class _ConsentView:
             r = sp.resolve(s.cmd)
             if r.name not in ("cd", "pushd"):
                 continue
-            args = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+            args = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
             if not args:
                 self.cwds.append((self.home or "/", True))
                 continue

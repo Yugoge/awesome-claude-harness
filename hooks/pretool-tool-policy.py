@@ -817,7 +817,7 @@ def _call_dirs(script, sp, cwd: str):
         if r.name not in ("cd", "pushd"):
             continue
         first, was_first = False, first
-        operands = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+        operands = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
         if not operands:
             dest = os.environ.get("HOME") or os.path.expanduser("~")
         else:

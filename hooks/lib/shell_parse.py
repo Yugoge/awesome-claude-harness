@@ -423,6 +423,7 @@ _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
+CD_OPTIONS = ("-L", "-P", "-e", "-@", "--")  # bash: cd [-L|[-P [-e]] [-@]] [--] [dir]
 
 
 def _match_pair(t, i, opener, closer):
