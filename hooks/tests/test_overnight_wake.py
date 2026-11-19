@@ -262,7 +262,7 @@ def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
 # ---------------------------------------------------------------- a human /restart or a plain prompt in an open span
 
 CARRY_ON = ("CARRY ON: carry on with /dev Step 8; this turn cannot end until its checklist is complete; "
-            "pause only with AskUserQuestion; /stop is the exit.")
+            "a refusal is reported, never asked about; /stop is the exit.")
 
 
 def _usage_limit(s):
