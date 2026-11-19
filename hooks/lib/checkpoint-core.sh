@@ -8,6 +8,8 @@
 # This file MUST be sourced, not executed directly:
 #   source ~/.claude/hooks/lib/checkpoint-core.sh
 #   write_checkpoint "$GIT_DIR" "trigger reason" ["custom message"]
+# On return 0 checkpoint_ref and checkpoint_commit name the commit holding the snapshot (empty when
+# none was written: /harness off). CHECKPOINT_NO_PUSH=1 in the caller's environment starts no push.
 #
 # ----------------------------------------------------------------------------
 # Ref layout
@@ -161,13 +163,9 @@ _checkpoint_refused() {
 # Internal: compute git dir (.git) for the repo at <work_dir>
 _checkpoint_git_dir() {
     local work_dir="$1"
-    local git_cmd
-    if [ -n "$work_dir" ]; then
-        git_cmd="git -C $work_dir"
-    else
-        git_cmd="git"
-    fi
-    $git_cmd rev-parse --git-dir 2>/dev/null
+    local -a git_cmd
+    if [ -n "$work_dir" ]; then git_cmd=(git -C "$work_dir"); else git_cmd=(git); fi
+    "${git_cmd[@]}" rev-parse --git-dir 2>/dev/null
 }
 
 # Internal: stale temp-index sweep (defensive; prevents SIGKILL residue buildup)
@@ -342,21 +340,17 @@ _checkpoint_rate_limited_push() {
     . "${BASH_SOURCE[0]%/*}/auto_push.sh" 2>/dev/null && harness_auto_push "$1" || return 0
     local work_dir="$1"
     local ref="$2"
-    local git_cmd
-    if [ -n "$work_dir" ]; then
-        git_cmd="git -C $work_dir"
-    else
-        git_cmd="git"
-    fi
+    local -a git_cmd
+    if [ -n "$work_dir" ]; then git_cmd=(git -C "$work_dir"); else git_cmd=(git); fi
 
     # Skip silently if no 'origin' configured
-    if ! $git_cmd remote get-url origin >/dev/null 2>&1; then
+    if ! "${git_cmd[@]}" remote get-url origin >/dev/null 2>&1; then
         return 0
     fi
 
     # Compute a stable stamp key for this repo (absolute git-dir path, hashed)
     local abs_git_dir
-    abs_git_dir=$($git_cmd rev-parse --absolute-git-dir 2>/dev/null)
+    abs_git_dir=$("${git_cmd[@]}" rev-parse --absolute-git-dir 2>/dev/null)
     if [ -z "$abs_git_dir" ]; then
         return 0
     fi
@@ -387,7 +381,7 @@ _checkpoint_rate_limited_push() {
     # Resolve the exact local checkpoint tip ONCE so the object scanned by the
     # gate is exactly the object pushed (no TOCTOU if the ref advances).
     local local_sha
-    local_sha=$($git_cmd rev-parse --verify -q "${ref}^{commit}" 2>/dev/null)
+    local_sha=$("${git_cmd[@]}" rev-parse --verify -q "${ref}^{commit}" 2>/dev/null)
     if [ -z "$local_sha" ]; then
         return 0
     fi
@@ -472,7 +466,7 @@ write_checkpoint() {
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
     local count_file="" ref=""
-    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out=""
+    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out="" checkpoint_ref="" checkpoint_commit=""
 
     # /harness off: no snapshot is written, by any writer (hooks/lib/harness_switch.sh)
     if . "${BASH_SOURCE[0]%/*}/harness_switch.sh" 2>/dev/null && harness_switch_off; then
@@ -488,14 +482,10 @@ write_checkpoint() {
     fi
 
     # Resolve absolute git dir so temp-index path is unambiguous
-    local git_cmd
-    if [ -n "$work_dir" ]; then
-        git_cmd="git -C $work_dir"
-    else
-        git_cmd="git"
-    fi
+    local -a git_cmd
+    if [ -n "$work_dir" ]; then git_cmd=(git -C "$work_dir"); else git_cmd=(git); fi
     local abs_git_dir
-    abs_git_dir=$($git_cmd rev-parse --absolute-git-dir 2>/dev/null)
+    abs_git_dir=$("${git_cmd[@]}" rev-parse --absolute-git-dir 2>/dev/null)
     if [ -z "$abs_git_dir" ]; then
         _checkpoint_log ERROR "cannot resolve absolute git dir (work_dir='${work_dir}')"
         _checkpoint_record_failure
@@ -507,11 +497,11 @@ write_checkpoint() {
 
     # Determine branch name & ref
     local branch sanitized
-    branch=$($git_cmd branch --show-current 2>/dev/null)
+    branch=$("${git_cmd[@]}" branch --show-current 2>/dev/null)
     if [ -z "$branch" ]; then
         # Detached HEAD fallback: refs/checkpoints/detached-<short-sha>
         local short_sha
-        short_sha=$($git_cmd rev-parse --short HEAD 2>/dev/null)
+        short_sha=$("${git_cmd[@]}" rev-parse --short HEAD 2>/dev/null)
         if [ -z "$short_sha" ]; then
             # Empty repo + detached (unusual); fall back to a literal label
             sanitized="detached-empty"
@@ -541,22 +531,22 @@ write_checkpoint() {
     # -------------------------------------------------------------------------
     local seed_parent_sha=""
     local seed_parent_tree=""
-    seed_parent_sha=$($git_cmd rev-parse --verify -q HEAD 2>/dev/null || true)
+    seed_parent_sha=$("${git_cmd[@]}" rev-parse --verify -q HEAD 2>/dev/null || true)
     if [ -n "$seed_parent_sha" ]; then
-        seed_parent_tree=$($git_cmd rev-parse "${seed_parent_sha}^{tree}" 2>/dev/null || true)
+        seed_parent_tree=$("${git_cmd[@]}" rev-parse "${seed_parent_sha}^{tree}" 2>/dev/null || true)
     fi
 
     rm -f "$TMP_INDEX"
     mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null  # the 2>> redirects below fail on a fresh home
     if [ -n "$seed_parent_tree" ]; then
-        if ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd read-tree "$seed_parent_tree" 2>>"$CHECKPOINT_LOG_FILE"; then
+        if ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" read-tree "$seed_parent_tree" 2>>"$CHECKPOINT_LOG_FILE"; then
             _checkpoint_log ERROR "read-tree failed (parent_tree=${seed_parent_tree}, ref=${ref})"
             rm -f "$TMP_INDEX"
             _checkpoint_record_failure
             return 1
         fi
     else
-        if ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd read-tree --empty 2>>"$CHECKPOINT_LOG_FILE"; then
+        if ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" read-tree --empty 2>>"$CHECKPOINT_LOG_FILE"; then
             _checkpoint_log ERROR "read-tree --empty failed (ref=${ref})"
             rm -f "$TMP_INDEX"
             _checkpoint_record_failure
@@ -567,12 +557,12 @@ write_checkpoint() {
     local h top common report
     checkpoint_refused_by=""
     h="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"
-    { read -r top; read -r common; } < <($git_cmd rev-parse --show-toplevel --path-format=absolute --git-common-dir 2>/dev/null)
-    if ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd add -A 2>>"$CHECKPOINT_LOG_FILE"; then
+    { read -r top; read -r common; } < <("${git_cmd[@]}" rev-parse --show-toplevel --path-format=absolute --git-common-dir 2>/dev/null)
+    if ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" add -A 2>>"$CHECKPOINT_LOG_FILE"; then
         rm -f "$TMP_INDEX"
         # Staging fails by design when this harness home's registered clean filter cannot clean
         # settings.json: a refusal if its engine, run here, refuses the file (rc 1; a missing one: 2).
-        if [ "$top" = "$h" ] && [ -f "$h/settings.json" ] && $git_cmd config filter.claude-settings.clean >/dev/null \
+        if [ "$top" = "$h" ] && [ -f "$h/settings.json" ] && "${git_cmd[@]}" config filter.claude-settings.clean >/dev/null \
             && { python3 "$h/scripts/install/render-settings" clean <"$h/settings.json" >/dev/null 2>&1; [ "$?" = 1 ]; }; then
             checkpoint_refused_by="the settings filter (render-settings clean)"
             _checkpoint_refused
@@ -592,10 +582,10 @@ write_checkpoint() {
     local pii_path pii_removed=0
     while IFS= read -r pii_path; do
         [ -z "$pii_path" ] && continue
-        if GIT_INDEX_FILE="$TMP_INDEX" $git_cmd update-index --force-remove -- "$pii_path" 2>>"$CHECKPOINT_LOG_FILE"; then
+        if GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" update-index --force-remove -- "$pii_path" 2>>"$CHECKPOINT_LOG_FILE"; then
             pii_removed=$((pii_removed + 1))
         fi
-    done < <(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd ls-files 2>/dev/null | while IFS= read -r p; do
+    done < <(GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" ls-files 2>/dev/null | while IFS= read -r p; do
         base="${p##*/}"
         is_pii=0
         for prefix in $CHECKPOINT_PII_BASENAME_PREFIXES; do
@@ -631,9 +621,9 @@ write_checkpoint() {
         _checkpoint_log ERROR "the private-literal rule: ${report//$'\n'/ | }"
         checkpoint_left_out=$(printf '%s\n' "$report" | sed -n 's/^FAIL: private literal (.*) -> \(.*\)\(:[0-9]*\| (path name)\)$/\1/p' | sort -u)
         checkpoint_left_out="$(sort -u "$hits" 2>/dev/null | wc -l | tr -d ' ') file(s) holding a private literal: ${checkpoint_left_out//$'\n'/, }"
-        if [ -s "$hits" ] && GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$TMP_INDEX" $git_cmd reset -q --pathspec-from-file="$hits" \
-            2>>"$CHECKPOINT_LOG_FILE" && report=$(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd -c core.quotePath=off diff-index \
-            --cached --no-renames --name-only "${seed_parent_tree:-$($git_cmd hash-object -t tree /dev/null)}") \
+        if [ -s "$hits" ] && GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" reset -q --pathspec-from-file="$hits" \
+            2>>"$CHECKPOINT_LOG_FILE" && report=$(GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" -c core.quotePath=off diff-index \
+            --cached --no-renames --name-only "${seed_parent_tree:-$("${git_cmd[@]}" hash-object -t tree /dev/null)}") \
             && ! printf '%s\n' "$report" | grep -qxFf "$hits"; then
             _checkpoint_log WARN "left out ${checkpoint_left_out} (ref=${ref})"
         else
@@ -642,7 +632,7 @@ write_checkpoint() {
     fi
     rm -f "$hits"
     if [ "$top" = "$h" ] \
-        && ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd diff-index --cached --quiet HEAD -- settings.json 2>/dev/null \
+        && ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" diff-index --cached --quiet HEAD -- settings.json 2>/dev/null \
         && ! GIT_INDEX_FILE="$TMP_INDEX" python3 "$h/scripts/install/render-settings" check --staged 2>>"$CHECKPOINT_LOG_FILE"; then
         checkpoint_refused_by+="${checkpoint_refused_by:+ and }the settings check (render-settings check --staged)"
     fi
@@ -653,7 +643,7 @@ write_checkpoint() {
     fi
 
     local tree_sha
-    tree_sha=$(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd write-tree 2>>"$CHECKPOINT_LOG_FILE")
+    tree_sha=$(GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" write-tree 2>>"$CHECKPOINT_LOG_FILE")
     if [ -z "$tree_sha" ]; then
         _checkpoint_log ERROR "write-tree produced empty sha (ref=${ref})"
         rm -f "$TMP_INDEX"
@@ -687,20 +677,20 @@ write_checkpoint() {
             local old_ref_sha_inner=""
             local parent_sha_inner=""
             local parent_tree_inner=""
-            old_ref_sha_inner=$($git_cmd rev-parse --verify -q "$ref" 2>/dev/null || true)
+            old_ref_sha_inner=$("${git_cmd[@]}" rev-parse --verify -q "$ref" 2>/dev/null || true)
             if [ -n "$old_ref_sha_inner" ]; then
                 parent_sha_inner="$old_ref_sha_inner"
             else
-                parent_sha_inner=$($git_cmd rev-parse --verify -q HEAD 2>/dev/null || true)
+                parent_sha_inner=$("${git_cmd[@]}" rev-parse --verify -q HEAD 2>/dev/null || true)
             fi
             if [ -n "$parent_sha_inner" ]; then
-                parent_tree_inner=$($git_cmd rev-parse "${parent_sha_inner}^{tree}" 2>/dev/null || true)
+                parent_tree_inner=$("${git_cmd[@]}" rev-parse "${parent_sha_inner}^{tree}" 2>/dev/null || true)
             fi
 
             # Idempotency short-circuit: if the pre-built tree matches the
             # CURRENT parent tree (latest, under the lock), do not commit.
             if [ -n "$parent_tree_inner" ] && [ "$tree_sha" = "$parent_tree_inner" ]; then
-                : > "$result_file"
+                printf '%s' "$parent_sha_inner" > "$result_file"  # it holds this snapshot already
                 exit 2
             fi
 
@@ -712,9 +702,9 @@ write_checkpoint() {
             local commit_body=""
             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
             if [ -n "$parent_tree_inner" ]; then
-                file_count=$($git_cmd diff-tree -r --name-only "$parent_tree_inner" "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
+                file_count=$("${git_cmd[@]}" diff-tree -r --name-only "$parent_tree_inner" "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
             else
-                file_count=$($git_cmd ls-tree -r --name-only "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
+                file_count=$("${git_cmd[@]}" ls-tree -r --name-only "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
             fi
             if [ -n "$custom_message" ]; then
                 summary="$custom_message"
@@ -727,9 +717,9 @@ write_checkpoint() {
             # object at a time, so no dangling objects accumulate.
             local new_sha_inner=""
             if [ -n "$parent_sha_inner" ]; then
-                new_sha_inner=$(printf '%s' "$commit_body" | $git_cmd commit-tree "$tree_sha" -p "$parent_sha_inner" 2>>"$CHECKPOINT_LOG_FILE")
+                new_sha_inner=$(printf '%s' "$commit_body" | "${git_cmd[@]}" commit-tree "$tree_sha" -p "$parent_sha_inner" 2>>"$CHECKPOINT_LOG_FILE")
             else
-                new_sha_inner=$(printf '%s' "$commit_body" | $git_cmd commit-tree "$tree_sha" 2>>"$CHECKPOINT_LOG_FILE")
+                new_sha_inner=$(printf '%s' "$commit_body" | "${git_cmd[@]}" commit-tree "$tree_sha" 2>>"$CHECKPOINT_LOG_FILE")
             fi
             if [ -z "$new_sha_inner" ]; then
                 _checkpoint_log ERROR "commit-tree failed (ref=${ref}, tree=${tree_sha})"
@@ -740,7 +730,7 @@ write_checkpoint() {
             # CAS update-ref kept as safety net. Under the lock it must not
             # fail; if it does, something is badly wrong — log and abort.
             # Do NOT retry inside the lock (that reintroduces the orphan bug).
-            if $git_cmd update-ref "$ref" "$new_sha_inner" "$old_ref_sha_inner" 2>>"$CHECKPOINT_LOG_FILE"; then
+            if "${git_cmd[@]}" update-ref "$ref" "$new_sha_inner" "$old_ref_sha_inner" 2>>"$CHECKPOINT_LOG_FILE"; then
                 printf '%s' "$new_sha_inner" > "$result_file"
                 exit 0
             fi
@@ -755,10 +745,13 @@ write_checkpoint() {
         trap - EXIT INT TERM HUP
 
         case "$rc" in
+            0|2) checkpoint_ref="$ref" checkpoint_commit=$(cat "$result_file" 2>/dev/null) ;;
+        esac
+        case "$rc" in
             0)
                 rm -f "$result_file"
                 _checkpoint_record_success
-                _checkpoint_rate_limited_push "$work_dir" "$ref"
+                [ -n "${CHECKPOINT_NO_PUSH:-}" ] || _checkpoint_rate_limited_push "$work_dir" "$ref"
                 return 0
                 ;;
             2)
@@ -790,18 +783,19 @@ write_checkpoint() {
         local old_ref_sha=""
         local parent_sha=""
         local parent_tree=""
-        old_ref_sha=$($git_cmd rev-parse --verify -q "$ref" 2>/dev/null || true)
+        old_ref_sha=$("${git_cmd[@]}" rev-parse --verify -q "$ref" 2>/dev/null || true)
         if [ -n "$old_ref_sha" ]; then
             parent_sha="$old_ref_sha"
         else
-            parent_sha=$($git_cmd rev-parse --verify -q HEAD 2>/dev/null || true)
+            parent_sha=$("${git_cmd[@]}" rev-parse --verify -q HEAD 2>/dev/null || true)
         fi
         if [ -n "$parent_sha" ]; then
-            parent_tree=$($git_cmd rev-parse "${parent_sha}^{tree}" 2>/dev/null || true)
+            parent_tree=$("${git_cmd[@]}" rev-parse "${parent_sha}^{tree}" 2>/dev/null || true)
         fi
 
         # Idempotency short-circuit on pre-built tree.
         if [ -n "$parent_tree" ] && [ "$tree_sha" = "$parent_tree" ]; then
+            checkpoint_ref="$ref" checkpoint_commit="$parent_sha"
             rm -f "$result_file"
             _checkpoint_record_success
             return 0
@@ -813,9 +807,9 @@ write_checkpoint() {
         local commit_body=""
         timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         if [ -n "$parent_tree" ]; then
-            file_count=$($git_cmd diff-tree -r --name-only "$parent_tree" "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
+            file_count=$("${git_cmd[@]}" diff-tree -r --name-only "$parent_tree" "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
         else
-            file_count=$($git_cmd ls-tree -r --name-only "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
+            file_count=$("${git_cmd[@]}" ls-tree -r --name-only "$tree_sha" 2>/dev/null | wc -l | tr -d ' ')
         fi
         if [ -n "$custom_message" ]; then
             summary="$custom_message"
@@ -825,9 +819,9 @@ write_checkpoint() {
         commit_body=$(_checkpoint_commit_body "$summary" "$trigger" "$ref" "$file_count")
 
         if [ -n "$parent_sha" ]; then
-            new_sha=$(printf '%s' "$commit_body" | $git_cmd commit-tree "$tree_sha" -p "$parent_sha" 2>>"$CHECKPOINT_LOG_FILE")
+            new_sha=$(printf '%s' "$commit_body" | "${git_cmd[@]}" commit-tree "$tree_sha" -p "$parent_sha" 2>>"$CHECKPOINT_LOG_FILE")
         else
-            new_sha=$(printf '%s' "$commit_body" | $git_cmd commit-tree "$tree_sha" 2>>"$CHECKPOINT_LOG_FILE")
+            new_sha=$(printf '%s' "$commit_body" | "${git_cmd[@]}" commit-tree "$tree_sha" 2>>"$CHECKPOINT_LOG_FILE")
         fi
         if [ -z "$new_sha" ]; then
             _checkpoint_log ERROR "commit-tree failed (ref=${ref}, tree=${tree_sha})"
@@ -836,12 +830,13 @@ write_checkpoint() {
             return 1
         fi
 
-        if $git_cmd update-ref "$ref" "$new_sha" "$old_ref_sha" 2>>"$CHECKPOINT_LOG_FILE"; then
+        if "${git_cmd[@]}" update-ref "$ref" "$new_sha" "$old_ref_sha" 2>>"$CHECKPOINT_LOG_FILE"; then
             rm -f "$result_file"
             rm -f "$TMP_INDEX"
             trap - EXIT INT TERM HUP
+            checkpoint_ref="$ref" checkpoint_commit="$new_sha"
             _checkpoint_record_success
-            _checkpoint_rate_limited_push "$work_dir" "$ref"
+            [ -n "${CHECKPOINT_NO_PUSH:-}" ] || _checkpoint_rate_limited_push "$work_dir" "$ref"
             return 0
         fi
 

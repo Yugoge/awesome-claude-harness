@@ -246,8 +246,9 @@ def test_the_installer_installs_and_refreshes(tmp_path):
 
 
 READ = {"dd of=": "dd if=/dev/null of={rt}", "truncate": "truncate -s 0 {rt}", "ln -sf": "ln -sf /bin/true {rt}",
-        "rsync": "rsync {work}/x {rt}"}
-MISSES = {"cd, then a relative chmod": "cd {dir} && chmod -x reference-transaction"}
+        "rsync": "rsync {work}/x {rt}",
+        # was an out-of-scope miss; the parser now places a relative write at the directory a cd moved to
+        "cd, then a relative chmod": "cd {dir} && chmod -x reference-transaction"}
 
 
 @pytest.mark.parametrize("form", list(READ))
@@ -256,19 +257,6 @@ def test_the_parser_reads_these_writes_of_the_keystone_hook(repo, form):
     work = _state(repo, "registered_worktree")
     rt = _keystone(repo)
     command = READ[form].format(rt=rt, work=work, dir=rt.parent)
-    r = _hook(repo, "Bash", {"command": command}, work)
-    assert r.returncode == 2, (form, r.stderr)
-
-
-@pytest.mark.xfail(strict=True, reason="out of scope, found: on a --worktree host without bubblewrap the parser "
-                                       "reads no target of these, so the keystone hook is reachable")
-@pytest.mark.parametrize("form", list(MISSES))
-def test_out_of_scope_found_writes_the_parser_cannot_read(repo, form):
-    """Measured on this tree: each passes the guard here and, run, changes the keystone hook; with
-    bubblewrap (in place always has it) the read-only rebind refuses every one with EROFS."""
-    work = _state(repo, "registered_worktree")
-    rt = _keystone(repo)
-    command = MISSES[form].format(rt=rt, work=work, dir=rt.parent)
     r = _hook(repo, "Bash", {"command": command}, work)
     assert r.returncode == 2, (form, r.stderr)
 

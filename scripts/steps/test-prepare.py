@@ -38,7 +38,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS = "docs/test/edge-case-analysis.json"
 SUBDIRS = ("scripts", "instructions", "data/fixtures", "data/mocks", "reports")
 sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
-from harness_vocabulary import FOLDER_DOCUMENTS as NOT_TEMPLATES  # noqa: E402
+from command_span import FOLDER_DOCUMENTS as NOT_TEMPLATES  # noqa: E402
 
 
 def emit(**facts: object) -> None:

@@ -13,7 +13,3 @@ RUN_CODE_TOOLS = frozenset({"mcp__playwright__browser_run_code", "mcp__paseo__br
 # CLAUDE_OBLIGATION_STOPGATE (hooks/subagentstop-artifact-contract-enforce.py). Any other value
 # is not a mode: each reader keeps its own default for it.
 GATE_MODES = ("block", "advisory", "off")
-
-# The markdown files of a folder that are its folder documents (doc-sync writes them), never its
-# content: not a command, an agent, a spec, a template or a todo script's command.
-FOLDER_DOCUMENTS = ("INDEX.md", "README.md")
