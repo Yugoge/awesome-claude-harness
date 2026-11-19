@@ -25,6 +25,9 @@ def last_nonempty(text: str) -> str:
 # (not landed), recognised BEFORE the `CLOSE:` prefix test.
 _ROUND_OPEN_RE = re.compile(r"^CLOSE_FINDINGS:\s*\d+\s+items?\b")
 
+# The classes that decide a close (classify_line's others: "unknown", and classify_file's "missing").
+DECISIVE_CLASSES = ("yes", "no")
+
 
 def classify_line(line: str) -> str:
     text = (line or "").strip()

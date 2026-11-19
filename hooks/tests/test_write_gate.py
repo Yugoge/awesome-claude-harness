@@ -603,8 +603,9 @@ def test_the_tools_named_one_after_another_run_their_rules_in_the_gates_process(
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     assert gate.ONE_AFTER_ANOTHER == frozenset({"Bash"})
-    from lib import hook_launch
-    assert gate.WARM == hook_launch.WARM
+    from lib import hook_launch, rule_fork
+    # one list of the modules warmed before the forks, read by the gate and the launcher
+    assert not hasattr(gate, "WARM") and not hasattr(hook_launch, "WARM") and rule_fork.WARM
     rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(2)]
     for tool, forked in (("Bash", False), ("Write", True), ("Edit", True), (None, True)):
         code, out, err, pid, _ = _gate_runs(tmp_path, rules, tool=tool)
