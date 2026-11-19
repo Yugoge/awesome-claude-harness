@@ -68,7 +68,7 @@ _SENSITIVE_DATA_FRAGMENTS = (
     "secrets/",
 )
 
-# Filesystem-noise patterns — authority: scripts/blast-radius-tool.py:35-38.
+# Filesystem-noise patterns, also scripts/blast-radius-tool.py's scope filter (spec §5.3).
 _FILESYSTEM_NOISE_FRAGMENTS = (
     "/venv/",
     "/worktrees/",
