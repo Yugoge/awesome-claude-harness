@@ -60,8 +60,9 @@ import shlex
 import sys
 
 try:
-    from lib import shell_parse
+    from lib import bash_read_only, shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
+    import bash_read_only
     import shell_parse
 try:
     from . import locations
@@ -700,9 +701,9 @@ _TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
 # and `git log` reading a `--grep` pattern.
 _TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
 _GIT_CONFIG_OPTS = ('-c', '--config-env')
-# rg reads its pattern as text, unless a preprocessor runs (`--pre`,
-# `--pre-glob`) or a config file it is pointed at may add one.
-_RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
+# rg reads its pattern as text, unless it runs a program (shell_parse.RG_RUN_OPTS:
+# `--pre`, `--hostname-bin`, `--search-zip`) or a config file it is pointed at may add one.
+_RG_PROGRAM_OPTS = shell_parse.RG_RUN_OPTS
 # Commands that read what a pipe feeds them as text and never run it. They are
 # not text-only: their own arguments may name a program (`sort
 # --compress-program`), and one given such an option (_PROGRAM_OPTIONS) is no
@@ -710,9 +711,7 @@ _RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
 # absent: LESSOPEN and LESSCLOSE name an input preprocessor (`|-sh %s` runs
 # what it reads), and they may come from the inherited environment, which the
 # command line cannot show.
-_STDIN_CONSUMERS = frozenset({
-    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl',
-})
+_STDIN_CONSUMERS = bash_read_only.FILTERS  # the one list of text filters
 
 
 def _long_opt_named(value, names):
@@ -1359,7 +1358,7 @@ def _shell_c_strings(text, fed=False):
 # its own: rg's preprocessor, ag's and ack's pager (run by a shell), and
 # sort's compressor. A long option may be abbreviated.
 _PROGRAM_OPTIONS = {
-    'rg': ('--pre',),
+    'rg': shell_parse.RG_PROGRAM_OPTS,
     'ag': ('--pager',),
     'ack': ('--pager',),
     'sort': ('--compress-program',),

@@ -48,7 +48,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
-    OPTION_ENDS, OUTPUT_REDIRECT_OPS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+    OPTION_ENDS, OUTPUT_REDIRECT_OPS, RG_RUN_OPTS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
 from shell_parse import GIT_INERT_FLAGS, git_plain_subcommand_index  # noqa: E402
 from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
 from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
@@ -125,25 +125,79 @@ def _find(args) -> bool:
     return not any(a.startswith(f) for a in args for f in _FIND_FORBIDDEN)
 
 
-_RG_FORBIDDEN = ("--pre", "--pre-glob", "--hostname-bin", "--search-zip")
-
-
 def _rg(args) -> bool:
-    return not any(_long_hits(a, _RG_FORBIDDEN) or _cluster_has(a, "z") for a in args)
+    return not any(_long_hits(a, RG_RUN_OPTS) or _cluster_has(a, "z") for a in args)
 
 
-_SORT_FORBIDDEN = ("--output", "--compress-program")
+# -o writes the output file, --compress-program runs a program, -T writes temporary files into a directory.
+_SORT_FORBIDDEN = ("--output", "--compress-program", "--temporary-directory")
 
 
 def _sort(args) -> bool:
-    return not any(_long_hits(a, _SORT_FORBIDDEN) or _cluster_has(a, "o") for a in args)
+    return not any(_long_hits(a, _SORT_FORBIDDEN) or _cluster_has(a, "oT") for a in args)
 
 
 def _uniq(args) -> bool:
-    # uniq IN OUT writes OUT: no operand at all, so only stdin to stdout. A bare
-    # `--` ends option parsing and makes every later word an operand, dash-named
-    # ones included (uniq -- -in -out writes -out), so it is refused too.
-    return all(a.startswith("-") and a not in OPTION_ENDS for a in args)
+    # uniq IN OUT writes OUT: at most one operand (the input; `-` is stdin), the
+    # values of -f -s -w (and their long forms, abbreviated too) are no operand.
+    # A bare `--` ends option parsing and makes every later word an operand,
+    # dash-named ones included (uniq -- -in -out writes -out), so it is refused.
+    operands, i = 0, 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a == "--":
+            return False
+        if a == "-" or not a.startswith("-"):
+            operands += 1
+        elif a.startswith("--"):
+            i += "=" not in a and _long_hits(a, ("--skip-fields", "--skip-chars", "--check-chars"))
+        else:
+            k = next((k for k, ch in enumerate(a[1:], 1) if ch in "fsw"), 0)
+            i += bool(k) and k == len(a) - 1
+    return operands <= 1
+
+
+def _file(args) -> bool:
+    # file -C (--compile) writes the compiled magic file into the working directory.
+    return not any(_long_hits(a, ("--compile",)) or _cluster_has(a, "C") for a in args)
+
+
+_XXD_VALUES = ("cols", "groupsize", "len", "name", "offset", "seek", "R")
+
+
+def _xxd(args) -> bool:
+    # xxd [options] [infile [outfile]]: a second operand is written. Its options are
+    # single-dash words, abbreviated too (-c 8, -cols 8, -c8); a value is no operand.
+    operands, i = 0, 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a == "-" or not a.startswith("-"):
+            operands += 1
+        elif a[1:] and any(n.startswith(a[1:]) for n in _XXD_VALUES):
+            i += 1
+    return operands <= 1
+
+
+def _ag(args) -> bool:
+    return not any(_long_hits(a, ("--pager",)) for a in args)
+
+
+def _ack(args) -> bool:
+    # --output is a Perl expression ack evaluates; --ackrc names options (a pager among them).
+    return not any(_long_hits(a, ("--pager", "--output", "--ackrc")) for a in args)
+
+
+def _bat(args) -> bool:
+    # `bat cache --build` writes bat's cache; --pager runs a program.
+    operands = [a for a in args if not a.startswith("-")]
+    return not any(_long_hits(a, ("--pager",)) for a in args) and operands[:1] != ["cache"]
+
+
+def _less(args) -> bool:
+    # -o / -O / --log-file / --LOG-FILE copy the input into a log file.
+    return not any(_long_hits(a, ("--log-file", "--LOG-FILE")) or _cluster_has(a, "oO") for a in args)
 
 
 # A sed script is admitted only when this small grammar matches the WHOLE of
@@ -171,7 +225,8 @@ def _sed_script_ok(script: str) -> bool:
     return bool(script) and _SED_SCRIPT_RE.fullmatch(script) is not None
 
 
-_SED_LONG_FLAGS = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
+# The long sed options that take no value (also the config guard's sed proof).
+SED_LONG_FLAGS = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
                              "--null-data", "--posix", "--sandbox", "--debug"})
 
 
@@ -186,7 +241,7 @@ def _sed(args) -> bool:
         if a.startswith("--"):
             if a.startswith("--expression="):
                 scripts.append(a.split("=", 1)[1])
-            elif a not in _SED_LONG_FLAGS:
+            elif a not in SED_LONG_FLAGS:
                 return False  # --in-place, --file, an abbreviation of either, ...
         elif _short_cluster(a):
             body = a[1:]
@@ -332,18 +387,31 @@ def _git(args) -> bool:
     return _git_sub(args[i], args[i + 1:])
 
 
-# Programs whose every option only reads and prints: their arguments are not
-# checked, and a glob or brace expansion among them is fine (whatever file
-# names it expands to, no option of theirs runs or writes anything).
-_ANY_ARGS = frozenset({
+# THE PROGRAMS THAT ONLY READ, for every hook that asks (the one definition: the
+# orchestrator gate's proof below, the harness-switch rule and the config guard
+# read these names and checks; none keeps a list of its own).
+#
+# ANY_ARGS: programs whose every option only reads and prints: their arguments
+# are not checked, and a glob or brace expansion among them is fine (whatever
+# file names it expands to, no option of theirs runs or writes anything).
+ANY_ARGS = frozenset({
     "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "nl", "tac", "stat", "du", "df", "pwd",
     "echo", "true", "false", "basename", "dirname", "realpath", "readlink", "cut", "tr", "comm",
     "paste", "column", "rev", "fold", "expand", "unexpand", "diff", "cmp", "md5sum", "sha1sum",
     "sha256sum", "sha512sum", "cksum", "uname", "whoami", "id", "which",
+    ":", "od", "hexdump", "strings", "b2sum", "sha224sum", "sha384sum", "sum", "fmt", "jq", "type", "whereis",
 })
 
-# Programs with a per-argument check; their arguments must be static words.
-_CHECKED = {
+# FILTERS: the readers that read standard input (or their files) as text and print a transform of it,
+# never reading it as code; sort and uniq among them read only in the forms their CHECKED entry admits
+# (sort --compress-program hands its input to a program, uniq IN OUT writes OUT).
+FILTERS = frozenset({"head", "tail", "wc", "cut", "tr", "nl", "column", "jq", "sort", "uniq"})
+
+# CHECKED: programs that read in some forms and write a file or run a program in
+# others (sort -o, uniq IN OUT, find -delete, rg --pre, sed w, awk system(), xxd IN
+# OUT, file -C, git ...). The bare name is in neither list: a call is a read only
+# when its arguments (static words) pass the program's check.
+CHECKED = {
     "printf": _printf,
     "test": _test,
     "[": _test,
@@ -357,9 +425,34 @@ _CHECKED = {
     "gawk": _awk,
     "mawk": _awk,
     "git": _git,
+    "file": _file,
+    "xxd": _xxd,
+    "ag": _ag,
+    "ack": _ack,
+    "bat": _bat,
 }
 
-PROGRAMS = _ANY_ARGS | frozenset(_CHECKED)
+# PAGERS: they read and print like ANY_ARGS, but a pager's own commands run a
+# program (`!cmd`, `|`, `v`, LESSOPEN), so the orchestrator proof, which asks
+# whether a command runs code, counts them; a guard that asks only which files a
+# command's words make it write counts them readers (reads_only(..., pagers=True)).
+PAGERS = {
+    "less": _less,
+    "more": _any_args,
+}
+
+PROGRAMS = ANY_ARGS | frozenset(CHECKED)
+
+
+def reads_only(name: str, args, pagers: bool = False) -> bool:
+    """Whether program ``name`` (a bare name) called with ``args`` only reads: a name of
+    ANY_ARGS, or one of CHECKED (of PAGERS with ``pagers``) whose static-word ``args``
+    pass its check; any computed argument (None) fails a check. Anything else is False."""
+    if name in ANY_ARGS:
+        return True
+    check = CHECKED.get(name) or (PAGERS.get(name) if pagers else None)
+    args = list(args)
+    return check is not None and all(isinstance(a, str) for a in args) and check(args)
 
 
 # ---------------------------------------------------------------------------
@@ -410,14 +503,14 @@ def _command_ok(cmd) -> bool:
     if any(_holds_code(w) for w in cmd.words):
         return False
     rest = cmd.words[1:]
-    if name in _ANY_ARGS:
+    if name in ANY_ARGS:
         return all(p.kind in ("lit", "glob", "brace") for w in rest for p in active_parts(w.parts))
     if any(p.kind != "lit" for w in rest for p in active_parts(w.parts)):
         return False
     args = [w.value() for w in rest]
     if any(a is None for a in args):
         return False
-    return _CHECKED[name](args)
+    return CHECKED[name](args)
 
 
 def is_read_only(command) -> bool:

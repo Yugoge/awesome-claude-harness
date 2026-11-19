@@ -880,28 +880,17 @@ def _url_name(url: str) -> str:
 
 
 def _operand_writes(name: str, values: list) -> list:
-    """The paths a writer names among its operands (as written): ``sort -o``, ``uniq IN OUT``, a
-    sed ``w`` command, an awk ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with
-    ``--output-dir``, wget's ``-O``/``-P``. Only literal operands; a read never names one."""
+    """The paths a writer names among its operands (as written): a sed ``w`` command, an awk
+    ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with ``--output-dir``, wget's ``-O``/``-P``
+    (sort -o and uniq IN OUT are the shared parser's). Only literal operands; a read never names one."""
+    from lib import shell_parse as sp
     out = []
     plain = [v for v in values if v is not None]
-    if name == "sort":
-        for i, v in enumerate(plain):
-            if v in ("-o", "--output") and i + 1 < len(plain):
-                out.append(plain[i + 1])
-            elif v.startswith("--output="):
-                out.append(v.split("=", 1)[1])
-            elif v.startswith("-o") and len(v) > 2 and not v.startswith("--"):
-                out.append(v[2:])
-    elif name == "uniq":
-        operands = [v for v in plain if not v.startswith("-") or v == "-"]
-        if len(operands) >= 2:
-            out.append(operands[1])
-    elif name in ("sed", "gsed"):
+    if name in ("sed", "gsed"):
         for v in plain:
             for m in _SED_W.finditer(v):
                 out.append(m.group(1) or m.group(3))
-    elif name in ("awk", "gawk", "mawk", "nawk"):
+    elif name in sp.AWK_NAMES:
         for v in plain:
             out += _AWK_OUT.findall(v)
     elif name == "openssl":
@@ -930,7 +919,7 @@ def _operand_writes(name: str, values: list) -> list:
                 prefix = v.split("=", 1)[1]
             elif v.startswith("-P") and len(v) > 2:
                 prefix = v[2:]
-            elif v in ("-O", "--output-document") and i + 1 < len(plain):
+            elif v in sp.WGET_OUTPUT_OPTS and i + 1 < len(plain):
                 out.append(plain[i + 1])
             elif "://" in v:
                 urls.append(v)
