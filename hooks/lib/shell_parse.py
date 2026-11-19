@@ -1279,8 +1279,11 @@ def ansi_decode(text):
 # Option splitting
 # ---------------------------------------------------------------------------
 
-def _spec(bools=(), vals=(), nargs=None):
-    return {"bool": set(bools), "val": set(vals), "nargs": dict(nargs or {})}
+def _spec(bools=(), vals=(), nargs=None, attached=()):
+    """An option spec: flags, options taking a value, and (``attached``) options whose
+    value is optional and only ever attached (`-m/path`, `--mount=/path`), nargs 0."""
+    return {"bool": set(bools), "val": set(vals) | set(attached),
+            "nargs": {**dict(nargs or {}), **{o: 0 for o in attached}}}
 
 
 def _resolve_long(name, spec):
@@ -1378,8 +1381,8 @@ def split_options(words, spec, start=0, permute=False, lenient=False):
                 i += 1
                 continue
             if res in spec["val"]:
-                if eq:
-                    opts.append((res, _synthetic_word(val, w)))
+                if eq or spec["nargs"].get(res, 1) == 0:
+                    opts.append((res, _synthetic_word(val, w) if eq else None))
                     i += 1
                     continue
                 if i + 1 >= n:
@@ -1397,6 +1400,8 @@ def split_options(words, spec, start=0, permute=False, lenient=False):
             if ch in spec["val"]:
                 if j + 1 < len(lit):
                     opts.append((ch, _synthetic_word(lit[j + 1:], w)))
+                elif spec["nargs"].get(ch, 1) == 0:
+                    opts.append((ch, None))
                 else:
                     if i + 1 >= n:
                         return opts, operands, "missing_option_value:" + ch
@@ -2293,26 +2298,32 @@ WRAPPERS = {
     "stdbuf": (_spec((), ("-i", "-o", "-e", "--input", "--output", "--error")), 0),
     "timeout": (_spec(("-f", "--foreground", "--preserve-status", "-v", "--verbose"),
                       ("-s", "--signal", "-k", "--kill-after")), 1),
-    "chroot": (_spec((), ("--userspec", "--groups", "--skip-chdir")), 1),
-    "strace": (_spec(("-f", "-ff", "-c", "-C", "-T", "-t", "-tt", "-y", "-yy")),
+    # each spec below from the program's --help (util-linux 2.39, strace 6.8, coreutils) or manual
+    "chroot": (_spec(("--skip-chdir",), ("--userspec", "--groups")), 1),
+    "strace": (_spec(("-f", "-ff", "-c", "-C", "-T", "-t", "-tt", "-ttt", "-y", "-yy", "-Y", "-D", "-i",
+                      "-k", "-n", "-A", "-q", "-r", "-v", "-x", "-xx", "-z", "-Z", "-w", "-d"),
+                     ("-e", "-E", "-p", "-u", "-I", "-b", "-P", "-a", "-o", "-s", "-X", "-O", "-S", "-U")),
                0),
-    "ltrace": (_spec(("-f", "-c", "-C", "-S", "-t", "-tt")), 0),
+    "ltrace": (_spec(("-f", "-c", "-C", "-S", "-t", "-tt", "-ttt", "-T", "-b", "-i", "-r", "-L"),
+                     ("-a", "-A", "-D", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x")), 0),
     "taskset": (_spec(("-a", "--all-tasks", "-p", "--pid", "-c", "--cpu-list")), 1),
-    "prlimit": (_spec((), ("--pid", "--core", "--cpu", "--data", "--fsize",
-                           "--nofile", "--nproc", "--as", "--stack", "--locks",
-                           "--memlock", "--msgqueue", "--nice", "--rtprio",
-                           "--rttime", "--sigpending")), 0),
-    "unshare": (_spec(("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net",
-                       "-p", "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time",
-                       "-f", "--fork", "--mount-proc", "-r", "--map-root-user",
-                       "--kill-child", "--keep-caps"),
-                      ("--propagation", "--setgroups", "--wd", "-S", "--setuid",
-                       "-G", "--setgid")), 0),
-    "nsenter": (_spec(("-a", "--all", "-F", "--no-fork"),
-                      ("-t", "--target", "-m", "--mount", "-u", "--uts", "-i", "--ipc",
-                       "-n", "--net", "-p", "--pid", "-U", "--user", "-C", "--cgroup",
-                       "-S", "--setuid", "-G", "--setgid", "-w", "--wd", "-r", "--root")),
-                0),
+    "prlimit": (_spec(("--noheadings", "--raw", "--verbose"), ("-p", "--pid", "-o", "--output"),
+                      attached=("--core", "--cpu", "--data", "--fsize", "--nofile", "--nproc", "--as",
+                                "--stack", "--locks", "--memlock", "--msgqueue", "--nice", "--rtprio",
+                                "--rttime", "--sigpending", "--rss")), 0),
+    "unshare": (_spec(("-f", "--fork", "-r", "--map-root-user", "-c", "--map-current-user",
+                       "--map-auto", "--keep-caps"),
+                      ("--map-user", "--map-group", "--map-users", "--map-groups", "--propagation",
+                       "--setgroups", "-R", "--root", "-w", "--wd", "-S", "--setuid", "-G",
+                       "--setgid", "--monotonic", "--boottime"),
+                      attached=("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net", "-p",
+                                "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time",
+                                "--kill-child", "--mount-proc")), 0),
+    "nsenter": (_spec(("-a", "--all", "-F", "--no-fork", "-e", "--env", "--preserve-credentials",
+                       "-Z", "--follow-context"), ("-t", "--target", "-W", "--wdns"),
+                      attached=("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net", "-p",
+                                "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time", "-S",
+                                "--setuid", "-G", "--setgid", "-r", "--root", "-w", "--wd")), 0),
     "setarch": (_spec(("-v", "--verbose", "-3", "--3gb", "-B", "--32bit", "-L",
                        "--addr-compat-layout", "-F", "--fdpic-funcptrs",
                        "-I", "--short-inode", "-R", "--addr-no-randomize",
@@ -2325,9 +2336,10 @@ WRAPPERS = {
     "eatmydata": (_spec(), 0),
     "valgrind": (_spec(("-q", "--quiet", "-v", "--verbose"),
                        ("--tool", "--log-file", "--error-exitcode")), 0),
-    "xvfb-run": (_spec(("-a", "--auto-servernum", "-d", "--auto-display", "-h", "-w"),
-                       ("-n", "--server-num", "-s", "--server-args", "-e",
-                        "--error-file", "-f", "--auth-file", "-p", "--wait")), 0),
+    "xvfb-run": (_spec(("-a", "--auto-servernum", "-d", "--auto-display", "-h", "--help", "-l",
+                        "--listen-tcp"),
+                       ("-n", "--server-num", "-s", "--server-args", "-e", "--error-file", "-f",
+                        "--auth-file", "-p", "--xauth-protocol", "-w", "--wait")), 0),
     "dbus-run-session": (_spec((), ("--config-file", "--dbus-daemon")), 0),
     "daemonize": (_spec(("-v",), ("-a", "-c", "-e", "-o", "-p", "-l", "-u", "-g",
                                   "-E", "-P")), 0),
@@ -2373,7 +2385,7 @@ WRAPPERS = {
     "time": (_spec(("-p", "--portability", "-v", "--verbose", "-a", "--append",
                     "-q", "--quiet"),
                    ("-f", "--format", "-o", "--output")), 0),
-    "perf": (_spec(), 1),
+    "perf": (_spec((), ("-o", "--output", "-p", "--pid", "-e", "--event", "-C", "--cpu")), 1),
     "machinectl": None,
     "start-stop-daemon": None,
     "flock": None,
@@ -2453,7 +2465,7 @@ PEEL = {
     "trickle": (_spec(("-h", "-v", "-V", "-s"), ("-d", "-u", "-w", "-t", "-l", "-n")), 0),
     "cpulimit": (_spec(("-z", "--lazy", "-i", "--include-children", "-k", "--kill", "-r",
                         "--restore", "-v", "--verbose", "-q", "--quiet"),
-                       ("-l", "--limit", "-c", "--cpu")), 0),
+                       ("-l", "--limit", "-c", "--cpu", "-p", "--pid", "-e", "--exe")), 0),
     "tsp": (_spec(("-n", "-f", "-d", "-B", "-E", "-g"), ("-L", "-D", "-W", "-N")), 0),
     "ssh-agent": (_spec(("-c", "-s", "-D", "-d"), ("-a", "-E", "-O", "-P", "-t")), 0),
 }

@@ -2614,6 +2614,17 @@ def _pm_global_setting(name: str, value: Optional[str]) -> bool:
     return False
 
 
+# Each front-end's options that take the next word (and the options whose value is its
+# shell code) come from the parser's option spec of the program, where it has one.
+_FRONTEND_SPECS = {"su": _sp._SU_SPEC, **{n: (_sp.WRAPPERS.get(n) or _sp.PEEL.get(n) or (None,))[0]
+                                        for n in EXEC_FRONTEND_PROFILES if n != "su"}}
+_FRONTEND_PAYLOAD_OPTS = {"flock": _sp.COMMAND_OPTS, "su": _sp.SU_COMMAND_OPTS, "runuser": _sp.SU_COMMAND_OPTS}
+EXEC_FRONTEND_PROFILES = {
+    n: p if _FRONTEND_SPECS.get(n) is None else {
+        **p, "payload_opts": frozenset(_FRONTEND_PAYLOAD_OPTS.get(n, ())),
+        "opts_with_arg": frozenset(o for o in _FRONTEND_SPECS[n]["val"] if _FRONTEND_SPECS[n]["nargs"].get(o, 1))
+        - frozenset(_FRONTEND_PAYLOAD_OPTS.get(n, ()))}
+    for n, p in EXEC_FRONTEND_PROFILES.items()}
 # Wrapper -> the options that take the next word as their value: read from the
 # shared parser's option specs (shell_parse.WRAPPERS / PEEL), one per wrapper.
 _WRAPPER_OPTS_WITH_ARG = {name: frozenset((_sp.WRAPPERS.get(name) or _sp.PEEL[name])[0]["val"])

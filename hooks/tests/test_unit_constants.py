@@ -104,8 +104,11 @@ def test_exec_frontend_profiles_shape():
     assert constants.EXEC_FRONTEND_PROFILES["flock"]["leading_positionals"] == 1
     # watch joins its whole trailing argv into a shell-evaluated string.
     assert constants.EXEC_FRONTEND_PROFILES["watch"].get("joins_tail_as_shell") is True
-    # every profile carries an opts_with_arg frozenset.
-    for name, prof in constants.EXEC_FRONTEND_PROFILES.items():
+    # every profile, as the guard reads it (_core fills opts_with_arg from the
+    # parser's option spec where it has one), carries an opts_with_arg frozenset.
+    from lib.runtime_guard import _core
+    assert set(_core.EXEC_FRONTEND_PROFILES) == set(constants.EXEC_FRONTEND_PROFILES)
+    for name, prof in _core.EXEC_FRONTEND_PROFILES.items():
         assert isinstance(prof, dict), name
         assert isinstance(prof["opts_with_arg"], frozenset), name
 
