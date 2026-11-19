@@ -145,8 +145,9 @@ def test_the_hook_reads_its_own_harness_and_tells_the_model(tmp_path) -> None:
     for part in ("hooks", "scripts/todo", "commands"):
         (home / part).mkdir(parents=True)
     shutil.copy(CHECKER_PATH, home / "hooks" / CHECKER_PATH.name)
-    (home / "hooks" / "lib").mkdir()  # the folder-document names it reads (lib/harness_vocabulary.py)
-    shutil.copy(CHECKER_PATH.parent / "lib" / "harness_vocabulary.py", home / "hooks" / "lib")
+    (home / "hooks" / "lib").mkdir()  # the folder-document names it reads (lib/command_span.py)
+    for name in ("command_span.py", "stop-commands.json"):
+        shutil.copy(CHECKER_PATH.parent / "lib" / name, home / "hooks" / "lib")
     (home / "commands" / "x.md").write_text("### Step 1: one\n### Step 2: two\n", encoding="utf-8")
     (home / "scripts" / "todo" / "x.py").write_text(
         "import json\nprint(json.dumps([{'content': 'Step 1: one'}]))\n", encoding="utf-8")

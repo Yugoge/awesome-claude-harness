@@ -28,7 +28,7 @@ import sys
 import re
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
-from harness_vocabulary import FOLDER_DOCUMENTS  # noqa: E402
+from command_span import FOLDER_DOCUMENTS  # noqa: E402
 
 
 def get_file_path():

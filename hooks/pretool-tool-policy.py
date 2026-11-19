@@ -280,6 +280,16 @@ def _owner_binding(role: str, data: dict):
         return None
 
 
+def _main_scratch(data: dict):
+    """The main agent's own scratch directory: its session's (locations.session_scratch_dir) when
+    hooks/session-scratch-init.sh made it for this session (lib/scratch_owner), else None."""
+    from lib.scratch_owner import owns_scratch_dir
+
+    sid = data.get("session_id")
+    own = None if data.get("agent_id") else locations.session_scratch_dir(sid)
+    return own if own and owns_scratch_dir(own, sid) else None
+
+
 def _scratch_status(role: str, target: str, data: dict) -> str:
     """Classify a write target as owner / sibling / system_temp / outside.
 
@@ -292,6 +302,9 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     """
     from pathlib import Path
 
+    own = _main_scratch(data)
+    if own and locations.is_inside(target, own, str(_project_root())):
+        return "owner"
     binding = _owner_binding(role, data)
     if binding is not None:
         try:
@@ -345,24 +358,25 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
 def _note_own_scratch(role: str, data: dict, target) -> None:
     """After a refused write of ``target`` to system temp or scratch, name the
     caller's own scratch directory as a literal path. It is the directory
-    _scratch_status judges "owner": the resource session's when one resolves,
-    else <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
+    _scratch_status judges "owner": the main agent's session scratch, a
+    subagent's resource session's when one resolves, else
+    <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
     from pathlib import Path
 
     try:
         if _scratch_status(role, target, data) not in ("sibling", "system_temp"):
             return
-        binding = _owner_binding(role, data)
-        if binding is not None:
+        own, binding = _main_scratch(data), _owner_binding(role, data)
+        if not own and binding is not None:
             from lib import session_resources
 
             own = session_resources.scratch_path(_project_root(), binding)
-        else:
+        elif not own:
             parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
             if not all(parts):  # an id that is no single name fails the owner check below
                 return
             own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
-        if _scratch_status(role, str(own / "f"), data) != "owner":
+        if _scratch_status(role, os.path.join(own, "f"), data) != "owner":
             return
         sys.stderr.write(f"tool-policy.v1 note: your own scratch directory is {own}/ (mkdir -p {own} first; "
                          f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")

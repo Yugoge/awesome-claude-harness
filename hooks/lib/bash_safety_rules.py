@@ -11,6 +11,7 @@ them; every later rule is released by both. A view that cannot be built degrades
 helper refuses more, never less.
 """
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import resource
 import signal
 import subprocess
 import sys
+import time
 import urllib.parse
 
 HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -4776,16 +4778,88 @@ def let_through_unproven(entry, payload):
         {"rule": "removal-policy", "kind": "let_through_unproven",
          "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no usable verdict),
          "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
-    This module writes no log of its own: the record's writer is called from here.
+    Before the command runs, a snapshot of the repository at the payload's cwd is taken and named in the entry
+    (entry["snapshot"], see snapshot_before()), so what the command removes or overwrites there can be brought back
+    (the owner, 2026-10-04: discard, but recoverably). Then the entry goes to the refusal record (record(), kind
+    "unproven") as one line: what was let through and why, then "snapshot: <ref> <commit>; bring a file back: ..."
+    (and what it left out) or "snapshot: none, <why>".
     """
+    shot = entry["snapshot"] = snapshot_before(payload)
+    lines = [f"{entry.get('rule', 'removal-policy')} let through unproven: {entry.get('reason', '')}"]
+    if "none" in shot:
+        lines.append(f"snapshot: none, {shot['none']}")
+    else:
+        lines.append(f"snapshot: {shot['ref']} {shot['commit']}; bring a file back: {shot['restore']}")
+        lines += [f"snapshot left out: {shot['left_out']}"] if shot.get("left_out") else []
+    record("\n".join(lines), "unproven")
+
+
+def snapshot_before(payload):
+    """lib/checkpoint-core.sh write_checkpoint, run in the payload's cwd within CLAUDE_HOOK_SNAPSHOT_TIMEOUT (10 s:
+    with the analyzer's 15 s it stays inside the CLI's 60 s for this hook, which settings.json leaves at its
+    default), starting no push. A snapshot that is not taken never refuses: the reply says why. A repository whose
+    snapshot ran past that limit gets none for CLAUDE_HOOK_SNAPSHOT_PAUSE (30 min) after it, so a repository too big
+    to snapshot costs one wait per period, not one per command; its mark is a file in the hook state root, named by
+    the repository's real top-level path. Returns {"ref", "commit", "restore"} (and "left_out" when files were left
+    out) or {"none": why}."""
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        return {"none": "the call names no working directory"}
+    limit = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_TIMEOUT", ""), "10s") or 10.0
+    try:
+        top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=limit).stdout.strip()
+    except subprocess.TimeoutExpired:
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+    except (OSError, subprocess.SubprocessError):
+        top = ""
+    if not top:
+        return {"none": "not inside a git repository"}
+    top = os.path.realpath(top)
+    mark = os.path.join(state_dir(), ".checkpoint-overtime-" + hashlib.sha256(os.fsencode(top)).hexdigest()[:24])
+    pause = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_PAUSE", ""), "30m") or 1800.0
+    with contextlib.suppress(OSError):
+        since = os.stat(mark).st_mtime
+        if 0 <= time.time() - since < pause:
+            return {"none": "the last snapshot of this repository ran past its time limit at "
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(since))}; the next is tried "
+                    f"{pause:g} s after it (CLAUDE_HOOK_SNAPSHOT_PAUSE)"}
+    script = ('. "$2" || exit 90; export CHECKPOINT_NO_PUSH=1; write_checkpoint "$1" "$3" "pre-command snapshot"; '
+              'printf "%s\\n" "$?" "$checkpoint_commit" "$checkpoint_ref" "$checkpoint_left_out$checkpoint_notice"')
+    try:
+        p = subprocess.Popen(["bash", "-c", script, "snapshot", cwd, os.path.join(LIB, "checkpoint-core.sh"),
+                              "an unproven Bash command let through (removal policy)"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                             start_new_session=True)
+    except OSError as exc:
+        return {"none": f"the snapshot could not start: {exc}"}
+    try:
+        out = p.communicate(timeout=limit)[0]
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(p.pid, signal.SIGKILL)  # git and all; its temp index is swept by a later snapshot
+        p.wait()
+        with contextlib.suppress(OSError), open(mark, "w", encoding="utf-8") as fh:
+            fh.write(top + "\n")
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+    rc, commit, ref, note = (out.split("\n", 3) + [""] * 4)[:4]
+    note = note.strip()
+    if rc == "0" and commit:
+        shot = {"ref": ref, "commit": commit, "restore": f"git -C {top} restore --source={commit} -- <path>, or "
+                f"git -C {top} show {commit}:<path from the repository's top>"}
+        return {**shot, "left_out": note} if note else shot
+    return {"none": {"0": "write_checkpoint wrote none (/harness off)", "2": "not inside a git repository",
+                     "90": "the snapshot library could not be loaded"}.get(rc) or note
+            or f"write_checkpoint failed (rc={rc or p.returncode}); see the checkpoint log"}
 
 
 def _scratch_owner(payload):
     """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
     naming that directory or ""). Both are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch),
     loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an actor may write
-    scratch files, with no second one here. An actor the write policy gives no directory (the main agent, a
-    subagent whose role does not resolve) owns nothing, and so does any failure to ask."""
+    scratch files, with no second one here. An actor the write policy gives no directory (a main agent whose
+    session scratch was not made, a subagent whose role does not resolve) owns nothing, and so does any failure
+    to ask."""
     import importlib.util
     import io
     try:
@@ -4802,7 +4876,7 @@ def _scratch_owner(payload):
 
     def owns(path):
         try:
-            return bool(role) and policy._scratch_status(role, path, payload) == "owner"
+            return policy._scratch_status(role, path, payload) == "owner"
         except Exception:  # noqa: BLE001
             return False
     return owns, note.getvalue().strip()

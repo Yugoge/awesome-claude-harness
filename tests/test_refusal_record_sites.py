@@ -120,7 +120,9 @@ class Scratch:
         p = {"session_id": SESSION, "hook_event_name": event, "cwd": str(self.root / "project"),
              "transcript_path": str(self.root / "none.jsonl"), "permission_mode": "default", "stop_hook_active": False}
         if event in refusal_record.EVENTS[:3] or event == "PermissionRequest":  # the events that carry a tool call
-            tool = matcher.split("|")[0] if re.fullmatch(r"[A-Za-z0-9_|]+", matcher) else "Glob"
+            # A registration for every tool ("*", ""): a tool every rule under it sees. Not one that carries no
+            # prompt (Read, Glob, ...): the harness-switch rule passes those unread (harness_switch.NO_PROMPT).
+            tool = matcher.split("|")[0] if re.fullmatch(r"[A-Za-z0-9_|]+", matcher) else "Write"
             p.update(tool_name=tool, tool_use_id=f"toolu_{self.n:04d}", tool_response={},
                      tool_input=INPUTS.get(tool, {"file_path": str(self.root / "project" / "new.txt"), "content": "x",
                                                   "old_string": "a", "new_string": "b"}))

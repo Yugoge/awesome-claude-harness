@@ -159,9 +159,9 @@ def _load(path: Path, hint: str, package: bool = False):
 # ---------------------------------------------------------------------------------------------
 
 def _folder_documents() -> tuple:
-    """The folder documents' names (hooks/lib/harness_vocabulary.FOLDER_DOCUMENTS of this file's harness)."""
+    """The folder documents' names (hooks/lib/command_span.FOLDER_DOCUMENTS of this file's harness)."""
     spec = importlib.util.spec_from_file_location(
-        "_readme_facts_vocabulary", Path(__file__).resolve().parent.parent / "hooks" / "lib" / "harness_vocabulary.py")
+        "_readme_facts_command_span", Path(__file__).resolve().parent.parent / "hooks" / "lib" / "command_span.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.FOLDER_DOCUMENTS

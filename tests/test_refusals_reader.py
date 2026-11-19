@@ -101,6 +101,20 @@ def test_one_command_answers_what_was_refused(monkeypatch):
     assert "refusals: 8    let through unproven (not refusals): 1" in text and "     3x  " in text
 
 
+def test_a_let_through_is_listed_with_the_snapshot_taken_before_it_ran(monkeypatch):
+    """The pre-command snapshot (hooks/lib/bash_safety_rules.py::let_through_unproven) is read back with its call."""
+    text = ("removal-policy let through unproven: UNRESOLVED dynamic_command_head:$PY\n"
+            "snapshot: refs/checkpoints/main 5aab; bring a file back: git -C /work/app restore --source=5aab -- <path>")
+    R.write(call("Bash", {"command": "PY=x; $PY --version"}, "toolu_8"), [("hooks/lib/bash_safety_rules.py", text)],
+            "hooks/lib/bash_safety_rules.py", R.UNPROVEN)
+    R.write(call("Bash", {"command": "z=$(date)"}, "toolu_9"), [REMOVAL], REMOVAL[0], R.UNPROVEN)  # an older line
+    s = json.loads(reader("--json").stdout)
+    assert (s["refusals"], s["unproven"]) == (0, 2)
+    assert [x["snapshot"] for x in s["unproven_calls"]] == [text.splitlines()[1], "snapshot: not recorded"]
+    out = reader().stdout
+    assert "let through unproven (not refusals): 2" in out and "      " + text.splitlines()[1] in out
+
+
 def test_the_period_bounds_what_is_counted_and_split_reports_count_once():
     folder = Path(R.directory())
     folder.mkdir(parents=True)

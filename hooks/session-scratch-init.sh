@@ -89,4 +89,11 @@ else
   rm -f "$TMP_OWNER" 2>/dev/null || true
 fi
 
+# The session's programs keep their temp files here, the main agent's own scratch (pytest's
+# basetemp root included): the CLI runs each Bash command after sourcing CLAUDE_ENV_FILE.
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  printf 'export TMPDIR=%q\n' "$SESSION_DIR" >> "$CLAUDE_ENV_FILE" \
+    || echo "session-scratch-init: cannot set TMPDIR in $CLAUDE_ENV_FILE" >&3
+fi
+
 exit 0
