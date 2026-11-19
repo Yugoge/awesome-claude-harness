@@ -576,8 +576,8 @@ hook refusing an operation. The Retryable rule above takes a fresh grant for the
 nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
 line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim,
 with the remedy the hook names or the `/allow` line that would let it through, and end: the commit
-is not retried, and the Stop gate (`hooks/stop-command-gate.py`, `hook_refused_landing`) lets the
-run end on that line. The operation runs again only on
+is not retried, and the Stop gate (`hooks/stop-command-gate.py`, `hook_refused_tasks`) owes that
+task's landing no more once that line names it. The operation runs again only on
 the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.
 
 ### Step 8: Spec-update dispatch (post-commit, advisory)
@@ -664,12 +664,13 @@ time, through the same unmodified Step 3 to Step 8 an explicit `/commit <task-id
    landed. Bind `DRYRUN` and `QA_CODEX` as passed to the batch, and run Step 3 through Step 8 exactly
    as written; nothing in them is aware `--auto` drives them.
 3. **Each parent completes**: its walk ends only by landing (`commit_status` in `committed`,
-   `nothing_to_commit`, `push_gate_reconciled`, `nothing_to_commit_precommitted`) or, under
-   `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
+   `nothing_to_commit`, `push_gate_reconciled`, `nothing_to_commit_precommitted`), by a hook's
+   refusal reported on its `REFUSED:` line, or, under `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
    inside the walk (Steps 3-7); a `partially_committed` parent continues its remaining repositories
    in order under fresh grants (Step 7). A hook rejection is reported for that parent as Step 7
-   reports it (`REFUSED:` and the hook's output), never asked about; the walk goes on.
-4. **Batch summary**: once every parent has landed, print one line per parent:
+   reports it (`REFUSED:` and the hook's output), never asked about; the walk goes on to the next
+   parent, and the parents that can land do.
+4. **Batch summary**: once every parent has landed or been refused, print one line per parent:
    `task-id: <landed outcome>`.
 
 ## Privilege guard

@@ -501,20 +501,24 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
-    def last_text(self) -> str:
-        """The text of the main session's last assistant record in the span that holds text ('' when none):
-        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+    def texts(self) -> list:
+        """The text of each assistant record in the span that holds text, in order."""
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
-            return ""
-        last = ""
+            return []
+        out = []
         for begin, end in lines.offsets((b'"text"',), floor):
             record = _decode(lines.data[begin:end])
             texts = [b.get("text") for b in _blocks(record) if b.get("type") == "text" and isinstance(b.get("text"), str)]
             if texts and record.get("type") == "assistant":
-                last = "\n".join(texts)
-        return last
+                out.append("\n".join(texts))
+        return out
+
+    def last_text(self) -> str:
+        """The text of the main session's last assistant record in the span that holds text ('' when none):
+        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+        return (self.texts() or [""])[-1]
 
     def result_text(self, ident: str) -> str:
         """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent

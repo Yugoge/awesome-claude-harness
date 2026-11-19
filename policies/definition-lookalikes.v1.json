@@ -81,116 +81,10 @@
    ]
   },
   {
-   "id": "dot-dotdot",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "15 identical {., ..}; the variants add '' (an empty component) or .git for their own tests.",
-   "sides": [
-    [
-     {
-      "name": "_shape:in",
-      "fingerprint": "6281456aca2717f2",
-      "at": "hooks/lib/declared_paths.py:98"
-     },
-     {
-      "name": "_dynamic_only_in_directory:in",
-      "fingerprint": "6281456aca2717f2",
-      "at": "hooks/lib/git_command_classifier.py:970"
-     },
-     {
-      "name": "registry_dir_named:in",
-      "fingerprint": "6281456aca2717f2",
-      "at": "hooks/lib/obligation.py:747"
-     },
-     {
-      "name": "_carveout_entries:in",
-      "fingerprint": "6281456aca2717f2",
-      "at": "hooks/lib/policy_registry.py:295"
-     },
-     {
-      "name": "_proven_harmless:in",
-      "fingerprint": "6281456aca2717f2",
-      "at": "hooks/pretool-claude-config-guard.py:1286"
-     }
-    ],
-    [
-     {
-      "name": "_project_relative:in",
-      "fingerprint": "4774367ac5f59b1d",
-      "at": "hooks/lib/command_span.py:926"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "dup-redirect-operators",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Five identical {<& >&}; git_command_classifier.py:810 lists them with &> &>> for another test.",
-   "sides": [
-    [
-     {
-      "name": "_hb_inert_redirect:in",
-      "fingerprint": "2f0bcad636bb2d80",
-      "at": "hooks/lib/bash_safety_rules.py:3499"
-     },
-     {
-      "name": "_plain_redirects:in",
-      "fingerprint": "2f0bcad636bb2d80",
-      "at": "hooks/lib/bash_safety_rules.py:4235"
-     },
-     {
-      "name": "_reads_input_as_data:in",
-      "fingerprint": "2f0bcad636bb2d80",
-      "at": "hooks/lib/git_command_classifier.py:811"
-     },
-     {
-      "name": "Redir.close:in",
-      "fingerprint": "2f0bcad636bb2d80",
-      "at": "hooks/lib/shell_parse.py:388"
-     },
-     {
-      "name": "Redir.dup:in",
-      "fingerprint": "2f0bcad636bb2d80",
-      "at": "hooks/lib/shell_parse.py:392"
-     }
-    ],
-    [
-     {
-      "name": "_reads_input_as_data:in",
-      "fingerprint": "910aebec4fac7d77",
-      "at": "hooks/lib/git_command_classifier.py:810"
-     }
-    ]
-   ]
-  },
-  {
    "id": "dynamic-part-kinds",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "Two identical pairs shared by git_clean_guard and git_command_classifier, and narrower tests.",
    "sides": [
-    [
-     {
-      "name": "<module>._DYNAMIC_PARTS",
-      "fingerprint": "05d82f7ea8f19d02",
-      "at": "hooks/lib/git_clean_guard.py:118"
-     },
-     {
-      "name": "<module>._DYNAMIC_PARTS",
-      "fingerprint": "05d82f7ea8f19d02",
-      "at": "hooks/lib/git_command_classifier.py:310"
-     }
-    ],
-    [
-     {
-      "name": "<module>._BODY_PARTS",
-      "fingerprint": "e10364f21d852f1d",
-      "at": "hooks/lib/git_clean_guard.py:120"
-     },
-     {
-      "name": "<module>._BODY_PARTS",
-      "fingerprint": "e10364f21d852f1d",
-      "at": "hooks/lib/git_command_classifier.py:311"
-     }
-    ],
     [
      {
       "name": "_is_inert:in",
@@ -240,18 +134,6 @@
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "Two identical six-name tables; the runtime guard splits the names into path, name and case-insensitive predicates on purpose.",
    "sides": [
-    [
-     {
-      "name": "<module>._SD_FIND_NAMES",
-      "fingerprint": "8d02351874c35938",
-      "at": "hooks/lib/bash_safety_rules.py:6769"
-     },
-     {
-      "name": "<module>._FIND_NAME_OPTS",
-      "fingerprint": "8d02351874c35938",
-      "at": "hooks/pretool-tool-policy.py:1109"
-     }
-    ],
     [
      {
       "name": "<module>._FIND_PATH_PREDICATES",
@@ -370,18 +252,6 @@
       "name": "_commit_message:in",
       "fingerprint": "592557a4886876ef",
       "at": "hooks/pretool-git-privilege-guard.py:829"
-     }
-    ],
-    [
-     {
-      "name": "_commit_message:in",
-      "fingerprint": "6e478c501c6d48e4",
-      "at": "hooks/pretool-git-privilege-guard.py:831"
-     },
-     {
-      "name": "_consent_read_only:in",
-      "fingerprint": "6e478c501c6d48e4",
-      "at": "hooks/lib/bash_safety_rules.py:2724"
      }
     ]
    ]
@@ -541,37 +411,6 @@
    ]
   },
   {
-   "id": "git-redirect-env",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Three identical tables (git_clean_guard, git-privilege-guard, tool-policy); scripts/capture-hero-run.py:119 GIT_ROUTING_VARS scrubs the environment of a recorded demo run.",
-   "sides": [
-    [
-     {
-      "name": "<module>._REDIRECT_ENV",
-      "fingerprint": "2358d99644504406",
-      "at": "hooks/lib/git_clean_guard.py:77"
-     },
-     {
-      "name": "<module>._GIT_REDIRECT_ENV_VARS",
-      "fingerprint": "2358d99644504406",
-      "at": "hooks/pretool-git-privilege-guard.py:180"
-     },
-     {
-      "name": "_home_git_files:in",
-      "fingerprint": "2358d99644504406",
-      "at": "hooks/pretool-tool-policy.py:1869"
-     }
-    ],
-    [
-     {
-      "name": "<module>.GIT_ROUTING_VARS",
-      "fingerprint": "7002752d9cc96180",
-      "at": "scripts/capture-hero-run.py:119"
-     }
-    ]
-   ]
-  },
-  {
    "id": "glob-characters",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "The lexer's glob characters, the shell-glob metacharacters of a command-side token, and the characters that make a path after -- wide are three different tests.",
@@ -643,7 +482,7 @@
      {
       "name": "CdScopes.run_cmd:in",
       "fingerprint": "7dc2fd8f59c75fa4",
-      "at": "hooks/lib/shell_parse.py:3633"
+      "at": "hooks/lib/shell_parse.py:3642"
      }
     ]
    ]
@@ -677,37 +516,6 @@
    ]
   },
   {
-   "id": "heredoc-operators",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Ten tables ask 'is this a here-document' ({<< <<-}), three ask 'does this redirect feed text' (with <<<). f11_options: bash <<<, <<EOF and <<-EOF payloads are refused alike by six hooks.",
-   "sides": [
-    [
-     {
-      "name": "<module>.HEREDOC_OPS",
-      "fingerprint": "59311d81b117a5e2",
-      "at": "hooks/lib/shell_parse.py:472"
-     }
-    ],
-    [
-     {
-      "name": "<module>._PLAIN_HEREDOC_OPS",
-      "fingerprint": "e88a5764f7e1d9a0",
-      "at": "hooks/lib/bash_safety_rules.py:4192"
-     },
-     {
-      "name": "<module>._HEREDOC_OPS",
-      "fingerprint": "e88a5764f7e1d9a0",
-      "at": "hooks/lib/bash_safety_rules.py:4487"
-     },
-     {
-      "name": "_git_of:in",
-      "fingerprint": "e88a5764f7e1d9a0",
-      "at": "hooks/pretool-overnight-hook-guard.py:658"
-     }
-    ]
-   ]
-  },
-  {
    "id": "hero-claim-regions",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "CLAIM_REGIONS are the README hero regions that hold claims; PROSE_REGIONS the regions whose rows render as prose.",
@@ -733,28 +541,6 @@
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "The two-member sets ask whether a redirection reads a file; the wider sets ask whether it feeds a stream or which fd a redirection names by default.",
    "sides": [
-    [
-     {
-      "name": "_shell_words:in",
-      "fingerprint": "7d36ddd7aefe1d1c",
-      "at": "hooks/lib/git_command_classifier.py:1224"
-     },
-     {
-      "name": "_feed:in",
-      "fingerprint": "7d36ddd7aefe1d1c",
-      "at": "hooks/lib/shell_parse.py:2016"
-     },
-     {
-      "name": "_Scan._stdin:in",
-      "fingerprint": "7d36ddd7aefe1d1c",
-      "at": "hooks/pretool-wrapper-userintent.py:1173"
-     },
-     {
-      "name": "_Scan._site:in",
-      "fingerprint": "7d36ddd7aefe1d1c",
-      "at": "hooks/pretool-wrapper-userintent.py:1494"
-     }
-    ],
     [
      {
       "name": "_sd_streams:in",
@@ -881,7 +667,7 @@
      {
       "name": "<module>.SEQUENCE_OPS",
       "fingerprint": "5f35a153798ee96c",
-      "at": "hooks/lib/shell_parse.py:477"
+      "at": "hooks/lib/shell_parse.py:486"
      }
     ],
     [
@@ -907,23 +693,6 @@
     ],
     [
      {
-      "name": "_segments_with_kind:in",
-      "fingerprint": "5ce1f7f23d63863a",
-      "at": "hooks/lib/git_command_classifier.py:114"
-     },
-     {
-      "name": "_Grammar.parse_list:in",
-      "fingerprint": "5ce1f7f23d63863a",
-      "at": "hooks/lib/shell_parse.py:1528"
-     },
-     {
-      "name": "_AssignScope.certain:in",
-      "fingerprint": "5ce1f7f23d63863a",
-      "at": "hooks/lib/shell_parse.py:3360"
-     }
-    ],
-    [
-     {
       "name": "_base_bulk_sentinel_decision.compound",
       "fingerprint": "bd8e987772414103",
       "at": "hooks/lib/bash_safety_rules.py:3212"
@@ -934,18 +703,6 @@
       "name": "<module>._SHELL_OPS",
       "fingerprint": "de10d6ea1ab3a5ec",
       "at": "hooks/stop-command-gate.py:939"
-     }
-    ],
-    [
-     {
-      "name": "_group:in",
-      "fingerprint": "97f2a1810fb4e83f",
-      "at": "hooks/lib/git_command_classifier.py:358"
-     },
-     {
-      "name": "_shell_words:in",
-      "fingerprint": "97f2a1810fb4e83f",
-      "at": "hooks/lib/git_command_classifier.py:1189"
      }
     ],
     [
@@ -973,24 +730,7 @@
      {
       "name": "<module>.LITERAL_PART_KINDS",
       "fingerprint": "7bcfdd3096508628",
-      "at": "hooks/lib/shell_parse.py:473"
-     }
-    ],
-    [
-     {
-      "name": "_consent_git_tree:in",
-      "fingerprint": "064ea51be5d71a2a",
-      "at": "hooks/lib/bash_safety_rules.py:2478"
-     },
-     {
-      "name": "_consent_read_only:in",
-      "fingerprint": "064ea51be5d71a2a",
-      "at": "hooks/lib/bash_safety_rules.py:2631"
-     },
-     {
-      "name": "_bulk_static_args:in",
-      "fingerprint": "064ea51be5d71a2a",
-      "at": "hooks/lib/bash_safety_rules.py:3035"
+      "at": "hooks/lib/shell_parse.py:482"
      }
     ],
     [
@@ -1078,27 +818,6 @@
    ]
   },
   {
-   "id": "output-file-options",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "curl's and sort's output options and sort's two forbidden options; the tool policy's own sort -o reading is gone: sort -o is the parser's write target (writer-programs).",
-   "sides": [
-    [
-     {
-      "name": "_consent_read_only:in",
-      "fingerprint": "e6c6b8721ef594dc",
-      "at": "hooks/lib/bash_safety_rules.py:2687"
-     }
-    ],
-    [
-     {
-      "name": "<module>._SORT_FORBIDDEN",
-      "fingerprint": "a1e47531a093c8f0",
-      "at": "hooks/lib/bash_read_only.py:133"
-     }
-    ]
-   ]
-  },
-  {
    "id": "overnight-actor-classes",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "Two identical pairs in one file: the actors, and the actors plus a worktree context.",
@@ -1146,27 +865,6 @@
       "name": "<module>._CONTENT_KEEPING",
       "fingerprint": "58a10360457702b3",
       "at": "hooks/pretool-wrapper-userintent.py:137"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "pager-programs",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "_PLAIN_PAGERS are the programs git may hand files to that only read; the inline set the two of them that are pagers.",
-   "sides": [
-    [
-     {
-      "name": "_Scan._PLAIN_PAGERS",
-      "fingerprint": "5c3956d75612cc01",
-      "at": "hooks/pretool-wrapper-userintent.py:2773"
-     }
-    ],
-    [
-     {
-      "name": "_Scan._plain_pager:in",
-      "fingerprint": "e26a52d450f1b067",
-      "at": "hooks/pretool-wrapper-userintent.py:2785"
      }
     ]
    ]
@@ -1537,23 +1235,6 @@
     ],
     [
      {
-      "name": "_sd_allowed:in",
-      "fingerprint": "b4c49815d2953526",
-      "at": "hooks/lib/bash_safety_rules.py:6708"
-     },
-     {
-      "name": "_sd_glob_operand:in",
-      "fingerprint": "b4c49815d2953526",
-      "at": "hooks/lib/bash_safety_rules.py:6922"
-     },
-     {
-      "name": "<module>._SEARCH_NAMES",
-      "fingerprint": "b4c49815d2953526",
-      "at": "hooks/pretool-grep-backtrack-guard.py:116"
-     }
-    ],
-    [
-     {
       "name": "<module>._INERT_TEXT_OWNERS",
       "fingerprint": "1fcb9199faf79545",
       "at": "hooks/lib/git_command_classifier.py:452"
@@ -1590,53 +1271,10 @@
    ]
   },
   {
-   "id": "sed-quiet-options",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "The three-member sets are sed's quiet options in two read rules; the two long forms are the http reader's own test of a filter.",
-   "sides": [
-    [
-     {
-      "name": "_plain_simple:in",
-      "fingerprint": "3964121b2cc77b63",
-      "at": "hooks/lib/bash_safety_rules.py:4318"
-     },
-     {
-      "name": "_Scan._sed_reader:in",
-      "fingerprint": "3964121b2cc77b63",
-      "at": "hooks/pretool-wrapper-userintent.py:1024"
-     }
-    ],
-    [
-     {
-      "name": "_http_reader_ok:in",
-      "fingerprint": "f17588f84390c9d9",
-      "at": "hooks/lib/bash_safety_rules.py:623"
-     }
-    ]
-   ]
-  },
-  {
    "id": "sed-script-options",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "Per-step subsets of sed's script options (expression, file, line-length) in three files; f11_options: `sed -e`, `--expression=`, `--expression X` behave alike in each hook.",
    "sides": [
-    [
-     {
-      "name": "_consent_read_only:in",
-      "fingerprint": "9136fbc0fcf33add",
-      "at": "hooks/lib/bash_safety_rules.py:2650"
-     },
-     {
-      "name": "_sed_scripts:in",
-      "fingerprint": "9136fbc0fcf33add",
-      "at": "hooks/pretool-claude-config-guard.py:307"
-     },
-     {
-      "name": "_Scan._sed_reader:in",
-      "fingerprint": "9136fbc0fcf33add",
-      "at": "hooks/pretool-wrapper-userintent.py:1026"
-     }
-    ],
     [
      {
       "name": "_verb_targets:in",
@@ -1731,19 +1369,7 @@
      {
       "name": "<module>.SHELL_FILE_OPTS",
       "fingerprint": "340bb6b4e0479028",
-      "at": "hooks/lib/shell_parse.py:471"
-     }
-    ],
-    [
-     {
-      "name": "<module>._HIDDEN_SHELL_VALUE_OPTS",
-      "fingerprint": "9af09d17d5541a11",
-      "at": "hooks/lib/git_command_classifier.py:1944"
-     },
-     {
-      "name": "<module>._SHELL_VALUE_OPTS",
-      "fingerprint": "9af09d17d5541a11",
-      "at": "hooks/pretool-tool-policy.py:1087"
+      "at": "hooks/lib/shell_parse.py:480"
      }
     ],
     [
@@ -1760,33 +1386,6 @@
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "Five identical {., source}; the two wider sets add eval, env, exec for 'runs its argument as code or command'.",
    "sides": [
-    [
-     {
-      "name": "_command_runs_runtime_code:in",
-      "fingerprint": "61aff32db68006ac",
-      "at": "hooks/lib/git_command_classifier.py:1622"
-     },
-     {
-      "name": "_hidden_script_path:in",
-      "fingerprint": "61aff32db68006ac",
-      "at": "hooks/lib/git_command_classifier.py:2002"
-     },
-     {
-      "name": "resolve:in",
-      "fingerprint": "61aff32db68006ac",
-      "at": "hooks/lib/shell_parse.py:2536"
-     },
-     {
-      "name": "_runs_hook_code:in",
-      "fingerprint": "61aff32db68006ac",
-      "at": "hooks/pretool-tool-policy.py:1309"
-     },
-     {
-      "name": "_Scan._site:in",
-      "fingerprint": "61aff32db68006ac",
-      "at": "hooks/pretool-wrapper-userintent.py:1519"
-     }
-    ],
     [
      {
       "name": "_base_bulk_sentinel_decision:in",
@@ -1895,8 +1494,8 @@
     [
      {
       "name": "<module>.NAME_ROOT_VARS",
-      "fingerprint": "f8bf01d10db2e7c4",
-      "at": "hooks/lib/harness_temp_state.py:64"
+      "fingerprint": "5f774f889c0115fe",
+      "at": "hooks/lib/harness_temp_state.py:67"
      }
     ]
    ]
@@ -1967,27 +1566,6 @@
       "name": "<module>._WRAPPER_POSITIONAL_OPTIONAL",
       "fingerprint": "ad009975c8dcd313",
       "at": "hooks/lib/runtime_guard/constants.py:55"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "ruled-out-01-watched-exts",
-   "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "share .js .jsx .py .ts .tsx; one is the extensions whose change makes doc-sync regenerate folder documents, the other the extensions the quality gate can lint",
-   "sides": [
-    [
-     {
-      "name": "<module>.WATCHED_EXTS",
-      "fingerprint": "7d5b0c8eb44ddb89",
-      "at": "hooks/doc_sync/main.py:25"
-     }
-    ],
-    [
-     {
-      "name": "<module>.CHECKABLE_EXTS",
-      "fingerprint": "e66c660e8c555004",
-      "at": "hooks/pretool-quality-gate.py:47"
      }
     ]
    ]
@@ -2100,20 +1678,20 @@
   {
    "id": "ruled-out-06-ancestor-stop-roots",
    "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "share /boot /dev /etc /proc /run /sys; one is where the walk up from the runtime-guard data file stops, the other the directories a plain-command write must not name",
+   "reason": "share /boot /dev /etc /proc /run /sys; locations.SYSTEM_ROOTS is where the runtime guard's walk up from its data file stops (runtime_guard/config._ANCESTOR_STOP_ROOTS reads it), locations.UNSAFE_DIRS the system directories no ordinary project file is in",
    "sides": [
     [
      {
       "name": "<module>.SYSTEM_ROOTS",
       "fingerprint": "1a73a8d86b85f87e",
-      "at": "hooks/lib/locations.py:44"
+      "at": "hooks/lib/locations.py:46"
      }
     ],
     [
      {
       "name": "<module>.UNSAFE_DIRS",
       "fingerprint": "d103402a9bf111f5",
-      "at": "hooks/lib/locations.py:43"
+      "at": "hooks/lib/locations.py:45"
      }
     ]
    ]
@@ -2582,14 +2160,7 @@
      {
       "name": "<module>.SKIP_FILES",
       "fingerprint": "f94d8ec4d2a7cbda",
-      "at": "hooks/doc_sync/tree.py:22"
-     }
-    ],
-    [
-     {
-      "name": "<module>.SKIP_NAMES",
-      "fingerprint": "f94d8ec4d2a7cbda",
-      "at": "hooks/doc_sync/regen_readme.py:45"
+      "at": "hooks/doc_sync/config.py:32"
      }
     ]
    ]
@@ -2968,6 +2539,27 @@
       "name": "_parsed_kind:in",
       "fingerprint": "407cad7a32e5eb89",
       "at": "hooks/pretool-claude-config-guard.py:544"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "programs-sort-output-vs-git-output",
+   "source": "lane defs-programs reading",
+   "reason": "SORT_OUTPUT_OPTS asks which option of sort names the file sort writes; _sd_writes_output asks whether an option of a git command (git's -o or any abbreviation git accepts of --output) sends that command's output to a file. Two programs' output options spelled alike, read with different abbreviation rules.",
+   "sides": [
+    [
+     {
+      "name": "<module>.SORT_OUTPUT_OPTS",
+      "fingerprint": "e6c6b8721ef594dc",
+      "at": "hooks/lib/shell_parse.py:3444"
+     }
+    ],
+    [
+     {
+      "name": "_sd_writes_output:eq",
+      "fingerprint": "e6c6b8721ef594dc",
+      "at": "hooks/lib/bash_safety_rules.py:5896"
      }
     ]
    ]

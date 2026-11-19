@@ -178,7 +178,7 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # What repoints a commit at another repository or work tree than its cwd or its
 # one -C directory, where the grant's repo/branch/HEAD binding is checked. No
 # committer uses them, so a commit under a grant that carries one is refused.
-_GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
+_GIT_REDIRECT_ENV_VARS = shell_parse.GIT_REDIRECT_ENV_VARS
 _GIT_REDIRECT_FLAGS = shell_parse.GIT_REDIRECT_OPTS
 
 
@@ -826,7 +826,7 @@ def _commit_message(rec, cwd):
                 continue
         if value is None or (opt in ('-F', '--file') and value == '-'):
             return None
-        if opt in ('-m', '--message'):
+        if opt in shell_parse.GIT_MESSAGE_OPTS:
             texts.append(value)
         else:
             path = os.path.join(base, value)

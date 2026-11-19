@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
-    from . import roster
+    from . import locations, roster
     from .subagent_restart import (
         AGENT_RE,
         SESSION_RE,
@@ -55,6 +55,7 @@ try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
         project_slug,
     )
 except ImportError:  # hooks/lib placed directly on sys.path
+    import locations  # type: ignore[no-redef]
     import roster  # type: ignore[no-redef]
     from subagent_restart import (  # type: ignore[no-redef]
         AGENT_RE,
@@ -744,7 +745,7 @@ def registry_dir_named(project_dir: str | Path, name: Any) -> Path | None:
     today, but the artifact check reads the two spellings as two artifacts:
     the writer at ``dev-<ts>``, its readers at the name. None for a name that
     is not one plain path component."""
-    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+    if not isinstance(name, str) or name in locations.NAMELESS_PARTS or Path(name).name != name:
         return None
     return _registry_root(project_dir) / name
 

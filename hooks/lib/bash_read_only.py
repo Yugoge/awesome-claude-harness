@@ -440,6 +440,9 @@ PAGERS = {
     "more": _any_args,
 }
 
+# The pagers a pager setting (core.pager, PAGER) may name that only show what they are handed: the PAGERS, and cat.
+PLAIN_PAGERS = frozenset(PAGERS) | {"cat"}
+
 PROGRAMS = ANY_ARGS | frozenset(CHECKED)
 
 

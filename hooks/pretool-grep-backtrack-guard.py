@@ -113,7 +113,7 @@ _UGREP_ARGV0 = "ugrep"
 # ---------------------------------------------------------------------------
 # Step 1: recover (pattern, mode) pairs from the command's search invocations.
 # ---------------------------------------------------------------------------
-_SEARCH_NAMES = ("grep", "egrep", "fgrep")
+_SEARCH_NAMES = shell_parse.GREP_NAMES
 
 # Wrappers that keep the shell function in play: a search behind them still
 # reaches the embedded engine. Every other wrapper execs the named binary through
@@ -376,7 +376,7 @@ def _heredoc_scripts(cmd):
     if shell_parse.resolve(cmd).name not in _SHELL_INTERP_NAMES:
         return []
     return [shell_parse.parse_src(r.hd.body_src, 1) for r in cmd.redirects
-            if r.op in shell_parse.HEREDOC_OPS and r.hd is not None]
+            if r.op in shell_parse.HERE_DOCUMENT_OPS and r.hd is not None]
 
 
 def _searches_in(script, depth):

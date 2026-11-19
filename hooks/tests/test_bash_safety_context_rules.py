@@ -269,19 +269,17 @@ class TestCachedGitRmClassification:
 
     # A removal program whose name the command assembles without writing it: a substitution, a variable, an
     # ANSI-C escape, a glob, an extended glob, a brace. The analyzer cannot name what runs (UNRESOLVED), and until
-    # 2026-11-19 the hook refused each on that silence. By the owner's rule an unproven command whose text holds no
-    # removal word runs and is handed to the record; these do. (`r\<newline>m` is no member: the analyzer joins the
-    # line and finds the removal.)
+    # 2026-11-19 the hook refused each on that silence. By the owner's rule an unproven command runs and is handed
+    # to the record unless the words that can become it hold a removal word; these do not. (`r\<newline>m` is no
+    # member: the analyzer joins the line and finds the removal.)
     ASSEMBLED_WITHOUT_NAMING = (
         "$(printf r)$(printf m) tracked.txt", "r$(printf m) tracked.txt",
         "$(printf r)m tracked.txt", '"$(printf r)$(printf m)" tracked.txt',
         "`printf r``printf m` tracked.txt", 'R=r; M=m; "$R$M" tracked.txt',
-        r"$'\x72\x6d' tracked.txt", r"$'\162\155' tracked.txt",
         "/bin/r? tracked.txt",
         "eval '$(printf r)$(printf m) tracked.txt'",
         "bash -c '$(printf r)$(printf m) tracked.txt'",
         "sh -lc 'r$(printf m) tracked.txt'",
-        "EMPTY=; r${EMPTY}m tracked.txt",
         "bash -O extglob -c '/bin/r@(m) tracked.txt'", "bash -O extglob -c '/bin/r+(m) tracked.txt'",
         "{r,echo}m tracked.txt",
     )
@@ -302,12 +300,20 @@ class TestCachedGitRmClassification:
         proc = run_hook_proc(command)
         assert proc.returncode == ALLOW and "removal-policy" not in proc.stderr, (command, proc.stderr)
 
-    @pytest.mark.parametrize("command", ASSEMBLED_WITHOUT_NAMING)
-    def test_the_same_assembly_is_refused_once_the_text_names_a_removal(self, command):
-        # The owner's rule refuses an unproven command whose text holds a removal word: the assembly stays
-        # unproven, and a trailing word (here a comment) is enough to name one.
-        proc = run_hook_proc(command + " # rm")
+    # Assemblies whose words read as a removal program once ANSI-C quoting is decoded or an empty variable is
+    # dropped: the primary path reads them and refuses them.
+    ASSEMBLED_AND_READ = (r"$'\x72\x6d' tracked.txt", r"$'\162\155' tracked.txt", "EMPTY=; r${EMPTY}m tracked.txt")
+
+    @pytest.mark.parametrize("command", ASSEMBLED_AND_READ)
+    def test_a_removal_program_whose_words_read_as_one_is_refused(self, command):
+        proc = run_hook_proc(command)
         assert proc.returncode == BLOCK and "removal-policy" in proc.stderr, (command, proc.stderr)
+
+    @pytest.mark.parametrize("command", ASSEMBLED_WITHOUT_NAMING + ASSEMBLED_AND_READ)
+    def test_a_trailing_comment_does_not_change_the_verdict(self, command):
+        # Restated 2026-11-19: a comment is no word of any command, so it can neither refuse nor allow one. (Until
+        # then a trailing `# rm` turned each of these into a refusal, because the raw text was asked.)
+        assert run_hook_proc(command + " # rm").returncode == run_hook_proc(command).returncode, command
 
     @pytest.mark.parametrize("command", (
         "printf '%s' '$(printf r)$(printf m) tracked.txt'",
